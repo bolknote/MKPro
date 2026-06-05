@@ -763,7 +763,11 @@ Display rewrites are separated into strategy selection + body lowering.
   removes the alias. A separate CFG fact tracks points reached immediately
   after an X2 sync on every incoming path, including direct `В/О` call
   continuations, so restore passes do not have to rely on a purely linear
-  previous-op scan.
+  previous-op scan. Opaque X/X2 equality produced by a known instruction is
+  carried as an `expr:<step>` token; closed-context `/-/` creates a fresh
+  expression token rather than collapsing the value to undifferentiated
+  `same:unknown`, so later hidden-temp rewrites can prove that exact computed
+  value still lives in X2.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
@@ -897,11 +901,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     routed through the shared shape algebra, which can rebuild canonical
     mantissa facts, derive structural exponent-context sign toggles, derive
     closed-context mantissa sign toggles for synced structural exponent shapes,
-    and compare non-negative exponent shifts that are pure display
-    concatenation (`hex:Г` through `ВП 2` is the same structural display shape
-    as `hex:Г00`; shifted two-byte `super:FA` forms compare as the resulting
+    and compare structural exponent shifts that are pure display mantissa
+    shifts (`hex:Г` through `ВП 2` is the same structural display shape as
+    `hex:Г00`; `hex:Г ВП -2` is the same structural display shape as
+    `hex:0.0Г`; shifted two-byte `super:FA` forms compare as the resulting
     hex-like display mantissa) while still refusing hex/super arithmetic, carry,
-    negative exponent shifts, or decimalization proofs.
+    or decimalization proofs.
     Structural equality uses canonical shape reconstruction, so equivalent
     hex/super spellings compare as the same shape without becoming decimal
     values. Shape-set joins and equality checks use the same canonical
@@ -958,7 +963,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     for later recalls, joins keep only facts common to every path, and unknown
     indirect stores clear the memory. Hex-like preload facts remain shape-only,
     so they do not make `.`/`/-/` dead-restore candidates.
-19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, a raw decimal X2 fact whose restored visible value equals the stored scratch value, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The raw decimal case covers visible-only leading-zero forms such as `01.2 -> 1.2`; it remains blocked when removing the recall would expose a following context-sensitive `.`/`/-/`/`ВП` restore that can observe the raw mantissa shape. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
+19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, a raw decimal X2 fact whose restored visible value equals the stored scratch value, an opaque `expr:<step>` computed value, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The raw decimal case covers visible-only leading-zero forms such as `01.2 -> 1.2`; it remains blocked when removing the recall would expose a following context-sensitive `.`/`/-/`/`ВП` restore that can observe the raw mantissa shape. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
 20. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is
     already in the hidden X2 register, the dot-restore gap is safe (or CFG

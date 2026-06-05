@@ -868,7 +868,7 @@ describe("ir passes on synthetic programs", () => {
         new Set(["hex-exponent:Г:-2"]),
         new Set(["hex:0.0Г:mantissa"]),
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       x2ShapeSetsHaveSameStructuralShape(
         new Set(["super-exponent:FA:2"]),
@@ -979,9 +979,11 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:Г:2")).toBe("hex:Г00:mantissa");
     expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:8.70:2")).toBe("hex:870:mantissa");
     expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:8.70:1")).toBe("hex:87.0:mantissa");
+    expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:Г:-2")).toBe("hex:0.0Г:mantissa");
+    expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:8.70:-1")).toBe("hex:0.870:mantissa");
     expect(x2ClosedStructuralExponentMantissaShapeFact("super-exponent:FA:")).toBe("super:FA");
     expect(x2ClosedStructuralExponentMantissaShapeFact("super-exponent:FA:2")).toBe("hex:FA00:mantissa");
-    expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:Г:-2")).toBeUndefined();
+    expect(x2ClosedStructuralExponentMantissaShapeFact("super-exponent:FA:-2")).toBe("hex:0.FA:mantissa");
     expect(x2ShapeDataModelForFact("hex-exponent:Г:2")).toMatchObject({
       kind: "exponent-entry",
       closedStructuralMantissa: {
@@ -1208,10 +1210,10 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:1"]);
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["expr:1"]);
-    expect(x2ValueStateText(states[3]?.x)).toEqual(["same:unknown"]);
-    expect(x2ValueStateText(states[3]?.x2)).toEqual(["same:unknown"]);
-    expect(x2ValueStateText(states[4]?.x)).toEqual(["reg:2", "same:unknown"]);
-    expect(x2ValueStateText(states[4]?.x2)).toEqual(["reg:2", "same:unknown"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:2"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:2"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["expr:2", "reg:2"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:2", "reg:2"]);
   });
 
   it("x2 value dataflow models closed decimal sign-change after X2 sync", () => {
@@ -2143,6 +2145,36 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("recall value proof matches negative structural exponent shifts to mantissa-shaped preloads", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x02, "2"),
+      recall("2", "preload const 0.0Г"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const result = flowXReuse.run(program, ctx);
+
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:Г:-2"]);
+    expect(recallValueProof(recall("2", "preload const 0.0Г"), states[4])).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+      x2SyncShape: true,
+    });
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x02, "2"),
+      halt(),
+    ]);
+  });
+
   it("recall value proof matches preloaded structural exponent notation", () => {
     const program: IrOp[] = [
       recall("1", "preload const Г"),
@@ -2353,6 +2385,26 @@ describe("ir passes on synthetic programs", () => {
 
     expect(restored.applied).toBe(1);
     expect(restored.ops[5]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore turns opaque sign-change scratch recalls into dot restores", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      plain(0x0b, "/-/"),
+      store("2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
     expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });

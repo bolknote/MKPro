@@ -2007,7 +2007,7 @@ function transferPlainX2ValueState(
     return transferDotRestoreX2ValueState(input);
   }
   if (op.opcode === 0x0b) {
-    return transferSignChangeX2ValueState(input);
+    return transferSignChangeX2ValueState(input, producerIndex);
   }
   if (op.opcode === 0x0c) {
     return transferVpX2ValueState(input);
@@ -2222,7 +2222,10 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
   };
 }
 
-function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
+function transferSignChangeX2ValueState(
+  input: X2ValueDataflowState,
+  producerIndex: number | undefined,
+): X2ValueDataflowState {
   if (input.structuralEntry?.kind === "exponent") {
     const entry = signChangeStructuralExponentEntry(input.structuralEntry);
     return x2ValueStateFromStructuralExponentEntry(entry, input.memory, input.shapeMemory);
@@ -2260,7 +2263,7 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
     };
   }
   if (input.entry.kind === "closed" && (input.vpContext === undefined || input.vpContext.kind === "none")) {
-    const state = signChangeClosedDecimalState(input);
+    const state = signChangeClosedDecimalState(input, producerIndex);
     if (state !== undefined) return state;
   }
   if (input.entry.kind !== "open") {
@@ -3079,9 +3082,8 @@ function shiftedStructuralMantissaRaw(raw: string, exponentRaw: string): string 
   const exponent = canonicalExponentShapeRaw(exponentRaw);
   if (exponent === undefined) return undefined;
   if (exponent === "" || exponent === "0" || exponent === "00") return raw;
-  if (exponent.startsWith("-")) return undefined;
   const shift = Number(exponent);
-  if (!Number.isInteger(shift) || shift < 0 || shift > 7) return undefined;
+  if (!Number.isInteger(shift) || Math.abs(shift) > 7) return undefined;
   const sign = raw.startsWith("-") ? "-" : "";
   const unsigned = sign === "" ? raw : raw.slice(1);
   const parts = unsigned.split(".");
@@ -3094,7 +3096,9 @@ function shiftedStructuralMantissaRaw(raw: string, exponentRaw: string): string 
   const point = integer.length + shift;
   const shifted = point >= digits.length
     ? `${digits}${"0".repeat(point - digits.length)}`
-    : `${digits.slice(0, point)}.${digits.slice(point)}`;
+    : point > 0
+      ? `${digits.slice(0, point)}.${digits.slice(point)}`
+      : `0.${"0".repeat(-point)}${digits}`;
   if (shapeDigits(shifted).length > 8) return undefined;
   return `${sign}${shifted}`;
 }
@@ -3523,7 +3527,10 @@ function signChangedDecimalEntry(raw: string): string {
   return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
 }
 
-function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataflowState | undefined {
+function signChangeClosedDecimalState(
+  input: X2ValueDataflowState,
+  producerIndex: number | undefined,
+): X2ValueDataflowState | undefined {
   const shaped = signChangedVpEntryMantissas(input);
   if (shaped !== undefined) return x2ValueStateFromMantissaShapes(shaped, input.memory, input.shapeMemory);
   const shapeBacked = signChangedClosedShapeMantissas(input);
@@ -3536,14 +3543,15 @@ function signChangeClosedDecimalState(input: X2ValueDataflowState): X2ValueDataf
   );
 
   const values = new Set<X2ValueFact>();
+  const opaque = producerIndex === undefined ? SAME_UNKNOWN_VALUE : expressionValueFact(producerIndex);
   if (input.x.has(SAME_UNKNOWN_VALUE) && input.x2.has(SAME_UNKNOWN_VALUE)) {
-    values.add(SAME_UNKNOWN_VALUE);
+    values.add(opaque);
   }
   for (const fact of input.x2) {
     if (!input.x.has(fact)) continue;
     const decimal = normalizedDecimalValueFromFact(fact);
     if (decimal === undefined && isOpaqueSharedValueFact(fact)) {
-      values.add(SAME_UNKNOWN_VALUE);
+      values.add(opaque);
       continue;
     }
     if (decimal === undefined) continue;
