@@ -164,6 +164,7 @@ type X2StructuralEntryState =
 export interface X2RestoreExposureOptions {
   readonly redundantSyncRegister?: RegisterName | undefined;
   readonly redundantSyncValue?: boolean | undefined;
+  readonly redundantSyncShape?: boolean | undefined;
 }
 
 export interface X2VpShapeContextAnalysis {
@@ -201,6 +202,7 @@ export interface RecallValueProof {
   readonly inX: boolean;
   readonly x2SyncRegister?: RegisterName | undefined;
   readonly x2SyncValue: boolean;
+  readonly x2SyncShape?: true | undefined;
 }
 
 export interface RecallRemovalAnalysis {
@@ -208,6 +210,7 @@ export interface RecallRemovalAnalysis {
   readonly valueProof?: RecallValueProof | undefined;
   readonly redundantSyncRegister?: RegisterName | undefined;
   readonly redundantSyncValue: boolean;
+  readonly redundantSyncShape: boolean;
   readonly x2SyncRedundant: boolean;
   readonly exposesStackLift: boolean;
   readonly exposesX2Restore: boolean;
@@ -1094,6 +1097,16 @@ export function recallAlreadySyncedInX2PreloadedDecimal(
   return undefined;
 }
 
+export function recallAlreadySyncedInX2StructuralShape(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  if (register === undefined || state === undefined) return undefined;
+  const shapes = recallStructuralShapeFacts(op, state, register);
+  return shapeSetsIntersect(state.x2Shape, shapes) ? register : undefined;
+}
+
 export function recallAlreadyInXDecimalMemory(
   op: IrOp,
   state: X2ValueDataflowState | undefined,
@@ -1151,11 +1164,13 @@ export function recallValueProof(
   const x2SyncValue =
     (recallAlreadySyncedInX2MemoryValue(op, state) ??
       recallAlreadySyncedInX2PreloadedDecimal(op, state)) !== undefined;
+  const x2SyncShape = recallAlreadySyncedInX2StructuralShape(op, state) === register ? true : undefined;
   return {
     register,
     inX,
     x2SyncRegister,
     x2SyncValue,
+    ...(x2SyncShape === true ? { x2SyncShape } : {}),
   };
 }
 
@@ -1172,17 +1187,20 @@ export function analyzeRecallRemoval(
   const valueProof = recallValueProof(op, x2ValueState);
   const redundantSyncRegister = recallAlreadySyncedInX2(op, x2RegisterState) ?? valueProof?.x2SyncRegister;
   const redundantSyncValue = valueProof?.x2SyncValue === true;
+  const redundantSyncShape = valueProof?.x2SyncShape === true;
   const exposesStackLift = removingRecallCanExposeStackLift(ops, recallIndex);
   const exposesX2Restore = removingRecallCanExposeX2Restore(ops, recallIndex, {
     redundantSyncRegister,
     redundantSyncValue,
+    redundantSyncShape,
   });
   return {
     register,
     valueProof,
     redundantSyncRegister,
     redundantSyncValue,
-    x2SyncRedundant: redundantSyncRegister !== undefined || redundantSyncValue,
+    redundantSyncShape,
+    x2SyncRedundant: redundantSyncRegister !== undefined || redundantSyncValue || redundantSyncShape,
     exposesStackLift,
     exposesX2Restore,
     removable: !exposesStackLift && !exposesX2Restore,
@@ -3950,7 +3968,8 @@ export function x2SyncCanExposeContextSensitiveRestore(
           if (effect === "restores" && isContextSensitiveX2Restore(op)) {
             const redundantSync =
               options.redundantSyncRegister !== undefined ||
-              options.redundantSyncValue === true;
+              options.redundantSyncValue === true ||
+              options.redundantSyncShape === true;
             return redundantSync && sawExecutableAfterSync ? false : true;
           }
           if (effect === "restores") return false;

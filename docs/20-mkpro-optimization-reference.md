@@ -690,8 +690,11 @@ Display rewrites are separated into strategy selection + body lowering.
   facts are tracked only as structural shapes until a separate proof makes them
   safe to restore. Those structural facts can still feed `ВП`-entry splice
   proofs after direct/proved recalls or the fallthrough side of a direct
-  conditional X2 sync; the jump edge remains conservative and preserves the old
-  hidden state instead of creating a new shape source.
+  conditional X2 sync. The same structural shape equality can prove that a
+  redundant recall would not change hidden X2 before a later
+  context-sensitive restore after an X2-preserving gap; it still does not make
+  hex/super shapes dot-safe. The jump edge remains conservative and preserves
+  the old hidden state instead of creating a new shape source.
 - `x2-hidden-temp-restore` — turns a direct scratch `П->X r`, or a
   stable-indirect proved scratch `К П->X R7..Re`, into `.` when X2 already
   contains `r`, and either a `.` restore-gap dataflow has seen two safe
@@ -752,12 +755,15 @@ Display rewrites are separated into strategy selection + body lowering.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
 - `dead-temp-store` — removes temporary stores after their last read when no longer needed.
 - `store-recall-peephole` — collapses direct or stable-indirect proved
-  same-cell `store` then immediate `recall` pairs unless the recall supplies
-  the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including
+  same-cell `store` then immediate `recall` pairs, and adjacent recalls to
+  another cell when value/shape dataflow proves the recalled decimal value or
+  structural display shape is already in X. The rewrite is refused when the
+  recall supplies the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including
   direct `В/О` returns, or lifts the stack for a downstream consumer through
-  direct or proved-indirect flow. If X2-register dataflow proves that X2 already contains
-  the same register and a preserving command remains before the restore, the
-  recall is no longer considered the required sync. Mutating `R0..R6` indirect
+  direct or proved-indirect flow. If X2-register/value/shape dataflow proves
+  that X2 already contains the same register, decimal fact, or structural
+  hex/super display shape and a preserving command remains before the restore,
+  the recall is no longer considered the required sync. Mutating `R0..R6` indirect
   selectors are kept because their selector side effects are observable.
 - `dead-store-elimination` — full pass removing pointless direct stores and
   stable-indirect `К X->П R7..Re` stores with proved memory targets, while
@@ -787,7 +793,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 5. `return-suffix-gadget` — finds repeated return-ending blocks ending in `return`, extracts one shared suffix, and redirects additional copies to it.
 6. `shared-terminal-tail` — finds repeated straight-line suffixes that already end in unconditional flow (`БП`, `К БП r`, or `В/О`) and replaces extra copies with a jump into the canonical suffix; it refuses programs with absolute numeric flow targets.
 7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
-8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, or stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, only when the recall is not the last X2 sync before a context-sensitive `.`/`/-/`/`ВП` restoration before the next X2-affecting op, including direct conditional/`F Lx` fallthrough syncs and direct `В/О` returns, and its stack lift cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors and loop-counter recalls are not folded when the hardware side effect is observable.
+8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, or an adjacent recall to another cell when the shared value/shape proof shows the recalled decimal value or structural hex/super display shape is already visible in X. The rewrite fires only when the recall is not the last X2 sync before a context-sensitive `.`/`/-/`/`ВП` restoration before the next X2-affecting op, including direct conditional/`F Lx` fallthrough syncs and direct `В/О` returns, or when the same shared proof shows X2 already carries the recalled decimal value or structural hex/super shape across an X2-preserving gap. Its stack lift still cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors and loop-counter recalls are not folded when the hardware side effect is observable.
 9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, or another stack-shifting producer, possibly through stack-preserving labels/stores/plain ops and path-safe direct conditional/counted-loop fallthroughs, when that producer already supplies the current X in Y, unless the full CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.

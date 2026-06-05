@@ -1734,6 +1734,7 @@ describe("ir passes on synthetic programs", () => {
       inX: true,
       x2SyncRegister: undefined,
       x2SyncValue: false,
+      x2SyncShape: true,
     });
   });
 
@@ -1759,6 +1760,32 @@ describe("ir passes on synthetic programs", () => {
       inX: true,
       x2SyncRegister: undefined,
       x2SyncValue: false,
+      x2SyncShape: true,
+    });
+  });
+
+  it("recall removal analysis treats structural X2 shape equality as a redundant sync", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      recall("3", "preload const FACE"),
+      recall("2"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const x2RegisterStates = computeX2RegisterStates(program);
+    const x2ValueStates = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(analyzeRecallRemoval(program, 3, x2RegisterStates[3], x2ValueStates[3])).toMatchObject({
+      register: "2",
+      redundantSyncRegister: undefined,
+      redundantSyncValue: false,
+      redundantSyncShape: true,
+      x2SyncRedundant: true,
+      exposesStackLift: false,
+      exposesX2Restore: false,
+      removable: true,
     });
   });
 
@@ -4329,6 +4356,31 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse drops structural recall before preserving gap and ВП when X2 shape already matches", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("3", "preload const FACE"),
+      recall("2"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const FACE"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("3", "preload const FACE"),
+      plain(0x20, "F pi"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
   });
 
   it("last-x-reuse keeps redundant X2 sync before immediate ВП context", () => {

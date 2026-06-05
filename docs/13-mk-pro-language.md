@@ -1451,9 +1451,12 @@ The pipeline currently contains:
   skip selector mutation. С/П acts as a barrier because the user may overwrite X during pause;
   context-sensitive `.`/`/-/`/`ВП` restoration also blocks the rewrite when the recall
   is the last X2 sync. If X2-register dataflow proves the same register is
-  already synced and the immediate previous-command context is preserved, the
-  recall can be removed. The same proof accepts stable indirect recalls
-  (`К П->X R7..Re`) when lowering has proved the actual memory target.
+  already synced, or the value/shape proof shows hidden X2 already carries the
+  same decimal fact or structural hex/super shape across an X2-preserving gap,
+  the recall can be removed. Structural shape sync proofs do not make a later
+  `.` dot-safe; they only prove the recall would not change hidden X2. The same
+  proof accepts stable indirect recalls (`К П->X R7..Re`) when lowering has
+  proved the actual memory target.
   Downstream binary/stack-consuming ops that can still observe the recall's
   stack lift through direct or proved-indirect flow also block the rewrite.
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
@@ -1469,8 +1472,8 @@ The pipeline currently contains:
   continuations through the same intersecting CFG proof; documented empty
   operators `К НОП`/`К 1`/`К 2` preserve it inside straight-line or merged CFG
   paths. Unknown indirect flow and absolute numeric direct targets are left untouched. The same
-  X2-register-aware `.`/`/-/`/`ВП` sync guard (stopped by direct `В/О` returns) plus
-  downstream stack-consumer guards are applied before removing a recall.
+  X2-register/value/shape-aware `.`/`/-/`/`ВП` sync guard (stopped by direct `В/О`
+  returns) plus downstream stack-consumer guards are applied before removing a recall.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
   target when the incoming branch path already carries that value in X. The
   proof can be the direct register alias from the tested X value, a decimal
