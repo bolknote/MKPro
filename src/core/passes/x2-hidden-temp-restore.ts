@@ -69,6 +69,7 @@ const run: IrPassFn = (ops) => {
       x2ValueStates[index],
       dotSafeStates[index] === true,
       immediateSyncStates[index] === true,
+      directReturnContext,
     );
     const canUseNormalizedDecimalEscape = sourceAlreadyDotSafe &&
       x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index);

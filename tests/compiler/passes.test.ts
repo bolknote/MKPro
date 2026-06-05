@@ -40,6 +40,7 @@ import {
   directReturnAnalysisContext,
   parseX2ShapeFact,
   recallValueProof,
+  x2CanUseClosedSignChangeDotSourceAt,
   x2CanonicalShapeFact,
   x2ClosedStructuralExponentMantissaShapeFact,
   x2ExponentMantissaSignChangedShapeFact,
@@ -1524,6 +1525,55 @@ describe("ir passes on synthetic programs", () => {
     expect(x2HasOnlyRestoreGapBeforeVp(directReturnGap, 6)).toBe(false);
     expect(x2HasOnlyRestoreGapBeforeVp(directReturnGap, 6, directReturnAnalysisContext(directReturnGap))).toBe(true);
     expect(x2HasOnlyRestoreGapBeforeVp(observingReturnGap, 6, directReturnAnalysisContext(observingReturnGap))).toBe(false);
+  });
+
+  it("x2 closed sign-change dot source crosses only transparent return helpers with context", () => {
+    const transparentGap: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      call("transparent"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const observingGap: IrOp[] = [
+      jump("main"),
+      label("observer"),
+      plain(0x0a, "."),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      call("observer"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const transparentStates = computeX2ValueStates(transparentGap);
+    const observingStates = computeX2ValueStates(observingGap);
+
+    expect(x2CanUseClosedSignChangeDotSourceAt(transparentGap, 9, transparentStates[9])).toBe(false);
+    expect(
+      x2CanUseClosedSignChangeDotSourceAt(
+        transparentGap,
+        9,
+        transparentStates[9],
+        directReturnAnalysisContext(transparentGap),
+      ),
+    ).toBe(true);
+    expect(
+      x2CanUseClosedSignChangeDotSourceAt(
+        observingGap,
+        9,
+        observingStates[9],
+        directReturnAnalysisContext(observingGap),
+      ),
+    ).toBe(false);
   });
 
   it("x2 value dataflow keeps signed zero sticky across repeated sign-change before ВП", () => {

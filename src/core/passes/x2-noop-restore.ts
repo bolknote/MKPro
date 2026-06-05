@@ -36,7 +36,14 @@ const run: IrPassFn = (ops) => {
     if (isDisplayFocusSensitive(op)) continue;
     const state = valueStates[index];
     if (
-      !x2CanUseDotRestoreAt(ops, index, state, dotSafeStates[index] === true, immediateSyncStates[index] === true) &&
+      !x2CanUseDotRestoreAt(
+        ops,
+        index,
+        state,
+        dotSafeStates[index] === true,
+        immediateSyncStates[index] === true,
+        directReturnContext,
+      ) &&
       !(
         x2StateHasSameNormalizedDecimalInXAndX2(state) &&
         x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)

@@ -48,6 +48,7 @@ const run: IrPassFn = (ops) => {
       index,
       dotSafeStates[index] === true,
       immediateSyncStates[index] === true,
+      context,
     )) continue;
     const deadRun = deadRestoreRunBeforeHardOverwrite(
       ops,
@@ -84,13 +85,17 @@ function isDeadRestoreCandidate(
   index: number,
   dotSafe: boolean,
   immediateSync: boolean,
+  context: DirectReturnAnalysisContext,
 ): boolean {
   if (state === undefined || !isFreeStandingPlain(op)) return false;
   if (isDisplayFocusSensitive(op)) return false;
   if (op.opcode === DOT) {
     if (x2StateHasUnsafeDotRestoreShapeX2(state)) return false;
     return x2StateIsClosedPlainContext(state) &&
-      (x2StateHasDotSafeDecimalX2(state) || x2CanUseDotRestoreAt(ops, index, state, dotSafe, immediateSync));
+      (
+        x2StateHasDotSafeDecimalX2(state) ||
+        x2CanUseDotRestoreAt(ops, index, state, dotSafe, immediateSync, context)
+      );
   }
   if (op.opcode === SIGN_CHANGE) {
     return isDeadSignRestoreCandidate(state);
@@ -111,8 +116,9 @@ function isDeadRestoreRecallOrProducerCandidate(
   index: number,
   dotSafe: boolean,
   immediateSync: boolean,
+  context: DirectReturnAnalysisContext,
 ): boolean {
-  return isDeadRestoreCandidate(ops, op, state, index, dotSafe, immediateSync) ||
+  return isDeadRestoreCandidate(ops, op, state, index, dotSafe, immediateSync, context) ||
     isDeadRecallCandidate(op) ||
     isDeadStackShiftingProducerCandidate(op);
 }
@@ -167,6 +173,7 @@ function deadRestoreRunBeforeHardOverwrite(
         index,
         dotSafeStates[index] === true,
         immediateSyncStates[index] === true,
+        context,
       )
     ) {
       remove.push(index);

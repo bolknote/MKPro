@@ -883,7 +883,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     still block the shortcut. That restore-gap proof may cross a simple direct
     or proved-indirect `ПП` helper that reaches `В/О` through only
     restore-transparent empty/address cells; helpers that store, branch,
-    restore X2, or expose another entry remain barriers.
+    restore X2, or expose another entry remain barriers. The same direct-return
+    context is used for closed-context `/-/` dot sources, so a transparent
+    helper between the modeled sign-change and the candidate `.` does not reset
+    the proof, while a helper that performs its own X2 restore still blocks it.
     A separate normalized/visible-decimal escape hatch handles proved X2-preserving
     gaps such as stable indirect conditionals: if `X` and `X2` carry the same
     normalized decimal fact, or restore to the same visible decimal after raw

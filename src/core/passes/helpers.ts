@@ -1259,19 +1259,26 @@ export function x2CanUseDotRestoreAt(
   state: X2ValueDataflowState | undefined,
   dotSafe: boolean,
   immediateSync: boolean,
+  context?: DirectReturnAnalysisContext,
 ): boolean {
-  return dotSafe || immediateSync || x2CanUseClosedSignChangeDotSourceAt(ops, index, state);
+  return dotSafe || immediateSync || x2CanUseClosedSignChangeDotSourceAt(ops, index, state, context);
 }
 
 export function x2CanUseClosedSignChangeDotSourceAt(
   ops: readonly IrOp[],
   index: number,
   state: X2ValueDataflowState | undefined,
+  context?: DirectReturnAnalysisContext,
 ): boolean {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
     if (op.kind === "label") continue;
     if (isFreeStandingX2EmptyOp(op)) continue;
+    if (
+      context !== undefined &&
+      isKnownReturnCallOp(op) &&
+      x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
+    ) continue;
     if (hasRewriteBarrier(op)) return false;
     return isFreeStandingX2SignChange(op) &&
       x2StateIsClosedPlainContext(state) &&

@@ -390,7 +390,14 @@ const run: IrPassFn = (ops) => {
       runAtIndex !== undefined &&
       isFreshClosedDecimalEntry(state) &&
       (
-        x2CanUseDotRestoreAt(ops, index, state, dotSafeStates[index] === true, immediateSyncStates[index] === true) ||
+        x2CanUseDotRestoreAt(
+          ops,
+          index,
+          state,
+          dotSafeStates[index] === true,
+          immediateSyncStates[index] === true,
+          directReturnContext,
+        ) ||
         (
           x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) &&
           x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
