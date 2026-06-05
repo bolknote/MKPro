@@ -1317,7 +1317,11 @@ The pipeline currently contains:
   eight-significant-digit dataflow bound; `/` is modeled exactly only for
   finite decimal quotients. `К max` is modeled exactly for concrete normalized
   decimal operands while preserving the hardware zero quirk: if either operand
-  is exactly zero, the result fact is zero. `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ`
+  is exactly zero, the result fact is zero. Stack transfers keep the same value
+  and shape lattice: `X↔Y` swaps visible `X`/`Y` facts, while `Y->X` copies the
+  current `Y` value or structural shape into visible `X`, leaves `Y` available,
+  and preserves the previous hidden X2 fact until a later X2-syncing command.
+  `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ`
   use the shared MK-61 mantissa-nibble model and seed decimal facts only when
   every resulting mantissa nibble remains `0`..`9`; hex-cell results stay
   structural/opaque. The degree/minute conversion opcodes `К °->′`,

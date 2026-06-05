@@ -101,6 +101,7 @@ const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
 const SAME_UNKNOWN_VALUE: X2ValueFact = "same:unknown";
 const X2_SIGN_CHANGE_OPCODE = 0x0b;
 const STACK_EXCHANGE_XY_OPCODE = 0x14;
+const STACK_COPY_Y_TO_X_OPCODE = 0x3e;
 const X2_EMPTY_OPCODE_START = 0x54;
 const X2_EMPTY_OPCODE_END = 0x56;
 const COMMUTATIVE_STABLE_EXPR_OPCODES = new Set<number>([
@@ -3202,6 +3203,9 @@ function transferPlainX2ValueState(
   if (op.opcode === STACK_EXCHANGE_XY_OPCODE) {
     return transferExchangeXYX2ValueState(input, op);
   }
+  if (op.opcode === STACK_COPY_Y_TO_X_OPCODE) {
+    return transferCopyYToXX2ValueState(input, op);
+  }
   const effect = plainX2Effect(op);
   const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
   if (closedExponentValues.size > 0) {
@@ -3748,6 +3752,34 @@ function transferExchangeXYX2ValueState(
     vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
+  };
+}
+
+function transferCopyYToXX2ValueState(
+  input: X2ValueDataflowState,
+  op: Extract<IrOp, { kind: "plain" }>,
+): X2ValueDataflowState {
+  const closed = closeX2ValueEntry(input);
+  const effect = plainX2Effect(op);
+  const x = cloneOptionalValueSet(closed.y);
+  const xShape = cloneOptionalShapeSet(closed.yShape);
+  const x2 = transferPlainX2ValueSet(closed, x, effect);
+  const x2Shape = transferPlainX2ShapeSet(closed, xShape, effect);
+  return {
+    x,
+    y: cloneOptionalValueSet(closed.y),
+    x2,
+    xShape,
+    yShape: cloneOptionalShapeSet(closed.yShape),
+    x2Shape,
+    entry: nextX2EntryStateForPlainEffect(effect),
+    vpContext: transferPlainX2VpContextState(closed, effect),
+    structuralEntry: noneX2StructuralEntryState(),
+    structuralVpContext: transferPlainX2StructuralVpContextState(closed, effect),
+    vpEntryMantissa: transferPlainX2VpEntryMantissaState(closed, op, x, x2, effect),
+    vpEntryShape: transferPlainX2VpEntryShapeState(closed, op, xShape, x2Shape, effect),
+    memory: closed.memory,
+    shapeMemory: closed.shapeMemory,
   };
 }
 

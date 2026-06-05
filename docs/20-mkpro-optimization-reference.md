@@ -842,8 +842,9 @@ Display rewrites are separated into strategy selection + body lowering.
   That lets repeated `F sqrt(2)`-style computations and their closed sign
   changes meet in X2 dataflow without relying on the producer address. The
   value dataflow also tracks a value-only `Y` fact through proved stack shifts,
-  through `X↔Y` swaps, and through documented operations whose stack profile
-  keeps `Y`, so stack-consuming documented pure computations seed
+  through `X↔Y` swaps, through undocumented `Y->X` copies that leave hidden X2
+  untouched, and through documented operations whose stack profile keeps `Y`, so
+  stack-consuming documented pure computations seed
   `expr-key:<opcode>(<Y>,<X>)` when both operands are stable sources and no
   concrete decimal result has already been proved; otherwise they remain
   producer-local. Stable keys for commutative binary opcodes (`+`, `*`, `К max`,

@@ -2076,6 +2076,36 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2 value dataflow copies Y facts through Y->X while preserving hidden X2", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x3e, "Y->X"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:1:normalized"]);
+    expect(x2ValueStateText(states[4]?.y)).toEqual(["decimal:1:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
+  });
+
+  it("x2 value dataflow copies structural Y shapes through Y->X", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const BEEF"),
+      plain(0x3e, "Y->X"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(states[4]?.yShape)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["hex:BEEF:mantissa"]);
+  });
+
   it("x2 value dataflow preserves Y through documented Y-keeping computations", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -5804,6 +5834,36 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0e, "В↑"),
       plain(0x02, "2"),
       plain(0x24, "F x^y"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.0 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses values copied through Y->X after a later X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x3e, "Y->X"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x3e, "Y->X"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.0 from hidden X2 temp" } },
       halt(),
