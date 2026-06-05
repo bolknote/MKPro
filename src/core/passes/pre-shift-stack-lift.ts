@@ -1,4 +1,5 @@
 import type { IrOp } from "../types.ts";
+import { getOpcode } from "../opcodes.ts";
 import {
   analyzeX2StackEffect,
   directReturnAnalysisContext,
@@ -6,6 +7,7 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
+  knownIndirectFlowTarget,
   knownReturnCallReturnsThroughTransparentRange,
   plainPreservesXValue,
   removingRecallCanExposeX2Restore,
@@ -93,6 +95,7 @@ function isBackwardStackLiftX2SyncGap(
   if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
   if (op.kind === "label") return !context.labelEntries.has(index);
   if (isKnownReturnCallOp(op)) return directReturnPreservesStackXAndX2(ops, op, context);
+  if (isKnownFallthroughStackX2Gap(op)) return true;
   switch (op.kind) {
     case "store":
     case "indirect-store":
@@ -105,6 +108,15 @@ function isBackwardStackLiftX2SyncGap(
     default:
       return false;
   }
+}
+
+function isKnownFallthroughStackX2Gap(op: IrOp): boolean {
+  if (op.kind !== "cjump" && op.kind !== "loop" && op.kind !== "indirect-cjump") return false;
+  if (op.kind === "indirect-cjump" && knownIndirectFlowTarget(op) === undefined) return false;
+  const effect = analyzeX2StackEffect(op);
+  if (!effect.stackPreserves) return false;
+  const fallthroughX2 = getOpcode(op.opcode).conditionalX2Effect?.fallthrough;
+  return fallthroughX2 === "affects" || fallthroughX2 === "preserves";
 }
 
 function directReturnPreservesStackXAndX2(

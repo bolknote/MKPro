@@ -255,6 +255,16 @@ function knownTargetIndirectCall(register: RegisterName, target: number): IrOp {
   };
 }
 
+function indirectCjump(register: RegisterName): IrOp {
+  return {
+    kind: "indirect-cjump",
+    condition: "==0",
+    register,
+    opcode: 0xe0 + REGISTER_INDEX[register],
+    meta: { mnemonic: `К x=0 ${register}` },
+  };
+}
+
 function knownTargetIndirectCjump(register: RegisterName, target: number): IrOp {
   return {
     kind: "indirect-cjump",
@@ -7519,6 +7529,89 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0a, "."),
       halt(),
       jump("entry"),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift removes post-producer В↑ through direct conditional fallthrough", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      cjump("done"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      cjump("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift removes post-producer В↑ through counted-loop fallthrough", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      loop("done"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      loop("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift removes post-producer В↑ through proved indirect conditional fallthrough", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      knownTargetIndirectCjump("7", 5),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      knownTargetIndirectCjump("7", 5),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps post-producer В↑ across unknown indirect conditionals", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      indirectCjump("7"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
     ];
     const result = preShiftStackLift.run(program, ctx);
 
