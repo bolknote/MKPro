@@ -1881,11 +1881,23 @@ function recallRemovalPreservesImmediateVpRestoreContext(
   state: X2ValueDataflowState | undefined,
   valueProof: RecallValueProof | undefined,
 ): boolean {
-  if (state === undefined || valueProof === undefined || valueProof.x2SyncShape !== true) return false;
+  if (
+    state === undefined ||
+    valueProof === undefined ||
+    (valueProof.x2SyncShape !== true && valueProof.x2SyncValue !== true)
+  ) return false;
   const op = ops[recallIndex];
   if (op === undefined) return false;
   const nextRestore = nextImmediateX2RestoreOp(ops, recallIndex + 1);
   if (nextRestore?.kind !== "plain" || nextRestore.opcode !== 0x0c) return false;
+  const recalledValues = recallX2ValueFacts(state, valueProof.register, true, op);
+  const recalledMantissas = vpEntryMantissasFromValueFacts(recalledValues);
+  const vpContext = analyzeX2VpShapeContext(state);
+  if (
+    vpContext.kind === "active-mantissa" &&
+    sameNonEmptyStringSet(vpContext.mantissa, recalledMantissas)
+  ) return true;
+  if (sameNonEmptyStringSet(state.vpEntryMantissa, recalledMantissas)) return true;
   const recalledShapes = recallStructuralShapeFacts(op, state, valueProof.register);
   return x2ShapeSetsHaveSameStructuralShape(state.vpEntryShape, recalledShapes);
 }

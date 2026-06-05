@@ -3090,6 +3090,57 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("recall removal analysis accepts immediate ВП when the decimal VP source is unchanged", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const x2RegisterStates = computeX2RegisterStates(program);
+    const x2ValueStates = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(analyzeRecallRemoval(program, 6, x2RegisterStates[6], x2ValueStates[6])).toMatchObject({
+      register: "2",
+      redundantSyncValue: true,
+      x2SyncRedundant: true,
+      exposesStackLift: false,
+      exposesX2Restore: false,
+      removable: true,
+    });
+  });
+
+  it("recall removal analysis keeps immediate ВП when a store reset the decimal VP source", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("4"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const x2RegisterStates = computeX2RegisterStates(program);
+    const x2ValueStates = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(analyzeRecallRemoval(program, 7, x2RegisterStates[7], x2ValueStates[7])).toMatchObject({
+      register: "2",
+      redundantSyncValue: true,
+      x2SyncRedundant: true,
+      exposesStackLift: false,
+      exposesX2Restore: true,
+      removable: false,
+    });
+  });
+
   it("recall removal analysis keeps immediate ВП when a store reset the structural VP source", () => {
     const program: IrOp[] = [
       recall("1", "preload const FACE"),
@@ -7125,6 +7176,52 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0c, "ВП"),
       halt(),
     ]);
+  });
+
+  it("last-x-reuse drops decimal recall before immediate ВП when the VP source already matches", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse keeps decimal recall before immediate ВП when a store reset the VP source", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      store("4"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("last-x-reuse keeps structural recall before immediate ВП when a store reset the VP source", () => {
