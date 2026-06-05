@@ -1204,7 +1204,10 @@ the program.
 The pipeline currently contains:
 
 - **store-recall-peephole** — drops adjacent `X->П r ; П->X r`, or a
-  stable-indirect proved same-cell `К X->П R7..Re ; К П->X R7..Re`, only when
+  stable-indirect proved same-cell `К X->П R7..Re ; К П->X R7..Re`. It can
+  also drop an adjacent recall to a different register when the shared
+  value/shape proof shows the recalled decimal value or structural display
+  shape is already in `X`. The rewrite fires only when
   the removed recall is not the visible X2 sync before a context-sensitive
   `.`/`/-/`/`ВП` restoration. If the shared X2-register dataflow proves that X2
   already contains the same register value and at least one executable

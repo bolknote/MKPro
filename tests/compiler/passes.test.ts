@@ -6577,6 +6577,40 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("store-recall-peephole drops recall when value proof shows X is unchanged", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("6"),
+      recall("1", "preload const 2"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      store("6"),
+      halt(),
+    ]);
+  });
+
+  it("store-recall-peephole drops structural recall when shape proof shows X is unchanged", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("6"),
+      recall("2", "preload const FACE"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const FACE"),
+      store("6"),
+      halt(),
+    ]);
+  });
+
   it("store-recall-peephole keeps mutating indirect store/recall pairs", () => {
     const program: IrOp[] = [
       knownTargetIndirectStore("4", "2"),

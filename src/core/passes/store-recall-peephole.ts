@@ -26,7 +26,7 @@ const run: IrPassFn = (ops) => {
     if (
       storedRegister !== undefined &&
       recalledRegister !== undefined &&
-      storedRegister === recalledRegister &&
+      (storedRegister === recalledRegister || removal?.valueProof?.inX === true) &&
       removal?.removable === true
     ) {
       result.push(current);
