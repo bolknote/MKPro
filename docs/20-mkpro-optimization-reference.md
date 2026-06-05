@@ -933,7 +933,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     branch target label onto the branch's own address byte, allowing that
     operand byte to be the first executed opcode.
 27. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`),
-    inert empty-op `КНОП ВП`/`К1 ВП`/`К2 ВП` forms, adjacent `/-/ /-/`
+    inert empty-op runs before `ВП`, including marker labels between the
+    empty ops and the exponent-entry command, adjacent `/-/ /-/`
     exponent-sign toggles, and shape-proved empty separators after at least
     one exponent digit before a non-digit command. It also uses the separate
     VP/exponent context to remove empty separators before `/-/` after

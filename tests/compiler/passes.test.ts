@@ -7376,6 +7376,73 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("vp-splice removes a full empty run before ВП", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x54, "КНОП"),
+      plain(0x55, "К1"),
+      plain(0x56, "К2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes an empty run plus redundant ВП in one segment", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x54, "КНОП"),
+      plain(0x55, "К1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes an empty run before ВП across marker labels", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x54, "КНОП"),
+      label("marker"),
+      plain(0x55, "К1"),
+      label("entry"),
+      plain(0x56, "К2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      label("marker"),
+      label("entry"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice removes an empty separator after an exponent digit before a non-digit command", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),

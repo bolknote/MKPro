@@ -161,6 +161,21 @@ function canRemoveClosedContextSignPairBeforeProvedVp(
   return x2StatesHaveSameVpEntrySource(state, stateAfterPair);
 }
 
+function freeStandingEmptyRunBefore(ops: readonly IrOp[], index: number): readonly number[] {
+  const indexes: number[] = [];
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const op = ops[cursor]!;
+    if (op.kind === "label") continue;
+    if (isFreeStandingEmptyOp(op)) {
+      indexes.push(cursor);
+      continue;
+    }
+    break;
+  }
+  indexes.reverse();
+  return indexes;
+}
+
 function nextNonLabelIndex(ops: readonly IrOp[], start: number): number | undefined {
   for (let index = start; index < ops.length; index += 1) {
     if (ops[index]!.kind !== "label") return index;
@@ -188,7 +203,7 @@ function sameNonEmptyStringSet(left: ReadonlySet<string> | undefined, right: Rea
 
 // These rewrites are proven behaviorally equivalent on the MK-61 emulator:
 //   ВП ВП  ≡ ВП   (a second exponent-entry while already in exponent mode is inert)
-//   КНОП/К1/К2 ВП ≡ ВП  (an empty op immediately before exponent entry is removable)
+//   КНОП/К1/К2 ... ВП ≡ ВП  (empty ops immediately before exponent entry are removable)
 //   ВП ... /-/ /-/ ... ≡ ВП ... ... while the dataflow proves exponent-entry
 //   value-safe /-/ /-/ ≡ empty in closed context when X and X2 are proven equal,
 //       unless the pair shields a downstream context-sensitive X2 restore
@@ -209,10 +224,17 @@ const run: IrPassFn = (ops) => {
       remove.add(i);
       continue;
     }
-    // КНОП/К1/К2 ВП -> ВП : drop the inert empty op preceding exponent entry.
-    if (isFreeStandingEmptyOp(prev) && isFreeStandingVp(cur)) {
-      remove.add(i - 1);
-      continue;
+    // КНОП/К1/К2 ... ВП -> ВП : drop the inert empty run preceding exponent entry.
+    if (isFreeStandingVp(cur)) {
+      const emptyRun = freeStandingEmptyRunBefore(ops, i);
+      if (emptyRun.length > 0) {
+        for (const emptyIndex of emptyRun) remove.add(emptyIndex);
+        const firstEmpty = emptyRun[0]!;
+        if (firstEmpty === i - emptyRun.length && firstEmpty > 0 && isFreeStandingVp(ops[firstEmpty - 1]!)) {
+          remove.add(i);
+        }
+        continue;
+      }
     }
     // After at least one exponent digit, an empty op only separates the number
     // from the following non-digit command. Removing it leaves that following
