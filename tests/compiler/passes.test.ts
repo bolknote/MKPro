@@ -3067,6 +3067,53 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("recall removal analysis accepts immediate ВП when the structural VP source is unchanged", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("3", "preload const FACE"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const x2RegisterStates = computeX2RegisterStates(program);
+    const x2ValueStates = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(analyzeRecallRemoval(program, 4, x2RegisterStates[4], x2ValueStates[4])).toMatchObject({
+      register: "2",
+      redundantSyncShape: true,
+      x2SyncRedundant: true,
+      exposesStackLift: false,
+      exposesX2Restore: false,
+      removable: true,
+    });
+  });
+
+  it("recall removal analysis keeps immediate ВП when a store reset the structural VP source", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("3", "preload const FACE"),
+      store("4"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const x2RegisterStates = computeX2RegisterStates(program);
+    const x2ValueStates = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(analyzeRecallRemoval(program, 5, x2RegisterStates[5], x2ValueStates[5])).toMatchObject({
+      register: "2",
+      redundantSyncShape: true,
+      x2SyncRedundant: true,
+      exposesStackLift: false,
+      exposesX2Restore: true,
+      removable: false,
+    });
+  });
+
   it("recall removal analysis combines stack-lift and X2 value-sync safety", () => {
     const program: IrOp[] = [
       plain(0x35, "К {x}"),
@@ -7057,12 +7104,36 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("last-x-reuse keeps structural recall before immediate ВП context", () => {
+  it("last-x-reuse drops structural recall before immediate ВП when the VP source already matches", () => {
     const program: IrOp[] = [
       recall("1", "preload const FACE"),
       store("2"),
       plain(0x0d, "Cx"),
       recall("3", "preload const FACE"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const FACE"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("3", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse keeps structural recall before immediate ВП when a store reset the VP source", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("3", "preload const FACE"),
+      store("4"),
       recall("2"),
       plain(0x0c, "ВП"),
       halt(),

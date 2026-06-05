@@ -1855,11 +1855,13 @@ export function analyzeRecallRemoval(
   const redundantSyncValue = valueProof?.x2SyncValue === true;
   const redundantSyncShape = valueProof?.x2SyncShape === true;
   const exposesStackLift = removingRecallCanExposeStackLift(ops, recallIndex);
-  const exposesX2Restore = removingRecallCanExposeX2Restore(ops, recallIndex, {
-    redundantSyncRegister,
-    redundantSyncValue,
-    redundantSyncShape,
-  });
+  const exposesX2Restore =
+    removingRecallCanExposeX2Restore(ops, recallIndex, {
+      redundantSyncRegister,
+      redundantSyncValue,
+      redundantSyncShape,
+    }) &&
+    !recallRemovalPreservesImmediateVpRestoreContext(ops, recallIndex, x2ValueState, valueProof);
   return {
     register,
     valueProof,
@@ -1871,6 +1873,30 @@ export function analyzeRecallRemoval(
     exposesX2Restore,
     removable: !exposesStackLift && !exposesX2Restore,
   };
+}
+
+function recallRemovalPreservesImmediateVpRestoreContext(
+  ops: readonly IrOp[],
+  recallIndex: number,
+  state: X2ValueDataflowState | undefined,
+  valueProof: RecallValueProof | undefined,
+): boolean {
+  if (state === undefined || valueProof === undefined || valueProof.x2SyncShape !== true) return false;
+  const op = ops[recallIndex];
+  if (op === undefined) return false;
+  const nextRestore = nextImmediateX2RestoreOp(ops, recallIndex + 1);
+  if (nextRestore?.kind !== "plain" || nextRestore.opcode !== 0x0c) return false;
+  const recalledShapes = recallStructuralShapeFacts(op, state, valueProof.register);
+  return x2ShapeSetsHaveSameStructuralShape(state.vpEntryShape, recalledShapes);
+}
+
+function nextImmediateX2RestoreOp(ops: readonly IrOp[], start: number): IrOp | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    return op;
+  }
+  return undefined;
 }
 
 function emptyRegisterDataflowState(): RegisterDataflowState {
