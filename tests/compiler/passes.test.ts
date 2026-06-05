@@ -1976,6 +1976,34 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2 value dataflow models concrete К max including its zero quirk", () => {
+    const maxProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x36, "К max"),
+      halt(),
+    ];
+    const zeroQuirkProgram: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0e, "В↑"),
+      plain(0x00, "0"),
+      plain(0x36, "К max"),
+      halt(),
+    ];
+    const maxStates = computeX2ValueStates(maxProgram);
+    const zeroQuirkStates = computeX2ValueStates(zeroQuirkProgram);
+
+    expect(x2ValueStateText(maxStates[4]?.x)).toEqual([
+      "decimal:2:normalized",
+      "expr:3",
+    ]);
+    expect(x2ValueStateText(zeroQuirkStates[4]?.x)).toEqual([
+      "decimal:0:normalized",
+      "expr:3",
+    ]);
+  });
+
   it("x2 value dataflow canonicalizes stable expr keys for commutative binary computations", () => {
     const plusProgram: IrOp[] = [
       recall("2"),
@@ -2045,12 +2073,12 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[4]?.y)).toEqual(["decimal:1:normalized"]);
     expect(x2ValueStateText(states[5]?.x)).toEqual([
-      "expr-key:37(decimal:1:normalized,expr-key:36(decimal:1:normalized,decimal:2:normalized))",
+      "expr-key:37(decimal:1:normalized,decimal:2:normalized)",
       "expr:4",
     ]);
     expect(x2ValueStateText(states[5]?.y)).toEqual(["decimal:1:normalized"]);
     expect(x2ValueStateText(states[6]?.x2)).toEqual([
-      "expr-key:37(decimal:1:normalized,expr-key:36(decimal:1:normalized,decimal:2:normalized))",
+      "expr-key:37(decimal:1:normalized,decimal:2:normalized)",
       "expr:4",
     ]);
   });
@@ -5329,6 +5357,33 @@ describe("ir passes on synthetic programs", () => {
       plain(0x13, "/"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.25 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses concrete К max X2 facts", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x05, "5"),
+      plain(0x36, "К max"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x05, "5"),
+      plain(0x36, "К max"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
       halt(),
     ]);
   });

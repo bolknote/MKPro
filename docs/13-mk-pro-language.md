@@ -1308,9 +1308,11 @@ The pipeline currently contains:
   signed-zero decimalization. Concrete normalized decimal `Y,X` operands for
   `+`, `-`, and `*` are also modeled exactly when the normalized result fits the
   eight-significant-digit dataflow bound; `/` is modeled exactly only for
-  finite decimal quotients. Wider results, division by zero, non-terminating
-  division, and structural hex/super operands keep only structural or opaque
-  expression facts. The shared
+  finite decimal quotients. `К max` is modeled exactly for concrete normalized
+  decimal operands while preserving the hardware zero quirk: if either operand
+  is exactly zero, the result fact is zero. Wider results, division by zero,
+  non-terminating division, and structural hex/super operands keep only
+  structural or opaque expression facts. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
   mantissa sign toggles, and non-negative exponent shifts that are pure display

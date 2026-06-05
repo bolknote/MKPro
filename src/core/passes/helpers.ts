@@ -642,7 +642,7 @@ function plainProducesConcreteBinaryDecimalValues(
   x: X2ValueSet | undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
-  if (op.opcode < 0x10 || op.opcode > 0x13) return output;
+  if ((op.opcode < 0x10 || op.opcode > 0x13) && op.opcode !== 0x36) return output;
   for (const yFact of y ?? []) {
     const yValue = normalizedDecimalValueFromFact(yFact);
     if (yValue === undefined) continue;
@@ -716,6 +716,7 @@ function concreteDecimalBinaryValue(opcode: number, y: string, x: string): strin
   if (left === undefined || right === undefined) return undefined;
   if (opcode === 0x12) return exactDecimalToNormalized(left.num * right.num, left.scale + right.scale);
   if (opcode === 0x13) return exactDecimalDivisionToNormalized(left, right);
+  if (opcode === 0x36) return exactDecimalMaxToNormalized(left, right);
   if (opcode !== 0x10 && opcode !== 0x11) return undefined;
   const scale = Math.max(left.scale, right.scale);
   const yNum = left.num * pow10BigInt(scale - left.scale);
@@ -767,6 +768,14 @@ function exactDecimalDivisionToNormalized(left: ExactDecimalParts, right: ExactD
     powBigInt(2n, scale - factors.twos) *
     powBigInt(5n, scale - factors.fives);
   return exactDecimalToNormalized(scaledNumerator, scale);
+}
+
+function exactDecimalMaxToNormalized(left: ExactDecimalParts, right: ExactDecimalParts): string | undefined {
+  if (left.num === 0n || right.num === 0n) return "0";
+  const scale = Math.max(left.scale, right.scale);
+  const leftNum = left.num * pow10BigInt(scale - left.scale);
+  const rightNum = right.num * pow10BigInt(scale - right.scale);
+  return exactDecimalToNormalized(leftNum >= rightNum ? leftNum : rightNum, scale);
 }
 
 function decimalDenominatorFactors(input: bigint): { readonly twos: number; readonly fives: number } | undefined {
