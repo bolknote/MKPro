@@ -2139,6 +2139,73 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2 value dataflow models exact MK-61 degree/minute conversion facts", () => {
+    const toMinutesProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x03, "3"),
+      plain(0x26, "К °->′"),
+      halt(),
+    ];
+    const toSecondsProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x01, "1"),
+      plain(0x04, "4"),
+      plain(0x00, "0"),
+      plain(0x04, "4"),
+      plain(0x02, "2"),
+      plain(0x2a, "К °->′\""),
+      halt(),
+    ];
+    const fromSecondsProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x03, "3"),
+      plain(0x04, "4"),
+      plain(0x05, "5"),
+      plain(0x30, "К °<-′\""),
+      halt(),
+    ];
+    const fromMinutesProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x05, "5"),
+      plain(0x33, "К °<-′"),
+      halt(),
+    ];
+    const nonTerminatingToMinutesProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0x26, "К °->′"),
+      halt(),
+    ];
+
+    expect(x2ValueStateText(computeX2ValueStates(toMinutesProgram)[4]?.x)).toEqual([
+      "decimal:1.5:normalized",
+      "expr:3",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(toSecondsProgram)[8]?.x)).toEqual([
+      "decimal:1.2345:normalized",
+      "expr:7",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(fromSecondsProgram)[7]?.x)).toEqual([
+      "decimal:1.14042:normalized",
+      "expr:6",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(fromMinutesProgram)[5]?.x)).toEqual([
+      "decimal:1.15:normalized",
+      "expr:4",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(nonTerminatingToMinutesProgram)[4]?.x)).toEqual([
+      "expr-key:26(decimal:1.5:normalized)",
+      "expr:3",
+    ]);
+  });
+
   it("x2 value dataflow does not seed expr facts from non-whitelisted or role-bearing plain ops", () => {
     const randomProgram: IrOp[] = [
       plain(0x02, "2"),
@@ -5649,6 +5716,35 @@ describe("ir passes on synthetic programs", () => {
       plain(0x3a, "К ИНВ"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 8.6666666 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses exact MK-61 degree/minute conversion X2 facts", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x05, "5"),
+      plain(0x33, "К °<-′"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x01, "1"),
+      plain(0x05, "5"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x05, "5"),
+      plain(0x33, "К °<-′"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.15 from hidden X2 temp" } },
       halt(),
     ]);
   });

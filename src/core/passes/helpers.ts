@@ -605,6 +605,10 @@ function stableExpressionKeyHasConcreteDecimalResult(
   if (op.opcode === 0x21) return decimalSquareRootFromFactKey(key) !== undefined;
   if (op.opcode === 0x22) return decimalSquareFromFactKey(key) !== undefined;
   if (op.opcode === 0x23) return decimalReciprocalFromFactKey(key) !== undefined;
+  if (op.opcode === 0x26) return decimalToMinutesFromFactKey(key) !== undefined;
+  if (op.opcode === 0x2a) return decimalToMinutesSecondsFromFactKey(key) !== undefined;
+  if (op.opcode === 0x30) return decimalFromMinutesSecondsFromFactKey(key) !== undefined;
+  if (op.opcode === 0x33) return decimalFromMinutesFromFactKey(key) !== undefined;
   if (op.opcode === 0x3a) return decimalBitwiseNotFromFactKey(key) !== undefined;
   if (op.opcode === 0x35) return decimalFractionPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x34) return decimalIntegerPartFromFactKey(key) !== undefined;
@@ -635,8 +639,12 @@ function plainProducesConcreteDecimalValues(
     op.opcode !== 0x21 &&
     op.opcode !== 0x22 &&
     op.opcode !== 0x23 &&
+    op.opcode !== 0x26 &&
+    op.opcode !== 0x2a &&
+    op.opcode !== 0x30 &&
     op.opcode !== 0x31 &&
     op.opcode !== 0x32 &&
+    op.opcode !== 0x33 &&
     op.opcode !== 0x34 &&
     op.opcode !== 0x35 &&
     op.opcode !== 0x3a
@@ -686,6 +694,14 @@ function concreteDecimalUnaryValue(opcode: number, value: string): string | unde
       return decimalSquare(value);
     case 0x23:
       return decimalReciprocal(value);
+    case 0x26:
+      return decimalToMinutes(value);
+    case 0x2a:
+      return decimalToMinutesSeconds(value);
+    case 0x30:
+      return decimalFromMinutesSeconds(value);
+    case 0x33:
+      return decimalFromMinutes(value);
     case 0x3a:
       return decimalBitwiseNot(value);
     case 0x31:
@@ -719,6 +735,26 @@ function decimalSquareFromFactKey(key: string): string | undefined {
 function decimalReciprocalFromFactKey(key: string): string | undefined {
   const decimal = decimalFromFactKey(key);
   return decimal === undefined ? undefined : decimalReciprocal(decimal);
+}
+
+function decimalToMinutesFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalToMinutes(decimal);
+}
+
+function decimalToMinutesSecondsFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalToMinutesSeconds(decimal);
+}
+
+function decimalFromMinutesSecondsFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalFromMinutesSeconds(decimal);
+}
+
+function decimalFromMinutesFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalFromMinutes(decimal);
 }
 
 function decimalBitwiseNotFromFactKey(key: string): string | undefined {
@@ -792,6 +828,63 @@ function decimalReciprocal(value: string): string | undefined {
     : exactDecimalDivisionToNormalized({ num: 1n, scale: 0 }, input);
 }
 
+function decimalToMinutes(value: string): string | undefined {
+  const input = decimalWholeFractionParts(value);
+  if (input === undefined) return undefined;
+  const minutes = centesimalFieldValue(input.fraction, 2);
+  if (minutes === undefined || minutes.num >= 60n * pow10BigInt(minutes.scale)) return undefined;
+  const denominator = 60n * pow10BigInt(minutes.scale);
+  const numerator = input.integer * denominator + minutes.num;
+  return exactDecimalDivisionToNormalized(
+    { num: input.sign === "-" ? -numerator : numerator, scale: 0 },
+    { num: denominator, scale: 0 },
+  );
+}
+
+function decimalToMinutesSeconds(value: string): string | undefined {
+  const input = decimalWholeFractionParts(value);
+  if (input === undefined) return undefined;
+  const fields = centesimalMinuteSecondFields(input.fraction);
+  if (fields === undefined) return undefined;
+  const { minutes, seconds } = fields;
+  if (minutes >= 60n || seconds.num >= 60n * pow10BigInt(seconds.scale)) return undefined;
+  const scale = seconds.scale;
+  const denominator = 3600n * pow10BigInt(scale);
+  const numerator = input.integer * denominator + minutes * 60n * pow10BigInt(scale) + seconds.num;
+  return exactDecimalDivisionToNormalized(
+    { num: input.sign === "-" ? -numerator : numerator, scale: 0 },
+    { num: denominator, scale: 0 },
+  );
+}
+
+function decimalFromMinutes(value: string): string | undefined {
+  const input = decimalWholeFractionParts(value);
+  if (input === undefined) return undefined;
+  const scale = input.fraction.length;
+  const fraction = input.fraction.length === 0 ? 0n : BigInt(input.fraction);
+  const denominatorScale = scale + 2;
+  const numerator = input.integer * pow10BigInt(denominatorScale) + fraction * 60n;
+  return exactDecimalToNormalized(input.sign === "-" ? -numerator : numerator, denominatorScale);
+}
+
+function decimalFromMinutesSeconds(value: string): string | undefined {
+  const input = decimalWholeFractionParts(value);
+  if (input === undefined) return undefined;
+  const scale = input.fraction.length;
+  const fraction = input.fraction.length === 0 ? 0n : BigInt(input.fraction);
+  const totalMinutesNumerator = fraction * 60n;
+  const scaleFactor = pow10BigInt(scale);
+  const minutes = totalMinutesNumerator / scaleFactor;
+  if (minutes >= 60n) return undefined;
+  const minuteRemainder = totalMinutesNumerator - minutes * scaleFactor;
+  const denominatorScale = scale + 4;
+  const numerator =
+    input.integer * pow10BigInt(denominatorScale) +
+    minutes * 100n * scaleFactor +
+    minuteRemainder * 60n;
+  return exactDecimalToNormalized(input.sign === "-" ? -numerator : numerator, denominatorScale);
+}
+
 function decimalBitwiseNot(value: string): string | undefined {
   const digits = decimalMantissaDigits(value);
   if (digits === undefined) return undefined;
@@ -807,6 +900,54 @@ function decimalBitwiseNot(value: string): string | undefined {
 interface ExactDecimalParts {
   readonly num: bigint;
   readonly scale: number;
+}
+
+interface DecimalWholeFractionParts {
+  readonly sign: "" | "-";
+  readonly integer: bigint;
+  readonly fraction: string;
+}
+
+interface ScaledCentesimalValue {
+  readonly num: bigint;
+  readonly scale: number;
+}
+
+function decimalWholeFractionParts(value: string): DecimalWholeFractionParts | undefined {
+  const match = /^(-?)([0-9]+)(?:\.([0-9]+))?$/u.exec(value);
+  if (match === null) return undefined;
+  return {
+    sign: match[1]! === "-" ? "-" : "",
+    integer: BigInt(match[2]!),
+    fraction: match[3] ?? "",
+  };
+}
+
+function centesimalFieldValue(raw: string, width: number): ScaledCentesimalValue | undefined {
+  if (!/^[0-9]*$/u.test(raw)) return undefined;
+  if (raw.length === 0) return { num: 0n, scale: 0 };
+  if (raw.length <= width) {
+    return {
+      num: BigInt(raw) * pow10BigInt(width - raw.length),
+      scale: 0,
+    };
+  }
+  return {
+    num: BigInt(raw),
+    scale: raw.length - width,
+  };
+}
+
+function centesimalMinuteSecondFields(
+  fraction: string,
+): { readonly minutes: bigint; readonly seconds: ScaledCentesimalValue } | undefined {
+  if (!/^[0-9]*$/u.test(fraction)) return undefined;
+  const minuteRaw = fraction.length <= 2 ? fraction : fraction.slice(0, 2);
+  const minuteValue = centesimalFieldValue(minuteRaw, 2);
+  if (minuteValue === undefined || minuteValue.scale !== 0) return undefined;
+  const secondRaw = fraction.length <= 2 ? "" : fraction.slice(2);
+  const seconds = centesimalFieldValue(secondRaw, 2);
+  return seconds === undefined ? undefined : { minutes: minuteValue.num, seconds };
 }
 
 function concreteDecimalBinaryValue(opcode: number, y: string, x: string): string | undefined {

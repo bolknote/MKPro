@@ -818,10 +818,14 @@ Display rewrites are separated into strategy selection + body lowering.
   preserved: if either operand is exactly zero, the proved result is zero.
   `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ` share the MK-61 mantissa-nibble model used
   by constant folding and seed decimal facts only when every resulting nibble is
-  still decimal; A-F/hex-cell results remain structural/opaque. Wider
-  products/quotients, division by zero, non-terminating division, irrational
-  square roots, fractional powers of ten, and non-decimal cases remain
-  structural/opaque rather than pretending to be an ordinary decimal value.
+  still decimal; A-F/hex-cell results remain structural/opaque. `К °->′`,
+  `К °->′"`, `К °<-′"`, and `К °<-′` seed exact decimal facts only when the
+  domain is safe, the rational sexagesimal conversion has a finite decimal
+  expansion, and the normalized result fits the eight-significant-digit proof
+  bound. Wider products/quotients, division by zero, non-terminating division,
+  irrational square roots, fractional powers of ten, hardware-rounded
+  sexagesimal conversions, and non-decimal cases remain structural/opaque
+  rather than pretending to be an ordinary decimal value.
   Later passes can therefore distinguish visible no-op
   integer/fraction/sign transforms and exact arithmetic transforms from
   observable hidden-X2 restores.

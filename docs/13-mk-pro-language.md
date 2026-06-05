@@ -1314,8 +1314,13 @@ The pipeline currently contains:
   is exactly zero, the result fact is zero. `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ`
   use the shared MK-61 mantissa-nibble model and seed decimal facts only when
   every resulting mantissa nibble remains `0`..`9`; hex-cell results stay
-  structural/opaque. Wider results, division by zero, non-terminating division,
-  irrational square roots, fractional powers of ten, and structural hex/super
+  structural/opaque. The degree/minute conversion opcodes `К °->′`,
+  `К °->′"`, `К °<-′"`, and `К °<-′` also seed exact decimal facts only for
+  domain-safe conversions whose rational result has a finite decimal expansion
+  and still fits the eight-significant-digit proof bound; hardware-rounded
+  sexagesimal cases remain opaque. Wider results, division by zero,
+  non-terminating division, irrational square roots, fractional powers of ten,
+  and structural hex/super
   operands keep only structural or opaque expression facts. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
