@@ -601,6 +601,10 @@ function stableExpressionKeyHasConcreteDecimalResult(
   key: string,
 ): boolean {
   if (decimalFromFactKey(key) === undefined) return false;
+  if (op.opcode === 0x15) return decimalPowerOfTenFromFactKey(key) !== undefined;
+  if (op.opcode === 0x21) return decimalSquareRootFromFactKey(key) !== undefined;
+  if (op.opcode === 0x22) return decimalSquareFromFactKey(key) !== undefined;
+  if (op.opcode === 0x23) return decimalReciprocalFromFactKey(key) !== undefined;
   if (op.opcode === 0x35) return decimalFractionPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x34) return decimalIntegerPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x31) return decimalAbsFromFactKey(key) !== undefined;
@@ -625,7 +629,16 @@ function plainProducesConcreteDecimalValues(
   x: X2ValueSet | undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
-  if (op.opcode !== 0x31 && op.opcode !== 0x32 && op.opcode !== 0x34 && op.opcode !== 0x35) return output;
+  if (
+    op.opcode !== 0x15 &&
+    op.opcode !== 0x21 &&
+    op.opcode !== 0x22 &&
+    op.opcode !== 0x23 &&
+    op.opcode !== 0x31 &&
+    op.opcode !== 0x32 &&
+    op.opcode !== 0x34 &&
+    op.opcode !== 0x35
+  ) return output;
   for (const fact of x ?? []) {
     const value = normalizedDecimalValueFromFact(fact);
     const concrete = value === undefined
@@ -657,6 +670,14 @@ function plainProducesConcreteBinaryDecimalValues(
 
 function concreteDecimalUnaryValue(opcode: number, value: string): string | undefined {
   switch (opcode) {
+    case 0x15:
+      return decimalPowerOfTen(value);
+    case 0x21:
+      return decimalSquareRoot(value);
+    case 0x22:
+      return decimalSquare(value);
+    case 0x23:
+      return decimalReciprocal(value);
     case 0x31:
       return decimalAbs(value);
     case 0x32:
@@ -668,6 +689,26 @@ function concreteDecimalUnaryValue(opcode: number, value: string): string | unde
     default:
       return undefined;
   }
+}
+
+function decimalPowerOfTenFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalPowerOfTen(decimal);
+}
+
+function decimalSquareRootFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalSquareRoot(decimal);
+}
+
+function decimalSquareFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalSquare(decimal);
+}
+
+function decimalReciprocalFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalReciprocal(decimal);
 }
 
 function decimalFractionPartFromFactKey(key: string): string | undefined {
@@ -703,6 +744,37 @@ function decimalSign(value: string): string | undefined {
   if (!/^-?[0-9]+(?:\.[0-9]+)?$/u.test(value)) return undefined;
   if (value === "0") return "0";
   return value.startsWith("-") ? "-1" : "1";
+}
+
+function decimalPowerOfTen(value: string): string | undefined {
+  const exponent = parseExactDecimal(value);
+  if (exponent === undefined || exponent.scale !== 0) return undefined;
+  const power = Number(exponent.num);
+  if (!Number.isSafeInteger(power) || power < -99 || power > 99) return undefined;
+  return power >= 0
+    ? exactDecimalToNormalized(pow10BigInt(power), 0)
+    : exactDecimalToNormalized(1n, -power);
+}
+
+function decimalSquareRoot(value: string): string | undefined {
+  const input = parseExactDecimal(value);
+  if (input === undefined || input.num < 0n || input.scale % 2 !== 0) return undefined;
+  const root = exactBigIntSquareRoot(input.num);
+  return root === undefined ? undefined : exactDecimalToNormalized(root, input.scale / 2);
+}
+
+function decimalSquare(value: string): string | undefined {
+  const input = parseExactDecimal(value);
+  return input === undefined
+    ? undefined
+    : exactDecimalToNormalized(input.num * input.num, input.scale * 2);
+}
+
+function decimalReciprocal(value: string): string | undefined {
+  const input = parseExactDecimal(value);
+  return input === undefined
+    ? undefined
+    : exactDecimalDivisionToNormalized({ num: 1n, scale: 0 }, input);
 }
 
 interface ExactDecimalParts {
@@ -776,6 +848,24 @@ function exactDecimalMaxToNormalized(left: ExactDecimalParts, right: ExactDecima
   const leftNum = left.num * pow10BigInt(scale - left.scale);
   const rightNum = right.num * pow10BigInt(scale - right.scale);
   return exactDecimalToNormalized(leftNum >= rightNum ? leftNum : rightNum, scale);
+}
+
+function exactBigIntSquareRoot(input: bigint): bigint | undefined {
+  if (input < 0n) return undefined;
+  if (input < 2n) return input;
+  let low = 1n;
+  let high = input;
+  while (low <= high) {
+    const mid = (low + high) / 2n;
+    const square = mid * mid;
+    if (square === input) return mid;
+    if (square < input) {
+      low = mid + 1n;
+    } else {
+      high = mid - 1n;
+    }
+  }
+  return undefined;
 }
 
 function decimalDenominatorFactors(input: bigint): { readonly twos: number; readonly fives: number } | undefined {

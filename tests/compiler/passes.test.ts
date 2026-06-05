@@ -2615,6 +2615,69 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(zeroSignStates[2]?.x2)).toEqual(["decimal:0:normalized"]);
   });
 
+  it("x2 value dataflow computes concrete unary arithmetic facts while preserving X2", () => {
+    const squareProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x22, "F x^2"),
+      halt(),
+    ];
+    const reciprocalProgram: IrOp[] = [
+      plain(0x04, "4"),
+      plain(0x23, "F 1/x"),
+      halt(),
+    ];
+    const sqrtProgram: IrOp[] = [
+      plain(0x09, "9"),
+      plain(0x21, "F sqrt"),
+      halt(),
+    ];
+    const irrationalSqrtProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      halt(),
+    ];
+    const pow10Program: IrOp[] = [
+      plain(0x03, "3"),
+      plain(0x15, "F 10^x"),
+      halt(),
+    ];
+    const negativePow10Program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x15, "F 10^x"),
+      halt(),
+    ];
+
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram)[5]?.x)).toEqual([
+      "decimal:1.44:normalized",
+      "expr:4",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram)[5]?.x2)).toEqual(["decimal:1.2:normalized"]);
+    expect(x2ValueStateText(computeX2ValueStates(reciprocalProgram)[2]?.x)).toEqual([
+      "decimal:0.25:normalized",
+      "expr:1",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(sqrtProgram)[2]?.x)).toEqual([
+      "decimal:3:normalized",
+      "expr:1",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(irrationalSqrtProgram)[2]?.x)).toEqual([
+      "expr-key:21(decimal:2:normalized)",
+      "expr:1",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(pow10Program)[2]?.x)).toEqual([
+      "decimal:1000:normalized",
+      "expr:1",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(negativePow10Program)[3]?.x)).toEqual([
+      "decimal:0.01:normalized",
+      "expr:2",
+    ]);
+  });
+
   it("x2 value dataflow does not decimalize negative integer fractional parts", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -5384,6 +5447,86 @@ describe("ir passes on synthetic programs", () => {
       plain(0x36, "К max"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses concrete unary arithmetic X2 facts", () => {
+    const squareProgram: IrOp[] = [
+      plain(0x04, "4"),
+      plain(0x22, "F x^2"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x06, "6"),
+      halt(),
+    ];
+    const reciprocalProgram: IrOp[] = [
+      plain(0x04, "4"),
+      plain(0x23, "F 1/x"),
+      plain(0x0e, "В↑"),
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x05, "5"),
+      halt(),
+    ];
+    const sqrtProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x04, "4"),
+      plain(0x04, "4"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const pow10Program: IrOp[] = [
+      plain(0x03, "3"),
+      plain(0x15, "F 10^x"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x00, "0"),
+      plain(0x00, "0"),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const squareResult = x2LiteralRestore.run(squareProgram, ctx);
+    const reciprocalResult = x2LiteralRestore.run(reciprocalProgram, ctx);
+    const sqrtResult = x2LiteralRestore.run(sqrtProgram, ctx);
+    const pow10Result = x2LiteralRestore.run(pow10Program, ctx);
+
+    expect(squareResult.applied).toBe(1);
+    expect(squareResult.ops).toEqual([
+      plain(0x04, "4"),
+      plain(0x22, "F x^2"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 16 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(reciprocalResult.applied).toBe(3);
+    expect(reciprocalResult.ops).toEqual([
+      plain(0x04, "4"),
+      plain(0x23, "F 1/x"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.25 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(sqrtResult.applied).toBe(1);
+    expect(sqrtResult.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x04, "4"),
+      plain(0x04, "4"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(pow10Result.applied).toBe(3);
+    expect(pow10Result.ops).toEqual([
+      plain(0x03, "3"),
+      plain(0x15, "F 10^x"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1000 from hidden X2 temp" } },
       halt(),
     ]);
   });

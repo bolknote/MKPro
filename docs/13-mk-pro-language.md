@@ -1299,7 +1299,8 @@ The pipeline currently contains:
   `super:*` facts until a later proof makes them dot-safe. Hex/super preloads
   with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural
   `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е` remains an
-  ordinary display digit. For concrete normalized decimal values, `К |x|`,
+  ordinary display digit. For concrete normalized decimal values, `F x^2`,
+  finite `F 1/x`, perfect-square `F sqrt`, integer-exponent `F 10^x`, `К |x|`,
   `К ЗН`, and `К [x]` are modeled as exact decimal results in visible `X`
   while preserving the previous hidden X2 fact. For non-negative concrete
   decimal values and negative non-integer concrete decimal values, `К {x}` is
@@ -1311,8 +1312,9 @@ The pipeline currently contains:
   finite decimal quotients. `К max` is modeled exactly for concrete normalized
   decimal operands while preserving the hardware zero quirk: if either operand
   is exactly zero, the result fact is zero. Wider results, division by zero,
-  non-terminating division, and structural hex/super operands keep only
-  structural or opaque expression facts. The shared
+  non-terminating division, irrational square roots, fractional powers of ten,
+  and structural hex/super operands keep only structural or opaque expression
+  facts. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
   mantissa sign toggles, and non-negative exponent shifts that are pure display
