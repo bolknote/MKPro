@@ -577,7 +577,7 @@ function plainProducesStableExpressionValues(
   ) {
     return new Set();
   }
-  const output = new Set<X2ValueFact>();
+  const output = plainProducesConcreteDecimalValues(op, x);
   const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
   if (info.stackEffect === "preserves") {
     for (const key of stableExpressionSourceKeys(x, xShape)) {
@@ -591,6 +591,28 @@ function plainProducesStableExpressionValues(
     }
   }
   return output;
+}
+
+function plainProducesConcreteDecimalValues(
+  op: Extract<IrOp, { kind: "plain" }>,
+  x: X2ValueSet | undefined,
+): Set<X2ValueFact> {
+  const output = new Set<X2ValueFact>();
+  if (op.opcode !== 0x35) return output;
+  for (const fact of x ?? []) {
+    const value = normalizedDecimalValueFromFact(fact);
+    const fractional = value === undefined ? undefined : nonNegativeDecimalFractionPart(value);
+    if (fractional !== undefined) output.add(decimalValueFact(fractional, "normalized"));
+  }
+  return output;
+}
+
+function nonNegativeDecimalFractionPart(value: string): string | undefined {
+  if (value.startsWith("-")) return undefined;
+  const match = /^([0-9]+)(?:\.([0-9]+))?$/u.exec(value);
+  if (match === null) return undefined;
+  const fraction = (match[2] ?? "").replace(/0+$/u, "");
+  return fraction.length === 0 ? "0" : `0.${fraction}`;
 }
 
 function plainProducesStableConstantExpressionValue(

@@ -1299,7 +1299,9 @@ The pipeline currently contains:
   `super:*` facts until a later proof makes them dot-safe. Hex/super preloads
   with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural
   `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е` remains an
-  ordinary display digit. The shared
+  ordinary display digit. For non-negative concrete decimal values, `К {x}` is
+  also modeled as an exact normalized fractional decimal in visible `X` while
+  preserving the previous hidden X2 fact. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
   mantissa sign toggles, and non-negative exponent shifts that are pure display
@@ -1698,7 +1700,11 @@ The pipeline currently contains:
   boundary markers. The pass can also drop a role-free, non-display `К {x}` when
   X2 value dataflow proves a closed plain-context `X` is already fractional
   (`0`, `0.x`, or `-0.x`) and the removed X2 sync cannot reach a later
-  context-sensitive `.`, `/-/`, or `ВП` restore.
+  context-sensitive `.`, `/-/`, or `ВП` restore. When the current hidden X2
+  value is already the same dot-restore value, that sync is treated as
+  redundant across a preserving executable gap before a later restore; an
+  immediate restore boundary is still kept unless a separate source proof
+  handles it.
 - **membership X2 restore** — membership set lowering may use `.` as a hidden
   X2 restore in non-display code. It is accepted only when the set collection
   assignable is byte-for-byte the tested collection, including indexed bank

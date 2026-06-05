@@ -1311,7 +1311,11 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr-key:35(decimal:2:normalized)", "expr:2"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual([
+      "decimal:0:normalized",
+      "expr-key:35(decimal:2:normalized)",
+      "expr:2",
+    ]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:02:unnormalized"]);
     expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:02:unnormalized"]);
@@ -2381,6 +2385,27 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:01.2:unnormalized"]);
     expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["mantissa:1.2:decimal"]);
     expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["mantissa:01.2:decimal"]);
+  });
+
+  it("x2 value dataflow computes non-negative decimal fractional parts while preserving X2", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:1.2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:1.2:normalized"]);
+    expect(x2ValueStateText(states[5]?.x)).toEqual([
+      "decimal:0.2:normalized",
+      "expr-key:35(decimal:1.2:normalized)",
+      "expr:4",
+    ]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:1.2:normalized"]);
   });
 
   it("x2 value dataflow tracks sign-change during fractional decimal entry", () => {
@@ -13075,6 +13100,62 @@ describe("ir passes on synthetic programs", () => {
   });
 
   it("vp-x2-peephole keeps a fractional no-op К {x} when its X2 sync reaches dot", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-x2-peephole removes a fractional no-op К {x} before dot when X2 already has the same value", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole keeps a fractional no-op К {x} before dot when X2 differs", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x35, "К {x}"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-x2-peephole keeps an immediate fractional no-op К {x} dot boundary", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x0a, "."),

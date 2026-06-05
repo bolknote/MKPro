@@ -13,6 +13,7 @@ import {
   type IrPassFn,
   type KnownReturnCallOp,
   type X2ValueDataflowState,
+  x2StateHasSameDotRestoreValueInXAndX2,
   x2StateIsClosedPlainContext,
   x2SyncCanExposeContextSensitiveRestore,
   x2ValueFactRestoredVisibleDecimal,
@@ -62,9 +63,15 @@ function isKnownFractionalNoopFraction(
   states: readonly (X2ValueDataflowState | undefined)[],
 ): boolean {
   const op = ops[index]!;
+  const state = states[index];
+  const syncAlreadyRedundant = x2StateHasSameDotRestoreValueInXAndX2(state);
   return isFreeStandingFractionOp(op) &&
-    stateHasFractionalNoopX(states[index]) &&
-    !x2SyncCanExposeContextSensitiveRestore(ops, index);
+    stateHasFractionalNoopX(state) &&
+    !x2SyncCanExposeContextSensitiveRestore(
+      ops,
+      index,
+      syncAlreadyRedundant ? { redundantSyncValue: true } : {},
+    );
 }
 
 function isFreeStandingEmptyOp(op: IrOp): boolean {

@@ -804,6 +804,10 @@ Display rewrites are separated into strategy selection + body lowering.
   X-only computations
   additionally seed a stable `expr-key:<opcode>(<source>)` fact when the source
   is a proved register, normalized decimal, or earlier stable expression key.
+  For non-negative concrete decimal `X`, `К {x}` also seeds the exact
+  normalized fractional decimal value while preserving the old X2 fact, so
+  later passes can distinguish a visible no-op fraction from an observable
+  hidden-X2 restore.
   Register-sourced keys are version-sensitive: a later direct/known-indirect
   store to that register, counted-loop mutation, or mutating indirect-flow
   selector edge drops `expr-key:*reg:r*` facts from the value lattice and
@@ -1197,7 +1201,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     same rule as decimal exponent sign pairs, still without promoting those
     shapes into decimal value facts.
 28. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
-29. `vp-x2-peephole` — removes redundant `К {x}` that follows a compiler-owned `ВП`/X2 marker, display or ordinary, possibly through free-standing `КНОП`/`К1`/`К2` empty ops, other role-free X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and simple direct-return helpers whose body also preserves X, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; the preceding `ВП` must carry a boundary marker because a plain opcode pattern such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}` redundant. The same pass also uses X2 value dataflow to remove a role-free, non-display `К {x}` when closed-context `X` is proved to be an already-fractional decimal (`0`, `0.x`, or `-0.x`) and dropping the cell's X2 sync cannot expose a later context-sensitive `.`, `/-/`, or `ВП` restore.
+29. `vp-x2-peephole` — removes redundant `К {x}` that follows a compiler-owned `ВП`/X2 marker, display or ordinary, possibly through free-standing `КНОП`/`К1`/`К2` empty ops, other role-free X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and simple direct-return helpers whose body also preserves X, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; the preceding `ВП` must carry a boundary marker because a plain opcode pattern such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}` redundant. The same pass also uses X2 value dataflow to remove a role-free, non-display `К {x}` when closed-context `X` is proved to be an already-fractional decimal (`0`, `0.x`, or `-0.x`) and dropping the cell's X2 sync cannot expose a later context-sensitive `.`, `/-/`, or `ВП` restore. If the current X2 already holds the same dot-restore value as `X`, the exposure guard treats that sync as redundant and can remove the no-op even before a later restore separated by an executable preserving gap; immediate restore boundaries remain conservative unless a separate VP/source proof covers them.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
 31. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
 32. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
