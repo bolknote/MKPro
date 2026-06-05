@@ -2073,13 +2073,69 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[4]?.y)).toEqual(["decimal:1:normalized"]);
     expect(x2ValueStateText(states[5]?.x)).toEqual([
-      "expr-key:37(decimal:1:normalized,decimal:2:normalized)",
+      "decimal:8:normalized",
       "expr:4",
     ]);
     expect(x2ValueStateText(states[5]?.y)).toEqual(["decimal:1:normalized"]);
     expect(x2ValueStateText(states[6]?.x2)).toEqual([
-      "expr-key:37(decimal:1:normalized,decimal:2:normalized)",
+      "decimal:8:normalized",
       "expr:4",
+    ]);
+  });
+
+  it("x2 value dataflow models concrete MK-61 bitwise decimal facts", () => {
+    const bitOrProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x04, "4"),
+      plain(0x38, "К ∨"),
+      halt(),
+    ];
+    const bitXorProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x06, "6"),
+      plain(0x0e, "В↑"),
+      plain(0x07, "7"),
+      plain(0x39, "К ⊕"),
+      halt(),
+    ];
+    const bitNotProgram: IrOp[] = [
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x3a, "К ИНВ"),
+      halt(),
+    ];
+    const hexNibbleProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x09, "9"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x07, "7"),
+      plain(0x38, "К ∨"),
+      halt(),
+    ];
+
+    expect(x2ValueStateText(computeX2ValueStates(bitOrProgram)[4]?.x)).toEqual([
+      "decimal:8:normalized",
+      "expr:3",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(bitXorProgram)[5]?.x)).toEqual([
+      "decimal:8.6:normalized",
+      "expr:4",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(bitNotProgram)[9]?.x)).toEqual([
+      "decimal:8.6666666:normalized",
+      "expr:8",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(hexNibbleProgram)[6]?.x)).toEqual([
+      "expr-key:38(decimal:17:normalized,decimal:19:normalized)",
+      "expr:5",
     ]);
   });
 
@@ -5527,6 +5583,72 @@ describe("ir passes on synthetic programs", () => {
       plain(0x15, "F 10^x"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1000 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses concrete MK-61 bitwise X2 facts", () => {
+    const bitXorProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x06, "6"),
+      plain(0x0e, "В↑"),
+      plain(0x07, "7"),
+      plain(0x39, "К ⊕"),
+      plain(0x0e, "В↑"),
+      plain(0x08, "8"),
+      plain(0x0a, "."),
+      plain(0x06, "6"),
+      halt(),
+    ];
+    const bitNotProgram: IrOp[] = [
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x3a, "К ИНВ"),
+      plain(0x0e, "В↑"),
+      plain(0x08, "8"),
+      plain(0x0a, "."),
+      plain(0x06, "6"),
+      plain(0x06, "6"),
+      plain(0x06, "6"),
+      plain(0x06, "6"),
+      plain(0x06, "6"),
+      plain(0x06, "6"),
+      plain(0x06, "6"),
+      halt(),
+    ];
+    const bitXorResult = x2LiteralRestore.run(bitXorProgram, ctx);
+    const bitNotResult = x2LiteralRestore.run(bitNotProgram, ctx);
+
+    expect(bitXorResult.applied).toBe(2);
+    expect(bitXorResult.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x06, "6"),
+      plain(0x0e, "В↑"),
+      plain(0x07, "7"),
+      plain(0x39, "К ⊕"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 8.6 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(bitNotResult.applied).toBe(8);
+    expect(bitNotResult.ops).toEqual([
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x3a, "К ИНВ"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 8.6666666 from hidden X2 temp" } },
       halt(),
     ]);
   });

@@ -605,6 +605,7 @@ function stableExpressionKeyHasConcreteDecimalResult(
   if (op.opcode === 0x21) return decimalSquareRootFromFactKey(key) !== undefined;
   if (op.opcode === 0x22) return decimalSquareFromFactKey(key) !== undefined;
   if (op.opcode === 0x23) return decimalReciprocalFromFactKey(key) !== undefined;
+  if (op.opcode === 0x3a) return decimalBitwiseNotFromFactKey(key) !== undefined;
   if (op.opcode === 0x35) return decimalFractionPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x34) return decimalIntegerPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x31) return decimalAbsFromFactKey(key) !== undefined;
@@ -637,7 +638,8 @@ function plainProducesConcreteDecimalValues(
     op.opcode !== 0x31 &&
     op.opcode !== 0x32 &&
     op.opcode !== 0x34 &&
-    op.opcode !== 0x35
+    op.opcode !== 0x35 &&
+    op.opcode !== 0x3a
   ) return output;
   for (const fact of x ?? []) {
     const value = normalizedDecimalValueFromFact(fact);
@@ -655,7 +657,13 @@ function plainProducesConcreteBinaryDecimalValues(
   x: X2ValueSet | undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
-  if ((op.opcode < 0x10 || op.opcode > 0x13) && op.opcode !== 0x36) return output;
+  if (
+    (op.opcode < 0x10 || op.opcode > 0x13) &&
+    op.opcode !== 0x36 &&
+    op.opcode !== 0x37 &&
+    op.opcode !== 0x38 &&
+    op.opcode !== 0x39
+  ) return output;
   for (const yFact of y ?? []) {
     const yValue = normalizedDecimalValueFromFact(yFact);
     if (yValue === undefined) continue;
@@ -678,6 +686,8 @@ function concreteDecimalUnaryValue(opcode: number, value: string): string | unde
       return decimalSquare(value);
     case 0x23:
       return decimalReciprocal(value);
+    case 0x3a:
+      return decimalBitwiseNot(value);
     case 0x31:
       return decimalAbs(value);
     case 0x32:
@@ -709,6 +719,11 @@ function decimalSquareFromFactKey(key: string): string | undefined {
 function decimalReciprocalFromFactKey(key: string): string | undefined {
   const decimal = decimalFromFactKey(key);
   return decimal === undefined ? undefined : decimalReciprocal(decimal);
+}
+
+function decimalBitwiseNotFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalBitwiseNot(decimal);
 }
 
 function decimalFractionPartFromFactKey(key: string): string | undefined {
@@ -777,6 +792,18 @@ function decimalReciprocal(value: string): string | undefined {
     : exactDecimalDivisionToNormalized({ num: 1n, scale: 0 }, input);
 }
 
+function decimalBitwiseNot(value: string): string | undefined {
+  const digits = decimalMantissaDigits(value);
+  if (digits === undefined) return undefined;
+  const result = [8];
+  for (let index = 1; index < 8; index += 1) {
+    const digit = (~digits[index]!) & 0x0f;
+    if (digit > 9) return undefined;
+    result.push(digit);
+  }
+  return decimalFromMantissaDigits(result);
+}
+
 interface ExactDecimalParts {
   readonly num: bigint;
   readonly scale: number;
@@ -789,6 +816,7 @@ function concreteDecimalBinaryValue(opcode: number, y: string, x: string): strin
   if (opcode === 0x12) return exactDecimalToNormalized(left.num * right.num, left.scale + right.scale);
   if (opcode === 0x13) return exactDecimalDivisionToNormalized(left, right);
   if (opcode === 0x36) return exactDecimalMaxToNormalized(left, right);
+  if (opcode >= 0x37 && opcode <= 0x39) return exactDecimalBitwiseToNormalized(opcode, y, x);
   if (opcode !== 0x10 && opcode !== 0x11) return undefined;
   const scale = Math.max(left.scale, right.scale);
   const yNum = left.num * pow10BigInt(scale - left.scale);
@@ -848,6 +876,45 @@ function exactDecimalMaxToNormalized(left: ExactDecimalParts, right: ExactDecima
   const leftNum = left.num * pow10BigInt(scale - left.scale);
   const rightNum = right.num * pow10BigInt(scale - right.scale);
   return exactDecimalToNormalized(leftNum >= rightNum ? leftNum : rightNum, scale);
+}
+
+function exactDecimalBitwiseToNormalized(opcode: number, y: string, x: string): string | undefined {
+  const left = decimalMantissaDigits(y);
+  const right = decimalMantissaDigits(x);
+  if (left === undefined || right === undefined) return undefined;
+  const result = [8];
+  for (let index = 1; index < 8; index += 1) {
+    const digit = bitwiseMantissaDigit(opcode, left[index]!, right[index]!);
+    if (digit === undefined || digit > 9) return undefined;
+    result.push(digit);
+  }
+  return decimalFromMantissaDigits(result);
+}
+
+function decimalMantissaDigits(value: string): number[] | undefined {
+  const normalized = parseExactDecimal(value);
+  if (normalized === undefined) return undefined;
+  if (normalized.num === 0n) return new Array<number>(8).fill(0);
+  const digits = absBigInt(normalized.num).toString().slice(0, 8).padEnd(8, "0");
+  return [...digits].map((digit) => Number(digit));
+}
+
+function decimalFromMantissaDigits(digits: readonly number[]): string | undefined {
+  if (digits.length !== 8 || digits.some((digit) => digit < 0 || digit > 9)) return undefined;
+  return exactDecimalToNormalized(BigInt(digits.join("")), 7);
+}
+
+function bitwiseMantissaDigit(opcode: number, left: number, right: number): number | undefined {
+  switch (opcode) {
+    case 0x37:
+      return left & right;
+    case 0x38:
+      return left | right;
+    case 0x39:
+      return left ^ right;
+    default:
+      return undefined;
+  }
 }
 
 function exactBigIntSquareRoot(input: bigint): bigint | undefined {

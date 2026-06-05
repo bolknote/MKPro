@@ -815,7 +815,10 @@ Display rewrites are separated into strategy selection + body lowering.
   result stays within the dataflow's eight-significant-digit bound; `/` does the
   same only when the reduced quotient has a finite decimal expansion. `К max`
   is modeled for concrete normalized decimal operands with the MK-61 zero quirk
-  preserved: if either operand is exactly zero, the proved result is zero. Wider
+  preserved: if either operand is exactly zero, the proved result is zero.
+  `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ` share the MK-61 mantissa-nibble model used
+  by constant folding and seed decimal facts only when every resulting nibble is
+  still decimal; A-F/hex-cell results remain structural/opaque. Wider
   products/quotients, division by zero, non-terminating division, irrational
   square roots, fractional powers of ten, and non-decimal cases remain
   structural/opaque rather than pretending to be an ordinary decimal value.

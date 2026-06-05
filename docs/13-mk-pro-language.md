@@ -1311,10 +1311,12 @@ The pipeline currently contains:
   eight-significant-digit dataflow bound; `/` is modeled exactly only for
   finite decimal quotients. `К max` is modeled exactly for concrete normalized
   decimal operands while preserving the hardware zero quirk: if either operand
-  is exactly zero, the result fact is zero. Wider results, division by zero,
-  non-terminating division, irrational square roots, fractional powers of ten,
-  and structural hex/super operands keep only structural or opaque expression
-  facts. The shared
+  is exactly zero, the result fact is zero. `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ`
+  use the shared MK-61 mantissa-nibble model and seed decimal facts only when
+  every resulting mantissa nibble remains `0`..`9`; hex-cell results stay
+  structural/opaque. Wider results, division by zero, non-terminating division,
+  irrational square roots, fractional powers of ten, and structural hex/super
+  operands keep only structural or opaque expression facts. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
   mantissa sign toggles, and non-negative exponent shifts that are pure display
