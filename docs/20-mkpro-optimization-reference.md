@@ -823,6 +823,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     whose old X2 form had leading zeroes. A dot-restored leading-zero X2 form
     is deliberately not upgraded into an ordinary `ВП` mantissa source:
     `02; К{x}; .; ВП; 3` yields `22000` on the emulator, not `2 ВП 3`.
+    When the same dataflow proves that `.` would keep the exact same
+    `ВП`-entry source and the next context-sensitive restore is reached only
+    through free-standing `КНОП`/`К1`/`К2` cells before `ВП`, the dot is removed:
+    emulator tests cover normalized and signed normalized mantissas in this
+    empty-op exponent-entry shape.
     Closed-context `/-/` is modeled for
     proved normalized decimal `X == X2` facts, including zero; this lets an
     immediately following `.`, or one reached only through free-standing

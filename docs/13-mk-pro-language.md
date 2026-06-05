@@ -1345,6 +1345,11 @@ The pipeline currently contains:
   before another reachable `.`/`/-/`/`ВП` context-sensitive restore, across opaque
   control flow, raw cells, and display-focused cells, so it does not erase a dot
   whose main job is to shape the next X2 restoration rather than to change `X`.
+  A narrow exception is proved same-source empty-op exponent entry: if dataflow
+  shows that `.` would leave the same `ВП` mantissa source and the next restore
+  is reached only through free-standing `КНОП`/`К1`/`К2` cells before `ВП`, the
+  dot can be removed; emulator tests cover normalized and signed normalized
+  mantissas for that shape.
   That reachability guard is the shared CFG-aware X2 exposure walker: direct and
   proved-indirect branches are followed path-sensitively instead of being blanket
   barriers, but any X2-preserving edge that can reach a context-sensitive restore
