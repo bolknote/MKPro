@@ -576,7 +576,6 @@ export function analyzeX2StackEffect(op: IrOp | undefined): X2StackEffectAnalysi
     x2Restores: raw.x2Effect === "restores",
     hardX2OverwriteWithoutStackUse,
     stackLiftAndX2Sync: op !== undefined &&
-      removableRecallValueRegister(op) !== undefined &&
       raw.stackEffect === "shifts" &&
       raw.x2Effect === "affects",
   };

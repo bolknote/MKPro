@@ -7230,6 +7230,25 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift removes В↑ after an existing stack lift and X2 sync", () => {
+    const firstLift: IrOp = { kind: "plain", opcode: 0x0e, meta: { mnemonic: "В↑", comment: "first lift" } };
+    const secondLift: IrOp = { kind: "plain", opcode: 0x0e, meta: { mnemonic: "В↑", comment: "second lift" } };
+    const program: IrOp[] = [
+      firstLift,
+      secondLift,
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      firstLift,
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
   it("pre-shift-stack-lift keeps post-recall В↑ when its stack lift is consumed", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -7266,6 +7285,11 @@ describe("ir passes on synthetic programs", () => {
     expect(analyzeX2StackEffect(plain(0x0e, "В↑"))).toMatchObject({
       stackShifts: true,
       x2Affects: true,
+      stackLiftAndX2Sync: true,
+    });
+    expect(analyzeX2StackEffect(plain(0x20, "F pi"))).toMatchObject({
+      stackShifts: true,
+      x2Preserves: true,
       stackLiftAndX2Sync: false,
     });
     expect(analyzeX2StackEffect(plain(0x0d, "Cx"))).toMatchObject({

@@ -1,5 +1,6 @@
 import type { IrOp } from "../types.ts";
 import {
+  analyzeX2StackEffect,
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
@@ -7,7 +8,6 @@ import {
   removingRecallCanExposeX2Restore,
   removingPreShiftLiftCanExposeStack,
   removingStackLiftCanExposeStack,
-  removableRecallValueRegister,
   type IrPass,
   type IrPassFn,
   x2NextHardX2OverwriteIndex,
@@ -24,13 +24,19 @@ const run: IrPassFn = (ops) => {
   for (let index = 0; index < ops.length - 1; index += 1) {
     const op = ops[index]!;
     if (!isStackLift(op)) continue;
-    if (previousRecallAlreadySuppliesLiftX2Sync(ops, index)) {
+    if (previousProducerAlreadySuppliesLiftX2Sync(ops, index)) {
       if (removingStackLiftCanExposeStack(ops, index)) continue;
       remove.add(index);
       continue;
     }
     const producerIndex = x2NextStackShiftingProducerIndex(ops, index + 1, context);
     if (producerIndex !== undefined) {
+      if (
+        producerIndex === index + 1 &&
+        isStackLift(ops[producerIndex]!) &&
+        previousProducerAlreadySuppliesLiftX2Sync(ops, producerIndex) &&
+        !removingStackLiftCanExposeStack(ops, producerIndex)
+      ) continue;
       if (removingPreShiftLiftCanExposeStack(ops, producerIndex)) continue;
       if (removingStackLiftCanExposeStack(ops, index)) continue;
       if (removingRecallCanExposeX2Restore(ops, index)) continue;
@@ -54,10 +60,10 @@ const run: IrPassFn = (ops) => {
   };
 };
 
-function previousRecallAlreadySuppliesLiftX2Sync(ops: readonly IrOp[], liftIndex: number): boolean {
+function previousProducerAlreadySuppliesLiftX2Sync(ops: readonly IrOp[], liftIndex: number): boolean {
   const previous = ops[liftIndex - 1];
   return previous !== undefined &&
-    removableRecallValueRegister(previous) !== undefined &&
+    analyzeX2StackEffect(previous).stackLiftAndX2Sync &&
     !isDisplayFocusSensitive(previous);
 }
 
