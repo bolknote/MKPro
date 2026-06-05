@@ -2475,6 +2475,51 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(negativeFractionStates[6]?.x2)).toEqual(["decimal:-0.2:normalized"]);
   });
 
+  it("x2 value dataflow computes concrete decimal abs and sign while preserving X2", () => {
+    const absProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x31, "К |x|"),
+      halt(),
+    ];
+    const negativeSignProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+    const zeroSignProgram: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+    const absStates = computeX2ValueStates(absProgram);
+    const negativeSignStates = computeX2ValueStates(negativeSignProgram);
+    const zeroSignStates = computeX2ValueStates(zeroSignProgram);
+
+    expect(x2ValueStateText(absStates[6]?.x)).toEqual([
+      "decimal:1.2:normalized",
+      "expr:5",
+    ]);
+    expect(x2ValueStateText(absStates[6]?.x2)).toEqual(["decimal:-1.2:normalized"]);
+    expect(x2ValueStateText(negativeSignStates[6]?.x)).toEqual([
+      "decimal:-1:normalized",
+      "expr:5",
+    ]);
+    expect(x2ValueStateText(negativeSignStates[6]?.x2)).toEqual(["decimal:-1.2:normalized"]);
+    expect(x2ValueStateText(zeroSignStates[2]?.x)).toEqual([
+      "decimal:0:normalized",
+      "expr:1",
+    ]);
+    expect(x2ValueStateText(zeroSignStates[2]?.x2)).toEqual(["decimal:0:normalized"]);
+  });
+
   it("x2 value dataflow does not decimalize negative integer fractional parts", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -5112,6 +5157,36 @@ describe("ir passes on synthetic programs", () => {
       plain(0x34, "К [x]"),
       plain(0xf0, "F* empty F0"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses concrete abs X2 facts from К |x|", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x31, "К |x|"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x31, "К |x|"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.2 from hidden X2 temp" } },
       halt(),
     ]);
   });

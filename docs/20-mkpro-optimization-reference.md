@@ -804,13 +804,14 @@ Display rewrites are separated into strategy selection + body lowering.
   X-only computations
   additionally seed a stable `expr-key:<opcode>(<source>)` fact when the source
   is a proved register, normalized decimal, or earlier stable expression key.
-  For concrete normalized decimal `X`, `К [x]` seeds the exact signed integer
-  part in visible X while preserving the old X2 fact. For non-negative concrete
-  decimal `X`, and for negative non-integer concrete decimal `X`, `К {x}` also
-  seeds the exact normalized fractional decimal value while preserving the old
-  X2 fact; negative integers stay opaque to avoid decimalizing signed-zero
-  behavior. Later passes can therefore distinguish visible no-op integer/fraction
-  transforms from observable hidden-X2 restores.
+  For concrete normalized decimal `X`, `К |x|`, `К ЗН`, and `К [x]` seed exact
+  decimal results in visible X while preserving the old X2 fact. For
+  non-negative concrete decimal `X`, and for negative non-integer concrete
+  decimal `X`, `К {x}` also seeds the exact normalized fractional decimal value
+  while preserving the old X2 fact; negative integers stay opaque to avoid
+  decimalizing signed-zero behavior. Later passes can therefore distinguish
+  visible no-op integer/fraction/sign transforms from observable hidden-X2
+  restores.
   Register-sourced keys are version-sensitive: a later direct/known-indirect
   store to that register, counted-loop mutation, or mutating indirect-flow
   selector edge drops `expr-key:*reg:r*` facts from the value lattice and

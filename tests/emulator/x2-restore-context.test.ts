@@ -86,6 +86,14 @@ describe("X2 restore context", () => {
     expect(runX([0x00, 0x0a, 0x02, 0x0b, 0xf0, 0x34, 0x50])).toBe("0,");
   });
 
+  it("К |x| and К ЗН map concrete decimals to exact decimal facts", () => {
+    expect(runX([0x01, 0x0a, 0x02, 0x0b, 0xf0, 0x31, 0x50])).toBe("1,2");
+    expect(runX([0x00, 0x0a, 0x02, 0x0b, 0xf0, 0x31, 0x50])).toBe("2,-1");
+    expect(runX([0x01, 0x0a, 0x02, 0x0b, 0xf0, 0x32, 0x50])).toBe("-1,");
+    expect(runX([0x00, 0xf0, 0x32, 0x50])).toBe("0,");
+    expect(runX([0x01, 0x0a, 0x02, 0xf0, 0x32, 0x50])).toBe("1,");
+  });
+
   it("В↑ preserves X but syncs the current X into X2", () => {
     // Same setup as the F* test: after К {x}, X is 0 and X2 is still 2.
     // В↑ shifts the stack, but X remains 0 and the following `.` observes

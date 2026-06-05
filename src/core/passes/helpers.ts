@@ -601,6 +601,8 @@ function stableExpressionKeyHasConcreteDecimalResult(
   if (!/^decimal:/u.test(key)) return false;
   if (op.opcode === 0x35) return decimalFractionPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x34) return decimalIntegerPartFromFactKey(key) !== undefined;
+  if (op.opcode === 0x31) return decimalAbsFromFactKey(key) !== undefined;
+  if (op.opcode === 0x32) return decimalSignFromFactKey(key) !== undefined;
   return false;
 }
 
@@ -609,17 +611,30 @@ function plainProducesConcreteDecimalValues(
   x: X2ValueSet | undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
-  if (op.opcode !== 0x34 && op.opcode !== 0x35) return output;
+  if (op.opcode !== 0x31 && op.opcode !== 0x32 && op.opcode !== 0x34 && op.opcode !== 0x35) return output;
   for (const fact of x ?? []) {
     const value = normalizedDecimalValueFromFact(fact);
     const concrete = value === undefined
       ? undefined
-      : op.opcode === 0x35
-        ? decimalFractionPart(value)
-        : decimalIntegerPart(value);
+      : concreteDecimalUnaryValue(op.opcode, value);
     if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
   }
   return output;
+}
+
+function concreteDecimalUnaryValue(opcode: number, value: string): string | undefined {
+  switch (opcode) {
+    case 0x31:
+      return decimalAbs(value);
+    case 0x32:
+      return decimalSign(value);
+    case 0x34:
+      return decimalIntegerPart(value);
+    case 0x35:
+      return decimalFractionPart(value);
+    default:
+      return undefined;
+  }
 }
 
 function decimalFractionPartFromFactKey(key: string): string | undefined {
@@ -630,6 +645,27 @@ function decimalFractionPartFromFactKey(key: string): string | undefined {
 function decimalIntegerPartFromFactKey(key: string): string | undefined {
   const match = /^decimal:([^:]+):normalized$/u.exec(key);
   return match === null ? undefined : decimalIntegerPart(match[1]!);
+}
+
+function decimalAbsFromFactKey(key: string): string | undefined {
+  const match = /^decimal:([^:]+):normalized$/u.exec(key);
+  return match === null ? undefined : decimalAbs(match[1]!);
+}
+
+function decimalSignFromFactKey(key: string): string | undefined {
+  const match = /^decimal:([^:]+):normalized$/u.exec(key);
+  return match === null ? undefined : decimalSign(match[1]!);
+}
+
+function decimalAbs(value: string): string | undefined {
+  if (!/^-?[0-9]+(?:\.[0-9]+)?$/u.test(value)) return undefined;
+  return value.startsWith("-") ? value.slice(1) : value;
+}
+
+function decimalSign(value: string): string | undefined {
+  if (!/^-?[0-9]+(?:\.[0-9]+)?$/u.test(value)) return undefined;
+  if (value === "0") return "0";
+  return value.startsWith("-") ? "-1" : "1";
 }
 
 function decimalIntegerPart(value: string): string | undefined {
