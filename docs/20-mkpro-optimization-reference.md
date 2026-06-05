@@ -771,7 +771,10 @@ Display rewrites are separated into strategy selection + body lowering.
 - `store-recall-peephole` — collapses direct or stable-indirect proved
   same-cell `store` then immediate `recall` pairs, and adjacent recalls to
   another cell when value/shape dataflow proves the recalled decimal value or
-  structural display shape is already in X. The rewrite is refused when the
+  structural display shape is already in X. Structural display equality uses
+  the shared exponent-shift shape algebra, so a recalled `hex:Г00` can match
+  an X value built as `hex:Г; ВП 2` without making either side decimal. The
+  rewrite is refused when the
   recall supplies the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including
   direct `В/О` returns, or lifts the stack for a downstream consumer through
   direct or proved-indirect flow. If X2-register/value/shape dataflow proves
@@ -807,7 +810,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 5. `return-suffix-gadget` — finds repeated return-ending blocks ending in `return`, extracts one shared suffix, and redirects additional copies to it.
 6. `shared-terminal-tail` — finds repeated straight-line suffixes that already end in unconditional flow (`БП`, `К БП r`, or `В/О`) and replaces extra copies with a jump into the canonical suffix; it refuses programs with absolute numeric flow targets.
 7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
-8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, or an adjacent recall to another cell when the shared value/shape proof shows the recalled decimal value or structural hex/super display shape is already visible in X. The rewrite fires only when the recall is not the last X2 sync before a context-sensitive `.`/`/-/`/`ВП` restoration before the next X2-affecting op, including direct conditional/`F Lx` fallthrough syncs and direct `В/О` returns, or when the same shared proof shows X2 already carries the recalled decimal value or structural hex/super shape across an X2-preserving gap. Its stack lift still cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors and loop-counter recalls are not folded when the hardware side effect is observable.
+8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, or an adjacent recall to another cell when the shared value/shape proof shows the recalled decimal value or structural hex/super display shape is already visible in X, including non-negative structural exponent shifts such as `hex:Г; ВП 2` matching `hex:Г00`. The rewrite fires only when the recall is not the last X2 sync before a context-sensitive `.`/`/-/`/`ВП` restoration before the next X2-affecting op, including direct conditional/`F Lx` fallthrough syncs and direct `В/О` returns, or when the same shared proof shows X2 already carries the recalled decimal value or structural hex/super shape across an X2-preserving gap. Its stack lift still cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors and loop-counter recalls are not folded when the hardware side effect is observable.
 9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, or another stack-shifting producer, possibly through stack-preserving labels/stores/plain ops, path-safe direct conditional/counted-loop/proved-indirect conditional fallthroughs, and simple stack-preserving direct-return callees, when that producer already supplies the current X in Y, unless the full CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
@@ -888,9 +891,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `super-exponent:*:*` forms; exponent digits and exponent `/-/` update that
     structural context without creating decimal value facts. The construction is
     routed through the shared shape algebra, which can rebuild canonical
-    mantissa facts, derive structural exponent-context sign toggles, and derive
-    closed-context mantissa sign toggles for synced structural exponent shapes
-    while still refusing hex/super arithmetic, carry, or decimalization proofs.
+    mantissa facts, derive structural exponent-context sign toggles, derive
+    closed-context mantissa sign toggles for synced structural exponent shapes,
+    and compare non-negative exponent shifts that are pure display
+    concatenation (`hex:Г` through `ВП 2` is the same structural display shape
+    as `hex:Г00`; shifted two-byte `super:FA` forms compare as the resulting
+    hex-like display mantissa) while still refusing hex/super arithmetic, carry,
+    negative exponent shifts, or decimalization proofs.
     Structural equality uses canonical shape reconstruction, so equivalent
     hex/super spellings compare as the same shape without becoming decimal
     values. Shape-set joins and equality checks use the same canonical
@@ -904,8 +911,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     not promoted to ordinary mantissas. Preloaded `П->X r` constants
     seed the same lattice: ordinary decimal/scientific constants become
     `decimal:*` facts, while hex-like display mantissas and `FA`..`FF` super
-    forms become structural-only `hex:*` / `super:*` shape facts. Until those
-    shapes are separately proved dot-safe, hex/super/display shapes remain
+    forms become structural-only `hex:*` / `super:*` shape facts. Structural
+    preloads with a Latin `E` exponent marker (`ГE-2`, `FAE2`) seed
+    shape-only `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е`
+    remains a display digit. Until those shapes are separately proved dot-safe,
+    hex/super/display shapes remain
     structural only. Shape-memory stores canonical structural spellings, so
     equivalent hex/super display shapes still join after store/recall proofs;
     structural VP context is not considered plain closed

@@ -40,6 +40,7 @@ import {
   parseX2ShapeFact,
   recallValueProof,
   x2CanonicalShapeFact,
+  x2ClosedStructuralExponentMantissaShapeFact,
   x2ExponentMantissaSignChangedShapeFact,
   x2ExponentShapeFactFromMantissaFact,
   x2ExponentSignChangedShapeFact,
@@ -726,6 +727,38 @@ describe("ir passes on synthetic programs", () => {
     expect(x2VpEntryShapeText(states[3])).toEqual(["hex:-8.70Е2-6С:mantissa"]);
   });
 
+  it("x2 value dataflow treats closed structural exponent shifts as structural display equality", () => {
+    const exponentProgram: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      halt(),
+    ];
+    const mantissaProgram: IrOp[] = [
+      recall("1", "preload const Г00"),
+      halt(),
+    ];
+    const exponentStates = computeX2ValueStates(exponentProgram, { trackRegisterMemory: true });
+    const mantissaStates = computeX2ValueStates(mantissaProgram, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(exponentStates[4]?.x2Shape)).toEqual(["hex-exponent:Г:2"]);
+    expect(x2ShapeStateText(mantissaStates[1]?.x2Shape)).toEqual(["hex:Г00:mantissa"]);
+    expect(x2ShapeSetsHaveSameStructuralShape(exponentStates[4]?.x2Shape, mantissaStates[1]?.x2Shape)).toBe(true);
+  });
+
+  it("x2 value dataflow parses preloaded structural exponent notation", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const ГE-2"),
+      recall("2", "preload const FAE2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[1]?.xShape)).toEqual(["hex-exponent:Г:-2"]);
+    expect(x2ShapeStateText(states[2]?.xShape)).toEqual(["super-exponent:FA:2"]);
+  });
+
   it("x2 shape algebra classifies decimal, exponent, hex, and super facts", () => {
     expect(parseX2ShapeFact("mantissa:02:decimal")).toEqual({
       kind: "decimal-mantissa",
@@ -822,6 +855,24 @@ describe("ir passes on synthetic programs", () => {
         new Set(["hex:FA:mantissa"]),
       ),
     ).toBe(false);
+    expect(
+      x2ShapeSetsHaveSameStructuralShape(
+        new Set(["hex-exponent:Г:2"]),
+        new Set(["hex:Г00:mantissa"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameStructuralShape(
+        new Set(["hex-exponent:Г:-2"]),
+        new Set(["hex:0.0Г:mantissa"]),
+      ),
+    ).toBe(false);
+    expect(
+      x2ShapeSetsHaveSameStructuralShape(
+        new Set(["super-exponent:FA:2"]),
+        new Set(["hex:FA00:mantissa"]),
+      ),
+    ).toBe(true);
   });
 
   it("x2 restore safety flags structural and error-prone shape-only contexts", () => {
@@ -893,6 +944,24 @@ describe("ir passes on synthetic programs", () => {
     );
     expect(x2ExponentShapeFactFromMantissaFact("super:FA", "")).toBe("super-exponent:FA:");
     expect(x2ShapeSetSafety(new Set(["hex-exponent:8.70Е2-6С:-2"]))).toBe("structuralOnly");
+  });
+
+  it("x2 shape algebra closes non-negative structural exponent shifts as mantissa shapes", () => {
+    expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:Г:2")).toBe("hex:Г00:mantissa");
+    expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:8.70:2")).toBe("hex:870:mantissa");
+    expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:8.70:1")).toBe("hex:87.0:mantissa");
+    expect(x2ClosedStructuralExponentMantissaShapeFact("super-exponent:FA:")).toBe("super:FA");
+    expect(x2ClosedStructuralExponentMantissaShapeFact("super-exponent:FA:2")).toBe("hex:FA00:mantissa");
+    expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:Г:-2")).toBeUndefined();
+    expect(x2ShapeDataModelForFact("hex-exponent:Г:2")).toMatchObject({
+      kind: "exponent-entry",
+      closedStructuralMantissa: {
+        kind: "mantissa",
+        radix: "hex",
+        canonical: "Г00",
+        safety: "structuralOnly",
+      },
+    });
   });
 
   it("x2 shape algebra toggles mantissa and exponent signs structurally", () => {
@@ -2015,6 +2084,65 @@ describe("ir passes on synthetic programs", () => {
       x2SyncValue: false,
       x2SyncShape: true,
     });
+  });
+
+  it("recall value proof matches closed structural exponent shifts to mantissa-shaped preloads", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      recall("2", "preload const Г00"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const result = flowXReuse.run(program, ctx);
+
+    expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["hex-exponent:Г:2"]);
+    expect(recallValueProof(recall("2", "preload const Г00"), states[3])).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+      x2SyncShape: true,
+    });
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ]);
+  });
+
+  it("recall value proof matches preloaded structural exponent notation", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x02, "2"),
+      recall("2", "preload const ГE-2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const result = flowXReuse.run(program, ctx);
+
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:Г:-2"]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:Г:-2"]);
+    expect(recallValueProof(recall("2", "preload const ГE-2"), states[4])).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+      x2SyncShape: true,
+    });
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x02, "2"),
+      halt(),
+    ]);
   });
 
   it("recall value proof uses stored signed structural exponent shapes after closed sign-change", () => {
@@ -5652,6 +5780,27 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("last-x-reuse drops structural exponent preload recall when X was rebuilt as the same exponent shape", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x02, "2"),
+      recall("2", "preload const ГE-2"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x02, "2"),
+      halt(),
+    ]);
+  });
+
   it("last-x-reuse keeps structural recall before immediate ВП context", () => {
     const program: IrOp[] = [
       recall("1", "preload const FACE"),
@@ -7218,6 +7367,41 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("branch-target-x-reuse uses structural exponent preload proof at unique targets", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x02, "2"),
+      store("6"),
+      recall("2", "preload const ГE-2"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      recall("6"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x02, "2"),
+      store("6"),
+      recall("2", "preload const ГE-2"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
   it("branch-target-x-reuse keeps recall that lifts the stack for a target binary op", () => {
     const program: IrOp[] = [
       recall("6"),
@@ -8178,6 +8362,29 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(1);
     expect(result.ops).toEqual([
       recall("1", "preload const FACE"),
+      store("6"),
+      halt(),
+    ]);
+  });
+
+  it("store-recall-peephole drops structural exponent preload recall when shape proof shows X is unchanged", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x02, "2"),
+      store("6"),
+      recall("2", "preload const ГE-2"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x02, "2"),
       store("6"),
       halt(),
     ]);

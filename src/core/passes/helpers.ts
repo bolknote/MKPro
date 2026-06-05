@@ -89,6 +89,7 @@ export type X2ShapeDataModel =
       readonly exponentSign: "" | "-";
       readonly exponentDigits: readonly string[];
       readonly normalizedDecimal?: string | undefined;
+      readonly closedStructuralMantissa?: X2MantissaDataModel | undefined;
       readonly safety: X2ShapeSafety;
     }
   | { readonly kind: "unknown"; readonly raw: string; readonly safety: "unknown" };
@@ -805,12 +806,14 @@ export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
   if (hex !== null) return structuralMantissaDataModel("hex", hex[1]!, "structuralOnly");
   const hexExponent = /^hex-exponent:([^:]*):([^:]*)$/u.exec(fact);
   if (hexExponent !== null) {
+    const mantissa = structuralMantissaDataModel("hex", hexExponent[1]!, "structuralOnly");
     return {
       kind: "exponent-entry",
-      mantissa: structuralMantissaDataModel("hex", hexExponent[1]!, "structuralOnly"),
+      mantissa,
       exponentRaw: hexExponent[2]!,
       exponentSign: hexExponent[2]!.startsWith("-") ? "-" : "",
       exponentDigits: shapeDigits(hexExponent[2]!),
+      closedStructuralMantissa: closedStructuralExponentMantissaModel(mantissa, hexExponent[2]!),
       safety: "structuralOnly",
     };
   }
@@ -818,12 +821,14 @@ export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
   if (superMantissa !== null) return structuralMantissaDataModel("super", superMantissa[1]!, "structuralOnly");
   const superExponent = /^super-exponent:([^:]*):([^:]*)$/u.exec(fact);
   if (superExponent !== null) {
+    const mantissa = structuralMantissaDataModel("super", superExponent[1]!, "structuralOnly");
     return {
       kind: "exponent-entry",
-      mantissa: structuralMantissaDataModel("super", superExponent[1]!, "structuralOnly"),
+      mantissa,
       exponentRaw: superExponent[2]!,
       exponentSign: superExponent[2]!.startsWith("-") ? "-" : "",
       exponentDigits: shapeDigits(superExponent[2]!),
+      closedStructuralMantissa: closedStructuralExponentMantissaModel(mantissa, superExponent[2]!),
       safety: "structuralOnly",
     };
   }
@@ -896,6 +901,13 @@ export function x2ExponentMantissaSignChangedShapeFact(fact: X2ShapeFact): X2Sha
   return signedMantissa === undefined
     ? undefined
     : x2ExponentShapeFactFromMantissaFact(signedMantissa, model.exponentRaw);
+}
+
+export function x2ClosedStructuralExponentMantissaShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "exponent-entry") return undefined;
+  const closed = model.closedStructuralMantissa;
+  return closed === undefined ? undefined : x2MantissaShapeFactFromModel(closed);
 }
 
 export function x2ShapeFactSafety(fact: X2ShapeFact): X2ShapeSafety {
@@ -1315,7 +1327,7 @@ export function recallAlreadySyncedInX2StructuralShape(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   const shapes = recallStructuralShapeFacts(op, state, register);
-  return shapeSetsIntersect(state.x2Shape, shapes) ? register : undefined;
+  return x2ShapeSetsHaveSameStructuralShape(state.x2Shape, shapes) ? register : undefined;
 }
 
 export function recallAlreadyInXDecimalMemory(
@@ -1357,7 +1369,7 @@ export function recallAlreadyInXStructuralShape(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   const shapes = recallStructuralShapeFacts(op, state, register);
-  return shapeSetsIntersect(state.xShape, shapes) ? register : undefined;
+  return x2ShapeSetsHaveSameStructuralShape(state.xShape, shapes) ? register : undefined;
 }
 
 export function recallValueProof(
@@ -2936,14 +2948,6 @@ function dotSafeDecimalShapeValues(input: X2ShapeSet | undefined): Set<string> {
   return output;
 }
 
-function shapeSetsIntersect(left: X2ShapeSet | undefined, right: X2ShapeSet | undefined): boolean {
-  if (left === undefined || right === undefined) return false;
-  for (const fact of right) {
-    if (left.has(fact)) return true;
-  }
-  return false;
-}
-
 function structuralMantissaShapeFacts(input: X2ShapeSet): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   for (const fact of input) {
@@ -2963,6 +2967,8 @@ function structuralRestoreShapeFacts(input: X2ShapeSet): Set<X2ShapeFact> {
     if (model.kind === "exponent-entry" && model.safety === "structuralOnly") {
       const canonical = x2ShapeFactFromDataModel(model);
       if (canonical !== undefined) output.add(canonical);
+      const closed = x2ClosedStructuralExponentMantissaShapeFact(fact);
+      if (closed !== undefined) output.add(closed);
     }
   }
   return output;
@@ -3018,6 +3024,41 @@ function structuralMantissaDataModel(
   };
 }
 
+function closedStructuralExponentMantissaModel(
+  mantissa: X2MantissaDataModel,
+  exponentRaw: string,
+): X2MantissaDataModel | undefined {
+  if (mantissa.radix !== "hex" && mantissa.radix !== "super") return undefined;
+  const shifted = shiftedStructuralMantissaRaw(mantissa.canonical, exponentRaw);
+  if (shifted === undefined) return undefined;
+  const radix = mantissa.radix === "super" && shifted !== mantissa.canonical ? "hex" : mantissa.radix;
+  return structuralMantissaDataModel(radix, shifted, "structuralOnly");
+}
+
+function shiftedStructuralMantissaRaw(raw: string, exponentRaw: string): string | undefined {
+  const exponent = canonicalExponentShapeRaw(exponentRaw);
+  if (exponent === undefined) return undefined;
+  if (exponent === "" || exponent === "0" || exponent === "00") return raw;
+  if (exponent.startsWith("-")) return undefined;
+  const shift = Number(exponent);
+  if (!Number.isInteger(shift) || shift < 0 || shift > 7) return undefined;
+  const sign = raw.startsWith("-") ? "-" : "";
+  const unsigned = sign === "" ? raw : raw.slice(1);
+  const parts = unsigned.split(".");
+  if (parts.length > 2) return undefined;
+  const integer = parts[0] ?? "";
+  const fraction = parts[1] ?? "";
+  if (integer.length === 0 && fraction.length === 0) return undefined;
+  const digits = `${integer}${fraction}`;
+  if (!/^[0-9A-FА-Я]+$/u.test(digits)) return undefined;
+  const point = integer.length + shift;
+  const shifted = point >= digits.length
+    ? `${digits}${"0".repeat(point - digits.length)}`
+    : `${digits.slice(0, point)}.${digits.slice(point)}`;
+  if (shapeDigits(shifted).length > 8) return undefined;
+  return `${sign}${shifted}`;
+}
+
 function x2MantissaShapeFactFromParts(radix: X2MantissaRadix, raw: string): X2ShapeFact | undefined {
   if (radix === "decimal") return decimalMantissaShapeFact(raw);
   if (radix === "hex") return `hex:${raw}:mantissa`;
@@ -3067,6 +3108,8 @@ function preloadedConstantShapeFacts(op: IrOp | undefined): Set<X2ShapeFact> {
   if (value === undefined) return new Set();
   const decimal = normalizePreloadedDecimalLiteral(value);
   if (decimal !== undefined) return new Set([decimalMantissaShapeFact(decimal)]);
+  const structuralExponent = normalizePreloadedStructuralExponentShape(value);
+  if (structuralExponent !== undefined) return new Set([structuralExponent]);
   const shape = normalizePreloadedShapeLiteral(value);
   if (shape === undefined) return new Set();
   if (/^F[A-F]$/u.test(shape)) return new Set<X2ShapeFact>([`super:${shape}`]);
@@ -3087,6 +3130,20 @@ function preloadedConstantLiteral(op: IrOp | undefined): string | undefined {
 function normalizePreloadedShapeLiteral(input: string): string | undefined {
   const normalized = input.trim().replace(/\s+/gu, "").replace(/,/gu, ".").toUpperCase();
   return normalized.length === 0 || normalized.length > 32 ? undefined : normalized;
+}
+
+function normalizePreloadedStructuralExponentShape(input: string): X2ShapeFact | undefined {
+  const normalized = normalizePreloadedShapeLiteral(input);
+  if (normalized === undefined) return undefined;
+  const match = /^(.+)E([+-]?[0-9]{1,2})$/u.exec(normalized);
+  if (match === null) return undefined;
+  const mantissa = match[1]!;
+  if (!/[A-FА-Я]/u.test(mantissa)) return undefined;
+  const exponent = match[2]!.replace(/^\+/u, "");
+  const mantissaFact = /^F[A-F]$/u.test(mantissa)
+    ? `super:${mantissa}` as X2ShapeFact
+    : `hex:${mantissa}:mantissa` as X2ShapeFact;
+  return x2ExponentShapeFactFromMantissaFact(mantissaFact, exponent);
 }
 
 function normalizePreloadedDecimalLiteral(input: string): string | undefined {

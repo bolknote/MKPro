@@ -1291,14 +1291,20 @@ The pipeline currently contains:
   recalled through `П->X r` also feed this proof: ordinary decimal and
   scientific-notation constants become `decimal:*` facts, while hex-like display
   mantissas and `FA`..`FF` super forms are tracked as shape-only `hex:*` /
-  `super:*` facts until a later proof makes them dot-safe. Hexadecimal
-  concatenation itself is not inferred here yet, but a shared shape-algebra
-  layer now derives structural `hex-exponent:*:*` / `super-exponent:*:*`
-  entries, exponent-context sign toggles, and closed-context mantissa sign
-  toggles for synced structural exponent shapes without promoting them to ordinary
-  decimal value facts. Structural shape equality is based on the canonical
-  shape model, so spelling differences such as lower-case hex digits or
-  whitespace do not split otherwise identical `hex:*` / `super:*` proofs.
+  `super:*` facts until a later proof makes them dot-safe. Hex/super preloads
+  with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural
+  `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е` remains an
+  ordinary display digit. The shared
+  shape-algebra layer derives structural `hex-exponent:*:*` /
+  `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
+  mantissa sign toggles, and non-negative exponent shifts that are pure display
+  concatenation (`hex:Г` through `ВП 2` compares as `hex:Г00`) without
+  promoting them to ordinary decimal value facts; shifted two-byte `super:FA`
+  forms compare as the resulting hex-like display mantissa. Structural shape
+  equality is based on the canonical shape model, so spelling differences such as
+  lower-case hex digits or whitespace do not split otherwise identical `hex:*`
+  / `super:*` proofs. Negative structural exponents, carry/borrow cases, and
+  decimalization stay structural-only and are not treated as dot-safe.
   Shape-set joins and equality checks use the same canonical spelling, keeping
   branch-merged `ВП`/restore facts stable without changing their safety class.
   Structural exponent shapes remain equality/restore
@@ -1504,8 +1510,10 @@ The pipeline currently contains:
   a concrete decimal literal or structural display shape, or recalled from
   matching `preload const N`, and X was later rebuilt as the same value/shape,
   the recall is redundant even after the register alias itself was lost. Shape
-  proofs only remove recalls whose X2/previous-command side effects are already
-  proven unobservable; they do not make `.`/`/-/` restores dot-safe.
+  proofs use the same structural exponent-shift equality as X2 dataflow, so a
+  recalled `hex:Г00` can match an X value built as `hex:Г; ВП 2`. They only
+  remove recalls whose X2/previous-command side effects are already proven
+  unobservable; they do not make `.`/`/-/` restores dot-safe.
   Compiler marker labels that are not reachable branch/call targets also
   preserve the fact, while string targets, numeric-address targets, proved
   indirect-flow targets, procedure starts, and unknown indirect flow make labels
