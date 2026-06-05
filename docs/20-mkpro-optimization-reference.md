@@ -821,7 +821,10 @@ Display rewrites are separated into strategy selection + body lowering.
   decimal `X`, `К {x}` also seeds the exact normalized fractional decimal value
   while preserving the old X2 fact; negative integers stay value-opaque but seed
   an `errorProne` `mantissa:-0:decimal` shape so later X2 analysis can remember
-  the signed-zero display context without treating it as ordinary zero.
+  the signed-zero display context without treating it as ordinary zero. Once a
+  later X2 sync proves that same signed-zero shape in both visible `X` and
+  hidden X2, it can seed a `-0` `ВП` mantissa source while still remaining
+  error-prone for dot-safety.
   Concrete normalized decimal `Y,X` operands for `+`, `-`, and `*` also seed
   exact decimal results when the normalized result stays within the dataflow's
   eight-significant-digit bound; `/` does the same only when the reduced
@@ -1030,7 +1033,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     values. Shape-set joins and equality checks use the same canonical
     spelling, so branch-merged structural `ВП`/restore proofs do not split on
     formatting. Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are kept as
-    `errorProne` shape facts, not dot-safe decimal facts. When a true merge sees
+    `errorProne` shape facts, not dot-safe decimal facts; shared signed-zero
+    shapes can feed `ВП` source proofs after X2 sync or closed `.` restore,
+    but never become ordinary decimal zero. When a true merge sees
     different structural spellings with the
     same restored display mantissa (`hex-exponent:Г:2` vs `hex:Г00`), the join
     keeps that restored mantissa as a structural-only fact for `X`, `X2`, `Y`,
@@ -1043,6 +1048,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     old exponent-entry marker.
     Closed-context `.`
     restores carry structural hex/super hidden X2 shapes forward as structural
+    `ВП`-entry sources and carry signed-zero decimal shapes forward as `-0`
     `ВП`-entry sources, while dot-restored leading-zero decimal forms are still
     not promoted to ordinary mantissas. Preloaded `П->X r` constants
     seed the same lattice: ordinary decimal/scientific constants become

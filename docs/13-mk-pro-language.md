@@ -1349,7 +1349,10 @@ The pipeline currently contains:
   / `super:*` proofs. Negative structural exponents, carry/borrow cases, and
   decimalization stay structural-only and are not treated as dot-safe.
   Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are deliberately
-  `errorProne` shape facts rather than dot-safe decimal facts.
+  `errorProne` shape facts rather than dot-safe decimal facts; when the same
+  signed-zero shape is proved in visible `X` and hidden X2 after an X2 sync, it
+  can still seed the following `ВП` mantissa source without becoming ordinary
+  zero.
   Shape-set joins and equality checks use the same canonical spelling, keeping
   branch-merged `ВП`/restore facts stable without changing their safety class.
   Structural exponent shapes remain equality/restore
@@ -1437,7 +1440,9 @@ The pipeline currently contains:
   or proved-indirect `В/О` return continuations, and path-sensitive direct-conditional fallthrough
   syncs through only
   `КНОП`/`К1`/`К2`; decimal facts are mantissa values, while hex/super facts
-  stay structural-only. This lets exponent-entry rewrites use hidden X2 without
+  stay structural-only. Synced signed-zero shape facts from negative-integer
+  `К {x}` are also accepted as `-0` mantissa sources, including after a
+  closed-context `.` restore or sticky `/-/`. This lets exponent-entry rewrites use hidden X2 without
   pretending that a preceding `X->П` or arbitrary preserving command leaves the
   same previous-command context. The shared VP shape-context classifier records
   active-entry vs closed VP-context phase, decimal vs structural source,

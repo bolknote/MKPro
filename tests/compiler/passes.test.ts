@@ -3002,6 +3002,65 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetSafety(states[4]?.xShape)).toBe("errorProne");
   });
 
+  it("x2 value dataflow uses synced signed-zero fractional shape as VP source", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["mantissa:-0:decimal"]);
+    expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["mantissa:-0:decimal"]);
+    expect(x2EntryStateText(states[6])).toBe("exponent:-0:");
+    expect(x2EntryStateText(states[7])).toBe("exponent:-0:3");
+  });
+
+  it("x2 value dataflow carries signed-zero VP source through dot restore", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ShapeStateText(states[6]?.xShape)).toEqual(["mantissa:0:decimal"]);
+    expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual(["mantissa:-0:decimal"]);
+    expect(x2EntryStateText(states[7])).toBe("exponent:-0:");
+    expect(x2EntryStateText(states[8])).toBe("exponent:-0:3");
+  });
+
+  it("x2 value dataflow keeps synced signed-zero sticky through closed sign-change", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[6]?.x)).toEqual(["decimal:0:normalized"]);
+    expect(x2ValueStateText(states[6]?.x2)).toEqual(["decimal:-0:unnormalized"]);
+    expect(x2EntryStateText(states[7])).toBe("exponent:-0:");
+    expect(x2EntryStateText(states[8])).toBe("exponent:-0:3");
+  });
+
   it("x2 value dataflow tracks sign-change during fractional decimal entry", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),

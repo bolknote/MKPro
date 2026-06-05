@@ -80,6 +80,14 @@ describe("X2 restore context", () => {
     expect(runX([0x02, 0x0b, 0xf0, 0x35, 0x50])).toBe("0,");
   });
 
+  it("К {x} on a synced negative integer keeps signed-zero context for ВП", () => {
+    const signedZero = [0x02, 0x0b, 0xf0, 0x35, 0xf0];
+
+    expect(runX([...signedZero, 0x0c, 0x03, 0x50])).toBe("-1000,");
+    expect(runX([...signedZero, 0x0a, 0x0c, 0x03, 0x50])).toBe("-1000,");
+    expect(runX([...signedZero, 0x0b, 0x0c, 0x03, 0x50])).toBe("-1000,");
+  });
+
   it("К [x] takes the signed integer part of concrete decimals", () => {
     expect(runX([0x01, 0x0a, 0x02, 0xf0, 0x34, 0x50])).toBe("1,");
     expect(runX([0x01, 0x0a, 0x02, 0x0b, 0xf0, 0x34, 0x50])).toBe("-1,");

@@ -2868,7 +2868,7 @@ function transferX2ValueDataflowState(
         vpContext: transferConditionalX2VpContextState(closed, effect),
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: transferConditionalX2StructuralVpContextState(closed, effect),
-        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
+        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, effect),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, effect),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
@@ -2898,7 +2898,7 @@ function transferX2ValueDataflowState(
         vpContext: transferConditionalX2VpContextState(stable, effect),
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: transferConditionalX2StructuralVpContextState(stable, effect),
-        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
+        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, effect),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, effect),
         memory: trackRegisterMemory ? deleteX2ValueMemory(stable.memory, counter) : undefined,
         shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(stable.shapeMemory, counter) : undefined,
@@ -2926,7 +2926,7 @@ function transferX2ValueDataflowState(
         vpContext: noneX2VpContextState(),
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: noneX2StructuralEntryState(),
-        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, "affects"),
+        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, "affects"),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, "affects"),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
@@ -3307,7 +3307,7 @@ function transferPlainX2ValueState(
       vpContext: transferPlainX2VpContextState(input, effect),
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: transferPlainX2StructuralVpContextState(input, effect),
-      vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
+      vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, xShape, x2Shape, effect),
       vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
@@ -3334,7 +3334,7 @@ function transferPlainX2ValueState(
       vpContext: transferPlainX2VpContextState(input, effect),
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: transferPlainX2StructuralVpContextState(input, effect),
-      vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, new Set(), effect),
+      vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, new Set(), xShape, x2Shape, effect),
       vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
@@ -3374,6 +3374,15 @@ function transferPlainX2ValueState(
       vpContext: transferPlainX2VpContextState(input, effect),
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: transferPlainX2StructuralVpContextState(input, effect),
+      vpEntryMantissa: transferPlainX2VpEntryMantissaState(
+        input,
+        op,
+        structuralXValue,
+        new Set(),
+        structuralXShape,
+        structuralX2Shape,
+        effect,
+      ),
       vpEntryShape: transferPlainX2VpEntryShapeState(input, op, structuralXShape, structuralX2Shape, effect),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
@@ -3390,7 +3399,7 @@ function transferPlainX2ValueState(
     vpContext: transferPlainX2VpContextState(input, effect),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: transferPlainX2StructuralVpContextState(input, effect),
-    vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
+    vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, xShape, x2Shape, effect),
     vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
@@ -3509,7 +3518,7 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
-    vpEntryMantissa: vpEntryMantissasFromValueFacts(input.x2),
+    vpEntryMantissa: vpEntryMantissasFromX2Restore(input.x2, input.x2Shape),
     vpEntryShape: vpEntryShapesFromShapeFacts(input.x2Shape),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
@@ -3739,7 +3748,7 @@ function transferIndirectConditionalX2ValueState(
     vpContext: transferConditionalX2VpContextState(closed, effect),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: transferConditionalX2StructuralVpContextState(closed, effect),
-    vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, effect),
+    vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, effect),
     vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, effect),
     memory: closed.memory,
     shapeMemory: closed.shapeMemory,
@@ -3841,7 +3850,7 @@ function transferExchangeXYX2ValueState(
     vpContext: transferPlainX2VpContextState(input, effect),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: transferPlainX2StructuralVpContextState(input, effect),
-    vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
+    vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, xShape, x2Shape, effect),
     vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
@@ -3869,7 +3878,7 @@ function transferCopyYToXX2ValueState(
     vpContext: transferPlainX2VpContextState(closed, effect),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: transferPlainX2StructuralVpContextState(closed, effect),
-    vpEntryMantissa: transferPlainX2VpEntryMantissaState(closed, op, x, x2, effect),
+    vpEntryMantissa: transferPlainX2VpEntryMantissaState(closed, op, x, x2, xShape, x2Shape, effect),
     vpEntryShape: transferPlainX2VpEntryShapeState(closed, op, xShape, x2Shape, effect),
     memory: closed.memory,
     shapeMemory: closed.shapeMemory,
@@ -3958,9 +3967,11 @@ function transferPlainX2VpEntryMantissaState(
   op: Extract<IrOp, { kind: "plain" }>,
   x: X2ValueSet,
   x2: X2ValueSet,
+  xShape: X2ShapeSet,
+  x2Shape: X2ShapeSet,
   effect: ReturnType<typeof plainX2Effect>,
 ): ReadonlySet<string> | undefined {
-  if (effect === "affects") return sharedNormalizedDecimalMantissas({ x, x2 });
+  if (effect === "affects") return sharedDecimalVpEntryMantissas({ x, x2, xShape, x2Shape });
   if (effect === "preserves" && isEmptyPlainOp(op)) return cloneOptionalStringSet(input.vpEntryMantissa);
   return undefined;
 }
@@ -4029,9 +4040,12 @@ function transferConditionalX2StructuralVpContextState(
 
 function transferConditionalX2VpEntryMantissaState(
   x: X2ValueSet,
+  xShape: X2ShapeSet,
   effect: ReturnType<typeof conditionalX2Effect>,
 ): ReadonlySet<string> | undefined {
-  return effect === "affects" ? sharedNormalizedDecimalMantissas({ x, x2: x }) : undefined;
+  return effect === "affects"
+    ? sharedDecimalVpEntryMantissas({ x, x2: x, xShape, x2Shape: xShape })
+    : undefined;
 }
 
 function transferConditionalX2VpEntryShapeState(
@@ -4826,6 +4840,16 @@ function vpEntryMantissasFromValueFacts(values: X2ValueSet): ReadonlySet<string>
   return mantissas.size === 0 ? undefined : mantissas;
 }
 
+function vpEntryMantissasFromX2Restore(
+  values: X2ValueSet,
+  shapes: X2ShapeSet | undefined,
+): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  addStringSet(mantissas, vpEntryMantissasFromValueFacts(values));
+  addStringSet(mantissas, signedZeroDecimalMantissaShapes(shapes));
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
 function vpEntryShapesFromShapeFacts(shapes: X2ShapeSet | undefined): X2ShapeSet | undefined {
   if (shapes === undefined) return undefined;
   const structural = structuralMantissaShapeFacts(shapes);
@@ -5257,6 +5281,15 @@ function toggleExponentSign(raw: string): string {
   return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
 }
 
+function sharedDecimalVpEntryMantissas(
+  input: Pick<X2ValueDataflowState, "x" | "x2" | "xShape" | "x2Shape">,
+): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  addStringSet(mantissas, sharedNormalizedDecimalMantissas(input));
+  addStringSet(mantissas, sharedSignedZeroDecimalMantissas(input.xShape, input.x2Shape));
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
 function sharedNormalizedDecimalMantissas(input: Pick<X2ValueDataflowState, "x" | "x2">): ReadonlySet<string> | undefined {
   const mantissas = new Set<string>();
   for (const fact of input.x2) {
@@ -5297,6 +5330,38 @@ function signChangedVpEntryMantissas(input: X2ValueDataflowState): ReadonlySet<s
     mantissas.add(signed);
   }
   return mantissas.size > 0 ? mantissas : undefined;
+}
+
+function sharedSignedZeroDecimalMantissas(
+  xShapes: X2ShapeSet | undefined,
+  x2Shapes: X2ShapeSet | undefined,
+): ReadonlySet<string> | undefined {
+  const xSignedZero = signedZeroDecimalMantissaShapes(xShapes);
+  const x2SignedZero = signedZeroDecimalMantissaShapes(x2Shapes);
+  const mantissas = new Set<string>();
+  for (const raw of x2SignedZero) {
+    if (xSignedZero.has(raw)) mantissas.add(raw);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function signedZeroDecimalMantissaShapes(input: X2ShapeSet | undefined): Set<string> {
+  const output = new Set<string>();
+  for (const fact of input ?? []) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (
+      model.kind === "mantissa" &&
+      model.radix === "decimal" &&
+      model.safety === "errorProne" &&
+      model.normalizedDecimal === "0" &&
+      model.sign === "-"
+    ) output.add(model.canonical);
+  }
+  return output;
+}
+
+function addStringSet(target: Set<string>, source: ReadonlySet<string> | undefined): void {
+  for (const value of source ?? []) target.add(value);
 }
 
 function signChangedMantissaShapes(input: ReadonlySet<string>): ReadonlySet<string> | undefined {
