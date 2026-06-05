@@ -63,16 +63,34 @@ function isFractionAfterX2Boundary(op: IrOp): boolean {
   return op.kind === "plain" && op.opcode === 0x35;
 }
 
+function isFreeStandingEmptyOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
+  return op.kind === "plain" &&
+    op.opcode >= 0x54 &&
+    op.opcode <= 0x56 &&
+    !hasRoles(op);
+}
+
+function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
+  return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
+}
+
+function fractionAfterBoundaryIndex(ops: readonly IrOp[], boundaryIndex: number): number | undefined {
+  for (let index = boundaryIndex + 1; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (isFreeStandingEmptyOp(op)) continue;
+    return isFractionAfterX2Boundary(op) ? index : undefined;
+  }
+  return undefined;
+}
+
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
   const boundaryStates = computeX2RestoreBoundaryStates(ops);
-  for (let i = 1; i < ops.length; i += 1) {
-    if (
-      (isVpX2Boundary(ops[i - 1]!) || isProvedVpX2Boundary(ops, i - 1, boundaryStates)) &&
-      isFractionAfterX2Boundary(ops[i]!)
-    ) {
-      remove.add(i);
-    }
+  for (let i = 0; i < ops.length; i += 1) {
+    if (!isVpX2Boundary(ops[i]!) && !isProvedVpX2Boundary(ops, i, boundaryStates)) continue;
+    const fractionIndex = fractionAfterBoundaryIndex(ops, i);
+    if (fractionIndex !== undefined) remove.add(fractionIndex);
   }
   if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
   return {
