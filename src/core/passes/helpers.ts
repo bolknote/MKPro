@@ -555,6 +555,8 @@ function plainProducesStableExpressionValues(
   op: Extract<IrOp, { kind: "plain" }>,
   x: X2ValueSet | undefined,
   y: X2ValueSet | undefined,
+  xShape: X2ShapeSet | undefined = undefined,
+  yShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return new Set();
   if (!PURE_OPAQUE_EXPR_OPCODES.has(op.opcode)) return new Set();
@@ -573,18 +575,12 @@ function plainProducesStableExpressionValues(
   const output = new Set<X2ValueFact>();
   const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
   if (info.stackEffect === "preserves") {
-    for (const source of x ?? []) {
-      const key = stableExpressionSourceKey(source);
-      if (key === undefined) continue;
+    for (const key of stableExpressionSourceKeys(x, xShape)) {
       output.add(stableExpressionValueFact(opcode, key));
     }
   } else if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") {
-    for (const ySource of y ?? []) {
-      const yKey = stableExpressionSourceKey(ySource);
-      if (yKey === undefined) continue;
-      for (const xSource of x ?? []) {
-        const xKey = stableExpressionSourceKey(xSource);
-        if (xKey === undefined) continue;
+    for (const yKey of stableExpressionSourceKeys(y, yShape)) {
+      for (const xKey of stableExpressionSourceKeys(x, xShape)) {
         output.add(stableBinaryExpressionValueFact(op, opcode, yKey, xKey));
       }
     }
@@ -607,8 +603,10 @@ function plainXValueAfterNonPreservingOp(
   producerIndex: number | undefined,
   x: X2ValueSet | undefined = undefined,
   y: X2ValueSet | undefined = undefined,
+  xShape: X2ShapeSet | undefined = undefined,
+  yShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
-  const output = plainProducesStableExpressionValues(op, x, y);
+  const output = plainProducesStableExpressionValues(op, x, y, xShape, yShape);
   const opaque = plainProducesOpaqueExpressionValue(op, producerIndex);
   if (opaque !== undefined) output.add(opaque);
   return output;
@@ -2441,10 +2439,10 @@ function transferPlainX2ValueState(
   const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
   if (closedExponentValues.size > 0) {
     const sourceX = new Set(closedExponentValues);
+    const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
     const x = plainPreservesXValue(op)
       ? new Set(sourceX)
-      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y);
-    const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
+      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape);
     const xShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
     const x2 = effect === "preserves"
       ? new Set(closedExponentValues)
@@ -2474,7 +2472,7 @@ function transferPlainX2ValueState(
     const sourceX = new Set<X2ValueFact>();
     const x = plainPreservesXValue(op)
       ? new Set<X2ValueFact>()
-      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y);
+      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape);
     const xShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
     const x2Shape = transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes);
     return {
@@ -2495,7 +2493,9 @@ function transferPlainX2ValueState(
     };
   }
   const x = syncUnknownSameValue(
-    plainPreservesXValue(op) ? new Set(input.x) : plainXValueAfterNonPreservingOp(op, producerIndex, input.x, input.y),
+    plainPreservesXValue(op)
+      ? new Set(input.x)
+      : plainXValueAfterNonPreservingOp(op, producerIndex, input.x, input.y, input.xShape, input.yShape),
     effect,
     producerIndex,
   );
@@ -2508,7 +2508,7 @@ function transferPlainX2ValueState(
     const sourceX = new Set<X2ValueFact>();
     const structuralXValue = plainPreservesXValue(op)
       ? new Set<X2ValueFact>()
-      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y);
+      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedStructuralShapes, input.yShape);
     const structuralXShape = plainPreservesXValue(op) ? new Set(closedStructuralShapes) : new Set<X2ShapeFact>();
     const structuralX2Shape = transferPlainX2ShapeSet(input, structuralXShape, effect, closedStructuralShapes);
     return {
@@ -3925,6 +3925,25 @@ function stableExpressionSourceKey(fact: X2ValueFact): string | undefined {
   if (fact.startsWith("expr-key:")) return fact;
   if (normalizedDecimalValueFromFact(fact) !== undefined) return fact;
   return undefined;
+}
+
+function stableExpressionSourceKeys(
+  values: X2ValueSet | undefined,
+  shapes: X2ShapeSet | undefined,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const fact of values ?? []) {
+    const key = stableExpressionSourceKey(fact);
+    if (key !== undefined) keys.add(key);
+  }
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+    keys.add(stableStructuralExpressionSourceKey(fact));
+  }
+  return keys;
+}
+
+function stableStructuralExpressionSourceKey(fact: X2ShapeFact): string {
+  return `shape:${x2CanonicalShapeFact(fact)}`;
 }
 
 function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {

@@ -1320,7 +1320,11 @@ The pipeline currently contains:
   splice passes a real model for structural `ВП ... /-/` sequences without
   promoting hex/super forms into ordinary decimal values. Such structural
   `ВП` context is not treated as a plain closed context by `.`/`/-/` rewrite
-  guards. A closed-context `.` now
+  guards. Pure documented X computations can still use structural shapes as
+  stable expression operands: the key is built from the canonical restored
+  shape (`hex:Г ВП 2` and `hex:Г00` share the same operand key), but the result
+  stays an opaque `expr-key:*` value and does not make the source shape decimal
+  or dot-safe. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are
   normalized for `X` during that transfer while the hidden X2 representation
   stays unchanged. If number entry is still open, `.` is treated as a decimal
@@ -1456,8 +1460,9 @@ The pipeline currently contains:
   the jump edge is left to ordinary liveness/DSE. Counted-loop crossings are
   refused when the scratch register is the loop counter being decremented. It
   can also prove the hidden temp from the dead scratch store's own stable source
-  fact (`decimal:*:normalized` or `expr:*`) when register-memory at a join has
-  become too conservative. It
+  fact (`decimal:*:normalized`, `expr:*`, or a stable `expr-key:*` whose
+  operands include canonical structural shape sources) when register-memory at
+  a join has become too conservative. It
   may also cross a simple direct `ПП` whose target reaches `В/О` linearly
   without touching the scratch register; nested flow, unknown memory access, or
   another entry label keeps the call as a barrier. The

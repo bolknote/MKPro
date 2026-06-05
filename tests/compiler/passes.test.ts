@@ -1612,6 +1612,60 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
   });
 
+  it("x2 value dataflow seeds stable expr keys from structural shape operands", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FABC"),
+      plain(0x31, "К |x|"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toContain("expr-key:31(shape:hex:FABC:mantissa)");
+    expect(x2ValueStateText(states[2]?.x)).toContain("expr-key:31(reg:1)");
+  });
+
+  it("x2-hidden-temp-restore uses structural shape expr keys across different registers", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FABC"),
+      plain(0x31, "К |x|"),
+      store("3"),
+      recall("2", "preload const FABC"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("3"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "3")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore uses restored structural shape expr keys after exponent shift", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г00"),
+      plain(0x31, "К |x|"),
+      store("3"),
+      recall("2", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("3"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[8]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "3")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2 value dataflow seeds stable and opaque expr facts from pure stack-consuming computations", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
