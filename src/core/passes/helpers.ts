@@ -100,6 +100,7 @@ type X2ShapeMemory = Partial<Record<RegisterName, X2ShapeSet>>;
 const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
 const SAME_UNKNOWN_VALUE: X2ValueFact = "same:unknown";
 const X2_SIGN_CHANGE_OPCODE = 0x0b;
+const STACK_EXCHANGE_XY_OPCODE = 0x14;
 const X2_EMPTY_OPCODE_START = 0x54;
 const X2_EMPTY_OPCODE_END = 0x56;
 const PURE_OPAQUE_EXPR_OPCODES = new Set<number>([
@@ -2405,6 +2406,9 @@ function transferPlainX2ValueState(
       shapeMemory: input.shapeMemory,
     };
   }
+  if (op.opcode === STACK_EXCHANGE_XY_OPCODE) {
+    return transferExchangeXYX2ValueState(input, op);
+  }
   const effect = plainX2Effect(op);
   const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
   if (closedExponentValues.size > 0) {
@@ -2893,6 +2897,38 @@ function transferPlainX2ValueSet(
   return new Set();
 }
 
+function transferExchangeXYX2ValueState(
+  input: X2ValueDataflowState,
+  op: Extract<IrOp, { kind: "plain" }>,
+): X2ValueDataflowState {
+  const effect = plainX2Effect(op);
+  const sourceX = visibleX2ValueFactsForStack(input);
+  const x = cloneOptionalValueSet(input.y);
+  const xShape = x2ShapesFromValueFacts(x);
+  const x2 = transferPlainX2ValueSet(input, x, effect);
+  const x2Shape = transferPlainX2ShapeSet(input, xShape, effect);
+  return {
+    x,
+    y: new Set(sourceX),
+    x2,
+    xShape,
+    x2Shape,
+    entry: nextX2EntryStateForPlainEffect(effect),
+    vpContext: transferPlainX2VpContextState(input, effect),
+    structuralEntry: noneX2StructuralEntryState(),
+    structuralVpContext: transferPlainX2StructuralVpContextState(input, effect),
+    vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, effect),
+    vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
+    memory: input.memory,
+    shapeMemory: input.shapeMemory,
+  };
+}
+
+function visibleX2ValueFactsForStack(input: X2ValueDataflowState): X2ValueSet {
+  const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
+  return closedExponentValues.size > 0 ? closedExponentValues : input.x;
+}
+
 function transferPlainYValueSet(
   input: X2ValueDataflowState,
   sourceX: X2ValueSet,
@@ -3300,6 +3336,7 @@ function deleteX2ShapeMemory(input: X2ShapeMemory | undefined, register: Registe
 function clearX2ValueMemory(input: X2ValueDataflowState): X2ValueDataflowState {
   return {
     x: new Set(input.x),
+    y: cloneOptionalValueSet(input.y),
     x2: new Set(input.x2),
     xShape: cloneOptionalShapeSet(input.xShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
