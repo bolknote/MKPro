@@ -1381,7 +1381,10 @@ The pipeline currently contains:
   restored `X` value is immediately destroyed by a proved hard X/X2 overwrite
   such as `Cx`. Consecutive same-segment dead restores and free-standing
   separators are removed as one run; labels split the run so a target entry
-  does not inherit a proof from the previous segment. This is deliberately
+  does not inherit a proof from the previous segment. The overwrite search may
+  cross a simple direct `ПП` helper that reaches `В/О` linearly through only
+  restore-transparent empty/address cells; helpers that restore X2, store X,
+  consume stack, branch, or expose another entry remain barriers. This is deliberately
   narrower than `x2-noop-restore`: `.` is
   accepted only from a closed, non-`ВП` context with a proved decimal X2 value
   fact. A plain `reg:r` fact is not enough, because a preloaded hexadecimal or

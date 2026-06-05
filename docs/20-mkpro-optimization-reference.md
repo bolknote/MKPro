@@ -736,7 +736,11 @@ Display rewrites are separated into strategy selection + body lowering.
 - `x2-dead-restore-before-overwrite` — removes a proved-safe X2 restore whose
   visible `X` result is immediately overwritten by a hard X/X2 replacement
   command. Consecutive same-segment restores and free-standing separators are
-  removed as one run, while labels split the removable run. The proof uses
+  removed as one run, while labels split the removable run. The overwrite
+  search may cross a simple direct `ПП` helper that reaches `В/О` linearly
+  through only restore-transparent empty/address cells; helpers that restore
+  X2, store X, consume stack, branch, or expose another entry remain barriers.
+  The proof uses
   decimal X2 value facts for `.`/`/-/` and mantissa/exponent-entry state for
   `ВП`; structural hex/super `ВП` sources are accepted only as shape facts,
   while unknown register-valued X2 facts are kept because hex/non-normal
@@ -904,7 +908,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     rejected because a preloaded hex or non-normal register value can make `.`
     signal `ЕГГ0Г`. `/-/` may also be removed from open mantissa, active
     exponent-entry, or VP/X2 restore contexts because the following hard
-    overwrite destroys both the restored X and the toggled X2. `ВП` may also be removed from a structural
+    overwrite destroys both the restored X and the toggled X2. The following
+    hard overwrite may sit after a simple direct-return helper only when that
+    helper is restore-transparent. `ВП` may also be removed from a structural
     hex/super `vpEntryShape` source, including one produced by a direct `В/О`
     return continuation or the fallthrough side of a direct conditional/`F Lx`
     loop, or from an already active VP/X2 restore context, when the following

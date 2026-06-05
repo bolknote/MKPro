@@ -3621,6 +3621,73 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite crosses transparent direct-return helpers before hard overwrite", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      plain(0x0a, "."),
+      call("transparent"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      call("transparent"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps restores before helpers that restore X2", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("restore"),
+      plain(0x0a, "."),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      plain(0x0a, "."),
+      call("restore"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps restores before helpers that store X", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("store_x"),
+      store("2"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      plain(0x0a, "."),
+      call("store_x"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-noop-restore removes dot after F* syncs a leading-zero literal", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
