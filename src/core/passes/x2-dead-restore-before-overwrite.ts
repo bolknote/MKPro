@@ -1,19 +1,22 @@
 import type { IrOp } from "../types.ts";
 import {
   analyzeX2StackEffect,
-  cellsPerOp,
-  computeLabelEntryIndexes,
   computeX2ValueStates,
+  directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
+  isKnownReturnCallOp,
+  knownReturnCallReturnsThroughTransparentRange,
   x2StateHasDotSafeDecimalX2,
   x2StateHasStructuralShapeX2,
   x2StateHasX2RestoreContext,
   x2StateIsClosedPlainContext,
   x2StateHasVpEntrySource,
+  type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
+  type KnownReturnCallOp,
   type X2ValueDataflowState,
 } from "./helpers.ts";
 
@@ -21,19 +24,9 @@ const DOT = 0x0a;
 const SIGN_CHANGE = 0x0b;
 const VP = 0x0c;
 
-interface DirectReturnGapContext {
-  readonly labelEntries: ReadonlySet<number>;
-  readonly labels: ReadonlyMap<string, number>;
-  readonly addresses: ReadonlyMap<number, number>;
-}
-
 const run: IrPassFn = (ops) => {
   const states = computeX2ValueStates(ops, { trackRegisterMemory: true });
-  const context: DirectReturnGapContext = {
-    labelEntries: computeLabelEntryIndexes(ops),
-    labels: labelIndexes(ops),
-    addresses: addressIndexes(ops),
-  };
+  const context = directReturnAnalysisContext(ops);
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
@@ -93,7 +86,7 @@ function deadRestoreRunBeforeHardOverwrite(
   ops: readonly IrOp[],
   states: readonly (X2ValueDataflowState | undefined)[],
   start: number,
-  context: DirectReturnGapContext,
+  context: DirectReturnAnalysisContext,
 ): readonly number[] | undefined {
   const remove: number[] = [start];
   let sameSegment = true;
@@ -111,7 +104,7 @@ function deadRestoreRunBeforeHardOverwrite(
       remove.push(index);
       continue;
     }
-    if (op.kind === "call" && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
     return isHardX2OverwriteWithoutStackUse(op) ? remove : undefined;
   }
   return undefined;
@@ -135,65 +128,14 @@ function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
 
 function simpleDirectReturnDoesNotObserveRestore(
   ops: readonly IrOp[],
-  call: Extract<IrOp, { kind: "call" }>,
-  context: DirectReturnGapContext,
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
 ): boolean {
-  const targetIndex = targetIndexForCall(call, context);
-  if (targetIndex === undefined) return false;
-  return linearReturnRangeDoesNotObserveRestore(ops, targetIndex, context.labelEntries);
-}
-
-function targetIndexForCall(
-  call: Extract<IrOp, { kind: "call" }>,
-  context: DirectReturnGapContext,
-): number | undefined {
-  return typeof call.target === "string"
-    ? context.labels.get(call.target)
-    : context.addresses.get(call.target);
-}
-
-function linearReturnRangeDoesNotObserveRestore(
-  ops: readonly IrOp[],
-  targetIndex: number,
-  labelEntries: ReadonlySet<number>,
-): boolean {
-  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
-  for (let index = startIndex; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") {
-      if (labelEntries.has(index)) return false;
-      continue;
-    }
-    if (hasRewriteBarrier(op)) return false;
-    if (op.kind === "return") return true;
-    if (!isRestoreTransparentLinearOp(op)) return false;
-  }
-  return false;
+  return knownReturnCallReturnsThroughTransparentRange(ops, call, context, isRestoreTransparentLinearOp);
 }
 
 function isRestoreTransparentLinearOp(op: IrOp): boolean {
   return op.kind === "orphan-address" || isFreeStandingEmptyOp(op);
-}
-
-function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
-  const result = new Map<string, number>();
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") result.set(op.name, index);
-  }
-  return result;
-}
-
-function addressIndexes(ops: readonly IrOp[]): Map<number, number> {
-  const result = new Map<number, number>();
-  let address = 0;
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") continue;
-    result.set(address, index);
-    address += cellsPerOp(op);
-  }
-  return result;
 }
 
 export const x2DeadRestoreBeforeOverwrite: IrPass = {

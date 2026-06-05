@@ -33,11 +33,13 @@ import { x2NoopRestore } from "../../src/core/passes/x2-noop-restore.ts";
 import {
   analyzeRecallRemoval,
   analyzeX2StackEffect,
+  analyzeX2VpShapeContext,
   computeX2ImmediateSyncStates,
   computeX2RegisterStates,
   computeX2ValueStates,
   parseX2ShapeFact,
   recallValueProof,
+  x2CanonicalShapeFact,
   x2ExponentMantissaSignChangedShapeFact,
   x2ExponentShapeFactFromMantissaFact,
   x2ExponentSignChangedShapeFact,
@@ -678,6 +680,21 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["super:FA"]);
   });
 
+  it("x2 value dataflow canonicalizes stored structural shape facts", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const fa.ce"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[1]?.xShape)).toEqual(["hex:FA.CE:mantissa"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex:FA.CE:mantissa"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["hex:FA.CE:mantissa"]);
+  });
+
   it("x2 value dataflow keeps recalled stored hex sign-change shape-only", () => {
     const program: IrOp[] = [
       recall("2", "preload const 8.70Е2-6С"),
@@ -777,8 +794,26 @@ describe("ir passes on synthetic programs", () => {
     ).toBe(true);
     expect(
       x2ShapeSetsHaveSameStructuralShape(
+        new Set(["hex:fa.bc:mantissa"]),
+        new Set(["hex:FA.BC:mantissa"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameStructuralShape(
         new Set(["hex-exponent:FABC:3"]),
         new Set(["hex-exponent:FABC:3"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameStructuralShape(
+        new Set(["hex-exponent:fa.bc:-3"]),
+        new Set(["hex-exponent:FA.BC:-3"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameStructuralShape(
+        new Set(["super:fa"]),
+        new Set(["super:FA"]),
       ),
     ).toBe(true);
     expect(
@@ -876,6 +911,14 @@ describe("ir passes on synthetic programs", () => {
       "hex:FA.CE:mantissa",
     );
     expect(superModel.kind === "mantissa" ? x2MantissaShapeFactFromModel(superModel) : undefined).toBe("super:FA");
+  });
+
+  it("x2 shape algebra canonicalizes mantissa and exponent facts", () => {
+    expect(x2CanonicalShapeFact("mantissa: 02 :decimal")).toBe("mantissa:02:decimal");
+    expect(x2CanonicalShapeFact("hex: fa.ce :mantissa")).toBe("hex:FA.CE:mantissa");
+    expect(x2CanonicalShapeFact("super: fa")).toBe("super:FA");
+    expect(x2CanonicalShapeFact("hex-exponent: fa.ce : -3")).toBe("hex-exponent:FA.CE:-3");
+    expect(x2CanonicalShapeFact("super-exponent: fa : 3")).toBe("super-exponent:FA:3");
   });
 
   it("x2 value dataflow keeps leading-zero X2 separate from normalized X", () => {
@@ -1567,6 +1610,50 @@ describe("ir passes on synthetic programs", () => {
     expect(x2VpContextStateText(states[6])).toBe("exponent:12:3");
     expect(x2EntryStateText(states[7])).toBe("closed");
     expect(x2VpContextStateText(states[7])).toBe("exponent:12:-3");
+  });
+
+  it("x2 VP shape context analysis classifies active entries and closed VP contexts for splicing", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(analyzeX2VpShapeContext(states[3])).toMatchObject({
+      kind: "active-exponent",
+      phase: "active-entry",
+      source: "decimal",
+      hasExponentDigit: false,
+      restoresX2: true,
+      canCancelExponentSignPair: true,
+      canDiscardSeparatorBeforeNonDigit: false,
+      canDiscardSeparatorBeforeSignChange: false,
+      canDiscardRestoreBeforeFreshDigit: false,
+    });
+    expect(analyzeX2VpShapeContext(states[4])).toMatchObject({
+      kind: "active-exponent",
+      phase: "active-entry",
+      source: "decimal",
+      hasExponentDigit: true,
+      canDiscardSeparatorBeforeNonDigit: true,
+      canCancelExponentSignPair: true,
+    });
+    expect(analyzeX2VpShapeContext(states[6])).toMatchObject({
+      kind: "vp-exponent-context",
+      phase: "vp-context",
+      source: "decimal",
+      hasExponentDigit: true,
+      restoresX2: true,
+      canDiscardSeparatorBeforeNonDigit: false,
+      canDiscardSeparatorBeforeSignChange: true,
+      canDiscardRestoreBeforeFreshDigit: true,
+      canCancelExponentSignPair: false,
+    });
   });
 
   it("x2 value dataflow proves a closed integer exponent-entry after an X2 sync", () => {
@@ -2487,6 +2574,48 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore uses proved indirect conditional preserved normalized X2", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      knownTargetIndirectCjump("7", 6),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      knownTargetIndirectCjump("7", 6),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps leading-zero literals through proved indirect conditionals", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      knownTargetIndirectCjump("7", 6),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore uses direct return X2 sync", () => {
     const program: IrOp[] = [
       label("main"),
@@ -2691,7 +2820,7 @@ describe("ir passes on synthetic programs", () => {
     const roleEmpty: IrOp = {
       kind: "plain",
       opcode: 0x55,
-      meta: { mnemonic: "К 1", roles: ["layout-anchor"] },
+      meta: { mnemonic: "К 1", roles: ["display-byte"] },
     };
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -3003,6 +3132,45 @@ describe("ir passes on synthetic programs", () => {
       label("done"),
       halt(),
     ]);
+  });
+
+  it("x2-noop-restore removes dot after proved indirect conditional preserved normalized X2", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      knownTargetIndirectCjump("7", 5),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      knownTargetIndirectCjump("7", 5),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore keeps dot after proved indirect conditional preserved leading-zero X2", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      knownTargetIndirectCjump("7", 5),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("x2-noop-restore removes dot immediately after direct return X2 sync", () => {
@@ -3650,6 +3818,35 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite crosses known indirect-return helpers before hard overwrite", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      plain(0x0a, "."),
+      knownTargetIndirectCall("7", 2),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      knownTargetIndirectCall("7", 2),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
   it("x2-dead-restore-before-overwrite keeps restores before helpers that restore X2", () => {
     const program: IrOp[] = [
       jump("main"),
@@ -3976,11 +4173,38 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-noop-restore removes dot before marker labels and empty-op ВП when the VP source is unchanged", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      label("marker"),
+      plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      label("marker"),
+      plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("x2-noop-restore keeps dot before role-bearing empty-op ВП context", () => {
     const roleEmpty: IrOp = {
       kind: "plain",
       opcode: 0x55,
-      meta: { mnemonic: "К 1", roles: ["layout-anchor"] },
+      meta: { mnemonic: "К 1", roles: ["display-byte"] },
     };
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -4188,6 +4412,42 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore crosses stable known indirect conditional fallthrough", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      store("2"),
+      knownTargetIndirectCjump("7", 6),
+      recall("2"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[4]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps recalls when an indirect conditional mutates the scratch selector", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("2"),
+      knownTargetIndirectCjump("2", 5),
+      recall("2"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-hidden-temp-restore crosses simple direct-return X2 syncs that ignore scratch", () => {
     const program: IrOp[] = [
       jump("main"),
@@ -4198,6 +4458,28 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0d, "Cx"),
       store("2"),
       call("sync"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[8]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore crosses known indirect-return X2 syncs that ignore scratch", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("sync"),
+      plain(0x0d, "Cx"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      store("2"),
+      knownTargetIndirectCall("7", 2),
       recall("2"),
       halt(),
     ];
@@ -4875,6 +5157,29 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("last-x-reuse drops recall when a known indirect return syncs X2 before ВП", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      knownTargetIndirectCall("7", 5),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      store("1"),
+      knownTargetIndirectCall("7", 5),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
+    ]);
+  });
+
   it("last-x-reuse preserves X facts through documented empty operators", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -5419,6 +5724,29 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("flow-x-reuse drops recall when a known indirect return syncs X2 before ВП", () => {
+    const program: IrOp[] = [
+      store("4"),
+      recall("4"),
+      knownTargetIndirectCall("7", 5),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      store("4"),
+      knownTargetIndirectCall("7", 5),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
+    ]);
+  });
+
   it("flow-x-reuse keeps recall that lifts the stack for an immediate binary op", () => {
     const program: IrOp[] = [
       store("4"),
@@ -5822,6 +6150,75 @@ describe("ir passes on synthetic programs", () => {
       plain(0x12, "*"),
       halt(),
     ]);
+  });
+
+  it("pre-shift-stack-lift crosses known indirect-return callees before a following recall", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      knownTargetIndirectCall("7", 2),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      knownTargetIndirectCall("7", 2),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift crosses proved indirect conditional fallthrough before a following recall", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      knownTargetIndirectCjump("7", 5),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      knownTargetIndirectCjump("7", 5),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps lifts across proved indirect conditionals when the target consumes stack", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      knownTargetIndirectCjump("7", 5),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+      label("consume"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("pre-shift-stack-lift crosses simple direct-return callees before hard X2 overwrite", () => {
@@ -7448,6 +7845,29 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("store-recall-peephole drops recall before a known indirect call return that syncs X2 before ВП", () => {
+    const program: IrOp[] = [
+      store("2"),
+      recall("2"),
+      knownTargetIndirectCall("7", 5),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      store("2"),
+      knownTargetIndirectCall("7", 5),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("noop"),
+      ret(),
+    ]);
+  });
+
   it("store-recall-peephole still drops recall before a fresh digit entry", () => {
     const program: IrOp[] = [
       store("2"),
@@ -8650,6 +9070,41 @@ describe("ir passes on synthetic programs", () => {
       plain(0x03, "3"),
       plain(0x20, "Fπ"),
       call("transparent"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes VP-context empty separators before known indirect-return helpers and dead overwrite", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x55, "К1"),
+      knownTargetIndirectCall("7", 2),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      knownTargetIndirectCall("7", 2),
       plain(0x0d, "Cx"),
       halt(),
     ]);

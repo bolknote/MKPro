@@ -1295,7 +1295,12 @@ The pipeline currently contains:
   layer now derives structural `hex-exponent:*:*` / `super-exponent:*:*`
   entries, exponent-context sign toggles, and closed-context mantissa sign
   toggles for synced structural exponent shapes without promoting them to ordinary
-  decimal value facts. Structural exponent shapes remain equality/restore
+  decimal value facts. Structural shape equality is based on the canonical
+  shape model, so spelling differences such as lower-case hex digits or
+  whitespace do not split otherwise identical `hex:*` / `super:*` proofs.
+  Shape-set joins and equality checks use the same canonical spelling, keeping
+  branch-merged `ВП`/restore facts stable without changing their safety class.
+  Structural exponent shapes remain equality/restore
   evidence only; unlike structural mantissas, they do not seed a fresh
   shape-only `ВП`-entry source. Structural mantissa forms also
   seed a separate shape-only `ВП`-entry source after direct/proved recalls,
@@ -1325,7 +1330,9 @@ The pipeline currently contains:
   alias. A parallel shape-memory layer remembers structural hex/super shapes
   from the same stores and preloads; those facts can prove that a later recall
   would not change visible `X`, but they still do not become dot-safe decimal
-  values. Closed structural exponent forms (`hex-exponent:*:*` /
+  values. The remembered structural spellings are canonicalized, so equivalent
+  hex/super display shapes still join after a store/recall round trip. Closed
+  structural exponent forms (`hex-exponent:*:*` /
   `super-exponent:*:*`) participate in that restore/equality proof, while
   new `ВП` sources still require a separate structural mantissa fact. This
   keeps shape-memory useful for recall removal without treating a closed
@@ -1358,6 +1365,10 @@ The pipeline currently contains:
   barriers, but any X2-preserving edge that can reach a context-sensitive restore
   still keeps the dot. Closed-context `/-/` proofs also cover a following `.`
   reached only through free-standing `КНОП`/`К1`/`К2` empty ops.
+  A narrower normalized-decimal proof also removes `.` after X2-preserving local
+  gaps, including proved stable indirect conditionals, when `X` and `X2` carry
+  the same normalized decimal fact and no display-focused cell lies between the
+  X2 sync and the dot. Leading-zero and display-byte gaps stay explicit.
   The same X2 value dataflow now carries narrow `ВП`-entry facts after proved
   closed decimal syncs (`Cx`, `В↑`, `F0..FF`), direct/proved recalls, direct
   `В/О` return continuations, and path-sensitive direct-conditional fallthrough
@@ -1365,7 +1376,10 @@ The pipeline currently contains:
   `КНОП`/`К1`/`К2`; decimal facts are mantissa values, while hex/super facts
   stay structural-only. This lets exponent-entry rewrites use hidden X2 without
   pretending that a preceding `X->П` or arbitrary preserving command leaves the
-  same previous-command context. Proved `/-/` toggles those facts, but zero is
+  same previous-command context. The shared VP shape-context classifier records
+  active-entry vs closed VP-context phase, decimal vs structural source,
+  exponent-digit presence, and the exact splice actions that are safe for that
+  state; `vp-splice` consumes those flags directly. Proved `/-/` toggles those facts, but zero is
   carried as a distinct `-0` shape instead of normalized away because
   `Cx /-/ ВП` has a signed-zero mantissa on the emulator. VP-context sign
   commands and empty separators after X2-preserving gaps are collapsed as one
@@ -1414,7 +1428,8 @@ The pipeline currently contains:
   `.` restore-gap proof must have seen two safe X2-preserving executable steps
   after the last X2 sync; alternatively, the shared X2 model can prove a
   closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2`
-  empty ops. The normal stack-lift/X2-context guards still prove that
+  empty ops, or a normalized decimal source fact already in X2 through a
+  display-free local gap. The normal stack-lift/X2-context guards still prove that
   the recall's stack shift and previous-command class are not observable. The
   scratch-store search can cross a direct conditional or counted-loop test when
   the recall sits on the fallthrough path: the shared path-sensitive X2 proof
@@ -1436,8 +1451,10 @@ The pipeline currently contains:
   `.` when X2 value dataflow proves the same normalized decimal value is already
   hidden in X2, the inserted dot is safe, and removing the literal's stack lift
   is unobservable. The dot source can be a normal restore-gap proof, a CFG-proved
-  immediate X2 sync, or a modeled closed-context `/-/` reached through only
-  free-standing `КНОП`/`К1`/`К2` empty ops. The same shared CFG-aware X2
+  immediate X2 sync, a normalized decimal fact preserved through a display-free
+  local gap such as a proved stable indirect conditional, or a modeled
+  closed-context `/-/` reached through only free-standing `КНОП`/`К1`/`К2` empty
+  ops. The same shared CFG-aware X2
   exposure walker used by `x2-noop-restore` protects the inserted `.`:
   branch/call edges are not
   automatic blockers, but a path that preserves X2 into a later

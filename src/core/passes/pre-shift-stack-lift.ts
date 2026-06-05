@@ -1,15 +1,19 @@
 import type { IrOp } from "../types.ts";
 import {
   analyzeX2StackEffect,
-  cellsPerOp,
-  computeLabelEntryIndexes,
+  directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
+  isKnownReturnCallOp,
+  knownIndirectFlowTarget,
+  knownReturnCallReturnsThroughTransparentRange,
   removingRecallCanExposeX2Restore,
   removingPreShiftLiftCanExposeStack,
   removingStackLiftCanExposeStack,
+  type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
+  type KnownReturnCallOp,
 } from "./helpers.ts";
 
 function isStackLift(op: IrOp): boolean {
@@ -36,24 +40,28 @@ function isStackPreservingGapOp(op: IrOp): boolean {
 }
 
 function isFallthroughStackPreservingGapOp(op: IrOp): boolean {
-  return isStackPreservingGapOp(op) || op.kind === "cjump" || op.kind === "loop";
+  return isStackPreservingGapOp(op) ||
+    op.kind === "cjump" ||
+    op.kind === "loop" ||
+    isKnownIndirectFallthroughStackPreservingConditional(op);
 }
 
-interface DirectReturnGapContext {
-  readonly labelEntries: ReadonlySet<number>;
-  readonly labels: ReadonlyMap<string, number>;
-  readonly addresses: ReadonlyMap<number, number>;
+function isKnownIndirectFallthroughStackPreservingConditional(op: IrOp): boolean {
+  return op.kind === "indirect-cjump" &&
+    knownIndirectFlowTarget(op) !== undefined &&
+    !hasRewriteBarrier(op) &&
+    analyzeX2StackEffect(op).stackPreserves;
 }
 
 function nextStackShiftingProducerIndex(
   ops: readonly IrOp[],
   start: number,
-  context: DirectReturnGapContext,
+  context: DirectReturnAnalysisContext,
 ): number | undefined {
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (isStackShiftingProducer(op)) return index;
-    if (op.kind === "call" && simpleDirectReturnPreservesStack(ops, op, context)) continue;
+    if (isKnownReturnCallOp(op) && simpleDirectReturnPreservesStack(ops, op, context)) continue;
     if (!isFallthroughStackPreservingGapOp(op)) return undefined;
   }
   return undefined;
@@ -66,12 +74,12 @@ function isHardX2Overwrite(op: IrOp | undefined): boolean {
 function nextHardX2OverwriteIndex(
   ops: readonly IrOp[],
   start: number,
-  context: DirectReturnGapContext,
+  context: DirectReturnAnalysisContext,
 ): number | undefined {
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (isHardX2Overwrite(op)) return index;
-    if (op.kind === "call" && simpleDirectReturnPreservesStack(ops, op, context)) continue;
+    if (isKnownReturnCallOp(op) && simpleDirectReturnPreservesStack(ops, op, context)) continue;
     if (!isFallthroughStackPreservingGapOp(op)) return undefined;
   }
   return undefined;
@@ -79,11 +87,7 @@ function nextHardX2OverwriteIndex(
 
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
-  const context: DirectReturnGapContext = {
-    labelEntries: computeLabelEntryIndexes(ops),
-    labels: labelIndexes(ops),
-    addresses: addressIndexes(ops),
-  };
+  const context = directReturnAnalysisContext(ops);
   for (let index = 0; index < ops.length - 1; index += 1) {
     const op = ops[index]!;
     if (!isStackLift(op)) continue;
@@ -120,40 +124,10 @@ export const preShiftStackLift: IrPass = {
 
 function simpleDirectReturnPreservesStack(
   ops: readonly IrOp[],
-  call: Extract<IrOp, { kind: "call" }>,
-  context: DirectReturnGapContext,
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
 ): boolean {
-  const targetIndex = targetIndexForCall(call, context);
-  if (targetIndex === undefined) return false;
-  return linearReturnRangePreservesStack(ops, targetIndex, context.labelEntries);
-}
-
-function targetIndexForCall(
-  call: Extract<IrOp, { kind: "call" }>,
-  context: DirectReturnGapContext,
-): number | undefined {
-  return typeof call.target === "string"
-    ? context.labels.get(call.target)
-    : context.addresses.get(call.target);
-}
-
-function linearReturnRangePreservesStack(
-  ops: readonly IrOp[],
-  targetIndex: number,
-  labelEntries: ReadonlySet<number>,
-): boolean {
-  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
-  for (let index = startIndex; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") {
-      if (labelEntries.has(index)) return false;
-      continue;
-    }
-    if (hasRewriteBarrier(op)) return false;
-    if (op.kind === "return") return true;
-    if (!isStrictStackPreservingLinearOp(op)) return false;
-  }
-  return false;
+  return knownReturnCallReturnsThroughTransparentRange(ops, call, context, isStrictStackPreservingLinearOp);
 }
 
 function isStrictStackPreservingLinearOp(op: IrOp): boolean {
@@ -168,25 +142,4 @@ function isStrictStackPreservingLinearOp(op: IrOp): boolean {
     default:
       return false;
   }
-}
-
-function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
-  const result = new Map<string, number>();
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") result.set(op.name, index);
-  }
-  return result;
-}
-
-function addressIndexes(ops: readonly IrOp[]): Map<number, number> {
-  const result = new Map<number, number>();
-  let address = 0;
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") continue;
-    result.set(address, index);
-    address += cellsPerOp(op);
-  }
-  return result;
 }

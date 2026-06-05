@@ -6,8 +6,10 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   x2CanUseDotRestoreAt,
+  x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasSameDotRestoreValueInXAndX2,
+  x2StateHasSameNormalizedDecimalInXAndX2,
   x2StateIsClosedPlainContext,
   x2StatesHaveSameVpEntrySource,
   type IrPass,
@@ -29,7 +31,11 @@ const run: IrPassFn = (ops) => {
     if (isDisplayFocusSensitive(op)) continue;
     const state = valueStates[index];
     if (
-      !x2CanUseDotRestoreAt(ops, index, state, dotSafeStates[index] === true, immediateSyncStates[index] === true)
+      !x2CanUseDotRestoreAt(ops, index, state, dotSafeStates[index] === true, immediateSyncStates[index] === true) &&
+      !(
+        x2StateHasSameNormalizedDecimalInXAndX2(state) &&
+        x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
+      )
     ) continue;
     if (!isDotSafeValueContext(state)) continue;
     if (!x2StateHasSameDotRestoreValueInXAndX2(state)) continue;
@@ -77,6 +83,7 @@ function hasOnlyEmptyGapBeforeVp(ops: readonly IrOp[], start: number): boolean {
   let sawEmpty = false;
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
+    if (op.kind === "label") continue;
     if (isFreeStandingEmptyOp(op)) {
       sawEmpty = true;
       continue;

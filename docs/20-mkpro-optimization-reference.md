@@ -643,9 +643,10 @@ Display rewrites are separated into strategy selection + body lowering.
   stack-preserving labels, stores, address bytes, and plain stack-neutral
   commands, when the producer already supplies the current X in Y and the
   shared stack-difference proof shows the extra Z/T difference cannot reach a
-  later consumer. The gap may include a direct conditional or counted-loop
-  fallthrough when both the CFG stack proof and the X2-restore exposure proof
-  show that the skipped edge cannot observe the removed sync/lift. It may also
+  later consumer. The gap may include a direct conditional, counted-loop, or
+  proved-indirect conditional fallthrough when both the CFG stack proof and the
+  X2-restore exposure proof show that the skipped edge cannot observe the
+  removed sync/lift. It may also
   include a simple direct `ПП` callee that reaches `В/О` linearly through only
   stack-preserving commands; stack consumers, X2 restores, nested flow, and
   other entry labels keep the call as a barrier. The same
@@ -807,7 +808,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 6. `shared-terminal-tail` — finds repeated straight-line suffixes that already end in unconditional flow (`БП`, `К БП r`, or `В/О`) and replaces extra copies with a jump into the canonical suffix; it refuses programs with absolute numeric flow targets.
 7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
 8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, or an adjacent recall to another cell when the shared value/shape proof shows the recalled decimal value or structural hex/super display shape is already visible in X. The rewrite fires only when the recall is not the last X2 sync before a context-sensitive `.`/`/-/`/`ВП` restoration before the next X2-affecting op, including direct conditional/`F Lx` fallthrough syncs and direct `В/О` returns, or when the same shared proof shows X2 already carries the recalled decimal value or structural hex/super shape across an X2-preserving gap. Its stack lift still cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors and loop-counter recalls are not folded when the hardware side effect is observable.
-9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, or another stack-shifting producer, possibly through stack-preserving labels/stores/plain ops, path-safe direct conditional/counted-loop fallthroughs, and simple stack-preserving direct-return callees, when that producer already supplies the current X in Y, unless the full CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync.
+9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, or another stack-shifting producer, possibly through stack-preserving labels/stores/plain ops, path-safe direct conditional/counted-loop/proved-indirect conditional fallthroughs, and simple stack-preserving direct-return callees, when that producer already supplies the current X in Y, unless the full CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
 12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X, including concrete decimal equality proved through X2 register-memory or decimal preload metadata after X was rebuilt; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, counted-loop `F L0`..`F L3` backedges preserve visible X for non-counter registers while dropping the decremented counter alias, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.
@@ -841,6 +842,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     through free-standing `КНОП`/`К1`/`К2` cells before `ВП`, the dot is removed:
     emulator tests cover normalized and signed normalized mantissas in this
     empty-op exponent-entry shape.
+    A separate normalized-decimal escape hatch handles proved X2-preserving
+    gaps such as stable indirect conditionals: if `X` and `X2` carry the same
+    normalized decimal fact and the local gap back to the X2 sync contains no
+    display-focused cell, `.` can still be removed. Leading-zero and
+    display-byte gaps remain explicit.
     Closed-context `/-/` is modeled for
     proved normalized decimal `X == X2` facts, including zero; this lets an
     immediately following `.`, or one reached only through free-standing
@@ -878,6 +884,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     mantissa facts, derive structural exponent-context sign toggles, and derive
     closed-context mantissa sign toggles for synced structural exponent shapes
     while still refusing hex/super arithmetic, carry, or decimalization proofs.
+    Structural equality uses canonical shape reconstruction, so equivalent
+    hex/super spellings compare as the same shape without becoming decimal
+    values. Shape-set joins and equality checks use the same canonical
+    spelling, so branch-merged structural `ВП`/restore proofs do not split on
+    formatting.
     Closed structural exponent shapes are equality/restore evidence only; they
     are not promoted to fresh `ВП`-entry sources.
     Closed-context `.`
@@ -888,7 +899,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `decimal:*` facts, while hex-like display mantissas and `FA`..`FF` super
     forms become structural-only `hex:*` / `super:*` shape facts. Until those
     shapes are separately proved dot-safe, hex/super/display shapes remain
-    structural only; structural VP context is not considered plain closed
+    structural only. Shape-memory stores canonical structural spellings, so
+    equivalent hex/super display shapes still join after store/recall proofs;
+    structural VP context is not considered plain closed
     context by `.`/`/-/` rewrite guards. Closed-context
     `/-/` without a proved decimal, opaque, structural shape, or VP context stays
     unknown. The pass accepts either a
@@ -924,13 +937,15 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     for later recalls, joins keep only facts common to every path, and unknown
     indirect stores clear the memory. Hex-like preload facts remain shape-only,
     so they do not make `.`/`/-/` dead-restore candidates.
-19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The scratch-store proof can cross direct conditional/loop fallthrough syncs and simple direct-return calls that do not mention the scratch register, and it can use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
+19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
 20. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is
     already in the hidden X2 register, the dot-restore gap is safe (or CFG
     proves the literal starts immediately after an X2 sync, including direct
-    `В/О` continuations, or a modeled closed-context `/-/` reached through only
-    free-standing `КНОП`/`К1`/`К2` empty ops), and removing number entry cannot
+    `В/О` continuations, a normalized decimal fact survives through a
+    display-free local gap such as a proved stable indirect conditional, or a
+    modeled closed-context `/-/` reached through only free-standing
+    `КНОП`/`К1`/`К2` empty ops), and removing number entry cannot
     expose a consumed stack lift. It recognizes ordinary digit-runs,
     signed digit-runs, and normalized exponent-entry literals such as
     `5 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
@@ -989,6 +1004,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `2 F0 ВП /-/ /-/ 3`; a non-zero sign pair before the proved `ВП`
     (`2 F0 /-/ /-/ ВП 3`, `02 /-/ /-/ ВП 3`) can also collapse. The signed-zero
     forms are kept because `0 /-/ /-/ ВП` still differs from `0 ВП`.
+    The pass consumes the shared VP shape-context classifier rather than
+    decoding local `kind` strings: the classifier records active-entry vs
+    closed VP-context phase, decimal vs structural source, exponent-digit
+    presence, and the exact splice actions that are safe for that state.
     After an X2-preserving gap, a VP-context sign or sign pair is kept when its
     X2 restore is observable (`5 ВП 3 Fπ /-/ С/П`,
     `5 ВП 3 Fπ /-/ /-/ С/П`), but a free-standing `/-/`/empty restore run can

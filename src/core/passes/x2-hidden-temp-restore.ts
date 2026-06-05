@@ -3,21 +3,27 @@ import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
 import {
   analyzeRecallRemoval,
-  cellsPerOp,
-  computeLabelEntryIndexes,
   computeX2DotRestoreGapStates,
   computeX2ImmediateSyncStates,
   computeX2RegisterStates,
   computeX2ValueStates,
+  directReturnAnalysisContext,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
+  isKnownReturnCallOp,
+  knownReturnCallReturnsThroughTransparentRange,
+  knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   removableRecallValueRegister,
   removingRecallCanExposeX2Restore,
   x2CanUseDotRestoreAt,
+  x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateHasUnsafeDotRestoreShapeX2,
+  x2ValueFactIsNormalizedDecimal,
+  type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
+  type KnownReturnCallOp,
   type X2ValueDataflowState,
   type X2ValueFact,
 } from "./helpers.ts";
@@ -30,9 +36,7 @@ const run: IrPassFn = (ops) => {
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const liveness = computeLiveness(ops);
-  const labelEntries = computeLabelEntryIndexes(ops);
-  const labels = labelIndexes(ops);
-  const addresses = addressIndexes(ops);
+  const directReturnContext = directReturnAnalysisContext(ops);
   let applied = 0;
 
   const result = ops.map((op, index): IrOp => {
@@ -40,23 +44,28 @@ const run: IrPassFn = (ops) => {
     if (register === undefined) return op;
     if (!isSupportedScratchRecall(op)) return op;
     if (isDisplayFocusSensitive(op)) return op;
-    const storeIndex = findDeadScratchStore(ops, index, register, labelEntries, labels, addresses);
+    const storeIndex = findDeadScratchStore(ops, index, register, directReturnContext);
     if (storeIndex === undefined) return op;
     if (liveness.liveOut[index]?.has(register) === true) return op;
     const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index]);
     if (removal === undefined) return op;
     const sourceAlreadySynced = hiddenTempStoreSourceAlreadySyncedInX2(x2ValueStates[storeIndex], x2ValueStates[index]);
+    const sourceAlreadyDotSafe = hiddenTempStoreSourceAlreadyDotSafeInX2(
+      x2ValueStates[storeIndex],
+      x2ValueStates[index],
+    );
     if (removal.x2SyncRedundant !== true && !sourceAlreadySynced) return op;
     if (x2StateHasUnsafeDotRestoreShapeX2(x2ValueStates[index])) return op;
-    if (
-      !x2CanUseDotRestoreAt(
-        ops,
-        index,
-        x2ValueStates[index],
-        dotSafeStates[index] === true,
-        immediateSyncStates[index] === true,
-      )
-    ) return op;
+    const canUseDotRestore = x2CanUseDotRestoreAt(
+      ops,
+      index,
+      x2ValueStates[index],
+      dotSafeStates[index] === true,
+      immediateSyncStates[index] === true,
+    );
+    const canUseNormalizedDecimalEscape = sourceAlreadyDotSafe &&
+      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index);
+    if (!canUseDotRestore && !canUseNormalizedDecimalEscape) return op;
     const exposesX2Restore = sourceAlreadySynced && removal.x2SyncRedundant !== true
       ? removingRecallCanExposeX2Restore(ops, index, { redundantSyncValue: true })
       : removal.exposesX2Restore;
@@ -104,8 +113,24 @@ function hiddenTempStoreSourceAlreadySyncedInX2(
   return false;
 }
 
+function hiddenTempStoreSourceAlreadyDotSafeInX2(
+  storeState: X2ValueDataflowState | undefined,
+  recallState: X2ValueDataflowState | undefined,
+): boolean {
+  if (storeState === undefined || recallState === undefined) return false;
+  for (const fact of storeState.x) {
+    if (!isNormalizedDecimalFact(fact)) continue;
+    if (recallState.x2.has(fact)) return true;
+  }
+  return false;
+}
+
 function isStableStoredSourceFact(fact: X2ValueFact): boolean {
   return fact.startsWith("expr:") || (fact.startsWith("decimal:") && fact.endsWith(":normalized"));
+}
+
+function isNormalizedDecimalFact(fact: X2ValueFact): boolean {
+  return x2ValueFactIsNormalizedDecimal(fact);
 }
 
 function isSupportedScratchRecall(op: IrOp): op is Extract<IrOp, { kind: "recall" | "indirect-recall" }> {
@@ -119,14 +144,12 @@ function findDeadScratchStore(
   ops: readonly IrOp[],
   recallIndex: number,
   register: RegisterName,
-  labelEntries: ReadonlySet<number>,
-  labels: ReadonlyMap<string, number>,
-  addresses: ReadonlyMap<number, number>,
+  directReturnContext: DirectReturnAnalysisContext,
 ): number | undefined {
   for (let index = recallIndex - 1; index >= 0; index -= 1) {
     const op = ops[index]!;
     if (op.kind === "label") {
-      if (labelEntries.has(index)) return undefined;
+      if (directReturnContext.labelEntries.has(index)) return undefined;
       continue;
     }
     if (hasRewriteBarrier(op)) return undefined;
@@ -142,88 +165,46 @@ function findDeadScratchStore(
     }
     if (mentionsRegister(op, register)) return undefined;
     if (op.kind === "cjump" || op.kind === "loop") continue;
-    if (op.kind === "call" && directReturningCallDoesNotMentionRegister(
+    if (isKnownIndirectConditionalFallthroughThatDoesNotMentionRegister(op, register)) continue;
+    if (isKnownReturnCallOp(op) && directReturningCallDoesNotMentionRegister(
       ops,
       op,
       register,
-      labelEntries,
-      labels,
-      addresses,
+      directReturnContext,
     )) continue;
     if (stopsStraightLineSearch(op)) return undefined;
   }
   return undefined;
 }
 
+function isKnownIndirectConditionalFallthroughThatDoesNotMentionRegister(
+  op: IrOp,
+  register: RegisterName,
+): boolean {
+  return op.kind === "indirect-cjump" &&
+    isStableIndirectSelector(op.register) &&
+    knownIndirectFlowTarget(op) !== undefined &&
+    !mentionsRegister(op, register);
+}
+
 function directReturningCallDoesNotMentionRegister(
   ops: readonly IrOp[],
-  call: Extract<IrOp, { kind: "call" }>,
+  call: KnownReturnCallOp,
   register: RegisterName,
-  labelEntries: ReadonlySet<number>,
-  labels: ReadonlyMap<string, number>,
-  addresses: ReadonlyMap<number, number>,
+  directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
-  const targetIndex = targetIndexForCall(call, labels, addresses);
-  if (targetIndex === undefined) return false;
-  return simpleReturningRangeDoesNotMentionRegister(ops, targetIndex, register, labelEntries);
-}
-
-function targetIndexForCall(
-  call: Extract<IrOp, { kind: "call" }>,
-  labels: ReadonlyMap<string, number>,
-  addresses: ReadonlyMap<number, number>,
-): number | undefined {
-  return typeof call.target === "string"
-    ? labels.get(call.target)
-    : addresses.get(call.target);
-}
-
-function simpleReturningRangeDoesNotMentionRegister(
-  ops: readonly IrOp[],
-  targetIndex: number,
-  register: RegisterName,
-  labelEntries: ReadonlySet<number>,
-): boolean {
-  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
-  for (let index = startIndex; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") {
-      if (labelEntries.has(index)) return false;
-      continue;
-    }
-    if (hasRewriteBarrier(op)) return false;
-    if (!memoryAccessDoesNotMentionRegister(op, register)) return false;
-    if (op.kind === "return") return true;
-    if (stopsStraightLineSearch(op)) return false;
-  }
-  return false;
+  return knownReturnCallReturnsThroughTransparentRange(
+    ops,
+    call,
+    directReturnContext,
+    (op) => memoryAccessDoesNotMentionRegister(op, register) && !stopsStraightLineSearch(op),
+  );
 }
 
 function memoryAccessDoesNotMentionRegister(op: IrOp, register: RegisterName): boolean {
   if (mentionsRegister(op, register)) return false;
   if (op.kind !== "indirect-store" && op.kind !== "indirect-recall") return true;
   return isStableIndirectSelector(op.register) && knownIndirectMemoryTarget(op) !== undefined;
-}
-
-function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
-  const result = new Map<string, number>();
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") result.set(op.name, index);
-  }
-  return result;
-}
-
-function addressIndexes(ops: readonly IrOp[]): Map<number, number> {
-  const result = new Map<number, number>();
-  let address = 0;
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") continue;
-    result.set(address, index);
-    address += cellsPerOp(op);
-  }
-  return result;
 }
 
 function mentionsRegister(op: IrOp, register: RegisterName): boolean {

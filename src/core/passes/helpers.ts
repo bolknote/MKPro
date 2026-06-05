@@ -175,11 +175,17 @@ export interface X2VpShapeContextAnalysis {
     | "active-structural-exponent"
     | "vp-structural-exponent-context"
     | "unknown";
+  readonly phase: "none" | "active-entry" | "vp-context" | "unknown";
+  readonly source: "none" | "decimal" | "structural" | "unknown";
   readonly mantissa?: ReadonlySet<string> | undefined;
   readonly shape?: X2ShapeSet | undefined;
   readonly exponent?: ReadonlySet<string> | undefined;
   readonly hasExponentDigit: boolean;
   readonly restoresX2: boolean;
+  readonly canDiscardSeparatorBeforeNonDigit: boolean;
+  readonly canDiscardSeparatorBeforeSignChange: boolean;
+  readonly canDiscardRestoreBeforeFreshDigit: boolean;
+  readonly canCancelExponentSignPair: boolean;
 }
 
 export interface X2StackEffectAnalysis {
@@ -215,6 +221,20 @@ export interface RecallRemovalAnalysis {
   readonly exposesStackLift: boolean;
   readonly exposesX2Restore: boolean;
   readonly removable: boolean;
+}
+
+export interface DirectReturnAnalysisContext {
+  readonly labelEntries: ReadonlySet<number>;
+  readonly labels: ReadonlyMap<string, number>;
+  readonly addresses: ReadonlyMap<number, number>;
+}
+
+export type KnownReturnCallOp =
+  | Extract<IrOp, { kind: "call" }>
+  | Extract<IrOp, { kind: "indirect-call" }>;
+
+export function isKnownReturnCallOp(op: IrOp): op is KnownReturnCallOp {
+  return op.kind === "call" || op.kind === "indirect-call";
 }
 
 export function emptyResult(ops: readonly IrOp[]): PassResult {
@@ -355,6 +375,74 @@ export function computeLabelEntryIndexes(
   return entries;
 }
 
+export function directReturnAnalysisContext(ops: readonly IrOp[]): DirectReturnAnalysisContext {
+  return {
+    labelEntries: computeLabelEntryIndexes(ops),
+    labels: labelIndexes(ops),
+    addresses: addressIndexes(ops),
+  };
+}
+
+export function directCallTargetIndex(
+  call: Extract<IrOp, { kind: "call" }>,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  return typeof call.target === "string"
+    ? context.labels.get(call.target)
+    : context.addresses.get(call.target);
+}
+
+export function knownReturnCallTargetIndex(
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  if (call.kind === "call") return directCallTargetIndex(call, context);
+  const target = knownIndirectFlowTarget(call);
+  return target === undefined ? undefined : context.addresses.get(target);
+}
+
+export function directCallReturnsThroughTransparentRange(
+  ops: readonly IrOp[],
+  call: Extract<IrOp, { kind: "call" }>,
+  context: DirectReturnAnalysisContext,
+  isTransparent: (op: IrOp) => boolean,
+): boolean {
+  const targetIndex = directCallTargetIndex(call, context);
+  if (targetIndex === undefined) return false;
+  return linearReturnRangeIsTransparent(ops, targetIndex, context.labelEntries, isTransparent);
+}
+
+export function knownReturnCallReturnsThroughTransparentRange(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+  isTransparent: (op: IrOp) => boolean,
+): boolean {
+  const targetIndex = knownReturnCallTargetIndex(call, context);
+  if (targetIndex === undefined) return false;
+  return linearReturnRangeIsTransparent(ops, targetIndex, context.labelEntries, isTransparent);
+}
+
+export function linearReturnRangeIsTransparent(
+  ops: readonly IrOp[],
+  targetIndex: number,
+  labelEntries: ReadonlySet<number>,
+  isTransparent: (op: IrOp) => boolean,
+): boolean {
+  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
+  for (let index = startIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      if (labelEntries.has(index)) return false;
+      continue;
+    }
+    if (hasRewriteBarrier(op)) return false;
+    if (op.kind === "return") return true;
+    if (!isTransparent(op)) return false;
+  }
+  return false;
+}
+
 function directFlowTarget(op: IrOp): string | number | undefined {
   switch (op.kind) {
     case "jump":
@@ -430,7 +518,7 @@ export function analyzeX2StackEffect(op: IrOp | undefined): X2StackEffectAnalysi
   };
 }
 
-function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
+export function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
   const result = new Map<string, number>();
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i]!;
@@ -439,7 +527,7 @@ function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
   return result;
 }
 
-function addressIndexes(ops: readonly IrOp[]): Map<number, number> {
+export function addressIndexes(ops: readonly IrOp[]): Map<number, number> {
   const result = new Map<number, number>();
   let address = 0;
   for (let i = 0; i < ops.length; i += 1) {
@@ -587,6 +675,62 @@ export function x2ValueSetHasConcreteDecimal(input: X2ValueSet | undefined): boo
   return false;
 }
 
+export function x2ValueFactIsNormalizedDecimal(fact: X2ValueFact): boolean {
+  return fact.startsWith("decimal:") && fact.endsWith(":normalized");
+}
+
+export function x2ValueSetHasNormalizedDecimalFact(
+  input: X2ValueSet | undefined,
+  fact: X2ValueFact,
+): boolean {
+  return x2ValueFactIsNormalizedDecimal(fact) && input?.has(fact) === true;
+}
+
+export function x2StateHasSameNormalizedDecimalInXAndX2(
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  if (state === undefined) return false;
+  for (const fact of state.x) {
+    if (x2ValueSetHasNormalizedDecimalFact(state.x2, fact)) return true;
+  }
+  return false;
+}
+
+export function x2NormalizedDecimalRestoreGapIsFreeStanding(
+  ops: readonly IrOp[],
+  index: number,
+): boolean {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const op = ops[cursor]!;
+    if (op.kind === "label") continue;
+    if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+
+    switch (op.kind) {
+      case "plain": {
+        const effect = plainX2Effect(op);
+        if (effect === "affects" || effect === "restores") return true;
+        if (effect === "preserves") continue;
+        return false;
+      }
+      case "recall":
+      case "indirect-recall":
+        return true;
+      case "store":
+      case "indirect-store":
+      case "orphan-address":
+      case "cjump":
+      case "loop":
+        continue;
+      case "indirect-cjump":
+        if (knownIndirectFlowTarget(op) !== undefined) continue;
+        return false;
+      default:
+        return false;
+    }
+  }
+  return false;
+}
+
 export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
   const mantissa = /^mantissa:(.*):decimal$/u.exec(fact);
   if (mantissa !== null) {
@@ -696,6 +840,17 @@ export function x2MantissaShapeFactFromModel(model: X2MantissaDataModel): X2Shap
   return x2MantissaShapeFactFromParts(model.radix, model.canonical);
 }
 
+export function x2ShapeFactFromDataModel(model: X2ShapeDataModel): X2ShapeFact | undefined {
+  if (model.kind === "mantissa") return x2MantissaShapeFactFromModel(model);
+  if (model.kind !== "exponent-entry") return undefined;
+  const mantissa = x2MantissaShapeFactFromModel(model.mantissa);
+  return mantissa === undefined ? undefined : x2ExponentShapeFactFromMantissaFact(mantissa, model.exponentRaw);
+}
+
+export function x2CanonicalShapeFact(fact: X2ShapeFact): X2ShapeFact {
+  return x2ShapeFactFromDataModel(x2ShapeDataModelForFact(fact)) ?? fact;
+}
+
 export function x2ExponentShapeFactFromMantissaFact(
   fact: X2ShapeFact,
   exponentRaw: string,
@@ -802,8 +957,9 @@ export function x2ShapeSetsHaveSameStructuralShape(
 ): boolean {
   if (left === undefined || right === undefined) return false;
   const leftShapes = structuralRestoreShapeFacts(left);
+  const rightShapes = structuralRestoreShapeFacts(right);
   for (const shape of leftShapes) {
-    if (right.has(shape)) return true;
+    if (rightShapes.has(shape)) return true;
   }
   return false;
 }
@@ -892,42 +1048,70 @@ export function analyzeX2VpShapeContext(
   state: X2ValueDataflowState | undefined,
 ): X2VpShapeContextAnalysis {
   if (state === undefined) {
-    return { kind: "unknown", hasExponentDigit: false, restoresX2: false };
+    return emptyX2VpShapeContextAnalysis("unknown");
   }
   if (state.entry.kind === "exponent") {
+    const hasExponentDigit = x2ExponentSetHasDigit(state.entry.exponent);
     return {
       kind: "active-exponent",
+      phase: "active-entry",
+      source: "decimal",
       mantissa: state.entry.mantissa,
       exponent: state.entry.exponent,
-      hasExponentDigit: x2ExponentSetHasDigit(state.entry.exponent),
+      hasExponentDigit,
       restoresX2: true,
+      canDiscardSeparatorBeforeNonDigit: hasExponentDigit,
+      canDiscardSeparatorBeforeSignChange: false,
+      canDiscardRestoreBeforeFreshDigit: false,
+      canCancelExponentSignPair: true,
     };
   }
   if (state.structuralEntry?.kind === "exponent") {
+    const hasExponentDigit = x2ExponentSetHasDigit(state.structuralEntry.exponent);
     return {
       kind: "active-structural-exponent",
+      phase: "active-entry",
+      source: "structural",
       shape: state.structuralEntry.mantissa,
       exponent: state.structuralEntry.exponent,
-      hasExponentDigit: x2ExponentSetHasDigit(state.structuralEntry.exponent),
+      hasExponentDigit,
       restoresX2: true,
+      canDiscardSeparatorBeforeNonDigit: hasExponentDigit,
+      canDiscardSeparatorBeforeSignChange: false,
+      canDiscardRestoreBeforeFreshDigit: false,
+      canCancelExponentSignPair: true,
     };
   }
   if (state.entry.kind === "closed" && state.vpContext?.kind === "exponent") {
+    const hasExponentDigit = x2ExponentSetHasDigit(state.vpContext.exponent);
     return {
       kind: "vp-exponent-context",
+      phase: "vp-context",
+      source: "decimal",
       mantissa: state.vpContext.mantissa,
       exponent: state.vpContext.exponent,
-      hasExponentDigit: x2ExponentSetHasDigit(state.vpContext.exponent),
+      hasExponentDigit,
       restoresX2: true,
+      canDiscardSeparatorBeforeNonDigit: false,
+      canDiscardSeparatorBeforeSignChange: hasExponentDigit,
+      canDiscardRestoreBeforeFreshDigit: true,
+      canCancelExponentSignPair: false,
     };
   }
   if (state.entry.kind === "closed" && state.structuralVpContext?.kind === "exponent") {
+    const hasExponentDigit = x2ExponentSetHasDigit(state.structuralVpContext.exponent);
     return {
       kind: "vp-structural-exponent-context",
+      phase: "vp-context",
+      source: "structural",
       shape: state.structuralVpContext.mantissa,
       exponent: state.structuralVpContext.exponent,
-      hasExponentDigit: x2ExponentSetHasDigit(state.structuralVpContext.exponent),
+      hasExponentDigit,
       restoresX2: true,
+      canDiscardSeparatorBeforeNonDigit: false,
+      canDiscardSeparatorBeforeSignChange: hasExponentDigit,
+      canDiscardRestoreBeforeFreshDigit: true,
+      canCancelExponentSignPair: false,
     };
   }
   if (
@@ -935,9 +1119,25 @@ export function analyzeX2VpShapeContext(
     (state.vpContext === undefined || state.vpContext.kind === "none") &&
     (state.structuralVpContext === undefined || state.structuralVpContext.kind === "none")
   ) {
-    return { kind: "none", hasExponentDigit: false, restoresX2: false };
+    return emptyX2VpShapeContextAnalysis("none");
   }
-  return { kind: "unknown", hasExponentDigit: false, restoresX2: false };
+  return emptyX2VpShapeContextAnalysis("unknown");
+}
+
+function emptyX2VpShapeContextAnalysis(
+  kind: "none" | "unknown",
+): X2VpShapeContextAnalysis {
+  return {
+    kind,
+    phase: kind,
+    source: kind,
+    hasExponentDigit: false,
+    restoresX2: false,
+    canDiscardSeparatorBeforeNonDigit: false,
+    canDiscardSeparatorBeforeSignChange: false,
+    canDiscardRestoreBeforeFreshDigit: false,
+    canCancelExponentSignPair: false,
+  };
 }
 
 export function x2ExponentSetHasDigit(exponents: ReadonlySet<string> | undefined): boolean {
@@ -2624,7 +2824,10 @@ function concreteStoredX2ValueFacts(values: X2ValueSet): Set<X2ValueFact> {
 
 function storableX2ShapeMemoryFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  for (const shape of shapes ?? []) output.add(shape);
+  for (const shape of shapes ?? []) {
+    const canonical = x2ShapeFactFromDataModel(x2ShapeDataModelForFact(shape));
+    output.add(canonical ?? shape);
+  }
   return output;
 }
 
@@ -2721,7 +2924,10 @@ function structuralMantissaShapeFacts(input: X2ShapeSet): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   for (const fact of input) {
     const model = x2ShapeDataModelForFact(fact);
-    if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) output.add(fact);
+    if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) {
+      const canonical = x2ShapeFactFromDataModel(model);
+      if (canonical !== undefined) output.add(canonical);
+    }
   }
   return output;
 }
@@ -2730,7 +2936,19 @@ function structuralRestoreShapeFacts(input: X2ShapeSet): Set<X2ShapeFact> {
   const output = structuralMantissaShapeFacts(input);
   for (const fact of input) {
     const model = x2ShapeDataModelForFact(fact);
-    if (model.kind === "exponent-entry" && model.safety === "structuralOnly") output.add(fact);
+    if (model.kind === "exponent-entry" && model.safety === "structuralOnly") {
+      const canonical = x2ShapeFactFromDataModel(model);
+      if (canonical !== undefined) output.add(canonical);
+    }
+  }
+  return output;
+}
+
+function canonicalStructuralShapeFacts(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of input ?? []) {
+    const canonical = x2ShapeFactFromDataModel(x2ShapeDataModelForFact(fact));
+    if (canonical !== undefined && x2ShapeFactSafety(canonical) === "structuralOnly") output.add(canonical);
   }
   return output;
 }
@@ -2887,7 +3105,7 @@ function vpEntryShapesFromShapeFacts(shapes: X2ShapeSet | undefined): X2ShapeSet
 }
 
 function cloneOptionalShapeSet(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
-  return input === undefined ? new Set() : new Set(input);
+  return canonicalShapeSet(input);
 }
 
 function joinOptionalShapeSets(
@@ -2895,9 +3113,11 @@ function joinOptionalShapeSets(
   incoming: X2ShapeSet | undefined,
 ): Set<X2ShapeFact> {
   if (current === undefined || incoming === undefined) return new Set();
+  const currentSet = canonicalShapeSet(current);
+  const incomingSet = canonicalShapeSet(incoming);
   const joined = new Set<X2ShapeFact>();
-  for (const value of current) {
-    if (incoming.has(value)) joined.add(value);
+  for (const value of currentSet) {
+    if (incomingSet.has(value)) joined.add(value);
   }
   return joined;
 }
@@ -2906,8 +3126,8 @@ function sameOptionalShapeSet(
   left: X2ShapeSet | undefined,
   right: X2ShapeSet | undefined,
 ): boolean {
-  const leftSet = left ?? new Set<X2ShapeFact>();
-  const rightSet = right ?? new Set<X2ShapeFact>();
+  const leftSet = canonicalShapeSet(left);
+  const rightSet = canonicalShapeSet(right);
   if (leftSet.size !== rightSet.size) return false;
   for (const value of leftSet) {
     if (!rightSet.has(value)) return false;
@@ -2916,11 +3136,19 @@ function sameOptionalShapeSet(
 }
 
 function sameNonEmptyShapeSet(left: X2ShapeSet | undefined, right: X2ShapeSet | undefined): boolean {
-  if (left === undefined || right === undefined || left.size === 0 || left.size !== right.size) return false;
-  for (const value of left) {
-    if (!right.has(value)) return false;
+  const leftSet = canonicalShapeSet(left);
+  const rightSet = canonicalShapeSet(right);
+  if (leftSet.size === 0 || leftSet.size !== rightSet.size) return false;
+  for (const value of leftSet) {
+    if (!rightSet.has(value)) return false;
   }
   return true;
+}
+
+function canonicalShapeSet(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of input ?? []) output.add(x2CanonicalShapeFact(fact));
+  return output;
 }
 
 function joinStringSets(current: ReadonlySet<string>, incoming: ReadonlySet<string>): Set<string> {
@@ -3211,9 +3439,11 @@ function signChangedClosedShapeMantissas(input: X2ValueDataflowState): ReadonlyS
 
 function signChangedClosedStructuralShapeFacts(input: X2ValueDataflowState): ReadonlySet<X2ShapeFact> | undefined {
   const shapes = new Set<X2ShapeFact>();
-  for (const fact of input.x2Shape ?? []) {
+  const xShapes = canonicalStructuralShapeFacts(input.xShape);
+  const x2Shapes = canonicalStructuralShapeFacts(input.x2Shape);
+  for (const fact of x2Shapes) {
     const model = x2ShapeDataModelForFact(fact);
-    if (input.xShape?.has(fact) !== true) continue;
+    if (!xShapes.has(fact)) continue;
     if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) {
       shapes.add(signChangedStructuralMantissaShapeFact(fact));
       continue;
@@ -3340,7 +3570,7 @@ function x2ValueStateFromStructuralShapes(
   memory: X2ValueMemory | undefined = undefined,
   shapeMemory: X2ShapeMemory | undefined = undefined,
 ): X2ValueDataflowState {
-  const shapeSet = new Set(shapes);
+  const shapeSet = canonicalStructuralShapeFacts(shapes);
   return {
     x: new Set(),
     x2: new Set(),

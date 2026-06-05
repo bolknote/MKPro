@@ -8,7 +8,9 @@ import {
   isDisplayFocusSensitive,
   replacingNumberEntryCanExposeStackLift,
   x2CanUseDotRestoreAt,
+  x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2SyncCanExposeContextSensitiveRestore,
+  x2ValueSetHasNormalizedDecimalFact,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
@@ -244,7 +246,13 @@ const run: IrPassFn = (ops) => {
     if (
       runAtIndex !== undefined &&
       isFreshClosedDecimalEntry(state) &&
-      x2CanUseDotRestoreAt(ops, index, state, dotSafeStates[index] === true, immediateSyncStates[index] === true) &&
+      (
+        x2CanUseDotRestoreAt(ops, index, state, dotSafeStates[index] === true, immediateSyncStates[index] === true) ||
+        (
+          x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) &&
+          x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
+        )
+      ) &&
       x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
       !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex)

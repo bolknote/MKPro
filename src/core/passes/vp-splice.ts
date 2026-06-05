@@ -2,11 +2,12 @@ import type { IrOp } from "../types.ts";
 import {
   analyzeX2StackEffect,
   analyzeX2VpShapeContext,
-  cellsPerOp,
-  computeLabelEntryIndexes,
   computeX2ValueStates,
+  directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
+  isKnownReturnCallOp,
+  knownReturnCallReturnsThroughTransparentRange,
   removingRecallCanExposeX2Restore,
   x2StateHasSameDotSafeDecimalInXAndX2,
   x2StateHasSameStructuralShapeInXAndX2,
@@ -14,8 +15,10 @@ import {
   x2StateIsClosedPlainContext,
   x2StatesHaveSameVpEntrySource,
   x2ValueSetHasIntersection,
+  type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
+  type KnownReturnCallOp,
   type X2ValueDataflowState,
 } from "./helpers.ts";
 
@@ -24,12 +27,6 @@ const SIGN_CHANGE = 0x0b;
 const KNOP = 0x54;
 const K1 = 0x55;
 const K2 = 0x56;
-
-interface DirectReturnGapContext {
-  readonly labelEntries: ReadonlySet<number>;
-  readonly labels: ReadonlyMap<string, number>;
-  readonly addresses: ReadonlyMap<number, number>;
-}
 
 function isPlainOpcode(op: IrOp, opcode: number): boolean {
   return op.kind === "plain" && op.opcode === opcode && !hasRewriteBarrier(op);
@@ -90,23 +87,15 @@ function x2ContextRestoreRunBeforeFreshDigit(
   startIndex: number,
   state: X2ValueDataflowState | undefined,
 ): readonly number[] {
-  if (!isVpExponentContext(analyzeX2VpShapeContext(state).kind)) return [];
+  if (!analyzeX2VpShapeContext(state).canDiscardRestoreBeforeFreshDigit) return [];
   return x2ContextRestoreRunBefore(ops, startIndex, isDecimalDigit);
-}
-
-function isActiveExponentContext(kind: ReturnType<typeof analyzeX2VpShapeContext>["kind"]): boolean {
-  return kind === "active-exponent" || kind === "active-structural-exponent";
-}
-
-function isVpExponentContext(kind: ReturnType<typeof analyzeX2VpShapeContext>["kind"]): boolean {
-  return kind === "vp-exponent-context" || kind === "vp-structural-exponent-context";
 }
 
 function x2ContextRestoreRunBeforeDeadOverwrite(
   ops: readonly IrOp[],
   startIndex: number,
   state: X2ValueDataflowState | undefined,
-  context: DirectReturnGapContext,
+  context: DirectReturnAnalysisContext,
 ): readonly number[] {
   if (!x2StateHasX2RestoreContext(state)) return [];
   return x2ContextRestoreRunBeforeHardOverwrite(ops, startIndex, context);
@@ -137,7 +126,7 @@ function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
 function x2ContextRestoreRunBeforeHardOverwrite(
   ops: readonly IrOp[],
   startIndex: number,
-  context: DirectReturnGapContext,
+  context: DirectReturnAnalysisContext,
 ): readonly number[] {
   const removableIndexes: number[] = [];
   for (let index = startIndex; index < ops.length; index += 1) {
@@ -147,7 +136,7 @@ function x2ContextRestoreRunBeforeHardOverwrite(
       continue;
     }
     if (op.kind === "label") continue;
-    if (op.kind === "call" && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
     return removableIndexes.length > 0 && isHardX2OverwriteWithoutStackUse(op) ? removableIndexes : [];
   }
   return [];
@@ -155,40 +144,10 @@ function x2ContextRestoreRunBeforeHardOverwrite(
 
 function simpleDirectReturnDoesNotObserveRestore(
   ops: readonly IrOp[],
-  call: Extract<IrOp, { kind: "call" }>,
-  context: DirectReturnGapContext,
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
 ): boolean {
-  const targetIndex = targetIndexForCall(call, context);
-  if (targetIndex === undefined) return false;
-  return linearReturnRangeDoesNotObserveRestore(ops, targetIndex, context.labelEntries);
-}
-
-function targetIndexForCall(
-  call: Extract<IrOp, { kind: "call" }>,
-  context: DirectReturnGapContext,
-): number | undefined {
-  return typeof call.target === "string"
-    ? context.labels.get(call.target)
-    : context.addresses.get(call.target);
-}
-
-function linearReturnRangeDoesNotObserveRestore(
-  ops: readonly IrOp[],
-  targetIndex: number,
-  labelEntries: ReadonlySet<number>,
-): boolean {
-  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
-  for (let index = startIndex; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") {
-      if (labelEntries.has(index)) return false;
-      continue;
-    }
-    if (hasRewriteBarrier(op)) return false;
-    if (op.kind === "return") return true;
-    if (!isRestoreTransparentLinearOp(op)) return false;
-  }
-  return false;
+  return knownReturnCallReturnsThroughTransparentRange(ops, call, context, isRestoreTransparentLinearOp);
 }
 
 function isRestoreTransparentLinearOp(op: IrOp): boolean {
@@ -260,11 +219,7 @@ function sameNonEmptyStringSet(left: ReadonlySet<string> | undefined, right: Rea
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
-  const context: DirectReturnGapContext = {
-    labelEntries: computeLabelEntryIndexes(ops),
-    labels: labelIndexes(ops),
-    addresses: addressIndexes(ops),
-  };
+  const context = directReturnAnalysisContext(ops);
   for (let i = 1; i < ops.length; i += 1) {
     const prev = ops[i - 1]!;
     const cur = ops[i]!;
@@ -289,10 +244,10 @@ const run: IrPassFn = (ops) => {
     // After at least one exponent digit, an empty op only separates the number
     // from the following non-digit command. Removing it leaves that following
     // command to close exponent entry in the same place.
+    const previousContext = analyzeX2VpShapeContext(x2ValueStates[i - 1]);
     if (
       isFreeStandingEmptyOp(prev) &&
-      isActiveExponentContext(analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind) &&
-      analyzeX2VpShapeContext(x2ValueStates[i - 1]).hasExponentDigit &&
+      previousContext.canDiscardSeparatorBeforeNonDigit &&
       !isDecimalDigit(cur)
     ) {
       remove.add(i - 1);
@@ -304,8 +259,7 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingEmptyOp(prev) &&
       isFreeStandingSignChange(cur) &&
-      isVpExponentContext(analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind) &&
-      analyzeX2VpShapeContext(x2ValueStates[i - 1]).hasExponentDigit
+      previousContext.canDiscardSeparatorBeforeSignChange
     ) {
       remove.add(i - 1);
       continue;
@@ -325,7 +279,7 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingSignChange(prev) &&
       isFreeStandingSignChange(cur) &&
-      isActiveExponentContext(analyzeX2VpShapeContext(x2ValueStates[i - 1]).kind)
+      previousContext.canCancelExponentSignPair
     ) {
       remove.add(i - 1);
       remove.add(i);
@@ -382,24 +336,3 @@ export const vpSplice: IrPass = {
   run,
   layoutSafe: false,
 };
-
-function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
-  const result = new Map<string, number>();
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") result.set(op.name, index);
-  }
-  return result;
-}
-
-function addressIndexes(ops: readonly IrOp[]): Map<number, number> {
-  const result = new Map<number, number>();
-  let address = 0;
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") continue;
-    result.set(address, index);
-    address += cellsPerOp(op);
-  }
-  return result;
-}
