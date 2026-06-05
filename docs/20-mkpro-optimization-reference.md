@@ -810,8 +810,10 @@ Display rewrites are separated into strategy selection + body lowering.
   decimal `X`, `К {x}` also seeds the exact normalized fractional decimal value
   while preserving the old X2 fact; negative integers stay opaque to avoid
   decimalizing signed-zero behavior. Concrete normalized decimal `Y,X` operands
-  for `+` and `-` also seed exact decimal results when the normalized result
-  stays within the dataflow's eight-significant-digit bound; larger or
+  for `+`, `-`, and `*` also seed exact decimal results when the normalized
+  result stays within the dataflow's eight-significant-digit bound; `/` does the
+  same only when the reduced quotient has a finite decimal expansion. Wider
+  products/quotients, division by zero, non-terminating division, and
   non-decimal cases remain structural/opaque rather than pretending to be an
   ordinary decimal value. Later passes can therefore distinguish visible no-op
   integer/fraction/sign transforms and exact arithmetic transforms from

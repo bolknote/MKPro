@@ -1932,6 +1932,50 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2 value dataflow seeds concrete multiply and finite division facts", () => {
+    const multiplyProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x03, "3"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const divisionProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x04, "4"),
+      plain(0x13, "/"),
+      halt(),
+    ];
+    const multiplyStates = computeX2ValueStates(multiplyProgram);
+    const divisionStates = computeX2ValueStates(divisionProgram);
+
+    expect(x2ValueStateText(multiplyStates[4]?.x)).toEqual([
+      "decimal:6:normalized",
+      "expr:3",
+    ]);
+    expect(x2ValueStateText(divisionStates[4]?.x)).toEqual([
+      "decimal:0.25:normalized",
+      "expr:3",
+    ]);
+  });
+
+  it("x2 value dataflow keeps non-terminating division opaque", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x03, "3"),
+      plain(0x13, "/"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual([
+      "expr-key:13(decimal:1:normalized,decimal:3:normalized)",
+      "expr:3",
+    ]);
+  });
+
   it("x2 value dataflow canonicalizes stable expr keys for commutative binary computations", () => {
     const plusProgram: IrOp[] = [
       recall("2"),
@@ -5237,6 +5281,54 @@ describe("ir passes on synthetic programs", () => {
       plain(0x10, "+"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 15 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses concrete multiply and finite division X2 facts", () => {
+    const multiplyProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x06, "6"),
+      plain(0x12, "*"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const divisionProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x04, "4"),
+      plain(0x13, "/"),
+      plain(0x0e, "В↑"),
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x05, "5"),
+      halt(),
+    ];
+    const multiplyResult = x2LiteralRestore.run(multiplyProgram, ctx);
+    const divisionResult = x2LiteralRestore.run(divisionProgram, ctx);
+
+    expect(multiplyResult.applied).toBe(1);
+    expect(multiplyResult.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x06, "6"),
+      plain(0x12, "*"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(divisionResult.applied).toBe(3);
+    expect(divisionResult.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x04, "4"),
+      plain(0x13, "/"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.25 from hidden X2 temp" } },
       halt(),
     ]);
   });

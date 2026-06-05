@@ -1306,9 +1306,11 @@ The pipeline currently contains:
   also modeled as an exact normalized fractional decimal in visible `X` while
   preserving the previous hidden X2 fact; negative integers stay opaque to avoid
   signed-zero decimalization. Concrete normalized decimal `Y,X` operands for
-  `+` and `-` are also modeled exactly when the normalized result fits the
-  eight-significant-digit dataflow bound; otherwise the optimizer keeps only
-  structural or opaque expression facts. The shared
+  `+`, `-`, and `*` are also modeled exactly when the normalized result fits the
+  eight-significant-digit dataflow bound; `/` is modeled exactly only for
+  finite decimal quotients. Wider results, division by zero, non-terminating
+  division, and structural hex/super operands keep only structural or opaque
+  expression facts. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
   mantissa sign toggles, and non-negative exponent shifts that are pure display

@@ -642,7 +642,7 @@ function plainProducesConcreteBinaryDecimalValues(
   x: X2ValueSet | undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
-  if (op.opcode !== 0x10 && op.opcode !== 0x11) return output;
+  if (op.opcode < 0x10 || op.opcode > 0x13) return output;
   for (const yFact of y ?? []) {
     const yValue = normalizedDecimalValueFromFact(yFact);
     if (yValue === undefined) continue;
@@ -714,16 +714,13 @@ function concreteDecimalBinaryValue(opcode: number, y: string, x: string): strin
   const left = parseExactDecimal(y);
   const right = parseExactDecimal(x);
   if (left === undefined || right === undefined) return undefined;
+  if (opcode === 0x12) return exactDecimalToNormalized(left.num * right.num, left.scale + right.scale);
+  if (opcode === 0x13) return exactDecimalDivisionToNormalized(left, right);
+  if (opcode !== 0x10 && opcode !== 0x11) return undefined;
   const scale = Math.max(left.scale, right.scale);
   const yNum = left.num * pow10BigInt(scale - left.scale);
   const xNum = right.num * pow10BigInt(scale - right.scale);
-  const num = opcode === 0x10
-    ? yNum + xNum
-    : opcode === 0x11
-      ? yNum - xNum
-      : undefined;
-  if (num === undefined) return undefined;
-  return exactDecimalToNormalized(num, scale);
+  return exactDecimalToNormalized(opcode === 0x10 ? yNum + xNum : yNum - xNum, scale);
 }
 
 function parseExactDecimal(value: string): ExactDecimalParts | undefined {
@@ -749,6 +746,61 @@ function exactDecimalToNormalized(num: bigint, scale: number): string | undefine
   const normalized = normalizePlainDecimal(raw);
   if (normalized === undefined || significantDecimalDigits(normalized) > 8) return undefined;
   return normalized;
+}
+
+function exactDecimalDivisionToNormalized(left: ExactDecimalParts, right: ExactDecimalParts): string | undefined {
+  if (right.num === 0n) return undefined;
+  let numerator = left.num * pow10BigInt(right.scale);
+  let denominator = right.num * pow10BigInt(left.scale);
+  if (denominator < 0n) {
+    numerator = -numerator;
+    denominator = -denominator;
+  }
+  const divisor = gcdBigInt(absBigInt(numerator), denominator);
+  numerator /= divisor;
+  denominator /= divisor;
+  const factors = decimalDenominatorFactors(denominator);
+  if (factors === undefined) return undefined;
+  const scale = Math.max(factors.twos, factors.fives);
+  const scaledNumerator =
+    numerator *
+    powBigInt(2n, scale - factors.twos) *
+    powBigInt(5n, scale - factors.fives);
+  return exactDecimalToNormalized(scaledNumerator, scale);
+}
+
+function decimalDenominatorFactors(input: bigint): { readonly twos: number; readonly fives: number } | undefined {
+  let value = input;
+  let twos = 0;
+  let fives = 0;
+  while (value % 2n === 0n) {
+    value /= 2n;
+    twos += 1;
+  }
+  while (value % 5n === 0n) {
+    value /= 5n;
+    fives += 1;
+  }
+  return value === 1n ? { twos, fives } : undefined;
+}
+
+function gcdBigInt(left: bigint, right: bigint): bigint {
+  let a = left;
+  let b = right;
+  while (b !== 0n) {
+    const next = a % b;
+    a = b;
+    b = next;
+  }
+  return a;
+}
+
+function absBigInt(value: bigint): bigint {
+  return value < 0n ? -value : value;
+}
+
+function powBigInt(base: bigint, power: number): bigint {
+  return base ** BigInt(power);
 }
 
 function pow10BigInt(power: number): bigint {
