@@ -787,7 +787,7 @@ export function x2ShapeSetsHaveSameStructuralShape(
   right: X2ShapeSet | undefined,
 ): boolean {
   if (left === undefined || right === undefined) return false;
-  const leftShapes = structuralShapeFacts(left);
+  const leftShapes = structuralRestoreShapeFacts(left);
   for (const shape of leftShapes) {
     if (right.has(shape)) return true;
   }
@@ -2654,10 +2654,10 @@ function recallStructuralShapeFacts(
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   for (const fact of state.shapeMemory?.[register] ?? []) {
-    for (const structural of structuralShapeFacts(new Set([fact]))) output.add(structural);
+    for (const structural of structuralRestoreShapeFacts(new Set([fact]))) output.add(structural);
   }
   for (const fact of preloadedConstantShapeFacts(op)) {
-    for (const structural of structuralShapeFacts(new Set([fact]))) output.add(structural);
+    for (const structural of structuralRestoreShapeFacts(new Set([fact]))) output.add(structural);
   }
   return output;
 }
@@ -2688,11 +2688,20 @@ function shapeSetsIntersect(left: X2ShapeSet | undefined, right: X2ShapeSet | un
   return false;
 }
 
-function structuralShapeFacts(input: X2ShapeSet): Set<X2ShapeFact> {
+function structuralMantissaShapeFacts(input: X2ShapeSet): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   for (const fact of input) {
     const model = x2ShapeDataModelForFact(fact);
     if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) output.add(fact);
+  }
+  return output;
+}
+
+function structuralRestoreShapeFacts(input: X2ShapeSet): Set<X2ShapeFact> {
+  const output = structuralMantissaShapeFacts(input);
+  for (const fact of input) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind === "exponent-entry" && model.safety === "structuralOnly") output.add(fact);
   }
   return output;
 }
@@ -2844,7 +2853,7 @@ function vpEntryMantissasFromValueFacts(values: X2ValueSet): ReadonlySet<string>
 
 function vpEntryShapesFromShapeFacts(shapes: X2ShapeSet | undefined): X2ShapeSet | undefined {
   if (shapes === undefined) return undefined;
-  const structural = structuralShapeFacts(shapes);
+  const structural = structuralMantissaShapeFacts(shapes);
   return structural.size === 0 ? undefined : structural;
 }
 
@@ -2989,7 +2998,7 @@ function exponentEntryShapeFacts(input: Extract<X2EntryState, { kind: "exponent"
 }
 
 function structuralExponentEntryFromVpEntryShapes(shapes: X2ShapeSet): X2StructuralEntryState {
-  const mantissa = structuralShapeFacts(shapes);
+  const mantissa = structuralMantissaShapeFacts(shapes);
   return mantissa.size === 0
     ? { kind: "unknown" }
     : { kind: "exponent", mantissa, exponent: new Set([""]) };

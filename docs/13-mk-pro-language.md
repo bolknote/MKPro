@@ -1319,7 +1319,12 @@ The pipeline currently contains:
   alias. A parallel shape-memory layer remembers structural hex/super shapes
   from the same stores and preloads; those facts can prove that a later recall
   would not change visible `X`, but they still do not become dot-safe decimal
-  values. This makes a recalled decimal register dot-safe for the same rewrites
+  values. Closed structural exponent forms (`hex-exponent:*:*` /
+  `super-exponent:*:*`) participate in that restore/equality proof, while
+  new `ВП` sources still require a separate structural mantissa fact. This
+  keeps shape-memory useful for recall removal without treating a closed
+  exponent display as a fresh mantissa-entry source. This makes a recalled
+  decimal register dot-safe for the same rewrites
   as an inline literal, while unknown indirect stores clear the remembered
   facts and hex/non-normal preload shapes remain unsafe until separately proved.
   Repeated literal restoration may also consume those recalled/preloaded decimal

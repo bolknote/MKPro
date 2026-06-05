@@ -705,8 +705,11 @@ Display rewrites are separated into strategy selection + body lowering.
   `reg:r` fact available for later scratch aliases. It may also come from
   register value-memory when the scratch register and hidden X2 share the same
   proved decimal fact, even without a live `reg:r` alias. Structural hex/super
-  shape-memory remains available to recall-elimination proofs, but is not used
-  as a hidden-temp `.` restore source until a separate dot-safety proof exists.
+  shape-memory remains available to recall-elimination proofs, including
+  closed `hex-exponent:*:*` / `super-exponent:*:*` restore-shape facts, but is
+  not used as a hidden-temp `.` restore source until a separate dot-safety
+  proof exists. Closed structural exponent facts prove recall-visible equality;
+  only structural mantissa facts seed a new `ВП` source.
   The scratch-store search may cross a direct conditional or counted-loop
   fallthrough when the path-sensitive X2 dataflow proves that fallthrough edge
   already synchronized the same value into X2; the non-fallthrough edge remains

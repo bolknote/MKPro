@@ -776,6 +776,12 @@ describe("ir passes on synthetic programs", () => {
     ).toBe(true);
     expect(
       x2ShapeSetsHaveSameStructuralShape(
+        new Set(["hex-exponent:FABC:3"]),
+        new Set(["hex-exponent:FABC:3"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameStructuralShape(
         new Set(["super:FA"]),
         new Set(["hex:FA:mantissa"]),
       ),
@@ -1724,6 +1730,31 @@ describe("ir passes on synthetic programs", () => {
     const states = computeX2ValueStates(program, { trackRegisterMemory: true });
 
     expect(recallValueProof(recall("2"), states[3])).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+    });
+  });
+
+  it("recall value proof uses stored structural exponent shapes as in-X evidence", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      store("2"),
+      recall("3", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
+    expect(x2ShapeStateText(states[9]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
+    expect(recallValueProof(recall("2"), states[9])).toEqual({
       register: "2",
       inX: true,
       x2SyncRegister: undefined,
