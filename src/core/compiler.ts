@@ -7757,6 +7757,14 @@ export class EmitContext {
     return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
   }
 
+  inputFeedsOnlyFollowingStatement(
+    input: Extract<StatementAst, { kind: "input" }>,
+    statement: StatementAst,
+  ): boolean {
+    const reads = countIdentifierReadsInStatement(statement, input.target);
+    return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
+  }
+
   inputFeedsGuardedDecrementConsumer(
     input: Extract<StatementAst, { kind: "input" }>,
     decrement: Extract<StatementAst, { kind: "assign" }>,
@@ -7771,6 +7779,21 @@ export class EmitContext {
     return consumer.kind === "dispatch"
       ? this.inputFeedsOnlyFollowingDispatch(input, consumer)
       : this.inputFeedsOnlyFollowingCondition(input, consumer);
+  }
+
+  inputFeedsStoredGuardedDecrementConsumer(
+    input: Extract<StatementAst, { kind: "input" }>,
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+    consumer: Extract<StatementAst, { kind: "dispatch" | "if" }>,
+  ): boolean {
+    if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
+    if (branch.elseBody !== undefined) return false;
+    if (!decrementUnderflowCondition(branch.condition, decrement.target)) return false;
+    if (!this.statementsTerminate(branch.thenBody)) return false;
+    if (this.allocation.registers[decrement.target] === undefined) return false;
+    if (this.allocation.registers[input.target] === undefined) return false;
+    return this.inputFeedsOnlyFollowingStatement(input, consumer);
   }
 
   compileShowReadGuardedTransfer(
@@ -7950,9 +7973,13 @@ export class EmitContext {
     consumer: StatementAst | undefined,
   ): boolean {
     if (consumer?.kind !== "dispatch" && consumer?.kind !== "if") return false;
-    if (!this.inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer)) return false;
+    const omitInputStore = this.inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer);
+    const keepStoredInput = !omitInputStore &&
+      this.inputFeedsStoredGuardedDecrementConsumer(input, decrement, branch, consumer);
+    if (!omitInputStore && !keepStoredInput) return false;
 
     compileShow(this, show.display, show.line);
+    if (keepStoredInput) this.emitStore(input.target, `read ${input.target}`, input.line);
     const okLabel = this.freshLabel("decrement_ok");
     this.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
     this.emitNumberOrPreload("1");
@@ -7967,8 +7994,12 @@ export class EmitContext {
     this.emitOp(0x14, "X↔Y", `restore read ${input.target}`, input.line);
     this.markCurrentX(input.target);
     this.optimizations.push({
-      name: "show-read-decrement-underflow-fusion",
-      detail: `Kept read ${input.target} in Y while checking ${decrement.target} at lines ${input.line}/${branch.line}.`,
+      name: keepStoredInput
+        ? "show-read-stored-decrement-underflow-fusion"
+        : "show-read-decrement-underflow-fusion",
+      detail: keepStoredInput
+        ? `Stored read ${input.target} while also restoring it from Y after checking ${decrement.target} at lines ${input.line}/${branch.line}.`
+        : `Kept read ${input.target} in Y while checking ${decrement.target} at lines ${input.line}/${branch.line}.`,
     });
     return true;
   }
@@ -12562,6 +12593,52 @@ function allProcCallsHaveImmediateParamAssignment(ast: ProgramAst, procName: str
 
 function statementsReadIdentifier(statements: readonly StatementAst[], name: string): boolean {
   return statements.some((statement) => statementReadsIdentifier(statement, name));
+}
+
+function countIdentifierReadsInStatements(statements: readonly StatementAst[], name: string): number {
+  return statements.reduce((sum, statement) => sum + countIdentifierReadsInStatement(statement, name), 0);
+}
+
+function countIdentifierReadsInStatement(statement: StatementAst, name: string): number {
+  switch (statement.kind) {
+    case "pause":
+    case "preview":
+    case "return_value":
+      return countIdentifierReads(statement.expr, name);
+    case "halt":
+      return countIdentifierReads(statement.expr, name) +
+        (statement.displaySources?.filter((source) => source === name).length ?? 0);
+    case "assign":
+      return countIdentifierReads(statement.expr, name);
+    case "indexed_assign":
+      return countIdentifierReads(statement.target.index, name) + countIdentifierReads(statement.expr, name);
+    case "coord_list_remove":
+      return countIdentifierReads(statement.item, name);
+    case "if":
+      return countIdentifierReadsInCondition(statement.condition, name) +
+        countIdentifierReadsInStatements(statement.thenBody, name) +
+        (statement.elseBody === undefined ? 0 : countIdentifierReadsInStatements(statement.elseBody, name));
+    case "loop":
+    case "while":
+      return (statement.kind === "while" ? countIdentifierReadsInCondition(statement.condition, name) : 0) +
+        countIdentifierReadsInStatements(statement.body, name);
+    case "dispatch":
+      return countIdentifierReads(statement.expr, name) +
+        statement.cases.reduce(
+          (sum, dispatchCase) =>
+            sum + countIdentifierReads(dispatchCase.value, name) +
+              countIdentifierReadsInStatements(dispatchCase.body, name),
+          0,
+        ) +
+        (statement.defaultBody === undefined ? 0 : countIdentifierReadsInStatements(statement.defaultBody, name));
+    case "core":
+      return statement.inputs?.reduce((sum, input) => sum + countIdentifierReads(input.expr, name), 0) ?? 0;
+    case "show":
+    case "input":
+    case "call":
+    case "decimal_series":
+      return 0;
+  }
 }
 
 function flattenAdditionTerms(expr: ExpressionAst): ExpressionAst[] {

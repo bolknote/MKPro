@@ -1863,6 +1863,27 @@ program SingleCaseResidualFallback {
     expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toHaveLength(0);
   });
 
+  it("derives unary calls from a value already live in X", () => {
+    const result = compileOk(`
+program CurrentXUnaryCall {
+  state {
+    key: counter -9..9 = 0
+    result: counter 0..9 = 0
+  }
+
+  loop {
+    key = read()
+    result = abs(key)
+    halt(result)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "current-x-unary-derivation")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "recall key")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "current-X abs")).toBe(true);
+  });
+
   it("passes single-use rule parameters through X for shared rule entries", () => {
     const result = compileOk(`
 program XParamRule {
@@ -3458,6 +3479,44 @@ program ReadKeyResourceUnderflow {
     expect(result.report.optimizations.some((item) => item.name === "show-read-decrement-underflow-fusion")).toBe(true);
     expect(result.steps.some((step) => step.comment === "read key")).toBe(false);
     expect(result.steps.some((step) => step.comment === "restore read key")).toBe(true);
+  });
+
+  it("restores a stored read key from Y before a nested decrement-guard consumer", () => {
+    const result = compileOk(`
+program ReadKeyNestedResourceUnderflow {
+  state {
+    food: counter 0..9 = 2
+    pos: counter 0..9 = 1
+    result: counter -9..9 = 0
+  }
+
+  loop {
+    show(pos)
+    key = read()
+    food--
+    if food < 0 {
+      loop {
+      }
+    }
+    if abs(key) == 5 {
+      result = sign(key)
+    }
+    else {
+      match key {
+        1 => halt(1)
+        otherwise => halt(0)
+      }
+    }
+    halt(result)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "show-read-stored-decrement-underflow-fusion")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "current-x-unary-derivation")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "read key")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "restore read key")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "current-X abs")).toBe(true);
   });
 
   it("reuses branch comparison residuals for the first false-branch display", () => {

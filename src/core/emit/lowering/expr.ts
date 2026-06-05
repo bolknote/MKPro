@@ -539,7 +539,6 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       });
       return;
     }
-    compileExpression(ctx, expr.args[0]!);
     const opcode = X_TRANSFORM_UNARY_OPCODES[name];
     if (!opcode) {
       ctx.diagnostics.push({
@@ -548,6 +547,14 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       });
       return;
     }
+    if (compileCurrentXDerivation(ctx, expr)) {
+      ctx.optimizations.push({
+        name: "current-x-unary-derivation",
+        detail: `Reused ${expressionToIntentText(expr.args[0]!)} already in X for ${expr.callee}().`,
+      });
+      return;
+    }
+    compileExpression(ctx, expr.args[0]!);
     ctx.emitOp(opcode[0], opcode[1], `${expr.callee}()`);
   }
 
