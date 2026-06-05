@@ -712,13 +712,19 @@ Display rewrites are separated into strategy selection + body lowering.
   closed `hex-exponent:*:*` / `super-exponent:*:*` restore-shape facts, but is
   not used as a hidden-temp `.` restore source until a separate dot-safety
   proof exists. Closed structural exponent facts prove recall-visible equality;
-  only structural mantissa facts seed a new `ВП` source.
+  only structural mantissa facts seed a new `ВП` source. If register-memory has
+  become too conservative at a join, the pass can still use the dead scratch
+  store's own stable source fact (`decimal:*:normalized` or `expr:*`) as the
+  hidden-temp proof.
   The scratch-store search may cross a direct conditional or counted-loop
   fallthrough when the path-sensitive X2 dataflow proves that fallthrough edge
   already synchronized the same value into X2; the non-fallthrough edge remains
   governed by ordinary liveness/DSE and does not create an X2 sync proof.
   Counted-loop crossings are refused when the scratch register is the loop
-  counter being decremented.
+  counter being decremented. It may also cross a simple direct `ПП` when the
+  callee reaches `В/О` linearly and does not touch the scratch register; nested
+  flow, unknown indirect memory access, or another entry label keeps the call
+  as a barrier.
   This exposes the scratch
   register store to ordinary DSE instead of
   requiring a membership-specific lowering; repeated reads of loop/state
@@ -909,7 +915,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     for later recalls, joins keep only facts common to every path, and unknown
     indirect stores clear the memory. Hex-like preload facts remain shape-only,
     so they do not make `.`/`/-/` dead-restore candidates.
-19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. This lets later DSE remove now-unused scratch stores.
+19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The scratch-store proof can cross direct conditional/loop fallthrough syncs and simple direct-return calls that do not mention the scratch register, and it can use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
 20. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is
     already in the hidden X2 register, the dot-restore gap is safe (or CFG

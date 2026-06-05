@@ -4121,6 +4121,67 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore crosses simple direct-return X2 syncs that ignore scratch", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("sync"),
+      plain(0x0d, "Cx"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      store("2"),
+      call("sync"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[8]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps recalls when a direct-return callee reads scratch", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("use_scratch"),
+      recall("2"),
+      ret(),
+      label("main"),
+      recall("1"),
+      store("2"),
+      call("use_scratch"),
+      recall("2"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-hidden-temp-restore keeps recalls across unknown indirect memory in direct-return callees", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("maybe_reads_scratch"),
+      indirectRecall("7"),
+      plain(0x0d, "Cx"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      store("2"),
+      call("maybe_reads_scratch"),
+      recall("2"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-hidden-temp-restore keeps counted-loop counter scratch recalls", () => {
     const program: IrOp[] = [
       recall("1"),

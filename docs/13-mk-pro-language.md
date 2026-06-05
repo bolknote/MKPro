@@ -1416,7 +1416,13 @@ The pipeline currently contains:
   the recall sits on the fallthrough path: the shared path-sensitive X2 proof
   must show that this edge already synchronized the same value into X2, while
   the jump edge is left to ordinary liveness/DSE. Counted-loop crossings are
-  refused when the scratch register is the loop counter being decremented. The
+  refused when the scratch register is the loop counter being decremented. It
+  can also prove the hidden temp from the dead scratch store's own stable source
+  fact (`decimal:*:normalized` or `expr:*`) when register-memory at a join has
+  become too conservative. It
+  may also cross a simple direct `ПП` whose target reaches `В/О` linearly
+  without touching the scratch register; nested flow, unknown memory access, or
+  another entry label keeps the call as a barrier. The
   rewrite is intentionally one cell for one cell; the win appears when the
   following liveness pass removes the scratch `X->П r`/`К X->П R7..Re` whose
   only remaining purpose was that recall. Repeated reads of loop/state registers
