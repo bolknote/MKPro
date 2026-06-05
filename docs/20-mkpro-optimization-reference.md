@@ -1092,7 +1092,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     direct-return context, the same scanner can cross simple direct or
     proved-indirect `ПП` helpers whose body is only restore-transparent
     empty/address cells; helpers that store, branch, restore X2, or expose
-    another entry remain barriers.
+    another entry remain barriers. The non-zero open/closed mantissa sign-pair
+    proof before `ВП` uses the same transparent-helper crossing, so it is no
+    longer limited to an immediately adjacent `ВП`.
     After an X2-preserving gap, a VP-context sign or sign pair is kept when its
     X2 restore is observable (`5 ВП 3 Fπ /-/ С/П`,
     `5 ВП 3 Fπ /-/ /-/ С/П`), but a free-standing `/-/`/empty restore run can

@@ -10313,6 +10313,70 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes a structural sign pair before transparent return helpers and ВП", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("2", "preload const 8.70Е2-6С"),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes an open mantissa sign pair before transparent return helpers and ВП", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice does not infer closed decimal ВП shape through a preceding store", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),

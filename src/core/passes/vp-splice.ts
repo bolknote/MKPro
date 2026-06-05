@@ -59,6 +59,7 @@ function canRemoveClosedContextSignPair(
   secondSignIndex: number,
   state: X2ValueDataflowState | undefined,
   stateAfterPair: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
 ): boolean {
   if (!x2StateIsClosedPlainContext(state)) return false;
   if (state === undefined) return false;
@@ -68,7 +69,7 @@ function canRemoveClosedContextSignPair(
     !x2StateHasSameStructuralShapeInXAndX2(state)
   ) return false;
   if (!removingRecallCanExposeX2Restore(ops, secondSignIndex)) return true;
-  return canRemoveClosedContextSignPairBeforeProvedVp(ops, secondSignIndex, state, stateAfterPair);
+  return canRemoveClosedContextSignPairBeforeProvedVp(ops, secondSignIndex, state, stateAfterPair, context);
 }
 
 function canRemoveOpenMantissaSignPairBeforeProvedVp(
@@ -76,9 +77,10 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
   secondSignIndex: number,
   state: X2ValueDataflowState | undefined,
   stateAfterPair: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
 ): boolean {
   if (analyzeX2VpShapeContext(state).kind !== "active-mantissa") return false;
-  const nextIndex = nextNonLabelIndex(ops, secondSignIndex + 1);
+  const nextIndex = nextVpAfterTransparentRestoreGap(ops, secondSignIndex + 1, context);
   if (nextIndex === undefined || !isFreeStandingVp(ops[nextIndex]!)) return false;
   return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterPair);
 }
@@ -197,10 +199,25 @@ function canRemoveClosedContextSignPairBeforeProvedVp(
   secondSignIndex: number,
   state: X2ValueDataflowState,
   stateAfterPair: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
 ): boolean {
-  const nextIndex = nextNonLabelIndex(ops, secondSignIndex + 1);
+  const nextIndex = nextVpAfterTransparentRestoreGap(ops, secondSignIndex + 1, context);
   if (nextIndex === undefined || !isFreeStandingVp(ops[nextIndex]!)) return false;
   return x2StatesHaveSameVpEntrySource(state, stateAfterPair);
+}
+
+function nextVpAfterTransparentRestoreGap(
+  ops: readonly IrOp[],
+  start: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    return isFreeStandingVp(op) ? index : undefined;
+  }
+  return undefined;
 }
 
 function freeStandingEmptyRunBefore(ops: readonly IrOp[], index: number): readonly number[] {
@@ -216,13 +233,6 @@ function freeStandingEmptyRunBefore(ops: readonly IrOp[], index: number): readon
   }
   indexes.reverse();
   return indexes;
-}
-
-function nextNonLabelIndex(ops: readonly IrOp[], start: number): number | undefined {
-  for (let index = start; index < ops.length; index += 1) {
-    if (ops[index]!.kind !== "label") return index;
-  }
-  return undefined;
 }
 
 function nextFreshDigitIndex(ops: readonly IrOp[], start: number): number | undefined {
@@ -325,7 +335,7 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingSignChange(prev) &&
       isFreeStandingSignChange(cur) &&
-      canRemoveOpenMantissaSignPairBeforeProvedVp(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1])
+      canRemoveOpenMantissaSignPairBeforeProvedVp(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1], context)
     ) {
       remove.add(i - 1);
       remove.add(i);
@@ -347,7 +357,7 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingSignChange(prev) &&
       isFreeStandingSignChange(cur) &&
-      canRemoveClosedContextSignPair(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1])
+      canRemoveClosedContextSignPair(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1], context)
     ) {
       remove.add(i - 1);
       remove.add(i);
