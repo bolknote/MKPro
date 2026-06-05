@@ -7,6 +7,7 @@ import {
   isDisplayFocusSensitive,
   x2StateHasDotSafeDecimalX2,
   x2StateHasStructuralShapeX2,
+  x2StateHasX2RestoreContext,
   x2StateIsClosedPlainContext,
   x2StateHasVpEntrySource,
   type IrPass,
@@ -62,7 +63,8 @@ function isDeadRestoreCandidate(
   if (op.opcode === VP) {
     return state.entry.kind === "open" ||
       state.entry.kind === "exponent" ||
-      (state.entry.kind === "closed" && x2StateHasVpEntrySource(state));
+      (state.entry.kind === "closed" && x2StateHasVpEntrySource(state)) ||
+      x2StateHasX2RestoreContext(state);
   }
   return false;
 }

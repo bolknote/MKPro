@@ -867,9 +867,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     can make `.` signal `ЕГГ0Г`. `ВП` may also be removed from a structural
     hex/super `vpEntryShape` source, including one produced by a direct `В/О`
     return continuation or the fallthrough side of a direct conditional/`F Lx`
-    loop, when the following overwrite destroys its visible result; the
-    conditional jump edge does not invent such a source, and none of this makes structural
-    `.`/`/-/` restores dot-safe.
+    loop, or from an already active VP/X2 restore context, when the following
+    overwrite destroys its visible result; the conditional jump edge does not
+    invent such a source, and none of this makes structural `.`/`/-/` restores
+    dot-safe.
     This pass requests the register value-memory layer and also consumes decimal preload facts from `П->X r` metadata:
     direct stores of proved decimal `X` facts seed remembered `decimal:*` facts
     for later recalls, joins keep only facts common to every path, and unknown

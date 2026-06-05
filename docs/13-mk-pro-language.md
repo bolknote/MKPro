@@ -1359,8 +1359,11 @@ The pipeline currently contains:
   before the overwrite can run. `ВП` is removed only when the X2 value dataflow
   still knows an open mantissa, active exponent entry, proved decimal
   `vpEntryMantissa` source, or structural hex/super `vpEntryShape` source from
-  the same general proof used by `vp-splice`; that structural source is not
-  reused to make `.` dot-safe. This pass requests the register value-memory layer,
+  the same general proof used by `vp-splice`. It also accepts a current
+  VP/X2-restore context, for example a repeated `ВП` in exponent entry or a
+  `ВП` after an X2-preserving gap, when the following hard overwrite destroys
+  the restored X. That structural source is not reused to make `.` dot-safe.
+  This pass requests the register value-memory layer,
   so a recall of a previously stored literal-shaped decimal can be treated like
   a proved decimal restore without making arbitrary register contents dot-safe.
 - **x2-hidden-temp-restore** — replaces a direct scratch `П->X r`, or a
