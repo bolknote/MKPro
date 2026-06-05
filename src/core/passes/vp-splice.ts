@@ -82,6 +82,42 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
   return sameNonEmptyStringSet(state.entry.raw, stateAfterPair?.vpEntryMantissa);
 }
 
+function canRemoveMantissaRestoreRunBeforeProvedVp(
+  state: X2ValueDataflowState | undefined,
+  stateAfterRun: X2ValueDataflowState | undefined,
+): boolean {
+  if (state?.entry.kind === "open") return sameNonEmptyStringSet(state.entry.raw, stateAfterRun?.vpEntryMantissa);
+  return x2StatesHaveSameVpEntrySource(state, stateAfterRun);
+}
+
+function mantissaRestoreRunBeforeProvedVp(
+  ops: readonly IrOp[],
+  vpIndex: number,
+  states: readonly (X2ValueDataflowState | undefined)[],
+): readonly number[] {
+  const run: number[] = [];
+  let sawSign = false;
+  for (let cursor = vpIndex - 1; cursor >= 0; cursor -= 1) {
+    const op = ops[cursor]!;
+    if (op.kind === "label") continue;
+    if (isFreeStandingEmptyOp(op)) {
+      run.push(cursor);
+      continue;
+    }
+    if (isFreeStandingSignChange(op)) {
+      run.push(cursor);
+      sawSign = true;
+      continue;
+    }
+    break;
+  }
+  if (!sawSign) return [];
+  run.reverse();
+  const first = run[0];
+  if (first === undefined) return [];
+  return canRemoveMantissaRestoreRunBeforeProvedVp(states[first], states[vpIndex]) ? run : [];
+}
+
 function x2ContextRestoreRunBeforeFreshDigit(
   ops: readonly IrOp[],
   startIndex: number,
@@ -231,6 +267,11 @@ const run: IrPassFn = (ops) => {
     }
     // КНОП/К1/К2 ... ВП -> ВП : drop the inert empty run preceding exponent entry.
     if (isFreeStandingVp(cur)) {
+      const restoreRun = mantissaRestoreRunBeforeProvedVp(ops, i, x2ValueStates);
+      if (restoreRun.length > 0) {
+        for (const runIndex of restoreRun) remove.add(runIndex);
+        continue;
+      }
       const emptyRun = freeStandingEmptyRunBefore(ops, i);
       if (emptyRun.length > 0) {
         for (const emptyIndex of emptyRun) remove.add(emptyIndex);
@@ -325,7 +366,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ /-/ before proved ВП/fresh digit -> empty, closed value /-/ /-/ -> empty).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ and empty restore runs before proved ВП/fresh digit -> empty, closed value /-/ /-/ -> empty).`,
       },
     ],
   };

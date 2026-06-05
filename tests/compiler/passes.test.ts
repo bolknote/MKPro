@@ -3200,6 +3200,38 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces signed digit runs before restore-run ВП context", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "К НОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal -12 from hidden X2 temp" } },
+      plain(0x54, "К НОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore keeps leading-zero digit runs before empty-op ВП context", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -3231,6 +3263,31 @@ describe("ir passes on synthetic programs", () => {
       plain(0x01, "1"),
       plain(0x02, "2"),
       roleEmpty,
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-literal-restore keeps digit runs before role-bearing sign-change ВП context", () => {
+    const roleSign: IrOp = {
+      kind: "plain",
+      opcode: 0x0b,
+      meta: { mnemonic: "/-/", roles: ["display-byte"] },
+    };
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      roleSign,
+      plain(0x0b, "/-/"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),
@@ -4685,6 +4742,35 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-noop-restore removes dot before a proved restore-run ВП source", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      plain(0x0b, "/-/"),
+      plain(0x54, "К НОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "К НОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("x2-noop-restore keeps dot before role-bearing empty-op ВП context", () => {
     const roleEmpty: IrOp = {
       kind: "plain",
@@ -4697,6 +4783,29 @@ describe("ir passes on synthetic programs", () => {
       plain(0xf0, "F* empty F0"),
       plain(0x0a, "."),
       roleEmpty,
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-noop-restore keeps dot before role-bearing sign-change ВП context", () => {
+    const roleSign: IrOp = {
+      kind: "plain",
+      opcode: 0x0b,
+      meta: { mnemonic: "/-/", roles: ["display-byte"] },
+    };
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      roleSign,
+      plain(0x0b, "/-/"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),
@@ -9853,6 +9962,25 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes a mixed structural restore run before proved structural ВП entry", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice removes a non-zero closed-context sign pair before proved ВП", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -9897,6 +10025,29 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes a mixed open mantissa restore run before proved ВП", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice keeps a closed-context sign pair when it shapes a following ВП", () => {
     const program: IrOp[] = [
       plain(0x0d, "Cx"),
@@ -9915,6 +10066,22 @@ describe("ir passes on synthetic programs", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-splice keeps a mixed zero mantissa restore run before ВП because signed zero is sticky", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
       plain(0x0b, "/-/"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),

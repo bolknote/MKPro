@@ -844,9 +844,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `02; К{x}; .; ВП; 3` yields `22000` on the emulator, not `2 ВП 3`.
     When the same dataflow proves that `.` would keep the exact same
     `ВП`-entry source and the next context-sensitive restore is reached only
-    through free-standing `КНОП`/`К1`/`К2` cells before `ВП`, the dot is removed:
-    emulator tests cover normalized and signed normalized mantissas in this
-    empty-op exponent-entry shape.
+    through a free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap before `ВП`,
+    the dot is removed: emulator tests cover normalized and signed normalized
+    mantissas in this exponent-entry shape, while role-bearing display cells
+    still block the shortcut.
     A separate normalized-decimal escape hatch handles proved X2-preserving
     gaps such as stable indirect conditionals: if `X` and `X2` carry the same
     normalized decimal fact and the local gap back to the X2 sync contains no
@@ -957,15 +958,17 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent-entry literals such as
     `5 ВП 3`, `1.2 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
-    X2-affecting sync. Fractional digit-runs remain explicit before a following
-    `ВП` source context; a repeated normalized non-zero integer digit run or
-    normalized exponent-entry literal with a non-leading-zero mantissa may also be
-    replaced before a free-standing `КНОП`/`К1`/`К2` gap followed by `ВП`:
-    emulator tests prove that the inserted `.` preserves the same mantissa
-    source for that empty-op exponent entry. Leading-zero and signed-zero forms
-    are excluded from this shortcut because their restored mantissa shape is
-    observable, and leading-zero exponent mantissas stay explicit for the same
-    reason. Leading-zero exponent mantissas are normalized after
+    X2-affecting sync; role-bearing `/-/` cells are not parsed as replaceable
+    literal sign suffixes. Fractional digit-runs remain explicit before a
+    following `ВП` source context; a repeated normalized non-zero integer
+    digit-run, signed digit-run, or normalized exponent-entry literal with a
+    non-leading-zero mantissa may also be replaced before a free-standing
+    `КНОП`/`К1`/`К2` and `/-/` restore gap followed by `ВП`: emulator tests
+    prove that the inserted `.` preserves the same mantissa source for that
+    exponent entry. Leading-zero and signed-zero forms are excluded from this
+    shortcut because their restored mantissa shape is observable, and
+    leading-zero exponent mantissas stay explicit for the same reason.
+    Leading-zero exponent mantissas are normalized after
     that closing sync (`05 ВП 3` -> `5000`, `00 ВП 3` -> `10000`), but active
     exponent-entry X2 remains shape-only because an immediate `.` can still
     signal `ЕГГ0Г`. Too-wide exponent forms, display/raw bytes, and later
@@ -1009,9 +1012,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     VP/exponent context to remove empty separators before `/-/` after
     X2-preserving gaps such as `ВП 3 Fπ КНОП /-/`, and it can remove exponent
     sign toggles after a closed decimal X2-sync-fed `ВП` such as
-    `2 F0 ВП /-/ /-/ 3`; a non-zero sign pair before the proved `ВП`
-    (`2 F0 /-/ /-/ ВП 3`, `02 /-/ /-/ ВП 3`) can also collapse. The signed-zero
-    forms are kept because `0 /-/ /-/ ВП` still differs from `0 ВП`.
+    `2 F0 ВП /-/ /-/ 3`; a non-zero restore run before the proved `ВП`
+    (`2 F0 /-/ /-/ ВП 3`, `02 /-/ /-/ ВП 3`,
+    `02 /-/ КНОП /-/ ВП 3`) can also collapse when the shared source proof
+    shows the same mantissa reaches `ВП`. Structural hex/super preload shapes
+    use the same shape-source proof without becoming decimal values. The
+    signed-zero forms are kept because `0 /-/ /-/ ВП` still differs from
+    `0 ВП`.
     The pass consumes the shared VP shape-context classifier rather than
     decoding local `kind` strings: the classifier records active-entry vs
     closed VP-context phase, decimal vs structural source, exponent-digit

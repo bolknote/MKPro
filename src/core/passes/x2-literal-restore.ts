@@ -50,7 +50,8 @@ function isPlainSignChange(op: IrOp | undefined): op is Extract<IrOp, { kind: "p
     op.kind === "plain" &&
     op.opcode === SIGN_CHANGE &&
     !hasRewriteBarrier(op) &&
-    !isDisplayFocusSensitive(op);
+    !isDisplayFocusSensitive(op) &&
+    !hasRoles(op);
 }
 
 function isPlainVp(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }> {
@@ -275,20 +276,32 @@ function isFreeStandingEmptyOp(op: IrOp): boolean {
     !hasRoles(op);
 }
 
+function isFreeStandingSignChange(op: IrOp): boolean {
+  return op.kind === "plain" &&
+    op.opcode === SIGN_CHANGE &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    !hasRoles(op);
+}
+
+function isFreeStandingVp(op: IrOp): boolean {
+  return isPlainVp(op) && !hasRoles(op);
+}
+
 function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
   return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
 }
 
-function hasOnlyEmptyGapBeforeVp(ops: readonly IrOp[], start: number): boolean {
-  let sawEmpty = false;
+function hasOnlyRestoreGapBeforeVp(ops: readonly IrOp[], start: number): boolean {
+  let sawRestoreGap = false;
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (op.kind === "label") continue;
-    if (isFreeStandingEmptyOp(op)) {
-      sawEmpty = true;
+    if (isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op)) {
+      sawRestoreGap = true;
       continue;
     }
-    return sawEmpty && isPlainVp(op);
+    return sawRestoreGap && isFreeStandingVp(op);
   }
   return false;
 }
@@ -298,7 +311,7 @@ function replacingLiteralCanExposeContextSensitiveRestore(
   run: NumericLiteralRun,
 ): boolean {
   if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
-  return !run.dotPreservesVpEntrySource || !hasOnlyEmptyGapBeforeVp(ops, run.end + 1);
+  return !run.dotPreservesVpEntrySource || !hasOnlyRestoreGapBeforeVp(ops, run.end + 1);
 }
 
 function dotRestoreOp(value: string, source: IrOp): IrOp {

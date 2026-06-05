@@ -1361,11 +1361,11 @@ The pipeline currently contains:
   before another reachable `.`/`/-/`/`ВП` context-sensitive restore, across opaque
   control flow, raw cells, and display-focused cells, so it does not erase a dot
   whose main job is to shape the next X2 restoration rather than to change `X`.
-  A narrow exception is proved same-source empty-op exponent entry: if dataflow
-  shows that `.` would leave the same `ВП` mantissa source and the next restore
-  is reached only through free-standing `КНОП`/`К1`/`К2` cells before `ВП`, the
-  dot can be removed; emulator tests cover normalized and signed normalized
-  mantissas for that shape.
+  A narrow exception is proved same-source exponent entry: if dataflow shows
+  that `.` would leave the same `ВП` mantissa source and the next restore is
+  reached only through a free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap
+  before `ВП`, the dot can be removed; role-bearing display cells still block
+  the proof.
   That reachability guard is the shared CFG-aware X2 exposure walker: direct and
   proved-indirect branches are followed path-sensitively instead of being blanket
   barriers, but any X2-preserving edge that can reach a context-sensitive restore
@@ -1387,12 +1387,17 @@ The pipeline currently contains:
   exponent-digit presence, and the exact splice actions that are safe for that
   state; `vp-splice` consumes those flags directly. Proved `/-/` toggles those facts, but zero is
   carried as a distinct `-0` shape instead of normalized away because
-  `Cx /-/ ВП` has a signed-zero mantissa on the emulator. VP-context sign
-  commands and empty separators after X2-preserving gaps are collapsed as one
-  restore run when the following command starts fresh number entry; otherwise
-  their X2-to-X restore is observable. Closed structural exponent sign pairs
-  after an X2 sync collapse through the same shape equality proof, while the
-  structural exponent shape remains non-decimal and non-dot-safe. Marker labels inside the run are
+  `Cx /-/ ВП` has a signed-zero mantissa on the emulator. A free-standing
+  `/-/`/empty run immediately before a proved `ВП` source is collapsed when
+  the shared dataflow proves that the run leaves the same decimal or
+  structural hex/super mantissa source; mixed forms such as
+  `02 /-/ КНОП /-/ ВП` and structural preload shapes use the same proof, while
+  signed-zero forms stay explicit. VP-context sign commands and empty
+  separators after X2-preserving gaps are collapsed as one restore run when the
+  following command starts fresh number entry; otherwise their X2-to-X restore
+  is observable. Closed structural exponent sign pairs after an X2 sync
+  collapse through the same shape equality proof, while the structural exponent
+  shape remains non-decimal and non-dot-safe. Marker labels inside the run are
   preserved. Consecutive free-standing `/-/` and empty ops in the same VP/X2
   context are also removed as one restore run before a proved hard X/X2
   overwrite such as `Cx`, even through a simple direct `ПП` helper that reaches
@@ -1464,8 +1469,11 @@ The pipeline currently contains:
   closed-context `/-/` reached through only free-standing `КНОП`/`К1`/`К2` empty
   ops. It recognizes integer and fractional decimal digit-runs (`12`, `1.2`),
   fractional-mantissa exponent literals (`1.2 ВП 3`), and their open-entry
-  sign-change forms, while refusing a standalone fractional digit-run before a
-  following `ВП` source context until that splice is separately proved.
+  sign-change forms; role-bearing `/-/` cells are not treated as literal sign
+  suffixes. A repeated literal may be replaced before a following `ВП` only
+  when the same-source proof survives the free-standing `КНОП`/`К1`/`К2` and
+  `/-/` restore gap, so standalone fractional digit-runs and unsafe
+  leading-zero/signed-zero shapes stay explicit until a separate proof exists.
   The same shared CFG-aware X2 exposure walker used by `x2-noop-restore`
   protects the inserted `.`:
   branch/call edges are not

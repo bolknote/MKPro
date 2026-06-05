@@ -67,28 +67,28 @@ function dotCanExposeContextSensitiveRestore(
   stateAfterDot: X2ValueDataflowState | undefined,
 ): boolean {
   if (!x2SyncCanExposeContextSensitiveRestore(ops, index)) return false;
-  return !dotPreservesEmptyVpEntrySource(ops, index, state, stateAfterDot);
+  return !dotPreservesVpEntrySourceThroughRestoreGap(ops, index, state, stateAfterDot);
 }
 
-function dotPreservesEmptyVpEntrySource(
+function dotPreservesVpEntrySourceThroughRestoreGap(
   ops: readonly IrOp[],
   index: number,
   state: X2ValueDataflowState | undefined,
   stateAfterDot: X2ValueDataflowState | undefined,
 ): boolean {
-  return x2StatesHaveSameVpEntrySource(state, stateAfterDot) && hasOnlyEmptyGapBeforeVp(ops, index + 1);
+  return x2StatesHaveSameVpEntrySource(state, stateAfterDot) && hasOnlyRestoreGapBeforeVp(ops, index + 1);
 }
 
-function hasOnlyEmptyGapBeforeVp(ops: readonly IrOp[], start: number): boolean {
-  let sawEmpty = false;
+function hasOnlyRestoreGapBeforeVp(ops: readonly IrOp[], start: number): boolean {
+  let sawRestoreGap = false;
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (op.kind === "label") continue;
-    if (isFreeStandingEmptyOp(op)) {
-      sawEmpty = true;
+    if (isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op)) {
+      sawRestoreGap = true;
       continue;
     }
-    return sawEmpty && isFreeStandingVp(op);
+    return sawRestoreGap && isFreeStandingVp(op);
   }
   return false;
 }
@@ -105,6 +105,14 @@ function isFreeStandingEmptyOp(op: IrOp): boolean {
   return op.kind === "plain" &&
     op.opcode >= 0x54 &&
     op.opcode <= 0x56 &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    !hasRoles(op);
+}
+
+function isFreeStandingSignChange(op: IrOp): boolean {
+  return op.kind === "plain" &&
+    op.opcode === 0x0b &&
     !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op) &&
     !hasRoles(op);
