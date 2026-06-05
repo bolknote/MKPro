@@ -3925,6 +3925,8 @@ function signChangeClosedDecimalState(
     const decimal = normalizedDecimalValueFromFact(fact);
     if (decimal === undefined && isOpaqueSharedValueFact(fact)) {
       values.add(opaque);
+      const key = stableExpressionSourceKey(fact);
+      if (key !== undefined) values.add(stableExpressionValueFact("0B", key));
       continue;
     }
     if (decimal === undefined) continue;

@@ -1302,6 +1302,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:2", "reg:2"]);
   });
 
+  it("x2 value dataflow gives closed sign-change a stable expr key from stable sources", () => {
+    const registerProgram: IrOp[] = [
+      recall("1"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const nestedProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const registerStates = computeX2ValueStates(registerProgram);
+    const nestedStates = computeX2ValueStates(nestedProgram);
+
+    expect(x2ValueStateText(registerStates[2]?.x)).toEqual(["expr-key:0B(reg:1)", "expr:1"]);
+    expect(x2ValueStateText(registerStates[2]?.x2)).toEqual(["expr-key:0B(reg:1)", "expr:1"]);
+    expect(x2ValueStateText(nestedStates[4]?.x)).toEqual([
+      "expr-key:0B(expr-key:21(decimal:2:normalized))",
+      "expr:3",
+    ]);
+    expect(x2ValueStateText(nestedStates[4]?.x2)).toEqual([
+      "expr-key:0B(expr-key:21(decimal:2:normalized))",
+      "expr:3",
+    ]);
+  });
+
   it("x2 value dataflow seeds opaque expr facts from pure unary X computations", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -1349,6 +1377,23 @@ describe("ir passes on synthetic programs", () => {
       plain(0x21, "F sqrt"),
       plain(0x0e, "В↑"),
       recall("1"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+  });
+
+  it("x2-hidden-temp-restore uses stable expr keys across repeated closed sign-change", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x0b, "/-/"),
+      store("2"),
+      recall("1"),
+      plain(0x0b, "/-/"),
+      plain(0x0e, "В↑"),
+      recall("2"),
       halt(),
     ];
     const result = x2HiddenTempRestore.run(program, ctx);

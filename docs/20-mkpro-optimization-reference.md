@@ -779,18 +779,21 @@ Display rewrites are separated into strategy selection + body lowering.
   previous-op scan. Opaque X/X2 equality produced by a known instruction is
   carried as an `expr:<step>` token; closed-context `/-/` creates a fresh
   expression token rather than collapsing the value to undifferentiated
-  `same:unknown`. Whitelisted documented pure computations such as `F sqrt`,
-  `F x^2`, `К [x]`, `К {x}`, arithmetic `+`/`-`/`*`/`/`, `F x^y`, `К max`,
-  and `К ∧`/`К ∨`/`К ⊕` also seed an opaque `expr:<step>` value in visible X
-  while leaving X2 untouched; a later explicit X2 sync (`В↑`, F* empty, direct
-  conditional fallthrough, etc.) can then carry that exact computed value as a
-  hidden temporary. Documented unary X-only computations additionally seed a
-  stable `expr-key:<opcode>(<source>)` fact when the source is a proved register,
-  normalized decimal, or earlier stable expression key. That lets repeated
-  `F sqrt(2)`-style computations meet in X2 dataflow without relying on the
-  producer address. Stack-consuming expressions remain producer-local until the
-  optimizer has a real Y-value model. Display-role, barrier, exposing,
-  undocumented, dangerous, and random-like commands do not seed such facts.
+  `same:unknown`, and also creates a stable `expr-key:0B(<source>)` when the
+  closed-context source is already a proved register, normalized decimal, or
+  stable expression key. Whitelisted documented pure computations such as
+  `F sqrt`, `F x^2`, `К [x]`, `К {x}`, arithmetic `+`/`-`/`*`/`/`, `F x^y`,
+  `К max`, and `К ∧`/`К ∨`/`К ⊕` also seed an opaque `expr:<step>` value in
+  visible X while leaving X2 untouched; a later explicit X2 sync (`В↑`, F*
+  empty, direct conditional fallthrough, etc.) can then carry that exact
+  computed value as a hidden temporary. Documented unary X-only computations
+  additionally seed a stable `expr-key:<opcode>(<source>)` fact when the source
+  is a proved register, normalized decimal, or earlier stable expression key.
+  That lets repeated `F sqrt(2)`-style computations and their closed sign
+  changes meet in X2 dataflow without relying on the producer address.
+  Stack-consuming expressions remain producer-local until the optimizer has a
+  real Y-value model. Display-role, barrier, exposing, undocumented, dangerous,
+  and random-like commands do not seed such facts.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
