@@ -50,6 +50,12 @@ const run: IrPassFn = (ops) => {
       remove.add(index);
       continue;
     }
+    if (x2NextFallthroughSyncConditionalIndex(ops, index + 1, context) !== undefined) {
+      if (removingStackLiftCanExposeStack(ops, index)) continue;
+      if (removingRecallCanExposeX2Restore(ops, index)) continue;
+      remove.add(index);
+      continue;
+    }
     if (x2NextHardX2OverwriteIndex(ops, index + 1, context) === undefined) continue;
     if (removingStackLiftCanExposeStack(ops, index)) continue;
     if (removingRecallCanExposeX2Restore(ops, index)) continue;
@@ -84,6 +90,28 @@ function producerSuppliesLiftX2Sync(op: IrOp): boolean {
   return !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op) &&
     analyzeX2StackEffect(op).stackLiftAndX2Sync;
+}
+
+function x2NextFallthroughSyncConditionalIndex(
+  ops: readonly IrOp[],
+  start: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (isFallthroughX2SyncConditional(op)) return index;
+    if (!isBackwardStackLiftX2SyncGap(ops, op, index, context)) return undefined;
+  }
+  return undefined;
+}
+
+function isFallthroughX2SyncConditional(op: IrOp): boolean {
+  if (op.kind !== "cjump" && op.kind !== "loop") return false;
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  const effect = analyzeX2StackEffect(op);
+  if (!effect.stackPreserves) return false;
+  const conditional = getOpcode(op.opcode).conditionalX2Effect;
+  return conditional?.fallthrough === "affects" && conditional.jump === "preserves";
 }
 
 function isBackwardStackLiftX2SyncGap(

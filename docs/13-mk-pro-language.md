@@ -1660,7 +1660,10 @@ The pipeline currently contains:
   producer such as direct/indirect `П->X`, `F pi`, or another `В↑`, even through
   stack-preserving labels, stores, address bytes, and plain stack-neutral
   commands, when that producer already keeps the current X in Y for the
-  following consumer. The gap may include a direct conditional or counted-loop
+  following consumer. It can also remove `В↑` before a direct conditional or
+  counted-loop fallthrough X2 sync when that sync makes the explicit `В↑`
+  redundant on the fallthrough path and the skipped edge cannot observe the
+  removed sync/lift. The gap may include a direct conditional or counted-loop
   fallthrough only when the full CFG stack-difference proof and the X2-restore
   exposure proof show that the skipped edge cannot observe the removed
   sync/lift. It may also include a simple direct `ПП` callee that reaches

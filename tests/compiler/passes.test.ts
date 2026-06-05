@@ -8289,6 +8289,50 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift removes В↑ before a path-safe fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      plain(0x54, "К НОП"),
+      cjump("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x54, "К НОП"),
+      cjump("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ before a fallthrough sync when the jump edge observes X2", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      cjump("restore"),
+      halt(),
+      label("restore"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift keeps post-producer В↑ before helpers that change X", () => {
     const program: IrOp[] = [
       jump("main"),
