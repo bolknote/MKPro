@@ -83,17 +83,7 @@ function x2ContextRestoreRunBeforeFreshDigit(
   state: X2ValueDataflowState | undefined,
 ): readonly number[] {
   if (!isVpExponentContext(analyzeX2VpShapeContext(state).kind)) return [];
-  const removableIndexes: number[] = [];
-  for (let index = startIndex; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op)) {
-      removableIndexes.push(index);
-      continue;
-    }
-    if (op.kind === "label") continue;
-    return removableIndexes.length > 0 && isDecimalDigit(op) ? removableIndexes : [];
-  }
-  return [];
+  return x2ContextRestoreRunBefore(ops, startIndex, isDecimalDigit);
 }
 
 function isActiveExponentContext(kind: ReturnType<typeof analyzeX2VpShapeContext>["kind"]): boolean {
@@ -110,6 +100,14 @@ function x2ContextRestoreRunBeforeDeadOverwrite(
   state: X2ValueDataflowState | undefined,
 ): readonly number[] {
   if (!x2StateHasX2RestoreContext(state)) return [];
+  return x2ContextRestoreRunBefore(ops, startIndex, isHardX2OverwriteWithoutStackUse);
+}
+
+function x2ContextRestoreRunBefore(
+  ops: readonly IrOp[],
+  startIndex: number,
+  terminator: (op: IrOp) => boolean,
+): readonly number[] {
   const removableIndexes: number[] = [];
   for (let index = startIndex; index < ops.length; index += 1) {
     const op = ops[index]!;
@@ -117,19 +115,10 @@ function x2ContextRestoreRunBeforeDeadOverwrite(
       removableIndexes.push(index);
       continue;
     }
-    if (op.kind === "label") {
-      return removableIndexes.length > 0 && isFollowedByHardX2OverwriteWithoutStackUse(ops, index + 1)
-        ? removableIndexes
-        : [];
-    }
-    return removableIndexes.length > 0 && isHardX2OverwriteWithoutStackUse(op) ? removableIndexes : [];
+    if (op.kind === "label") continue;
+    return removableIndexes.length > 0 && terminator(op) ? removableIndexes : [];
   }
   return [];
-}
-
-function isFollowedByHardX2OverwriteWithoutStackUse(ops: readonly IrOp[], start: number): boolean {
-  const nextIndex = nextFreshDigitIndex(ops, start);
-  return nextIndex !== undefined && isHardX2OverwriteWithoutStackUse(ops[nextIndex]!);
 }
 
 function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {

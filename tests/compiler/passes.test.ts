@@ -7660,6 +7660,33 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice preserves labels while removing a VP-context restore run before fresh digit entry", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      label("entry"),
+      plain(0x0b, "/-/"),
+      plain(0x55, "К1"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      label("entry"),
+      plain(0x04, "4"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice keeps an active exponent sign before an exponent digit", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),

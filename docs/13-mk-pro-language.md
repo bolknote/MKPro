@@ -1352,9 +1352,10 @@ The pipeline currently contains:
   `Cx /-/ ВП` has a signed-zero mantissa on the emulator. VP-context sign
   commands and empty separators after X2-preserving gaps are collapsed as one
   restore run when the following command starts fresh number entry; otherwise
-  their X2-to-X restore is observable. Consecutive free-standing `/-/` and
-  empty ops in the same VP/X2 context are also removed as one restore run before
-  a proved hard X/X2 overwrite such as `Cx`.
+  their X2-to-X restore is observable. Marker labels inside the run are
+  preserved. Consecutive free-standing `/-/` and empty ops in the same VP/X2
+  context are also removed as one restore run before a proved hard X/X2
+  overwrite such as `Cx`.
 - **x2-dead-restore-before-overwrite** — removes a context-sensitive
   `.`/`/-/`/`ВП` restore, plus adjacent `КНОП`/`К1`/`К2` separators, when the
   restored `X` value is immediately destroyed by a proved hard X/X2 overwrite
