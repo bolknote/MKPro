@@ -1398,8 +1398,11 @@ The pipeline currently contains:
 - **x2-literal-restore** — replaces a repeated explicit numeric literal with
   `.` when X2 value dataflow proves the same normalized decimal value is already
   hidden in X2, the inserted dot is safe, and removing the literal's stack lift
-  is unobservable. The same shared CFG-aware X2 exposure walker used by
-  `x2-noop-restore` protects the inserted `.`: branch/call edges are not
+  is unobservable. The dot source can be a normal restore-gap proof, a CFG-proved
+  immediate X2 sync, or a modeled closed-context `/-/` reached through only
+  free-standing `КНОП`/`К1`/`К2` empty ops. The same shared CFG-aware X2
+  exposure walker used by `x2-noop-restore` protects the inserted `.`:
+  branch/call edges are not
   automatic blockers, but a path that preserves X2 into a later
   context-sensitive `.`/`/-/`/`ВП` restore keeps the literal explicit.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes

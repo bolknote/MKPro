@@ -888,8 +888,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `.` when X2 value dataflow proves the same normalized decimal value is
     already in the hidden X2 register, the dot-restore gap is safe (or CFG
     proves the literal starts immediately after an X2 sync, including direct
-    `В/О` continuations), and removing number entry cannot expose a consumed
-    stack lift. It recognizes ordinary digit-runs,
+    `В/О` continuations, or a modeled closed-context `/-/` reached through only
+    free-standing `КНОП`/`К1`/`К2` empty ops), and removing number entry cannot
+    expose a consumed stack lift. It recognizes ordinary digit-runs,
     signed digit-runs, and normalized exponent-entry literals such as
     `5 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
