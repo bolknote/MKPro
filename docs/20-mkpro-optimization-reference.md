@@ -255,6 +255,14 @@ The control-flow family is where the largest byte savings are found.
 - `dispatch-case-ordering` — reorders cases so fast paths are checked earlier.
 - `dispatch-source-register` — keeps selected source in a dedicated register in advance.
 - `numeric-dispatch-residual-chain` — packs numeric check chains in tail lowering form.
+- `dispatch-default-residual-sign` — derives `sign(selector - bound)` /
+  `sign(bound - selector)` from the residual `selector - lastCase` already left
+  in X at a numeric dispatch `default`, optionally multiplying by a numeric
+  scale, so the selector does not have to be recalled just to compute the sign.
+  If the selector is a declared integer `counter` and an enclosing branch has
+  proven the adjacent boundary value impossible (for example the false branch of
+  `abs(key) == 5`), `dispatch-default-residual-sign-domain` can also skip the
+  one-cell residual shift between `bound` and `lastCase`.
 - `terminal-if-direct-branch` — turns final checks into direct branches.
 - `terminal-branch-end-elision` — removes the final redundant jump at block end.
 - `nested-guard-shared-failure` — uses one shared failure handler for nested guarded branches.

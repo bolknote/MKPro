@@ -14,6 +14,7 @@ import {
   compileEqualityWithCurrentX,
   compileLocalTerminalElseTail,
   compileNegativeZeroThresholdFlow,
+  compileBlockCall,
   emitErrorStopOpcode,
 } from "./proc-raw-setup.ts";
 import {
@@ -444,7 +445,11 @@ export function compileIf(ctx: LoweringCtx,
           detail: `Reused the zero left in X by false branch of inequality comparison at line ${line}.`,
         });
       }
-      ctx.compileStatements(compileResidualHeadIfPossible(ctx, selected.elseBody, residual, line, "false branch"));
+      compileStatementsWithExcludedValues(
+        ctx,
+        compileResidualHeadIfPossible(ctx, selected.elseBody, residual, line, "false branch"),
+        falseBranchExcludedNumericValues(selected.condition),
+      );
       if (endLabel !== undefined) ctx.emitLabel(endLabel);
       if (thenTerminates) {
         ctx.optimizations.push({
@@ -522,6 +527,57 @@ function compileResidualHeadStatement(
       return true;
     }
     return false;
+}
+
+function compileStatementsWithExcludedValues(
+    ctx: LoweringCtx,
+    statements: StatementAst[],
+    excluded: { name: string; values: readonly number[] } | undefined,
+  ): void {
+    if (excluded === undefined || excluded.values.length === 0) {
+      ctx.compileStatements(statements);
+      return;
+    }
+    const previous = ctx.pathExcludedNumericValues.get(excluded.name);
+    const next = new Set(previous ?? []);
+    for (const value of excluded.values) next.add(value);
+    ctx.pathExcludedNumericValues.set(excluded.name, next);
+    try {
+      ctx.compileStatements(statements);
+    } finally {
+      if (previous === undefined) ctx.pathExcludedNumericValues.delete(excluded.name);
+      else ctx.pathExcludedNumericValues.set(excluded.name, previous);
+    }
+}
+
+function falseBranchExcludedNumericValues(
+    condition: ConditionAst,
+  ): { name: string; values: readonly number[] } | undefined {
+    if (condition.op !== "==") return undefined;
+    const direct = identifierEqualsNumericCondition(condition.left, condition.right);
+    if (direct !== undefined) return direct;
+    return identifierEqualsNumericCondition(condition.right, condition.left);
+}
+
+function identifierEqualsNumericCondition(
+    identifierSide: ExpressionAst,
+    numericSide: ExpressionAst,
+  ): { name: string; values: readonly number[] } | undefined {
+    const value = numericLiteralValue(numericSide);
+    if (value === undefined || !Number.isInteger(value)) return undefined;
+    if (identifierSide.kind === "identifier") return { name: identifierSide.name, values: [value] };
+    if (
+      identifierSide.kind === "call" &&
+      identifierSide.callee.toLowerCase() === "abs" &&
+      identifierSide.args.length === 1
+    ) {
+      const arg = identifierSide.args[0]!;
+      if (arg.kind !== "identifier") return undefined;
+      return value === 0
+        ? { name: arg.name, values: [0] }
+        : { name: arg.name, values: [value, -value] };
+    }
+    return undefined;
 }
 
 function displayIsSingleResidualExpression(
@@ -1549,7 +1605,9 @@ export function compileNumericResidualDispatchCompareChain(ctx: LoweringCtx,
       }
       ctx.emitLabel(nextLabel);
     }
-    if (statement.defaultBody) ctx.compileStatements(statement.defaultBody);
+    if (statement.defaultBody && !compileDispatchResidualDefaultBody(ctx, statement, comparedValue)) {
+      ctx.compileStatements(statement.defaultBody);
+    }
     ctx.emitLabel(endLabel);
     ctx.optimizations.push({
       name: "numeric-dispatch-residual-chain",
@@ -1561,6 +1619,119 @@ export function compileNumericResidualDispatchCompareChain(ctx: LoweringCtx,
 function compileDispatchSelectorExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
     if (expr.kind === "identifier" && ctx.xHolds(expr.name)) return;
     compileExpression(ctx, expr);
+}
+
+function compileDispatchResidualDefaultBody(
+    ctx: LoweringCtx,
+    statement: Extract<StatementAst, { kind: "dispatch" }>,
+    comparedValue: number,
+  ): boolean {
+    const body = statement.defaultBody;
+    const first = body?.[0];
+    if (first?.kind !== "assign") return false;
+    if (!compileDispatchResidualSignExpression(ctx, first.expr, statement.expr, comparedValue, first.line)) return false;
+
+    const next = body[1];
+    const xParam = next?.kind === "call" ? ctx.xParamProcs.get(next.block) : undefined;
+    if (next?.kind === "call" && xParam?.param === first.target) {
+      compileBlockCall(ctx, next.block, next.line);
+      ctx.compileStatements(body.slice(2));
+      ctx.optimizations.push({
+        name: "dispatch-default-residual-x-param",
+        detail: `Passed residual-derived ${first.target} to ${next.block} through X at line ${first.line}.`,
+      });
+      return true;
+    }
+
+    ctx.emitStore(first.target, `set ${first.target}`, first.line);
+    ctx.compileStatements(body.slice(1));
+    return true;
+}
+
+function compileDispatchResidualSignExpression(
+    ctx: LoweringCtx,
+    expr: ExpressionAst,
+    dispatchExpr: ExpressionAst,
+    comparedValue: number,
+    line: number,
+  ): boolean {
+    const matched = matchDispatchResidualSignExpression(expr, dispatchExpr);
+    if (matched === undefined) return false;
+
+    if (canSkipDispatchResidualSignUnitAdjust(ctx, matched, dispatchExpr, comparedValue)) {
+      ctx.optimizations.push({
+        name: "dispatch-default-residual-sign-domain",
+        detail: `Used integer-domain exclusions to derive ${expressionToIntentText(expr)} without shifting the dispatch residual at line ${line}.`,
+      });
+    } else {
+      emitResidualCompareDelta(ctx, matched.bound - comparedValue, "dispatch default residual adjust", line);
+    }
+    if (matched.negate) ctx.emitOp(0x0b, "/-/", "dispatch default residual sign direction", line);
+    ctx.emitOp(0x32, "К ЗН", "dispatch default residual sign", line);
+    if (matched.factor !== undefined) {
+      compileExpression(ctx, matched.factor);
+      ctx.emitOp(0x12, "*", "dispatch default residual sign scale", line);
+    }
+    ctx.optimizations.push({
+      name: "dispatch-default-residual-sign",
+      detail: `Derived ${expressionToIntentText(expr)} from the dispatch residual at line ${line}.`,
+    });
+    return true;
+}
+
+function canSkipDispatchResidualSignUnitAdjust(
+    ctx: LoweringCtx,
+    matched: { bound: number; negate: boolean; factor?: ExpressionAst },
+    dispatchExpr: ExpressionAst,
+    comparedValue: number,
+  ): boolean {
+    const delta = matched.bound - comparedValue;
+    if (Math.abs(delta) !== 1) return false;
+    if (!Number.isInteger(matched.bound) || !Number.isInteger(comparedValue)) return false;
+    if (dispatchExpr.kind !== "identifier") return false;
+    if (!identifierHasIntegerDomain(ctx, dispatchExpr.name)) return false;
+    return ctx.pathExcludedNumericValues.get(dispatchExpr.name)?.has(matched.bound) === true;
+}
+
+function identifierHasIntegerDomain(ctx: LoweringCtx, name: string): boolean {
+    const field = ctx.findStateField(name);
+    return field?.type === "range" &&
+      field.min !== undefined &&
+      field.max !== undefined &&
+      Number.isInteger(field.min) &&
+      Number.isInteger(field.max);
+}
+
+function matchDispatchResidualSignExpression(
+    expr: ExpressionAst,
+    dispatchExpr: ExpressionAst,
+  ): { bound: number; negate: boolean; factor?: ExpressionAst } | undefined {
+    if (expr.kind === "binary" && expr.op === "*") {
+      const left = matchDispatchResidualSignExpression(expr.left, dispatchExpr);
+      if (left !== undefined && numericLiteralValue(expr.right) !== undefined) {
+        return { ...left, factor: expr.right };
+      }
+      const right = matchDispatchResidualSignExpression(expr.right, dispatchExpr);
+      if (right !== undefined && numericLiteralValue(expr.left) !== undefined) {
+        return { ...right, factor: expr.left };
+      }
+      return undefined;
+    }
+
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "sign" || expr.args.length !== 1) return undefined;
+    const arg = expr.args[0]!;
+    if (arg.kind !== "binary" || arg.op !== "-") return undefined;
+
+    const rightBound = numericLiteralValue(arg.right);
+    if (rightBound !== undefined && expressionEquals(arg.left, dispatchExpr)) {
+      return { bound: rightBound, negate: false };
+    }
+
+    const leftBound = numericLiteralValue(arg.left);
+    if (leftBound !== undefined && expressionEquals(arg.right, dispatchExpr)) {
+      return { bound: leftBound, negate: true };
+    }
+    return undefined;
 }
 
 function markDispatchCaseMatchZero(ctx: LoweringCtx): void {

@@ -6,6 +6,8 @@ reference anvarov_demo
 
 program CaveTreasure {
   state {
+    key: counter -10..10 = 0
+
     // The visible position is also the key into generated wall/cache masks. The
     // source does not prescribe how those masks are packed into registers.
     pos: coord(cave) = stack.X

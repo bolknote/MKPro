@@ -1829,6 +1829,63 @@ program DispatchKnownZeroCase {
     expect(result.steps.slice(0, 4).map((step) => step.hex)).toEqual(["60", "5E", "04", "50"]);
   });
 
+  it("derives a default sign expression from the residual dispatch value", () => {
+    const result = compileOk(`
+program DispatchResidualDefaultSign {
+  state {
+    key: counter 0..9 = stack.X
+  }
+
+  fn move(dir) {
+    halt(dir)
+  }
+
+  loop {
+    match key {
+      0 => halt(0)
+      5 => halt(5)
+      otherwise => move(sign(5 - key))
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "dispatch-default-residual-sign")).toBe(true);
+    expect(result.steps.filter((step) => step.comment === "recall key")).toHaveLength(1);
+    expect(result.steps.some((step) => step.comment === "dispatch default residual sign")).toBe(true);
+  });
+
+  it("uses branch exclusions and integer domains to skip residual sign adjustment", () => {
+    const result = compileOk(`
+program DispatchResidualDefaultSignDomain {
+  state {
+    key: counter -10..10 = stack.X
+  }
+
+  fn move(dir) {
+    halt(dir)
+  }
+
+  loop {
+    if abs(key) == 5 {
+      halt(5)
+    }
+    else {
+      match key {
+        0 => halt(0)
+        6 => halt(6)
+        otherwise => move(sign(5 - key))
+      }
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "dispatch-default-residual-sign-domain")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "dispatch default residual adjust")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "dispatch default residual sign direction")).toBe(true);
+  });
+
   it("keeps scratch-free residual dispatch valid after default-case merge leaves one case", () => {
     const result = compileLoweringVariantForTest(`
 program SingleCaseResidualFallback {

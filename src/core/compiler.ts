@@ -6205,6 +6205,7 @@ export class EmitContext {
   readonly candidates: CandidateReport[];
   readonly loweringOptions: LoweringOptions;
   readonly loopPromptInitials: ReadonlyMap<string, ExpressionAst>;
+  readonly pathExcludedNumericValues = new Map<string, Set<number>>();
   private currentProcedure: ProcAst | undefined;
   // Set when a show was fused into a following read so its calculator stop also
   // serves as the input entry; the next read() lowering consumes this instead of
