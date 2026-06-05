@@ -1,6 +1,8 @@
 import type { IrOp } from "../types.ts";
 import {
   analyzeX2StackEffect,
+  computeX2DotRestoreGapStates,
+  computeX2ImmediateSyncStates,
   computeX2ValueStates,
   directReturnAnalysisContext,
   emptyResult,
@@ -11,8 +13,10 @@ import {
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingStackLiftCanExposeStack,
+  x2CanUseDotRestoreAt,
   x2StateHasDotSafeDecimalX2,
   x2StateHasStructuralShapeX2,
+  x2StateHasUnsafeDotRestoreShapeX2,
   x2StateHasX2RestoreContext,
   x2StateIsClosedPlainContext,
   x2StateHasVpEntrySource,
@@ -29,14 +33,30 @@ const VP = 0x0c;
 
 const run: IrPassFn = (ops) => {
   const states = computeX2ValueStates(ops, { trackRegisterMemory: true });
+  const dotSafeStates = computeX2DotRestoreGapStates(ops);
+  const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const context = directReturnAnalysisContext(ops);
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
     if (remove.has(index)) continue;
     const op = ops[index]!;
-    if (!isDeadRestoreRecallOrProducerCandidate(op, states[index])) continue;
-    const deadRun = deadRestoreRunBeforeHardOverwrite(ops, states, index, context);
+    if (!isDeadRestoreRecallOrProducerCandidate(
+      ops,
+      op,
+      states[index],
+      index,
+      dotSafeStates[index] === true,
+      immediateSyncStates[index] === true,
+    )) continue;
+    const deadRun = deadRestoreRunBeforeHardOverwrite(
+      ops,
+      states,
+      dotSafeStates,
+      immediateSyncStates,
+      index,
+      context,
+    );
     if (deadRun === undefined) continue;
     if (isDeadRecallCandidate(op) && removingRecallCanExposeStackLift(ops, index)) continue;
     if (isDeadStackShiftingProducerCandidate(op) && removingStackLiftCanExposeStack(ops, index)) continue;
@@ -58,13 +78,19 @@ const run: IrPassFn = (ops) => {
 };
 
 function isDeadRestoreCandidate(
+  ops: readonly IrOp[],
   op: IrOp,
   state: X2ValueDataflowState | undefined,
+  index: number,
+  dotSafe: boolean,
+  immediateSync: boolean,
 ): boolean {
   if (state === undefined || !isFreeStandingPlain(op)) return false;
   if (isDisplayFocusSensitive(op)) return false;
   if (op.opcode === DOT) {
-    return x2StateIsClosedPlainContext(state) && x2StateHasDotSafeDecimalX2(state);
+    if (x2StateHasUnsafeDotRestoreShapeX2(state)) return false;
+    return x2StateIsClosedPlainContext(state) &&
+      (x2StateHasDotSafeDecimalX2(state) || x2CanUseDotRestoreAt(ops, index, state, dotSafe, immediateSync));
   }
   if (op.opcode === SIGN_CHANGE) {
     return isDeadSignRestoreCandidate(state);
@@ -79,10 +105,14 @@ function isDeadRestoreCandidate(
 }
 
 function isDeadRestoreRecallOrProducerCandidate(
+  ops: readonly IrOp[],
   op: IrOp,
   state: X2ValueDataflowState | undefined,
+  index: number,
+  dotSafe: boolean,
+  immediateSync: boolean,
 ): boolean {
-  return isDeadRestoreCandidate(op, state) ||
+  return isDeadRestoreCandidate(ops, op, state, index, dotSafe, immediateSync) ||
     isDeadRecallCandidate(op) ||
     isDeadStackShiftingProducerCandidate(op);
 }
@@ -111,6 +141,8 @@ function isDeadSignRestoreCandidate(state: X2ValueDataflowState): boolean {
 function deadRestoreRunBeforeHardOverwrite(
   ops: readonly IrOp[],
   states: readonly (X2ValueDataflowState | undefined)[],
+  dotSafeStates: readonly boolean[],
+  immediateSyncStates: readonly boolean[],
   start: number,
   context: DirectReturnAnalysisContext,
 ): readonly number[] | undefined {
@@ -126,7 +158,17 @@ function deadRestoreRunBeforeHardOverwrite(
       if (sameSegment) remove.push(index);
       continue;
     }
-    if (sameSegment && isDeadRestoreCandidate(op, states[index])) {
+    if (
+      sameSegment &&
+      isDeadRestoreCandidate(
+        ops,
+        op,
+        states[index],
+        index,
+        dotSafeStates[index] === true,
+        immediateSyncStates[index] === true,
+      )
+    ) {
       remove.push(index);
       continue;
     }

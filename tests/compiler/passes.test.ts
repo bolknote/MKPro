@@ -4488,6 +4488,44 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-dead-restore-before-overwrite removes immediate-sync dot restores before hard overwrite", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x0a, "."),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite removes opaque expr dot restores before hard overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      plain(0x54, "КНОП"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
   it("x2-dead-restore-before-overwrite removes direct recalls before hard overwrite", () => {
     const program: IrOp[] = [
       recall("1"),

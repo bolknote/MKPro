@@ -973,9 +973,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     restored `X` before it can be observed. Consecutive same-segment dead
     restores and free-standing separators are removed as one run, while labels
     split the run. `.` requires a closed, non-`ВП`
-    context with a proved decimal X2 value; a bare `reg:r` fact is intentionally
-    rejected because a preloaded hex or non-normal register value can make `.`
-    signal `ЕГГ0Г`. `/-/` may also be removed from open mantissa, active
+    context with a proved decimal X2 value or the same shared dot-restore
+    safety proof used by `x2-noop-restore` (for example an immediate sync or
+    closed sign-change dot source); a bare `reg:r` fact after only an
+    X2-preserving gap is intentionally rejected because a preloaded hex or
+    non-normal register value can make `.` signal `ЕГГ0Г`. `/-/` may also be removed from open mantissa, active
     exponent-entry, or VP/X2 restore contexts because the following hard
     overwrite destroys both the restored X and the toggled X2. The following
     hard overwrite may sit after a simple direct-return helper only when that
