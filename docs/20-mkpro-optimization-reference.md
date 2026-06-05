@@ -877,7 +877,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     through a free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap before `ВП`,
     the dot is removed: emulator tests cover normalized and signed normalized
     mantissas in this exponent-entry shape, while role-bearing display cells
-    still block the shortcut.
+    still block the shortcut. That restore-gap proof may cross a simple direct
+    or proved-indirect `ПП` helper that reaches `В/О` through only
+    restore-transparent empty/address cells; helpers that store, branch,
+    restore X2, or expose another entry remain barriers.
     A separate normalized/visible-decimal escape hatch handles proved X2-preserving
     gaps such as stable indirect conditionals: if `X` and `X2` carry the same
     normalized decimal fact, or restore to the same visible decimal after raw
@@ -994,7 +997,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     for later recalls, joins keep only facts common to every path, and unknown
     indirect stores clear the memory. Hex-like preload facts remain shape-only,
     so they do not make `.`/`/-/` dead-restore candidates.
-19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, a raw decimal X2 fact whose restored visible value equals the stored scratch value, an opaque `expr:<step>` computed value, including one produced by a whitelisted pure X or X/Y computation and then explicitly synced into X2, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The raw decimal case covers visible-only leading-zero forms such as `01.2 -> 1.2`; it remains blocked when removing the recall would expose a following context-sensitive `.`/`/-/`/`ВП` restore that can observe the raw mantissa shape. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
+19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, a raw decimal X2 fact whose restored visible value equals the stored scratch value, an opaque `expr:<step>` computed value, including one produced by a whitelisted pure X or X/Y computation and then explicitly synced into X2, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The VP-source escape uses the shared restore-gap scanner, so a transparent direct/proved-indirect return helper between that gap and `ВП` is allowed when the helper body cannot observe the restore. The raw decimal case covers visible-only leading-zero forms such as `01.2 -> 1.2`; it remains blocked when removing the recall would expose a following context-sensitive `.`/`/-/`/`ВП` restore that can observe the raw mantissa shape. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
 20. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is
     already in the hidden X2 register, the dot-restore gap is safe (or CFG
@@ -1013,9 +1016,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     following `ВП` source context; a repeated normalized non-zero integer
     digit-run, signed digit-run, or normalized exponent-entry literal with a
     non-leading-zero mantissa may also be replaced before a free-standing
-    `КНОП`/`К1`/`К2` and `/-/` restore gap followed by `ВП`: emulator tests
-    prove that the inserted `.` preserves the same mantissa source for that
-    exponent entry. Leading-zero and signed-zero forms are excluded from this
+    `КНОП`/`К1`/`К2` and `/-/` restore gap followed by `ВП`, including when a
+    transparent direct/proved-indirect return helper sits between the gap and
+    `ВП`: emulator tests prove that the inserted `.` preserves the same
+    mantissa source for that exponent entry. Leading-zero and signed-zero forms are excluded from this
     shortcut because their restored mantissa shape is observable, and
     leading-zero exponent mantissas stay explicit for the same reason. If the
     following code cannot observe that raw mantissa shape, normalized X2 facts
@@ -1084,7 +1088,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     The helper's restore-gap scanner is shared with `x2-noop-restore`,
     `x2-hidden-temp-restore`, and `x2-literal-restore`, so all three passes use
     the same marker-label/display-role safety rules before deciding that a
-    `КНОП`/`К1`/`К2`/`/-/` run can be ignored before `ВП`.
+    `КНОП`/`К1`/`К2`/`/-/` run can be ignored before `ВП`. With a
+    direct-return context, the same scanner can cross simple direct or
+    proved-indirect `ПП` helpers whose body is only restore-transparent
+    empty/address cells; helpers that store, branch, restore X2, or expose
+    another entry remain barriers.
     After an X2-preserving gap, a VP-context sign or sign pair is kept when its
     X2 restore is observable (`5 ВП 3 Fπ /-/ С/П`,
     `5 ВП 3 Fπ /-/ /-/ С/П`), but a free-standing `/-/`/empty restore run can

@@ -1484,6 +1484,38 @@ describe("ir passes on synthetic programs", () => {
     expect(x2HasOnlyRestoreGapBeforeVp(displayCommentGap, 1)).toBe(false);
   });
 
+  it("x2 VP restore-gap scanner crosses only transparent return helpers with context", () => {
+    const directReturnGap: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x55, "К1"),
+      call("transparent"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const observingReturnGap: IrOp[] = [
+      jump("main"),
+      label("observer"),
+      store("1"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x55, "К1"),
+      call("observer"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+
+    expect(x2HasOnlyRestoreGapBeforeVp(directReturnGap, 6)).toBe(false);
+    expect(x2HasOnlyRestoreGapBeforeVp(directReturnGap, 6, directReturnAnalysisContext(directReturnGap))).toBe(true);
+    expect(x2HasOnlyRestoreGapBeforeVp(observingReturnGap, 6, directReturnAnalysisContext(observingReturnGap))).toBe(false);
+  });
+
   it("x2 value dataflow keeps signed zero sticky across repeated sign-change before ВП", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -3715,6 +3747,45 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces normalized digit runs before transparent return helpers and ВП", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x55, "К 1"),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      plain(0x55, "К 1"),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore replaces signed digit runs before restore-run ВП context", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -5324,6 +5395,43 @@ describe("ir passes on synthetic programs", () => {
       plain(0x02, "2"),
       plain(0xf0, "F* empty F0"),
       plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot before transparent return helpers and empty-op ВП", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      plain(0x55, "К 1"),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x55, "К 1"),
+      call("transparent"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),

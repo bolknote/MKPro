@@ -3,6 +3,7 @@ import {
   computeX2DotRestoreGapStates,
   computeX2ImmediateSyncStates,
   computeX2ValueStates,
+  directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
@@ -13,6 +14,7 @@ import {
   x2SyncCanExposeContextSensitiveRestore,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueSetHasNormalizedDecimalFact,
+  type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
@@ -276,9 +278,10 @@ function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
 function replacingLiteralCanExposeContextSensitiveRestore(
   ops: readonly IrOp[],
   run: NumericLiteralRun,
+  context: DirectReturnAnalysisContext,
 ): boolean {
   if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
-  return !run.dotPreservesVpEntrySource || !x2HasOnlyRestoreGapBeforeVp(ops, run.end + 1);
+  return !run.dotPreservesVpEntrySource || !x2HasOnlyRestoreGapBeforeVp(ops, run.end + 1, context);
 }
 
 function dotRestoreOp(value: string, source: IrOp): IrOp {
@@ -297,6 +300,7 @@ const run: IrPassFn = (ops) => {
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
+  const directReturnContext = directReturnAnalysisContext(ops);
   const result: IrOp[] = [];
   let removed = 0;
 
@@ -323,7 +327,7 @@ const run: IrPassFn = (ops) => {
       ) &&
       (exactX2Fact || visibleDecimalX2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
-      !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex)
+      !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext)
     ) {
       result.push(dotRestoreOp(runAtIndex.displayValue, ops[index]!));
       removed += runAtIndex.end - index;

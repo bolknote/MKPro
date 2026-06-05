@@ -1327,7 +1327,11 @@ export function x2StateCanDiscardRestoreRunBeforeProvedVp(
   return x2StatesHaveSameVpEntrySource(beforeRun, beforeVp);
 }
 
-export function x2HasOnlyRestoreGapBeforeVp(ops: readonly IrOp[], start: number): boolean {
+export function x2HasOnlyRestoreGapBeforeVp(
+  ops: readonly IrOp[],
+  start: number,
+  context?: DirectReturnAnalysisContext,
+): boolean {
   let sawRestoreGap = false;
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
@@ -1336,9 +1340,34 @@ export function x2HasOnlyRestoreGapBeforeVp(ops: readonly IrOp[], start: number)
       sawRestoreGap = true;
       continue;
     }
+    if (
+      context !== undefined &&
+      isKnownReturnCallOp(op) &&
+      x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
+    ) continue;
     return sawRestoreGap && isFreeStandingX2VpOp(op);
   }
   return false;
+}
+
+function x2RestoreGapDirectReturnDoesNotObserveRestore(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return knownReturnCallReturnsThroughTransparentRange(ops, call, context, isLinearX2RestoreGapTransparentOp);
+}
+
+function isLinearX2RestoreGapTransparentOp(op: IrOp): boolean {
+  return op.kind === "orphan-address" ||
+    (
+      op.kind === "plain" &&
+      !hasRewriteBarrier(op) &&
+      !isDisplayFocusSensitive(op) &&
+      !hasIrRoles(op) &&
+      op.opcode >= X2_EMPTY_OPCODE_START &&
+      op.opcode <= X2_EMPTY_OPCODE_END
+    );
 }
 
 function isFreeStandingX2RestoreGapOp(op: IrOp): boolean {

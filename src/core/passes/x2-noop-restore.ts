@@ -3,6 +3,7 @@ import {
   computeX2DotRestoreGapStates,
   computeX2ImmediateSyncStates,
   computeX2ValueStates,
+  directReturnAnalysisContext,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   x2CanUseDotRestoreAt,
@@ -14,6 +15,7 @@ import {
   x2StateHasSameRestoredVisibleDecimalInXAndX2,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateIsClosedPlainContext,
+  type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
@@ -25,6 +27,7 @@ const run: IrPassFn = (ops) => {
   const valueStates = computeX2ValueStates(ops);
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
+  const directReturnContext = directReturnAnalysisContext(ops);
   const removed = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
@@ -48,7 +51,7 @@ const run: IrPassFn = (ops) => {
       !x2StateHasSameDotRestoreValueInXAndX2(state) &&
       !x2StateHasSameRestoredVisibleDecimalInXAndX2(state)
     ) continue;
-    if (dotCanExposeContextSensitiveRestore(ops, index, state, valueStates[index + 1])) continue;
+    if (dotCanExposeContextSensitiveRestore(ops, index, state, valueStates[index + 1], directReturnContext)) continue;
     removed.add(index);
   }
 
@@ -74,9 +77,10 @@ function dotCanExposeContextSensitiveRestore(
   index: number,
   state: X2ValueDataflowState | undefined,
   stateAfterDot: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
 ): boolean {
   if (!x2SyncCanExposeContextSensitiveRestore(ops, index)) return false;
-  return !dotPreservesVpEntrySourceThroughRestoreGap(ops, index, state, stateAfterDot);
+  return !dotPreservesVpEntrySourceThroughRestoreGap(ops, index, state, stateAfterDot, context);
 }
 
 function dotPreservesVpEntrySourceThroughRestoreGap(
@@ -84,9 +88,10 @@ function dotPreservesVpEntrySourceThroughRestoreGap(
   index: number,
   state: X2ValueDataflowState | undefined,
   stateAfterDot: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
 ): boolean {
   return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterDot) &&
-    x2HasOnlyRestoreGapBeforeVp(ops, index + 1);
+    x2HasOnlyRestoreGapBeforeVp(ops, index + 1, context);
 }
 
 function isDotSafeValueContext(
