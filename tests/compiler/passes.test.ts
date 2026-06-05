@@ -887,6 +887,40 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:02:unnormalized"]);
   });
 
+  it("x2 value dataflow keeps dot-restored leading-zero decimals out of VP-entry sources", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2VpEntryShapeText(states[4])).toEqual([]);
+    expect(x2EntryStateText(states[5])).toBe("unknown");
+  });
+
+  it("x2 value dataflow carries structural VP-entry shapes through dot restore", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(states[3]?.x2Shape)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2VpEntryShapeText(states[3])).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:FACE:"]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
+  });
+
   it("x2 value dataflow syncs normalized X into X2 through F* empty opcodes", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -6869,6 +6903,30 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
       recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes exponent sign toggles after dot-restored structural X2 ВП", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("2", "preload const FACE"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),

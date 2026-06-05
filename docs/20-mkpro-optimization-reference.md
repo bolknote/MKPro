@@ -841,7 +841,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent shape and `mantissa:5000:decimal`. Structural hex/super mantissas
     consumed by `ВП` become shape-only `hex-exponent:*:*` /
     `super-exponent:*:*` forms; exponent digits and exponent `/-/` update that
-    structural context without creating decimal value facts. Preloaded `П->X r` constants
+    structural context without creating decimal value facts. Closed-context `.`
+    restores carry structural hex/super hidden X2 shapes forward as structural
+    `ВП`-entry sources, while dot-restored leading-zero decimal forms are still
+    not promoted to ordinary mantissas. Preloaded `П->X r` constants
     seed the same lattice: ordinary decimal/scientific constants become
     `decimal:*` facts, while hex-like display mantissas and `FA`..`FF` super
     forms become structural-only `hex:*` / `super:*` shape facts. Until those

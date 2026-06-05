@@ -1751,6 +1751,7 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntryMantissa: vpEntryMantissasFromValueFacts(input.x2),
+    vpEntryShape: vpEntryShapesFromShapeFacts(input.x2Shape),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
   };

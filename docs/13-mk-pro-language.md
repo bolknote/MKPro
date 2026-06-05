@@ -1290,9 +1290,10 @@ The pipeline currently contains:
   `super:*` facts until a later proof makes them dot-safe. Hexadecimal
   concatenation itself is not inferred here yet. Those structural forms also
   seed a separate shape-only `ВП`-entry source after direct/proved recalls,
-  direct `В/О` return continuations, and path-sensitive direct-conditional
-  fallthrough X2 syncs; the jump edge keeps the previous X2 state and does not
-  invent a new source. When `ВП` consumes such a source, dataflow now creates
+  closed-context `.` restores of structural hidden X2, direct `В/О` return
+  continuations, and path-sensitive direct-conditional fallthrough X2 syncs; the
+  jump edge keeps the previous X2 state and does not invent a new source. When
+  `ВП` consumes such a source, dataflow now creates
   structural exponent-entry facts (`hex-exponent:*:*` / `super-exponent:*:*`)
   and carries exponent digits/sign toggles as shape-only context. That gives
   splice passes a real model for structural `ВП ... /-/` sequences without
@@ -1304,7 +1305,9 @@ The pipeline currently contains:
   proof is cleared instead of inventing a restore. A dot-restored leading-zero
   X2 form is also not promoted to an ordinary `ВП` mantissa: emulator probes
   show `02; К{x}; .; ВП; 3` produces `22000`, not the normalized `2 ВП 3`
-  result. The proof now also keeps a
+  result. Structural hex/super forms restored by `.` remain structural-only:
+  they may feed `ВП` shape analysis, but they still do not become decimal
+  equality or dot-safe value facts. The proof now also keeps a
   register value-memory layer: a direct `X->П r` remembers only concrete
   decimal facts proved for visible `X`, and a later direct or proved indirect
   `П->X r` rehydrates those decimal facts together with the ordinary `reg:r`
