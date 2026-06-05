@@ -3207,6 +3207,47 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-noop-restore removes dot after modeled closed sign-change through empty ops", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "К НОП"),
+      plain(0x55, "К 1"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "К НОП"),
+      plain(0x55, "К 1"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore keeps dot after modeled sign-change through role-bearing empty ops", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      { kind: "plain", opcode: 0x54, meta: { mnemonic: "К НОП", roles: ["display-byte"] } },
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-noop-restore removes dot after modeled opaque closed sign-change", () => {
     const program: IrOp[] = [
       plain(0x35, "К {x}"),
@@ -3299,6 +3340,23 @@ describe("ir passes on synthetic programs", () => {
       plain(0x02, "2"),
       plain(0xf0, "F* empty F0"),
       plain(0x0b, "/-/"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-noop-restore keeps dot after empty-op closed sign-change when it shapes a following ВП", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "К НОП"),
       plain(0x0a, "."),
       plain(0x0c, "ВП"),
       halt(),

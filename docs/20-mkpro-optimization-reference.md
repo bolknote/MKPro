@@ -812,8 +812,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `02; К{x}; .; ВП; 3` yields `22000` on the emulator, not `2 ВП 3`.
     Closed-context `/-/` is modeled for
     proved normalized decimal `X == X2` facts, including zero; this lets an
-    immediately following `.` be removed unless it would shape a later X2
-    restore context. `ВП` after an open mantissa creates both a structural exponent-entry
+    immediately following `.`, or one reached only through free-standing
+    `КНОП`/`К1`/`К2`, be removed unless it would shape a later X2 restore
+    context. `ВП` after an open mantissa creates both a structural exponent-entry
     state and a separate VP/exponent context. `ВП` after a proved closed
     decimal X2 sync (`Cx`, `В↑`, direct conditional/`F Lx` fallthrough, or `F0..FF`,
     possibly through only `КНОП`/`К1`/`К2`) also becomes a structural

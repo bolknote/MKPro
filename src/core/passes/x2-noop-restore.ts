@@ -30,7 +30,7 @@ const run: IrPassFn = (ops) => {
     if (
       dotSafeStates[index] !== true &&
       immediateSyncStates[index] !== true &&
-      !isImmediateAfterModeledSignChange(ops, index, state)
+      !isAfterModeledSignChangeThroughEmptyOps(ops, index, state)
     ) continue;
     if (!isDotSafeValueContext(state)) continue;
     if (!x2ValueSetHasIntersection(state?.x, state?.x2) && !x2StateHasSameDotSafeDecimalInXAndX2(state)) continue;
@@ -61,7 +61,7 @@ function isDotSafeValueContext(
   return x2StateIsClosedPlainContext(state);
 }
 
-function isImmediateAfterModeledSignChange(
+function isAfterModeledSignChangeThroughEmptyOps(
   ops: readonly IrOp[],
   dotIndex: number,
   state: ReturnType<typeof computeX2ValueStates>[number],
@@ -69,13 +69,29 @@ function isImmediateAfterModeledSignChange(
   for (let index = dotIndex - 1; index >= 0; index -= 1) {
     const op = ops[index]!;
     if (op.kind === "label") continue;
+    if (isPlainEmptyOp(op)) continue;
     if (hasRewriteBarrier(op)) return false;
-    return op.kind === "plain" &&
-      op.opcode === SIGN_CHANGE &&
+    return isPlainSignChange(op) &&
       x2StateIsClosedPlainContext(state) &&
       (x2ValueSetHasIntersection(state?.x, state?.x2) || x2StateHasSameDotSafeDecimalInXAndX2(state));
   }
   return false;
+}
+
+function isPlainSignChange(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
+  return op.kind === "plain" && op.opcode === SIGN_CHANGE && !hasRewriteBarrier(op);
+}
+
+function isPlainEmptyOp(op: IrOp): boolean {
+  return op.kind === "plain" &&
+    op.opcode >= 0x54 &&
+    op.opcode <= 0x56 &&
+    !hasRewriteBarrier(op) &&
+    !hasRoles(op);
+}
+
+function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
+  return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
 }
 
 export const x2NoopRestore: IrPass = {

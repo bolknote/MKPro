@@ -1335,7 +1335,8 @@ The pipeline currently contains:
   That reachability guard is the shared CFG-aware X2 exposure walker: direct and
   proved-indirect branches are followed path-sensitively instead of being blanket
   barriers, but any X2-preserving edge that can reach a context-sensitive restore
-  still keeps the dot.
+  still keeps the dot. Closed-context `/-/` proofs also cover a following `.`
+  reached only through free-standing `КНОП`/`К1`/`К2` empty ops.
   The same X2 value dataflow now carries narrow `ВП`-entry facts after proved
   closed decimal syncs (`Cx`, `В↑`, `F0..FF`), direct/proved recalls, direct
   `В/О` return continuations, and path-sensitive direct-conditional fallthrough
