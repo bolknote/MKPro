@@ -1385,6 +1385,27 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
   });
 
+  it("x2-hidden-temp-restore uses stable expr keys across repeated stack-consuming computations", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      store("3"),
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      plain(0x0e, "В↑"),
+      recall("3"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[10]).toMatchObject({ kind: "plain", opcode: 0x0a });
+  });
+
   it("x2-hidden-temp-restore uses stable expr keys across repeated closed sign-change", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -1402,7 +1423,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
   });
 
-  it("x2 value dataflow seeds opaque expr facts from pure stack-consuming computations", () => {
+  it("x2 value dataflow seeds stable and opaque expr facts from pure stack-consuming computations", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
       plain(0x0e, "В↑"),
@@ -1414,12 +1435,29 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program, { trackRegisterMemory: true });
 
-    expect(x2ValueStateText(states[4]?.x)).toEqual(["expr:3"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual([
+      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "expr:3",
+    ]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
-    expect(x2ValueStateText(states[5]?.x)).toEqual(["expr:3"]);
-    expect(x2ValueStateText(states[5]?.x2)).toEqual(["expr:3"]);
-    expect(x2ValueStateText(states[6]?.x)).toEqual(["expr:3", "reg:2"]);
-    expect(x2ValueStateText(states[6]?.x2)).toEqual(["expr:3", "reg:2"]);
+    expect(x2ValueStateText(states[5]?.x)).toEqual([
+      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "expr:3",
+    ]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual([
+      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "expr:3",
+    ]);
+    expect(x2ValueStateText(states[6]?.x)).toEqual([
+      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "expr:3",
+      "reg:2",
+    ]);
+    expect(x2ValueStateText(states[6]?.x2)).toEqual([
+      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "expr:3",
+      "reg:2",
+    ]);
   });
 
   it("x2 value dataflow does not seed expr facts from non-whitelisted or role-bearing plain ops", () => {
