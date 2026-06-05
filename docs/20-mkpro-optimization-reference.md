@@ -901,7 +901,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     loop, or from an already active VP/X2 restore context, when the following
     overwrite destroys its visible result; the conditional jump edge does not
     invent such a source, and none of this makes structural `.`/`/-/` restores
-    dot-safe.
+    dot-safe. Closed structural exponent sign restores are treated as structural
+    shape-only `/-/` restores here: removable before a hard overwrite, but never
+    promoted into decimal or dot-safe facts.
     This pass requests the register value-memory layer and also consumes decimal preload facts from `П->X r` metadata:
     direct stores of proved decimal `X` facts seed remembered `decimal:*` facts
     for later recalls, joins keep only facts common to every path, and unknown
@@ -986,7 +988,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     entry and is kept. Closed-context `/-/ /-/` pairs are removed only when
     value dataflow proves an ordinary decimal `X == X2` fact, including
     fractional exponent-derived values such as `decimal:0.005:normalized`, and
-    downstream scan proves the pair is not acting as the previous-command
+    structural shape equality, including synced structural exponent shapes, can
+    prove the same cancellation without decimalizing the shape. The downstream
+    scan still proves the pair is not acting as the previous-command
     shield for a later context-sensitive `.`/`/-/`/`ВП` restore. Register
     value-memory and decimal preload metadata can supply the same proved
     mantissa/exponent context after a direct or proved-indirect recall of a

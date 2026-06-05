@@ -56,10 +56,7 @@ function isDeadRestoreCandidate(
     return x2StateIsClosedPlainContext(state) && x2StateHasDotSafeDecimalX2(state);
   }
   if (op.opcode === SIGN_CHANGE) {
-    return x2StateIsClosedPlainContext(state) &&
-      (x2StateHasDotSafeDecimalX2(state) || x2StateHasStructuralShapeX2(state)) ||
-      state.entry.kind === "open" ||
-      x2StateHasX2RestoreContext(state);
+    return isDeadSignRestoreCandidate(state);
   }
   if (op.opcode === VP) {
     return state.entry.kind === "open" ||
@@ -68,6 +65,15 @@ function isDeadRestoreCandidate(
       x2StateHasX2RestoreContext(state);
   }
   return false;
+}
+
+function isDeadSignRestoreCandidate(state: X2ValueDataflowState): boolean {
+  return (
+    x2StateIsClosedPlainContext(state) &&
+    (x2StateHasDotSafeDecimalX2(state) || x2StateHasStructuralShapeX2(state))
+  ) ||
+    state.entry.kind === "open" ||
+    x2StateHasX2RestoreContext(state);
 }
 
 function deadRestoreRunBeforeHardOverwrite(

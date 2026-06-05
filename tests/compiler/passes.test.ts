@@ -3223,6 +3223,29 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite removes closed structural exponent sign before hard overwrite", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
   it("x2-dead-restore-before-overwrite removes a same-segment dead restore run before hard overwrite", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -8518,6 +8541,28 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       recall("2", "preload const 8.70Е2-6С"),
       shapedSign,
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a closed-context structural exponent sign pair", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
       halt(),
     ]);
   });

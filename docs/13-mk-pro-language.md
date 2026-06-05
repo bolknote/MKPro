@@ -1370,7 +1370,9 @@ The pipeline currently contains:
   `Cx /-/ ВП` has a signed-zero mantissa on the emulator. VP-context sign
   commands and empty separators after X2-preserving gaps are collapsed as one
   restore run when the following command starts fresh number entry; otherwise
-  their X2-to-X restore is observable. Marker labels inside the run are
+  their X2-to-X restore is observable. Closed structural exponent sign pairs
+  after an X2 sync collapse through the same shape equality proof, while the
+  structural exponent shape remains non-decimal and non-dot-safe. Marker labels inside the run are
   preserved. Consecutive free-standing `/-/` and empty ops in the same VP/X2
   context are also removed as one restore run before a proved hard X/X2
   overwrite such as `Cx`.
@@ -1384,7 +1386,8 @@ The pipeline currently contains:
   accepted only from a closed, non-`ВП` context with a proved decimal X2 value
   fact. A plain `reg:r` fact is not enough, because a preloaded hexadecimal or
   other non-normal register value may make `.` signal `ЕГГ0Г` before the
-  overwrite can run. `/-/` may also be removed from open mantissa, active
+  overwrite can run. `/-/` may also be removed from closed proved structural
+  shapes, including synced structural exponent shapes, open mantissa, active
   exponent-entry, or VP/X2 restore contexts because the following hard overwrite
   destroys both the restored X and the toggled X2. `ВП` is removed only when the X2 value dataflow
   still knows an open mantissa, active exponent entry, proved decimal
