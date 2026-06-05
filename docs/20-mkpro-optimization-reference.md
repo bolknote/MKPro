@@ -804,8 +804,10 @@ Display rewrites are separated into strategy selection + body lowering.
   X-only computations
   additionally seed a stable `expr-key:<opcode>(<source>)` fact when the source
   is a proved register, normalized decimal, or earlier stable expression key.
-  For concrete normalized decimal `X`, `F x^2`, finite `F 1/x`, perfect-square
-  `F sqrt`, integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and `К [x]` seed exact
+  The documented `F pi` stack producer seeds both the stable `expr-key:20()`
+  and the hardware decimal constant `3.1415926`. For concrete normalized
+  decimal `X`, `F x^2`, finite `F 1/x`, perfect-square `F sqrt`,
+  integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and `К [x]` seed exact
   decimal results in visible X while preserving the old X2 fact. For
   non-negative concrete decimal `X`, and for negative non-integer concrete
   decimal `X`, `К {x}` also seeds the exact normalized fractional decimal value

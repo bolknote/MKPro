@@ -561,8 +561,8 @@ function plainProducesStableExpressionValues(
   xShape: X2ShapeSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
-  const constant = plainProducesStableConstantExpressionValue(op);
-  if (constant !== undefined) return new Set([constant]);
+  const constants = plainProducesStableConstantExpressionValues(op);
+  if (constants.size > 0) return constants;
   if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return new Set();
   if (!PURE_OPAQUE_EXPR_OPCODES.has(op.opcode)) return new Set();
   const info = getOpcode(op.opcode);
@@ -1143,6 +1143,29 @@ function plainProducesStableConstantExpressionValue(
   }
   const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
   return stableExpressionValueFact(opcode, "");
+}
+
+function plainProducesStableConstantExpressionValues(
+  op: Extract<IrOp, { kind: "plain" }>,
+): Set<X2ValueFact> {
+  const output = new Set<X2ValueFact>();
+  const constant = plainProducesStableConstantExpressionValue(op);
+  if (constant !== undefined) output.add(constant);
+  const decimal = plainProducesStableConstantDecimalValue(op);
+  if (decimal !== undefined) output.add(decimal);
+  return output;
+}
+
+function plainProducesStableConstantDecimalValue(
+  op: Extract<IrOp, { kind: "plain" }>,
+): X2ValueFact | undefined {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return undefined;
+  if (op.opcode !== 0x20) return undefined;
+  const info = getOpcode(op.opcode);
+  if (info.risk !== "documented" || info.x2Effect !== "preserves" || info.stackEffect !== "shifts") {
+    return undefined;
+  }
+  return decimalValueFact("3.1415926", "normalized");
 }
 
 function stableBinaryExpressionValueFact(

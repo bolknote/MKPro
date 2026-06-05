@@ -1806,9 +1806,27 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr-key:20()"]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual([
+      "decimal:3.1415926:normalized",
+      "expr-key:20()",
+    ]);
     expect(x2ValueStateText(states[2]?.y)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:2:normalized"]);
+  });
+
+  it("x2 value dataflow derives concrete decimal facts from F pi", () => {
+    const program: IrOp[] = [
+      plain(0x20, "F pi"),
+      plain(0x34, "К [x]"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual([
+      "decimal:3:normalized",
+      "expr-key:34(expr-key:20())",
+      "expr:1",
+    ]);
   });
 
   it("x2-hidden-temp-restore uses stable expr keys across repeated constant stack producers", () => {
@@ -5650,6 +5668,28 @@ describe("ir passes on synthetic programs", () => {
       plain(0x15, "F 10^x"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1000 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses concrete F pi derived X2 facts", () => {
+    const program: IrOp[] = [
+      plain(0x20, "F pi"),
+      plain(0x34, "К [x]"),
+      plain(0x0e, "В↑"),
+      plain(0x03, "3"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x20, "F pi"),
+      plain(0x34, "К [x]"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 3.0 from hidden X2 temp" } },
       halt(),
     ]);
   });

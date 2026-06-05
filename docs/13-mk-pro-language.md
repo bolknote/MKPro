@@ -1299,9 +1299,11 @@ The pipeline currently contains:
   `super:*` facts until a later proof makes them dot-safe. Hex/super preloads
   with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural
   `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е` remains an
-  ordinary display digit. For concrete normalized decimal values, `F x^2`,
-  finite `F 1/x`, perfect-square `F sqrt`, integer-exponent `F 10^x`, `К |x|`,
-  `К ЗН`, and `К [x]` are modeled as exact decimal results in visible `X`
+  ordinary display digit. The documented `F pi` stack producer also seeds the
+  hardware decimal constant `3.1415926` alongside its stable expression key.
+  For concrete normalized decimal values, `F x^2`, finite `F 1/x`,
+  perfect-square `F sqrt`, integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and
+  `К [x]` are modeled as exact decimal results in visible `X`
   while preserving the previous hidden X2 fact. For non-negative concrete
   decimal values and negative non-integer concrete decimal values, `К {x}` is
   also modeled as an exact normalized fractional decimal in visible `X` while
