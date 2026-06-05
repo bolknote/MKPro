@@ -34,6 +34,8 @@ const FPI = 0x20;
 const STORE1 = 0x41;
 const F0 = 0xf0;
 const STOP = 0x50;
+const RETURN = 0x52;
+const CALL = 0x53;
 
 describe("ВП exponent-entry splice collapse (vp-splice)", () => {
   it("ВП ВП and empty-op ВП produce the same value as a single ВП on the emulator", () => {
@@ -46,6 +48,12 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
     // К1 and К2 are the same empty-op class for this exponent-entry boundary.
     expect(display([0x05, K1, VP, 0x03, STOP])).toContain("5000");
     expect(display([0x05, K2, VP, 0x03, STOP])).toContain("5000");
+
+    // The same empty op is inert when a transparent subroutine return is the
+    // only thing between it and ВП: В/О resynchronizes the same X into X2.
+    expect(display([0x02, K1, CALL, 0x07, VP, 0x03, STOP, KNOP, RETURN])).toBe(
+      display([0x02, CALL, 0x06, VP, 0x03, STOP, KNOP, RETURN]),
+    );
   });
 
   it("the pass rewrites a freestanding ВП ВП / empty-op ВП run to a single ВП", () => {

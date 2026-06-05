@@ -222,7 +222,11 @@ function nextVpAfterTransparentRestoreGap(
   return undefined;
 }
 
-function freeStandingEmptyRunBefore(ops: readonly IrOp[], index: number): readonly number[] {
+function freeStandingEmptyRunBeforeProvedVp(
+  ops: readonly IrOp[],
+  index: number,
+  context: DirectReturnAnalysisContext,
+): readonly number[] {
   const indexes: number[] = [];
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
@@ -231,6 +235,7 @@ function freeStandingEmptyRunBefore(ops: readonly IrOp[], index: number): readon
       indexes.push(cursor);
       continue;
     }
+    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
     break;
   }
   indexes.reverse();
@@ -278,7 +283,7 @@ const run: IrPassFn = (ops) => {
         for (const runIndex of restoreRun) remove.add(runIndex);
         continue;
       }
-      const emptyRun = freeStandingEmptyRunBefore(ops, i);
+      const emptyRun = freeStandingEmptyRunBeforeProvedVp(ops, i, context);
       if (emptyRun.length > 0) {
         for (const emptyIndex of emptyRun) remove.add(emptyIndex);
         const firstEmpty = emptyRun[0]!;

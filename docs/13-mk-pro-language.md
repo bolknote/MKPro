@@ -1400,11 +1400,13 @@ The pipeline currently contains:
   state; `vp-splice` consumes those flags directly. Proved `/-/` toggles those facts, but zero is
   carried as a distinct `-0` shape instead of normalized away because
   `Cx /-/ ВП` has a signed-zero mantissa on the emulator. A free-standing
-  `/-/`/empty run immediately before a proved `ВП` source is collapsed when
-  the shared dataflow proves that the run leaves the same decimal or
-  structural hex/super mantissa source; mixed forms such as
-  `02 /-/ КНОП /-/ ВП` and structural preload shapes use the same proof, while
-  signed-zero forms stay explicit. VP-context sign commands and empty
+  `/-/`/empty run immediately before a proved `ВП` source, or separated from it
+  only by a transparent direct/proved-indirect `ПП` helper whose `В/О` return
+  resynchronizes the same X into X2, is collapsed when the shared dataflow
+  proves that the run leaves the same decimal or structural hex/super mantissa
+  source; mixed forms such as `02 /-/ КНОП /-/ ВП` and structural preload
+  shapes use the same proof, while signed-zero forms stay explicit. VP-context
+  sign commands and empty
   separators after X2-preserving gaps are collapsed as one restore run when the
   following command starts fresh number entry; otherwise their X2-to-X restore
   is observable. Closed structural exponent sign pairs after an X2 sync

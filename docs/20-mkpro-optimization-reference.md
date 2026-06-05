@@ -1128,9 +1128,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     The helper's restore-gap scanner is shared with `x2-noop-restore`,
     `x2-hidden-temp-restore`, and `x2-literal-restore`, so all three passes use
     the same marker-label/display-role safety rules before deciding that a
-    `КНОП`/`К1`/`К2`/`/-/` run can be ignored before `ВП`. With a
-    direct-return context, the same scanner can cross simple direct or
-    proved-indirect `ПП` helpers whose body is only restore-transparent
+    `КНОП`/`К1`/`К2`/`/-/` run, including an empty-only run, can be ignored
+    before `ВП`. With a direct-return context, the same scanner can cross
+    simple direct or proved-indirect `ПП` helpers whose body is only restore-transparent
     empty/address cells; helpers that store, branch, restore X2, or expose
     another entry remain barriers. The non-zero open/closed mantissa sign-pair
     proof before `ВП` uses the same transparent-helper crossing, so it is no
