@@ -3336,12 +3336,42 @@ function intersectKnownX2ShapeSets(
   current: X2ShapeSet | undefined,
   incoming: X2ShapeSet | undefined,
 ): Set<X2ShapeFact> {
+  return intersectX2ShapeSets(current, incoming);
+}
+
+function intersectX2ShapeSets(
+  current: X2ShapeSet | undefined,
+  incoming: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
   if (current === undefined || incoming === undefined) return new Set();
+  const currentSet = canonicalShapeSet(current);
+  const incomingSet = canonicalShapeSet(incoming);
   const joined = new Set<X2ShapeFact>();
-  for (const shape of current) {
-    if (incoming.has(shape)) joined.add(shape);
+  for (const shape of currentSet) {
+    if (incomingSet.has(shape)) joined.add(shape);
+  }
+  if (sameCanonicalShapeSet(currentSet, incomingSet)) return joined;
+  for (const shape of commonStructuralRestoreShapeFacts(currentSet, incomingSet)) {
+    joined.add(shape);
   }
   return joined;
+}
+
+function commonStructuralRestoreShapeFacts(
+  left: X2ShapeSet,
+  right: X2ShapeSet,
+): Set<X2ShapeFact> {
+  const leftRestoreShapes = structuralRestoreShapeFacts(left);
+  const rightRestoreShapes = structuralRestoreShapeFacts(right);
+  const output = new Set<X2ShapeFact>();
+  for (const fact of leftRestoreShapes) {
+    if (!rightRestoreShapes.has(fact)) continue;
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) {
+      output.add(fact);
+    }
+  }
+  return output;
 }
 
 function sameX2ValueMemory(left: X2ValueMemory | undefined, right: X2ValueMemory | undefined): boolean {
@@ -3362,6 +3392,14 @@ function sameX2ShapeMemory(left: X2ShapeMemory | undefined, right: X2ShapeMemory
   for (const register of leftRegisters) {
     if (!rightRegisters.includes(register)) return false;
     if (!sameOptionalShapeSet(left?.[register], right?.[register])) return false;
+  }
+  return true;
+}
+
+function sameCanonicalShapeSet(left: X2ShapeSet, right: X2ShapeSet): boolean {
+  if (left.size !== right.size) return false;
+  for (const shape of left) {
+    if (!right.has(shape)) return false;
   }
   return true;
 }
@@ -3786,14 +3824,7 @@ function joinOptionalShapeSets(
   current: X2ShapeSet | undefined,
   incoming: X2ShapeSet | undefined,
 ): Set<X2ShapeFact> {
-  if (current === undefined || incoming === undefined) return new Set();
-  const currentSet = canonicalShapeSet(current);
-  const incomingSet = canonicalShapeSet(incoming);
-  const joined = new Set<X2ShapeFact>();
-  for (const value of currentSet) {
-    if (incomingSet.has(value)) joined.add(value);
-  }
-  return joined;
+  return intersectX2ShapeSets(current, incoming);
 }
 
 function sameOptionalShapeSet(

@@ -964,7 +964,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     hex/super spellings compare as the same shape without becoming decimal
     values. Shape-set joins and equality checks use the same canonical
     spelling, so branch-merged structural `ВП`/restore proofs do not split on
-    formatting.
+    formatting. When a true merge sees different structural spellings with the
+    same restored display mantissa (`hex-exponent:Г:2` vs `hex:Г00`), the join
+    keeps that restored mantissa as a structural-only fact for `X`, `X2`, `Y`,
+    `ВП` sources, and shape memory; identical straight-line facts are not
+    expanded into aliases by themselves.
     Closed structural exponent shapes become fresh `ВП`-entry sources only
     after X2 value/shape dataflow proves the same structural restore-shape is
     visible in both `X` and hidden `X2`; the source is the restored mantissa

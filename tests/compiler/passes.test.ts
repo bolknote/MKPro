@@ -847,6 +847,53 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[6]?.xShape)).toEqual(["hex-exponent:Г00:3"]);
   });
 
+  it("x2 value dataflow joins structural exponent and mantissa shapes by restored display shape", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      cjump("right"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      jump("join"),
+      label("right"),
+      recall("2", "preload const Г00"),
+      label("join"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[9]?.xShape)).toEqual(["hex:Г00:mantissa"]);
+    expect(x2ShapeStateText(states[9]?.x2Shape)).toEqual(["hex:Г00:mantissa"]);
+    expect(x2VpEntryShapeText(states[9])).toEqual(["hex:Г00:mantissa"]);
+    expect(x2ShapeStateText(states[10]?.xShape)).toEqual(["hex-exponent:Г00:"]);
+    expect(x2ShapeStateText(states[11]?.xShape)).toEqual(["hex-exponent:Г00:3"]);
+  });
+
+  it("x2 value dataflow joins structural shape memory by restored display shape", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      cjump("right"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      store("3"),
+      jump("join"),
+      label("right"),
+      recall("2", "preload const Г00"),
+      store("3"),
+      label("join"),
+      plain(0x0d, "Cx"),
+      recall("3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[13]?.xShape)).toEqual(["hex:Г00:mantissa"]);
+    expect(x2ShapeStateText(states[13]?.x2Shape)).toEqual(["hex:Г00:mantissa"]);
+  });
+
   it("x2 value dataflow parses preloaded structural exponent notation", () => {
     const program: IrOp[] = [
       recall("1", "preload const ГE-2"),
