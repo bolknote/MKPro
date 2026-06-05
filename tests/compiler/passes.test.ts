@@ -8635,6 +8635,78 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift removes В↑ before a transparent direct-return X2 sync", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("noop"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      call("noop"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift removes В↑ before a transparent known-indirect return X2 sync", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      knownTargetIndirectCall("7", 2),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      knownTargetIndirectCall("7", 2),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ before a direct-return sync when the lift reaches a stack consumer", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("noop"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift keeps В↑ before direct-return callees that consume stack", () => {
     const program: IrOp[] = [
       jump("main"),

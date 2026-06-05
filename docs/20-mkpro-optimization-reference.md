@@ -644,12 +644,13 @@ Display rewrites are separated into strategy selection + body lowering.
   commands, when the producer already supplies the current X in Y and the
   shared stack-difference proof shows the extra Z/T difference cannot reach a
   later consumer. The gap may include a direct conditional, counted-loop, or
-  proved-indirect conditional fallthrough when both the CFG stack proof and the
-  X2-restore exposure proof show that the skipped edge cannot observe the
-  removed sync/lift. It may also
-  include a simple direct `ПП` callee that reaches `В/О` linearly through only
-  stack-preserving commands; stack consumers, X2 restores, nested flow, and
-  other entry labels keep the call as a barrier. The same
+  proved-indirect conditional fallthrough, or a simple direct/proved-indirect
+  `ПП` helper whose `В/О` return itself syncs the same X into X2, when both the
+  CFG stack proof and the X2-restore exposure proof show that skipped or
+  downstream edges cannot observe the removed sync/lift. Such `ПП` helpers must
+  reach `В/О` linearly through only stack-preserving commands; stack consumers,
+  X2 restores, nested flow, and other entry labels keep the call as a barrier.
+  The same
   proof also removes `В↑` before a hard X/X2 overwrite such as `Cx` when the
   lift's Y value cannot reach any later stack consumer. A `В↑` after any proved
   stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another

@@ -1660,15 +1660,15 @@ The pipeline currently contains:
   producer such as direct/indirect `П->X`, `F pi`, or another `В↑`, even through
   stack-preserving labels, stores, address bytes, and plain stack-neutral
   commands, when that producer already keeps the current X in Y for the
-  following consumer. It can also remove `В↑` before a direct conditional or
-  counted-loop fallthrough X2 sync when that sync makes the explicit `В↑`
-  redundant on the fallthrough path and the skipped edge cannot observe the
-  removed sync/lift. The gap may include a direct conditional or counted-loop
-  fallthrough only when the full CFG stack-difference proof and the X2-restore
-  exposure proof show that the skipped edge cannot observe the removed
-  sync/lift. It may also include a simple direct `ПП` callee that reaches
-  `В/О` linearly through only stack-preserving commands; stack consumers, X2
-  restores, nested flow, and other entry labels keep the call as a barrier.
+  following consumer. It can also remove `В↑` before a direct conditional,
+  counted-loop fallthrough, or simple direct/proved-indirect `ПП` helper whose
+  `В/О` return syncs the same X into X2, when that sync makes the explicit `В↑`
+  redundant and skipped or downstream edges cannot observe the removed
+  sync/lift. Such gaps are accepted only when the full CFG stack-difference
+  proof and the X2-restore exposure proof both hold. Direct/proved-indirect
+  `ПП` helpers must reach `В/О` linearly through only stack-preserving commands;
+  stack consumers, X2 restores, nested flow, and other entry labels keep the
+  call as a barrier.
   The same stack-difference proof starts with the possible difference
   in Z and follows direct calls/returns, so the rewrite is refused if a later
   opcode could expose or consume that deeper stack value. The same pass also
