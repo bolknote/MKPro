@@ -33,6 +33,7 @@ export type RegisterValueSet = ReadonlySet<RegisterName>;
 export type X2ValueFact =
   | `reg:${RegisterName}`
   | `expr:${number}`
+  | `expr-key:${string}`
   | "same:unknown"
   | `decimal:${string}:normalized`
   | `decimal:${string}:unnormalized`;
@@ -539,12 +540,39 @@ function plainProducesOpaqueExpressionValue(
   return expressionValueFact(producerIndex);
 }
 
+function plainProducesStableExpressionValues(
+  op: Extract<IrOp, { kind: "plain" }>,
+  x: X2ValueSet | undefined,
+): Set<X2ValueFact> {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return new Set();
+  if (!PURE_OPAQUE_EXPR_OPCODES.has(op.opcode)) return new Set();
+  const info = getOpcode(op.opcode);
+  if (
+    info.risk !== "documented" ||
+    info.x2Effect !== "preserves" ||
+    info.stackEffect !== "preserves"
+  ) {
+    return new Set();
+  }
+  const output = new Set<X2ValueFact>();
+  const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
+  for (const source of x ?? []) {
+    const key = stableExpressionSourceKey(source);
+    if (key === undefined) continue;
+    output.add(stableExpressionValueFact(opcode, key));
+  }
+  return output;
+}
+
 function plainXValueAfterNonPreservingOp(
   op: Extract<IrOp, { kind: "plain" }>,
   producerIndex: number | undefined,
+  x: X2ValueSet | undefined = undefined,
 ): Set<X2ValueFact> {
+  const output = plainProducesStableExpressionValues(op, x);
   const opaque = plainProducesOpaqueExpressionValue(op, producerIndex);
-  return opaque === undefined ? new Set() : new Set([opaque]);
+  if (opaque !== undefined) output.add(opaque);
+  return output;
 }
 
 export function analyzeX2StackEffect(op: IrOp | undefined): X2StackEffectAnalysis {
@@ -2352,7 +2380,7 @@ function transferPlainX2ValueState(
   if (closedExponentValues.size > 0) {
     const x = plainPreservesXValue(op)
       ? new Set(closedExponentValues)
-      : plainXValueAfterNonPreservingOp(op, producerIndex);
+      : plainXValueAfterNonPreservingOp(op, producerIndex, closedExponentValues);
     const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
     const xShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
     const x2 = effect === "preserves"
@@ -2399,7 +2427,7 @@ function transferPlainX2ValueState(
     };
   }
   const x = syncUnknownSameValue(
-    plainPreservesXValue(op) ? new Set(input.x) : plainXValueAfterNonPreservingOp(op, producerIndex),
+    plainPreservesXValue(op) ? new Set(input.x) : plainXValueAfterNonPreservingOp(op, producerIndex, input.x),
     effect,
     producerIndex,
   );
@@ -3250,7 +3278,7 @@ function isConcreteDecimalX2ValueFact(value: X2ValueFact): boolean {
 }
 
 function isExpressionX2ValueFact(value: X2ValueFact): boolean {
-  return /^expr:\d+$/u.test(value);
+  return /^expr:\d+$/u.test(value) || value.startsWith("expr-key:");
 }
 
 function isStorableX2MemoryValueFact(value: X2ValueFact): boolean {
@@ -3258,7 +3286,8 @@ function isStorableX2MemoryValueFact(value: X2ValueFact): boolean {
 }
 
 function isOpaqueSharedValueFact(value: X2ValueFact): boolean {
-  return value === SAME_UNKNOWN_VALUE || value.startsWith("reg:") || value.startsWith("expr:");
+  return value === SAME_UNKNOWN_VALUE || value.startsWith("reg:") || value.startsWith("expr:") ||
+    value.startsWith("expr-key:");
 }
 
 function recallX2ValueFacts(
@@ -3663,6 +3692,17 @@ function registerValueFact(register: RegisterName): X2ValueFact {
 
 function expressionValueFact(producerIndex: number): X2ValueFact {
   return `expr:${producerIndex}`;
+}
+
+function stableExpressionValueFact(opcode: string, source: string): X2ValueFact {
+  return `expr-key:${opcode}(${source})`;
+}
+
+function stableExpressionSourceKey(fact: X2ValueFact): string | undefined {
+  if (fact.startsWith("reg:")) return fact;
+  if (fact.startsWith("expr-key:")) return fact;
+  if (normalizedDecimalValueFromFact(fact) !== undefined) return fact;
+  return undefined;
 }
 
 function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {

@@ -1171,7 +1171,7 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:1"]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr-key:35(reg:1)", "expr:1"]);
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["reg:1"]);
     expect(x2ValueStateText(states[3]?.x)).toEqual(["reg:1"]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["reg:1"]);
@@ -1189,7 +1189,7 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:2"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr-key:35(decimal:2:normalized)", "expr:2"]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:02:unnormalized"]);
     expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:02:unnormalized"]);
@@ -1312,12 +1312,49 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program, { trackRegisterMemory: true });
 
-    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:1"]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr-key:21(decimal:2:normalized)", "expr:1"]);
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:2:normalized"]);
-    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:1"]);
-    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:1"]);
-    expect(x2ValueStateText(states[4]?.x)).toEqual(["expr:1", "reg:2"]);
-    expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:1", "reg:2"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr-key:21(decimal:2:normalized)", "expr:1"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr-key:21(decimal:2:normalized)", "expr:1"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["expr-key:21(decimal:2:normalized)", "expr:1", "reg:2"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr-key:21(decimal:2:normalized)", "expr:1", "reg:2"]);
+  });
+
+  it("x2 value dataflow gives repeated pure unary computations a stable expr key", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      store("1"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      store("2"),
+      recall("1"),
+      recall("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[2]?.x)).toContain("expr-key:21(decimal:2:normalized)");
+    expect(x2ValueStateText(states[5]?.x)).toContain("expr-key:21(decimal:2:normalized)");
+    expect(x2ValueStateText(states[7]?.x)).toContain("expr-key:21(decimal:2:normalized)");
+    expect(x2ValueStateText(states[8]?.x)).toContain("expr-key:21(decimal:2:normalized)");
+  });
+
+  it("x2-hidden-temp-restore uses stable expr keys across repeated pure unary computations", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      store("1"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      recall("1"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
   });
 
   it("x2 value dataflow seeds opaque expr facts from pure stack-consuming computations", () => {

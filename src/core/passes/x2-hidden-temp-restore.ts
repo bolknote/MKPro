@@ -148,7 +148,8 @@ function hiddenTempStoreSourceRestoresSameVisibleDecimalFromX2(
 }
 
 function isStableStoredSourceFact(fact: X2ValueFact): boolean {
-  return fact.startsWith("expr:") || (fact.startsWith("decimal:") && fact.endsWith(":normalized"));
+  return fact.startsWith("expr:") || fact.startsWith("expr-key:") ||
+    (fact.startsWith("decimal:") && fact.endsWith(":normalized"));
 }
 
 function isNormalizedDecimalFact(fact: X2ValueFact): boolean {
