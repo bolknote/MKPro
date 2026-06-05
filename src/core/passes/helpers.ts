@@ -1195,6 +1195,40 @@ export function x2ShapeSetsHaveSameStructuralShape(
   return false;
 }
 
+export function x2SignChangedSharedStructuralShapeFacts(
+  xShapes: X2ShapeSet | undefined,
+  x2Shapes: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  const visibleRestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShapes));
+  for (const fact of canonicalStructuralShapeFacts(x2Shapes)) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (!structuralShapeSetHasIntersection(visibleRestoreShapes, structuralRestoreShapeFacts(new Set([fact])))) {
+      continue;
+    }
+    if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) {
+      output.add(signChangedStructuralMantissaShapeFact(fact));
+      continue;
+    }
+    if (
+      model.kind === "exponent-entry" &&
+      (model.mantissa.radix === "hex" || model.mantissa.radix === "super") &&
+      model.safety === "structuralOnly"
+    ) {
+      const signed = x2ExponentMantissaSignChangedShapeFact(fact);
+      if (signed !== undefined) output.add(signed);
+    }
+  }
+  return output;
+}
+
+function structuralShapeSetHasIntersection(left: X2ShapeSet, right: X2ShapeSet): boolean {
+  for (const shape of left) {
+    if (right.has(shape)) return true;
+  }
+  return false;
+}
+
 export function x2StateHasSameDotSafeDecimalInXAndX2(state: X2ValueDataflowState | undefined): boolean {
   return state !== undefined && x2ShapeSetsHaveSameDotSafeDecimal(state.xShape, state.x2Shape);
 }
@@ -3853,26 +3887,7 @@ function signChangedClosedShapeMantissas(input: X2ValueDataflowState): ReadonlyS
 }
 
 function signChangedClosedStructuralShapeFacts(input: X2ValueDataflowState): ReadonlySet<X2ShapeFact> | undefined {
-  const shapes = new Set<X2ShapeFact>();
-  const xShapes = canonicalStructuralShapeFacts(input.xShape);
-  const x2Shapes = canonicalStructuralShapeFacts(input.x2Shape);
-  for (const fact of x2Shapes) {
-    const model = x2ShapeDataModelForFact(fact);
-    if (!xShapes.has(fact)) continue;
-    if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) {
-      shapes.add(signChangedStructuralMantissaShapeFact(fact));
-      continue;
-    }
-    if (
-      model.kind === "exponent-entry" &&
-      (model.mantissa.radix === "hex" || model.mantissa.radix === "super") &&
-      model.safety === "structuralOnly"
-    ) {
-      const signed = x2ExponentMantissaSignChangedShapeFact(fact);
-      if (signed === undefined) return undefined;
-      shapes.add(signed);
-    }
-  }
+  const shapes = x2SignChangedSharedStructuralShapeFacts(input.xShape, input.x2Shape);
   return shapes.size === 0 ? undefined : shapes;
 }
 

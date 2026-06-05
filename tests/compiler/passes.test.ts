@@ -56,6 +56,7 @@ import {
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetsHaveSameStructuralShape,
   x2ShapeSetSafety,
+  x2SignChangedSharedStructuralShapeFacts,
   x2StructuralMantissaAppendDigitsShapeFact,
   x2StructuralMantissaConcatShapeFacts,
   x2StructuralMantissaShiftShapeFact,
@@ -1059,6 +1060,25 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ExponentSignChangedShapeFact("super-exponent:FA:")).toBe("super-exponent:FA:-");
     expect(x2ExponentMantissaSignChangedShapeFact("hex-exponent:FACE:-2")).toBe("hex-exponent:-FACE:-2");
     expect(x2ExponentMantissaSignChangedShapeFact("super-exponent:-FA:3")).toBe("super-exponent:FA:3");
+  });
+
+  it("x2 shape algebra toggles shared structural X2 shapes through restore equality", () => {
+    expect(x2ShapeStateText(x2SignChangedSharedStructuralShapeFacts(
+      new Set(["hex:FACE:mantissa"]),
+      new Set(["hex:FACE:mantissa"]),
+    ))).toEqual(["hex:-FACE:mantissa"]);
+    expect(x2ShapeStateText(x2SignChangedSharedStructuralShapeFacts(
+      new Set(["hex:Г00:mantissa"]),
+      new Set(["hex-exponent:Г:2"]),
+    ))).toEqual(["hex-exponent:-Г:2"]);
+    expect(x2ShapeStateText(x2SignChangedSharedStructuralShapeFacts(
+      new Set(["hex:0.0Г:mantissa"]),
+      new Set(["hex-exponent:Г:-2"]),
+    ))).toEqual(["hex-exponent:-Г:-2"]);
+    expect(x2ShapeStateText(x2SignChangedSharedStructuralShapeFacts(
+      new Set(["hex:Г0:mantissa"]),
+      new Set(["hex-exponent:Г:2"]),
+    ))).toEqual([]);
   });
 
   it("x2 shape algebra rebuilds canonical mantissa facts from data models", () => {

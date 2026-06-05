@@ -914,8 +914,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     structural context without creating decimal value facts. The construction is
     routed through the shared shape algebra, which can rebuild canonical
     mantissa facts, derive structural exponent-context sign toggles, derive
-    closed-context mantissa sign toggles for synced structural exponent shapes,
-    and compare structural exponent shifts that are pure display mantissa
+    closed-context mantissa sign toggles for synced structural shapes through
+    the same restore-equality model, and compare structural exponent shifts
+    that are pure display mantissa
     shifts (`hex:Г` through `ВП 2` is the same structural display shape as
     `hex:Г00`; `hex:Г ВП -2` is the same structural display shape as
     `hex:0.0Г`; shifted two-byte `super:FA` forms compare as the resulting
