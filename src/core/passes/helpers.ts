@@ -101,7 +101,11 @@ const SAME_UNKNOWN_VALUE: X2ValueFact = "same:unknown";
 const X2_SIGN_CHANGE_OPCODE = 0x0b;
 const X2_EMPTY_OPCODE_START = 0x54;
 const X2_EMPTY_OPCODE_END = 0x56;
-const PURE_UNARY_OPAQUE_EXPR_OPCODES = new Set<number>([
+const PURE_OPAQUE_EXPR_OPCODES = new Set<number>([
+  0x10, // +
+  0x11, // -
+  0x12, // *
+  0x13, // /
   0x15, // F 10^x
   0x16, // F e^x
   0x17, // F lg
@@ -115,6 +119,7 @@ const PURE_UNARY_OPAQUE_EXPR_OPCODES = new Set<number>([
   0x21, // F sqrt
   0x22, // F x^2
   0x23, // F 1/x
+  0x24, // F x^y
   0x26, // К °->′
   0x2a, // К °->′"
   0x30, // К °<-′"
@@ -123,6 +128,10 @@ const PURE_UNARY_OPAQUE_EXPR_OPCODES = new Set<number>([
   0x33, // К °<-′
   0x34, // К [x]
   0x35, // К {x}
+  0x36, // К max
+  0x37, // К ∧
+  0x38, // К ∨
+  0x39, // К ⊕
   0x3a, // К ИНВ
 ]);
 const REGISTER_NAMES: readonly RegisterName[] = [
@@ -515,9 +524,16 @@ function plainProducesOpaqueExpressionValue(
 ): X2ValueFact | undefined {
   if (producerIndex === undefined) return undefined;
   if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return undefined;
-  if (!PURE_UNARY_OPAQUE_EXPR_OPCODES.has(op.opcode)) return undefined;
+  if (!PURE_OPAQUE_EXPR_OPCODES.has(op.opcode)) return undefined;
   const info = getOpcode(op.opcode);
-  if (info.risk !== "documented" || info.stackEffect !== "preserves" || info.x2Effect !== "preserves") {
+  if (
+    info.risk !== "documented" ||
+    info.x2Effect !== "preserves" ||
+    info.stackEffect === "barrier" ||
+    info.stackEffect === "unknown" ||
+    info.stackEffect === "exposes" ||
+    info.stackEffect === "shifts"
+  ) {
     return undefined;
   }
   return expressionValueFact(producerIndex);

@@ -1288,6 +1288,26 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:1", "reg:2"]);
   });
 
+  it("x2 value dataflow seeds opaque expr facts from pure stack-consuming computations", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      plain(0x0e, "В↑"),
+      store("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["expr:3"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["expr:3"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["expr:3"]);
+    expect(x2ValueStateText(states[6]?.x)).toEqual(["expr:3", "reg:2"]);
+    expect(x2ValueStateText(states[6]?.x2)).toEqual(["expr:3", "reg:2"]);
+  });
+
   it("x2 value dataflow does not seed expr facts from non-whitelisted or role-bearing plain ops", () => {
     const randomProgram: IrOp[] = [
       plain(0x02, "2"),
@@ -2580,6 +2600,28 @@ describe("ir passes on synthetic programs", () => {
 
     expect(restored.applied).toBe(1);
     expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore uses pure stack-consuming expr facts after an explicit X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      plain(0x0e, "В↑"),
+      store("2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[8]).toMatchObject({ kind: "plain", opcode: 0x0a });
     expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
