@@ -721,6 +721,41 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["hex:FA.CE:mantissa"]);
   });
 
+  it("x2 value dataflow tracks structural Y shapes through stack lift and X/Y exchange", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x0e, "В↑"),
+      recall("3", "preload const CAFE"),
+      plain(0x14, "X↔Y"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[2]?.yShape)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["hex:CAFE:mantissa"]);
+    expect(x2ShapeStateText(states[3]?.yShape)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(states[4]?.yShape)).toEqual(["hex:CAFE:mantissa"]);
+  });
+
+  it("x2 value dataflow stores structural shapes restored from Y by X/Y exchange", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x0e, "В↑"),
+      recall("3", "preload const CAFE"),
+      plain(0x14, "X↔Y"),
+      store("1"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(states[7]?.xShape)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(states[7]?.x2Shape)).toEqual(["hex:FACE:mantissa"]);
+  });
+
   it("x2 value dataflow keeps recalled stored hex sign-change shape-only", () => {
     const program: IrOp[] = [
       recall("2", "preload const 8.70Е2-6С"),
