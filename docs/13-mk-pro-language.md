@@ -1695,7 +1695,10 @@ The pipeline currently contains:
   marker must be present. A plain opcode pattern such as `П->X r; Fπ; ВП` is
   not enough: emulator probes show that it restores X2 but does not generally
   make `К {x}` redundant. Display lowering is just one producer of valid
-  boundary markers.
+  boundary markers. The pass can also drop a role-free, non-display `К {x}` when
+  X2 value dataflow proves a closed plain-context `X` is already fractional
+  (`0`, `0.x`, or `-0.x`) and the removed X2 sync cannot reach a later
+  context-sensitive `.`, `/-/`, or `ВП` restore.
 - **membership X2 restore** — membership set lowering may use `.` as a hidden
   X2 restore in non-display code. It is accepted only when the set collection
   assignable is byte-for-byte the tested collection, including indexed bank

@@ -1,8 +1,10 @@
 import type { IrOp } from "../types.ts";
 import {
+  computeX2ValueStates,
   computeLabelEntryIndexes,
   directReturnAnalysisContext,
   hasRewriteBarrier,
+  isDisplayFocusSensitive,
   isKnownReturnCallOp,
   knownReturnCallReturnsThroughTransparentRange,
   plainPreservesXValue,
@@ -10,6 +12,10 @@ import {
   type IrPass,
   type IrPassFn,
   type KnownReturnCallOp,
+  type X2ValueDataflowState,
+  x2StateIsClosedPlainContext,
+  x2SyncCanExposeContextSensitiveRestore,
+  x2ValueFactRestoredVisibleDecimal,
 } from "./helpers.ts";
 
 function x2BoundaryText(op: IrOp): string {
@@ -30,6 +36,35 @@ function isVpX2Boundary(op: IrOp): boolean {
 function isFractionAfterX2Boundary(op: IrOp): boolean {
   if (hasRewriteBarrier(op)) return false;
   return op.kind === "plain" && op.opcode === 0x35;
+}
+
+function isFreeStandingFractionOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  return op.kind === "plain" && op.opcode === 0x35 && !hasRoles(op);
+}
+
+function isFractionalNoopValue(value: string): boolean {
+  return value === "0" || /^-?0\.[0-9]+$/u.test(value);
+}
+
+function stateHasFractionalNoopX(state: X2ValueDataflowState | undefined): boolean {
+  if (state === undefined || !x2StateIsClosedPlainContext(state)) return false;
+  for (const fact of state.x) {
+    const visible = x2ValueFactRestoredVisibleDecimal(fact);
+    if (visible !== undefined && isFractionalNoopValue(visible)) return true;
+  }
+  return false;
+}
+
+function isKnownFractionalNoopFraction(
+  ops: readonly IrOp[],
+  index: number,
+  states: readonly (X2ValueDataflowState | undefined)[],
+): boolean {
+  const op = ops[index]!;
+  return isFreeStandingFractionOp(op) &&
+    stateHasFractionalNoopX(states[index]) &&
+    !x2SyncCanExposeContextSensitiveRestore(ops, index);
 }
 
 function isFreeStandingEmptyOp(op: IrOp): boolean {
@@ -89,10 +124,14 @@ const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
   const labelEntries = computeLabelEntryIndexes(ops);
   const context = directReturnAnalysisContext(ops);
+  const states = computeX2ValueStates(ops, { trackRegisterMemory: true });
   for (let i = 0; i < ops.length; i += 1) {
     if (!isVpX2Boundary(ops[i]!)) continue;
     const fractionIndex = fractionAfterBoundaryIndex(ops, i, labelEntries, context);
     if (fractionIndex !== undefined) remove.add(fractionIndex);
+  }
+  for (let i = 0; i < ops.length; i += 1) {
+    if (!remove.has(i) && isKnownFractionalNoopFraction(ops, i, states)) remove.add(i);
   }
   if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
   return {
@@ -101,7 +140,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-fraction-restore",
-        detail: `Removed ${remove.size} К {x} op(s) already supplied by a ВП/X2 boundary.`,
+        detail: `Removed ${remove.size} redundant К {x} op(s) already supplied by a ВП/X2 boundary or proved fractional X value.`,
       },
     ],
   };

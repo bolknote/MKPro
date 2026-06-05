@@ -13038,6 +13038,58 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-x2-peephole removes a no-op К {x} for a proved closed fractional X value", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole keeps no-op-looking К {x} during active fractional entry", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0x35, "К {x}"),
+      plain(0x06, "6"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-x2-peephole keeps a fractional no-op К {x} when its X2 sync reaches dot", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-x2-peephole removes К {x} after a proved boundary through transparent direct-return helpers", () => {
     const program: IrOp[] = [
       jump("main"),
