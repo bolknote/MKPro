@@ -1139,7 +1139,7 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2ValueStateText(states[2]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:1"]);
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["reg:1"]);
     expect(x2ValueStateText(states[3]?.x)).toEqual(["reg:1"]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["reg:1"]);
@@ -1157,7 +1157,7 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2ValueStateText(states[3]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:2"]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:02:unnormalized"]);
     expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:02:unnormalized"]);
@@ -1243,13 +1243,13 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2ValueStateText(states[1]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[1]?.x)).toEqual(["expr:0"]);
     expect(x2ValueStateText(states[1]?.x2)).toEqual([]);
-    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:1"]);
-    expect(x2ValueStateText(states[2]?.x2)).toEqual(["expr:1"]);
-    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:1", "reg:2"]);
-    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:1", "reg:2"]);
-    expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:1", "reg:2"]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:0"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["expr:0"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:0", "reg:2"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:0", "reg:2"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:0", "reg:2"]);
   });
 
   it("x2 value dataflow keeps opaque X/X2 equality through closed sign-change", () => {
@@ -1262,12 +1262,46 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:1"]);
-    expect(x2ValueStateText(states[2]?.x2)).toEqual(["expr:1"]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:0"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["expr:0"]);
     expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:2"]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:2"]);
     expect(x2ValueStateText(states[4]?.x)).toEqual(["expr:2", "reg:2"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:2", "reg:2"]);
+  });
+
+  it("x2 value dataflow seeds opaque expr facts from pure unary X computations", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      store("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:1"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:1"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:1"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["expr:1", "reg:2"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:1", "reg:2"]);
+  });
+
+  it("x2 value dataflow does not seed expr facts from non-whitelisted or role-bearing plain ops", () => {
+    const randomProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x3b, "К СЧ"),
+      halt(),
+    ];
+    const displayProgram: IrOp[] = [
+      plain(0x02, "2"),
+      { kind: "plain", opcode: 0x21, meta: { mnemonic: "F sqrt", roles: ["display-byte"] } },
+      halt(),
+    ];
+
+    expect(x2ValueStateText(computeX2ValueStates(randomProgram)[2]?.x)).toEqual([]);
+    expect(x2ValueStateText(computeX2ValueStates(displayProgram)[2]?.x)).toEqual([]);
   });
 
   it("x2 value dataflow models closed decimal sign-change after X2 sync", () => {
@@ -2170,10 +2204,10 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program, { trackRegisterMemory: true });
 
-    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:1", "reg:1"]);
-    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:1", "reg:1"]);
-    expect(x2ValueStateText(states[5]?.x)).toEqual(["expr:1", "reg:1"]);
-    expect(x2ValueStateText(states[5]?.x2)).toEqual(["expr:1", "reg:1"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:0", "reg:1"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:0", "reg:1"]);
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["expr:0", "reg:1"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["expr:0", "reg:1"]);
   });
 
   it("recall value proof treats stored expr facts as value syncs", () => {
@@ -2515,6 +2549,26 @@ describe("ir passes on synthetic programs", () => {
       plain(0x35, "К {x}"),
       plain(0x0e, "В↑"),
       plain(0x0b, "/-/"),
+      store("2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore uses pure-unary expr facts after an explicit X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
       store("2"),
       plain(0x20, "Fπ"),
       plain(0x20, "Fπ"),

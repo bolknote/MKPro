@@ -101,6 +101,30 @@ const SAME_UNKNOWN_VALUE: X2ValueFact = "same:unknown";
 const X2_SIGN_CHANGE_OPCODE = 0x0b;
 const X2_EMPTY_OPCODE_START = 0x54;
 const X2_EMPTY_OPCODE_END = 0x56;
+const PURE_UNARY_OPAQUE_EXPR_OPCODES = new Set<number>([
+  0x15, // F 10^x
+  0x16, // F e^x
+  0x17, // F lg
+  0x18, // F ln
+  0x19, // F sin^-1
+  0x1a, // F cos^-1
+  0x1b, // F tg^-1
+  0x1c, // F sin
+  0x1d, // F cos
+  0x1e, // F tg
+  0x21, // F sqrt
+  0x22, // F x^2
+  0x23, // F 1/x
+  0x26, // К °->′
+  0x2a, // К °->′"
+  0x30, // К °<-′"
+  0x31, // К |x|
+  0x32, // К ЗН
+  0x33, // К °<-′
+  0x34, // К [x]
+  0x35, // К {x}
+  0x3a, // К ИНВ
+]);
 const REGISTER_NAMES: readonly RegisterName[] = [
   "0",
   "1",
@@ -483,6 +507,28 @@ export function plainPreservesXValue(op: Extract<IrOp, { kind: "plain" }>): bool
   if (op.opcode === 0x0e) return true;
   if (op.opcode >= 0xf0 && op.opcode <= 0xff) return true;
   return op.opcode >= 0x54 && op.opcode <= 0x56;
+}
+
+function plainProducesOpaqueExpressionValue(
+  op: Extract<IrOp, { kind: "plain" }>,
+  producerIndex: number | undefined,
+): X2ValueFact | undefined {
+  if (producerIndex === undefined) return undefined;
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return undefined;
+  if (!PURE_UNARY_OPAQUE_EXPR_OPCODES.has(op.opcode)) return undefined;
+  const info = getOpcode(op.opcode);
+  if (info.risk !== "documented" || info.stackEffect !== "preserves" || info.x2Effect !== "preserves") {
+    return undefined;
+  }
+  return expressionValueFact(producerIndex);
+}
+
+function plainXValueAfterNonPreservingOp(
+  op: Extract<IrOp, { kind: "plain" }>,
+  producerIndex: number | undefined,
+): Set<X2ValueFact> {
+  const opaque = plainProducesOpaqueExpressionValue(op, producerIndex);
+  return opaque === undefined ? new Set() : new Set([opaque]);
 }
 
 export function analyzeX2StackEffect(op: IrOp | undefined): X2StackEffectAnalysis {
@@ -2210,7 +2256,9 @@ function transferPlainX2ValueState(
   const effect = plainX2Effect(op);
   const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
   if (closedExponentValues.size > 0) {
-    const x = plainPreservesXValue(op) ? new Set(closedExponentValues) : new Set<X2ValueFact>();
+    const x = plainPreservesXValue(op)
+      ? new Set(closedExponentValues)
+      : plainXValueAfterNonPreservingOp(op, producerIndex);
     const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
     const xShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
     const x2 = effect === "preserves"
@@ -2236,7 +2284,9 @@ function transferPlainX2ValueState(
   }
   const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
   if (closedExponentShapes.size > 0) {
-    const x = new Set<X2ValueFact>();
+    const x = plainPreservesXValue(op)
+      ? new Set<X2ValueFact>()
+      : plainXValueAfterNonPreservingOp(op, producerIndex);
     const xShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
     const x2Shape = transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes);
     return {
@@ -2255,7 +2305,7 @@ function transferPlainX2ValueState(
     };
   }
   const x = syncUnknownSameValue(
-    plainPreservesXValue(op) ? new Set(input.x) : new Set<X2ValueFact>(),
+    plainPreservesXValue(op) ? new Set(input.x) : plainXValueAfterNonPreservingOp(op, producerIndex),
     effect,
     producerIndex,
   );
@@ -2265,10 +2315,13 @@ function transferPlainX2ValueState(
   const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
   if (structuralEntry.kind === "exponent") {
     const closedStructuralShapes = structuralExponentEntryShapeFacts(structuralEntry);
+    const structuralXValue = plainPreservesXValue(op)
+      ? new Set<X2ValueFact>()
+      : plainXValueAfterNonPreservingOp(op, producerIndex);
     const structuralXShape = plainPreservesXValue(op) ? new Set(closedStructuralShapes) : new Set<X2ShapeFact>();
     const structuralX2Shape = transferPlainX2ShapeSet(input, structuralXShape, effect, closedStructuralShapes);
     return {
-      x: new Set(),
+      x: structuralXValue,
       x2: new Set(),
       xShape: structuralXShape,
       x2Shape: structuralX2Shape,
