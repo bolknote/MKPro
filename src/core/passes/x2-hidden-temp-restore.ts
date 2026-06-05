@@ -52,7 +52,13 @@ const run: IrPassFn = (ops) => {
     if (liveness.liveOut[index]?.has(register) === true) return op;
     const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index]);
     if (removal === undefined) return op;
-    const sourceAlreadySynced = hiddenTempStoreSourceAlreadySyncedInX2(x2ValueStates[storeIndex], x2ValueStates[index]);
+    const sourceAlreadySynced = hiddenTempStoreSourceAlreadySyncedInX2(
+      ops,
+      storeIndex,
+      index,
+      x2ValueStates[storeIndex],
+      x2ValueStates[index],
+    );
     const sourceAlreadyDotSafe = hiddenTempStoreSourceAlreadyDotSafeInX2(
       x2ValueStates[storeIndex],
       x2ValueStates[index],
@@ -117,12 +123,18 @@ function dotRestoreOp(register: RegisterName, source: IrOp): IrOp {
 }
 
 function hiddenTempStoreSourceAlreadySyncedInX2(
+  ops: readonly IrOp[],
+  storeIndex: number,
+  recallIndex: number,
   storeState: X2ValueDataflowState | undefined,
   recallState: X2ValueDataflowState | undefined,
 ): boolean {
   if (storeState === undefined || recallState === undefined) return false;
   for (const fact of storeState.x) {
-    if (!isStableStoredSourceFact(fact)) continue;
+    if (
+      !isStableStoredSourceFact(fact) &&
+      !isStableRegisterStoredSourceFact(ops, storeIndex, recallIndex, fact)
+    ) continue;
     if (recallState.x2.has(fact)) return true;
   }
   return false;
@@ -150,6 +162,45 @@ function hiddenTempStoreSourceRestoresSameVisibleDecimalFromX2(
 function isStableStoredSourceFact(fact: X2ValueFact): boolean {
   return fact.startsWith("expr:") || fact.startsWith("expr-key:") ||
     (fact.startsWith("decimal:") && fact.endsWith(":normalized"));
+}
+
+function isStableRegisterStoredSourceFact(
+  ops: readonly IrOp[],
+  storeIndex: number,
+  recallIndex: number,
+  fact: X2ValueFact,
+): boolean {
+  const register = registerSourceValueFact(fact);
+  return register !== undefined && !registerMayBeOverwrittenBetween(ops, storeIndex + 1, recallIndex, register);
+}
+
+function registerSourceValueFact(fact: X2ValueFact): RegisterName | undefined {
+  const match = /^reg:([0-9a-e])$/u.exec(fact);
+  return match?.[1] as RegisterName | undefined;
+}
+
+function registerMayBeOverwrittenBetween(
+  ops: readonly IrOp[],
+  start: number,
+  end: number,
+  register: RegisterName,
+): boolean {
+  for (let index = start; index < end; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label" || op.kind === "orphan-address") continue;
+    if (op.kind === "store") {
+      if (op.register === register) return true;
+      continue;
+    }
+    if (op.kind === "indirect-store") {
+      const target = knownIndirectMemoryTarget(op);
+      if (target === undefined || target === register || op.register === register) return true;
+      continue;
+    }
+    if (op.kind === "loop" && loopCounterRegister(op.counter) === register) return true;
+    if (stopsStraightLineSearch(op)) return true;
+  }
+  return false;
 }
 
 function isNormalizedDecimalFact(fact: X2ValueFact): boolean {

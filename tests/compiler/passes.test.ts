@@ -1612,6 +1612,41 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
   });
 
+  it("x2-hidden-temp-restore uses stable register sources after a later X2 sync", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("1"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[4]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps register-source recalls after the source register is overwritten", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      plain(0x05, "5"),
+      store("1"),
+      recall("1"),
+      plain(0x10, "+"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+
+    expect(restored.applied).toBe(0);
+    expect(restored.ops).toEqual(program);
+  });
+
   it("x2 value dataflow seeds stable expr keys from structural shape operands", () => {
     const program: IrOp[] = [
       recall("1", "preload const FABC"),
