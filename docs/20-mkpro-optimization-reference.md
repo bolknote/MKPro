@@ -910,7 +910,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     signed digit-runs, and normalized exponent-entry literals such as
     `5 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
-    X2-affecting sync. Leading-zero exponent mantissas are normalized after
+    X2-affecting sync. A repeated normalized non-zero digit run may also be
+    replaced before a free-standing `КНОП`/`К1`/`К2` gap followed by `ВП`:
+    emulator tests prove that the inserted `.` preserves the same mantissa
+    source for that empty-op exponent entry. Leading-zero and signed-zero forms
+    are excluded from this shortcut because their restored mantissa shape is
+    observable. Leading-zero exponent mantissas are normalized after
     that closing sync (`05 ВП 3` -> `5000`, `00 ВП 3` -> `10000`), but active
     exponent-entry X2 remains shape-only because an immediate `.` can still
     signal `ЕГГ0Г`. Too-wide exponent forms, display/raw bytes, and later

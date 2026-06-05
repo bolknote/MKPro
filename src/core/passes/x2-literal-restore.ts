@@ -24,6 +24,7 @@ interface NumericLiteralRun {
   readonly end: number;
   readonly displayValue: string;
   readonly x2Fact: X2ValueFact;
+  readonly dotPreservesVpEntrySource: boolean;
 }
 
 function isPlainDigit(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
@@ -71,11 +72,12 @@ function decimalLiteralRunAt(ops: readonly IrOp[], start: number): NumericLitera
   if (normalized === undefined) return undefined;
   const x2Fact = decimalEntryFact(raw);
   if (x2Fact === undefined) return undefined;
+  const dotPreservesVpEntrySource = raw === normalized && normalized !== "0";
   if (sign === "") {
     if (digits.length < 2) return undefined;
-    return { end: end - 1, displayValue: raw, x2Fact };
+    return { end: end - 1, displayValue: raw, x2Fact, dotPreservesVpEntrySource };
   }
-  return { end, displayValue: raw, x2Fact };
+  return { end, displayValue: raw, x2Fact, dotPreservesVpEntrySource };
 }
 
 function exponentLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiteralRun | undefined {
@@ -105,7 +107,12 @@ function exponentLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiter
 
   const value = normalizedExponentEntryValue(`${mantissaSign}${mantissaDigits.join("")}`, `${exponentSign}${exponentDigits.join("")}`);
   if (value === undefined) return undefined;
-  return { end: cursor - 1, displayValue: value, x2Fact: decimalValueFact(value, "normalized") };
+  return {
+    end: cursor - 1,
+    displayValue: value,
+    x2Fact: decimalValueFact(value, "normalized"),
+    dotPreservesVpEntrySource: false,
+  };
 }
 
 function literalRunAt(ops: readonly IrOp[], start: number): NumericLiteralRun | undefined {
@@ -176,6 +183,41 @@ function x2ValueSetHasFact(input: X2ValueSet | undefined, fact: X2ValueFact): bo
   return input?.has(fact) === true;
 }
 
+function isFreeStandingEmptyOp(op: IrOp): boolean {
+  return op.kind === "plain" &&
+    op.opcode >= 0x54 &&
+    op.opcode <= 0x56 &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    !hasRoles(op);
+}
+
+function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
+  return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
+}
+
+function hasOnlyEmptyGapBeforeVp(ops: readonly IrOp[], start: number): boolean {
+  let sawEmpty = false;
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    if (isFreeStandingEmptyOp(op)) {
+      sawEmpty = true;
+      continue;
+    }
+    return sawEmpty && isPlainVp(op);
+  }
+  return false;
+}
+
+function replacingLiteralCanExposeContextSensitiveRestore(
+  ops: readonly IrOp[],
+  run: NumericLiteralRun,
+): boolean {
+  if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
+  return !run.dotPreservesVpEntrySource || !hasOnlyEmptyGapBeforeVp(ops, run.end + 1);
+}
+
 function dotRestoreOp(value: string, source: IrOp): IrOp {
   const sourceComment = "meta" in source ? source.meta.comment : undefined;
   return {
@@ -204,7 +246,7 @@ const run: IrPassFn = (ops) => {
       x2CanUseDotRestoreAt(ops, index, state, dotSafeStates[index] === true, immediateSyncStates[index] === true) &&
       x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
-      !x2SyncCanExposeContextSensitiveRestore(ops, runAtIndex.end)
+      !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex)
     ) {
       result.push(dotRestoreOp(runAtIndex.displayValue, ops[index]!));
       removed += runAtIndex.end - index;
