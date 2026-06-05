@@ -5,12 +5,16 @@ import {
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
+  isKnownReturnCallOp,
+  knownReturnCallReturnsThroughTransparentRange,
+  plainPreservesXValue,
   removingRecallCanExposeX2Restore,
   removingPreShiftLiftCanExposeStack,
   removingStackLiftCanExposeStack,
   type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
+  type KnownReturnCallOp,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
 } from "./helpers.ts";
@@ -69,7 +73,7 @@ function previousProducerAlreadySuppliesLiftX2Sync(
   for (let index = liftIndex - 1; index >= 0; index -= 1) {
     const previous = ops[index]!;
     if (producerSuppliesLiftX2Sync(previous)) return true;
-    if (!isBackwardStackLiftX2SyncGap(previous, index, context)) return false;
+    if (!isBackwardStackLiftX2SyncGap(ops, previous, index, context)) return false;
   }
   return false;
 }
@@ -81,12 +85,14 @@ function producerSuppliesLiftX2Sync(op: IrOp): boolean {
 }
 
 function isBackwardStackLiftX2SyncGap(
+  ops: readonly IrOp[],
   op: IrOp,
   index: number,
   context: DirectReturnAnalysisContext,
 ): boolean {
   if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
   if (op.kind === "label") return !context.labelEntries.has(index);
+  if (isKnownReturnCallOp(op)) return directReturnPreservesStackXAndX2(ops, op, context);
   switch (op.kind) {
     case "store":
     case "indirect-store":
@@ -94,7 +100,37 @@ function isBackwardStackLiftX2SyncGap(
       return true;
     case "plain": {
       const effect = analyzeX2StackEffect(op);
-      return effect.stackPreserves && effect.x2Preserves;
+      return effect.stackPreserves && effect.x2Preserves && plainPreservesXValue(op);
+    }
+    default:
+      return false;
+  }
+}
+
+function directReturnPreservesStackXAndX2(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return knownReturnCallReturnsThroughTransparentRange(
+    ops,
+    call,
+    context,
+    (op) => isLinearStackXAndX2PreservingOp(op),
+  );
+}
+
+function isLinearStackXAndX2PreservingOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  switch (op.kind) {
+    case "label":
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain": {
+      const effect = analyzeX2StackEffect(op);
+      return effect.stackPreserves && effect.x2Preserves && plainPreservesXValue(op);
     }
     default:
       return false;

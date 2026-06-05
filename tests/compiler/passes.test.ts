@@ -7347,6 +7347,20 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("pre-shift-stack-lift stops post-producer scanning at X-changing gaps", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x22, "F x^2"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift stops post-producer scanning at targeted entry labels", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -7356,6 +7370,85 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0a, "."),
       halt(),
       jump("entry"),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift removes post-producer В↑ through X-preserving direct-return helpers", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      store("2"),
+      ret(),
+      label("main"),
+      recall("1"),
+      call("noop"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      store("2"),
+      ret(),
+      label("main"),
+      recall("1"),
+      call("noop"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift removes post-producer В↑ through proved indirect-return helpers", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      recall("1"),
+      knownTargetIndirectCall("7", 2),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      recall("1"),
+      knownTargetIndirectCall("7", 2),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps post-producer В↑ before helpers that change X", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      recall("1"),
+      call("square"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
     ];
     const result = preShiftStackLift.run(program, ctx);
 
