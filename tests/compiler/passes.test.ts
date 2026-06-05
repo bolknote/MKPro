@@ -7460,12 +7460,13 @@ describe("ir passes on synthetic programs", () => {
       plain(0x03, "3"),
       plain(0x20, "Fπ"),
       plain(0x54, "КНОП"),
+      plain(0x55, "К1"),
       plain(0x0d, "Cx"),
       halt(),
     ];
     const result = vpSplice.run(program, ctx);
 
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
@@ -7487,11 +7488,32 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = vpSplice.run(program, ctx);
 
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice preserves labels while removing proved VP-context empty separators", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x55, "К1"),
+      label("entry"),
       plain(0x56, "К2"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      label("entry"),
       plain(0x0d, "Cx"),
       halt(),
     ]);

@@ -118,12 +118,27 @@ function canRemoveX2RestoreSignBeforeDeadOverwrite(
   return x2StateHasX2RestoreContext(state) && isFollowedByHardX2OverwriteWithoutStackUse(ops, signIndex + 1);
 }
 
-function canRemoveX2ContextEmptyBeforeDeadOverwrite(
+function x2ContextEmptyRunBeforeDeadOverwrite(
   ops: readonly IrOp[],
   emptyIndex: number,
   state: X2ValueDataflowState | undefined,
-): boolean {
-  return x2StateHasX2RestoreContext(state) && isFollowedByHardX2OverwriteWithoutStackUse(ops, emptyIndex + 1);
+): readonly number[] {
+  if (!x2StateHasX2RestoreContext(state)) return [];
+  const emptyIndexes: number[] = [];
+  for (let index = emptyIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (isFreeStandingEmptyOp(op)) {
+      emptyIndexes.push(index);
+      continue;
+    }
+    if (op.kind === "label") {
+      return emptyIndexes.length > 0 && isFollowedByHardX2OverwriteWithoutStackUse(ops, index + 1)
+        ? emptyIndexes
+        : [];
+    }
+    return emptyIndexes.length > 0 && isHardX2OverwriteWithoutStackUse(op) ? emptyIndexes : [];
+  }
+  return [];
 }
 
 function isFollowedByHardX2OverwriteWithoutStackUse(ops: readonly IrOp[], start: number): boolean {
@@ -226,12 +241,12 @@ const run: IrPassFn = (ops) => {
     // A VP/X2-context empty separator is inert before the same kind of hard
     // overwrite: its only remaining role would be previous-command context, and
     // that context is destroyed together with X/X2.
-    if (
-      isFreeStandingEmptyOp(cur) &&
-      canRemoveX2ContextEmptyBeforeDeadOverwrite(ops, i, x2ValueStates[i])
-    ) {
-      remove.add(i);
-      continue;
+    if (isFreeStandingEmptyOp(cur)) {
+      const emptyRun = x2ContextEmptyRunBeforeDeadOverwrite(ops, i, x2ValueStates[i]);
+      if (emptyRun.length > 0) {
+        for (const emptyIndex of emptyRun) remove.add(emptyIndex);
+        continue;
+      }
     }
     // In exponent-entry mode /-/ only toggles the exponent sign. Adjacent toggles
     // cancel; outside exponent-entry this is not safe before following digits.
