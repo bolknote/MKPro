@@ -122,9 +122,10 @@ function x2ContextRestoreRunBeforeFreshDigit(
   ops: readonly IrOp[],
   startIndex: number,
   state: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
 ): readonly number[] {
   if (!analyzeX2VpShapeContext(state).canDiscardRestoreBeforeFreshDigit) return [];
-  return x2ContextRestoreRunBefore(ops, startIndex, isDecimalDigit);
+  return x2ContextRestoreRunBeforeFreshDigitEntry(ops, startIndex, context);
 }
 
 function x2ContextRestoreRunBeforeDeadOverwrite(
@@ -137,10 +138,10 @@ function x2ContextRestoreRunBeforeDeadOverwrite(
   return x2ContextRestoreRunBeforeHardOverwrite(ops, startIndex, context);
 }
 
-function x2ContextRestoreRunBefore(
+function x2ContextRestoreRunBeforeFreshDigitEntry(
   ops: readonly IrOp[],
   startIndex: number,
-  terminator: (op: IrOp) => boolean,
+  context: DirectReturnAnalysisContext,
 ): readonly number[] {
   const removableIndexes: number[] = [];
   for (let index = startIndex; index < ops.length; index += 1) {
@@ -150,7 +151,8 @@ function x2ContextRestoreRunBefore(
       continue;
     }
     if (op.kind === "label") continue;
-    return removableIndexes.length > 0 && terminator(op) ? removableIndexes : [];
+    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    return removableIndexes.length > 0 && isDecimalDigit(op) ? removableIndexes : [];
   }
   return [];
 }
@@ -333,7 +335,7 @@ const run: IrPassFn = (ops) => {
     // new number. Active exponent-entry is excluded because a following digit
     // is an exponent digit there, not fresh mantissa entry.
     if (isFreeStandingEmptyOp(cur) || isFreeStandingSignChange(cur)) {
-      const restoreRun = x2ContextRestoreRunBeforeFreshDigit(ops, i, x2ValueStates[i]);
+      const restoreRun = x2ContextRestoreRunBeforeFreshDigit(ops, i, x2ValueStates[i], context);
       if (restoreRun.length > 0) {
         for (const runIndex of restoreRun) remove.add(runIndex);
         continue;

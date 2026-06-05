@@ -10497,6 +10497,98 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes VP-context restore runs before transparent direct-return helpers and fresh digit entry", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      call("transparent"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      call("transparent"),
+      plain(0x04, "4"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes VP-context restore runs before proved indirect-return helpers and fresh digit entry", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      knownTargetIndirectCall("7", 2),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      knownTargetIndirectCall("7", 2),
+      plain(0x04, "4"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps VP-context restore runs before direct-return helpers that observe X", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("observer"),
+      store("1"),
+      ret(),
+      label("main"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      call("observer"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-splice keeps an active exponent sign before an exponent digit", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),

@@ -1091,10 +1091,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     be dropped before a fresh digit (`5 ВП 3 Fπ /-/ 4`,
     `5 ВП 3 Fπ /-/ КНОП 4`, `5 ВП 3 Fπ /-/ /-/ КНОП 4`), because that digit
     starts new number entry and discards the restored `X`; labels inside the
-    run are preserved. The same kind of restore run is likewise removed before
-    a proved hard X/X2 overwrite such as `Cx`, including across a simple direct
-    `ПП` helper that reaches `В/О` through only restore-transparent
-    empty/address cells.
+    run are preserved. The fresh-digit proof can cross the same simple direct
+    or proved-indirect `ПП` helper shape when the helper reaches `В/О` through
+    only restore-transparent empty/address cells, because the helper cannot
+    observe the restored `X` and the following digit starts fresh entry. The
+    same kind of restore run is likewise removed before a proved hard X/X2
+    overwrite such as `Cx`, including across that transparent return-helper
+    shape.
     The after-digit separator
     rewrite is deliberately shape-sensitive: the same empty op before the
     first exponent digit, or before another exponent digit, changes number
