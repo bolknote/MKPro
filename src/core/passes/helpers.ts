@@ -97,6 +97,9 @@ type X2ShapeMemory = Partial<Record<RegisterName, X2ShapeSet>>;
 
 const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
 const SAME_UNKNOWN_VALUE: X2ValueFact = "same:unknown";
+const X2_SIGN_CHANGE_OPCODE = 0x0b;
+const X2_EMPTY_OPCODE_START = 0x54;
+const X2_EMPTY_OPCODE_END = 0x56;
 const REGISTER_NAMES: readonly RegisterName[] = [
   "0",
   "1",
@@ -284,6 +287,10 @@ export function isDisplayFocusSensitive(op: IrOp): boolean {
     op.meta.roles?.includes("display-byte") === true ||
     /\b(display|screen|show|x2|вп)\b/iu.test(op.meta.comment ?? "")
   );
+}
+
+function hasIrRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
+  return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
 }
 
 export function knownIndirectMemoryTarget(op: IrOp): RegisterName | undefined {
@@ -692,6 +699,52 @@ export function x2StateHasSameStructuralShapeInXAndX2(state: X2ValueDataflowStat
 
 export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefined): boolean {
   return state?.entry.kind === "closed" && (state.vpContext === undefined || state.vpContext.kind === "none");
+}
+
+export function x2StateHasSameDotRestoreValueInXAndX2(state: X2ValueDataflowState | undefined): boolean {
+  return x2ValueSetHasIntersection(state?.x, state?.x2) || x2StateHasSameDotSafeDecimalInXAndX2(state);
+}
+
+export function x2CanUseDotRestoreAt(
+  ops: readonly IrOp[],
+  index: number,
+  state: X2ValueDataflowState | undefined,
+  dotSafe: boolean,
+  immediateSync: boolean,
+): boolean {
+  return dotSafe || immediateSync || x2CanUseClosedSignChangeDotSourceAt(ops, index, state);
+}
+
+export function x2CanUseClosedSignChangeDotSourceAt(
+  ops: readonly IrOp[],
+  index: number,
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const op = ops[cursor]!;
+    if (op.kind === "label") continue;
+    if (isFreeStandingX2EmptyOp(op)) continue;
+    if (hasRewriteBarrier(op)) return false;
+    return isFreeStandingX2SignChange(op) &&
+      x2StateIsClosedPlainContext(state) &&
+      x2StateHasSameDotRestoreValueInXAndX2(state);
+  }
+  return false;
+}
+
+function isFreeStandingX2SignChange(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
+  return op.kind === "plain" &&
+    op.opcode === X2_SIGN_CHANGE_OPCODE &&
+    !hasRewriteBarrier(op) &&
+    !hasIrRoles(op);
+}
+
+function isFreeStandingX2EmptyOp(op: IrOp): boolean {
+  return op.kind === "plain" &&
+    op.opcode >= X2_EMPTY_OPCODE_START &&
+    op.opcode <= X2_EMPTY_OPCODE_END &&
+    !hasRewriteBarrier(op) &&
+    !hasIrRoles(op);
 }
 
 export function x2StateHasDecimalVpEntrySource(state: X2ValueDataflowState | undefined): boolean {

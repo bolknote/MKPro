@@ -3568,6 +3568,29 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore uses modeled closed sign-change as a dot source", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      store("2"),
+      plain(0x20, "Fπ"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x55, "К 1"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[9]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2-hidden-temp-restore handles stable indirect scratch stores and recalls", () => {
     const program: IrOp[] = [
       recall("1"),

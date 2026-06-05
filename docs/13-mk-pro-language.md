@@ -1383,7 +1383,9 @@ The pipeline currently contains:
   use register value-memory when X2 already contains the same proved decimal
   fact as the scratch register, even if there is no live `reg:r` alias. A separate
   `.` restore-gap proof must have seen two safe X2-preserving executable steps
-  after the last X2 sync, and the normal stack-lift/X2-context guards prove that
+  after the last X2 sync; alternatively, the shared X2 model can prove a
+  closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2`
+  empty ops. The normal stack-lift/X2-context guards still prove that
   the recall's stack shift and previous-command class are not observable. The
   scratch-store search can cross a direct conditional or counted-loop test when
   the recall sits on the fallthrough path: the shared path-sensitive X2 proof

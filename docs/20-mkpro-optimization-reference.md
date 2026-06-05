@@ -696,7 +696,9 @@ Display rewrites are separated into strategy selection + body lowering.
   stable-indirect proved scratch `К П->X R7..Re`, into `.` when X2 already
   contains `r`, and either a `.` restore-gap dataflow has seen two safe
   X2-preserving executable steps after the last X2 sync or CFG proves the
-  recall starts immediately after an X2 sync. The normal stack-lift/context
+  recall starts immediately after an X2 sync, or the shared X2 shape model
+  proves a closed-context `/-/` dot source through only free-standing
+  `КНОП`/`К1`/`К2` empty ops. The normal stack-lift/context
   guards still prove that the recall's stack shift and previous-command class
   are dead. The proof can come from either X2-register dataflow or the stricter
   X2 value dataflow, so a prior closed-context `.` restore keeps the hidden
@@ -883,7 +885,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     for later recalls, joins keep only facts common to every path, and unknown
     indirect stores clear the memory. Hex-like preload facts remain shape-only,
     so they do not make `.`/`/-/` dead-restore candidates.
-19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap or a CFG-proven immediate X2 sync is available, while also proving the recall stack lift is unobserved. This lets later DSE remove now-unused scratch stores.
+19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. This lets later DSE remove now-unused scratch stores.
 20. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is
     already in the hidden X2 register, the dot-restore gap is safe (or CFG

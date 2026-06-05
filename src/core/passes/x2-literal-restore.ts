@@ -7,10 +7,8 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   replacingNumberEntryCanExposeStackLift,
+  x2CanUseDotRestoreAt,
   x2SyncCanExposeContextSensitiveRestore,
-  x2StateHasSameDotSafeDecimalInXAndX2,
-  x2StateIsClosedPlainContext,
-  x2ValueSetHasIntersection,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
@@ -50,25 +48,6 @@ function isPlainVp(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }>
     op.opcode === VP &&
     !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op);
-}
-
-function isFreeStandingEmptyOp(op: IrOp): boolean {
-  return op.kind === "plain" &&
-    op.opcode >= 0x54 &&
-    op.opcode <= 0x56 &&
-    !hasRewriteBarrier(op) &&
-    !hasRoles(op);
-}
-
-function isFreeStandingSignChange(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
-  return op.kind === "plain" &&
-    op.opcode === SIGN_CHANGE &&
-    !hasRewriteBarrier(op) &&
-    !hasRoles(op);
-}
-
-function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
-  return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
 }
 
 function isFreshClosedDecimalEntry(state: X2ValueDataflowState | undefined): boolean {
@@ -197,33 +176,6 @@ function x2ValueSetHasFact(input: X2ValueSet | undefined, fact: X2ValueFact): bo
   return input?.has(fact) === true;
 }
 
-function canUseDotRestoreAt(
-  ops: readonly IrOp[],
-  index: number,
-  state: X2ValueDataflowState | undefined,
-  dotSafe: boolean,
-  immediateSync: boolean,
-): boolean {
-  return dotSafe || immediateSync || isAfterModeledSignChangeThroughEmptyOps(ops, index, state);
-}
-
-function isAfterModeledSignChangeThroughEmptyOps(
-  ops: readonly IrOp[],
-  index: number,
-  state: X2ValueDataflowState | undefined,
-): boolean {
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const op = ops[cursor]!;
-    if (op.kind === "label") continue;
-    if (isFreeStandingEmptyOp(op)) continue;
-    if (hasRewriteBarrier(op)) return false;
-    return isFreeStandingSignChange(op) &&
-      x2StateIsClosedPlainContext(state) &&
-      (x2ValueSetHasIntersection(state?.x, state?.x2) || x2StateHasSameDotSafeDecimalInXAndX2(state));
-  }
-  return false;
-}
-
 function dotRestoreOp(value: string, source: IrOp): IrOp {
   const sourceComment = "meta" in source ? source.meta.comment : undefined;
   return {
@@ -249,7 +201,7 @@ const run: IrPassFn = (ops) => {
     if (
       runAtIndex !== undefined &&
       isFreshClosedDecimalEntry(state) &&
-      canUseDotRestoreAt(ops, index, state, dotSafeStates[index] === true, immediateSyncStates[index] === true) &&
+      x2CanUseDotRestoreAt(ops, index, state, dotSafeStates[index] === true, immediateSyncStates[index] === true) &&
       x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
       !x2SyncCanExposeContextSensitiveRestore(ops, runAtIndex.end)
