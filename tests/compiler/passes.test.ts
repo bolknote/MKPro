@@ -2224,6 +2224,78 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2 value dataflow models exact documented function special cases", () => {
+    const unaryCases: Array<{
+      readonly name: string;
+      readonly input: IrOp[];
+      readonly op: IrOp;
+      readonly index: number;
+      readonly expected: string;
+    }> = [
+      { name: "e^0", input: [plain(0x00, "0")], op: plain(0x16, "F e^x"), index: 2, expected: "decimal:1:normalized" },
+      { name: "lg(1)", input: [plain(0x01, "1")], op: plain(0x17, "F lg"), index: 2, expected: "decimal:0:normalized" },
+      { name: "ln(1)", input: [plain(0x01, "1")], op: plain(0x18, "F ln"), index: 2, expected: "decimal:0:normalized" },
+      { name: "asin(0)", input: [plain(0x00, "0")], op: plain(0x19, "F sin^-1"), index: 2, expected: "decimal:0:normalized" },
+      { name: "acos(1)", input: [plain(0x01, "1")], op: plain(0x1a, "F cos^-1"), index: 2, expected: "decimal:0:normalized" },
+      { name: "atan(0)", input: [plain(0x00, "0")], op: plain(0x1b, "F tg^-1"), index: 2, expected: "decimal:0:normalized" },
+      { name: "sin(0)", input: [plain(0x00, "0")], op: plain(0x1c, "F sin"), index: 2, expected: "decimal:0:normalized" },
+      { name: "cos(0)", input: [plain(0x00, "0")], op: plain(0x1d, "F cos"), index: 2, expected: "decimal:1:normalized" },
+      { name: "tg(0)", input: [plain(0x00, "0")], op: plain(0x1e, "F tg"), index: 2, expected: "decimal:0:normalized" },
+    ];
+
+    for (const { input, op, index, expected } of unaryCases) {
+      const states = computeX2ValueStates([...input, op, halt()]);
+      expect(x2ValueStateText(states[index]?.x), op.meta.mnemonic).toContain(expected);
+    }
+
+    const nonSpecial = computeX2ValueStates([
+      plain(0x02, "2"),
+      plain(0x16, "F e^x"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(nonSpecial[2]?.x)).toEqual([
+      "expr-key:16(decimal:2:normalized)",
+      "expr:1",
+    ]);
+  });
+
+  it("x2 value dataflow models exact F x^y identity cases only", () => {
+    const baseOneProgram: IrOp[] = [
+      plain(0x07, "7"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x24, "F x^y"),
+      halt(),
+    ];
+    const exponentZeroProgram: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x24, "F x^y"),
+      halt(),
+    ];
+    const approximateProgram: IrOp[] = [
+      plain(0x03, "3"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x24, "F x^y"),
+      halt(),
+    ];
+
+    expect(x2ValueStateText(computeX2ValueStates(baseOneProgram)[4]?.x)).toEqual([
+      "decimal:1:normalized",
+      "expr:3",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(exponentZeroProgram)[4]?.x)).toEqual([
+      "decimal:1:normalized",
+      "expr:3",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(approximateProgram)[4]?.x)).toEqual([
+      "expr-key:24(decimal:3:normalized,decimal:2:normalized)",
+      "expr:3",
+    ]);
+  });
+
   it("x2 value dataflow does not seed expr facts from non-whitelisted or role-bearing plain ops", () => {
     const randomProgram: IrOp[] = [
       plain(0x02, "2"),
@@ -5690,6 +5762,50 @@ describe("ir passes on synthetic programs", () => {
       plain(0x34, "К [x]"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 3.0 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses exact documented function special-case X2 facts", () => {
+    const cosZeroProgram: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x1d, "F cos"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const powIdentityProgram: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x24, "F x^y"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const cosZeroResult = x2LiteralRestore.run(cosZeroProgram, ctx);
+    const powIdentityResult = x2LiteralRestore.run(powIdentityProgram, ctx);
+
+    expect(cosZeroResult.applied).toBe(2);
+    expect(cosZeroResult.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x1d, "F cos"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.0 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(powIdentityResult.applied).toBe(2);
+    expect(powIdentityResult.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x24, "F x^y"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.0 from hidden X2 temp" } },
       halt(),
     ]);
   });

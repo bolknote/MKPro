@@ -805,10 +805,13 @@ Display rewrites are separated into strategy selection + body lowering.
   additionally seed a stable `expr-key:<opcode>(<source>)` fact when the source
   is a proved register, normalized decimal, or earlier stable expression key.
   The documented `F pi` stack producer seeds both the stable `expr-key:20()`
-  and the hardware decimal constant `3.1415926`. For concrete normalized
-  decimal `X`, `F x^2`, finite `F 1/x`, perfect-square `F sqrt`,
-  integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and `К [x]` seed exact
-  decimal results in visible X while preserving the old X2 fact. For
+  and the hardware decimal constant `3.1415926`. Emulator-verified exact
+  special values for documented functions are also modeled: `F e^x` on `0`,
+  `F lg`/`F ln` on `1`, inverse/direct sine and tangent on `0`, inverse cosine
+  on `1`, direct cosine on `0`, and `F x^y` identity cases (`1^y` and positive
+  `x^0`). For concrete normalized decimal `X`, `F x^2`, finite `F 1/x`,
+  perfect-square `F sqrt`, integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and
+  `К [x]` seed exact decimal results in visible X while preserving the old X2 fact. For
   non-negative concrete decimal `X`, and for negative non-integer concrete
   decimal `X`, `К {x}` also seeds the exact normalized fractional decimal value
   while preserving the old X2 fact; negative integers stay opaque to avoid
@@ -825,9 +828,9 @@ Display rewrites are separated into strategy selection + body lowering.
   domain is safe, the rational sexagesimal conversion has a finite decimal
   expansion, and the normalized result fits the eight-significant-digit proof
   bound. Wider products/quotients, division by zero, non-terminating division,
-  irrational square roots, fractional powers of ten, hardware-rounded
-  sexagesimal conversions, and non-decimal cases remain structural/opaque
-  rather than pretending to be an ordinary decimal value.
+  irrational square roots, fractional powers of ten, non-identity powers,
+  hardware-rounded sexagesimal conversions, and non-decimal cases remain
+  structural/opaque rather than pretending to be an ordinary decimal value.
   Later passes can therefore distinguish visible no-op
   integer/fraction/sign transforms and exact arithmetic transforms from
   observable hidden-X2 restores.

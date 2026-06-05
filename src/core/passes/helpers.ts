@@ -602,6 +602,15 @@ function stableExpressionKeyHasConcreteDecimalResult(
 ): boolean {
   if (decimalFromFactKey(key) === undefined) return false;
   if (op.opcode === 0x15) return decimalPowerOfTenFromFactKey(key) !== undefined;
+  if (op.opcode === 0x16) return decimalExpFromFactKey(key) !== undefined;
+  if (op.opcode === 0x17) return decimalCommonLogFromFactKey(key) !== undefined;
+  if (op.opcode === 0x18) return decimalNaturalLogFromFactKey(key) !== undefined;
+  if (op.opcode === 0x19) return decimalArcSinFromFactKey(key) !== undefined;
+  if (op.opcode === 0x1a) return decimalArcCosFromFactKey(key) !== undefined;
+  if (op.opcode === 0x1b) return decimalArcTanFromFactKey(key) !== undefined;
+  if (op.opcode === 0x1c) return decimalSinFromFactKey(key) !== undefined;
+  if (op.opcode === 0x1d) return decimalCosFromFactKey(key) !== undefined;
+  if (op.opcode === 0x1e) return decimalTanFromFactKey(key) !== undefined;
   if (op.opcode === 0x21) return decimalSquareRootFromFactKey(key) !== undefined;
   if (op.opcode === 0x22) return decimalSquareFromFactKey(key) !== undefined;
   if (op.opcode === 0x23) return decimalReciprocalFromFactKey(key) !== undefined;
@@ -636,6 +645,15 @@ function plainProducesConcreteDecimalValues(
   const output = new Set<X2ValueFact>();
   if (
     op.opcode !== 0x15 &&
+    op.opcode !== 0x16 &&
+    op.opcode !== 0x17 &&
+    op.opcode !== 0x18 &&
+    op.opcode !== 0x19 &&
+    op.opcode !== 0x1a &&
+    op.opcode !== 0x1b &&
+    op.opcode !== 0x1c &&
+    op.opcode !== 0x1d &&
+    op.opcode !== 0x1e &&
     op.opcode !== 0x21 &&
     op.opcode !== 0x22 &&
     op.opcode !== 0x23 &&
@@ -667,6 +685,7 @@ function plainProducesConcreteBinaryDecimalValues(
   const output = new Set<X2ValueFact>();
   if (
     (op.opcode < 0x10 || op.opcode > 0x13) &&
+    op.opcode !== 0x24 &&
     op.opcode !== 0x36 &&
     op.opcode !== 0x37 &&
     op.opcode !== 0x38 &&
@@ -688,6 +707,24 @@ function concreteDecimalUnaryValue(opcode: number, value: string): string | unde
   switch (opcode) {
     case 0x15:
       return decimalPowerOfTen(value);
+    case 0x16:
+      return decimalExp(value);
+    case 0x17:
+      return decimalCommonLog(value);
+    case 0x18:
+      return decimalNaturalLog(value);
+    case 0x19:
+      return decimalArcSin(value);
+    case 0x1a:
+      return decimalArcCos(value);
+    case 0x1b:
+      return decimalArcTan(value);
+    case 0x1c:
+      return decimalSin(value);
+    case 0x1d:
+      return decimalCos(value);
+    case 0x1e:
+      return decimalTan(value);
     case 0x21:
       return decimalSquareRoot(value);
     case 0x22:
@@ -720,6 +757,51 @@ function concreteDecimalUnaryValue(opcode: number, value: string): string | unde
 function decimalPowerOfTenFromFactKey(key: string): string | undefined {
   const decimal = decimalFromFactKey(key);
   return decimal === undefined ? undefined : decimalPowerOfTen(decimal);
+}
+
+function decimalExpFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalExp(decimal);
+}
+
+function decimalCommonLogFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalCommonLog(decimal);
+}
+
+function decimalNaturalLogFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalNaturalLog(decimal);
+}
+
+function decimalArcSinFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalArcSin(decimal);
+}
+
+function decimalArcCosFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalArcCos(decimal);
+}
+
+function decimalArcTanFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalArcTan(decimal);
+}
+
+function decimalSinFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalSin(decimal);
+}
+
+function decimalCosFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalCos(decimal);
+}
+
+function decimalTanFromFactKey(key: string): string | undefined {
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalTan(decimal);
 }
 
 function decimalSquareRootFromFactKey(key: string): string | undefined {
@@ -805,6 +887,42 @@ function decimalPowerOfTen(value: string): string | undefined {
   return power >= 0
     ? exactDecimalToNormalized(pow10BigInt(power), 0)
     : exactDecimalToNormalized(1n, -power);
+}
+
+function decimalExp(value: string): string | undefined {
+  return decimalIsZero(value) ? "1" : undefined;
+}
+
+function decimalCommonLog(value: string): string | undefined {
+  return decimalIsOne(value) ? "0" : undefined;
+}
+
+function decimalNaturalLog(value: string): string | undefined {
+  return decimalIsOne(value) ? "0" : undefined;
+}
+
+function decimalArcSin(value: string): string | undefined {
+  return decimalIsZero(value) ? "0" : undefined;
+}
+
+function decimalArcCos(value: string): string | undefined {
+  return decimalIsOne(value) ? "0" : undefined;
+}
+
+function decimalArcTan(value: string): string | undefined {
+  return decimalIsZero(value) ? "0" : undefined;
+}
+
+function decimalSin(value: string): string | undefined {
+  return decimalIsZero(value) ? "0" : undefined;
+}
+
+function decimalCos(value: string): string | undefined {
+  return decimalIsZero(value) ? "1" : undefined;
+}
+
+function decimalTan(value: string): string | undefined {
+  return decimalIsZero(value) ? "0" : undefined;
 }
 
 function decimalSquareRoot(value: string): string | undefined {
@@ -956,6 +1074,7 @@ function concreteDecimalBinaryValue(opcode: number, y: string, x: string): strin
   if (left === undefined || right === undefined) return undefined;
   if (opcode === 0x12) return exactDecimalToNormalized(left.num * right.num, left.scale + right.scale);
   if (opcode === 0x13) return exactDecimalDivisionToNormalized(left, right);
+  if (opcode === 0x24) return exactDecimalPowerIdentityToNormalized(left, right);
   if (opcode === 0x36) return exactDecimalMaxToNormalized(left, right);
   if (opcode >= 0x37 && opcode <= 0x39) return exactDecimalBitwiseToNormalized(opcode, y, x);
   if (opcode !== 0x10 && opcode !== 0x11) return undefined;
@@ -975,6 +1094,16 @@ function parseExactDecimal(value: string): ExactDecimalParts | undefined {
     num: sign === "-" ? -unsigned : unsigned,
     scale: (match[3] ?? "").length,
   };
+}
+
+function decimalIsZero(value: string): boolean {
+  const parsed = parseExactDecimal(value);
+  return parsed !== undefined && parsed.num === 0n;
+}
+
+function decimalIsOne(value: string): boolean {
+  const parsed = parseExactDecimal(value);
+  return parsed !== undefined && parsed.num === 1n && parsed.scale === 0;
 }
 
 function exactDecimalToNormalized(num: bigint, scale: number): string | undefined {
@@ -1017,6 +1146,12 @@ function exactDecimalMaxToNormalized(left: ExactDecimalParts, right: ExactDecima
   const leftNum = left.num * pow10BigInt(scale - left.scale);
   const rightNum = right.num * pow10BigInt(scale - right.scale);
   return exactDecimalToNormalized(leftNum >= rightNum ? leftNum : rightNum, scale);
+}
+
+function exactDecimalPowerIdentityToNormalized(exponent: ExactDecimalParts, base: ExactDecimalParts): string | undefined {
+  if (base.num === 1n && base.scale === 0) return "1";
+  if (exponent.num === 0n && base.num > 0n) return "1";
+  return undefined;
 }
 
 function exactDecimalBitwiseToNormalized(opcode: number, y: string, x: string): string | undefined {
