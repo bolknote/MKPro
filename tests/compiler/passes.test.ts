@@ -13200,7 +13200,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("vp-x2-peephole keeps a fractional no-op К {x} before dot when X2 differs", () => {
+  it("vp-x2-peephole removes a fractional no-op К {x} before dot through a preserving gap even when X2 differs", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
       plain(0x35, "К {x}"),
@@ -13211,8 +13211,14 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = vpX2Peephole.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
   });
 
   it("vp-x2-peephole keeps an immediate fractional no-op К {x} dot boundary", () => {

@@ -1701,12 +1701,12 @@ The pipeline currently contains:
   make `К {x}` redundant. Display lowering is just one producer of valid
   boundary markers. The pass can also drop a role-free, non-display `К {x}` when
   X2 value dataflow proves a closed plain-context `X` is already fractional
-  (`0`, `0.x`, or `-0.x`) and the removed X2 sync cannot reach a later
-  context-sensitive `.`, `/-/`, or `ВП` restore. When the current hidden X2
-  value is already the same dot-restore value, that sync is treated as
-  redundant across a preserving executable gap before a later restore; an
-  immediate restore boundary is still kept unless a separate source proof
-  handles it.
+  (`0`, `0.x`, or `-0.x`). Because `К {x}` preserves hidden X2, the rewrite
+  does not require hidden X2 to already match visible `X`; it only requires a
+  preserving executable gap before any later context-sensitive `.`, `/-/`, or
+  `ВП` restore so removing the opcode cannot change the restore's
+  previous-command context. An immediate restore boundary is still kept unless
+  a separate source proof handles it.
 - **membership X2 restore** — membership set lowering may use `.` as a hidden
   X2 restore in non-display code. It is accepted only when the set collection
   assignable is byte-for-byte the tested collection, including indexed bank

@@ -13,7 +13,6 @@ import {
   type IrPassFn,
   type KnownReturnCallOp,
   type X2ValueDataflowState,
-  x2StateHasSameDotRestoreValueInXAndX2,
   x2StateIsClosedPlainContext,
   x2SyncCanExposeContextSensitiveRestore,
   x2ValueFactRestoredVisibleDecimal,
@@ -64,13 +63,16 @@ function isKnownFractionalNoopFraction(
 ): boolean {
   const op = ops[index]!;
   const state = states[index];
-  const syncAlreadyRedundant = x2StateHasSameDotRestoreValueInXAndX2(state);
   return isFreeStandingFractionOp(op) &&
     stateHasFractionalNoopX(state) &&
+    // К {x} preserves hidden X2. Once dataflow proves it is also a visible-X
+    // no-op, removing it cannot change a later restore value. The exposure
+    // guard still keeps immediate restore boundaries where the opcode itself
+    // could be the observable previous-command context.
     !x2SyncCanExposeContextSensitiveRestore(
       ops,
       index,
-      syncAlreadyRedundant ? { redundantSyncValue: true } : {},
+      { redundantSyncValue: true },
     );
 }
 
