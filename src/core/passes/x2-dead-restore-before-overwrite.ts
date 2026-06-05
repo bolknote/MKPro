@@ -186,7 +186,10 @@ function deadRestoreRunBeforeHardOverwrite(
 }
 
 function isFreeStandingPlain(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
-  return op.kind === "plain" && !hasRewriteBarrier(op) && !hasRoles(op);
+  return op.kind === "plain" &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    !hasRoles(op);
 }
 
 function isFreeStandingEmptyOp(op: IrOp): boolean {

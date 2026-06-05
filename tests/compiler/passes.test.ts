@@ -5602,6 +5602,27 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite keeps display-sensitive separators in dead restore runs", () => {
+    const displayEmpty: IrOp = {
+      kind: "plain",
+      opcode: 0x55,
+      meta: { mnemonic: "К1", comment: "display separator" },
+    };
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      displayEmpty,
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-dead-restore-before-overwrite keeps restore runs separated by labels", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -5816,6 +5837,27 @@ describe("ir passes on synthetic programs", () => {
       recall("1", "preload const 8.70Е2-6С"),
       ret(),
     ]);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps return-helper crossings with display-sensitive cells", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x0c, "ВП"),
+      call("display_gap"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("load"),
+      recall("1", "preload const 8.70Е2-6С"),
+      ret(),
+      label("display_gap"),
+      { kind: "plain", opcode: 0x55, meta: { mnemonic: "К1", comment: "display separator" } },
+      ret(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("x2-dead-restore-before-overwrite uses only the fallthrough conditional structural ВП source", () => {

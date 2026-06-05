@@ -1037,7 +1037,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent-entry, or VP/X2 restore contexts because the following hard
     overwrite destroys both the restored X and the toggled X2. The following
     hard overwrite may sit after a simple direct-return helper only when that
-    helper is restore-transparent. A direct `П->X r` or proved stable-indirect
+    helper is restore-transparent; display-sensitive separator cells are not
+    transparent and are not removed from a same-segment dead restore run. A direct `П->X r` or proved stable-indirect
     `К П->X R7..Re` is treated as the same kind of dead X/X2 restore before a
     hard overwrite, but only when the shared stack-exposure proof shows that
     the recall's stack lift cannot reach a later stack consumer. Free-standing
