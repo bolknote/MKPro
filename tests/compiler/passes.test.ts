@@ -432,6 +432,40 @@ describe("ir passes on synthetic programs", () => {
     expect(registerStateText(states[3])).toEqual(["2"]);
   });
 
+  it("x2 register dataflow carries Y aliases through Y->X and later stack lift", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      plain(0x0e, "В↑"),
+      plain(0x35, "К {x}"),
+      plain(0x3e, "Y->X"),
+      plain(0x0e, "В↑"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[3])).toEqual(["2"]);
+    expect(registerStateText(states[4])).toEqual(["2"]);
+    expect(registerStateText(states[5])).toEqual(["2"]);
+  });
+
+  it("x2 register dataflow drops stale Y aliases after a register overwrite", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      plain(0x20, "F pi"),
+      store("2"),
+      plain(0x3e, "Y->X"),
+      plain(0x0e, "В↑"),
+      halt(),
+    ];
+
+    const states = computeX2RegisterStates(program);
+
+    expect(registerStateText(states[2])).toEqual(["2"]);
+    expect(registerStateText(states[3])).toEqual([]);
+    expect(registerStateText(states[5])).toEqual([]);
+  });
+
   it("x2 register dataflow drops aliases when a register is overwritten from non-X2 X", () => {
     const program: IrOp[] = [
       recall("2"),
@@ -1603,6 +1637,29 @@ describe("ir passes on synthetic programs", () => {
       plain(0x02, "2"),
       plain(0x14, "X↔Y"),
       plain(0x11, "-"),
+      plain(0x0e, "В↑"),
+      recall("3"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[12]).toMatchObject({ kind: "plain", opcode: 0x0a });
+  });
+
+  it("x2-hidden-temp-restore uses stable expr keys across repeated Y->X stack copies", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x3e, "Y->X"),
+      plain(0x10, "+"),
+      store("3"),
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x3e, "Y->X"),
+      plain(0x10, "+"),
       plain(0x0e, "В↑"),
       recall("3"),
       halt(),

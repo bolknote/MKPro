@@ -1510,6 +1510,7 @@ interface Edge {
 
 interface RegisterDataflowState {
   readonly x: RegisterValueSet;
+  readonly y: RegisterValueSet;
   readonly x2: RegisterValueSet;
 }
 
@@ -2620,7 +2621,7 @@ function nextImmediateX2RestoreOp(ops: readonly IrOp[], start: number): IrOp | u
 }
 
 function emptyRegisterDataflowState(): RegisterDataflowState {
-  return { x: new Set(), x2: new Set() };
+  return { x: new Set(), y: new Set(), x2: new Set() };
 }
 
 function emptyX2ValueDataflowState(trackRegisterMemory = false): X2ValueDataflowState {
@@ -2641,7 +2642,7 @@ function emptyX2ValueDataflowState(trackRegisterMemory = false): X2ValueDataflow
 }
 
 function cloneRegisterDataflowState(input: RegisterDataflowState): RegisterDataflowState {
-  return { x: new Set(input.x), x2: new Set(input.x2) };
+  return { x: new Set(input.x), y: new Set(input.y), x2: new Set(input.x2) };
 }
 
 function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflowState {
@@ -2679,26 +2680,26 @@ function transferRegisterDataflowState(
     case "store":
       return {
         x: addRegisterValue(input.x, op.register),
+        y: transferStoreYRegisterSet(input, op.register),
         x2: addStoredX2Alias(input, op.register),
       };
     case "indirect-store":
       return transferIndirectStoreRegisterState(input, op);
     case "recall":
-      return { x: new Set([op.register]), x2: new Set([op.register]) };
+      return { x: new Set([op.register]), y: new Set(input.x), x2: new Set([op.register]) };
     case "indirect-recall": {
       const target = knownIndirectMemoryTarget(op);
       const registers = target === undefined ? new Set<RegisterName>() : new Set([target]);
-      return { x: registers, x2: new Set(registers) };
+      return { x: registers, y: new Set(input.x), x2: new Set(registers) };
     }
     case "plain": {
-      const effect = plainX2Effect(op);
-      const x = plainPreservesXValue(op) ? new Set(input.x) : new Set<RegisterName>();
-      return { x, x2: transferPlainX2RegisterSet(input, x, effect) };
+      return transferPlainRegisterDataflowState(input, op);
     }
     case "cjump": {
       const effect = conditionalX2EffectForGraphEdge(op, edge);
       return {
         x: new Set(input.x),
+        y: new Set(input.y),
         x2: transferConditionalX2RegisterSet(input, effect),
       };
     }
@@ -2706,9 +2707,11 @@ function transferRegisterDataflowState(
       const effect = conditionalX2EffectForGraphEdge(op, edge);
       const counter = loopCounterRegister(op.counter);
       const x = removeRegisterValue(input.x, counter);
+      const y = removeRegisterValue(input.y, counter);
       const x2 = removeRegisterValue(input.x2, counter);
       return {
         x,
+        y,
         x2: effect === "preserves"
           ? x2
           : effect === "affects"
@@ -2724,7 +2727,7 @@ function transferRegisterDataflowState(
     case "stop":
       return emptyRegisterDataflowState();
     case "return":
-      return { x: new Set(input.x), x2: new Set(input.x) };
+      return { x: new Set(input.x), y: new Set(input.y), x2: new Set(input.x) };
   }
 }
 
@@ -3104,6 +3107,10 @@ function addStoredX2Alias(input: RegisterDataflowState, register: RegisterName):
   return output;
 }
 
+function transferStoreYRegisterSet(input: RegisterDataflowState, register: RegisterName): Set<RegisterName> {
+  return input.x.has(register) ? new Set(input.y) : removeRegisterValue(input.y, register);
+}
+
 function removeRegisterValue(input: RegisterValueSet, register: RegisterName): Set<RegisterName> {
   const output = new Set(input);
   output.delete(register);
@@ -3126,6 +3133,7 @@ function loopCounterRegister(counter: Extract<IrOp, { kind: "loop" }>["counter"]
 function dropMutatedSelectorFact(input: RegisterDataflowState, register: RegisterName): RegisterDataflowState {
   return {
     x: removeRegisterValue(input.x, register),
+    y: removeRegisterValue(input.y, register),
     x2: removeRegisterValue(input.x2, register),
   };
 }
@@ -3147,6 +3155,7 @@ function transferIndirectConditionalRegisterState(
   if (effect === "unknown") return emptyRegisterDataflowState();
   const output: RegisterDataflowState = {
     x: new Set(input.x),
+    y: new Set(input.y),
     x2: transferConditionalX2RegisterSet(input, effect),
   };
   return edge === "jump" && !isStableIndirectSelector(op.register)
@@ -3159,10 +3168,42 @@ function transferIndirectStoreRegisterState(
   op: Extract<IrOp, { kind: "indirect-store" }>,
 ): RegisterDataflowState {
   const target = knownIndirectMemoryTarget(op);
-  if (target === undefined) return { x: new Set(input.x), x2: new Set(input.x2) };
+  if (target === undefined) return cloneRegisterDataflowState(input);
   return {
     x: addRegisterValue(input.x, target),
+    y: transferStoreYRegisterSet(input, target),
     x2: addStoredX2Alias(input, target),
+  };
+}
+
+function transferPlainRegisterDataflowState(
+  input: RegisterDataflowState,
+  op: Extract<IrOp, { kind: "plain" }>,
+): RegisterDataflowState {
+  if (op.opcode === STACK_EXCHANGE_XY_OPCODE) {
+    const effect = plainX2Effect(op);
+    const x = new Set(input.y);
+    return {
+      x,
+      y: new Set(input.x),
+      x2: transferPlainX2RegisterSet(input, x, effect),
+    };
+  }
+  if (op.opcode === STACK_COPY_Y_TO_X_OPCODE) {
+    const effect = plainX2Effect(op);
+    const x = new Set(input.y);
+    return {
+      x,
+      y: new Set(input.y),
+      x2: transferPlainX2RegisterSet(input, x, effect),
+    };
+  }
+  const effect = plainX2Effect(op);
+  const x = plainPreservesXValue(op) ? new Set(input.x) : new Set<RegisterName>();
+  return {
+    x,
+    y: transferPlainYRegisterSet(input, input.x, op),
+    x2: transferPlainX2RegisterSet(input, x, effect),
   };
 }
 
@@ -3716,6 +3757,18 @@ function transferPlainX2RegisterSet(
   return new Set();
 }
 
+function transferPlainYRegisterSet(
+  input: RegisterDataflowState,
+  sourceX: RegisterValueSet,
+  op: Extract<IrOp, { kind: "plain" }>,
+): Set<RegisterName> {
+  const info = getOpcode(op.opcode);
+  if (info.stackEffect === "shifts") return new Set(sourceX);
+  if (info.stackEffect === "preserves") return new Set(input.y);
+  if (info.stackEffect === "consume-y-keep" && info.risk === "documented") return new Set(input.y);
+  return new Set();
+}
+
 function transferPlainX2ValueSet(
   input: X2ValueDataflowState,
   x: X2ValueSet,
@@ -3954,10 +4007,12 @@ function joinRegisterDataflowStates(
 ): RegisterDataflowState {
   if (current === undefined) return {
     x: new Set(incoming.x),
+    y: new Set(incoming.y),
     x2: new Set(incoming.x2),
   };
   return {
     x: joinRegisterValueSets(current.x, incoming.x),
+    y: joinRegisterValueSets(current.y, incoming.y),
     x2: joinRegisterValueSets(current.x2, incoming.x2),
   };
 }
@@ -4006,7 +4061,9 @@ function sameRegisterDataflowState(
   right: RegisterDataflowState | undefined,
 ): boolean {
   if (left === undefined || right === undefined) return left === right;
-  return sameRegisterValueSet(left.x, right.x) && sameRegisterValueSet(left.x2, right.x2);
+  return sameRegisterValueSet(left.x, right.x) &&
+    sameRegisterValueSet(left.y, right.y) &&
+    sameRegisterValueSet(left.x2, right.x2);
 }
 
 function sameX2ValueDataflowState(

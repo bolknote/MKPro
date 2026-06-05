@@ -1256,6 +1256,10 @@ The pipeline currently contains:
   unrelated register facts live. Indirect conditional jumps `К x?0 r` are
   modeled separately from direct `F x?0`: both their fallthrough and jump edges
   preserve X2, and only the jump edge can mutate the selector.
+  The proof also carries a narrow register-valued `Y` stack fact through
+  stack shifts, `X↔Y`, `Y->X`, Y-keeping operations, and register writes that
+  do not stale that alias; a later X2 sync can therefore recover `X2 = r` after
+  `Y->X` copies a proved stack value back into visible X.
   Direct `В/О` continuations are now modeled as an X2 sync from the returned X
   value: if X is known to contain register `r`, the caller continuation gets
   `X2 = r`; if returned X is unknown, the X2 proof is cleared. `С/П`, unknown

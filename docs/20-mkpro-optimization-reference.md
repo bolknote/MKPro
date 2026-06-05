@@ -776,7 +776,11 @@ Display rewrites are separated into strategy selection + body lowering.
   targets (`indirect-target=NN`), and branch-specific direct conditional
   effects. Stable indirect-flow selectors preserve register-valued X/X2 facts;
   mutating selectors drop only facts about the selector register that the
-  hardware address computation changes. Direct `В/О` continuations sync X2 from
+  hardware address computation changes. The same proof now tracks a narrow
+  register-valued `Y` fact through stack shifts, `X↔Y`, `Y->X`, Y-keeping
+  operations, and non-staling register writes, so `Y->X` followed by an X2 sync
+  can recover the register alias without falling back to the heavier value
+  lattice. Direct `В/О` continuations sync X2 from
   the returned X value when that value is proved; if returned X is unknown, the
   proof is cleared. Stops, opaque X2-affecting ops, and unknown indirect flow
   also clear the proof. Recall-removal passes use it to remove redundant
