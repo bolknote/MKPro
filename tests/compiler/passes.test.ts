@@ -1490,6 +1490,24 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[8]?.x)).toContain("expr-key:21(decimal:2:normalized)");
   });
 
+  it("x2 value dataflow drops address-local opaque expr facts on backedges but keeps stable expr keys", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      store("1"),
+      label("again"),
+      loop("again"),
+      recall("1"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[3]?.x)).toContain("expr-key:21(decimal:2:normalized)");
+    expect(x2ValueStateText(states[3]?.x)).not.toContain("expr:1");
+    expect(x2ValueStateText(states[3]?.memory?.["1"]) ?? []).toContain("expr-key:21(decimal:2:normalized)");
+    expect(x2ValueStateText(states[3]?.memory?.["1"]) ?? []).not.toContain("expr:1");
+  });
+
   it("x2-hidden-temp-restore uses stable expr keys across repeated pure unary computations", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -1666,7 +1684,7 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[3]?.memory?.["2"])).toContain("expr-key:31(reg:1)");
     expect(x2ValueStateText(states[7]?.x)).not.toContain("expr-key:31(reg:1)");
-    expect(x2ValueStateText(states[7]?.memory?.["2"])).not.toContain("expr-key:31(reg:1)");
+    expect(x2ValueStateText(states[7]?.memory?.["2"]) ?? []).not.toContain("expr-key:31(reg:1)");
   });
 
   it("x2 value dataflow invalidates register-dependent expr keys only on mutating indirect conditional jump edges", () => {

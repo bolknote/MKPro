@@ -863,7 +863,10 @@ export function computeX2ValueStates(
       const input = inStates[index];
       if (input === undefined) continue;
       for (const edge of edges[index] ?? []) {
-        const output = transferX2ValueDataflowState(input, ops[index]!, edge.kind, trackRegisterMemory, index);
+        const transferred = transferX2ValueDataflowState(input, ops[index]!, edge.kind, trackRegisterMemory, index);
+        const output = edge.target <= index
+          ? dropUnstableOpaqueExpressionX2ValueFacts(transferred, trackRegisterMemory)
+          : transferred;
         const joined = joinX2ValueDataflowStates(inStates[edge.target], output, trackRegisterMemory);
         if (!sameX2ValueDataflowState(joined, inStates[edge.target])) {
           inStates[edge.target] = joined;
@@ -3528,8 +3531,51 @@ function invalidateRegisterDependentX2ValueState(
   };
 }
 
+function dropUnstableOpaqueExpressionX2ValueFacts(
+  input: X2ValueDataflowState,
+  trackRegisterMemory: boolean,
+): X2ValueDataflowState {
+  return {
+    x: removeUnstableOpaqueExpressionValueFacts(input.x),
+    y: removeUnstableOpaqueExpressionValueFacts(input.y),
+    x2: removeUnstableOpaqueExpressionValueFacts(input.x2),
+    xShape: cloneOptionalShapeSet(input.xShape),
+    yShape: cloneOptionalShapeSet(input.yShape),
+    x2Shape: cloneOptionalShapeSet(input.x2Shape),
+    entry: cloneX2EntryState(input.entry),
+    vpContext: cloneX2VpContextState(input.vpContext),
+    structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
+    structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
+    vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
+    memory: trackRegisterMemory ? removeUnstableOpaqueExpressionValueMemory(input.memory) : undefined,
+    shapeMemory: trackRegisterMemory ? cloneX2ShapeMemory(input.shapeMemory) : undefined,
+  };
+}
+
 function registerWritePreservesStoredValue(input: X2ValueDataflowState, register: RegisterName): boolean {
   return input.x.has(registerValueFact(register));
+}
+
+function removeUnstableOpaqueExpressionValueMemory(input: X2ValueMemory | undefined): X2ValueMemory {
+  const output: X2ValueMemory = {};
+  for (const key of x2ValueMemoryRegisters(input)) {
+    const values = removeUnstableOpaqueExpressionValueFacts(input?.[key]);
+    if (values.size > 0) output[key] = values;
+  }
+  return output;
+}
+
+function removeUnstableOpaqueExpressionValueFacts(input: X2ValueSet | undefined): Set<X2ValueFact> {
+  const output = new Set<X2ValueFact>();
+  for (const fact of input ?? []) {
+    if (!isUnstableOpaqueExpressionValueFact(fact)) output.add(fact);
+  }
+  return output;
+}
+
+function isUnstableOpaqueExpressionValueFact(fact: X2ValueFact): boolean {
+  return /^expr:\d+$/u.test(fact);
 }
 
 function removeRegisterDependentX2ValueMemory(
