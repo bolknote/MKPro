@@ -5576,6 +5576,76 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("branch-target-x-reuse uses decimal value proof at unique targets", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("6"),
+      recall("1", "preload const 2"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      recall("6"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      store("6"),
+      recall("1", "preload const 2"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
+  it("branch-target-x-reuse uses structural shape proof at unique targets", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      store("6"),
+      recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      recall("6"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      store("6"),
+      recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      plain(0x32, "К ЗН"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
   it("branch-target-x-reuse keeps recall that lifts the stack for a target binary op", () => {
     const program: IrOp[] = [
       recall("6"),

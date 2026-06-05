@@ -23,8 +23,6 @@ const run: IrPassFn = (ops) => {
       continue;
     }
 
-    const register = branchPreservedRegister(ops, index, op);
-    if (register === undefined) continue;
     if ((references.get(op.target) ?? 0) !== 1) continue;
 
     const labelIndex = labels.get(op.target);
@@ -33,8 +31,13 @@ const run: IrPassFn = (ops) => {
     const targetIndex = nextExecutableIndex(ops, labelIndex + 1);
     if (targetIndex === undefined || remove.has(targetIndex)) continue;
     const target = ops[targetIndex]!;
-    if (removableRecallValueRegister(target) !== register) continue;
-    if (analyzeRecallRemoval(ops, targetIndex, x2States[targetIndex], x2ValueStates[targetIndex])?.removable !== true) {
+    const targetRegister = removableRecallValueRegister(target);
+    if (targetRegister === undefined) continue;
+    if (op.kind === "loop" && loopCounterRegister(op.counter) === targetRegister) continue;
+    const preservedRegister = branchPreservedRegister(ops, index, op);
+    const removal = analyzeRecallRemoval(ops, targetIndex, x2States[targetIndex], x2ValueStates[targetIndex]);
+    if (preservedRegister !== targetRegister && removal?.valueProof?.inX !== true) continue;
+    if (removal?.removable !== true) {
       continue;
     }
 

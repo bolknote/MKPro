@@ -1469,11 +1469,14 @@ The pipeline currently contains:
   X2-register-aware `.`/`/-/`/`ВП` sync guard (stopped by direct `В/О` returns) plus
   downstream stack-consumer guards are applied before removing a recall.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
-  target when the incoming branch path already carries that value in X. This
-  covers direct zero-test branches and counted-loop branch targets for
-  non-counter registers; a loop target recall of the decremented counter is
-  kept. `С/П` is treated as a no-fallthrough separator for this uniqueness
-  check, matching the CFG used by the other passes. The rewrite is refused when
+  target when the incoming branch path already carries that value in X. The
+  proof can be the direct register alias from the tested X value, a decimal
+  value-memory/preload equality, or structural hex/super shape-memory equality
+  on the target entry. This covers direct zero-test branches and counted-loop
+  branch targets for non-counter registers; a loop target recall of the
+  decremented counter is kept. `С/П` is treated as a no-fallthrough separator
+  for this uniqueness check, matching the CFG used by the other passes. The
+  rewrite is refused when
   that recall is needed as the target-side X2 sync before `.`/`/-/`/`ВП` before a
   direct `В/О` return syncs X2. The shared X2-register proof can now show that
   the branch path already has the same X2 value, so only immediate
