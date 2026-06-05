@@ -807,6 +807,46 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetsHaveSameStructuralShape(exponentStates[4]?.x2Shape, mantissaStates[1]?.x2Shape)).toBe(true);
   });
 
+  it("x2 value dataflow exposes closed structural exponent sync as a VP mantissa source", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:Г:2"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["hex-exponent:Г:2"]);
+    expect(x2VpEntryShapeText(states[4])).toEqual(["hex:Г00:mantissa"]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:Г00:"]);
+    expect(x2ShapeStateText(states[6]?.xShape)).toEqual(["hex-exponent:Г00:3"]);
+  });
+
+  it("x2 value dataflow derives VP mantissa sources from conditional structural X2 syncs", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      cjump("done"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:Г:2"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["hex-exponent:Г:2"]);
+    expect(x2VpEntryShapeText(states[4])).toEqual(["hex:Г00:mantissa"]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:Г00:"]);
+    expect(x2ShapeStateText(states[6]?.xShape)).toEqual(["hex-exponent:Г00:3"]);
+  });
+
   it("x2 value dataflow parses preloaded structural exponent notation", () => {
     const program: IrOp[] = [
       recall("1", "preload const ГE-2"),

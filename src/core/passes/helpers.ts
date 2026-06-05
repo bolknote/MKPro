@@ -4204,9 +4204,11 @@ function sharedNormalizedDecimalMantissas(input: Pick<X2ValueDataflowState, "x" 
 function sharedStructuralShapeFacts(
   input: Pick<X2ValueDataflowState, "xShape" | "x2Shape">,
 ): X2ShapeSet | undefined {
+  const xRestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(input.xShape));
+  const x2RestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(input.x2Shape));
   const shapes = new Set<X2ShapeFact>();
-  for (const fact of input.x2Shape ?? []) {
-    if (input.xShape?.has(fact) !== true) continue;
+  for (const fact of x2RestoreShapes) {
+    if (!xRestoreShapes.has(fact)) continue;
     const model = x2ShapeDataModelForFact(fact);
     if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) shapes.add(fact);
   }

@@ -965,8 +965,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     values. Shape-set joins and equality checks use the same canonical
     spelling, so branch-merged structural `ВП`/restore proofs do not split on
     formatting.
-    Closed structural exponent shapes are equality/restore evidence only; they
-    are not promoted to fresh `ВП`-entry sources.
+    Closed structural exponent shapes become fresh `ВП`-entry sources only
+    after X2 value/shape dataflow proves the same structural restore-shape is
+    visible in both `X` and hidden `X2`; the source is the restored mantissa
+    shape (`hex-exponent:Г:2` seeds `hex:Г00`), not a decimal value and not the
+    old exponent-entry marker.
     Closed-context `.`
     restores carry structural hex/super hidden X2 shapes forward as structural
     `ВП`-entry sources, while dot-restored leading-zero decimal forms are still
