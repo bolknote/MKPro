@@ -4888,22 +4888,11 @@ function dropMutatedSelectorX2ValueFact(
   register: RegisterName,
   trackRegisterMemory: boolean,
 ): X2ValueDataflowState {
-  const value = registerValueFact(register);
+  const stable = invalidateRegisterDependentX2ValueState(input, register, trackRegisterMemory);
   return {
-    x: removeX2Value(input.x, value),
-    y: cloneOptionalValueSet(input.y),
-    x2: removeX2Value(input.x2, value),
-    xShape: cloneOptionalShapeSet(input.xShape),
-    yShape: cloneOptionalShapeSet(input.yShape),
-    x2Shape: cloneOptionalShapeSet(input.x2Shape),
-    entry: cloneX2EntryState(input.entry),
-    vpContext: cloneX2VpContextState(input.vpContext),
-    structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
-    structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
-    vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
-    vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
-    memory: trackRegisterMemory ? deleteX2ValueMemory(input.memory, register) : undefined,
-    shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(input.shapeMemory, register) : undefined,
+    ...stable,
+    memory: trackRegisterMemory ? deleteX2ValueMemory(stable.memory, register) : undefined,
+    shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(stable.shapeMemory, register) : undefined,
   };
 }
 

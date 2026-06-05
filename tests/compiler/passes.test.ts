@@ -1632,6 +1632,64 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[8]?.x2)).toContain("expr-key:31(reg:1)");
   });
 
+  it("x2 value dataflow invalidates register-dependent expr keys after mutating indirect jump selectors", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      knownTargetIndirectJump("1", 4),
+      label("tail"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[3]?.memory?.["2"])).toContain("expr-key:31(reg:1)");
+    expect(x2ValueStateText(states[5]?.x)).not.toContain("expr-key:31(reg:1)");
+    expect(x2ValueStateText(states[5]?.memory?.["2"])).not.toContain("expr-key:31(reg:1)");
+  });
+
+  it("x2 value dataflow invalidates register-dependent expr keys after mutating indirect call selectors", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      knownTargetIndirectCall("1", 6),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      label("callee"),
+      plain(0x20, "Fπ"),
+      ret(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[3]?.memory?.["2"])).toContain("expr-key:31(reg:1)");
+    expect(x2ValueStateText(states[7]?.x)).not.toContain("expr-key:31(reg:1)");
+    expect(x2ValueStateText(states[7]?.memory?.["2"])).not.toContain("expr-key:31(reg:1)");
+  });
+
+  it("x2 value dataflow invalidates register-dependent expr keys only on mutating indirect conditional jump edges", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      knownTargetIndirectCjump("1", 7),
+      plain(0x20, "Fπ"),
+      jump("done"),
+      label("target"),
+      plain(0x0e, "В↑"),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[4]?.memory?.["2"])).toContain("expr-key:31(reg:1)");
+    expect(states[7]).toBeDefined();
+    expect(x2ValueStateText(states[7]?.x) ?? []).not.toContain("expr-key:31(reg:1)");
+    expect(x2ValueStateText(states[7]?.memory?.["2"]) ?? []).not.toContain("expr-key:31(reg:1)");
+  });
+
   it("x2-hidden-temp-restore keeps expr-key scratch recalls after a source register overwrite", () => {
     const program: IrOp[] = [
       recall("1"),

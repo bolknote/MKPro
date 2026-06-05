@@ -801,9 +801,10 @@ Display rewrites are separated into strategy selection + body lowering.
   additionally seed a stable `expr-key:<opcode>(<source>)` fact when the source
   is a proved register, normalized decimal, or earlier stable expression key.
   Register-sourced keys are version-sensitive: a later direct/known-indirect
-  store to that register or counted-loop mutation drops `expr-key:*reg:r*`
-  facts from the value lattice and register-memory, unless the store is proved
-  to write the same `reg:r` value back.
+  store to that register, counted-loop mutation, or mutating indirect-flow
+  selector edge drops `expr-key:*reg:r*` facts from the value lattice and
+  register-memory, unless the store is proved to write the same `reg:r` value
+  back.
   That lets repeated `F sqrt(2)`-style computations and their closed sign
   changes meet in X2 dataflow without relying on the producer address. The
   value dataflow also tracks a value-only `Y` fact through proved stack shifts,
