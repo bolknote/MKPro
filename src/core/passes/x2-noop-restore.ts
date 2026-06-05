@@ -46,11 +46,11 @@ const run: IrPassFn = (ops) => {
       ) &&
       !(
         x2StateHasSameNormalizedDecimalInXAndX2(state) &&
-        x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
+        x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext)
       ) &&
       !(
         x2StateHasSameRestoredVisibleDecimalInXAndX2(state) &&
-        x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
+        x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext)
       )
     ) continue;
     if (!isDotSafeValueContext(state)) continue;

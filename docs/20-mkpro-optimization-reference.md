@@ -891,8 +891,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     gaps such as stable indirect conditionals: if `X` and `X2` carry the same
     normalized decimal fact, or restore to the same visible decimal after raw
     X2 normalization, and the local gap back to the X2 sync contains no
-    display-focused cell, `.` can still be removed. Display-byte gaps remain
-    explicit.
+    display-focused cell, `.` can still be removed. This escape hatch uses the
+    same direct-return context as the `ВП` restore-gap and closed-context
+    `/-/` source proof: transparent direct or proved-indirect helpers may be
+    crossed, while helpers that store, branch, restore X2, or expose entry state
+    remain barriers. Display-byte gaps remain explicit.
     Closed-context `/-/` is modeled for
     proved normalized decimal `X == X2` facts, including zero; this lets an
     immediately following `.`, or one reached only through free-standing

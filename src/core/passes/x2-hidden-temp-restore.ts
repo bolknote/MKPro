@@ -72,9 +72,9 @@ const run: IrPassFn = (ops) => {
       directReturnContext,
     );
     const canUseNormalizedDecimalEscape = sourceAlreadyDotSafe &&
-      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index);
+      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext);
     const canUseVisibleDecimalEscape = sourceRestoresSameVisibleDecimal &&
-      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index);
+      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext);
     const canUseVpSourceEscape = sourceAlreadyDotSafe &&
       x2StateCanDiscardRestoreRunBeforeProvedVp(x2ValueStates[index], x2ValueStates[index + 1]) &&
       x2HasOnlyRestoreGapBeforeVp(ops, index + 1, directReturnContext);

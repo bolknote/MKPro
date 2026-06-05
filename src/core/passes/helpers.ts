@@ -875,6 +875,7 @@ export function x2StateHasSameNormalizedDecimalInXAndX2(
 export function x2NormalizedDecimalRestoreGapIsFreeStanding(
   ops: readonly IrOp[],
   index: number,
+  context?: DirectReturnAnalysisContext,
 ): boolean {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
@@ -899,6 +900,14 @@ export function x2NormalizedDecimalRestoreGapIsFreeStanding(
         continue;
       case "indirect-cjump":
         if (knownIndirectFlowTarget(op) !== undefined) continue;
+        return false;
+      case "call":
+      case "indirect-call":
+        if (
+          context !== undefined &&
+          isKnownReturnCallOp(op) &&
+          x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
+        ) continue;
         return false;
       default:
         return false;

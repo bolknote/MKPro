@@ -400,11 +400,11 @@ const run: IrPassFn = (ops) => {
         ) ||
         (
           x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) &&
-          x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
+          x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext)
         ) ||
         (
           visibleDecimalX2Fact &&
-          x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
+          x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext)
         )
       ) &&
       (exactX2Fact || visibleDecimalX2Fact) &&

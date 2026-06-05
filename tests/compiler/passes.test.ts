@@ -51,6 +51,7 @@ import {
   x2HasOnlyRestoreGapBeforeVp,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
+  x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateIsClosedPlainContext,
   x2ShapeDataModelForFact,
@@ -1571,6 +1572,53 @@ describe("ir passes on synthetic programs", () => {
         observingGap,
         9,
         observingStates[9],
+        directReturnAnalysisContext(observingGap),
+      ),
+    ).toBe(false);
+  });
+
+  it("x2 normalized decimal restore-gap crosses only transparent return helpers with context", () => {
+    const transparentGap: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x55, "К1"),
+      call("transparent"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const observingGap: IrOp[] = [
+      jump("main"),
+      label("observer"),
+      plain(0x0a, "."),
+      ret(),
+      label("main"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x55, "К1"),
+      call("observer"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+
+    expect(x2NormalizedDecimalRestoreGapIsFreeStanding(transparentGap, 10)).toBe(false);
+    expect(
+      x2NormalizedDecimalRestoreGapIsFreeStanding(
+        transparentGap,
+        10,
+        directReturnAnalysisContext(transparentGap),
+      ),
+    ).toBe(true);
+    expect(
+      x2NormalizedDecimalRestoreGapIsFreeStanding(
+        observingGap,
+        10,
         directReturnAnalysisContext(observingGap),
       ),
     ).toBe(false);
