@@ -2222,6 +2222,39 @@ describe("ir passes on synthetic programs", () => {
     ).toBe(false);
   });
 
+  it("x2 closed sign-change dot source treats display-sensitive restore cells as barriers", () => {
+    const displaySign: IrOp = {
+      kind: "plain",
+      opcode: 0x0b,
+      meta: { mnemonic: "/-/", comment: "display sign" },
+    };
+    const displayEmpty: IrOp = {
+      kind: "plain",
+      opcode: 0x54,
+      meta: { mnemonic: "КНОП", comment: "display spacer" },
+    };
+    const displaySignProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      displaySign,
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const displayEmptyProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      displayEmpty,
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const signStates = computeX2ValueStates(displaySignProgram);
+    const emptyStates = computeX2ValueStates(displayEmptyProgram);
+
+    expect(x2CanUseClosedSignChangeDotSourceAt(displaySignProgram, 3, signStates[3])).toBe(false);
+    expect(x2CanUseClosedSignChangeDotSourceAt(displayEmptyProgram, 4, emptyStates[4])).toBe(false);
+  });
+
   it("x2 normalized decimal restore-gap crosses only transparent return helpers with context", () => {
     const transparentGap: IrOp[] = [
       jump("main"),
@@ -11744,6 +11777,25 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice keeps display-sensitive empty cells before ВП", () => {
+    const displayEmpty: IrOp = {
+      kind: "plain",
+      opcode: 0x54,
+      meta: { mnemonic: "КНОП", comment: "display spacer" },
+    };
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      displayEmpty,
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-splice removes an empty run plus redundant ВП in one segment", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
@@ -12718,6 +12770,28 @@ describe("ir passes on synthetic programs", () => {
       plain(0x03, "3"),
       halt(),
     ]);
+  });
+
+  it("vp-splice keeps display-sensitive signs in open mantissa restore runs", () => {
+    const displaySign: IrOp = {
+      kind: "plain",
+      opcode: 0x0b,
+      meta: { mnemonic: "/-/", comment: "display sign" },
+    };
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      displaySign,
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("vp-splice keeps a closed-context sign pair when it shapes a following ВП", () => {

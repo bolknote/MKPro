@@ -6,6 +6,7 @@ import {
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
+  isDisplayFocusSensitive,
   isKnownReturnCallOp,
   knownReturnCallReturnsThroughTransparentRange,
   removingRecallCanExposeX2Restore,
@@ -30,11 +31,18 @@ const K1 = 0x55;
 const K2 = 0x56;
 
 function isPlainOpcode(op: IrOp, opcode: number): boolean {
-  return op.kind === "plain" && op.opcode === opcode && !hasRewriteBarrier(op);
+  return op.kind === "plain" &&
+    op.opcode === opcode &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op);
 }
 
 function isDecimalDigit(op: IrOp): boolean {
-  return op.kind === "plain" && op.opcode >= 0 && op.opcode <= 9 && !hasRewriteBarrier(op);
+  return op.kind === "plain" &&
+    op.opcode >= 0 &&
+    op.opcode <= 9 &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op);
 }
 
 // A ВП (exponent-entry) op that carries no layout/role contract, so removing the

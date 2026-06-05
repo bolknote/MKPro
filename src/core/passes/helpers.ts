@@ -1391,6 +1391,7 @@ function isFreeStandingX2SignChange(op: IrOp): op is Extract<IrOp, { kind: "plai
   return op.kind === "plain" &&
     op.opcode === X2_SIGN_CHANGE_OPCODE &&
     !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
     !hasIrRoles(op);
 }
 
@@ -1399,6 +1400,7 @@ function isFreeStandingX2EmptyOp(op: IrOp): boolean {
     op.opcode >= X2_EMPTY_OPCODE_START &&
     op.opcode <= X2_EMPTY_OPCODE_END &&
     !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
     !hasIrRoles(op);
 }
 
