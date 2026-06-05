@@ -1213,10 +1213,11 @@ The pipeline currently contains:
   already contains the same register value and at least one executable
   X2-preserving command keeps the `.`/`/-/`/`ВП` previous-command context intact, the
   recall is treated as a redundant sync and can still be removed. The proof also
-  treats an immediate `ВП` as safe for decimal or structural recalls when the
-  same decimal mantissa or structural `ВП` source is already active before the
-  removed recall; a store or other context-closing command between the source
-  sync and the recall keeps the recall as the visible `ВП` source. The proof also sees
+  treats an immediate `ВП` as safe for direct or proved stable-indirect decimal
+  or structural recalls when the same decimal mantissa or structural `ВП`
+  source is already active before the removed recall; a store or other
+  context-closing command between the source sync and the recall keeps the
+  recall as the visible `ВП` source. The proof also sees
   path-sensitive direct conditional and counted-loop fallthrough X2 syncs,
   while loop-counter recalls remain protected by the shared value model. A direct
   `В/О` return is an X2 sync boundary, so the X2 hazard stops there; the
@@ -1539,10 +1540,10 @@ The pipeline currently contains:
   is the last X2 sync. If X2-register dataflow proves the same register is
   already synced, or the value/shape proof shows hidden X2 already carries the
   same decimal fact or structural hex/super shape across an X2-preserving gap,
-  the recall can be removed. A decimal or structural recall immediately before
-  `ВП` can also be removed when the active decimal mantissa or structural `ВП`
-  source already matches the recalled source; if a store closed that source, the
-  recall stays. Structural
+  the recall can be removed. A direct or proved stable-indirect decimal or
+  structural recall immediately before `ВП` can also be removed when the active
+  decimal mantissa or structural `ВП` source already matches the recalled
+  source; if a store closed that source, the recall stays. Structural
   shape sync proofs do not make a later
   `.` dot-safe; they only prove the recall would not change hidden X2. The same
   proof accepts stable indirect recalls (`К П->X R7..Re`) when lowering has
