@@ -37,7 +37,8 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 134 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
 | `cave-treasure.mkpro` | 118 | 105 | floor-indexed resource bank and source-shaped command decoder are in place; remaining blockers are command dispatch, wall breaking, cache reward flow, and loop prompt/input storage |
-| `giants-country.mkpro` | 120 | 105 | final score is now live on the death path; source-level `tile == 7` corrections now fold to the same mask shape as the hand-written abs/sign form |
+| `giants-country.mkpro` | 116 | 105 | source port is complete; remaining blocker is optimizer/layout size pressure in the main cave loop and indirect floor/encounter flow |
+| `tic-tac-toe-4x4.mkpro` | 317 | 105 | source port is complete; remaining blocker is optimizer/lowering size for packed line helpers, bit masks, and nested move search |
 
 Prototype notes:
 
