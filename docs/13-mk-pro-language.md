@@ -1299,9 +1299,11 @@ The pipeline currently contains:
   `super:*` facts until a later proof makes them dot-safe. Hex/super preloads
   with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural
   `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е` remains an
-  ordinary display digit. For non-negative concrete decimal values, `К {x}` is
-  also modeled as an exact normalized fractional decimal in visible `X` while
-  preserving the previous hidden X2 fact. The shared
+  ordinary display digit. For non-negative concrete decimal values and negative
+  non-integer concrete decimal values, `К {x}` is also modeled as an exact
+  normalized fractional decimal in visible `X` while preserving the previous
+  hidden X2 fact; negative integers stay opaque to avoid signed-zero
+  decimalization. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
   mantissa sign toggles, and non-negative exponent shifts that are pure display

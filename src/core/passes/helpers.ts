@@ -581,6 +581,7 @@ function plainProducesStableExpressionValues(
   const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
   if (info.stackEffect === "preserves") {
     for (const key of stableExpressionSourceKeys(x, xShape)) {
+      if (stableExpressionKeyHasConcreteDecimalFraction(op, key)) continue;
       output.add(stableExpressionValueFact(opcode, key));
     }
   } else if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") {
@@ -593,6 +594,15 @@ function plainProducesStableExpressionValues(
   return output;
 }
 
+function stableExpressionKeyHasConcreteDecimalFraction(
+  op: Extract<IrOp, { kind: "plain" }>,
+  key: string,
+): boolean {
+  return op.opcode === 0x35 &&
+    /^decimal:/u.test(key) &&
+    decimalFractionPartFromFactKey(key) !== undefined;
+}
+
 function plainProducesConcreteDecimalValues(
   op: Extract<IrOp, { kind: "plain" }>,
   x: X2ValueSet | undefined,
@@ -601,18 +611,24 @@ function plainProducesConcreteDecimalValues(
   if (op.opcode !== 0x35) return output;
   for (const fact of x ?? []) {
     const value = normalizedDecimalValueFromFact(fact);
-    const fractional = value === undefined ? undefined : nonNegativeDecimalFractionPart(value);
+    const fractional = value === undefined ? undefined : decimalFractionPart(value);
     if (fractional !== undefined) output.add(decimalValueFact(fractional, "normalized"));
   }
   return output;
 }
 
-function nonNegativeDecimalFractionPart(value: string): string | undefined {
-  if (value.startsWith("-")) return undefined;
-  const match = /^([0-9]+)(?:\.([0-9]+))?$/u.exec(value);
+function decimalFractionPartFromFactKey(key: string): string | undefined {
+  const match = /^decimal:([^:]+):normalized$/u.exec(key);
+  return match === null ? undefined : decimalFractionPart(match[1]!);
+}
+
+function decimalFractionPart(value: string): string | undefined {
+  const match = /^(-?)([0-9]+)(?:\.([0-9]+))?$/u.exec(value);
   if (match === null) return undefined;
-  const fraction = (match[2] ?? "").replace(/0+$/u, "");
-  return fraction.length === 0 ? "0" : `0.${fraction}`;
+  const sign = match[1]!;
+  const fraction = (match[3] ?? "").replace(/0+$/u, "");
+  if (fraction.length === 0) return sign === "-" ? undefined : "0";
+  return `${sign}0.${fraction}`;
 }
 
 function plainProducesStableConstantExpressionValue(

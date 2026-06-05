@@ -1313,7 +1313,6 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[3]?.x)).toEqual([
       "decimal:0:normalized",
-      "expr-key:35(decimal:2:normalized)",
       "expr:2",
     ]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:02:unnormalized"]);
@@ -2402,10 +2401,44 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:1.2:normalized"]);
     expect(x2ValueStateText(states[5]?.x)).toEqual([
       "decimal:0.2:normalized",
-      "expr-key:35(decimal:1.2:normalized)",
       "expr:4",
     ]);
     expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:1.2:normalized"]);
+  });
+
+  it("x2 value dataflow computes negative non-integer decimal fractional parts conservatively", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:-1.2:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:-1.2:normalized"]);
+    expect(x2ValueStateText(states[6]?.x)).toEqual([
+      "decimal:-0.2:normalized",
+      "expr:5",
+    ]);
+    expect(x2ValueStateText(states[6]?.x2)).toEqual(["decimal:-1.2:normalized"]);
+  });
+
+  it("x2 value dataflow does not decimalize negative integer fractional parts", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["expr-key:35(decimal:-2:normalized)", "expr:3"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:-2:normalized"]);
   });
 
   it("x2 value dataflow tracks sign-change during fractional decimal entry", () => {
@@ -13136,6 +13169,33 @@ describe("ir passes on synthetic programs", () => {
       plain(0xf0, "F* empty F0"),
       plain(0x54, "К НОП"),
       plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole removes a negative fractional no-op К {x} after an X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      plain(0xf0, "F* empty F0"),
       halt(),
     ]);
   });

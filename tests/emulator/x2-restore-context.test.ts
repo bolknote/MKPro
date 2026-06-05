@@ -74,6 +74,12 @@ describe("X2 restore context", () => {
     }
   });
 
+  it("К {x} keeps the fractional sign for negative non-integers", () => {
+    expect(runX([0x01, 0x0a, 0x02, 0xf0, 0x35, 0x50])).toBe("2,-1");
+    expect(runX([0x01, 0x0a, 0x02, 0x0b, 0xf0, 0x35, 0x50])).toBe("-2,-1");
+    expect(runX([0x02, 0x0b, 0xf0, 0x35, 0x50])).toBe("0,");
+  });
+
   it("В↑ preserves X but syncs the current X into X2", () => {
     // Same setup as the F* test: after К {x}, X is 0 and X2 is still 2.
     // В↑ shifts the stack, but X remains 0 and the following `.` observes
