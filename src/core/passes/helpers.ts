@@ -798,7 +798,9 @@ export function x2StateHasSameStructuralShapeInXAndX2(state: X2ValueDataflowStat
 }
 
 export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefined): boolean {
-  return state?.entry.kind === "closed" && (state.vpContext === undefined || state.vpContext.kind === "none");
+  return state?.entry.kind === "closed" &&
+    (state.vpContext === undefined || state.vpContext.kind === "none") &&
+    (state.structuralVpContext === undefined || state.structuralVpContext.kind === "none");
 }
 
 export function x2StateHasSameDotRestoreValueInXAndX2(state: X2ValueDataflowState | undefined): boolean {

@@ -42,6 +42,7 @@ import {
   x2ExponentSignChangedShapeFact,
   x2MantissaShapeFactFromModel,
   x2MantissaSignChangedShapeFact,
+  x2StateIsClosedPlainContext,
   x2ShapeDataModelForFact,
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetsHaveSameStructuralShape,
@@ -319,6 +320,14 @@ function x2EntryStateText(state: ReturnType<typeof computeX2ValueStates>[number]
 function x2VpContextStateText(state: ReturnType<typeof computeX2ValueStates>[number]): string | undefined {
   if (state === undefined) return undefined;
   const context = state.vpContext;
+  if (context === undefined || context.kind === "none") return "none";
+  if (context.kind === "unknown") return "unknown";
+  return `exponent:${[...context.mantissa].sort().join("|")}:${[...context.exponent].sort().join("|")}`;
+}
+
+function x2StructuralVpContextStateText(state: ReturnType<typeof computeX2ValueStates>[number]): string | undefined {
+  if (state === undefined) return undefined;
+  const context = state.structuralVpContext;
   if (context === undefined || context.kind === "none") return "none";
   if (context.kind === "unknown") return "unknown";
   return `exponent:${[...context.mantissa].sort().join("|")}:${[...context.exponent].sort().join("|")}`;
@@ -1322,6 +1331,7 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0b, "/-/"),
       plain(0x0b, "/-/"),
       plain(0x03, "3"),
+      plain(0x20, "Fπ"),
       halt(),
     ];
     const states = computeX2ValueStates(program, { trackRegisterMemory: true });
@@ -1332,6 +1342,8 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["hex-exponent:FACE:-"]);
     expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:FACE:"]);
     expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
+    expect(x2StructuralVpContextStateText(states[6])).toBe("exponent:hex:FACE:mantissa:3");
+    expect(x2StateIsClosedPlainContext(states[6])).toBe(false);
   });
 
   it("x2 value dataflow keeps indirect conditional fallthrough ВП structural-only", () => {

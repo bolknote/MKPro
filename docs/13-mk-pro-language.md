@@ -1300,7 +1300,9 @@ The pipeline currently contains:
   structural exponent-entry facts (`hex-exponent:*:*` / `super-exponent:*:*`)
   and carries exponent digits/sign toggles as shape-only context. That gives
   splice passes a real model for structural `ВП ... /-/` sequences without
-  promoting hex/super forms into ordinary decimal values. A closed-context `.` now
+  promoting hex/super forms into ordinary decimal values. Such structural
+  `ВП` context is not treated as a plain closed context by `.`/`/-/` rewrite
+  guards. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are
   normalized for `X` during that transfer while the hidden X2 representation
   stays unchanged. If number entry

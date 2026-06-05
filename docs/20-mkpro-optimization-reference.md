@@ -858,7 +858,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `decimal:*` facts, while hex-like display mantissas and `FA`..`FF` super
     forms become structural-only `hex:*` / `super:*` shape facts. Until those
     shapes are separately proved dot-safe, hex/super/display shapes remain
-    structural only. Closed-context
+    structural only; structural VP context is not considered plain closed
+    context by `.`/`/-/` rewrite guards. Closed-context
     `/-/` without a proved decimal or VP context stays
     unknown. The pass accepts either a
     safe dot-restore gap or a CFG-proven immediate no-op form after an
