@@ -1217,7 +1217,8 @@ export function x2StatesHaveSameVpEntrySource(
   right: X2ValueDataflowState | undefined,
 ): boolean {
   return sameNonEmptyStringSet(left?.vpEntryMantissa, right?.vpEntryMantissa) ||
-    sameNonEmptyShapeSet(left?.vpEntryShape, right?.vpEntryShape);
+    sameNonEmptyShapeSet(left?.vpEntryShape, right?.vpEntryShape) ||
+    x2ShapeSetsHaveSameStructuralShape(left?.vpEntryShape, right?.vpEntryShape);
 }
 
 export function x2StateCanDiscardRestoreRunBeforeProvedVp(

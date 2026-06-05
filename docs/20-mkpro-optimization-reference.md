@@ -1062,7 +1062,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     source, exponent-digit presence, and the exact splice actions that are
     safe for that state. Restore runs before a proved `ВП` are checked through
     the same helper for decimal active mantissas and shape-only structural
-    sources. The helper's restore-gap scanner is shared with `x2-noop-restore`,
+    sources; structural source equality now goes through the shared shape
+    algebra, so shifted exponent-entry shapes such as `hex-exponent:Г:2` can
+    match the equivalent `hex:Г00` source without becoming decimal values.
+    The helper's restore-gap scanner is shared with `x2-noop-restore`,
     `x2-hidden-temp-restore`, and `x2-literal-restore`, so all three passes use
     the same marker-label/display-role safety rules before deciding that a
     `КНОП`/`К1`/`К2`/`/-/` run can be ignored before `ВП`.

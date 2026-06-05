@@ -59,9 +59,11 @@ import {
   x2StructuralMantissaAppendDigitsShapeFact,
   x2StructuralMantissaConcatShapeFacts,
   x2StructuralMantissaShiftShapeFact,
+  x2StatesHaveSameVpEntrySource,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueSetsHaveSameRestoredVisibleDecimal,
+  type X2ShapeFact,
   type X2ShapeSet,
   type X2ValueSet,
 } from "../../src/core/passes/helpers.ts";
@@ -1026,6 +1028,25 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:0.1:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:-1:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "hex:1:mantissa")).toBeUndefined();
+  });
+
+  it("x2 VP source proof uses structural shape algebra equality", () => {
+    const base = computeX2ValueStates([halt()])[0]!;
+    const shiftedSource = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["hex-exponent:Г:2"]),
+    };
+    const mantissaSource = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["hex:Г00:mantissa"]),
+    };
+    const differentSource = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["hex:Г0:mantissa"]),
+    };
+
+    expect(x2StatesHaveSameVpEntrySource(shiftedSource, mantissaSource)).toBe(true);
+    expect(x2StatesHaveSameVpEntrySource(shiftedSource, differentSource)).toBe(false);
   });
 
   it("x2 shape algebra toggles mantissa and exponent signs structurally", () => {
