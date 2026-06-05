@@ -96,6 +96,7 @@ function mantissaRestoreRunBeforeProvedVp(
   ops: readonly IrOp[],
   vpIndex: number,
   states: readonly (X2ValueDataflowState | undefined)[],
+  context: DirectReturnAnalysisContext,
 ): readonly number[] {
   const run: number[] = [];
   let sawSign = false;
@@ -111,6 +112,7 @@ function mantissaRestoreRunBeforeProvedVp(
       sawSign = true;
       continue;
     }
+    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
     break;
   }
   if (!sawSign) return [];
@@ -271,7 +273,7 @@ const run: IrPassFn = (ops) => {
     }
     // КНОП/К1/К2 ... ВП -> ВП : drop the inert empty run preceding exponent entry.
     if (isFreeStandingVp(cur)) {
-      const restoreRun = mantissaRestoreRunBeforeProvedVp(ops, i, x2ValueStates);
+      const restoreRun = mantissaRestoreRunBeforeProvedVp(ops, i, x2ValueStates, context);
       if (restoreRun.length > 0) {
         for (const runIndex of restoreRun) remove.add(runIndex);
         continue;

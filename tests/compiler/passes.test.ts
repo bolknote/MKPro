@@ -10377,6 +10377,37 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes a mixed structural restore run before transparent return helpers and ВП", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x0b, "/-/"),
+      plain(0x55, "К1"),
+      plain(0x0b, "/-/"),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("2", "preload const 8.70Е2-6С"),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice does not infer closed decimal ВП shape through a preceding store", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
