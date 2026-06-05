@@ -862,8 +862,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `super-exponent:*:*` forms; exponent digits and exponent `/-/` update that
     structural context without creating decimal value facts. The construction is
     routed through the shared shape algebra, which can rebuild canonical
-    mantissa facts and derive structural mantissa/exponent sign toggles while
-    still refusing hex/super arithmetic, carry, or decimalization proofs.
+    mantissa facts, derive structural exponent-context sign toggles, and derive
+    closed-context mantissa sign toggles for synced structural exponent shapes
+    while still refusing hex/super arithmetic, carry, or decimalization proofs.
+    Closed structural exponent shapes are equality/restore evidence only; they
+    are not promoted to fresh `ВП`-entry sources.
     Closed-context `.`
     restores carry structural hex/super hidden X2 shapes forward as structural
     `ВП`-entry sources, while dot-restored leading-zero decimal forms are still
@@ -874,7 +877,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shapes are separately proved dot-safe, hex/super/display shapes remain
     structural only; structural VP context is not considered plain closed
     context by `.`/`/-/` rewrite guards. Closed-context
-    `/-/` without a proved decimal or VP context stays
+    `/-/` without a proved decimal, opaque, structural shape, or VP context stays
     unknown. The pass accepts either a
     safe dot-restore gap or a CFG-proven immediate no-op form after an
     X2-affecting sync such as `П->X r`/`Cx`/conditional fallthrough/direct

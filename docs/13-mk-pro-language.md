@@ -1293,8 +1293,11 @@ The pipeline currently contains:
   `super:*` facts until a later proof makes them dot-safe. Hexadecimal
   concatenation itself is not inferred here yet, but a shared shape-algebra
   layer now derives structural `hex-exponent:*:*` / `super-exponent:*:*`
-  entries and mantissa/exponent sign toggles without promoting them to ordinary
-  decimal value facts. Those structural forms also
+  entries, exponent-context sign toggles, and closed-context mantissa sign
+  toggles for synced structural exponent shapes without promoting them to ordinary
+  decimal value facts. Structural exponent shapes remain equality/restore
+  evidence only; unlike structural mantissas, they do not seed a fresh
+  shape-only `ВП`-entry source. Structural mantissa forms also
   seed a separate shape-only `ВП`-entry source after direct/proved recalls,
   closed-context `.` restores of structural hidden X2, direct `В/О` return
   continuations, and path-sensitive direct-conditional fallthrough X2 syncs; the

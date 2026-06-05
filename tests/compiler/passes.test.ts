@@ -38,6 +38,7 @@ import {
   computeX2ValueStates,
   parseX2ShapeFact,
   recallValueProof,
+  x2ExponentMantissaSignChangedShapeFact,
   x2ExponentShapeFactFromMantissaFact,
   x2ExponentSignChangedShapeFact,
   x2MantissaShapeFactFromModel,
@@ -860,6 +861,8 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ExponentSignChangedShapeFact("exponent:05:3:decimal")).toBe("exponent:05:-3:decimal");
     expect(x2ExponentSignChangedShapeFact("hex-exponent:FACE:-2")).toBe("hex-exponent:FACE:2");
     expect(x2ExponentSignChangedShapeFact("super-exponent:FA:")).toBe("super-exponent:FA:-");
+    expect(x2ExponentMantissaSignChangedShapeFact("hex-exponent:FACE:-2")).toBe("hex-exponent:-FACE:-2");
+    expect(x2ExponentMantissaSignChangedShapeFact("super-exponent:-FA:3")).toBe("super-exponent:FA:3");
   });
 
   it("x2 shape algebra rebuilds canonical mantissa facts from data models", () => {
@@ -1370,6 +1373,26 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StateIsClosedPlainContext(states[6])).toBe(false);
   });
 
+  it("x2 value dataflow models closed structural exponent mantissa sign-change after X2 sync", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["hex-exponent:FACE:3"]);
+    expect(x2StateIsClosedPlainContext(states[4])).toBe(true);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:-FACE:3"]);
+    expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["hex-exponent:-FACE:3"]);
+    expect(x2VpEntryShapeText(states[5])).toEqual([]);
+    expect(x2StateIsClosedPlainContext(states[5])).toBe(true);
+  });
+
   it("x2 value dataflow keeps indirect conditional fallthrough ВП structural-only", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -1756,6 +1779,33 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
     expect(x2ShapeStateText(states[9]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
     expect(recallValueProof(recall("2"), states[9])).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+      x2SyncShape: true,
+    });
+  });
+
+  it("recall value proof uses stored signed structural exponent shapes after closed sign-change", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      store("2"),
+      recall("3", "preload const -FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:-FACE:3"]);
+    expect(x2ShapeStateText(states[10]?.xShape)).toEqual(["hex-exponent:-FACE:3"]);
+    expect(recallValueProof(recall("2"), states[10])).toEqual({
       register: "2",
       inX: true,
       x2SyncRegister: undefined,

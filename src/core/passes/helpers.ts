@@ -732,6 +732,17 @@ export function x2ExponentSignChangedShapeFact(fact: X2ShapeFact): X2ShapeFact |
   );
 }
 
+export function x2ExponentMantissaSignChangedShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "exponent-entry") return undefined;
+  const mantissa = x2MantissaShapeFactFromModel(model.mantissa);
+  if (mantissa === undefined) return undefined;
+  const signedMantissa = x2MantissaSignChangedShapeFact(mantissa);
+  return signedMantissa === undefined
+    ? undefined
+    : x2ExponentShapeFactFromMantissaFact(signedMantissa, model.exponentRaw);
+}
+
 export function x2ShapeFactSafety(fact: X2ShapeFact): X2ShapeSafety {
   return x2ShapeDataModelForFact(fact).safety;
 }
@@ -3202,9 +3213,20 @@ function signChangedClosedStructuralShapeFacts(input: X2ValueDataflowState): Rea
   const shapes = new Set<X2ShapeFact>();
   for (const fact of input.x2Shape ?? []) {
     const model = x2ShapeDataModelForFact(fact);
-    if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) continue;
     if (input.xShape?.has(fact) !== true) continue;
-    shapes.add(signChangedStructuralMantissaShapeFact(fact));
+    if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) {
+      shapes.add(signChangedStructuralMantissaShapeFact(fact));
+      continue;
+    }
+    if (
+      model.kind === "exponent-entry" &&
+      (model.mantissa.radix === "hex" || model.mantissa.radix === "super") &&
+      model.safety === "structuralOnly"
+    ) {
+      const signed = x2ExponentMantissaSignChangedShapeFact(fact);
+      if (signed === undefined) return undefined;
+      shapes.add(signed);
+    }
   }
   return shapes.size === 0 ? undefined : shapes;
 }
@@ -3318,16 +3340,17 @@ function x2ValueStateFromStructuralShapes(
   memory: X2ValueMemory | undefined = undefined,
   shapeMemory: X2ShapeMemory | undefined = undefined,
 ): X2ValueDataflowState {
+  const shapeSet = new Set(shapes);
   return {
     x: new Set(),
     x2: new Set(),
-    xShape: new Set(shapes),
-    x2Shape: new Set(shapes),
+    xShape: shapeSet,
+    x2Shape: new Set(shapeSet),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
-    vpEntryShape: new Set(shapes),
+    vpEntryShape: vpEntryShapesFromShapeFacts(shapeSet),
     memory,
     shapeMemory,
   };
