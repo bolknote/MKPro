@@ -103,6 +103,14 @@ const X2_SIGN_CHANGE_OPCODE = 0x0b;
 const STACK_EXCHANGE_XY_OPCODE = 0x14;
 const X2_EMPTY_OPCODE_START = 0x54;
 const X2_EMPTY_OPCODE_END = 0x56;
+const COMMUTATIVE_STABLE_EXPR_OPCODES = new Set<number>([
+  0x10, // +
+  0x12, // *
+  0x36, // К max
+  0x37, // К ∧
+  0x38, // К ∨
+  0x39, // К ⊕
+]);
 const PURE_OPAQUE_EXPR_OPCODES = new Set<number>([
   0x10, // +
   0x11, // -
@@ -576,11 +584,21 @@ function plainProducesStableExpressionValues(
       for (const xSource of x ?? []) {
         const xKey = stableExpressionSourceKey(xSource);
         if (xKey === undefined) continue;
-        output.add(stableExpressionValueFact(opcode, `${yKey},${xKey}`));
+        output.add(stableBinaryExpressionValueFact(op, opcode, yKey, xKey));
       }
     }
   }
   return output;
+}
+
+function stableBinaryExpressionValueFact(
+  op: Extract<IrOp, { kind: "plain" }>,
+  opcode: string,
+  yKey: string,
+  xKey: string,
+): X2ValueFact {
+  const operands = COMMUTATIVE_STABLE_EXPR_OPCODES.has(op.opcode) ? [yKey, xKey].sort() : [yKey, xKey];
+  return stableExpressionValueFact(opcode, operands.join(","));
 }
 
 function plainXValueAfterNonPreservingOp(

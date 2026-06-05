@@ -1406,6 +1406,27 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[10]).toMatchObject({ kind: "plain", opcode: 0x0a });
   });
 
+  it("x2-hidden-temp-restore uses canonical stable expr keys for commutative computations", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      store("3"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x10, "+"),
+      plain(0x0e, "В↑"),
+      recall("3"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[10]).toMatchObject({ kind: "plain", opcode: 0x0a });
+  });
+
   it("x2-hidden-temp-restore uses stable expr keys across repeated X/Y exchange computations", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -1503,6 +1524,34 @@ describe("ir passes on synthetic programs", () => {
       "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
       "expr:3",
       "reg:2",
+    ]);
+  });
+
+  it("x2 value dataflow canonicalizes stable expr keys for commutative binary computations", () => {
+    const plusProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const minusProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x11, "-"),
+      halt(),
+    ];
+    const plusStates = computeX2ValueStates(plusProgram);
+    const minusStates = computeX2ValueStates(minusProgram);
+
+    expect(x2ValueStateText(plusStates[4]?.x)).toEqual([
+      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "expr:3",
+    ]);
+    expect(x2ValueStateText(minusStates[4]?.x)).toEqual([
+      "expr-key:11(decimal:2:normalized,decimal:1:normalized)",
+      "expr:3",
     ]);
   });
 
