@@ -718,10 +718,12 @@ Display rewrites are separated into strategy selection + body lowering.
   no-net rewrite can perturb layout.
 - `x2-dead-restore-before-overwrite` — removes a proved-safe X2 restore whose
   visible `X` result is immediately overwritten by a hard X/X2 replacement
-  command. The proof uses decimal X2 value facts for `.`/`/-/` and
-  mantissa/exponent-entry state for `ВП`; structural hex/super `ВП` sources are
-  accepted only as shape facts, while unknown register-valued X2 facts are kept
-  because hex/non-normal preloads can make the restore itself observable.
+  command. Consecutive same-segment restores and free-standing separators are
+  removed as one run, while labels split the removable run. The proof uses
+  decimal X2 value facts for `.`/`/-/` and mantissa/exponent-entry state for
+  `ВП`; structural hex/super `ВП` sources are accepted only as shape facts,
+  while unknown register-valued X2 facts are kept because hex/non-normal
+  preloads can make the restore itself observable.
 - `x2-register-dataflow` — tracks definite states of the form “X2 currently
   equals register `r`” through X2-preserving code, stores, known indirect memory
   recalls, direct or proved-indirect calls into the graph, proved indirect flow
@@ -862,7 +864,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 18. `x2-dead-restore-before-overwrite` — removes a safe context-sensitive
     `.`/`/-/`/`ВП` restore, plus adjacent free-standing `КНОП`/`К1`/`К2`
     separators, when a following hard X/X2 overwrite such as `Cx` destroys the
-    restored `X` before it can be observed. `.` requires a closed, non-`ВП`
+    restored `X` before it can be observed. Consecutive same-segment dead
+    restores and free-standing separators are removed as one run, while labels
+    split the run. `.` requires a closed, non-`ВП`
     context with a proved decimal X2 value; a bare `reg:r` fact is intentionally
     rejected because a preloaded hex or non-normal register value can make `.`
     signal `ЕГГ0Г`. `/-/` may also be removed from open mantissa, active

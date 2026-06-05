@@ -1355,7 +1355,10 @@ The pipeline currently contains:
 - **x2-dead-restore-before-overwrite** — removes a context-sensitive
   `.`/`/-/`/`ВП` restore, plus adjacent `КНОП`/`К1`/`К2` separators, when the
   restored `X` value is immediately destroyed by a proved hard X/X2 overwrite
-  such as `Cx`. This is deliberately narrower than `x2-noop-restore`: `.` is
+  such as `Cx`. Consecutive same-segment dead restores and free-standing
+  separators are removed as one run; labels split the run so a target entry
+  does not inherit a proof from the previous segment. This is deliberately
+  narrower than `x2-noop-restore`: `.` is
   accepted only from a closed, non-`ВП` context with a proved decimal X2 value
   fact. A plain `reg:r` fact is not enough, because a preloaded hexadecimal or
   other non-normal register value may make `.` signal `ЕГГ0Г` before the

@@ -27,11 +27,10 @@ const run: IrPassFn = (ops) => {
     if (remove.has(index)) continue;
     const op = ops[index]!;
     if (!isDeadRestoreCandidate(op, states[index])) continue;
-    const overwrite = followingHardOverwrite(ops, index + 1);
-    if (overwrite === undefined) continue;
+    const deadRun = deadRestoreRunBeforeHardOverwrite(ops, states, index);
+    if (deadRun === undefined) continue;
 
-    remove.add(index);
-    for (const gap of overwrite.gaps) remove.add(gap);
+    for (const removeIndex of deadRun) remove.add(removeIndex);
   }
 
   if (remove.size === 0) return emptyResult(ops);
@@ -71,19 +70,28 @@ function isDeadRestoreCandidate(
   return false;
 }
 
-function followingHardOverwrite(
+function deadRestoreRunBeforeHardOverwrite(
   ops: readonly IrOp[],
+  states: readonly (X2ValueDataflowState | undefined)[],
   start: number,
-): { readonly index: number; readonly gaps: readonly number[] } | undefined {
-  const gaps: number[] = [];
-  for (let index = start; index < ops.length; index += 1) {
+): readonly number[] | undefined {
+  const remove: number[] = [start];
+  let sameSegment = true;
+  for (let index = start + 1; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (op.kind === "label") continue;
-    if (isFreeStandingEmptyOp(op)) {
-      gaps.push(index);
+    if (op.kind === "label") {
+      sameSegment = false;
       continue;
     }
-    return isHardX2OverwriteWithoutStackUse(op) ? { index, gaps } : undefined;
+    if (isFreeStandingEmptyOp(op)) {
+      if (sameSegment) remove.push(index);
+      continue;
+    }
+    if (sameSegment && isDeadRestoreCandidate(op, states[index])) {
+      remove.push(index);
+      continue;
+    }
+    return isHardX2OverwriteWithoutStackUse(op) ? remove : undefined;
   }
   return undefined;
 }

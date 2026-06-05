@@ -2819,6 +2819,55 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite removes a same-segment dead restore run before hard overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps restore runs separated by labels", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      label("entry"),
+      plain(0x0b, "/-/"),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      label("entry"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
   it("x2-dead-restore-before-overwrite removes open mantissa sign before hard overwrite", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
@@ -2848,10 +2897,9 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
 
-    expect(result.applied).toBe(2);
+    expect(result.applied).toBe(3);
     expect(result.ops).toEqual([
       plain(0x05, "5"),
-      plain(0x0c, "ВП"),
       plain(0x0d, "Cx"),
       halt(),
     ]);
@@ -2954,11 +3002,9 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
 
-    expect(result.applied).toBe(2);
+    expect(result.applied).toBe(4);
     expect(result.ops).toEqual([
       plain(0x05, "5"),
-      plain(0x0c, "ВП"),
-      plain(0x54, "КНОП"),
       plain(0x0d, "Cx"),
       halt(),
     ]);
