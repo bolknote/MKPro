@@ -1429,6 +1429,29 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops[12]).toMatchObject({ kind: "plain", opcode: 0x0a });
   });
 
+  it("x2-hidden-temp-restore uses stable expr keys across repeated Y-keeping computations", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x36, "К max"),
+      plain(0x37, "К ∧"),
+      store("3"),
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x36, "К max"),
+      plain(0x37, "К ∧"),
+      plain(0x0e, "В↑"),
+      recall("3"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[12]).toMatchObject({ kind: "plain", opcode: 0x0a });
+  });
+
   it("x2-hidden-temp-restore uses stable expr keys across repeated closed sign-change", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -1505,6 +1528,31 @@ describe("ir passes on synthetic programs", () => {
     ]);
     expect(x2ValueStateText(states[6]?.x2)).toEqual([
       "expr-key:11(decimal:2:normalized,decimal:1:normalized)",
+      "expr:4",
+    ]);
+  });
+
+  it("x2 value dataflow preserves Y through documented Y-keeping computations", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x36, "К max"),
+      plain(0x37, "К ∧"),
+      plain(0x0e, "В↑"),
+      store("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[4]?.y)).toEqual(["decimal:1:normalized"]);
+    expect(x2ValueStateText(states[5]?.x)).toEqual([
+      "expr-key:37(decimal:1:normalized,expr-key:36(decimal:1:normalized,decimal:2:normalized))",
+      "expr:4",
+    ]);
+    expect(x2ValueStateText(states[5]?.y)).toEqual(["decimal:1:normalized"]);
+    expect(x2ValueStateText(states[6]?.x2)).toEqual([
+      "expr-key:37(decimal:1:normalized,expr-key:36(decimal:1:normalized,decimal:2:normalized))",
       "expr:4",
     ]);
   });

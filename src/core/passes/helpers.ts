@@ -2937,6 +2937,7 @@ function transferPlainYValueSet(
   const info = getOpcode(op.opcode);
   if (info.stackEffect === "shifts") return new Set(sourceX);
   if (info.stackEffect === "preserves") return new Set(input.y ?? []);
+  if (info.stackEffect === "consume-y-keep" && info.risk === "documented") return new Set(input.y ?? []);
   return new Set();
 }
 

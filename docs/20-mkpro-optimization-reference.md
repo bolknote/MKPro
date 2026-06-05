@@ -792,10 +792,11 @@ Display rewrites are separated into strategy selection + body lowering.
   That lets repeated `F sqrt(2)`-style computations and their closed sign
   changes meet in X2 dataflow without relying on the producer address. The
   value dataflow also tracks a value-only `Y` fact through proved stack shifts,
-  and through `X↔Y` swaps, so stack-consuming documented pure computations
-  seed `expr-key:<opcode>(<Y>,<X>)` when both operands are stable sources;
-  otherwise they remain producer-local. Display-role, barrier, exposing,
-  undocumented, dangerous, and random-like commands do not seed such facts.
+  through `X↔Y` swaps, and through documented operations whose stack profile
+  keeps `Y`, so stack-consuming documented pure computations seed
+  `expr-key:<opcode>(<Y>,<X>)` when both operands are stable sources; otherwise
+  they remain producer-local. Display-role, barrier, exposing, undocumented,
+  dangerous, and random-like commands do not seed such facts.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.
