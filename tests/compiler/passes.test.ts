@@ -10338,7 +10338,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
   });
 
-  it("vp-x2-peephole proves an ordinary ВП/X2 boundary from opcode context", () => {
+  it("vp-x2-peephole keeps К {x} after unmarked ordinary opcode context", () => {
     const program: IrOp[] = [
       recall("1"),
       plain(0x20, "F pi"),
@@ -10348,20 +10348,15 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = vpX2Peephole.run(program, ctx);
 
-    expect(result.applied).toBe(1);
-    expect(result.ops).toEqual([
-      recall("1"),
-      plain(0x20, "F pi"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
-      halt(),
-    ]);
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("vp-x2-peephole removes unmarked К {x} after a proved ВП/X2 boundary", () => {
     const program: IrOp[] = [
       recall("1"),
       plain(0x20, "F pi"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       plain(0x35, "К {x}"),
       halt(),
     ];
@@ -10371,7 +10366,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       recall("1"),
       plain(0x20, "F pi"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       halt(),
     ]);
   });
@@ -10380,7 +10375,7 @@ describe("ir passes on synthetic programs", () => {
     const program: IrOp[] = [
       recall("1"),
       plain(0x20, "F pi"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       plain(0x54, "КНОП"),
       plain(0x55, "К1"),
       plain(0x35, "К {x}"),
@@ -10392,7 +10387,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       recall("1"),
       plain(0x20, "F pi"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       plain(0x54, "КНОП"),
       plain(0x55, "К1"),
       halt(),
@@ -10403,7 +10398,7 @@ describe("ir passes on synthetic programs", () => {
     const program: IrOp[] = [
       recall("1"),
       plain(0x20, "F pi"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       { kind: "plain", opcode: 0x55, meta: { mnemonic: "К1", roles: ["display-byte"] } },
       plain(0x35, "К {x}"),
       halt(),
@@ -10418,7 +10413,7 @@ describe("ir passes on synthetic programs", () => {
     const program: IrOp[] = [
       recall("1"),
       plain(0x20, "F pi"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       plain(0x54, "КНОП"),
       label("marker"),
       plain(0x55, "К1"),
@@ -10431,7 +10426,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       recall("1"),
       plain(0x20, "F pi"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       plain(0x54, "КНОП"),
       label("marker"),
       plain(0x55, "К1"),
@@ -10439,11 +10434,102 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-x2-peephole removes К {x} after a proved boundary through X-preserving stores", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
+      store("2"),
+      plain(0x0e, "В↑"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
+      store("2"),
+      plain(0x0e, "В↑"),
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole removes К {x} after a proved boundary through transparent direct-return helpers", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      store("2"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
+      call("noop"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      store("2"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
+      call("noop"),
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole keeps К {x} after direct-return helpers that change X", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("load"),
+      plain(0x20, "F pi"),
+      ret(),
+      label("main"),
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      call("load"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-x2-peephole keeps К {x} across role-bearing X-preserving gaps", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
+      { kind: "plain", opcode: 0x0e, meta: { mnemonic: "В↑", roles: ["display-byte"] } },
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-x2-peephole keeps К {x} across referenced labels", () => {
     const program: IrOp[] = [
       recall("1"),
       plain(0x20, "F pi"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       jump("entry"),
       label("entry"),
       plain(0x35, "К {x}"),
@@ -10459,7 +10545,7 @@ describe("ir passes on synthetic programs", () => {
     const program: IrOp[] = [
       recall("1"),
       plain(0x20, "F pi"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", raw: true } },
       halt(),
     ];
@@ -10469,13 +10555,13 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("vp-x2-peephole proves a ВП/X2 boundary through a direct conditional jump edge", () => {
+  it("vp-x2-peephole removes a marked ВП/X2 boundary reached by a direct conditional jump edge", () => {
     const program: IrOp[] = [
       recall("1"),
       cjump("target"),
       jump("end"),
       label("target"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
       label("end"),
       halt(),
@@ -10486,13 +10572,13 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
   });
 
-  it("vp-x2-peephole proves a ВП/X2 boundary through a counted-loop jump edge", () => {
+  it("vp-x2-peephole removes a marked ВП/X2 boundary reached by a counted-loop jump edge", () => {
     const program: IrOp[] = [
       recall("1"),
       loop("target"),
       jump("end"),
       label("target"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
       label("end"),
       halt(),
@@ -10503,13 +10589,13 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
   });
 
-  it("vp-x2-peephole proves a ВП/X2 boundary through a proved stable indirect jump", () => {
+  it("vp-x2-peephole removes a marked ВП/X2 boundary reached by a proved stable indirect jump", () => {
     const program: IrOp[] = [
       recall("1"),
       knownTargetIndirectJump("8", 3),
       halt(),
       label("target"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
       halt(),
     ];
@@ -10519,13 +10605,13 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
   });
 
-  it("vp-x2-peephole proves a ВП/X2 boundary through a proved stable indirect conditional jump edge", () => {
+  it("vp-x2-peephole removes a marked ВП/X2 boundary reached by a proved stable indirect conditional jump edge", () => {
     const program: IrOp[] = [
       recall("1"),
       knownTargetIndirectCjump("8", 4),
       jump("end"),
       label("target"),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
       halt(),
       label("end"),
@@ -10537,7 +10623,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
   });
 
-  it("vp-x2-peephole keeps fraction after a direct conditional fallthrough X2 sync", () => {
+  it("vp-x2-peephole keeps fraction after an unmarked direct conditional fallthrough X2 sync", () => {
     const program: IrOp[] = [
       recall("1"),
       cjump("target"),
@@ -10552,7 +10638,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("vp-x2-peephole keeps fraction after a counted-loop fallthrough X2 sync", () => {
+  it("vp-x2-peephole keeps fraction after an unmarked counted-loop fallthrough X2 sync", () => {
     const program: IrOp[] = [
       recall("1"),
       loop("target"),
@@ -10567,11 +10653,11 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("vp-x2-peephole removes fraction after an indirect conditional preserves an X2 boundary", () => {
+  it("vp-x2-peephole removes fraction after a marked indirect conditional fallthrough boundary", () => {
     const program: IrOp[] = [
       recall("1"),
       knownTargetIndirectCjump("8", 6),
-      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
       { kind: "plain", opcode: 0x35, meta: { mnemonic: "К {x}", comment: "frac after restore" } },
       jump("end"),
       label("target"),
@@ -10585,7 +10671,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops.some((op) => op.kind === "plain" && op.opcode === 0x35)).toBe(false);
   });
 
-  it("vp-x2-peephole requires every CFG entry to prove the ВП/X2 boundary", () => {
+  it("vp-x2-peephole keeps an unmarked ВП at a CFG join", () => {
     const program: IrOp[] = [
       recall("1"),
       cjump("target"),

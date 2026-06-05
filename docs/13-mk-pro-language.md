@@ -1665,18 +1665,15 @@ The pipeline currently contains:
   ordinary stack-difference proof shows the lift's Y value is dead before any
   consumer can observe it.
 - **vp-x2-peephole** — drops a `К {x}` after a proved `ВП`/X2 boundary,
-  possibly through free-standing `КНОП`/`К1`/`К2` empty ops and unreferenced
-  marker labels, when `ВП` already supplies the fractional transform. The
-  `К {x}` itself is recognized by opcode, not by a display/frac comment; only
-  the preceding `ВП`/X2 boundary must be proved. The proof is not
-  display-specific:
-  display lowering is just one producer of such boundaries. For ordinary code
-  the pass can also prove a boundary from the opcode context itself: an X2 sync,
-  at least one X2-preserving executable gap, then `ВП`. That proof is
-  path-sensitive for direct CFG edges, so a conditional jump edge may prove the
-  boundary while an immediate fallthrough X2-sync still refuses the rewrite;
-  `F Lx` loop edges follow the same rule. Joins require every incoming path to
-  carry the proof.
+  possibly through free-standing `КНОП`/`К1`/`К2`, other role-free
+  X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and simple
+  direct-return helpers whose body also preserves X, when `ВП` already supplies
+  the fractional transform. The `К {x}` itself is recognized by opcode, not by
+  a display/frac comment; only the preceding compiler-owned `ВП`/X2 boundary
+  marker must be present. A plain opcode pattern such as `П->X r; Fπ; ВП` is
+  not enough: emulator probes show that it restores X2 but does not generally
+  make `К {x}` redundant. Display lowering is just one producer of valid
+  boundary markers.
 - **membership X2 restore** — membership set lowering may use `.` as a hidden
   X2 restore in non-display code. It is accepted only when the set collection
   assignable is byte-for-byte the tested collection, including indexed bank

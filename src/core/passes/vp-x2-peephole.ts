@@ -1,11 +1,15 @@
 import type { IrOp } from "../types.ts";
-import { getOpcode } from "../opcodes.ts";
 import {
   computeLabelEntryIndexes,
-  computeX2RestoreBoundaryStates,
+  directReturnAnalysisContext,
   hasRewriteBarrier,
+  isKnownReturnCallOp,
+  knownReturnCallReturnsThroughTransparentRange,
+  plainPreservesXValue,
+  type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
+  type KnownReturnCallOp,
 } from "./helpers.ts";
 
 function x2BoundaryText(op: IrOp): string {
@@ -21,42 +25,6 @@ function isVpX2Boundary(op: IrOp): boolean {
   return op.kind === "plain" &&
     op.opcode === 0x0c &&
     /display|x2|вп/u.test(x2BoundaryText(op));
-}
-
-function isX2Sync(op: IrOp): boolean {
-  if (hasRewriteBarrier(op)) return false;
-  if (op.kind === "recall" || op.kind === "indirect-recall") return true;
-  if (op.kind !== "plain") return false;
-  return getOpcode(op.opcode).x2Effect === "affects";
-}
-
-function isLinearX2PreservingExecutable(op: IrOp): boolean {
-  if (hasRewriteBarrier(op)) return false;
-  switch (op.kind) {
-    case "store":
-    case "indirect-store":
-    case "orphan-address":
-      return true;
-    case "plain":
-      return getOpcode(op.opcode).x2Effect === "preserves";
-    default:
-      return false;
-  }
-}
-
-function isProvedVpX2Boundary(ops: readonly IrOp[], index: number, boundaryStates: readonly boolean[]): boolean {
-  const op = ops[index];
-  if (op === undefined || op.kind !== "plain" || op.opcode !== 0x0c || hasRewriteBarrier(op)) return false;
-  if (boundaryStates[index] === true) return true;
-  let sawPreservingGap = false;
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const previous = ops[cursor]!;
-    if (previous.kind === "label") continue;
-    if (isX2Sync(previous)) return sawPreservingGap;
-    if (!isLinearX2PreservingExecutable(previous)) return false;
-    sawPreservingGap = true;
-  }
-  return false;
 }
 
 function isFractionAfterX2Boundary(op: IrOp): boolean {
@@ -80,6 +48,7 @@ function fractionAfterBoundaryIndex(
   ops: readonly IrOp[],
   boundaryIndex: number,
   labelEntries: ReadonlySet<number>,
+  context: DirectReturnAnalysisContext,
 ): number | undefined {
   for (let index = boundaryIndex + 1; index < ops.length; index += 1) {
     const op = ops[index]!;
@@ -87,19 +56,42 @@ function fractionAfterBoundaryIndex(
       if (labelEntries.has(index)) return undefined;
       continue;
     }
-    if (isFreeStandingEmptyOp(op)) continue;
+    if (isXPreservingBoundaryGap(op)) continue;
+    if (isKnownReturnCallOp(op) && simpleDirectReturnPreservesX(ops, op, context)) continue;
     return isFractionAfterX2Boundary(op) ? index : undefined;
   }
   return undefined;
 }
 
+function isXPreservingBoundaryGap(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
+  switch (op.kind) {
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain":
+      return !hasRoles(op) && (isFreeStandingEmptyOp(op) || plainPreservesXValue(op));
+    default:
+      return false;
+  }
+}
+
+function simpleDirectReturnPreservesX(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return knownReturnCallReturnsThroughTransparentRange(ops, call, context, isXPreservingBoundaryGap);
+}
+
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
-  const boundaryStates = computeX2RestoreBoundaryStates(ops);
   const labelEntries = computeLabelEntryIndexes(ops);
+  const context = directReturnAnalysisContext(ops);
   for (let i = 0; i < ops.length; i += 1) {
-    if (!isVpX2Boundary(ops[i]!) && !isProvedVpX2Boundary(ops, i, boundaryStates)) continue;
-    const fractionIndex = fractionAfterBoundaryIndex(ops, i, labelEntries);
+    if (!isVpX2Boundary(ops[i]!)) continue;
+    const fractionIndex = fractionAfterBoundaryIndex(ops, i, labelEntries, context);
     if (fractionIndex !== undefined) remove.add(fractionIndex);
   }
   if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
