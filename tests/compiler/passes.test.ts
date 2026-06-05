@@ -7171,6 +7171,49 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift removes В↑ after recall when the recall already supplies X2 sync", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps post-recall В↑ when its stack lift is consumed", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x0e, "В↑"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift keeps post-recall В↑ after display-sensitive recalls", () => {
+    const program: IrOp[] = [
+      recall("1", "display digit"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("stack/X2 effect analysis classifies recall as combined lift and X2 sync", () => {
     expect(analyzeX2StackEffect(recall("2"))).toMatchObject({
       stackShifts: true,

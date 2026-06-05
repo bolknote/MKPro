@@ -3,9 +3,11 @@ import {
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
+  isDisplayFocusSensitive,
   removingRecallCanExposeX2Restore,
   removingPreShiftLiftCanExposeStack,
   removingStackLiftCanExposeStack,
+  removableRecallValueRegister,
   type IrPass,
   type IrPassFn,
   x2NextHardX2OverwriteIndex,
@@ -22,6 +24,11 @@ const run: IrPassFn = (ops) => {
   for (let index = 0; index < ops.length - 1; index += 1) {
     const op = ops[index]!;
     if (!isStackLift(op)) continue;
+    if (previousRecallAlreadySuppliesLiftX2Sync(ops, index)) {
+      if (removingStackLiftCanExposeStack(ops, index)) continue;
+      remove.add(index);
+      continue;
+    }
     const producerIndex = x2NextStackShiftingProducerIndex(ops, index + 1, context);
     if (producerIndex !== undefined) {
       if (removingPreShiftLiftCanExposeStack(ops, producerIndex)) continue;
@@ -46,6 +53,13 @@ const run: IrPassFn = (ops) => {
     }],
   };
 };
+
+function previousRecallAlreadySuppliesLiftX2Sync(ops: readonly IrOp[], liftIndex: number): boolean {
+  const previous = ops[liftIndex - 1];
+  return previous !== undefined &&
+    removableRecallValueRegister(previous) !== undefined &&
+    !isDisplayFocusSensitive(previous);
+}
 
 export const preShiftStackLift: IrPass = {
   name: "pre-shift-stack-lift",
