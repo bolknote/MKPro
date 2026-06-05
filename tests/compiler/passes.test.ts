@@ -1872,7 +1872,7 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
-  it("x2 value dataflow seeds stable and opaque expr facts from pure stack-consuming computations", () => {
+  it("x2 value dataflow seeds concrete and opaque expr facts from pure stack-consuming computations", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
       plain(0x0e, "В↑"),
@@ -1885,42 +1885,65 @@ describe("ir passes on synthetic programs", () => {
     const states = computeX2ValueStates(program, { trackRegisterMemory: true });
 
     expect(x2ValueStateText(states[4]?.x)).toEqual([
-      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "decimal:3:normalized",
       "expr:3",
     ]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[5]?.x)).toEqual([
-      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "decimal:3:normalized",
       "expr:3",
     ]);
     expect(x2ValueStateText(states[5]?.x2)).toEqual([
-      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "decimal:3:normalized",
       "expr:3",
     ]);
     expect(x2ValueStateText(states[6]?.x)).toEqual([
-      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "decimal:3:normalized",
       "expr:3",
       "reg:2",
     ]);
     expect(x2ValueStateText(states[6]?.x2)).toEqual([
-      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "decimal:3:normalized",
       "expr:3",
       "reg:2",
     ]);
   });
 
-  it("x2 value dataflow canonicalizes stable expr keys for commutative binary computations", () => {
-    const plusProgram: IrOp[] = [
-      plain(0x02, "2"),
+  it("x2 value dataflow keeps wide binary decimal results opaque", () => {
+    const program: IrOp[] = [
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
       plain(0x0e, "В↑"),
       plain(0x01, "1"),
       plain(0x10, "+"),
       halt(),
     ];
-    const minusProgram: IrOp[] = [
-      plain(0x02, "2"),
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[11]?.x)).toEqual([
+      "expr-key:10(decimal:1:normalized,decimal:99999999:normalized)",
+      "expr:10",
+    ]);
+  });
+
+  it("x2 value dataflow canonicalizes stable expr keys for commutative binary computations", () => {
+    const plusProgram: IrOp[] = [
+      recall("2"),
       plain(0x0e, "В↑"),
-      plain(0x01, "1"),
+      recall("1"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const minusProgram: IrOp[] = [
+      recall("2"),
+      plain(0x0e, "В↑"),
+      recall("1"),
       plain(0x11, "-"),
       halt(),
     ];
@@ -1928,11 +1951,11 @@ describe("ir passes on synthetic programs", () => {
     const minusStates = computeX2ValueStates(minusProgram);
 
     expect(x2ValueStateText(plusStates[4]?.x)).toEqual([
-      "expr-key:10(decimal:1:normalized,decimal:2:normalized)",
+      "expr-key:10(reg:1,reg:2)",
       "expr:3",
     ]);
     expect(x2ValueStateText(minusStates[4]?.x)).toEqual([
-      "expr-key:11(decimal:2:normalized,decimal:1:normalized)",
+      "expr-key:11(reg:2,reg:1)",
       "expr:3",
     ]);
   });
@@ -1954,11 +1977,11 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.y)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[5]?.x)).toEqual([
-      "expr-key:11(decimal:2:normalized,decimal:1:normalized)",
+      "decimal:1:normalized",
       "expr:4",
     ]);
     expect(x2ValueStateText(states[6]?.x2)).toEqual([
-      "expr-key:11(decimal:2:normalized,decimal:1:normalized)",
+      "decimal:1:normalized",
       "expr:4",
     ]);
   });
@@ -5187,6 +5210,33 @@ describe("ir passes on synthetic programs", () => {
       plain(0x31, "К |x|"),
       plain(0xf0, "F* empty F0"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.2 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses concrete binary addition X2 facts", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x03, "3"),
+      plain(0x10, "+"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x05, "5"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x03, "3"),
+      plain(0x10, "+"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 15 from hidden X2 temp" } },
       halt(),
     ]);
   });

@@ -585,8 +585,10 @@ function plainProducesStableExpressionValues(
       output.add(stableExpressionValueFact(opcode, key));
     }
   } else if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") {
+    for (const fact of plainProducesConcreteBinaryDecimalValues(op, y, x)) output.add(fact);
     for (const yKey of stableExpressionSourceKeys(y, yShape)) {
       for (const xKey of stableExpressionSourceKeys(x, xShape)) {
+        if (stableBinaryExpressionKeyHasConcreteDecimalResult(op, yKey, xKey)) continue;
         output.add(stableBinaryExpressionValueFact(op, opcode, yKey, xKey));
       }
     }
@@ -598,12 +600,24 @@ function stableExpressionKeyHasConcreteDecimalResult(
   op: Extract<IrOp, { kind: "plain" }>,
   key: string,
 ): boolean {
-  if (!/^decimal:/u.test(key)) return false;
+  if (decimalFromFactKey(key) === undefined) return false;
   if (op.opcode === 0x35) return decimalFractionPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x34) return decimalIntegerPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x31) return decimalAbsFromFactKey(key) !== undefined;
   if (op.opcode === 0x32) return decimalSignFromFactKey(key) !== undefined;
   return false;
+}
+
+function stableBinaryExpressionKeyHasConcreteDecimalResult(
+  op: Extract<IrOp, { kind: "plain" }>,
+  yKey: string,
+  xKey: string,
+): boolean {
+  const y = decimalFromFactKey(yKey);
+  const x = decimalFromFactKey(xKey);
+  return y !== undefined &&
+    x !== undefined &&
+    concreteDecimalBinaryValue(op.opcode, y, x) !== undefined;
 }
 
 function plainProducesConcreteDecimalValues(
@@ -618,6 +632,25 @@ function plainProducesConcreteDecimalValues(
       ? undefined
       : concreteDecimalUnaryValue(op.opcode, value);
     if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
+  }
+  return output;
+}
+
+function plainProducesConcreteBinaryDecimalValues(
+  op: Extract<IrOp, { kind: "plain" }>,
+  y: X2ValueSet | undefined,
+  x: X2ValueSet | undefined,
+): Set<X2ValueFact> {
+  const output = new Set<X2ValueFact>();
+  if (op.opcode !== 0x10 && op.opcode !== 0x11) return output;
+  for (const yFact of y ?? []) {
+    const yValue = normalizedDecimalValueFromFact(yFact);
+    if (yValue === undefined) continue;
+    for (const xFact of x ?? []) {
+      const xValue = normalizedDecimalValueFromFact(xFact);
+      const concrete = xValue === undefined ? undefined : concreteDecimalBinaryValue(op.opcode, yValue, xValue);
+      if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
+    }
   }
   return output;
 }
@@ -638,23 +671,27 @@ function concreteDecimalUnaryValue(opcode: number, value: string): string | unde
 }
 
 function decimalFractionPartFromFactKey(key: string): string | undefined {
-  const match = /^decimal:([^:]+):normalized$/u.exec(key);
-  return match === null ? undefined : decimalFractionPart(match[1]!);
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalFractionPart(decimal);
 }
 
 function decimalIntegerPartFromFactKey(key: string): string | undefined {
-  const match = /^decimal:([^:]+):normalized$/u.exec(key);
-  return match === null ? undefined : decimalIntegerPart(match[1]!);
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalIntegerPart(decimal);
 }
 
 function decimalAbsFromFactKey(key: string): string | undefined {
-  const match = /^decimal:([^:]+):normalized$/u.exec(key);
-  return match === null ? undefined : decimalAbs(match[1]!);
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalAbs(decimal);
 }
 
 function decimalSignFromFactKey(key: string): string | undefined {
-  const match = /^decimal:([^:]+):normalized$/u.exec(key);
-  return match === null ? undefined : decimalSign(match[1]!);
+  const decimal = decimalFromFactKey(key);
+  return decimal === undefined ? undefined : decimalSign(decimal);
+}
+
+function decimalFromFactKey(key: string): string | undefined {
+  return /^decimal:([^:]+):normalized$/u.exec(key)?.[1];
 }
 
 function decimalAbs(value: string): string | undefined {
@@ -666,6 +703,56 @@ function decimalSign(value: string): string | undefined {
   if (!/^-?[0-9]+(?:\.[0-9]+)?$/u.test(value)) return undefined;
   if (value === "0") return "0";
   return value.startsWith("-") ? "-1" : "1";
+}
+
+interface ExactDecimalParts {
+  readonly num: bigint;
+  readonly scale: number;
+}
+
+function concreteDecimalBinaryValue(opcode: number, y: string, x: string): string | undefined {
+  const left = parseExactDecimal(y);
+  const right = parseExactDecimal(x);
+  if (left === undefined || right === undefined) return undefined;
+  const scale = Math.max(left.scale, right.scale);
+  const yNum = left.num * pow10BigInt(scale - left.scale);
+  const xNum = right.num * pow10BigInt(scale - right.scale);
+  const num = opcode === 0x10
+    ? yNum + xNum
+    : opcode === 0x11
+      ? yNum - xNum
+      : undefined;
+  if (num === undefined) return undefined;
+  return exactDecimalToNormalized(num, scale);
+}
+
+function parseExactDecimal(value: string): ExactDecimalParts | undefined {
+  const match = /^(-?)([0-9]+)(?:\.([0-9]+))?$/u.exec(value);
+  if (match === null) return undefined;
+  const sign = match[1]!;
+  const digits = `${match[2]!}${match[3] ?? ""}`.replace(/^0+/u, "") || "0";
+  const unsigned = BigInt(digits);
+  return {
+    num: sign === "-" ? -unsigned : unsigned,
+    scale: (match[3] ?? "").length,
+  };
+}
+
+function exactDecimalToNormalized(num: bigint, scale: number): string | undefined {
+  const sign = num < 0n ? "-" : "";
+  const unsigned = num < 0n ? -num : num;
+  const rawDigits = unsigned.toString().padStart(scale + 1, "0");
+  const point = rawDigits.length - scale;
+  const raw = scale === 0
+    ? `${sign}${rawDigits}`
+    : `${sign}${rawDigits.slice(0, point)}.${rawDigits.slice(point)}`;
+  const normalized = normalizePlainDecimal(raw);
+  if (normalized === undefined || significantDecimalDigits(normalized) > 8) return undefined;
+  return normalized;
+}
+
+function pow10BigInt(power: number): bigint {
+  return 10n ** BigInt(power);
 }
 
 function decimalIntegerPart(value: string): string | undefined {

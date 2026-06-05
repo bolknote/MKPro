@@ -809,9 +809,13 @@ Display rewrites are separated into strategy selection + body lowering.
   non-negative concrete decimal `X`, and for negative non-integer concrete
   decimal `X`, `К {x}` also seeds the exact normalized fractional decimal value
   while preserving the old X2 fact; negative integers stay opaque to avoid
-  decimalizing signed-zero behavior. Later passes can therefore distinguish
-  visible no-op integer/fraction/sign transforms from observable hidden-X2
-  restores.
+  decimalizing signed-zero behavior. Concrete normalized decimal `Y,X` operands
+  for `+` and `-` also seed exact decimal results when the normalized result
+  stays within the dataflow's eight-significant-digit bound; larger or
+  non-decimal cases remain structural/opaque rather than pretending to be an
+  ordinary decimal value. Later passes can therefore distinguish visible no-op
+  integer/fraction/sign transforms and exact arithmetic transforms from
+  observable hidden-X2 restores.
   Register-sourced keys are version-sensitive: a later direct/known-indirect
   store to that register, counted-loop mutation, or mutating indirect-flow
   selector edge drops `expr-key:*reg:r*` facts from the value lattice and
@@ -822,9 +826,10 @@ Display rewrites are separated into strategy selection + body lowering.
   value dataflow also tracks a value-only `Y` fact through proved stack shifts,
   through `X↔Y` swaps, and through documented operations whose stack profile
   keeps `Y`, so stack-consuming documented pure computations seed
-  `expr-key:<opcode>(<Y>,<X>)` when both operands are stable sources; otherwise
-  they remain producer-local. Stable keys for commutative binary opcodes (`+`,
-  `*`, `К max`, `К∧`, `К∨`, `К⊕`) canonicalize operand order, while
+  `expr-key:<opcode>(<Y>,<X>)` when both operands are stable sources and no
+  concrete decimal result has already been proved; otherwise they remain
+  producer-local. Stable keys for commutative binary opcodes (`+`, `*`, `К max`,
+  `К∧`, `К∨`, `К⊕`) canonicalize operand order, while
   non-commutative opcodes keep the hardware `Y,X` order. Display-role, barrier,
   exposing, undocumented, dangerous, and random-like commands do not seed such
   facts. The same stack transfer model carries structural `Y` shape facts for

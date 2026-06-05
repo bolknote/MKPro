@@ -1305,7 +1305,10 @@ The pipeline currently contains:
   decimal values and negative non-integer concrete decimal values, `К {x}` is
   also modeled as an exact normalized fractional decimal in visible `X` while
   preserving the previous hidden X2 fact; negative integers stay opaque to avoid
-  signed-zero decimalization. The shared
+  signed-zero decimalization. Concrete normalized decimal `Y,X` operands for
+  `+` and `-` are also modeled exactly when the normalized result fits the
+  eight-significant-digit dataflow bound; otherwise the optimizer keeps only
+  structural or opaque expression facts. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
   mantissa sign toggles, and non-negative exponent shifts that are pure display
