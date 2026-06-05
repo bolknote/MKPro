@@ -816,6 +816,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
 8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, or an adjacent recall to another cell when the shared value/shape proof shows the recalled decimal value or structural hex/super display shape is already visible in X, including non-negative structural exponent shifts such as `hex:Г; ВП 2` matching `hex:Г00`. The rewrite fires only when the recall is not the last X2 sync before a context-sensitive `.`/`/-/`/`ВП` restoration before the next X2-affecting op, including direct conditional/`F Lx` fallthrough syncs and direct `В/О` returns, or when the same shared proof shows X2 already carries the recalled decimal value or structural hex/super shape across an X2-preserving gap. Its stack lift still cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors and loop-counter recalls are not folded when the hardware side effect is observable.
 9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, or another stack-shifting producer, possibly through stack-preserving labels/stores/plain ops, path-safe direct conditional/counted-loop/proved-indirect conditional fallthroughs, and simple stack-preserving direct-return callees, when that producer already supplies the current X in Y, unless the full CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync.
+    The scan for the next stack-shifting producer or dead hard X2 overwrite is
+    shared helper code (`x2NextStackShiftingProducerIndex`,
+    `x2NextHardX2OverwriteIndex`), so later stack+X2 scheduler rewrites use
+    the same fallthrough, direct-return, and stack-preserving-gap rules instead
+    of reimplementing them locally.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
 12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X, including concrete decimal equality proved through X2 register-memory or decimal preload metadata after X was rebuilt; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, counted-loop `F L0`..`F L3` backedges preserve visible X for non-counter registers while dropping the decremented counter alias, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.
@@ -949,7 +954,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent-entry, or VP/X2 restore contexts because the following hard
     overwrite destroys both the restored X and the toggled X2. The following
     hard overwrite may sit after a simple direct-return helper only when that
-    helper is restore-transparent. `ВП` may also be removed from a structural
+    helper is restore-transparent. A direct `П->X r` or proved stable-indirect
+    `К П->X R7..Re` is treated as the same kind of dead X/X2 restore before a
+    hard overwrite, but only when the shared stack-exposure proof shows that
+    the recall's stack lift cannot reach a later stack consumer. `ВП` may also be removed from a structural
     hex/super `vpEntryShape` source, including one produced by a direct or
     proved-indirect `В/О` return continuation or the fallthrough side of a direct conditional/`F Lx`
     loop, or from an already active VP/X2 restore context, when the following
@@ -1042,9 +1050,15 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     signed-zero forms are kept because `0 /-/ /-/ ВП` still differs from
     `0 ВП`.
     The pass consumes the shared VP shape-context classifier rather than
-    decoding local `kind` strings: the classifier records active-entry vs
-    closed VP-context phase, decimal vs structural source, exponent-digit
-    presence, and the exact splice actions that are safe for that state.
+    decoding local `kind` strings: the classifier records active mantissa,
+    active exponent-entry, and closed VP-context phases, decimal vs structural
+    source, exponent-digit presence, and the exact splice actions that are
+    safe for that state. Restore runs before a proved `ВП` are checked through
+    the same helper for decimal active mantissas and shape-only structural
+    sources. The helper's restore-gap scanner is shared with `x2-noop-restore`,
+    `x2-hidden-temp-restore`, and `x2-literal-restore`, so all three passes use
+    the same marker-label/display-role safety rules before deciding that a
+    `КНОП`/`К1`/`К2`/`/-/` run can be ignored before `ВП`.
     After an X2-preserving gap, a VP-context sign or sign pair is kept when its
     X2 restore is observable (`5 ВП 3 Fπ /-/ С/П`,
     `5 ВП 3 Fπ /-/ /-/ С/П`), but a free-standing `/-/`/empty restore run can

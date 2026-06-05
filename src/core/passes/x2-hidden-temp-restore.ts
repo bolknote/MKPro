@@ -17,9 +17,10 @@ import {
   removableRecallValueRegister,
   removingRecallCanExposeX2Restore,
   x2CanUseDotRestoreAt,
+  x2HasOnlyRestoreGapBeforeVp,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateHasUnsafeDotRestoreShapeX2,
-  x2StatesHaveSameVpEntrySource,
+  x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2ValueFactIsNormalizedDecimal,
   x2ValueSetsHaveSameRestoredVisibleDecimal,
   type DirectReturnAnalysisContext,
@@ -74,8 +75,8 @@ const run: IrPassFn = (ops) => {
     const canUseVisibleDecimalEscape = sourceRestoresSameVisibleDecimal &&
       x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index);
     const canUseVpSourceEscape = sourceAlreadyDotSafe &&
-      x2StatesHaveSameVpEntrySource(x2ValueStates[index], x2ValueStates[index + 1]) &&
-      hasOnlyRestoreGapBeforeVp(ops, index + 1);
+      x2StateCanDiscardRestoreRunBeforeProvedVp(x2ValueStates[index], x2ValueStates[index + 1]) &&
+      x2HasOnlyRestoreGapBeforeVp(ops, index + 1);
     if (!canUseDotRestore && !canUseNormalizedDecimalEscape && !canUseVisibleDecimalEscape && !canUseVpSourceEscape) {
       return op;
     }
@@ -151,49 +152,6 @@ function isStableStoredSourceFact(fact: X2ValueFact): boolean {
 
 function isNormalizedDecimalFact(fact: X2ValueFact): boolean {
   return x2ValueFactIsNormalizedDecimal(fact);
-}
-
-function isFreeStandingEmptyOp(op: IrOp): boolean {
-  return op.kind === "plain" &&
-    op.opcode >= 0x54 &&
-    op.opcode <= 0x56 &&
-    !hasRewriteBarrier(op) &&
-    !isDisplayFocusSensitive(op) &&
-    !hasRoles(op);
-}
-
-function isFreeStandingSignChange(op: IrOp): boolean {
-  return op.kind === "plain" &&
-    op.opcode === 0x0b &&
-    !hasRewriteBarrier(op) &&
-    !isDisplayFocusSensitive(op) &&
-    !hasRoles(op);
-}
-
-function isFreeStandingVp(op: IrOp): boolean {
-  return op.kind === "plain" &&
-    op.opcode === 0x0c &&
-    !hasRewriteBarrier(op) &&
-    !isDisplayFocusSensitive(op) &&
-    !hasRoles(op);
-}
-
-function hasOnlyRestoreGapBeforeVp(ops: readonly IrOp[], start: number): boolean {
-  let sawRestoreGap = false;
-  for (let index = start; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") continue;
-    if (isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op)) {
-      sawRestoreGap = true;
-      continue;
-    }
-    return sawRestoreGap && isFreeStandingVp(op);
-  }
-  return false;
-}
-
-function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
-  return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
 }
 
 function isSupportedScratchRecall(op: IrOp): op is Extract<IrOp, { kind: "recall" | "indirect-recall" }> {

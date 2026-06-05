@@ -37,6 +37,7 @@ import {
   computeX2ImmediateSyncStates,
   computeX2RegisterStates,
   computeX2ValueStates,
+  directReturnAnalysisContext,
   parseX2ShapeFact,
   recallValueProof,
   x2CanonicalShapeFact,
@@ -46,6 +47,10 @@ import {
   x2ExponentSignChangedShapeFact,
   x2MantissaShapeFactFromModel,
   x2MantissaSignChangedShapeFact,
+  x2HasOnlyRestoreGapBeforeVp,
+  x2NextHardX2OverwriteIndex,
+  x2NextStackShiftingProducerIndex,
+  x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateIsClosedPlainContext,
   x2ShapeDataModelForFact,
   x2ShapeSetsHaveSameDotSafeDecimal,
@@ -1287,6 +1292,73 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2EntryStateText(states[3])).toBe("exponent:-0:");
     expect(x2EntryStateText(states[4])).toBe("exponent:-0:3");
+  });
+
+  it("x2 VP shape context exposes active mantissa restore-run proofs", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+    const context = analyzeX2VpShapeContext(states[2]);
+
+    expect(context).toMatchObject({
+      kind: "active-mantissa",
+      phase: "active-entry",
+      source: "decimal",
+      restoresX2: false,
+      canCancelExponentSignPair: false,
+    });
+    expect([...(context.mantissa ?? [])]).toEqual(["02"]);
+    expect(x2StateCanDiscardRestoreRunBeforeProvedVp(states[2], states[5])).toBe(true);
+  });
+
+  it("x2 VP shape context uses structural source proofs for restore runs before ВП", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(analyzeX2VpShapeContext(states[1]).kind).toBe("none");
+    expect(x2StateCanDiscardRestoreRunBeforeProvedVp(states[1], states[4])).toBe(true);
+  });
+
+  it("x2 VP restore-gap scanner shares label and role safety", () => {
+    const safeGap: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x54, "КНОП"),
+      label("marker"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const roleBearingGap: IrOp[] = [
+      plain(0x02, "2"),
+      { kind: "plain", opcode: 0x54, meta: { mnemonic: "КНОП", roles: ["display-byte"] } },
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const displayCommentGap: IrOp[] = [
+      plain(0x02, "2"),
+      { kind: "plain", opcode: 0x54, meta: { mnemonic: "КНОП", comment: "display spacer" } },
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+
+    expect(x2HasOnlyRestoreGapBeforeVp(safeGap, 1)).toBe(true);
+    expect(x2HasOnlyRestoreGapBeforeVp(roleBearingGap, 1)).toBe(false);
+    expect(x2HasOnlyRestoreGapBeforeVp(displayCommentGap, 1)).toBe(false);
   });
 
   it("x2 value dataflow keeps signed zero sticky across repeated sign-change before ВП", () => {
@@ -4129,6 +4201,51 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-dead-restore-before-overwrite removes direct recalls before hard overwrite", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite removes stable indirect recalls before hard overwrite", () => {
+    const program: IrOp[] = [
+      knownTargetIndirectRecall("7", "1"),
+      plain(0x54, "КНОП"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps recalls whose stack lift is consumed after overwrite", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x0d, "Cx"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-dead-restore-before-overwrite removes dot after a preloaded decimal recall", () => {
     const program: IrOp[] = [
       recall("1", "preload const 8.1020088E14"),
@@ -4138,9 +4255,8 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
 
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
-      recall("1", "preload const 8.1020088E14"),
       plain(0x0d, "Cx"),
       halt(),
     ]);
@@ -4168,9 +4284,8 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
 
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
-      recall("1", "preload const 8.70Е2-6С"),
       plain(0x0d, "Cx"),
       halt(),
     ]);
@@ -4319,9 +4434,8 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
 
-    expect(result.applied).toBe(2);
+    expect(result.applied).toBe(3);
     expect(result.ops).toEqual([
-      recall("1", "preload const 8.70Е2-6С"),
       plain(0x0d, "Cx"),
       halt(),
     ]);
@@ -4509,12 +4623,11 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
 
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
       plain(0x02, "2"),
       store("1"),
       plain(0x0d, "Cx"),
-      recall("1"),
       plain(0x0d, "Cx"),
       halt(),
     ]);
@@ -4532,12 +4645,11 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
 
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
       plain(0x02, "2"),
       store("1"),
       plain(0x0d, "Cx"),
-      recall("1"),
       plain(0x0d, "Cx"),
       halt(),
     ]);
@@ -6933,6 +7045,39 @@ describe("ir passes on synthetic programs", () => {
       x2Affects: true,
       hardX2OverwriteWithoutStackUse: true,
     });
+  });
+
+  it("stack/X2 scheduler helpers find producers and dead overwrites through transparent gaps", () => {
+    const producerProgram: IrOp[] = [
+      plain(0x0e, "В↑"),
+      plain(0x54, "К НОП"),
+      label("marker"),
+      store("2"),
+      recall("1"),
+      halt(),
+    ];
+    const overwriteProgram: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("noop"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+
+    expect(x2NextStackShiftingProducerIndex(
+      producerProgram,
+      1,
+      directReturnAnalysisContext(producerProgram),
+    )).toBe(4);
+    expect(x2NextHardX2OverwriteIndex(
+      overwriteProgram,
+      6,
+      directReturnAnalysisContext(overwriteProgram),
+    )).toBe(7);
   });
 
   it("pre-shift-stack-lift removes В↑ before indirect recall", () => {

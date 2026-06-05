@@ -171,6 +171,7 @@ export interface X2RestoreExposureOptions {
 export interface X2VpShapeContextAnalysis {
   readonly kind:
     | "none"
+    | "active-mantissa"
     | "active-exponent"
     | "vp-exponent-context"
     | "active-structural-exponent"
@@ -517,6 +518,85 @@ export function analyzeX2StackEffect(op: IrOp | undefined): X2StackEffectAnalysi
       raw.stackEffect === "shifts" &&
       raw.x2Effect === "affects",
   };
+}
+
+export function x2NextStackShiftingProducerIndex(
+  ops: readonly IrOp[],
+  start: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (analyzeX2StackEffect(op).stackShifts) return index;
+    if (isKnownReturnCallOp(op) && x2SimpleDirectReturnPreservesStack(ops, op, context)) continue;
+    if (!x2IsFallthroughStackPreservingGapOp(op)) return undefined;
+  }
+  return undefined;
+}
+
+export function x2NextHardX2OverwriteIndex(
+  ops: readonly IrOp[],
+  start: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse) return index;
+    if (isKnownReturnCallOp(op) && x2SimpleDirectReturnPreservesStack(ops, op, context)) continue;
+    if (!x2IsFallthroughStackPreservingGapOp(op)) return undefined;
+  }
+  return undefined;
+}
+
+function x2IsFallthroughStackPreservingGapOp(op: IrOp): boolean {
+  return x2IsStackPreservingGapOp(op) ||
+    op.kind === "cjump" ||
+    op.kind === "loop" ||
+    x2IsKnownIndirectFallthroughStackPreservingConditional(op);
+}
+
+function x2IsKnownIndirectFallthroughStackPreservingConditional(op: IrOp): boolean {
+  return op.kind === "indirect-cjump" &&
+    knownIndirectFlowTarget(op) !== undefined &&
+    !hasRewriteBarrier(op) &&
+    analyzeX2StackEffect(op).stackPreserves;
+}
+
+function x2IsStackPreservingGapOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op)) return false;
+  switch (op.kind) {
+    case "label":
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain":
+      return analyzeX2StackEffect(op).stackPreserves;
+    default:
+      return false;
+  }
+}
+
+function x2SimpleDirectReturnPreservesStack(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return knownReturnCallReturnsThroughTransparentRange(ops, call, context, x2IsStrictStackPreservingLinearOp);
+}
+
+function x2IsStrictStackPreservingLinearOp(op: IrOp): boolean {
+  switch (op.kind) {
+    case "label":
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain":
+      return analyzeX2StackEffect(op).stackPreserves;
+    default:
+      return false;
+  }
 }
 
 export function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
@@ -1096,11 +1176,66 @@ export function x2StatesHaveSameVpEntrySource(
     sameNonEmptyShapeSet(left?.vpEntryShape, right?.vpEntryShape);
 }
 
+export function x2StateCanDiscardRestoreRunBeforeProvedVp(
+  beforeRun: X2ValueDataflowState | undefined,
+  beforeVp: X2ValueDataflowState | undefined,
+): boolean {
+  const context = analyzeX2VpShapeContext(beforeRun);
+  if (context.kind === "active-mantissa") {
+    return sameNonEmptyStringSet(context.mantissa, beforeVp?.vpEntryMantissa);
+  }
+  return x2StatesHaveSameVpEntrySource(beforeRun, beforeVp);
+}
+
+export function x2HasOnlyRestoreGapBeforeVp(ops: readonly IrOp[], start: number): boolean {
+  let sawRestoreGap = false;
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    if (isFreeStandingX2RestoreGapOp(op)) {
+      sawRestoreGap = true;
+      continue;
+    }
+    return sawRestoreGap && isFreeStandingX2VpOp(op);
+  }
+  return false;
+}
+
+function isFreeStandingX2RestoreGapOp(op: IrOp): boolean {
+  return op.kind === "plain" &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    !hasIrRoles(op) &&
+    (op.opcode === X2_SIGN_CHANGE_OPCODE || (op.opcode >= X2_EMPTY_OPCODE_START && op.opcode <= X2_EMPTY_OPCODE_END));
+}
+
+function isFreeStandingX2VpOp(op: IrOp): boolean {
+  return op.kind === "plain" &&
+    op.opcode === 0x0c &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    !hasIrRoles(op);
+}
+
 export function analyzeX2VpShapeContext(
   state: X2ValueDataflowState | undefined,
 ): X2VpShapeContextAnalysis {
   if (state === undefined) {
     return emptyX2VpShapeContextAnalysis("unknown");
+  }
+  if (state.entry.kind === "open") {
+    return {
+      kind: "active-mantissa",
+      phase: "active-entry",
+      source: "decimal",
+      mantissa: state.entry.raw,
+      hasExponentDigit: false,
+      restoresX2: false,
+      canDiscardSeparatorBeforeNonDigit: false,
+      canDiscardSeparatorBeforeSignChange: false,
+      canDiscardRestoreBeforeFreshDigit: false,
+      canCancelExponentSignPair: false,
+    };
   }
   if (state.entry.kind === "exponent") {
     const hasExponentDigit = x2ExponentSetHasDigit(state.entry.exponent);

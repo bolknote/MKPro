@@ -12,6 +12,7 @@ import {
   x2StateHasSameDotSafeDecimalInXAndX2,
   x2StateHasSameStructuralShapeInXAndX2,
   x2StateHasX2RestoreContext,
+  x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateIsClosedPlainContext,
   x2StatesHaveSameVpEntrySource,
   x2ValueSetHasIntersection,
@@ -76,18 +77,17 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
   state: X2ValueDataflowState | undefined,
   stateAfterPair: X2ValueDataflowState | undefined,
 ): boolean {
-  if (state?.entry.kind !== "open") return false;
+  if (analyzeX2VpShapeContext(state).kind !== "active-mantissa") return false;
   const nextIndex = nextNonLabelIndex(ops, secondSignIndex + 1);
   if (nextIndex === undefined || !isFreeStandingVp(ops[nextIndex]!)) return false;
-  return sameNonEmptyStringSet(state.entry.raw, stateAfterPair?.vpEntryMantissa);
+  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterPair);
 }
 
 function canRemoveMantissaRestoreRunBeforeProvedVp(
   state: X2ValueDataflowState | undefined,
   stateAfterRun: X2ValueDataflowState | undefined,
 ): boolean {
-  if (state?.entry.kind === "open") return sameNonEmptyStringSet(state.entry.raw, stateAfterRun?.vpEntryMantissa);
-  return x2StatesHaveSameVpEntrySource(state, stateAfterRun);
+  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterRun);
 }
 
 function mantissaRestoreRunBeforeProvedVp(
@@ -231,14 +231,6 @@ function nextFreshDigitIndex(ops: readonly IrOp[], start: number): number | unde
     return index;
   }
   return undefined;
-}
-
-function sameNonEmptyStringSet(left: ReadonlySet<string> | undefined, right: ReadonlySet<string> | undefined): boolean {
-  if (left === undefined || right === undefined || left.size === 0 || left.size !== right.size) return false;
-  for (const value of left) {
-    if (!right.has(value)) return false;
-  }
-  return true;
 }
 
 // These rewrites are proven behaviorally equivalent on the MK-61 emulator:

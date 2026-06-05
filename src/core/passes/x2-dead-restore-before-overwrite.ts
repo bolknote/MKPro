@@ -8,6 +8,8 @@ import {
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
   knownReturnCallReturnsThroughTransparentRange,
+  removableRecallValueRegister,
+  removingRecallCanExposeStackLift,
   x2StateHasDotSafeDecimalX2,
   x2StateHasStructuralShapeX2,
   x2StateHasX2RestoreContext,
@@ -32,9 +34,10 @@ const run: IrPassFn = (ops) => {
   for (let index = 0; index < ops.length; index += 1) {
     if (remove.has(index)) continue;
     const op = ops[index]!;
-    if (!isDeadRestoreCandidate(op, states[index])) continue;
+    if (!isDeadRestoreOrRecallCandidate(op, states[index])) continue;
     const deadRun = deadRestoreRunBeforeHardOverwrite(ops, states, index, context);
     if (deadRun === undefined) continue;
+    if (isDeadRecallCandidate(op) && removingRecallCanExposeStackLift(ops, index)) continue;
 
     for (const removeIndex of deadRun) remove.add(removeIndex);
   }
@@ -46,7 +49,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "x2-dead-restore-before-overwrite",
-        detail: `Removed ${remove.size} X2 restore/separator cell(s) whose restored X value is overwritten before it can be observed.`,
+        detail: `Removed ${remove.size} X2 recall/restore/separator cell(s) whose restored X value is overwritten before it can be observed.`,
       },
     ],
   };
@@ -71,6 +74,18 @@ function isDeadRestoreCandidate(
       x2StateHasX2RestoreContext(state);
   }
   return false;
+}
+
+function isDeadRestoreOrRecallCandidate(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  return isDeadRestoreCandidate(op, state) || isDeadRecallCandidate(op);
+}
+
+function isDeadRecallCandidate(op: IrOp): boolean {
+  if (removableRecallValueRegister(op) === undefined) return false;
+  return !isDisplayFocusSensitive(op);
 }
 
 function isDeadSignRestoreCandidate(state: X2ValueDataflowState): boolean {
