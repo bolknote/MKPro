@@ -2089,12 +2089,20 @@ function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: st
       shapeMemory: input.shapeMemory,
     };
   }
+  return x2ValueStateFromOpenDecimalEntry(entry, input.memory, input.shapeMemory);
+}
+
+function x2ValueStateFromOpenDecimalEntry(
+  entry: Extract<X2EntryState, { kind: "open" }>,
+  memory: X2ValueMemory | undefined,
+  shapeMemory: X2ShapeMemory | undefined,
+): X2ValueDataflowState {
   const x = new Set<X2ValueFact>();
   const x2 = new Set<X2ValueFact>();
   const xShape = new Set<X2ShapeFact>();
   const x2Shape = new Set<X2ShapeFact>();
   for (const raw of entry.raw) {
-    const normalized = normalizeDecimalEntry(raw);
+    const normalized = normalizeDecimalMantissaEntry(raw);
     if (normalized !== undefined) {
       x.add(decimalValueFact(normalized, "normalized"));
       xShape.add(decimalMantissaShapeFact(normalized));
@@ -2112,12 +2120,28 @@ function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: st
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    memory,
+    shapeMemory,
   };
 }
 
 function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDataflowState {
+  if (input.entry.kind === "open") {
+    const entry = advanceDecimalPointEntry(input.entry);
+    if (entry.kind === "open") return x2ValueStateFromOpenDecimalEntry(entry, input.memory, input.shapeMemory);
+    return {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set(),
+      entry,
+      vpContext: noneX2VpContextState(),
+      structuralEntry: noneX2StructuralEntryState(),
+      structuralVpContext: noneX2StructuralEntryState(),
+      memory: input.memory,
+      shapeMemory: input.shapeMemory,
+    };
+  }
   if (input.entry.kind !== "closed") {
     return {
       x: new Set(),
@@ -2207,7 +2231,7 @@ function transferSignChangeX2ValueState(input: X2ValueDataflowState): X2ValueDat
   const x2Shape = new Set<X2ShapeFact>();
   for (const raw of input.entry.raw) {
     const signed = signChangedDecimalEntry(raw);
-    const normalized = normalizeDecimalEntry(signed);
+    const normalized = normalizeDecimalMantissaEntry(signed);
     if (normalized !== undefined) {
       x.add(decimalValueFact(normalized, "normalized"));
       xShape.add(decimalMantissaShapeFact(normalized));
@@ -3329,8 +3353,25 @@ function normalizeDecimalEntry(raw: string): string | undefined {
   return `${sign}${digits}`;
 }
 
+function normalizeDecimalMantissaEntry(raw: string): string | undefined {
+  const match = /^(-?)([0-9]{1,8})(?:\.([0-9]*))?$/u.exec(raw);
+  if (match === null) return undefined;
+  if (decimalMantissaDigitCount(raw) > 8) return undefined;
+  const sign = match[1]!;
+  const integer = match[2]!;
+  const fraction = match[3];
+  const normalized = fraction === undefined || fraction.length === 0
+    ? normalizePlainDecimal(`${sign}${integer}`)
+    : normalizePlainDecimal(`${sign}${integer}.${fraction}`);
+  return normalized;
+}
+
+function decimalMantissaDigitCount(raw: string): number {
+  return raw.replace(/^-/, "").replace(".", "").length;
+}
+
 function x2DecimalEntryFact(raw: string): X2ValueFact | undefined {
-  const normalized = normalizeDecimalEntry(raw);
+  const normalized = normalizeDecimalMantissaEntry(raw);
   if (normalized === undefined) return undefined;
   if (raw === normalized) return decimalValueFact(raw, "normalized");
   return decimalValueFact(raw, "unnormalized");
@@ -3365,7 +3406,7 @@ function normalizeX2RestoreShapesForX(input: X2ShapeSet | undefined): Set<X2Shap
 }
 
 function signChangedDecimalEntry(raw: string): string {
-  const normalized = normalizeDecimalEntry(raw);
+  const normalized = normalizeDecimalMantissaEntry(raw);
   if (normalized === undefined || normalized === "0") return "0";
   return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
 }
@@ -3427,7 +3468,7 @@ function signChangedClosedShapeMantissas(input: X2ValueDataflowState): ReadonlyS
     const model = x2ShapeDataModelForFact(fact);
     if (model.kind !== "mantissa" || model.radix !== "decimal" || model.safety !== "dotSafeDecimal") continue;
     const raw = model.canonical;
-    const normalized = normalizeDecimalEntry(raw);
+    const normalized = normalizeDecimalMantissaEntry(raw);
     if (normalized === undefined || model.normalizedDecimal === undefined) continue;
     if (input.xShape?.has(decimalMantissaShapeFact(normalized)) !== true) continue;
     const signed = signChangedMantissaShape(raw);
@@ -3526,7 +3567,7 @@ function signChangedMantissaShapes(input: ReadonlySet<string>): ReadonlySet<stri
 }
 
 function signChangedMantissaShape(raw: string): string | undefined {
-  const normalized = normalizeDecimalEntry(raw);
+  const normalized = normalizeDecimalMantissaEntry(raw);
   if (normalized === undefined) return undefined;
   if (normalized === "0") return "-0";
   return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
@@ -3542,7 +3583,7 @@ function x2ValueStateFromMantissaShapes(
   const xShape = new Set<X2ShapeFact>();
   const x2Shape = new Set<X2ShapeFact>();
   for (const raw of mantissas) {
-    const normalized = normalizeDecimalEntry(raw);
+    const normalized = normalizeDecimalMantissaEntry(raw);
     const x2Fact = x2DecimalEntryFact(raw);
     if (normalized === undefined || x2Fact === undefined) return undefined;
     x.add(decimalValueFact(normalized, "normalized"));
@@ -3779,8 +3820,17 @@ function advanceDecimalDigitEntry(input: X2EntryState, digit: string): X2EntrySt
   const raw = new Set<string>();
   for (const prefix of source) {
     const next = `${prefix}${digit}`;
-    if (next.length > 8) return { kind: "unknown" };
+    if (decimalMantissaDigitCount(next) > 8) return { kind: "unknown" };
     raw.add(next);
+  }
+  return { kind: "open", raw };
+}
+
+function advanceDecimalPointEntry(input: Extract<X2EntryState, { kind: "open" }>): X2EntryState {
+  const raw = new Set<string>();
+  for (const prefix of input.raw) {
+    if (prefix.includes(".")) return { kind: "unknown" };
+    raw.add(`${prefix}.`);
   }
   return { kind: "open", raw };
 }

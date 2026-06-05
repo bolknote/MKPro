@@ -1206,8 +1206,78 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2ValueStateText(states[2]?.x)).toEqual([]);
-    expect(x2ValueStateText(states[2]?.x2)).toEqual([]);
+    expect(x2EntryStateText(states[2])).toBe("open:1.");
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["decimal:1:normalized"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:1.:unnormalized"]);
+    expect(x2ShapeStateText(states[2]?.xShape)).toEqual(["mantissa:1:decimal"]);
+    expect(x2ShapeStateText(states[2]?.x2Shape)).toEqual(["mantissa:1.:decimal"]);
+  });
+
+  it("x2 value dataflow tracks fractional decimal digit runs", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      store("2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[3])).toBe("open:1.2");
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:1.2:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:1.2:normalized"]);
+    expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["mantissa:1.2:decimal"]);
+    expect(x2ShapeStateText(states[3]?.x2Shape)).toEqual(["mantissa:1.2:decimal"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:1.2:normalized", "reg:2"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:1.2:normalized", "reg:2"]);
+  });
+
+  it("x2 value dataflow treats duplicate decimal points as unknown", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[3])).toBe("unknown");
+    expect(x2ValueStateText(states[3]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual([]);
+  });
+
+  it("x2 value dataflow keeps leading-zero fractional X2 separate from normalized X", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[4])).toBe("open:01.2");
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:1.2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:01.2:unnormalized"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["mantissa:1.2:decimal"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["mantissa:01.2:decimal"]);
+  });
+
+  it("x2 value dataflow tracks sign-change during fractional decimal entry", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[4])).toBe("closed");
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:-1.2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:-1.2:normalized"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["mantissa:-1.2:decimal"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["mantissa:-1.2:decimal"]);
   });
 
   it("x2 value dataflow tracks exponent-entry state after ВП", () => {
@@ -2100,6 +2170,61 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces a repeated fractional digit run with dot", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.2 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces a repeated signed fractional digit run with dot", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal -1.2 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore replaces a repeated literal after a recalled decimal register", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -2643,6 +2768,33 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore uses known indirect return X2 sync", () => {
+    const program: IrOp[] = [
+      label("main"),
+      knownTargetIndirectCall("7", 4),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      halt(),
+      label("load"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      ret(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      label("main"),
+      knownTargetIndirectCall("7", 4),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+      label("load"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      ret(),
+    ]);
+  });
+
   it("x2-literal-restore keeps conditional fallthrough literals whose stack lift is consumed", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -2743,6 +2895,25 @@ describe("ir passes on synthetic programs", () => {
       plain(0x20, "Fπ"),
       plain(0x20, "Fπ"),
       plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-literal-restore keeps fractional digit runs that would change a following ВП context", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
       plain(0x02, "2"),
       plain(0x0c, "ВП"),
       halt(),
@@ -3025,6 +3196,18 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-noop-restore keeps dot when it is a decimal separator", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-noop-restore removes dot immediately after a recall X2 sync", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -3189,6 +3372,29 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       label("main"),
       call("load"),
+      halt(),
+      label("load"),
+      recall("1"),
+      ret(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot immediately after known indirect return X2 sync", () => {
+    const program: IrOp[] = [
+      label("main"),
+      knownTargetIndirectCall("7", 3),
+      plain(0x0a, "."),
+      halt(),
+      label("load"),
+      recall("1"),
+      ret(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      label("main"),
+      knownTargetIndirectCall("7", 3),
       halt(),
       label("load"),
       recall("1"),
@@ -8580,6 +8786,32 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       label("main"),
       call("load"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("load"),
+      recall("2", "preload const 8.70Е2-6С"),
+      ret(),
+    ]);
+  });
+
+  it("vp-splice removes a structural sign pair before ВП after known indirect return X2 sync", () => {
+    const program: IrOp[] = [
+      label("main"),
+      knownTargetIndirectCall("7", 5),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("load"),
+      recall("2", "preload const 8.70Е2-6С"),
+      ret(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      label("main"),
+      knownTargetIndirectCall("7", 5),
       plain(0x0c, "ВП"),
       halt(),
       label("load"),

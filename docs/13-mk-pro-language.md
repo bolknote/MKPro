@@ -1264,7 +1264,7 @@ The pipeline currently contains:
 - **X2 value dataflow** — a stricter companion proof tracks small symbolic
   value facts in both `X` and `X2`, currently register aliases (`reg:r`),
   normalized decimal zero produced by `Cx` (`decimal:0:normalized`), and plain
-  decimal digit-runs up to the visible mantissa width. It also models `/-/`
+  integer or fractional decimal digit-runs up to the visible mantissa width. It also models `/-/`
   only while a decimal digit-run is still open: `12 /-/` produces the shared
   fact `decimal:-12:normalized`, while `02 /-/` produces normalized visible
   `X=decimal:-2:normalized` and hidden `X2=decimal:-02:unnormalized`.
@@ -1304,8 +1304,8 @@ The pipeline currently contains:
   evidence only; unlike structural mantissas, they do not seed a fresh
   shape-only `ВП`-entry source. Structural mantissa forms also
   seed a separate shape-only `ВП`-entry source after direct/proved recalls,
-  closed-context `.` restores of structural hidden X2, direct `В/О` return
-  continuations, and path-sensitive direct-conditional fallthrough X2 syncs; the
+  closed-context `.` restores of structural hidden X2, direct/proved-indirect
+  `В/О` return continuations, and path-sensitive direct-conditional fallthrough X2 syncs; the
   jump edge keeps the previous X2 state and does not invent a new source. When
   `ВП` consumes such a source, dataflow now creates
   structural exponent-entry facts (`hex-exponent:*:*` / `super-exponent:*:*`)
@@ -1316,9 +1316,11 @@ The pipeline currently contains:
   guards. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are
   normalized for `X` during that transfer while the hidden X2 representation
-  stays unchanged. If number entry
-  is still open, as in `1.`, the same byte is treated as decimal input and the
-  proof is cleared instead of inventing a restore. A dot-restored leading-zero
+  stays unchanged. If number entry is still open, `.` is treated as a decimal
+  separator instead of a restore: `1.` remains an open raw mantissa
+  (`X=decimal:1:normalized`, `X2=decimal:1.:unnormalized`), and following
+  digits such as `1.2` continue the same proof while duplicate separators still
+  become unknown. A dot-restored leading-zero
   X2 form is also not promoted to an ordinary `ВП` mantissa: emulator probes
   show `02; К{x}; .; ВП; 3` produces `22000`, not the normalized `2 ВП 3`
   result. Structural hex/super forms restored by `.` remain structural-only:
@@ -1371,7 +1373,7 @@ The pipeline currently contains:
   X2 sync and the dot. Leading-zero and display-byte gaps stay explicit.
   The same X2 value dataflow now carries narrow `ВП`-entry facts after proved
   closed decimal syncs (`Cx`, `В↑`, `F0..FF`), direct/proved recalls, direct
-  `В/О` return continuations, and path-sensitive direct-conditional fallthrough
+  or proved-indirect `В/О` return continuations, and path-sensitive direct-conditional fallthrough
   syncs through only
   `КНОП`/`К1`/`К2`; decimal facts are mantissa values, while hex/super facts
   stay structural-only. This lets exponent-entry rewrites use hidden X2 without
@@ -1454,8 +1456,11 @@ The pipeline currently contains:
   immediate X2 sync, a normalized decimal fact preserved through a display-free
   local gap such as a proved stable indirect conditional, or a modeled
   closed-context `/-/` reached through only free-standing `КНОП`/`К1`/`К2` empty
-  ops. The same shared CFG-aware X2
-  exposure walker used by `x2-noop-restore` protects the inserted `.`:
+  ops. It recognizes integer and fractional decimal digit-runs (`12`, `1.2`)
+  plus their open-entry sign-change forms, while refusing fractional runs before
+  a following `ВП` source context until that splice is separately proved.
+  The same shared CFG-aware X2 exposure walker used by `x2-noop-restore`
+  protects the inserted `.`:
   branch/call edges are not
   automatic blockers, but a path that preserves X2 into a later
   context-sensitive `.`/`/-/`/`ВП` restore keeps the literal explicit. The one

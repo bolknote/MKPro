@@ -824,14 +824,19 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 16. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.
 17. `x2-noop-restore` — removes `.` when X2 value dataflow proves that `X`
     already contains the same hidden X2 value, including register aliases,
-    normalized decimal digit-runs (`decimal:12:normalized`), signed digit-runs
-    while number entry is still open (`decimal:-12:normalized`), and the
+    normalized integer or fractional decimal digit-runs (`decimal:12:normalized`,
+    `decimal:1.2:normalized`), signed digit-runs
+    while number entry is still open (`decimal:-12:normalized`,
+    `decimal:-1.2:normalized`), and the
     normalized zero from `Cx`; leading-zero runs are split
     (`X=decimal:2:normalized`, `X2=decimal:02:unnormalized`, likewise `-2`
     vs `-02`) so they do not satisfy the equality proof. The value proof also
     models closed-context `.` as a real X2-to-X restore, normalizing decimal
-    facts only for visible `X` and refusing open number-entry dots such as
-    `1.`. The value proof also treats `В↑` and `F0..FF` empty opcodes as
+    facts only for visible `X`. Open number-entry dots are modeled separately
+    as decimal separators: `1.` remains an open raw mantissa with
+    `X2=decimal:1.:unnormalized`, and following digits such as `1.2` continue
+    the fractional digit-run without making the separator itself a removable
+    no-op restore. The value proof also treats `В↑` and `F0..FF` empty opcodes as
     X-preserving X2-affecting commands: when `X` is already proved, those
     opcodes sync the same fact into `X2`, including normalized visible values
     whose old X2 form had leading zeroes. A dot-restored leading-zero X2 form
@@ -924,8 +929,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     overwrite destroys both the restored X and the toggled X2. The following
     hard overwrite may sit after a simple direct-return helper only when that
     helper is restore-transparent. `ВП` may also be removed from a structural
-    hex/super `vpEntryShape` source, including one produced by a direct `В/О`
-    return continuation or the fallthrough side of a direct conditional/`F Lx`
+    hex/super `vpEntryShape` source, including one produced by a direct or
+    proved-indirect `В/О` return continuation or the fallthrough side of a direct conditional/`F Lx`
     loop, or from an already active VP/X2 restore context, when the following
     overwrite destroys its visible result; the conditional jump edge does not
     invent such a source, and none of this makes structural `.`/`/-/` restores
@@ -941,16 +946,18 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 20. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is
     already in the hidden X2 register, the dot-restore gap is safe (or CFG
-    proves the literal starts immediately after an X2 sync, including direct
-    `В/О` continuations, a normalized decimal fact survives through a
+    proves the literal starts immediately after an X2 sync, including direct or
+    proved-indirect `В/О` continuations, a normalized decimal fact survives through a
     display-free local gap such as a proved stable indirect conditional, or a
     modeled closed-context `/-/` reached through only free-standing
     `КНОП`/`К1`/`К2` empty ops), and removing number entry cannot
-    expose a consumed stack lift. It recognizes ordinary digit-runs,
-    signed digit-runs, and normalized exponent-entry literals such as
+    expose a consumed stack lift. It recognizes ordinary integer or fractional
+    digit-runs (`12`, `1.2`), their signed open-entry forms, and normalized
+    exponent-entry literals such as
     `5 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
-    X2-affecting sync. A repeated normalized non-zero digit run or
+    X2-affecting sync. Fractional digit-runs remain explicit before a following
+    `ВП` source context; a repeated normalized non-zero integer digit run or
     normalized exponent-entry literal with a non-leading-zero mantissa may also be
     replaced before a free-standing `КНОП`/`К1`/`К2` gap followed by `ВП`:
     emulator tests prove that the inserted `.` preserves the same mantissa
@@ -1032,7 +1039,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     mantissa/exponent context after a direct or proved-indirect recall of a
     previously stored or setup-loaded literal-shaped decimal. The same generic
     `ВП` source proof is also used for structural hex/super shapes after direct
-    return continuations and path-sensitive direct-conditional/`F Lx`
+    or proved-indirect return continuations and path-sensitive direct-conditional/`F Lx`
     fallthrough X2 syncs. When such a source reaches `ВП`, the same context
     classifier carries `hex-exponent:*:*` / `super-exponent:*:*` through
     exponent signs/digits, so structural exponent sign pairs can collapse by the
