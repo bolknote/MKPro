@@ -861,10 +861,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 18. `x2-dead-restore-before-overwrite` — removes a safe context-sensitive
     `.`/`/-/`/`ВП` restore, plus adjacent free-standing `КНОП`/`К1`/`К2`
     separators, when a following hard X/X2 overwrite such as `Cx` destroys the
-    restored `X` before it can be observed. `.` and `/-/` require a closed,
-    non-`ВП` context with a proved decimal X2 value; a bare `reg:r` fact is
-    intentionally rejected because a preloaded hex or non-normal register value
-    can make `.` signal `ЕГГ0Г`. `ВП` may also be removed from a structural
+    restored `X` before it can be observed. `.` requires a closed, non-`ВП`
+    context with a proved decimal X2 value; a bare `reg:r` fact is intentionally
+    rejected because a preloaded hex or non-normal register value can make `.`
+    signal `ЕГГ0Г`. `/-/` may also be removed from open mantissa, active
+    exponent-entry, or VP/X2 restore contexts because the following hard
+    overwrite destroys both the restored X and the toggled X2. `ВП` may also be removed from a structural
     hex/super `vpEntryShape` source, including one produced by a direct `В/О`
     return continuation or the fallthrough side of a direct conditional/`F Lx`
     loop, or from an already active VP/X2 restore context, when the following

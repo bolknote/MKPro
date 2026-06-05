@@ -58,7 +58,9 @@ function isDeadRestoreCandidate(
   }
   if (op.opcode === SIGN_CHANGE) {
     return x2StateIsClosedPlainContext(state) &&
-      (x2StateHasDotSafeDecimalX2(state) || x2StateHasStructuralShapeX2(state));
+      (x2StateHasDotSafeDecimalX2(state) || x2StateHasStructuralShapeX2(state)) ||
+      state.entry.kind === "open" ||
+      x2StateHasX2RestoreContext(state);
   }
   if (op.opcode === VP) {
     return state.entry.kind === "open" ||

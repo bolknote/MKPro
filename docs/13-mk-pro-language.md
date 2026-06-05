@@ -1352,11 +1352,13 @@ The pipeline currently contains:
 - **x2-dead-restore-before-overwrite** — removes a context-sensitive
   `.`/`/-/`/`ВП` restore, plus adjacent `КНОП`/`К1`/`К2` separators, when the
   restored `X` value is immediately destroyed by a proved hard X/X2 overwrite
-  such as `Cx`. This is deliberately narrower than `x2-noop-restore`: `.` and
-  `/-/` are accepted only from a closed, non-`ВП` context with a proved decimal
-  X2 value fact. A plain `reg:r` fact is not enough, because a preloaded
-  hexadecimal or other non-normal register value may make `.` signal `ЕГГ0Г`
-  before the overwrite can run. `ВП` is removed only when the X2 value dataflow
+  such as `Cx`. This is deliberately narrower than `x2-noop-restore`: `.` is
+  accepted only from a closed, non-`ВП` context with a proved decimal X2 value
+  fact. A plain `reg:r` fact is not enough, because a preloaded hexadecimal or
+  other non-normal register value may make `.` signal `ЕГГ0Г` before the
+  overwrite can run. `/-/` may also be removed from open mantissa, active
+  exponent-entry, or VP/X2 restore contexts because the following hard overwrite
+  destroys both the restored X and the toggled X2. `ВП` is removed only when the X2 value dataflow
   still knows an open mantissa, active exponent entry, proved decimal
   `vpEntryMantissa` source, or structural hex/super `vpEntryShape` source from
   the same general proof used by `vp-splice`. It also accepts a current
