@@ -1032,7 +1032,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     context-sensitive `.`/`/-/`/`ВП`
     observations are kept. The same CFG-aware exposure guard is used for the
     inserted dot, so a branch without a reachable preserving-edge restore is no
-    longer a blanket blocker. Register value-memory can supply the same decimal
+    longer a blanket blocker. When the only newly exposed context restore is a
+    non-`ВП` `.`/`/-/` reached after an executable gap and the replacement dot
+    restores the same X2 value, the pass treats the original literal sync as
+    redundant; reachable `ВП` restores still require the stricter mantissa-source
+    proof above. Register value-memory can supply the same decimal
     fact after a direct or proved-indirect recall of a previously stored
     literal-shaped decimal.
 21. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.

@@ -3,10 +3,14 @@ import {
   computeX2DotRestoreGapStates,
   computeX2ImmediateSyncStates,
   computeX2ValueStates,
+  addressIndexes,
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
+  knownIndirectFlowTarget,
+  labelIndexes,
+  analyzeX2StackEffect,
   replacingNumberEntryCanExposeStackLift,
   x2CanUseDotRestoreAt,
   x2HasOnlyRestoreGapBeforeVp,
@@ -281,7 +285,78 @@ function replacingLiteralCanExposeContextSensitiveRestore(
   context: DirectReturnAnalysisContext,
 ): boolean {
   if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
-  return !run.dotPreservesVpEntrySource || !x2HasOnlyRestoreGapBeforeVp(ops, run.end + 1, context);
+  if (run.dotPreservesVpEntrySource && x2HasOnlyRestoreGapBeforeVp(ops, run.end + 1, context)) return false;
+  if (
+    !literalReplacementCanReachVpRestore(ops, run.end + 1) &&
+    !x2SyncCanExposeContextSensitiveRestore(ops, run.end, { redundantSyncValue: true })
+  ) return false;
+  return true;
+}
+
+function literalReplacementCanReachVpRestore(ops: readonly IrOp[], start: number): boolean {
+  const labels = labelIndexes(ops);
+  const addresses = addressIndexes(ops);
+  const visited = new Set<string>();
+  const visit = (cursor: number): boolean => {
+    for (let index = cursor; index < ops.length; index += 1) {
+      if (visited.has(String(index))) return false;
+      visited.add(String(index));
+      const op = ops[index]!;
+      if (hasRewriteBarrier(op)) return true;
+      switch (op.kind) {
+        case "label":
+        case "store":
+        case "indirect-store":
+        case "orphan-address":
+          continue;
+        case "plain": {
+          if (isPlainVp(op)) return true;
+          const effect = analyzeX2StackEffect(op);
+          if (effect.x2Preserves) continue;
+          if (effect.x2Affects || effect.x2Restores) return false;
+          return true;
+        }
+        case "jump": {
+          if (typeof op.target !== "string") return true;
+          const target = labels.get(op.target);
+          return target === undefined ? true : visit(target + 1);
+        }
+        case "cjump":
+        case "loop": {
+          if (typeof op.target !== "string") return true;
+          const target = labels.get(op.target);
+          return (target === undefined ? true : visit(target + 1)) || visit(index + 1);
+        }
+        case "call": {
+          if (typeof op.target !== "string") return true;
+          const target = labels.get(op.target);
+          return target === undefined ? true : visit(target + 1);
+        }
+        case "indirect-jump": {
+          const target = knownIndirectFlowTarget(op);
+          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          return targetIndex === undefined ? true : visit(targetIndex);
+        }
+        case "indirect-call": {
+          const target = knownIndirectFlowTarget(op);
+          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          return targetIndex === undefined ? true : visit(targetIndex);
+        }
+        case "indirect-cjump": {
+          const target = knownIndirectFlowTarget(op);
+          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          return (targetIndex === undefined ? true : visit(targetIndex)) || visit(index + 1);
+        }
+        case "recall":
+        case "indirect-recall":
+        case "return":
+        case "stop":
+          return false;
+      }
+    }
+    return false;
+  };
+  return visit(start);
 }
 
 function dotRestoreOp(value: string, source: IrOp): IrOp {

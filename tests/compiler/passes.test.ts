@@ -3221,6 +3221,47 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-literal-restore replaces repeated literals before a redundant context restore through a gap", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x54, "К НОП"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      plain(0x54, "К НОП"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps repeated literals before an immediate context restore", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore replaces a repeated fractional exponent literal with dot", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
