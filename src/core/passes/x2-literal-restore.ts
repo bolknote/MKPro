@@ -107,11 +107,12 @@ function exponentLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiter
 
   const value = normalizedExponentEntryValue(`${mantissaSign}${mantissaDigits.join("")}`, `${exponentSign}${exponentDigits.join("")}`);
   if (value === undefined) return undefined;
+  const dotPreservesVpEntrySource = mantissaDigits[0] !== "0";
   return {
     end: cursor - 1,
     displayValue: value,
     x2Fact: decimalValueFact(value, "normalized"),
-    dotPreservesVpEntrySource: false,
+    dotPreservesVpEntrySource,
   };
 }
 

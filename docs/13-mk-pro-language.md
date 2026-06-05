@@ -1426,10 +1426,12 @@ The pipeline currently contains:
   branch/call edges are not
   automatic blockers, but a path that preserves X2 into a later
   context-sensitive `.`/`/-/`/`ВП` restore keeps the literal explicit. The one
-  exception is a normalized non-zero digit run followed only by free-standing
+  exception is a normalized non-zero digit run or normalized exponent-entry
+  literal with a non-leading-zero mantissa followed only by free-standing
   `КНОП`/`К1`/`К2` cells before `ВП`: the inserted `.` is emulator-proved to
-  preserve the same mantissa source there. Leading-zero and signed-zero forms
-  still stay explicit because their restored mantissa shape is observable.
+  preserve the same mantissa source there. Leading-zero, signed-zero, and
+  leading-zero exponent mantissa forms still stay explicit because their
+  restored mantissa shape is observable.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
   `X->П r`, and stable-indirect `К X->П R7..Re` with a proved memory target,
   when liveOut at that point excludes the written cell, unless that store

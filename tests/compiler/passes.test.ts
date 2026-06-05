@@ -2660,6 +2660,124 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-literal-restore replaces exponent literals before empty-op ВП context", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 5000 from hidden X2 temp" } },
+      plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces signed-mantissa exponent literals before empty-op ВП context", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal -5000 from hidden X2 temp" } },
+      plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces fractional exponent literals before empty-op ВП context", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.005 from hidden X2 temp" } },
+      plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps leading-zero exponent literals before empty-op ВП context", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x00, "0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore replaces a repeated literal before a branch with no reachable X2 restore", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
