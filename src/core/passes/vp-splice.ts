@@ -110,33 +110,25 @@ function isVpExponentContext(kind: ReturnType<typeof analyzeX2VpShapeContext>["k
   return kind === "vp-exponent-context" || kind === "vp-structural-exponent-context";
 }
 
-function canRemoveX2RestoreSignBeforeDeadOverwrite(
+function x2ContextRestoreRunBeforeDeadOverwrite(
   ops: readonly IrOp[],
-  signIndex: number,
-  state: X2ValueDataflowState | undefined,
-): boolean {
-  return x2StateHasX2RestoreContext(state) && isFollowedByHardX2OverwriteWithoutStackUse(ops, signIndex + 1);
-}
-
-function x2ContextEmptyRunBeforeDeadOverwrite(
-  ops: readonly IrOp[],
-  emptyIndex: number,
+  startIndex: number,
   state: X2ValueDataflowState | undefined,
 ): readonly number[] {
   if (!x2StateHasX2RestoreContext(state)) return [];
-  const emptyIndexes: number[] = [];
-  for (let index = emptyIndex; index < ops.length; index += 1) {
+  const removableIndexes: number[] = [];
+  for (let index = startIndex; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (isFreeStandingEmptyOp(op)) {
-      emptyIndexes.push(index);
+    if (isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op)) {
+      removableIndexes.push(index);
       continue;
     }
     if (op.kind === "label") {
-      return emptyIndexes.length > 0 && isFollowedByHardX2OverwriteWithoutStackUse(ops, index + 1)
-        ? emptyIndexes
+      return removableIndexes.length > 0 && isFollowedByHardX2OverwriteWithoutStackUse(ops, index + 1)
+        ? removableIndexes
         : [];
     }
-    return emptyIndexes.length > 0 && isHardX2OverwriteWithoutStackUse(op) ? emptyIndexes : [];
+    return removableIndexes.length > 0 && isHardX2OverwriteWithoutStackUse(op) ? removableIndexes : [];
   }
   return [];
 }
@@ -260,13 +252,13 @@ const run: IrPassFn = (ops) => {
       remove.add(i - 1);
       continue;
     }
-    // A VP/X2-context empty separator is inert before the same kind of hard
-    // overwrite: its only remaining role would be previous-command context, and
-    // that context is destroyed together with X/X2.
-    if (isFreeStandingEmptyOp(cur)) {
-      const emptyRun = x2ContextEmptyRunBeforeDeadOverwrite(ops, i, x2ValueStates[i]);
-      if (emptyRun.length > 0) {
-        for (const emptyIndex of emptyRun) remove.add(emptyIndex);
+    // A VP/X2-context restore/empty run is inert before the same kind of hard
+    // overwrite: its only remaining role would be restored X/previous-command
+    // context, and that context is destroyed together with X/X2.
+    if (isFreeStandingEmptyOp(cur) || isFreeStandingSignChange(cur)) {
+      const restoreRun = x2ContextRestoreRunBeforeDeadOverwrite(ops, i, x2ValueStates[i]);
+      if (restoreRun.length > 0) {
+        for (const runIndex of restoreRun) remove.add(runIndex);
         continue;
       }
     }
@@ -310,16 +302,6 @@ const run: IrPassFn = (ops) => {
       !remove.has(i) &&
       isFreeStandingSignChange(cur) &&
       canRemoveVpContextSignBeforeFreshDigit(ops, i, x2ValueStates[i])
-    ) {
-      remove.add(i);
-    }
-    // If a VP/X2-context sign restore is followed only by inert separators and
-    // then by a command that unconditionally replaces both X and X2 without
-    // stack use, the restored value cannot be observed.
-    if (
-      !remove.has(i) &&
-      isFreeStandingSignChange(cur) &&
-      canRemoveX2RestoreSignBeforeDeadOverwrite(ops, i, x2ValueStates[i])
     ) {
       remove.add(i);
     }

@@ -7706,7 +7706,55 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("vp-splice removes an active exponent sign before a dead X2 overwrite", () => {
+  it("vp-splice removes a VP-context sign pair before a dead X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a mixed VP-context restore run before a dead X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes an active exponent restore run before a dead X2 overwrite", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
@@ -7717,11 +7765,10 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = vpSplice.run(program, ctx);
 
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
-      plain(0x54, "КНОП"),
       plain(0x0d, "Cx"),
       halt(),
     ]);

@@ -1353,8 +1353,8 @@ The pipeline currently contains:
   commands after X2-preserving gaps are only collapsed when the following
   command, possibly after free-standing empty ops, starts fresh number entry;
   otherwise their X2-to-X restore is observable. Consecutive free-standing
-  empty ops in the same VP/X2 context are removed as one run before a proved
-  hard X/X2 overwrite such as `Cx`.
+  `/-/` and empty ops in the same VP/X2 context are removed as one restore run
+  before a proved hard X/X2 overwrite such as `Cx`.
 - **x2-dead-restore-before-overwrite** — removes a context-sensitive
   `.`/`/-/`/`ВП` restore, plus adjacent `КНОП`/`К1`/`К2` separators, when the
   restored `X` value is immediately destroyed by a proved hard X/X2 overwrite

@@ -953,8 +953,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     directly or through free-standing empty ops (`5 ВП 3 Fπ /-/ 4`,
     `5 ВП 3 Fπ /-/ КНОП 4`, `5 ВП 3 Fπ /-/ /-/ КНОП 4`), because that digit
     starts new number entry and discards the restored `X`. Consecutive
-    free-standing empty ops in a VP/X2 context are likewise removed as a single
-    run before a proved hard X/X2 overwrite such as `Cx`.
+    free-standing `/-/` and empty ops in a VP/X2 context are likewise removed
+    as a single restore run before a proved hard X/X2 overwrite such as `Cx`.
     The after-digit separator
     rewrite is deliberately shape-sensitive: the same empty op before the
     first exponent digit, or before another exponent digit, changes number
