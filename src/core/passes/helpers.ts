@@ -111,6 +111,9 @@ const COMMUTATIVE_STABLE_EXPR_OPCODES = new Set<number>([
   0x38, // К ∨
   0x39, // К ⊕
 ]);
+const STABLE_CONSTANT_EXPR_OPCODES = new Set<number>([
+  0x20, // F pi
+]);
 const PURE_OPAQUE_EXPR_OPCODES = new Set<number>([
   0x10, // +
   0x11, // -
@@ -558,6 +561,8 @@ function plainProducesStableExpressionValues(
   xShape: X2ShapeSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
+  const constant = plainProducesStableConstantExpressionValue(op);
+  if (constant !== undefined) return new Set([constant]);
   if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return new Set();
   if (!PURE_OPAQUE_EXPR_OPCODES.has(op.opcode)) return new Set();
   const info = getOpcode(op.opcode);
@@ -586,6 +591,19 @@ function plainProducesStableExpressionValues(
     }
   }
   return output;
+}
+
+function plainProducesStableConstantExpressionValue(
+  op: Extract<IrOp, { kind: "plain" }>,
+): X2ValueFact | undefined {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return undefined;
+  if (!STABLE_CONSTANT_EXPR_OPCODES.has(op.opcode)) return undefined;
+  const info = getOpcode(op.opcode);
+  if (info.risk !== "documented" || info.x2Effect !== "preserves" || info.stackEffect !== "shifts") {
+    return undefined;
+  }
+  const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
+  return stableExpressionValueFact(opcode, "");
 }
 
 function stableBinaryExpressionValueFact(

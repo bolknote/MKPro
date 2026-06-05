@@ -1324,7 +1324,9 @@ The pipeline currently contains:
   stable expression operands: the key is built from the canonical restored
   shape (`hex:Г ВП 2` and `hex:Г00` share the same operand key), but the result
   stays an opaque `expr-key:*` value and does not make the source shape decimal
-  or dot-safe. A closed-context `.` now
+  or dot-safe. Stable constant stack producers such as `F pi` use the same
+  opaque key model (`expr-key:20()`) without assigning a decimal approximation
+  to the constant. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are
   normalized for `X` during that transfer while the hidden X2 representation
   stays unchanged. If number entry is still open, `.` is treated as a decimal
@@ -1461,8 +1463,9 @@ The pipeline currently contains:
   refused when the scratch register is the loop counter being decremented. It
   can also prove the hidden temp from the dead scratch store's own stable source
   fact (`decimal:*:normalized`, `expr:*`, or a stable `expr-key:*` whose
-  operands include canonical structural shape sources) when register-memory at
-  a join has become too conservative. It
+  operands include canonical structural shape sources or constant stack
+  producers such as `F pi`) when register-memory at a join has become too
+  conservative. It
   may also cross a simple direct `ПП` whose target reaches `В/О` linearly
   without touching the scratch register; nested flow, unknown memory access, or
   another entry label keeps the call as a barrier. The

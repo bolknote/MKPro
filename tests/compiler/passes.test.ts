@@ -1624,6 +1624,38 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[2]?.x)).toContain("expr-key:31(reg:1)");
   });
 
+  it("x2 value dataflow seeds stable expr keys from constant stack producers", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x20, "F pi"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["expr-key:20()"]);
+    expect(x2ValueStateText(states[2]?.y)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:2:normalized"]);
+  });
+
+  it("x2-hidden-temp-restore uses stable expr keys across repeated constant stack producers", () => {
+    const program: IrOp[] = [
+      plain(0x20, "F pi"),
+      store("3"),
+      plain(0x0d, "Cx"),
+      plain(0x20, "F pi"),
+      plain(0x0e, "В↑"),
+      recall("3"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[5]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "3")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2-hidden-temp-restore uses structural shape expr keys across different registers", () => {
     const program: IrOp[] = [
       recall("1", "preload const FABC"),
