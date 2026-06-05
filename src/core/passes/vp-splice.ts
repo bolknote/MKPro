@@ -6,7 +6,6 @@ import {
   emptyResult,
   hasRewriteBarrier,
   removingRecallCanExposeX2Restore,
-  sameX2ExponentShapeContext,
   x2StateHasSameDotSafeDecimalInXAndX2,
   x2StateHasSameStructuralShapeInXAndX2,
   x2StateHasX2RestoreContext,
@@ -78,28 +77,23 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
   return sameNonEmptyStringSet(state.entry.raw, stateAfterPair?.vpEntryMantissa);
 }
 
-function canRemoveVpContextSignPairBeforeFreshDigit(
+function x2ContextRestoreRunBeforeFreshDigit(
   ops: readonly IrOp[],
-  secondSignIndex: number,
+  startIndex: number,
   state: X2ValueDataflowState | undefined,
-  stateAfterPair: X2ValueDataflowState | undefined,
-): boolean {
-  const before = analyzeX2VpShapeContext(state);
-  const after = analyzeX2VpShapeContext(stateAfterPair);
-  if (!isVpExponentContext(before.kind) || !isVpExponentContext(after.kind)) return false;
-  const nextIndex = nextFreshDigitIndex(ops, secondSignIndex + 1);
-  if (nextIndex === undefined || !isDecimalDigit(ops[nextIndex]!)) return false;
-  return sameX2ExponentShapeContext(before, after);
-}
-
-function canRemoveVpContextSignBeforeFreshDigit(
-  ops: readonly IrOp[],
-  signIndex: number,
-  state: X2ValueDataflowState | undefined,
-): boolean {
-  if (!isVpExponentContext(analyzeX2VpShapeContext(state).kind)) return false;
-  const nextIndex = nextFreshDigitIndex(ops, signIndex + 1);
-  return nextIndex !== undefined && isDecimalDigit(ops[nextIndex]!);
+): readonly number[] {
+  if (!isVpExponentContext(analyzeX2VpShapeContext(state).kind)) return [];
+  const removableIndexes: number[] = [];
+  for (let index = startIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op)) {
+      removableIndexes.push(index);
+      continue;
+    }
+    if (op.kind === "label") continue;
+    return removableIndexes.length > 0 && isDecimalDigit(op) ? removableIndexes : [];
+  }
+  return [];
 }
 
 function isActiveExponentContext(kind: ReturnType<typeof analyzeX2VpShapeContext>["kind"]): boolean {
@@ -283,27 +277,16 @@ const run: IrPassFn = (ops) => {
       remove.add(i - 1);
       remove.add(i);
     }
-    // After an X2-preserving gap, a VP-context /-/ /-/ pair is observable
-    // because it restores X2 into X even though the exponent sign cancels. A
-    // following digit, possibly after empty ops, starts fresh number entry, so
-    // that restored X is lost.
-    if (
-      isFreeStandingSignChange(prev) &&
-      isFreeStandingSignChange(cur) &&
-      canRemoveVpContextSignPairBeforeFreshDigit(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1])
-    ) {
-      remove.add(i - 1);
-      remove.add(i);
-    }
-    // A single VP-context /-/ also only restores/toggles X2. If fresh number
-    // entry starts next, possibly through empty ops, that restored X is lost.
-    // Active exponent-entry is excluded by requiring a closed entry state.
-    if (
-      !remove.has(i) &&
-      isFreeStandingSignChange(cur) &&
-      canRemoveVpContextSignBeforeFreshDigit(ops, i, x2ValueStates[i])
-    ) {
-      remove.add(i);
+    // A closed VP/X2-context restore/empty run is discarded by fresh digit
+    // entry: every restored X/previous-command effect is overwritten by the
+    // new number. Active exponent-entry is excluded because a following digit
+    // is an exponent digit there, not fresh mantissa entry.
+    if (isFreeStandingEmptyOp(cur) || isFreeStandingSignChange(cur)) {
+      const restoreRun = x2ContextRestoreRunBeforeFreshDigit(ops, i, x2ValueStates[i]);
+      if (restoreRun.length > 0) {
+        for (const runIndex of restoreRun) remove.add(runIndex);
+        continue;
+      }
     }
     // In closed context, two sign changes are only removable when value
     // dataflow proves ordinary decimal X and X2 equality and the pair is not

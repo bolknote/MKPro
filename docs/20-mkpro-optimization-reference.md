@@ -949,12 +949,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     forms are kept because `0 /-/ /-/ ВП` still differs from `0 ВП`.
     After an X2-preserving gap, a VP-context sign or sign pair is kept when its
     X2 restore is observable (`5 ВП 3 Fπ /-/ С/П`,
-    `5 ВП 3 Fπ /-/ /-/ С/П`), but it can be dropped before a fresh digit,
-    directly or through free-standing empty ops (`5 ВП 3 Fπ /-/ 4`,
+    `5 ВП 3 Fπ /-/ /-/ С/П`), but a free-standing `/-/`/empty restore run can
+    be dropped before a fresh digit (`5 ВП 3 Fπ /-/ 4`,
     `5 ВП 3 Fπ /-/ КНОП 4`, `5 ВП 3 Fπ /-/ /-/ КНОП 4`), because that digit
-    starts new number entry and discards the restored `X`. Consecutive
-    free-standing `/-/` and empty ops in a VP/X2 context are likewise removed
-    as a single restore run before a proved hard X/X2 overwrite such as `Cx`.
+    starts new number entry and discards the restored `X`. The same kind of
+    restore run is likewise removed before a proved hard X/X2 overwrite such as
+    `Cx`.
     The after-digit separator
     rewrite is deliberately shape-sensitive: the same empty op before the
     first exponent digit, or before another exponent digit, changes number

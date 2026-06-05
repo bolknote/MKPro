@@ -7564,7 +7564,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("vp-splice removes a VP-context sign pair before empty-op fresh digit entry", () => {
+  it("vp-splice removes a VP-context sign pair and empty op before fresh digit entry", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
@@ -7578,13 +7578,12 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = vpSplice.run(program, ctx);
 
-    expect(result.applied).toBe(2);
+    expect(result.applied).toBe(3);
     expect(result.ops).toEqual([
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       plain(0x20, "Fπ"),
-      plain(0x54, "КНОП"),
       plain(0x04, "4"),
       halt(),
     ]);
@@ -7613,7 +7612,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("vp-splice removes a single VP-context sign before empty-op fresh digit entry", () => {
+  it("vp-splice removes a single VP-context sign and empty op before fresh digit entry", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
@@ -7626,13 +7625,36 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = vpSplice.run(program, ctx);
 
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       plain(0x20, "Fπ"),
+      plain(0x04, "4"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a VP-context empty run before fresh digit entry", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
       plain(0x54, "КНОП"),
+      plain(0x55, "К1"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
       plain(0x04, "4"),
       halt(),
     ]);
