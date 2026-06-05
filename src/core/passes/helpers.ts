@@ -581,7 +581,7 @@ function plainProducesStableExpressionValues(
   const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
   if (info.stackEffect === "preserves") {
     for (const key of stableExpressionSourceKeys(x, xShape)) {
-      if (stableExpressionKeyHasConcreteDecimalFraction(op, key)) continue;
+      if (stableExpressionKeyHasConcreteDecimalResult(op, key)) continue;
       output.add(stableExpressionValueFact(opcode, key));
     }
   } else if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") {
@@ -594,13 +594,14 @@ function plainProducesStableExpressionValues(
   return output;
 }
 
-function stableExpressionKeyHasConcreteDecimalFraction(
+function stableExpressionKeyHasConcreteDecimalResult(
   op: Extract<IrOp, { kind: "plain" }>,
   key: string,
 ): boolean {
-  return op.opcode === 0x35 &&
-    /^decimal:/u.test(key) &&
-    decimalFractionPartFromFactKey(key) !== undefined;
+  if (!/^decimal:/u.test(key)) return false;
+  if (op.opcode === 0x35) return decimalFractionPartFromFactKey(key) !== undefined;
+  if (op.opcode === 0x34) return decimalIntegerPartFromFactKey(key) !== undefined;
+  return false;
 }
 
 function plainProducesConcreteDecimalValues(
@@ -608,11 +609,15 @@ function plainProducesConcreteDecimalValues(
   x: X2ValueSet | undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
-  if (op.opcode !== 0x35) return output;
+  if (op.opcode !== 0x34 && op.opcode !== 0x35) return output;
   for (const fact of x ?? []) {
     const value = normalizedDecimalValueFromFact(fact);
-    const fractional = value === undefined ? undefined : decimalFractionPart(value);
-    if (fractional !== undefined) output.add(decimalValueFact(fractional, "normalized"));
+    const concrete = value === undefined
+      ? undefined
+      : op.opcode === 0x35
+        ? decimalFractionPart(value)
+        : decimalIntegerPart(value);
+    if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
   }
   return output;
 }
@@ -620,6 +625,20 @@ function plainProducesConcreteDecimalValues(
 function decimalFractionPartFromFactKey(key: string): string | undefined {
   const match = /^decimal:([^:]+):normalized$/u.exec(key);
   return match === null ? undefined : decimalFractionPart(match[1]!);
+}
+
+function decimalIntegerPartFromFactKey(key: string): string | undefined {
+  const match = /^decimal:([^:]+):normalized$/u.exec(key);
+  return match === null ? undefined : decimalIntegerPart(match[1]!);
+}
+
+function decimalIntegerPart(value: string): string | undefined {
+  const match = /^(-?)([0-9]+)(?:\.[0-9]+)?$/u.exec(value);
+  if (match === null) return undefined;
+  const sign = match[1]!;
+  const integer = match[2]!.replace(/^0+(?=\d)/u, "");
+  if (integer === "0") return "0";
+  return `${sign}${integer}`;
 }
 
 function decimalFractionPart(value: string): string | undefined {
