@@ -1020,8 +1020,52 @@ export function x2ExponentMantissaSignChangedShapeFact(fact: X2ShapeFact): X2Sha
 export function x2ClosedStructuralExponentMantissaShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
   const model = x2ShapeDataModelForFact(fact);
   if (model.kind !== "exponent-entry") return undefined;
-  const closed = model.closedStructuralMantissa;
-  return closed === undefined ? undefined : x2MantissaShapeFactFromModel(closed);
+  const mantissa = x2MantissaShapeFactFromModel(model.mantissa);
+  return mantissa === undefined ? undefined : x2StructuralMantissaShiftShapeFact(mantissa, model.exponentRaw);
+}
+
+export function x2StructuralMantissaShiftShapeFact(
+  fact: X2ShapeFact,
+  exponentRaw: string,
+): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) return undefined;
+  const shifted = shiftedStructuralMantissaRaw(model.canonical, exponentRaw);
+  if (shifted === undefined) return undefined;
+  const radix = model.radix === "super" && shifted !== model.canonical ? "hex" : model.radix;
+  return x2MantissaShapeFactFromModel(structuralMantissaDataModel(radix, shifted, "structuralOnly"));
+}
+
+export function x2StructuralMantissaAppendDigitsShapeFact(
+  fact: X2ShapeFact,
+  suffixRaw: string,
+): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) return undefined;
+  const suffix = canonicalStructuralDigitRun(suffixRaw);
+  if (suffix === undefined) return undefined;
+  const sign = model.sign;
+  const unsigned = sign === "" ? model.canonical : model.canonical.slice(1);
+  const appended = `${sign}${unsigned}${suffix}`;
+  if (shapeDigits(appended).length > 8) return undefined;
+  const radix = model.radix === "super" && suffix.length > 0 ? "hex" : model.radix;
+  return x2MantissaShapeFactFromModel(structuralMantissaDataModel(radix, appended, "structuralOnly"));
+}
+
+export function x2StructuralMantissaConcatShapeFacts(
+  left: X2ShapeFact,
+  right: X2ShapeFact,
+): X2ShapeFact | undefined {
+  const rightModel = x2ShapeDataModelForFact(right);
+  if (
+    rightModel.kind !== "mantissa" ||
+    (rightModel.radix !== "hex" && rightModel.radix !== "super") ||
+    rightModel.sign !== "" ||
+    rightModel.hasDecimalPoint
+  ) {
+    return undefined;
+  }
+  return x2StructuralMantissaAppendDigitsShapeFact(left, rightModel.digits.join(""));
 }
 
 export function x2ShapeFactSafety(fact: X2ShapeFact): X2ShapeSafety {
@@ -3236,6 +3280,12 @@ function shiftedStructuralMantissaRaw(raw: string, exponentRaw: string): string 
       : `0.${"0".repeat(-point)}${digits}`;
   if (shapeDigits(shifted).length > 8) return undefined;
   return `${sign}${shifted}`;
+}
+
+function canonicalStructuralDigitRun(raw: string): string | undefined {
+  const canonical = canonicalShapeRaw(raw);
+  if (canonical.length === 0) return "";
+  return /^[0-9A-FА-Я]+$/u.test(canonical) ? canonical : undefined;
 }
 
 function x2MantissaShapeFactFromParts(radix: X2MantissaRadix, raw: string): X2ShapeFact | undefined {

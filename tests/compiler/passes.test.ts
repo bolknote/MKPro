@@ -56,6 +56,9 @@ import {
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetsHaveSameStructuralShape,
   x2ShapeSetSafety,
+  x2StructuralMantissaAppendDigitsShapeFact,
+  x2StructuralMantissaConcatShapeFacts,
+  x2StructuralMantissaShiftShapeFact,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueSetsHaveSameRestoredVisibleDecimal,
@@ -998,6 +1001,31 @@ describe("ir passes on synthetic programs", () => {
         safety: "structuralOnly",
       },
     });
+  });
+
+  it("x2 shape algebra shifts and appends structural mantissa digits without decimalizing", () => {
+    expect(x2StructuralMantissaShiftShapeFact("hex:8.70:mantissa", "2")).toBe("hex:870:mantissa");
+    expect(x2StructuralMantissaShiftShapeFact("hex:Г:mantissa", "-2")).toBe("hex:0.0Г:mantissa");
+    expect(x2StructuralMantissaShiftShapeFact("super:FA", "2")).toBe("hex:FA00:mantissa");
+    expect(x2StructuralMantissaShiftShapeFact("mantissa:5:decimal", "2")).toBeUndefined();
+    expect(x2StructuralMantissaShiftShapeFact("hex:12345678:mantissa", "1")).toBeUndefined();
+
+    expect(x2StructuralMantissaAppendDigitsShapeFact("hex:8.70:mantissa", "Е2")).toBe(
+      "hex:8.70Е2:mantissa",
+    );
+    expect(x2StructuralMantissaAppendDigitsShapeFact("super:FA", "1")).toBe("hex:FA1:mantissa");
+    expect(x2StructuralMantissaAppendDigitsShapeFact("hex:12345678:mantissa", "9")).toBeUndefined();
+    expect(x2StructuralMantissaAppendDigitsShapeFact("hex:8:mantissa", "E-2")).toBeUndefined();
+  });
+
+  it("x2 shape algebra concatenates only pure structural digit mantissas", () => {
+    expect(x2StructuralMantissaConcatShapeFacts("hex:8.7:mantissa", "hex:0Е:mantissa")).toBe(
+      "hex:8.70Е:mantissa",
+    );
+    expect(x2StructuralMantissaConcatShapeFacts("super:FA", "hex:12:mantissa")).toBe("hex:FA12:mantissa");
+    expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:0.1:mantissa")).toBeUndefined();
+    expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:-1:mantissa")).toBeUndefined();
+    expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "hex:1:mantissa")).toBeUndefined();
   });
 
   it("x2 shape algebra toggles mantissa and exponent signs structurally", () => {

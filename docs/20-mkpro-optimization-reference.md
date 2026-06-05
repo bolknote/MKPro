@@ -910,8 +910,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shifts (`hex:Г` through `ВП 2` is the same structural display shape as
     `hex:Г00`; `hex:Г ВП -2` is the same structural display shape as
     `hex:0.0Г`; shifted two-byte `super:FA` forms compare as the resulting
-    hex-like display mantissa) while still refusing hex/super arithmetic, carry,
-    or decimalization proofs.
+    hex-like display mantissa). The same algebra now has shape-only structural
+    digit append/concat operations (`hex:8.7` + `hex:0Е` proves
+    `hex:8.70Е`) with eight-display-digit bounds and no signed/fractional
+    right operand. These are structural display proofs only: they still refuse
+    hex/super arithmetic, carry, or decimalization proofs.
     Structural equality uses canonical shape reconstruction, so equivalent
     hex/super spellings compare as the same shape without becoming decimal
     values. Shape-set joins and equality checks use the same canonical
