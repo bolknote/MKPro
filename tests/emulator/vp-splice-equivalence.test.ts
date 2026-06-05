@@ -202,7 +202,7 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
     const emptyDigitCodes = emptyDigitResult.items
       .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
       .map((item) => item.opcode);
-    expect(emptyDigitCodes).toEqual([0x05, VP, 0x03, FPI, KNOP, 0x04, STOP]);
+    expect(emptyDigitCodes).toEqual([0x05, VP, 0x03, FPI, 0x04, STOP]);
     expect(display(emptyDigitCodes)).toBe(
       display([0x05, VP, 0x03, FPI, SIGN_CHANGE, SIGN_CHANGE, KNOP, 0x04, STOP]),
     );
@@ -221,7 +221,7 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
     const singleCodes = singleResult.items
       .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
       .map((item) => item.opcode);
-    expect(singleCodes).toEqual([0x05, VP, 0x03, FPI, KNOP, 0x04, STOP]);
+    expect(singleCodes).toEqual([0x05, VP, 0x03, FPI, 0x04, STOP]);
     expect(display(singleCodes)).toBe(display([0x05, VP, 0x03, FPI, SIGN_CHANGE, KNOP, 0x04, STOP]));
   });
 

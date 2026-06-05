@@ -13,6 +13,7 @@ import {
   knownIndirectMemoryTarget,
   removableRecallValueRegister,
   x2CanUseDotRestoreAt,
+  x2StateHasUnsafeDotRestoreShapeX2,
   type IrPass,
   type IrPassFn,
 } from "./helpers.ts";
@@ -37,6 +38,7 @@ const run: IrPassFn = (ops) => {
     if (liveness.liveOut[index]?.has(register) === true) return op;
     const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index]);
     if (removal?.x2SyncRedundant !== true) return op;
+    if (x2StateHasUnsafeDotRestoreShapeX2(x2ValueStates[index])) return op;
     if (
       !x2CanUseDotRestoreAt(
         ops,

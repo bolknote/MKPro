@@ -764,6 +764,11 @@ export function x2StateHasStructuralShapeX2(state: X2ValueDataflowState | undefi
   return x2RestoreSafety(state) === "structuralOnly";
 }
 
+export function x2StateHasUnsafeDotRestoreShapeX2(state: X2ValueDataflowState | undefined): boolean {
+  const safety = x2RestoreSafety(state);
+  return safety === "structuralOnly" || safety === "errorProne";
+}
+
 export function x2ShapeSetsHaveSameDotSafeDecimal(
   left: X2ShapeSet | undefined,
   right: X2ShapeSet | undefined,

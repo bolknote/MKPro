@@ -47,6 +47,7 @@ import {
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetsHaveSameStructuralShape,
   x2ShapeSetSafety,
+  x2StateHasUnsafeDotRestoreShapeX2,
   type X2ShapeSet,
   type X2ValueSet,
 } from "../../src/core/passes/helpers.ts";
@@ -779,6 +780,23 @@ describe("ir passes on synthetic programs", () => {
         new Set(["hex:FA:mantissa"]),
       ),
     ).toBe(false);
+  });
+
+  it("x2 restore safety flags structural and error-prone shape-only contexts", () => {
+    const leadingZeroExponent: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const structuralRecall: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      halt(),
+    ];
+
+    expect(x2StateHasUnsafeDotRestoreShapeX2(computeX2ValueStates(leadingZeroExponent)[4])).toBe(true);
+    expect(x2StateHasUnsafeDotRestoreShapeX2(computeX2ValueStates(structuralRecall)[1])).toBe(true);
   });
 
   it("x2 shape data model captures normalized decimal, hex, super, and exponent-entry forms", () => {
@@ -3405,6 +3423,19 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-noop-restore keeps dot after modeled structural closed sign-change", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8.70Е2-6С"),
+      plain(0x0b, "/-/"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-noop-restore removes dot after modeled fractional closed sign-change", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
@@ -3637,6 +3668,20 @@ describe("ir passes on synthetic programs", () => {
     expect(restored.ops[9]).toMatchObject({ kind: "plain", opcode: 0x0a });
     expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps structural scratch recalls", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const 8.70Е2-6С"),
+      store("2"),
+      plain(0x20, "Fπ"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+
+    expect(restored.applied).toBe(0);
+    expect(restored.ops).toEqual(program);
   });
 
   it("x2-hidden-temp-restore handles stable indirect scratch stores and recalls", () => {
