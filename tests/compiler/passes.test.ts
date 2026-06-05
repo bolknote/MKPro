@@ -52,6 +52,8 @@ import {
   x2ShapeSetsHaveSameStructuralShape,
   x2ShapeSetSafety,
   x2StateHasUnsafeDotRestoreShapeX2,
+  x2ValueSetHasRestoredVisibleDecimal,
+  x2ValueSetsHaveSameRestoredVisibleDecimal,
   type X2ShapeSet,
   type X2ValueSet,
 } from "../../src/core/passes/helpers.ts";
@@ -873,6 +875,33 @@ describe("ir passes on synthetic programs", () => {
         new Set(["hex:FA00:mantissa"]),
       ),
     ).toBe(true);
+  });
+
+  it("x2 value algebra compares decimal facts by restored visible value", () => {
+    expect(
+      x2ValueSetsHaveSameRestoredVisibleDecimal(
+        new Set(["decimal:2:normalized"]),
+        new Set(["decimal:02:unnormalized"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ValueSetsHaveSameRestoredVisibleDecimal(
+        new Set(["decimal:-2:normalized"]),
+        new Set(["decimal:-02:unnormalized"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ValueSetHasRestoredVisibleDecimal(
+        new Set(["decimal:1.2:normalized"]),
+        "decimal:01.20:unnormalized",
+      ),
+    ).toBe(true);
+    expect(
+      x2ValueSetsHaveSameRestoredVisibleDecimal(
+        new Set(["reg:1"]),
+        new Set(["decimal:1:normalized"]),
+      ),
+    ).toBe(false);
   });
 
   it("x2 restore safety flags structural and error-prone shape-only contexts", () => {
@@ -2392,7 +2421,7 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
-  it("x2-hidden-temp-restore keeps raw leading-zero fractional scratch recalls", () => {
+  it("x2-hidden-temp-restore uses raw leading-zero fractional scratch recalls when only visible X is observed", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x01, "1"),
@@ -2402,6 +2431,30 @@ describe("ir passes on synthetic programs", () => {
       plain(0x20, "Fπ"),
       plain(0x20, "Fπ"),
       recall("1"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[7]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "1")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps raw leading-zero fractional scratch recalls before observable VP context", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("1"),
+      plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
       halt(),
     ];
     const restored = x2HiddenTempRestore.run(program, ctx);
@@ -2592,7 +2645,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("x2-literal-restore keeps leading-zero runs after X2 normalization", () => {
+  it("x2-literal-restore replaces leading-zero runs after X2 normalization when only visible X is observed", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x02, "2"),
@@ -2603,8 +2656,38 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2LiteralRestore.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 02 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces signed leading-zero runs after X2 normalization", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal -02 from hidden X2 temp" } },
+      halt(),
+    ]);
   });
 
   it("x2-literal-restore replaces a repeated digit run immediately after an X2 sync", () => {
@@ -3083,7 +3166,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("x2-literal-restore keeps leading-zero literals through proved indirect conditionals", () => {
+  it("x2-literal-restore uses visible leading-zero literals through proved indirect conditionals", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x02, "2"),
@@ -3096,8 +3179,16 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2LiteralRestore.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      knownTargetIndirectCjump("7", 6),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 02 from hidden X2 temp" } },
+      halt(),
+      label("done"),
+      halt(),
+    ]);
   });
 
   it("x2-literal-restore uses direct return X2 sync", () => {
@@ -3231,7 +3322,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("x2-literal-restore keeps leading-zero digit runs", () => {
+  it("x2-literal-restore replaces visible leading-zero digit runs through preserving gaps", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x02, "2"),
@@ -3243,8 +3334,15 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2LiteralRestore.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 02 from hidden X2 temp" } },
+      halt(),
+    ]);
   });
 
   it("x2-literal-restore keeps digit runs that would change a following ВП context", () => {
@@ -3756,7 +3854,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("x2-noop-restore keeps dot after proved indirect conditional preserved leading-zero X2", () => {
+  it("x2-noop-restore removes dot after proved indirect conditional preserved visible leading-zero X2", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x02, "2"),
@@ -3768,8 +3866,15 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2NoopRestore.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      knownTargetIndirectCjump("7", 5),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
   });
 
   it("x2-noop-restore removes dot immediately after direct return X2 sync", () => {
@@ -3915,7 +4020,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("x2-noop-restore keeps dot after a leading-zero X2 literal", () => {
+  it("x2-noop-restore removes dot after a visible-equivalent leading-zero X2 literal", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x02, "2"),
@@ -3926,8 +4031,14 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2NoopRestore.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      store("2"),
+      store("3"),
+      halt(),
+    ]);
   });
 
   it("x2-dead-restore-before-overwrite removes decimal dot restores before hard X/X2 overwrite", () => {
@@ -4787,7 +4898,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("x2-noop-restore keeps dot after a signed leading-zero X2 literal", () => {
+  it("x2-noop-restore removes dot after a visible-equivalent signed leading-zero X2 literal", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x02, "2"),
@@ -4799,8 +4910,15 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2NoopRestore.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      store("2"),
+      store("3"),
+      halt(),
+    ]);
   });
 
   it("x2-noop-restore keeps dot when it would change the next ВП context", () => {

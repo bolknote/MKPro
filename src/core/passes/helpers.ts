@@ -680,6 +680,40 @@ export function x2ValueFactIsNormalizedDecimal(fact: X2ValueFact): boolean {
   return normalizedDecimalValueFromFact(fact) !== undefined;
 }
 
+export function x2ValueFactRestoredVisibleDecimal(fact: X2ValueFact): string | undefined {
+  const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):(normalized|unnormalized)$/u.exec(fact);
+  return decimal === null ? undefined : normalizePlainDecimal(decimal[1]!);
+}
+
+export function x2ValueSetHasRestoredVisibleDecimal(
+  input: X2ValueSet | undefined,
+  fact: X2ValueFact,
+): boolean {
+  const visible = x2ValueFactRestoredVisibleDecimal(fact);
+  if (visible === undefined) return false;
+  for (const candidate of input ?? []) {
+    if (x2ValueFactRestoredVisibleDecimal(candidate) === visible) return true;
+  }
+  return false;
+}
+
+export function x2ValueSetsHaveSameRestoredVisibleDecimal(
+  left: X2ValueSet | undefined,
+  right: X2ValueSet | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return false;
+  const leftValues = new Set<string>();
+  for (const fact of left) {
+    const visible = x2ValueFactRestoredVisibleDecimal(fact);
+    if (visible !== undefined) leftValues.add(visible);
+  }
+  for (const fact of right) {
+    const visible = x2ValueFactRestoredVisibleDecimal(fact);
+    if (visible !== undefined && leftValues.has(visible)) return true;
+  }
+  return false;
+}
+
 export function x2ValueSetHasNormalizedDecimalFact(
   input: X2ValueSet | undefined,
   fact: X2ValueFact,
@@ -992,6 +1026,12 @@ export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefi
 
 export function x2StateHasSameDotRestoreValueInXAndX2(state: X2ValueDataflowState | undefined): boolean {
   return x2ValueSetHasIntersection(state?.x, state?.x2) || x2StateHasSameDotSafeDecimalInXAndX2(state);
+}
+
+export function x2StateHasSameRestoredVisibleDecimalInXAndX2(
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  return x2ValueSetsHaveSameRestoredVisibleDecimal(state?.x, state?.x2);
 }
 
 export function x2CanUseDotRestoreAt(

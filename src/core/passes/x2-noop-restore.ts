@@ -10,6 +10,7 @@ import {
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasSameDotRestoreValueInXAndX2,
   x2StateHasSameNormalizedDecimalInXAndX2,
+  x2StateHasSameRestoredVisibleDecimalInXAndX2,
   x2StateIsClosedPlainContext,
   x2StatesHaveSameVpEntrySource,
   type IrPass,
@@ -35,10 +36,17 @@ const run: IrPassFn = (ops) => {
       !(
         x2StateHasSameNormalizedDecimalInXAndX2(state) &&
         x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
+      ) &&
+      !(
+        x2StateHasSameRestoredVisibleDecimalInXAndX2(state) &&
+        x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
       )
     ) continue;
     if (!isDotSafeValueContext(state)) continue;
-    if (!x2StateHasSameDotRestoreValueInXAndX2(state)) continue;
+    if (
+      !x2StateHasSameDotRestoreValueInXAndX2(state) &&
+      !x2StateHasSameRestoredVisibleDecimalInXAndX2(state)
+    ) continue;
     if (dotCanExposeContextSensitiveRestore(ops, index, state, valueStates[index + 1])) continue;
     removed.add(index);
   }

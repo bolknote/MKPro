@@ -21,6 +21,7 @@ import {
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StatesHaveSameVpEntrySource,
   x2ValueFactIsNormalizedDecimal,
+  x2ValueSetsHaveSameRestoredVisibleDecimal,
   type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
@@ -55,7 +56,11 @@ const run: IrPassFn = (ops) => {
       x2ValueStates[storeIndex],
       x2ValueStates[index],
     );
-    if (removal.x2SyncRedundant !== true && !sourceAlreadySynced) return op;
+    const sourceRestoresSameVisibleDecimal = hiddenTempStoreSourceRestoresSameVisibleDecimalFromX2(
+      x2ValueStates[storeIndex],
+      x2ValueStates[index],
+    );
+    if (removal.x2SyncRedundant !== true && !sourceAlreadySynced && !sourceRestoresSameVisibleDecimal) return op;
     if (x2StateHasUnsafeDotRestoreShapeX2(x2ValueStates[index])) return op;
     const canUseDotRestore = x2CanUseDotRestoreAt(
       ops,
@@ -66,10 +71,14 @@ const run: IrPassFn = (ops) => {
     );
     const canUseNormalizedDecimalEscape = sourceAlreadyDotSafe &&
       x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index);
+    const canUseVisibleDecimalEscape = sourceRestoresSameVisibleDecimal &&
+      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index);
     const canUseVpSourceEscape = sourceAlreadyDotSafe &&
       x2StatesHaveSameVpEntrySource(x2ValueStates[index], x2ValueStates[index + 1]) &&
       hasOnlyRestoreGapBeforeVp(ops, index + 1);
-    if (!canUseDotRestore && !canUseNormalizedDecimalEscape && !canUseVpSourceEscape) return op;
+    if (!canUseDotRestore && !canUseNormalizedDecimalEscape && !canUseVisibleDecimalEscape && !canUseVpSourceEscape) {
+      return op;
+    }
     const exposesX2Restore = sourceAlreadySynced && removal.x2SyncRedundant !== true
       ? removingRecallCanExposeX2Restore(ops, index, { redundantSyncValue: true })
       : removal.exposesX2Restore;
@@ -127,6 +136,13 @@ function hiddenTempStoreSourceAlreadyDotSafeInX2(
     if (recallState.x2.has(fact)) return true;
   }
   return false;
+}
+
+function hiddenTempStoreSourceRestoresSameVisibleDecimalFromX2(
+  storeState: X2ValueDataflowState | undefined,
+  recallState: X2ValueDataflowState | undefined,
+): boolean {
+  return x2ValueSetsHaveSameRestoredVisibleDecimal(storeState?.x, recallState?.x2);
 }
 
 function isStableStoredSourceFact(fact: X2ValueFact): boolean {

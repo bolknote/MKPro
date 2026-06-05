@@ -5,6 +5,7 @@ const require = createRequire(import.meta.url);
 
 interface Mk61Instance {
   loadProgram(codes: number[] | string): { diagnostics: string[] };
+  setRegister(register: string, value: string): void;
   pressSequence(keys: string[]): void;
   runUntilStable(options: { maxFrames: number; stableFrames: number }): { stopped: boolean; frames: number; signature: string };
   readRegister(register: string): string;
@@ -15,6 +16,15 @@ const { MK61 } = require("./mk61.cjs") as { MK61: Mk61Constructor };
 function runX(codes: number[]): string {
   const calc = new MK61();
   calc.loadProgram(codes);
+  calc.pressSequence(["В/О", "С/П"]);
+  calc.runUntilStable({ maxFrames: 300, stableFrames: 5 });
+  return calc.readRegister("x").replace(/\s/gu, "");
+}
+
+function runXWithRegisters(codes: number[], registers: Record<string, string>): string {
+  const calc = new MK61();
+  calc.loadProgram(codes);
+  for (const [register, value] of Object.entries(registers)) calc.setRegister(register, value);
   calc.pressSequence(["В/О", "С/П"]);
   calc.runUntilStable({ maxFrames: 300, stableFrames: 5 });
   return calc.readRegister("x").replace(/\s/gu, "");
@@ -130,5 +140,13 @@ describe("X2 restore context", () => {
     expect(runX([0x00, 0x05, 0x0c, 0x03, 0xf0, 0x0a, 0x55, 0x0c, 0x02, 0x50])).not.toBe(
       runX([0x00, 0x05, 0x0c, 0x03, 0xf0, 0x00, 0x05, 0x0c, 0x03, 0x55, 0x0c, 0x02, 0x50]),
     );
+  });
+
+  it("plain ВП X2 restore does not make a following К {x} redundant", () => {
+    const withFraction = [0x61, 0x20, 0x0c, 0x35, 0x50]; // П->X 1; F pi; ВП; К {x}; С/П
+    const withoutFraction = [0x61, 0x20, 0x0c, 0x50]; // П->X 1; F pi; ВП; С/П
+
+    expect(runXWithRegisters(withFraction, { "1": "1.23" })).toBe("2,3-1");
+    expect(runXWithRegisters(withoutFraction, { "1": "1.23" })).toBe("1,23");
   });
 });

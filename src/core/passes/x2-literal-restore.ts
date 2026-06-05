@@ -10,6 +10,7 @@ import {
   x2CanUseDotRestoreAt,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2SyncCanExposeContextSensitiveRestore,
+  x2ValueSetHasRestoredVisibleDecimal,
   x2ValueSetHasNormalizedDecimalFact,
   type IrPass,
   type IrPassFn,
@@ -336,6 +337,10 @@ const run: IrPassFn = (ops) => {
   for (let index = 0; index < ops.length; index += 1) {
     const state = x2ValueStates[index];
     const runAtIndex = literalRunAt(ops, index);
+    const exactX2Fact = runAtIndex === undefined ? false : x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact);
+    const visibleDecimalX2Fact = runAtIndex === undefined
+      ? false
+      : x2ValueSetHasRestoredVisibleDecimal(state?.x2, runAtIndex.x2Fact);
     if (
       runAtIndex !== undefined &&
       isFreshClosedDecimalEntry(state) &&
@@ -344,9 +349,13 @@ const run: IrPassFn = (ops) => {
         (
           x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) &&
           x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
+        ) ||
+        (
+          visibleDecimalX2Fact &&
+          x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index)
         )
       ) &&
-      x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact) &&
+      (exactX2Fact || visibleDecimalX2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
       !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex)
     ) {

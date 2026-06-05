@@ -833,7 +833,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `decimal:-1.2:normalized`), and the
     normalized zero from `Cx`; leading-zero runs are split
     (`X=decimal:2:normalized`, `X2=decimal:02:unnormalized`, likewise `-2`
-    vs `-02`) so they do not satisfy the equality proof. The value proof also
+    vs `-02`) so they do not satisfy the exact equality proof, but a separate
+    visible-decimal proof can still remove `.` when the restored display value
+    is the same and no later context-sensitive restore observes the raw X2
+    mantissa shape. The value proof also
     models closed-context `.` as a real X2-to-X restore, normalizing decimal
     facts only for visible `X`. Open number-entry dots are modeled separately
     as decimal separators: `1.` remains an open raw mantissa with
@@ -851,11 +854,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     the dot is removed: emulator tests cover normalized and signed normalized
     mantissas in this exponent-entry shape, while role-bearing display cells
     still block the shortcut.
-    A separate normalized-decimal escape hatch handles proved X2-preserving
+    A separate normalized/visible-decimal escape hatch handles proved X2-preserving
     gaps such as stable indirect conditionals: if `X` and `X2` carry the same
-    normalized decimal fact and the local gap back to the X2 sync contains no
-    display-focused cell, `.` can still be removed. Leading-zero and
-    display-byte gaps remain explicit.
+    normalized decimal fact, or restore to the same visible decimal after raw
+    X2 normalization, and the local gap back to the X2 sync contains no
+    display-focused cell, `.` can still be removed. Display-byte gaps remain
+    explicit.
     Closed-context `/-/` is modeled for
     proved normalized decimal `X == X2` facts, including zero; this lets an
     immediately following `.`, or one reached only through free-standing
@@ -954,7 +958,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     for later recalls, joins keep only facts common to every path, and unknown
     indirect stores clear the memory. Hex-like preload facts remain shape-only,
     so they do not make `.`/`/-/` dead-restore candidates.
-19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The normalized decimal source includes fractional values such as `1.2`; raw leading-zero fractional X2 forms such as `01.2` stay unnormalized and are not treated as the same hidden-temp restore source. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
+19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, a raw decimal X2 fact whose restored visible value equals the stored scratch value, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. The raw decimal case covers visible-only leading-zero forms such as `01.2 -> 1.2`; it remains blocked when removing the recall would expose a following context-sensitive `.`/`/-/`/`ВП` restore that can observe the raw mantissa shape. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
 20. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is
     already in the hidden X2 register, the dot-restore gap is safe (or CFG
@@ -977,7 +981,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     prove that the inserted `.` preserves the same mantissa source for that
     exponent entry. Leading-zero and signed-zero forms are excluded from this
     shortcut because their restored mantissa shape is observable, and
-    leading-zero exponent mantissas stay explicit for the same reason.
+    leading-zero exponent mantissas stay explicit for the same reason. If the
+    following code cannot observe that raw mantissa shape, normalized X2 facts
+    may still replace leading-zero decimal literals by visible restored value
+    (`02 -> .` after X2 holds `2`).
     Leading-zero exponent mantissas are normalized after
     that closing sync (`05 ВП 3` -> `5000`, `00 ВП 3` -> `10000`), but active
     exponent-entry X2 remains shape-only because an immediate `.` can still
