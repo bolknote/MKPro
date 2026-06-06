@@ -842,9 +842,10 @@ Display rewrites are separated into strategy selection + body lowering.
   visible-`X` proof only: closed forms such as `exponent:1:8:decimal` can match
   the same stored display shape, but they are not made dot-safe for `.` restore
   rewrites. These canonical decimal display shapes can also seed opaque
-  stable-expression source keys; shape-only ordinary decimal mantissas do this
-  only when an equivalent `decimal:*:normalized` value fact is not already
-  present or when the operation cannot prove an exact decimal result. When a
+  stable-expression source keys; shape-only decimal display shapes, including
+  exact exponent display forms, do this only when an equivalent
+  `decimal:*:normalized` value fact is not already present or when the
+  operation cannot prove an exact decimal result. When a
   unary operation does prove an exact result from the restored-visible decimal
   display, the result is recorded as a normal decimal value while the original
   display-shape source still is not treated as a dot-safe X2 alias. Hex and

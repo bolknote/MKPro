@@ -2800,6 +2800,19 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x)).not.toContain("expr-key:31(decimal:100000000:normalized)");
   });
 
+  it("x2 value dataflow skips decimal display-shape expr keys when the same value fact is present", () => {
+    const valueBackedShape: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:100000000:normalized"]),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:1:8:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(valueBackedShape, plain(0x16, "F e^x"), "normal", {}, 0);
+
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:16(decimal:100000000:normalized)");
+    expect(x2ValueStateText(result?.x)).not.toContain("expr-key:16(shape:exponent:1:8:decimal)");
+  });
+
   it("x2 value dataflow derives unary decimal facts from shape-only decimal mantissas", () => {
     const shapeOnly: X2ValueDataflowState = {
       x: new Set(),

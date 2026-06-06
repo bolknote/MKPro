@@ -7065,12 +7065,12 @@ function stableExpressionDisplayShapeSourceKeys(
   }
   for (const fact of decimalDisplayShapeFacts(shapes)) {
     const model = x2ShapeDataModelForFact(fact);
-    if (
-      model.kind === "mantissa" &&
-      model.radix === "decimal" &&
-      model.normalizedDecimal !== undefined &&
-      valueDecimals.has(model.normalizedDecimal)
-    ) continue;
+    const decimal = model.kind === "mantissa" && model.radix === "decimal"
+      ? model.normalizedDecimal
+      : model.kind === "exponent-entry" && model.mantissa.radix === "decimal"
+        ? model.normalizedDecimal
+        : undefined;
+    if (decimal !== undefined && valueDecimals.has(decimal)) continue;
     keys.add(stableStructuralExpressionSourceKey(fact));
   }
   return keys;
