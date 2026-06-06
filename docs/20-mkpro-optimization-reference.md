@@ -1132,8 +1132,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Non-empty X2-preserving commands create a transient proof for the immediate
     `ВП`; a later empty command drops that transient source and proves a fresh
     source from the current visible `X`. Structural forms remain shape-only and
-    are not used as decimal value or dot-safety evidence. It also carries exact
-    emulator-pinned single-digit hex
+    are not used as decimal value or dot-safety evidence. The proved decimal
+    first-digit source is visible to `vp-splice`, so an empty separator and a
+    cancelling exponent sign pair before that `ВП` can be removed together. It
+    also carries exact emulator-pinned single-digit hex
     arithmetic tables as decimal value proofs. `F x^2` has a unary
     single-significant-hex-digit model: leading zeros before the digit are
     accepted, trailing digits are refused (`B0` is not treated like `B`), and

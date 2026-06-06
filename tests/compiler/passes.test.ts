@@ -4084,6 +4084,15 @@ describe("ir passes on synthetic programs", () => {
       plain(0x03, "3"),
       halt(),
     ];
+    const decimalPointTail: IrOp[] = [
+      recall("1", "preload const 3"),
+      recall("2", "preload const 8.00"),
+      plain(0x14, "←→"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
     const nonEmptyTransient: IrOp[] = [
       recall("1", "preload const 4"),
       recall("2", "preload const 800"),
@@ -4117,6 +4126,12 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(emptyStates[5])).toBe("exponent:300:");
     expect(x2EntryStateText(emptyStates[6])).toBe("exponent:300:3");
     expect(x2ValueStateText(emptyStates[6]?.x)).toEqual(["decimal:300000:normalized"]);
+
+    const decimalPointStates = computeX2ValueStates(decimalPointTail, { trackRegisterMemory: true });
+    expect(x2VpEntryMantissaText(decimalPointStates[4])).toEqual(["3"]);
+    expect(decimalPointStates[4]?.vpEntryMantissaTransient).toBeUndefined();
+    expect(x2EntryStateText(decimalPointStates[5])).toBe("exponent:3:");
+    expect(x2ValueStateText(decimalPointStates[6]?.x)).toEqual(["decimal:3000:normalized"]);
 
     const transientStates = computeX2ValueStates(nonEmptyTransient, { trackRegisterMemory: true });
     expect(x2VpEntryMantissaText(transientStates[4])).toEqual(["400"]);
@@ -16310,6 +16325,31 @@ describe("ir passes on synthetic programs", () => {
       store("1"),
       plain(0x0d, "Cx"),
       recall("1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes exponent sign toggles after decimal first-digit ВП splice", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const 3"),
+      recall("2", "preload const 800"),
+      plain(0x14, "←→"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      recall("1", "preload const 3"),
+      recall("2", "preload const 800"),
+      plain(0x14, "←→"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),
