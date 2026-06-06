@@ -4139,7 +4139,7 @@ function transferX2ValueDataflowState(
         structuralVpContext: transferConditionalX2StructuralVpContextState(closed, effect),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
         vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, effect),
-        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
+        vpEntryShape: transferConditionalX2VpEntryShapeState(x, xShape, x2Shape, effect),
         vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, x, xShape, x2Shape, effect),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
@@ -4172,7 +4172,7 @@ function transferX2ValueDataflowState(
         structuralVpContext: transferConditionalX2StructuralVpContextState(stable, effect),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
         vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(stable, x, xShape, x2Shape, effect),
-        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
+        vpEntryShape: transferConditionalX2VpEntryShapeState(x, xShape, x2Shape, effect),
         vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(stable, x, xShape, x2Shape, effect),
         memory: trackRegisterMemory ? deleteX2ValueMemory(stable.memory, counter) : undefined,
         shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(stable.shapeMemory, counter) : undefined,
@@ -4203,7 +4203,7 @@ function transferX2ValueDataflowState(
         structuralVpContext: noneX2StructuralEntryState(),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, "affects"),
         vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, "affects"),
-        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, "affects"),
+        vpEntryShape: transferConditionalX2VpEntryShapeState(x, xShape, x2Shape, "affects"),
         vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, x, xShape, x2Shape, "affects"),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
@@ -4611,6 +4611,8 @@ function transferPlainX2ValueState(
       vpEntryShape: transferPlainX2VpEntryShapeState(
         input,
         op,
+        x,
+        x2,
         xShape,
         x2Shape,
         effect,
@@ -4670,6 +4672,8 @@ function transferPlainX2ValueState(
       vpEntryShape: transferPlainX2VpEntryShapeState(
         input,
         op,
+        x,
+        new Set(),
         xShape,
         x2Shape,
         effect,
@@ -4750,6 +4754,8 @@ function transferPlainX2ValueState(
       vpEntryShape: transferPlainX2VpEntryShapeState(
         input,
         op,
+        structuralXValue,
+        new Set(),
         structuralXShape,
         structuralX2Shape,
         effect,
@@ -4799,6 +4805,8 @@ function transferPlainX2ValueState(
     vpEntryShape: transferPlainX2VpEntryShapeState(
       input,
       op,
+      x,
+      x2,
       xShape,
       x2Shape,
       effect,
@@ -5193,6 +5201,12 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
       input.yShape,
     );
   }
+  if (input.entry.kind === "closed" && input.vpEntryShape !== undefined && input.vpEntryShape.size > 0) {
+    const decimalEntry = decimalExponentEntryFromVpEntryShapes(input.vpEntryShape);
+    if (decimalEntry !== undefined) {
+      return x2ValueStateFromExponentEntry(decimalEntry, input.memory, input.shapeMemory, input.y, input.yShape);
+    }
+  }
   if (input.entry.kind === "closed" && input.vpEntryMantissa !== undefined) {
     // This is not inferred from plain `X == X2`: the MK-61 previous-command
     // context matters. The fact is set only by proved X2 syncs that can feed
@@ -5279,7 +5293,7 @@ function transferIndirectConditionalX2ValueState(
     structuralVpContext: transferConditionalX2StructuralVpContextState(closed, effect),
     vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
     vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, effect),
-    vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
+    vpEntryShape: transferConditionalX2VpEntryShapeState(x, xShape, x2Shape, effect),
     vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, x, xShape, x2Shape, effect),
     memory: closed.memory,
     shapeMemory: closed.shapeMemory,
@@ -5415,6 +5429,8 @@ function transferExchangeXYX2ValueState(
     vpEntryShape: transferPlainX2VpEntryShapeState(
       input,
       op,
+      x,
+      x2,
       xShape,
       x2Shape,
       effect,
@@ -5475,6 +5491,8 @@ function transferCopyYToXX2ValueState(
     vpEntryShape: transferPlainX2VpEntryShapeState(
       closed,
       op,
+      x,
+      x2,
       xShape,
       x2Shape,
       effect,
@@ -5631,13 +5649,15 @@ function transferPlainX2VpEntrySignShapeState(
 function transferPlainX2VpEntryShapeState(
   input: X2ValueDataflowState,
   op: Extract<IrOp, { kind: "plain" }>,
+  x: X2ValueSet,
+  x2: X2ValueSet,
   xShape: X2ShapeSet,
   x2Shape: X2ShapeSet,
   effect: ReturnType<typeof plainX2Effect>,
   firstDigitSourceShape: X2ShapeSet | undefined = xShape,
   firstDigitTargetShape: X2ShapeSet | undefined = x2Shape,
 ): X2ShapeSet | undefined {
-  if (effect === "affects") return sharedStructuralShapeFacts({ xShape, x2Shape });
+  if (effect === "affects") return sharedVpEntryShapeFacts({ x, x2, xShape, x2Shape });
   if (effect === "preserves") {
     const inherited = isEmptyPlainOp(op) && input.vpEntryShapeTransient !== true
       ? input.vpEntryShape
@@ -5748,11 +5768,12 @@ function transferConditionalX2VpEntrySignShapeState(
 }
 
 function transferConditionalX2VpEntryShapeState(
+  x: X2ValueSet,
   xShape: X2ShapeSet,
   x2Shape: X2ShapeSet,
   effect: ReturnType<typeof conditionalX2Effect>,
 ): X2ShapeSet | undefined {
-  return effect === "affects" ? sharedStructuralShapeFacts({ xShape, x2Shape }) : undefined;
+  return effect === "affects" ? sharedVpEntryShapeFacts({ x, x2: x, xShape, x2Shape }) : undefined;
 }
 
 function joinRegisterDataflowStates(
@@ -7135,6 +7156,39 @@ function structuralExponentEntryFromVpEntryShapes(shapes: X2ShapeSet): X2Structu
     : { kind: "exponent", mantissa, exponent: new Set([""]) };
 }
 
+function decimalExponentEntryFromVpEntryShapes(shapes: X2ShapeSet): X2EntryState | undefined {
+  const pairs = new Map<string, { readonly mantissa: string; readonly exponent: string }>();
+  for (const fact of decimalDisplayShapeFacts(shapes)) {
+    const pair = decimalDisplayShapeExponentEntryPair(fact);
+    if (pair === undefined) continue;
+    pairs.set(`${pair.mantissa}\u0000${pair.exponent}`, pair);
+  }
+  if (pairs.size !== 1) return undefined;
+  const pair = [...pairs.values()][0]!;
+  return {
+    kind: "exponent",
+    mantissa: new Set([pair.mantissa]),
+    exponent: new Set([pair.exponent]),
+  };
+}
+
+function decimalDisplayShapeExponentEntryPair(
+  fact: X2ShapeFact,
+): { readonly mantissa: string; readonly exponent: string } | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind === "mantissa" && model.radix === "decimal") {
+    if (model.normalizedDecimal === undefined || !model.normalizedSameAsRaw) return undefined;
+    return { mantissa: model.canonical, exponent: "" };
+  }
+  if (model.kind === "exponent-entry" && model.mantissa.radix === "decimal") {
+    const canonical = x2ShapeFactFromDataModel(model);
+    const exact = model.normalizedDecimal === undefined ? undefined : exactDecimalDisplayShapeFact(model.normalizedDecimal);
+    if (canonical === undefined || exact !== canonical) return undefined;
+    return { mantissa: model.mantissa.canonical, exponent: model.exponentRaw };
+  }
+  return undefined;
+}
+
 function structuralExponentEntryShapeFacts(input: Extract<X2StructuralEntryState, { kind: "exponent" }>): Set<X2ShapeFact> {
   const shapes = new Set<X2ShapeFact>();
   for (const mantissa of input.mantissa) {
@@ -7711,6 +7765,15 @@ function sharedStructuralShapeFacts(
 }
 
 function sharedVpEntrySignShapeFacts(
+  input: Pick<X2ValueDataflowState, "x" | "x2" | "xShape" | "x2Shape">,
+): X2ShapeSet | undefined {
+  return mergeOptionalShapeSources(
+    sharedStructuralShapeFacts(input),
+    sharedExactDecimalDisplayShapeFacts(input),
+  );
+}
+
+function sharedVpEntryShapeFacts(
   input: Pick<X2ValueDataflowState, "x" | "x2" | "xShape" | "x2Shape">,
 ): X2ShapeSet | undefined {
   return mergeOptionalShapeSources(

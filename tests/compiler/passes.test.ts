@@ -972,6 +972,35 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[6]?.xShape)).toEqual(["hex-exponent:Г00:3"]);
   });
 
+  it("x2 value dataflow exposes exact decimal exponent display sync as a shape-only VP source", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const activeExponent = analyzeX2VpShapeContext(states[5]);
+
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["exponent:1:8:decimal"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["exponent:1:8:decimal"]);
+    expect(x2VpEntryShapeText(states[4])).toEqual(["exponent:1:8:decimal"]);
+    expect(x2VpEntryMantissaText(states[4])).toEqual(["100000000"]);
+    expect(activeExponent).toMatchObject({
+      kind: "active-exponent",
+      source: "decimal",
+      hasExponentDigit: true,
+      restoresX2: true,
+    });
+    expect([...(activeExponent.mantissa ?? [])]).toEqual(["1"]);
+    expect([...(activeExponent.exponent ?? [])]).toEqual(["8"]);
+    expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual(["exponent:1:83:decimal"]);
+    expect(x2ValueStateText(states[6]?.x2)).toEqual([]);
+  });
+
   it("x2 value dataflow derives VP mantissa sources from conditional structural X2 syncs", () => {
     const program: IrOp[] = [
       recall("1", "preload const Г"),
@@ -6019,7 +6048,7 @@ describe("ir passes on synthetic programs", () => {
       { trackRegisterMemory: true },
     );
 
-    expect(x2VpEntryShapeText(afterFallthrough)).toBeUndefined();
+    expect(x2VpEntryShapeText(afterFallthrough)).toEqual(["exponent:5:-1:decimal"]);
     expect(x2VpEntrySignShapeText(afterFallthrough)).toEqual(["exponent:5:-1:decimal"]);
   });
 
@@ -18251,6 +18280,33 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(1);
     expect(result.ops).toEqual([
       plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes an empty separator after a decimal display-shape VP source exponent digit", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0xf0, "F* empty F0"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       plain(0x0b, "/-/"),
