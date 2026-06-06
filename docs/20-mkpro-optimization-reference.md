@@ -654,13 +654,14 @@ Display rewrites are separated into strategy selection + body lowering.
   commands, when the producer already supplies the current X in Y and the
   shared stack-difference proof shows the extra Z/T difference cannot reach a
   later consumer. The gap may include a direct conditional, counted-loop,
-  proved-indirect conditional fallthrough, a linear `В/О` return, or a simple
-  direct/proved-indirect `ПП` helper whose `В/О` return itself syncs the same X
+  proved-indirect conditional fallthrough, a linear `В/О` return, or a direct/proved-indirect
+  `ПП` helper chain whose `В/О` return itself syncs the same X
   into X2, when both the call-return-aware CFG stack proof and the X2-restore
   exposure proof show that skipped or downstream edges cannot observe the
   removed sync/lift. Such `ПП` helpers must
-  reach `В/О` linearly through only stack-preserving commands; stack consumers,
-  X2 restores, nested flow, and other entry labels keep the call as a barrier.
+  reach `В/О` through nested return-helper calls and only stack-preserving
+  commands; stack consumers, X2 restores, recursive helper cycles, and other
+  entry labels keep the call as a barrier.
   The same
   proof also removes `В↑` before a hard X/X2 overwrite such as `Cx` when the
   lift's Y value cannot reach any later stack consumer. A `В↑` after any proved
@@ -672,9 +673,9 @@ Display rewrites are separated into strategy selection + body lowering.
   path-safe direct conditional, counted-loop, or proved-indirect conditional
   fallthrough whose opcode has a known fallthrough X2 effect and preserves the
   stack; unknown indirect conditionals remain barriers. It can also cross a
-  simple direct or proved-indirect `ПП` helper that reaches `В/О` linearly
+  direct or proved-indirect `ПП` helper chain that reaches `В/О`
   through commands preserving X, stack, and X2; helpers that compute a new X,
-  consume stack, restore/overwrite X2, branch, or expose another entry remain
+  consume stack, restore/overwrite X2, branch, recurse, or expose another entry remain
   barriers. Targeted entry labels, display/X2 restore context, stack consumers,
   and other flow commands keep the post-producer scan conservative.
 - `known-zero-reuse` — reuses a known zero source instead of reloading.
@@ -949,7 +950,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 6. `shared-terminal-tail` — finds repeated straight-line suffixes that already end in unconditional flow (`БП`, `К БП r`, or `В/О`) and replaces extra copies with a jump into the canonical suffix; it refuses programs with absolute numeric flow targets.
 7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
 8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, or an adjacent recall to another cell when the shared value/shape proof shows the recalled decimal value or structural hex/super display shape is already visible in X, including exact decimal display-shape versus ordinary decimal-value equality after restored-visible normalization and non-negative structural exponent shifts such as `hex:Г; ВП 2` matching `hex:Г00`. The rewrite fires only when the recall is not the last X2 sync before a context-sensitive `.`/`/-/`/`ВП` restoration before the next X2-affecting op, including direct conditional/`F Lx` fallthrough syncs and direct `В/О` returns, or when the same shared proof shows X2 already carries the recalled decimal value or structural hex/super shape across an X2-preserving gap. Shape/value equality for visible X does not promote raw decimal mantissas or exact display-shape facts into general redundant X2 sync proofs for future `.`/`/-/`. A direct or proved stable-indirect decimal/structural recall immediately before `ВП` can also be removed when the active decimal mantissa, exact decimal display-shape source, or structural `ВП` source already matches the recalled source; that display-shape proof is VP-only and is not counted as a general redundant shape sync for `.`/`/-/`. Decimal recalls before a free-standing `/-/ ... ВП` gap are also removable when the store-backed sign source, proved closed `X == X2` normalized-decimal sign source, exact decimal display-shape sign source, or proved shared structural hex/super source already matches the recalled mantissa/source, including through transparent direct/proved-indirect return helpers. A store or other context-closing command keeps the recall as the visible source. Its stack lift still cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors and loop-counter recalls are not folded when the hardware side effect is observable.
-9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, another stack-shifting producer, a linear `В/О` return, or a direct conditional/counted-loop fallthrough X2 sync, possibly through stack-preserving labels/stores/plain ops, path-safe direct conditional/counted-loop/proved-indirect conditional fallthroughs, and simple stack-preserving direct-return callees, when that following operation already supplies the current X in Y or syncs the same X into X2, unless the call-return-aware CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync. It also removes a `В↑` after any proved stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another `В↑`) across local stack/X2-preserving gap cells, path-safe conditional fallthroughs with known X2 effects, and simple direct/proved-indirect return helpers that preserve X, stack, and X2, when the added stack lift cannot reach a consumer and no targeted entry label, display/X2 restore context, stack consumer, X-changing helper, unknown indirect conditional, or other flow command interrupts the producer-to-lift proof.
+9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, another stack-shifting producer, a linear `В/О` return, or a direct conditional/counted-loop fallthrough X2 sync, possibly through stack-preserving labels/stores/plain ops, path-safe direct conditional/counted-loop/proved-indirect conditional fallthroughs, and stack-preserving direct/proved-indirect return-helper chains, when that following operation already supplies the current X in Y or syncs the same X into X2, unless the call-return-aware CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync. It also removes a `В↑` after any proved stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another `В↑`) across local stack/X2-preserving gap cells, path-safe conditional fallthroughs with known X2 effects, and direct/proved-indirect return-helper chains that preserve X, stack, and X2, when the added stack lift cannot reach a consumer and no targeted entry label, display/X2 restore context, stack consumer, X-changing helper, recursive helper cycle, unknown indirect conditional, or other flow command interrupts the producer-to-lift proof.
     The scan for the next stack-shifting producer or dead hard X2 overwrite is
     shared helper code (`x2NextStackShiftingProducerIndex`,
     `x2NextHardX2OverwriteIndex`), so later stack+X2 scheduler rewrites use

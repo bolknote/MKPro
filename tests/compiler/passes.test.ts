@@ -13650,6 +13650,41 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift removes post-producer В↑ through nested X-preserving direct-return helpers", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("outer"),
+      call("noop"),
+      ret(),
+      label("main"),
+      recall("1"),
+      call("outer"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("outer"),
+      call("noop"),
+      ret(),
+      label("main"),
+      recall("1"),
+      call("outer"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
   it("pre-shift-stack-lift removes В↑ before a path-safe fallthrough X2 sync", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -13685,6 +13720,57 @@ describe("ir passes on synthetic programs", () => {
       cjump("restore"),
       halt(),
       label("restore"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift keeps post-producer В↑ before nested helpers that restore X2", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("restore"),
+      plain(0x0a, "."),
+      ret(),
+      label("outer"),
+      call("restore"),
+      ret(),
+      label("main"),
+      recall("1"),
+      call("outer"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift keeps post-producer В↑ before display-sensitive nested helper calls", () => {
+    const displayCall: Extract<IrOp, { kind: "call" }> = {
+      kind: "call",
+      target: "noop",
+      opcode: 0x53,
+      meta: { mnemonic: "ПП", comment: "display helper call" },
+      targetMeta: {},
+    };
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("outer"),
+      displayCall,
+      ret(),
+      label("main"),
+      recall("1"),
+      call("outer"),
+      plain(0x0e, "В↑"),
       plain(0x0a, "."),
       halt(),
     ];
@@ -13941,6 +14027,41 @@ describe("ir passes on synthetic programs", () => {
       ret(),
       label("main"),
       call("noop"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift crosses nested direct-return callees before a following recall", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("outer"),
+      call("noop"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("outer"),
+      recall("1"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("outer"),
+      call("noop"),
+      ret(),
+      label("main"),
+      call("outer"),
       recall("1"),
       plain(0x12, "*"),
       halt(),

@@ -510,6 +510,74 @@ export function knownReturnCallReturnsThroughTransparentRange(
   return linearReturnRangeIsTransparent(ops, targetIndex, context.labelEntries, isTransparent);
 }
 
+export function knownReturnCallReturnsThroughNestedTransparentRange(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+  isTransparent: (op: IrOp) => boolean,
+): boolean {
+  const memo = new Map<number, boolean>();
+  const active = new Set<number>();
+  return nestedReturnCallRangeIsTransparent(ops, call, context, isTransparent, memo, active);
+}
+
+function nestedReturnCallRangeIsTransparent(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+  isTransparent: (op: IrOp) => boolean,
+  memo: Map<number, boolean>,
+  active: Set<number>,
+): boolean {
+  const targetIndex = knownReturnCallTargetIndex(call, context);
+  if (targetIndex === undefined) return false;
+  const cached = memo.get(targetIndex);
+  if (cached !== undefined) return cached;
+  if (active.has(targetIndex)) return false;
+
+  active.add(targetIndex);
+  const result = nestedLinearReturnRangeIsTransparent(
+    ops,
+    targetIndex,
+    context,
+    isTransparent,
+    memo,
+    active,
+  );
+  active.delete(targetIndex);
+  memo.set(targetIndex, result);
+  return result;
+}
+
+function nestedLinearReturnRangeIsTransparent(
+  ops: readonly IrOp[],
+  targetIndex: number,
+  context: DirectReturnAnalysisContext,
+  isTransparent: (op: IrOp) => boolean,
+  memo: Map<number, boolean>,
+  active: Set<number>,
+): boolean {
+  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
+  for (let index = startIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      if (context.labelEntries.has(index)) return false;
+      continue;
+    }
+    if (hasRewriteBarrier(op)) return false;
+    if (op.kind === "return") return true;
+    if (isKnownReturnCallOp(op)) {
+      if (isDisplayFocusSensitive(op)) return false;
+      if (!nestedReturnCallRangeIsTransparent(ops, op, context, isTransparent, memo, active)) {
+        return false;
+      }
+      continue;
+    }
+    if (!isTransparent(op)) return false;
+  }
+  return false;
+}
+
 export function linearReturnRangeIsTransparent(
   ops: readonly IrOp[],
   targetIndex: number,
@@ -2252,7 +2320,7 @@ function x2SimpleDirectReturnPreservesStack(
   call: KnownReturnCallOp,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return knownReturnCallReturnsThroughTransparentRange(ops, call, context, x2IsStrictStackPreservingLinearOp);
+  return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, x2IsStrictStackPreservingLinearOp);
 }
 
 function x2IsStrictStackPreservingLinearOp(op: IrOp): boolean {

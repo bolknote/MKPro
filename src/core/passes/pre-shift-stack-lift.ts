@@ -8,7 +8,7 @@ import {
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
   knownIndirectFlowTarget,
-  knownReturnCallReturnsThroughTransparentRange,
+  knownReturnCallReturnsThroughNestedTransparentRange,
   plainPreservesXValue,
   removingRecallCanExposeX2Restore,
   removingPreShiftLiftCanExposeStack,
@@ -199,7 +199,7 @@ function directReturnPreservesStackXAndX2(
   call: KnownReturnCallOp,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return knownReturnCallReturnsThroughTransparentRange(
+  return knownReturnCallReturnsThroughNestedTransparentRange(
     ops,
     call,
     context,

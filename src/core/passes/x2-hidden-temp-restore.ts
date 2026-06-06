@@ -11,7 +11,7 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
-  knownReturnCallTargetIndex,
+  knownReturnCallReturnsThroughNestedTransparentRange,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   removableRecallValueRegister,
@@ -513,83 +513,12 @@ function directReturningCallHasRegisterSafeBody(
   directReturnContext: DirectReturnAnalysisContext,
   mode: RegisterSafeBodyMode,
 ): boolean {
-  const memo = new Map<string, boolean>();
-  const active = new Set<string>();
-  return knownReturnCallBodyIsRegisterSafe(
+  return knownReturnCallReturnsThroughNestedTransparentRange(
     ops,
     call,
-    register,
     directReturnContext,
-    mode,
-    memo,
-    active,
+    (op) => linearRegisterSafetyPredicate(op, register, mode),
   );
-}
-
-function knownReturnCallBodyIsRegisterSafe(
-  ops: readonly IrOp[],
-  call: KnownReturnCallOp,
-  register: RegisterName,
-  directReturnContext: DirectReturnAnalysisContext,
-  mode: RegisterSafeBodyMode,
-  memo: Map<string, boolean>,
-  active: Set<string>,
-): boolean {
-  const targetIndex = knownReturnCallTargetIndex(call, directReturnContext);
-  if (targetIndex === undefined) return false;
-  const key = `${targetIndex}:${register}:${mode}`;
-  const cached = memo.get(key);
-  if (cached !== undefined) return cached;
-  if (active.has(key)) return false;
-
-  active.add(key);
-  const result = linearReturnBodyIsRegisterSafe(
-    ops,
-    targetIndex,
-    register,
-    directReturnContext,
-    mode,
-    memo,
-    active,
-  );
-  active.delete(key);
-  memo.set(key, result);
-  return result;
-}
-
-function linearReturnBodyIsRegisterSafe(
-  ops: readonly IrOp[],
-  targetIndex: number,
-  register: RegisterName,
-  directReturnContext: DirectReturnAnalysisContext,
-  mode: RegisterSafeBodyMode,
-  memo: Map<string, boolean>,
-  active: Set<string>,
-): boolean {
-  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
-  for (let index = startIndex; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") {
-      if (directReturnContext.labelEntries.has(index)) return false;
-      continue;
-    }
-    if (hasRewriteBarrier(op)) return false;
-    if (op.kind === "return") return true;
-    if (isKnownReturnCallOp(op)) {
-      if (!knownReturnCallBodyIsRegisterSafe(
-        ops,
-        op,
-        register,
-        directReturnContext,
-        mode,
-        memo,
-        active,
-      )) return false;
-      continue;
-    }
-    if (!linearRegisterSafetyPredicate(op, register, mode)) return false;
-  }
-  return false;
 }
 
 function linearRegisterSafetyPredicate(
