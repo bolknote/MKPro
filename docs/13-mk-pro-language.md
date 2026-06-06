@@ -1321,8 +1321,15 @@ The pipeline currently contains:
   matched by hidden-temp dataflow after an explicit X2 sync. The same exact
   display-shape proof also works when one side is an ordinary mantissa display
   and the other side is an exponent-display shape (`mantissa:100:decimal` and
-  `exponent:100:0:decimal`), while the older raw-X2 path still preserves
-  leading-zero hidden forms such as visible `2` with hidden `02`. The fact spelling is
+  `exponent:100:0:decimal`). It also accepts mixed ordinary decimal value versus
+  exact exponent display-shape proofs in either direction. When hidden X2 is
+  only the display shape, this still produces signed display-shape metadata plus
+  the stable expression key, not a dot-safe hidden decimal value; when hidden
+  X2 is already a normalized decimal value, the signed value stays dot-safe. The
+  older raw-X2 path still preserves
+  leading-zero hidden forms such as visible `2` with hidden `02`; a visible
+  normalized decimal value may prove the sign source, but the hidden X2 fact
+  stays `decimal:02:unnormalized` after the sign toggle. The fact spelling is
   normalization-aware: `12` produces the shared fact
   `decimal:12:normalized`, while `02` produces `decimal:2:normalized` in `X`
   and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally treat
@@ -1346,8 +1353,11 @@ The pipeline currently contains:
   satisfied; raw entry spellings such as `mantissa:0.5:decimal` stay structural
   and are not accepted as exact restored values. Closed-context `/-/ /-/`
   cancellation uses the same source-equality layer, so a pair can be removed
-  when visible `X` and hidden X2 only prove the same display shape; that proof
-  still does not make a single `.`/`/-/` restore dot-safe.
+  when visible `X` and hidden X2 prove the same exact displayed decimal, even
+  if one side is an ordinary decimal value fact and the other is an exact
+  exponent display shape, in either direction; that proof still does not make a
+  single `.`/`/-/` restore dot-safe when the hidden source is only an unsafe
+  shape.
   Longer display-glyph runs such as `8Е000000`, hex-like display mantissas, and `FA`..`FF` super forms are tracked as
   shape-only `hex:*` / `super:*` facts until a later proof makes them dot-safe. Hex/super preloads
   with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural

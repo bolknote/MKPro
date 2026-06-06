@@ -1050,10 +1050,18 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Closed `/-/` can also use exact decimal display-shape equality when visible
     `X` and hidden X2 spell the same display through different shapes, for
     example `exponent:100:0:decimal` versus `mantissa:100:decimal`; that is a
-    sign-source proof, not a new dot-safe restore proof. Shape-only decimal
-    display sign changes also seed stable `expr-key:0B(shape:...)` facts for
-    hidden-temp equality after an explicit X2 sync. The raw-X2 leading-zero path
-    remains separate, so visible `2` with hidden `02` still produces hidden `-02`.
+    sign-source proof, not a new dot-safe restore proof. The same sign-source
+    proof accepts mixed ordinary decimal value versus exact exponent
+    display-shape equality in either direction. When hidden X2 is only the
+    display shape it still emits only signed display-shape metadata plus
+    `expr-key:0B(shape:...)`, not a hidden dot-safe decimal value; when hidden
+    X2 is already a normalized decimal value, the signed value remains dot-safe.
+    Shape-only decimal display sign changes also seed stable
+    `expr-key:0B(shape:...)` facts for hidden-temp equality after an explicit
+    X2 sync. The raw-X2 leading-zero path remains separate, so visible `2` with
+    hidden `02` still produces hidden `-02`; a visible normalized decimal value
+    can prove that sign source, but the hidden X2 spelling remains
+    unnormalized.
     Zero is represented as a distinct `-0` mantissa shape rather than
     normalized away, including during open digit entry (`0 /-/`) and after
     closed zero syncs, because the emulator distinguishes `Cx /-/ ВП` from
@@ -1374,9 +1382,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     entry and is kept. Closed-context `/-/ /-/` pairs are removed only when
     value dataflow proves the same sign source in visible `X` and hidden X2:
     an ordinary decimal/register/opaque fact, exact decimal display-shape
-    equality such as `exponent:*:*:decimal`, or structural restored-display
-    equality, including synced structural exponent shapes. Shape-only proofs
-    cancel the pair without decimalizing the shape or making single restores dot-safe. The downstream
+    equality such as `exponent:*:*:decimal`, mixed ordinary decimal value versus
+    exact display-shape equality in either direction, or structural
+    restored-display equality, including synced structural exponent shapes.
+    Shape-only proofs cancel the
+    pair without decimalizing the shape or making single restores dot-safe. The downstream
     scan still proves the pair is not acting as the previous-command
     shield for a later context-sensitive `.`/`/-/`/`ВП` restore. Register
     value-memory and decimal preload metadata can supply the same proved

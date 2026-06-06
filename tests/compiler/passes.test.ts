@@ -1269,10 +1269,34 @@ describe("ir passes on synthetic programs", () => {
       x2Shape: new Set<X2ShapeFact>(["mantissa:02:decimal"]),
       entry: { kind: "closed" },
     };
+    const mixedValueDisplayState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:0.5:normalized"]),
+      x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const mixedDisplayValueState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set<X2ValueFact>(["decimal:0.5:normalized"]),
+      xShape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+      x2Shape: new Set(),
+      entry: { kind: "closed" },
+    };
+    const rawFractionDisplayState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:0.5:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+      entry: { kind: "closed" },
+    };
 
     expect(x2StateHasSameClosedSignChangeSourceInXAndX2(decimalDisplayState)).toBe(true);
     expect(x2StateHasSameClosedSignChangeSourceInXAndX2(structuralState)).toBe(true);
+    expect(x2StateHasSameClosedSignChangeSourceInXAndX2(mixedValueDisplayState)).toBe(true);
+    expect(x2StateHasSameClosedSignChangeSourceInXAndX2(mixedDisplayValueState)).toBe(true);
     expect(x2StateHasSameClosedSignChangeSourceInXAndX2(leadingZeroState)).toBe(false);
+    expect(x2StateHasSameClosedSignChangeSourceInXAndX2(rawFractionDisplayState)).toBe(false);
   });
 
   it("x2 shape algebra recognizes emulator-pinned dot-safe structural mantissas", () => {
@@ -1627,9 +1651,31 @@ describe("ir passes on synthetic programs", () => {
       ...base,
       vpEntrySignMantissa: new Set(["100"]),
     };
+    const mixedValueSignSource = {
+      ...base,
+      x: new Set<X2ValueFact>(["decimal:0.5:normalized"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+    };
+    const mixedDisplaySignSource = {
+      ...base,
+      x2: new Set<X2ValueFact>(["decimal:0.5:normalized"]),
+      xShape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+    };
+    const exactFractionDisplaySource = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+    };
+    const rawFractionSignSource = {
+      ...base,
+      xShape: new Set<X2ShapeFact>(["mantissa:0.5:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+    };
 
     expect(x2StatesHaveSameVpEntrySource(exactMantissaSource, exactExponentDisplaySource)).toBe(true);
     expect(x2StatesHaveSameVpEntrySignSource(signSource, exactExponentDisplaySource)).toBe(true);
+    expect(x2StatesHaveSameVpEntrySignSource(mixedValueSignSource, exactFractionDisplaySource)).toBe(true);
+    expect(x2StatesHaveSameVpEntrySignSource(mixedDisplaySignSource, exactFractionDisplaySource)).toBe(true);
+    expect(x2StatesHaveSameVpEntrySignSource(rawFractionSignSource, exactFractionDisplaySource)).toBe(false);
     expect(x2StatesHaveSameVpEntrySource(leadingZeroSource, normalizedDisplaySource)).toBe(false);
     expect(x2StatesHaveSameVpEntrySignSource({
       ...base,
@@ -3701,6 +3747,90 @@ describe("ir passes on synthetic programs", () => {
       "mantissa:-100:decimal",
     ]);
     expect(x2ShapeSetSafety(equivalentDisplay?.x2Shape)).toBe("errorProne");
+  });
+
+  it("x2 value dataflow sign-changes mixed decimal value and exact display-shape sources", () => {
+    const mixedValueAndShape: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:0.5:normalized"]),
+      x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const rawShapeOnly: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:0.5:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const hiddenValueAndVisibleShape: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set<X2ValueFact>(["decimal:0.5:normalized"]),
+      xShape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+      x2Shape: new Set(),
+      entry: { kind: "closed" },
+    };
+    const hiddenValueAndRawVisibleShape: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set<X2ValueFact>(["decimal:0.5:normalized"]),
+      xShape: new Set<X2ShapeFact>(["mantissa:0.5:decimal"]),
+      x2Shape: new Set(),
+      entry: { kind: "closed" },
+    };
+
+    const mixed = transferX2ValueStateForEdge(mixedValueAndShape, plain(0x0b, "/-/"), "normal");
+    const raw = transferX2ValueStateForEdge(rawShapeOnly, plain(0x0b, "/-/"), "normal");
+    const hiddenValue = transferX2ValueStateForEdge(hiddenValueAndVisibleShape, plain(0x0b, "/-/"), "normal");
+    const hiddenValueRaw = transferX2ValueStateForEdge(
+      hiddenValueAndRawVisibleShape,
+      plain(0x0b, "/-/"),
+      "normal",
+    );
+
+    expect(x2ValueStateText(mixed?.x)).toEqual(["expr-key:0B(shape:exponent:5:-1:decimal)"]);
+    expect(x2ValueStateText(mixed?.x2)).toEqual(["expr-key:0B(shape:exponent:5:-1:decimal)"]);
+    expect(x2ShapeStateText(mixed?.xShape)).toEqual(["exponent:-5:-1:decimal"]);
+    expect(x2ShapeStateText(mixed?.x2Shape)).toEqual(["exponent:-5:-1:decimal"]);
+    expect(x2ShapeSetSafety(mixed?.x2Shape)).toBe("errorProne");
+    expect(x2StateHasUnsafeDotRestoreShapeX2(mixed)).toBe(true);
+    expect(x2ValueStateText(raw?.x)).toEqual([]);
+    expect(x2ShapeStateText(raw?.xShape)).toEqual([]);
+    expect(x2ValueStateText(hiddenValue?.x)).toEqual(["decimal:-0.5:normalized"]);
+    expect(x2ValueStateText(hiddenValue?.x2)).toEqual(["decimal:-0.5:normalized"]);
+    expect(x2ShapeStateText(hiddenValue?.xShape)).toEqual(["exponent:-5:-1:decimal"]);
+    expect(x2ShapeStateText(hiddenValue?.x2Shape)).toEqual(["exponent:-5:-1:decimal"]);
+    expect(x2ValueStateText(hiddenValueRaw?.x)).toEqual([]);
+    expect(x2ShapeStateText(hiddenValueRaw?.xShape)).toEqual([]);
+  });
+
+  it("x2 value dataflow sign-changes decimal X2 shapes with visible decimal values", () => {
+    const dotSafeShapeAndValue: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:2:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const rawShapeAndValue: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:02:decimal"]),
+      entry: { kind: "closed" },
+    };
+
+    const dotSafe = transferX2ValueStateForEdge(dotSafeShapeAndValue, plain(0x0b, "/-/"), "normal");
+    const raw = transferX2ValueStateForEdge(rawShapeAndValue, plain(0x0b, "/-/"), "normal");
+
+    expect(x2ValueStateText(dotSafe?.x)).toEqual(["decimal:-2:normalized"]);
+    expect(x2ValueStateText(dotSafe?.x2)).toEqual(["decimal:-2:normalized"]);
+    expect(x2ShapeStateText(dotSafe?.xShape)).toEqual(["mantissa:-2:decimal"]);
+    expect(x2ShapeStateText(dotSafe?.x2Shape)).toEqual(["mantissa:-2:decimal"]);
+    expect(x2ValueStateText(raw?.x)).toEqual(["decimal:-2:normalized"]);
+    expect(x2ValueStateText(raw?.x2)).toEqual(["decimal:-02:unnormalized"]);
+    expect(x2ShapeStateText(raw?.xShape)).toEqual(["mantissa:-2:decimal"]);
+    expect(x2ShapeStateText(raw?.x2Shape)).toEqual(["mantissa:-02:decimal"]);
   });
 
   it("x2 value dataflow carries non-zero closed sign-change into a following ВП", () => {
