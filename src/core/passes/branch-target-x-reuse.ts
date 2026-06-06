@@ -11,12 +11,14 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   knownIndirectFlowTarget,
+  knownIndirectMemoryTarget,
   plainPreservesXValue,
   removableRecallValueRegister,
   transferX2RegisterStateForEdge,
   transferX2ValueStateForEdge,
   type IrPass,
   type IrPassFn,
+  type X2ValueFact,
   type X2ValueDataflowState,
 } from "./helpers.ts";
 
@@ -224,30 +226,76 @@ function branchTargetRecallAfterTransparentPrefix(
   readonly valueState?: X2ValueDataflowState | undefined;
 } | undefined {
   let valueState = targetValueState;
+  let registerState = x2RegisterState;
   for (let index = targetIndex; index < ops.length; index += 1) {
     if (index !== targetIndex && (references.get(index) ?? 0) > 0) return undefined;
     const op = ops[index]!;
-    if (removableRecallValueRegister(op) !== undefined) return { index, x2RegisterState, valueState };
+    if (removableRecallValueRegister(op) !== undefined) return { index, x2RegisterState: registerState, valueState };
     if (!isTransparentBranchTargetPrefixOp(op)) return undefined;
+    const storedRegister = transparentPrefixStoredRegister(op);
+    if (storedRegister !== undefined) {
+      registerState = transferTransparentStoreX2RegisterState(registerState, valueState?.x, storedRegister);
+    }
     valueState = transferX2ValueStateForEdge(valueState, op, "normal", { trackRegisterMemory: true }, index);
   }
   return undefined;
 }
 
 function isTransparentBranchTargetPrefixOp(op: IrOp): boolean {
-  if (
-    op.kind !== "plain" ||
-    hasRewriteBarrier(op) ||
-    isDisplayFocusSensitive(op) ||
-    hasIrRoles(op) ||
-    !plainPreservesXValue(op)
-  ) return false;
-  const effect = analyzeX2StackEffect(op);
-  return effect.x2Preserves && effect.stackPreserves;
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  switch (op.kind) {
+    case "label":
+    case "store":
+    case "orphan-address":
+      return true;
+    case "indirect-store":
+      return isStableIndirectSelector(op.register) && knownIndirectMemoryTarget(op) !== undefined;
+    case "plain": {
+      if (hasIrRoles(op) || !plainPreservesXValue(op)) return false;
+      const effect = analyzeX2StackEffect(op);
+      return effect.x2Preserves && effect.stackPreserves;
+    }
+    default:
+      return false;
+  }
 }
 
 function hasIrRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
   return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
+}
+
+function transparentPrefixStoredRegister(op: IrOp): RegisterName | undefined {
+  switch (op.kind) {
+    case "store":
+      return op.register;
+    case "indirect-store":
+      return isStableIndirectSelector(op.register) ? knownIndirectMemoryTarget(op) : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function transferTransparentStoreX2RegisterState(
+  x2: ReadonlySet<RegisterName> | undefined,
+  xValues: ReadonlySet<X2ValueFact> | undefined,
+  register: RegisterName,
+): ReadonlySet<RegisterName> | undefined {
+  if (x2 === undefined || xValues === undefined) return undefined;
+  const output = new Set<RegisterName>();
+  for (const fact of x2) {
+    if (fact !== register) output.add(fact);
+  }
+  if (setsIntersectRegisterFacts(xValues, x2)) output.add(register);
+  return output;
+}
+
+function setsIntersectRegisterFacts(values: ReadonlySet<X2ValueFact>, registers: ReadonlySet<RegisterName>): boolean {
+  if (registers.size === 0) return false;
+  for (const fact of values) {
+    const match = /^reg:([0-9a-e])$/u.exec(fact);
+    if (match !== null && registers.has(match[1] as RegisterName)) return true;
+  }
+  return false;
 }
 
 function hasFallthroughIntoIndex(ops: readonly IrOp[], targetIndex: number): boolean {

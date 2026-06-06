@@ -14409,6 +14409,87 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("branch-target-x-reuse crosses X-preserving store prefixes at unique targets", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      store("5"),
+      recall("4"),
+      plain(0x35, "К {x}"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("4"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      store("5"),
+      plain(0x35, "К {x}"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
+  it("branch-target-x-reuse uses target-prefix stores as in-X value proofs", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      store("6"),
+      recall("6"),
+      plain(0x35, "К {x}"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("4"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      store("6"),
+      plain(0x35, "К {x}"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
+  it("branch-target-x-reuse crosses proved indirect store prefixes at unique targets", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      knownTargetIndirectStore("8", "5"),
+      recall("4"),
+      plain(0x35, "К {x}"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("4"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      knownTargetIndirectStore("8", "5"),
+      plain(0x35, "К {x}"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
   it("branch-target-x-reuse keeps recall that lifts the stack for a target binary op", () => {
     const program: IrOp[] = [
       recall("6"),
