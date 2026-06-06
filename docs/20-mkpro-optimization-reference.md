@@ -814,7 +814,11 @@ Display rewrites are separated into strategy selection + body lowering.
   are allowed to prove equality through a repeated entry. Documented unary
   X-only computations
   additionally seed a stable `expr-key:<opcode>(<source>)` fact when the source
-  is a proved register, normalized decimal, or earlier stable expression key.
+  is a proved register, normalized decimal, raw decimal value fact normalized by
+  restored-visible value, or earlier stable expression key. The same
+  restored-visible normalization feeds concrete pure unary/binary decimal
+  results, but it does not make the raw mantissa shape dot-safe and does not
+  promote it to a `ВП` display-shape proof.
   The documented `F pi` stack producer seeds the stable `expr-key:20()`,
   the hardware decimal constant `3.1415926`, and its display shape
   `mantissa:3.1415926:decimal`. Emulator-verified exact

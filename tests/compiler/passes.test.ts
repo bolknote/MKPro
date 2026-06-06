@@ -2740,6 +2740,30 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(valueBackedResult?.x)).not.toContain("expr-key:31(shape:mantissa:100:decimal)");
   });
 
+  it("x2 value dataflow treats raw decimal value facts as numeric sources for pure computations", () => {
+    const rawValueState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:02:unnormalized"]),
+      x2: new Set(),
+      xShape: new Set(),
+      entry: { kind: "closed" },
+    };
+    const rawBinaryState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:02:unnormalized"]),
+      y: new Set<X2ValueFact>(["decimal:3:normalized"]),
+      x2: new Set(),
+      xShape: new Set(),
+      yShape: new Set(),
+      entry: { kind: "closed" },
+    };
+    const stable = transferX2ValueStateForEdge(rawValueState, plain(0x1c, "F sin"), "normal", {}, 0);
+    const unary = transferX2ValueStateForEdge(rawValueState, plain(0x31, "К |x|"), "normal", {}, 0);
+    const binary = transferX2ValueStateForEdge(rawBinaryState, plain(0x10, "+"), "normal", {}, 0);
+
+    expect(x2ValueStateText(stable?.x)).toContain("expr-key:1C(decimal:2:normalized)");
+    expect(x2ValueStateText(unary?.x)).toContain("decimal:2:normalized");
+    expect(x2ValueStateText(binary?.x)).toContain("decimal:5:normalized");
+  });
+
   it("x2 value dataflow derives unary display shapes from shape-only exact decimal sources", () => {
     const shapeOnly: X2ValueDataflowState = {
       x: new Set(),

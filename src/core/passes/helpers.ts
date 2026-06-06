@@ -783,7 +783,7 @@ function plainProducesConcreteDecimalValues(
     op.opcode !== 0x3a
   ) return output;
   for (const fact of x ?? []) {
-    const value = normalizedDecimalValueFromFact(fact);
+    const value = computationDecimalValueFromFact(fact);
     const concrete = value === undefined
       ? undefined
       : concreteDecimalUnaryValue(op.opcode, value);
@@ -799,7 +799,7 @@ function plainProducesConcreteDecimalShapeFacts(
 ): Set<X2ShapeFact> {
   const output = plainProducesStableConstantShapeFacts(op);
   for (const fact of x ?? []) {
-    const value = normalizedDecimalValueFromFact(fact);
+    const value = computationDecimalValueFromFact(fact);
     const concrete = value === undefined ? undefined : concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
     if (concrete !== undefined) output.add(concrete);
   }
@@ -844,10 +844,10 @@ function plainProducesConcreteBinaryDecimalValues(
     op.opcode !== 0x39
   ) return output;
   for (const yFact of y ?? []) {
-    const yValue = normalizedDecimalValueFromFact(yFact);
+    const yValue = computationDecimalValueFromFact(yFact);
     if (yValue === undefined) continue;
     for (const xFact of x ?? []) {
-      const xValue = normalizedDecimalValueFromFact(xFact);
+      const xValue = computationDecimalValueFromFact(xFact);
       const concrete = xValue === undefined ? undefined : concreteDecimalBinaryValue(op.opcode, yValue, xValue);
       if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
     }
@@ -1004,10 +1004,10 @@ function plainProducesConcreteDecimalBinaryShapeFacts(
   const output = new Set<X2ShapeFact>();
   if (!EXACT_DECIMAL_BINARY_MANTISSA_SHAPE_OPCODES.has(op.opcode)) return output;
   for (const yFact of y ?? []) {
-    const yValue = normalizedDecimalValueFromFact(yFact);
+    const yValue = computationDecimalValueFromFact(yFact);
     if (yValue === undefined) continue;
     for (const xFact of x ?? []) {
-      const xValue = normalizedDecimalValueFromFact(xFact);
+      const xValue = computationDecimalValueFromFact(xFact);
       const concrete = xValue === undefined ? undefined : concreteDecimalBinaryValue(op.opcode, yValue, xValue);
       const shape = concrete === undefined ? undefined : exactDecimalDisplayShapeFact(concrete);
       if (shape !== undefined) output.add(shape);
@@ -1179,7 +1179,7 @@ function structuralHexBinaryDecimalDisplayShapes(
 function normalizedDecimalValues(values: X2ValueSet | undefined): Set<string> {
   const output = new Set<string>();
   for (const fact of values ?? []) {
-    const value = normalizedDecimalValueFromFact(fact);
+    const value = computationDecimalValueFromFact(fact);
     if (value !== undefined) output.add(value);
   }
   return output;
@@ -6880,7 +6880,8 @@ function stableExpressionValueFact(opcode: string, source: string): X2ValueFact 
 function stableExpressionSourceKey(fact: X2ValueFact): string | undefined {
   if (fact.startsWith("reg:")) return fact;
   if (fact.startsWith("expr-key:")) return fact;
-  if (normalizedDecimalValueFromFact(fact) !== undefined) return fact;
+  const decimal = computationDecimalValueFromFact(fact);
+  if (decimal !== undefined) return decimalValueFact(decimal, "normalized");
   return undefined;
 }
 
@@ -6922,7 +6923,7 @@ function stableExpressionDisplayShapeSourceKeys(
 function normalizedDecimalValueSet(values: X2ValueSet | undefined): Set<string> {
   const output = new Set<string>();
   for (const fact of values ?? []) {
-    const value = normalizedDecimalValueFromFact(fact);
+    const value = computationDecimalValueFromFact(fact);
     if (value !== undefined) output.add(value);
   }
   return output;
@@ -6949,6 +6950,10 @@ function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"):
 
 function normalizedDecimalValueFromFact(fact: X2ValueFact): string | undefined {
   return /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):normalized$/u.exec(fact)?.[1];
+}
+
+function computationDecimalValueFromFact(fact: X2ValueFact): string | undefined {
+  return x2ValueFactRestoredVisibleDecimal(fact);
 }
 
 function decimalMantissaShapeFact(value: string): X2ShapeFact {
