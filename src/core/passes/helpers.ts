@@ -5027,6 +5027,7 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntryMantissa: vpEntryMantissasFromX2Restore(input.x2, input.x2Shape),
+    vpEntrySignMantissa: vpEntrySignMantissasFromX2Restore(input.x2, input.x2Shape),
     vpEntryShape: vpEntryShapesFromShapeFacts(input.x2Shape),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
@@ -6593,16 +6594,40 @@ function vpEntryMantissasFromValueFacts(values: X2ValueSet): ReadonlySet<string>
   return mantissas.size === 0 ? undefined : mantissas;
 }
 
+function vpEntryMantissasFromRestoredValueFacts(values: X2ValueSet): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  for (const value of values) {
+    const decimal = computationDecimalValueFromFact(value);
+    if (decimal !== undefined) mantissas.add(decimal);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
 function vpEntryMantissasFromX2Restore(
   values: X2ValueSet,
   shapes: X2ShapeSet | undefined,
 ): ReadonlySet<string> | undefined {
   const mantissas = new Set<string>();
   const signedZero = signedZeroDecimalMantissaShapes(shapes);
-  for (const raw of vpEntryMantissasFromValueFacts(values) ?? []) {
+  for (const raw of vpEntryMantissasFromRestoredValueFacts(values) ?? []) {
     if (raw !== "0" || signedZero.size === 0) mantissas.add(raw);
   }
   addStringSet(mantissas, signedZero);
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function vpEntrySignMantissasFromX2Restore(
+  values: X2ValueSet,
+  shapes: X2ShapeSet | undefined,
+): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  for (const value of values) {
+    const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):(normalized|unnormalized)$/u.exec(value);
+    if (decimal !== null && normalizeDecimalMantissaEntry(decimal[1]!) !== undefined) {
+      mantissas.add(decimal[1]!);
+    }
+  }
+  addStringSet(mantissas, signedZeroDecimalMantissaShapes(shapes));
   return mantissas.size === 0 ? undefined : mantissas;
 }
 

@@ -1096,7 +1096,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     mantissa and exponent-entry forms independently from value facts: for
     example unsafe `05 ВП 3` is preserved as `exponent:05:3:decimal` without
     granting a `decimal:*` equality fact, while safe `5 ВП 3` carries both the
-    exponent shape and `mantissa:5000:decimal`. Structural hex/super mantissas
+    exponent shape and `mantissa:5000:decimal`. A closed-context `.` restore
+    from a raw decimal X2 value such as `decimal:02:unnormalized` seeds the next
+    `ВП` mantissa source from its restored visible value (`2`), while the raw
+    display shape remains separate metadata and is not promoted into a general
+    display-shape proof. Structural hex/super mantissas
     consumed by `ВП` become shape-only `hex-exponent:*:*` /
     `super-exponent:*:*` forms; exponent digits and exponent `/-/` update that
     structural context without creating decimal value facts. The construction is

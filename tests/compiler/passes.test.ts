@@ -1846,7 +1846,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:02:unnormalized"]);
   });
 
-  it("x2 value dataflow keeps dot-restored leading-zero decimals out of VP-entry sources", () => {
+  it("x2 value dataflow uses dot-restored leading-zero decimals as VP-entry sources", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
       plain(0x02, "2"),
@@ -1859,7 +1859,9 @@ describe("ir passes on synthetic programs", () => {
     const states = computeX2ValueStates(program);
 
     expect(x2VpEntryShapeText(states[4])).toEqual([]);
-    expect(x2EntryStateText(states[5])).toBe("unknown");
+    expect(x2VpEntryMantissaText(states[4])).toEqual(["2"]);
+    expect(x2EntryStateText(states[5])).toBe("exponent:2:");
+    expect(x2EntryStateText(states[6])).toBe("exponent:2:3");
   });
 
   it("x2 value dataflow carries structural VP-entry shapes through dot restore", () => {
@@ -5448,6 +5450,26 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual(["mantissa:-0:decimal"]);
     expect(x2EntryStateText(states[7])).toBe("exponent:-0:");
     expect(x2EntryStateText(states[8])).toBe("exponent:-0:3");
+  });
+
+  it("x2 value dataflow uses raw decimal dot restores as VP mantissa sources", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      store("1"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:02:unnormalized"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:2:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:02:unnormalized"]);
+    expect(x2VpEntryMantissaText(states[4])).toEqual(["2"]);
+    expect(x2EntryStateText(states[5])).toBe("exponent:2:");
+    expect(x2EntryStateText(states[6])).toBe("exponent:2:3");
   });
 
   it("x2 value dataflow keeps synced signed-zero sticky through closed sign-change", () => {
