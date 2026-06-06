@@ -1949,7 +1949,9 @@ The pipeline currently contains:
   CFG stack-difference proof and the X2-restore exposure proof both hold. Direct/proved-indirect
   `ПП` helpers must reach `В/О` linearly through only stack-preserving commands;
   stack consumers, X2 restores, nested flow, and other entry labels keep the
-  call as a barrier.
+  call as a barrier. A later `В↑` after a plain X-preserving X2 sync is also
+  removed across the same stack/X2-preserving local gaps when its stack lift is
+  dead, because the earlier plain sync already supplied the hidden X2 value.
   The same stack-difference proof starts with the possible difference
   in Z and follows direct calls/returns, so the rewrite is refused if a later
   opcode could expose or consume that deeper stack value. The same pass also

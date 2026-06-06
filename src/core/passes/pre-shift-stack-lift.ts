@@ -36,6 +36,11 @@ const run: IrPassFn = (ops) => {
       remove.add(index);
       continue;
     }
+    if (previousPlainX2SyncAlreadySuppliesX2Sync(ops, index, context)) {
+      if (removingStackLiftCanExposeStack(ops, index)) continue;
+      remove.add(index);
+      continue;
+    }
     const producerIndex = x2NextStackShiftingProducerIndex(ops, index + 1, context);
     if (producerIndex !== undefined) {
       if (
@@ -99,6 +104,19 @@ function previousProducerAlreadySuppliesLiftX2Sync(
   for (let index = liftIndex - 1; index >= 0; index -= 1) {
     const previous = ops[index]!;
     if (producerSuppliesLiftX2Sync(previous)) return true;
+    if (!isBackwardStackLiftX2SyncGap(ops, previous, index, context)) return false;
+  }
+  return false;
+}
+
+function previousPlainX2SyncAlreadySuppliesX2Sync(
+  ops: readonly IrOp[],
+  liftIndex: number,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  for (let index = liftIndex - 1; index >= 0; index -= 1) {
+    const previous = ops[index]!;
+    if (isPlainXPreservingX2Sync(previous)) return true;
     if (!isBackwardStackLiftX2SyncGap(ops, previous, index, context)) return false;
   }
   return false;

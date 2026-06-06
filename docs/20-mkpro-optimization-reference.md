@@ -668,12 +668,13 @@ Display rewrites are separated into strategy selection + body lowering.
   X-preserving X2 sync such as `F0`..`FF` when that sync replaces the removed
   lift's X2 update and the stack lift is dead. A `В↑` after any proved
   stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another
-  `В↑`) is also removed when only stack/X2-preserving local gap cells stand
-  between them and the lift's deeper stack cell is dead: the producer has
-  already supplied both the visible X value and hidden X2 sync, so the extra
-  lift is only a redundant scheduler cell. The post-producer scan can cross a
-  path-safe direct conditional, counted-loop, or proved-indirect conditional
-  fallthrough whose opcode has a known fallthrough X2 effect and preserves the
+  `В↑`) or after a plain X-preserving X2 sync (`F0`..`FF`) is also removed when
+  only stack/X2-preserving local gap cells stand between them and the lift's
+  deeper stack cell is dead: the earlier operation has already supplied the
+  hidden X2 sync, and stack-lift producers also supplied the visible X in Y, so
+  the extra lift is only a redundant scheduler cell. The post-producer scan can
+  cross a path-safe direct conditional, counted-loop, or proved-indirect
+  conditional fallthrough whose opcode has a known fallthrough X2 effect and preserves the
   stack; unknown indirect conditionals remain barriers. It can also cross a
   direct or proved-indirect `ПП` helper chain that reaches `В/О`
   through commands preserving X, stack, and X2; helpers that compute a new X,
