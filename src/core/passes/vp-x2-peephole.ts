@@ -3,6 +3,7 @@ import {
   computeX2ValueStates,
   computeLabelEntryIndexes,
   directReturnAnalysisContext,
+  emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
@@ -18,6 +19,8 @@ import {
   x2ShapeSetRestoredVisibleDecimals,
   x2ValueFactRestoredVisibleDecimal,
 } from "./helpers.ts";
+
+const FRACTION = 0x35;
 
 function x2BoundaryText(op: IrOp): string {
   if (!("meta" in op)) return "";
@@ -36,12 +39,12 @@ function isVpX2Boundary(op: IrOp): boolean {
 
 function isFractionAfterX2Boundary(op: IrOp): boolean {
   if (hasRewriteBarrier(op)) return false;
-  return op.kind === "plain" && op.opcode === 0x35;
+  return op.kind === "plain" && op.opcode === FRACTION;
 }
 
 function isFreeStandingFractionOp(op: IrOp): boolean {
   if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
-  return op.kind === "plain" && op.opcode === 0x35 && !hasRoles(op);
+  return op.kind === "plain" && op.opcode === FRACTION && !hasRoles(op);
 }
 
 function isFractionalNoopValue(value: string): boolean {
@@ -134,6 +137,7 @@ function simpleDirectReturnPreservesX(
 }
 
 const run: IrPassFn = (ops) => {
+  if (!ops.some(isFractionAfterX2Boundary)) return emptyResult(ops);
   const remove = new Set<number>();
   const labelEntries = computeLabelEntryIndexes(ops);
   const context = directReturnAnalysisContext(ops);
@@ -146,7 +150,7 @@ const run: IrPassFn = (ops) => {
   for (let i = 0; i < ops.length; i += 1) {
     if (!remove.has(i) && isKnownFractionalNoopFraction(ops, i, states)) remove.add(i);
   }
-  if (remove.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+  if (remove.size === 0) return emptyResult(ops);
   return {
     ops: ops.filter((_, index) => !remove.has(index)),
     applied: remove.size,

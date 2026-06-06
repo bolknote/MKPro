@@ -4,6 +4,7 @@ import {
   computeX2ImmediateSyncStates,
   computeX2ValueStates,
   directReturnAnalysisContext,
+  emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   x2CanUseDotRestoreAt,
@@ -28,6 +29,7 @@ import {
 const DOT = 0x0a;
 
 const run: IrPassFn = (ops) => {
+  if (!ops.some(isPlainDot)) return emptyResult(ops);
   const valueStates = computeX2ValueStates(ops);
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
@@ -70,7 +72,7 @@ const run: IrPassFn = (ops) => {
     removed.add(index);
   }
 
-  if (removed.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+  if (removed.size === 0) return emptyResult(ops);
   return {
     ops: ops.filter((_, index) => !removed.has(index)),
     applied: removed.size,

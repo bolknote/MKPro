@@ -133,8 +133,8 @@ function runPassesOnIr(
           }
         }
         if (result.preloads !== undefined) preloads.push(...result.preloads);
+        current = result.ops;
       }
-      current = result.ops;
     }
   }
   return { ops: current, applied: totalApplied, optimizations, passCounts, preloads };

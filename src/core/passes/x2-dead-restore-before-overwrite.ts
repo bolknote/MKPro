@@ -33,6 +33,7 @@ const SIGN_CHANGE = 0x0b;
 const VP = 0x0c;
 
 const run: IrPassFn = (ops) => {
+  if (!ops.some(isPotentialDeadRestoreOrProducerOpcode)) return emptyResult(ops);
   const states = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
@@ -78,6 +79,15 @@ const run: IrPassFn = (ops) => {
     ],
   };
 };
+
+function isPotentialDeadRestoreOrProducerOpcode(op: IrOp): boolean {
+  if (removableRecallValueRegister(op) !== undefined && !isDisplayFocusSensitive(op)) return true;
+  if (!isFreeStandingPlain(op)) return false;
+  return op.opcode === DOT ||
+    op.opcode === SIGN_CHANGE ||
+    op.opcode === VP ||
+    analyzeX2StackEffect(op).stackShifts;
+}
 
 function isDeadRestoreCandidate(
   ops: readonly IrOp[],

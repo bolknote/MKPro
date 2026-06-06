@@ -322,6 +322,8 @@ export function emptyResult(ops: readonly IrOp[]): PassResult {
   return { ops: [...ops], applied: 0, optimizations: [] };
 }
 
+const directReturnAnalysisContextCache = new WeakMap<readonly IrOp[], DirectReturnAnalysisContext>();
+
 export function cellsPerOp(op: IrOp): number {
   switch (op.kind) {
     case "label":
@@ -457,11 +459,15 @@ export function computeLabelEntryIndexes(
 }
 
 export function directReturnAnalysisContext(ops: readonly IrOp[]): DirectReturnAnalysisContext {
-  return {
+  const cached = directReturnAnalysisContextCache.get(ops);
+  if (cached !== undefined) return cached;
+  const context = {
     labelEntries: computeLabelEntryIndexes(ops),
     labels: labelIndexes(ops),
     addresses: addressIndexes(ops),
   };
+  directReturnAnalysisContextCache.set(ops, context);
+  return context;
 }
 
 export function directCallTargetIndex(
@@ -2346,9 +2352,32 @@ export interface X2ValueDataflowOptions {
 
 export type X2DataflowEdgeKind = Edge["kind"];
 
+const registerValueGraphCache = new WeakMap<readonly IrOp[], Edge[][]>();
+const x2RegisterStatesCache = new WeakMap<readonly IrOp[], Array<RegisterValueSet | undefined>>();
+const x2ValueStatesCache = new WeakMap<
+  readonly IrOp[],
+  {
+    plain?: Array<X2ValueDataflowState | undefined> | undefined;
+    registerMemory?: Array<X2ValueDataflowState | undefined> | undefined;
+  }
+>();
+const x2RestoreBoundaryStatesCache = new WeakMap<readonly IrOp[], boolean[]>();
+const x2DotRestoreGapStatesCache = new WeakMap<readonly IrOp[], boolean[]>();
+const x2ImmediateSyncStatesCache = new WeakMap<readonly IrOp[], boolean[]>();
+const recallRemovalAnalysisCache = new WeakMap<readonly IrOp[], Map<number, RecallRemovalCacheEntry[]>>();
+
+interface RecallRemovalCacheEntry {
+  readonly x2RegisterState: RegisterValueSet | undefined;
+  readonly x2ValueState: X2ValueDataflowState | undefined;
+  readonly context: DirectReturnAnalysisContext | undefined;
+  readonly result: RecallRemovalAnalysis | undefined;
+}
+
 export function computeX2RegisterStates(ops: readonly IrOp[]): Array<RegisterValueSet | undefined> {
   if (ops.length === 0) return [];
-  const edges = buildRegisterValueGraph(ops);
+  const cached = x2RegisterStatesCache.get(ops);
+  if (cached !== undefined) return cached;
+  const edges = registerValueGraphForOps(ops);
   const inStates: Array<RegisterDataflowState | undefined> = Array.from({ length: ops.length }, () => undefined);
   inStates[0] = emptyRegisterDataflowState();
 
@@ -2372,7 +2401,9 @@ export function computeX2RegisterStates(ops: readonly IrOp[]): Array<RegisterVal
     }
   }
 
-  return inStates.map((state) => state?.x2);
+  const result = inStates.map((state) => state?.x2);
+  x2RegisterStatesCache.set(ops, result);
+  return result;
 }
 
 export function computeX2ValueStates(
@@ -2381,7 +2412,10 @@ export function computeX2ValueStates(
 ): Array<X2ValueDataflowState | undefined> {
   if (ops.length === 0) return [];
   const trackRegisterMemory = options.trackRegisterMemory === true;
-  const edges = buildRegisterValueGraph(ops);
+  const cachedByMode = x2ValueStatesCache.get(ops);
+  const cached = trackRegisterMemory ? cachedByMode?.registerMemory : cachedByMode?.plain;
+  if (cached !== undefined) return cached;
+  const edges = registerValueGraphForOps(ops);
   const inStates: Array<X2ValueDataflowState | undefined> = Array.from({ length: ops.length }, () => undefined);
   inStates[0] = emptyX2ValueDataflowState(trackRegisterMemory);
 
@@ -2408,6 +2442,13 @@ export function computeX2ValueStates(
     }
   }
 
+  const nextCachedByMode = cachedByMode ?? {};
+  if (trackRegisterMemory) {
+    nextCachedByMode.registerMemory = inStates;
+  } else {
+    nextCachedByMode.plain = inStates;
+  }
+  x2ValueStatesCache.set(ops, nextCachedByMode);
   return inStates;
 }
 
@@ -3376,7 +3417,9 @@ type X2DotRestoreGapState = "none" | "synced" | "one-gap" | "safe";
 
 export function computeX2RestoreBoundaryStates(ops: readonly IrOp[]): boolean[] {
   if (ops.length === 0) return [];
-  const edges = buildRegisterValueGraph(ops);
+  const cached = x2RestoreBoundaryStatesCache.get(ops);
+  if (cached !== undefined) return cached;
+  const edges = registerValueGraphForOps(ops);
   const inStates: Array<X2RestoreBoundaryState | undefined> = Array.from({ length: ops.length }, () => undefined);
   inStates[0] = "none";
 
@@ -3400,12 +3443,16 @@ export function computeX2RestoreBoundaryStates(ops: readonly IrOp[]): boolean[] 
     }
   }
 
-  return inStates.map((state) => state === "boundary");
+  const result = inStates.map((state) => state === "boundary");
+  x2RestoreBoundaryStatesCache.set(ops, result);
+  return result;
 }
 
 export function computeX2DotRestoreGapStates(ops: readonly IrOp[]): boolean[] {
   if (ops.length === 0) return [];
-  const edges = buildRegisterValueGraph(ops);
+  const cached = x2DotRestoreGapStatesCache.get(ops);
+  if (cached !== undefined) return cached;
+  const edges = registerValueGraphForOps(ops);
   const inStates: Array<X2DotRestoreGapState | undefined> = Array.from({ length: ops.length }, () => undefined);
   inStates[0] = "none";
 
@@ -3429,12 +3476,16 @@ export function computeX2DotRestoreGapStates(ops: readonly IrOp[]): boolean[] {
     }
   }
 
-  return inStates.map((state) => state === "safe");
+  const result = inStates.map((state) => state === "safe");
+  x2DotRestoreGapStatesCache.set(ops, result);
+  return result;
 }
 
 export function computeX2ImmediateSyncStates(ops: readonly IrOp[]): boolean[] {
   if (ops.length === 0) return [];
-  const edges = buildRegisterValueGraph(ops);
+  const cached = x2ImmediateSyncStatesCache.get(ops);
+  if (cached !== undefined) return cached;
+  const edges = registerValueGraphForOps(ops);
   const inStates: Array<boolean | undefined> = Array.from({ length: ops.length }, () => undefined);
   inStates[0] = false;
 
@@ -3458,7 +3509,9 @@ export function computeX2ImmediateSyncStates(ops: readonly IrOp[]): boolean[] {
     }
   }
 
-  return inStates.map((state) => state === true);
+  const result = inStates.map((state) => state === true);
+  x2ImmediateSyncStatesCache.set(ops, result);
+  return result;
 }
 
 export function recallAlreadySyncedInX2(
@@ -3650,6 +3703,8 @@ export function analyzeRecallRemoval(
   if (op === undefined) return undefined;
   const register = removableRecallValueRegister(op);
   if (register === undefined) return undefined;
+  const cached = cachedRecallRemovalAnalysis(ops, recallIndex, x2RegisterState, x2ValueState, context);
+  if (cached !== undefined) return cached.result;
   const valueProof = recallValueProof(op, x2ValueState);
   const redundantSyncRegister = recallAlreadySyncedInX2(op, x2RegisterState) ?? valueProof?.x2SyncRegister;
   const redundantSyncValue = valueProof?.x2SyncValue === true;
@@ -3662,7 +3717,7 @@ export function analyzeRecallRemoval(
       redundantSyncShape,
     }) &&
     !recallRemovalPreservesImmediateVpRestoreContext(ops, recallIndex, x2ValueState, valueProof, context);
-  return {
+  const result: RecallRemovalAnalysis = {
     register,
     valueProof,
     redundantSyncRegister,
@@ -3673,6 +3728,47 @@ export function analyzeRecallRemoval(
     exposesX2Restore,
     removable: !exposesStackLift && !exposesX2Restore,
   };
+  cacheRecallRemovalAnalysis(ops, recallIndex, x2RegisterState, x2ValueState, context, result);
+  return result;
+}
+
+function cachedRecallRemovalAnalysis(
+  ops: readonly IrOp[],
+  recallIndex: number,
+  x2RegisterState: RegisterValueSet | undefined,
+  x2ValueState: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext | undefined,
+): RecallRemovalCacheEntry | undefined {
+  for (const entry of recallRemovalAnalysisCache.get(ops)?.get(recallIndex) ?? []) {
+    if (
+      entry.x2RegisterState === x2RegisterState &&
+      entry.x2ValueState === x2ValueState &&
+      entry.context === context
+    ) return entry;
+  }
+  return undefined;
+}
+
+function cacheRecallRemovalAnalysis(
+  ops: readonly IrOp[],
+  recallIndex: number,
+  x2RegisterState: RegisterValueSet | undefined,
+  x2ValueState: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext | undefined,
+  result: RecallRemovalAnalysis | undefined,
+): void {
+  let byIndex = recallRemovalAnalysisCache.get(ops);
+  if (byIndex === undefined) {
+    byIndex = new Map();
+    recallRemovalAnalysisCache.set(ops, byIndex);
+  }
+  const entries = byIndex.get(recallIndex);
+  const entry: RecallRemovalCacheEntry = { x2RegisterState, x2ValueState, context, result };
+  if (entries === undefined) {
+    byIndex.set(recallIndex, [entry]);
+  } else {
+    entries.push(entry);
+  }
 }
 
 function recallRemovalPreservesImmediateVpRestoreContext(
@@ -7965,6 +8061,14 @@ function dropMutatedSelectorX2ValueFact(
     memory: trackRegisterMemory ? deleteX2ValueMemory(stable.memory, register) : undefined,
     shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(stable.shapeMemory, register) : undefined,
   };
+}
+
+function registerValueGraphForOps(ops: readonly IrOp[]): Edge[][] {
+  const cached = registerValueGraphCache.get(ops);
+  if (cached !== undefined) return cached;
+  const graph = buildRegisterValueGraph(ops);
+  registerValueGraphCache.set(ops, graph);
+  return graph;
 }
 
 function buildRegisterValueGraph(ops: readonly IrOp[]): Edge[][] {
