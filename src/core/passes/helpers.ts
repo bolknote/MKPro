@@ -207,6 +207,7 @@ export interface X2ValueDataflowState {
   readonly vpEntryMantissaTransient?: true | undefined;
   readonly vpEntrySignMantissa?: ReadonlySet<string> | undefined;
   readonly vpEntryShape?: X2ShapeSet | undefined;
+  readonly vpEntrySignShape?: X2ShapeSet | undefined;
   readonly vpEntryShapeTransient?: true | undefined;
   readonly memory?: X2ValueMemory | undefined;
   readonly shapeMemory?: X2ShapeMemory | undefined;
@@ -3948,6 +3949,7 @@ function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflow
     ...(input.vpEntryMantissaTransient === true ? { vpEntryMantissaTransient: true } : {}),
     vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
+    vpEntrySignShape: cloneOptionalShapeSet(input.vpEntrySignShape),
     ...(input.vpEntryShapeTransient === true ? { vpEntryShapeTransient: true } : {}),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
@@ -4057,6 +4059,7 @@ function transferX2ValueDataflowState(
         vpEntryMantissa: vpEntryMantissasFromStoreSplice(stable.x2Shape),
         vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(stable.x2Shape),
         vpEntryShape,
+        vpEntrySignShape: vpEntrySignShapesFromStoreSplice(stable.x2Shape),
         ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
         memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, op.register, stable.x) : undefined,
         shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, op.register, stable.xShape) : undefined,
@@ -4081,6 +4084,7 @@ function transferX2ValueDataflowState(
         structuralVpContext: noneX2StructuralEntryState(),
         vpEntryMantissa: vpEntryMantissasFromValueFacts(value),
         vpEntryShape: vpEntryShapesFromShapeFacts(shape),
+        vpEntrySignShape: vpEntryShapesFromShapeFacts(shape),
         memory: input.memory,
         shapeMemory: input.shapeMemory,
       };
@@ -4109,6 +4113,7 @@ function transferX2ValueDataflowState(
         structuralVpContext: noneX2StructuralEntryState(),
         vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
         vpEntryShape: vpEntryShapesFromShapeFacts(shape),
+        vpEntrySignShape: vpEntryShapesFromShapeFacts(shape),
         memory: input.memory,
         shapeMemory: input.shapeMemory,
       };
@@ -4135,6 +4140,7 @@ function transferX2ValueDataflowState(
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
         vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, effect),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
+        vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, xShape, x2Shape, effect),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
       };
@@ -4167,6 +4173,7 @@ function transferX2ValueDataflowState(
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
         vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(stable, x, xShape, x2Shape, effect),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
+        vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(stable, xShape, x2Shape, effect),
         memory: trackRegisterMemory ? deleteX2ValueMemory(stable.memory, counter) : undefined,
         shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(stable.shapeMemory, counter) : undefined,
       };
@@ -4197,6 +4204,7 @@ function transferX2ValueDataflowState(
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, "affects"),
         vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, "affects"),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, "affects"),
+        vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, xShape, x2Shape, "affects"),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
       };
@@ -4599,6 +4607,7 @@ function transferPlainX2ValueState(
         closedExponentShapes,
       ),
       vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
+      vpEntrySignShape: transferPlainX2VpEntrySignShapeState(input, op, xShape, x2Shape, effect),
       vpEntryShape: transferPlainX2VpEntryShapeState(
         input,
         op,
@@ -4657,6 +4666,7 @@ function transferPlainX2ValueState(
         closedExponentShapes,
       ),
       vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
+      vpEntrySignShape: transferPlainX2VpEntrySignShapeState(input, op, xShape, x2Shape, effect),
       vpEntryShape: transferPlainX2VpEntryShapeState(
         input,
         op,
@@ -4728,6 +4738,7 @@ function transferPlainX2ValueState(
         closedStructuralShapes,
       ),
       vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
+      vpEntrySignShape: transferPlainX2VpEntrySignShapeState(input, op, structuralXShape, structuralX2Shape, effect),
       vpEntryShape: transferPlainX2VpEntryShapeState(
         input,
         op,
@@ -4776,6 +4787,7 @@ function transferPlainX2ValueState(
       input.x2Shape,
     ),
     vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
+    vpEntrySignShape: transferPlainX2VpEntrySignShapeState(input, op, xShape, x2Shape, effect),
     vpEntryShape: transferPlainX2VpEntryShapeState(
       input,
       op,
@@ -5028,6 +5040,7 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
     vpEntryMantissa: vpEntryMantissasFromX2Restore(input.x2, input.x2Shape),
     vpEntrySignMantissa: vpEntrySignMantissasFromX2Restore(input.x2, input.x2Shape),
     vpEntryShape: vpEntryShapesFromShapeFacts(input.x2Shape),
+    vpEntrySignShape: vpEntryShapesFromShapeFacts(input.x2Shape),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
   };
@@ -5259,6 +5272,7 @@ function transferIndirectConditionalX2ValueState(
     vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
     vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, effect),
     vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
+    vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, xShape, x2Shape, effect),
     memory: closed.memory,
     shapeMemory: closed.shapeMemory,
   };
@@ -5300,6 +5314,7 @@ function transferIndirectStoreX2ValueState(
     vpEntryMantissa: vpEntryMantissasFromStoreSplice(stable.x2Shape),
     vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(stable.x2Shape),
     vpEntryShape,
+    vpEntrySignShape: vpEntrySignShapesFromStoreSplice(stable.x2Shape),
     ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
     memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, target, stable.x) : undefined,
     shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, target, stable.xShape) : undefined,
@@ -5388,6 +5403,7 @@ function transferExchangeXYX2ValueState(
       input.x2Shape,
     ),
     vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
+    vpEntrySignShape: transferPlainX2VpEntrySignShapeState(input, op, xShape, x2Shape, effect),
     vpEntryShape: transferPlainX2VpEntryShapeState(
       input,
       op,
@@ -5447,6 +5463,7 @@ function transferCopyYToXX2ValueState(
       closed.x2Shape,
     ),
     vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(closed, op, effect),
+    vpEntrySignShape: transferPlainX2VpEntrySignShapeState(closed, op, xShape, x2Shape, effect),
     vpEntryShape: transferPlainX2VpEntryShapeState(
       closed,
       op,
@@ -5589,6 +5606,18 @@ function transferPlainX2VpEntrySignMantissaState(
   return undefined;
 }
 
+function transferPlainX2VpEntrySignShapeState(
+  input: X2ValueDataflowState,
+  op: Extract<IrOp, { kind: "plain" }>,
+  xShape: X2ShapeSet,
+  x2Shape: X2ShapeSet,
+  effect: ReturnType<typeof plainX2Effect>,
+): X2ShapeSet | undefined {
+  if (effect === "affects") return sharedStructuralShapeFacts({ xShape, x2Shape });
+  if (effect === "preserves" && isEmptyPlainOp(op)) return cloneOptionalShapeSet(input.vpEntrySignShape);
+  return undefined;
+}
+
 function transferPlainX2VpEntryShapeState(
   input: X2ValueDataflowState,
   op: Extract<IrOp, { kind: "plain" }>,
@@ -5696,6 +5725,17 @@ function transferConditionalX2VpEntrySignMantissaState(
   return undefined;
 }
 
+function transferConditionalX2VpEntrySignShapeState(
+  input: X2ValueDataflowState,
+  xShape: X2ShapeSet,
+  x2Shape: X2ShapeSet,
+  effect: ReturnType<typeof conditionalX2Effect>,
+): X2ShapeSet | undefined {
+  if (effect === "affects") return sharedStructuralShapeFacts({ xShape, x2Shape });
+  if (effect === "preserves") return cloneOptionalShapeSet(input.vpEntrySignShape);
+  return undefined;
+}
+
 function transferConditionalX2VpEntryShapeState(
   xShape: X2ShapeSet,
   x2Shape: X2ShapeSet,
@@ -5740,6 +5780,7 @@ function joinX2ValueDataflowStates(
     ...(incoming.vpEntryMantissaTransient === true ? { vpEntryMantissaTransient: true } : {}),
     vpEntrySignMantissa: cloneOptionalStringSet(incoming.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(incoming.vpEntryShape),
+    vpEntrySignShape: cloneOptionalShapeSet(incoming.vpEntrySignShape),
     ...(incoming.vpEntryShapeTransient === true ? { vpEntryShapeTransient: true } : {}),
     memory: trackRegisterMemory ? cloneX2ValueMemory(incoming.memory) : undefined,
     shapeMemory: trackRegisterMemory ? cloneX2ShapeMemory(incoming.shapeMemory) : undefined,
@@ -5763,6 +5804,7 @@ function joinX2ValueDataflowStates(
     ),
     vpEntrySignMantissa: joinOptionalStringSets(current.vpEntrySignMantissa, incoming.vpEntrySignMantissa),
     vpEntryShape: joinOptionalShapeSets(current.vpEntryShape, incoming.vpEntryShape),
+    vpEntrySignShape: joinOptionalShapeSets(current.vpEntrySignShape, incoming.vpEntrySignShape),
     ...(
       current.vpEntryShapeTransient === true || incoming.vpEntryShapeTransient === true
         ? { vpEntryShapeTransient: true as const }
@@ -5802,6 +5844,7 @@ function sameX2ValueDataflowState(
     left.vpEntryMantissaTransient === right.vpEntryMantissaTransient &&
     sameOptionalStringSet(left.vpEntrySignMantissa, right.vpEntrySignMantissa) &&
     sameOptionalShapeSet(left.vpEntryShape, right.vpEntryShape) &&
+    sameOptionalShapeSet(left.vpEntrySignShape, right.vpEntrySignShape) &&
     left.vpEntryShapeTransient === right.vpEntryShapeTransient &&
     sameX2ValueMemory(left.memory, right.memory) &&
     sameX2ShapeMemory(left.shapeMemory, right.shapeMemory);
@@ -6038,8 +6081,10 @@ function invalidateRegisterDependentX2ValueState(
     structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
     structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    ...(input.vpEntryMantissaTransient === true ? { vpEntryMantissaTransient: true } : {}),
     vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
+    vpEntrySignShape: cloneOptionalShapeSet(input.vpEntrySignShape),
     ...(input.vpEntryShapeTransient === true ? { vpEntryShapeTransient: true } : {}),
     memory: trackRegisterMemory ? removeRegisterDependentX2ValueMemory(input.memory, register) : undefined,
     shapeMemory: trackRegisterMemory ? cloneX2ShapeMemory(input.shapeMemory) : undefined,
@@ -6066,8 +6111,10 @@ function dropUnstableOpaqueExpressionX2ValueFacts(
     structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
     structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    ...(input.vpEntryMantissaTransient === true ? { vpEntryMantissaTransient: true } : {}),
     vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
+    vpEntrySignShape: cloneOptionalShapeSet(input.vpEntrySignShape),
     ...(input.vpEntryShapeTransient === true ? { vpEntryShapeTransient: true } : {}),
     memory: trackRegisterMemory ? removeUnstableOpaqueExpressionValueMemory(input.memory) : undefined,
     shapeMemory: trackRegisterMemory ? cloneX2ShapeMemory(input.shapeMemory) : undefined,
@@ -6157,8 +6204,11 @@ function clearX2ValueMemory(input: X2ValueDataflowState): X2ValueDataflowState {
     structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
     structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    ...(input.vpEntryMantissaTransient === true ? { vpEntryMantissaTransient: true } : {}),
     vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
+    vpEntrySignShape: cloneOptionalShapeSet(input.vpEntrySignShape),
+    ...(input.vpEntryShapeTransient === true ? { vpEntryShapeTransient: true } : {}),
     memory: {},
     shapeMemory: {},
   };
@@ -6650,6 +6700,7 @@ function withStoreVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowSt
     vpEntryMantissa: vpEntryMantissasFromStoreSplice(input.x2Shape),
     vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(input.x2Shape),
     vpEntryShape,
+    vpEntrySignShape: vpEntrySignShapesFromStoreSplice(input.x2Shape),
     ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
   };
 }
@@ -6675,6 +6726,11 @@ function vpEntrySignMantissasFromStoreSplice(shapes: X2ShapeSet | undefined): Re
     mantissas.add(model.canonical);
   }
   return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function vpEntrySignShapesFromStoreSplice(shapes: X2ShapeSet | undefined): X2ShapeSet | undefined {
+  const output = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes));
+  return output.size === 0 ? undefined : output;
 }
 
 function vpEntryShapesFromStoreSplice(shapes: X2ShapeSet | undefined): X2ShapeSet | undefined {
@@ -7301,6 +7357,16 @@ function signChangeClosedDecimalState(
   if (shapeBacked !== undefined) {
     return x2ValueStateFromMantissaShapes(shapeBacked, input.memory, input.shapeMemory, input.y, input.yShape);
   }
+  const structuralSource = signChangedVpEntryStructuralShapeFacts(input);
+  if (structuralSource !== undefined) {
+    return x2ValueStateFromStructuralShapes(
+      structuralSource,
+      input.memory,
+      input.shapeMemory,
+      input.y,
+      input.yShape,
+    );
+  }
   const structuralState = signChangedClosedStructuralState(input, producerIndex);
   if (structuralState !== undefined) return structuralState;
 
@@ -7342,6 +7408,7 @@ function signChangeClosedDecimalState(
     vpContext: noneX2VpContextState(),
     vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
     vpEntrySignMantissa: vpEntryMantissasFromValueFacts(values),
+    vpEntrySignShape: vpEntryShapesFromShapeFacts(shapes),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
   };
@@ -7442,6 +7509,7 @@ function signChangedClosedDecimalExponentShapeState(
     vpEntryMantissa: mantissas,
     vpEntrySignMantissa: mantissas.size === 0 ? undefined : mantissas,
     vpEntryShape: vpEntryShapesFromShapeFacts(shapes),
+    vpEntrySignShape: vpEntryShapesFromShapeFacts(shapes),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
   };
@@ -7449,6 +7517,19 @@ function signChangedClosedDecimalExponentShapeState(
 
 function signChangedClosedStructuralShapeFacts(input: X2ValueDataflowState): ReadonlySet<X2ShapeFact> | undefined {
   const shapes = x2SignChangedSharedStructuralShapeFacts(input.xShape, input.x2Shape);
+  return shapes.size === 0 ? undefined : shapes;
+}
+
+function signChangedVpEntryStructuralShapeFacts(input: X2ValueDataflowState): ReadonlySet<X2ShapeFact> | undefined {
+  const source = vpEntrySignSourceShapes(input);
+  if (source === undefined) return undefined;
+  const shapes = new Set<X2ShapeFact>();
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(source))) {
+    const signed = x2ExponentMantissaSignChangedShapeFact(fact) ?? x2MantissaSignChangedShapeFact(fact);
+    if (signed === undefined) continue;
+    const canonical = x2CanonicalShapeFact(signed);
+    if (canonical !== undefined && x2ShapeFactSafety(canonical) === "structuralOnly") shapes.add(canonical);
+  }
   return shapes.size === 0 ? undefined : shapes;
 }
 
@@ -7682,6 +7763,9 @@ function vpEntrySignSourceMantissas(input: X2ValueDataflowState): ReadonlySet<st
 }
 
 function vpEntrySignSourceShapes(input: X2ValueDataflowState): X2ShapeSet | undefined {
+  if (input.vpEntrySignShape !== undefined && input.vpEntrySignShape.size > 0) {
+    return input.vpEntrySignShape;
+  }
   const explicitSource = input.vpEntryShapeTransient === true ? undefined : input.vpEntryShape;
   if (explicitSource !== undefined && explicitSource.size > 0) return explicitSource;
   return mergeOptionalShapeSources(
@@ -7778,6 +7862,7 @@ function x2ValueStateFromMantissaShapes(
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntryMantissa: mantissas,
     vpEntrySignMantissa: mantissas,
+    vpEntrySignShape: vpEntryShapesFromShapeFacts(x2Shape),
     memory,
     shapeMemory,
   };
@@ -7803,6 +7888,7 @@ function x2ValueStateFromStructuralShapes(
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntryShape: vpEntryShapesFromShapeFacts(shapeSet),
+    vpEntrySignShape: vpEntryShapesFromShapeFacts(shapeSet),
     memory,
     shapeMemory,
   };
@@ -7843,6 +7929,7 @@ function x2ValueStateFromStructuralExponentEntry(
     vpContext: noneX2VpContextState(),
     structuralEntry: cloneX2StructuralEntryState(input),
     structuralVpContext: x2StructuralContextFromEntry(input),
+    vpEntrySignShape: vpEntryShapesFromShapeFacts(shapes),
     memory,
     shapeMemory,
   };
@@ -7887,6 +7974,7 @@ function x2ValueStateFromExponentEntry(
     vpContext: x2VpContextFromExponentEntry(input),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
+    vpEntrySignShape: vpEntryShapesFromShapeFacts(shapes),
     memory,
     shapeMemory,
   };
@@ -7971,6 +8059,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
       structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
       vpEntryMantissa: vpEntryMantissasFromValueFacts(closedExponentValues),
       vpEntryShape: vpEntryShapesFromShapeFacts(closedExponentShapes),
+      vpEntrySignShape: vpEntryShapesFromShapeFacts(closedExponentShapes),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
     };
@@ -7990,6 +8079,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: x2StructuralContextFromEntry(structuralEntry),
       vpEntryShape: vpEntryShapesFromShapeFacts(shapes),
+      vpEntrySignShape: vpEntryShapesFromShapeFacts(shapes),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
     };
@@ -8008,6 +8098,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
     vpEntryMantissa: input.vpEntryMantissaTransient === true ? undefined : cloneOptionalStringSet(input.vpEntryMantissa),
     vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: input.vpEntryShapeTransient === true ? undefined : cloneOptionalShapeSet(input.vpEntryShape),
+    vpEntrySignShape: cloneOptionalShapeSet(input.vpEntrySignShape),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
   };

@@ -384,6 +384,10 @@ function x2VpEntryShapeText(state: ReturnType<typeof computeX2ValueStates>[numbe
   return state === undefined ? undefined : x2ShapeStateText(state.vpEntryShape);
 }
 
+function x2VpEntrySignShapeText(state: ReturnType<typeof computeX2ValueStates>[number]): string[] | undefined {
+  return state === undefined ? undefined : x2ShapeStateText(state.vpEntrySignShape);
+}
+
 function x2VpEntryMantissaText(state: ReturnType<typeof computeX2ValueStates>[number]): string[] | undefined {
   return state === undefined || state.vpEntryMantissa === undefined
     ? undefined
@@ -1640,6 +1644,23 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StatesHaveSameVpEntrySource(decimalSource, differentDecimalSource)).toBe(false);
     expect(x2StatesHaveSameVpEntrySource(structuralSource, sameStructuralSource)).toBe(true);
     expect(x2StatesHaveSameVpEntrySource(decimalSource, structuralSource)).toBe(false);
+  });
+
+  it("x2 VP sign source proof uses explicit structural sign shapes separately from ordinary VP sources", () => {
+    const base = computeX2ValueStates([halt()])[0]!;
+    const transientOrdinarySource = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["hex:ACE:mantissa"]),
+      vpEntryShapeTransient: true as const,
+      vpEntrySignShape: new Set<X2ShapeFact>(["hex:FACE:mantissa"]),
+    };
+    const sameStructuralSource = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["hex:FACE:mantissa"]),
+    };
+
+    expect(x2StatesHaveSameVpEntrySource(transientOrdinarySource, sameStructuralSource)).toBe(false);
+    expect(x2StatesHaveSameVpEntrySignSource(transientOrdinarySource, sameStructuralSource)).toBe(true);
   });
 
   it("x2 VP source proof compares exact decimal display shapes without normalizing entry text", () => {
@@ -5912,6 +5933,30 @@ describe("ir passes on synthetic programs", () => {
     expect(x2VpEntrySignMantissaText(states[8])).toEqual(["-02"]);
     expect(x2EntryStateText(states[10])).toBe("exponent:02:");
     expect(x2EntryStateText(states[11])).toBe("exponent:02:3");
+  });
+
+  it("x2 value dataflow preserves structural sign-shape sources on conditional jump edges", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      cjump("target"),
+      halt(),
+      label("target"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const activeExponent = analyzeX2VpShapeContext(states[6]);
+
+    expect(x2VpEntryShapeText(states[4])).toBeUndefined();
+    expect(x2VpEntrySignShapeText(states[4])).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex:-FACE:mantissa"]);
+    expect(activeExponent).toMatchObject({
+      kind: "active-structural-exponent",
+      source: "structural",
+    });
+    expect(x2ShapeStateText(activeExponent.shape)).toEqual(["hex:-FACE:mantissa"]);
   });
 
   it("x2 value dataflow carries a closed decimal ВП sync through empty op gaps", () => {
