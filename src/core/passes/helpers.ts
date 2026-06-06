@@ -7062,15 +7062,30 @@ function expressionValueFact(producerIndex: number): X2ValueFact {
 }
 
 function stableExpressionValueFact(opcode: string, source: string): X2ValueFact {
-  return `expr-key:${opcode}(${source})`;
+  return canonicalStableExpressionValueFact(`expr-key:${opcode}(${source})` as X2ValueFact);
 }
 
 function stableExpressionSourceKey(fact: X2ValueFact): string | undefined {
   if (fact.startsWith("reg:")) return fact;
-  if (fact.startsWith("expr-key:")) return fact;
+  if (fact.startsWith("expr-key:")) return canonicalStableExpressionValueFact(fact);
   const decimal = computationDecimalValueFromFact(fact);
   if (decimal !== undefined) return decimalValueFact(decimal, "normalized");
   return undefined;
+}
+
+function canonicalStableExpressionValueFact(fact: X2ValueFact): X2ValueFact {
+  if (!fact.startsWith("expr-key:")) return fact;
+  return fact.replace(/shape:([^,()]+)/gu, (source, raw: string) => {
+    const canonical = canonicalStableShapeSourceKey(raw as X2ShapeFact);
+    return canonical ?? source;
+  }) as X2ValueFact;
+}
+
+function canonicalStableShapeSourceKey(fact: X2ShapeFact): string | undefined {
+  const structural = canonicalStructuralRestoreSourceKeyFacts(new Set([fact]));
+  if (structural.size === 1) return stableStructuralExpressionSourceKey([...structural][0]!);
+  const decimal = decimalDisplayShapeFacts(new Set([fact]));
+  return decimal.size === 1 ? stableStructuralExpressionSourceKey([...decimal][0]!) : undefined;
 }
 
 function stableExpressionSourceKeys(

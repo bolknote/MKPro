@@ -2838,6 +2838,23 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x)).not.toContain("expr-key:16(shape:hex-exponent:Г:2)");
   });
 
+  it("x2 value dataflow canonicalizes structural shape sources inside stable expr keys", () => {
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([
+        "expr-key:16(shape:hex-exponent:Г:2)",
+        "expr-key:16(shape:super-exponent:FA:2)",
+      ]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(legacy, plain(0x31, "К |x|"), "normal", {}, 0);
+
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(expr-key:16(shape:hex:Г00:mantissa))");
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(expr-key:16(shape:hex:FA00:mantissa))");
+    expect(x2ValueStateText(result?.x)).not.toContain("expr-key:31(expr-key:16(shape:hex-exponent:Г:2))");
+    expect(x2ValueStateText(result?.x)).not.toContain("expr-key:31(expr-key:16(shape:super-exponent:FA:2))");
+  });
+
   it("x2 value dataflow derives unary decimal facts from shape-only decimal mantissas", () => {
     const shapeOnly: X2ValueDataflowState = {
       x: new Set(),

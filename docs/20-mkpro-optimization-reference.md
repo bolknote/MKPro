@@ -860,6 +860,10 @@ Display rewrites are separated into strategy selection + body lowering.
   be proved. The same canonical structural source-key set is used by
   `ВП`/source equality and closed sign-source proofs, so the comparison does
   not carry both the raw exponent-entry spelling and its restored mantissa.
+  Stable `expr-key:*` facts canonicalize structural `shape:*` operands
+  recursively as well, so a hidden-temp proof that already contains
+  `shape:hex-exponent:Г:2` is reused as `shape:hex:Г00:mantissa` instead of
+  becoming a separate computed value.
   Hex and super displays are not promoted to decimal shapes without
   a separate display proof. For concrete decimal `X`, `К {x}` also
   seeds the exact normalized fractional decimal value in visible X while
