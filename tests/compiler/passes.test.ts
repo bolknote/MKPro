@@ -5890,6 +5890,35 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("recall value proof uses mixed decimal value and exact display-shape in-X evidence", () => {
+    const exactShapeState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+      x2Shape: new Set(),
+      entry: { kind: "closed" },
+      memory: {},
+      shapeMemory: {},
+    };
+    const rawShapeState: X2ValueDataflowState = {
+      ...exactShapeState,
+      xShape: new Set<X2ShapeFact>(["mantissa:0.5:decimal"]),
+    };
+
+    expect(recallValueProof(recall("2", "preload const 0.5"), exactShapeState)).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+    });
+    expect(recallValueProof(recall("2", "preload const 0.5"), rawShapeState)).toEqual({
+      register: "2",
+      inX: false,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+    });
+  });
+
   it("recall value proof uses decimal display shape equality as a VP-only X2 sync", () => {
     const state: X2ValueDataflowState = {
       x: new Set(),

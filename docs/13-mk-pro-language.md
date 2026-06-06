@@ -1207,7 +1207,10 @@ The pipeline currently contains:
   stable-indirect proved same-cell `К X->П R7..Re ; К П->X R7..Re`. It can
   also drop an adjacent recall to a different register when the shared
   value/shape proof shows the recalled decimal value or structural display
-  shape is already in `X`. The rewrite fires only when
+  shape is already in `X`. Exact decimal display-shape facts may also match
+  ordinary decimal value facts when their restored visible decimal is identical;
+  raw mantissa spellings are kept shape-only and do not become general X2
+  sync proofs. The rewrite fires only when
   the removed recall is not the visible X2 sync before a context-sensitive
   `.`/`/-/`/`ВП` restoration. If the shared X2-register dataflow proves that X2
   already contains the same register value and at least one executable
@@ -1747,10 +1750,12 @@ The pipeline currently contains:
   shape, or recalled from matching `preload const N`, and X was later rebuilt
   as the same value/shape, the recall is redundant even after the register
   alias itself was lost. Shape proofs use decimal display-shape equality and
-  the same structural exponent-shift equality as X2 dataflow, so a recalled
-  `hex:Г00` can match an X value built as `hex:Г; ВП 2`. They only remove
-  recalls whose X2/previous-command side effects are already proven
-  unobservable; they do not make `.`/`/-/` restores dot-safe.
+  exact decimal display-shape versus ordinary decimal-value equality after
+  restored-visible normalization, plus the same structural exponent-shift
+  equality as X2 dataflow, so a recalled `hex:Г00` can match an X value built
+  as `hex:Г; ВП 2`. They only remove recalls whose X2/previous-command side
+  effects are already proven unobservable; they do not make `.`/`/-/` restores
+  dot-safe.
   Compiler marker labels that are not reachable branch/call targets also
   preserve the fact, while string targets, numeric-address targets, proved
   indirect-flow targets, procedure starts, and unknown indirect flow make labels
