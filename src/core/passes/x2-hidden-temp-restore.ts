@@ -327,28 +327,112 @@ function registerMayBeOverwrittenBetween(
   register: RegisterName,
   directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
-  for (let index = start; index < end; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label" || op.kind === "orphan-address") continue;
-    if (op.kind === "store") {
-      if (op.register === register) return true;
-      continue;
+  const visited = new Set<string>();
+  const visit = (index: number, maybeOverwritten: boolean): boolean => {
+    for (let cursor = index; cursor < ops.length; cursor += 1) {
+      if (cursor === end) return maybeOverwritten;
+      const key = `${cursor}:${maybeOverwritten ? 1 : 0}`;
+      if (visited.has(key)) return false;
+      visited.add(key);
+
+      const op = ops[cursor]!;
+      if (hasRewriteBarrier(op)) return true;
+      if (op.kind === "label" || op.kind === "orphan-address") continue;
+
+      switch (op.kind) {
+        case "store":
+          maybeOverwritten = maybeOverwritten || op.register === register;
+          continue;
+        case "indirect-store": {
+          const target = knownIndirectMemoryTarget(op);
+          maybeOverwritten = maybeOverwritten ||
+            target === undefined ||
+            target === register ||
+            op.register === register;
+          continue;
+        }
+        case "indirect-recall":
+          maybeOverwritten = maybeOverwritten ||
+            (!isStableIndirectSelector(op.register) && op.register === register);
+          continue;
+        case "loop": {
+          const nextOverwritten = maybeOverwritten || loopCounterRegister(op.counter) === register;
+          const target = flowTargetStartIndex(ops, op.target, directReturnContext);
+          return target === undefined ||
+            visit(cursor + 1, nextOverwritten) ||
+            visit(target, nextOverwritten);
+        }
+        case "cjump": {
+          const target = flowTargetStartIndex(ops, op.target, directReturnContext);
+          return target === undefined ||
+            visit(cursor + 1, maybeOverwritten) ||
+            visit(target, maybeOverwritten);
+        }
+        case "indirect-cjump": {
+          const target = knownIndirectFlowStartIndex(ops, op, directReturnContext);
+          const nextOverwritten = maybeOverwritten ||
+            (!isStableIndirectSelector(op.register) && op.register === register);
+          return target === undefined ||
+            visit(cursor + 1, nextOverwritten) ||
+            visit(target, nextOverwritten);
+        }
+        case "jump": {
+          const target = flowTargetStartIndex(ops, op.target, directReturnContext);
+          return target === undefined || visit(target, maybeOverwritten);
+        }
+        case "indirect-jump": {
+          const target = knownIndirectFlowStartIndex(ops, op, directReturnContext);
+          const nextOverwritten = maybeOverwritten ||
+            (!isStableIndirectSelector(op.register) && op.register === register);
+          return target === undefined || visit(target, nextOverwritten);
+        }
+        case "call":
+        case "indirect-call":
+          if (isKnownReturnCallOp(op) && directReturningCallDoesNotMentionRegister(
+            ops,
+            op,
+            register,
+            directReturnContext,
+          )) continue;
+          return true;
+        case "return":
+          return true;
+        case "stop":
+          return false;
+        case "recall":
+        case "plain":
+          continue;
+      }
     }
-    if (op.kind === "indirect-store") {
-      const target = knownIndirectMemoryTarget(op);
-      if (target === undefined || target === register || op.register === register) return true;
-      continue;
-    }
-    if (op.kind === "loop" && loopCounterRegister(op.counter) === register) return true;
-    if (isKnownReturnCallOp(op) && directReturningCallDoesNotMentionRegister(
-      ops,
-      op,
-      register,
-      directReturnContext,
-    )) continue;
-    if (stopsStraightLineSearch(op)) return true;
-  }
-  return false;
+    return false;
+  };
+  return visit(start, false);
+}
+
+function flowTargetStartIndex(
+  ops: readonly IrOp[],
+  target: string | number,
+  directReturnContext: DirectReturnAnalysisContext,
+): number | undefined {
+  const targetIndex = typeof target === "string"
+    ? directReturnContext.labels.get(target)
+    : directReturnContext.addresses.get(target);
+  return targetIndex === undefined ? undefined : executableStartIndex(ops, targetIndex);
+}
+
+function knownIndirectFlowStartIndex(
+  ops: readonly IrOp[],
+  op: Extract<IrOp, { kind: "indirect-jump" | "indirect-call" | "indirect-cjump" }>,
+  directReturnContext: DirectReturnAnalysisContext,
+): number | undefined {
+  const target = knownIndirectFlowTarget(op);
+  if (target === undefined) return undefined;
+  const targetIndex = directReturnContext.addresses.get(target);
+  return targetIndex === undefined ? undefined : executableStartIndex(ops, targetIndex);
+}
+
+function executableStartIndex(ops: readonly IrOp[], index: number): number {
+  return ops[index]?.kind === "label" ? index + 1 : index;
 }
 
 function isNormalizedDecimalFact(fact: X2ValueFact): boolean {
