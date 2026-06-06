@@ -4590,6 +4590,52 @@ describe("ir passes on synthetic programs", () => {
     expect(x2HasOnlyRestoreGapBeforeVp(observingReturnGap, 6, directReturnAnalysisContext(observingReturnGap))).toBe(false);
   });
 
+  it("x2 VP restore-gap scanner crosses nested transparent return helper chains", () => {
+    const nestedReturnGap: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("outer"),
+      call("transparent"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x55, "К1"),
+      call("outer"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const observingNestedReturnGap: IrOp[] = [
+      jump("main"),
+      label("observer"),
+      plain(0x0a, "."),
+      ret(),
+      label("outer"),
+      call("observer"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x55, "К1"),
+      call("outer"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+
+    expect(x2HasOnlyRestoreGapBeforeVp(nestedReturnGap, 9)).toBe(false);
+    expect(x2HasOnlyRestoreGapBeforeVp(
+      nestedReturnGap,
+      9,
+      directReturnAnalysisContext(nestedReturnGap),
+    )).toBe(true);
+    expect(x2HasOnlyRestoreGapBeforeVp(
+      observingNestedReturnGap,
+      9,
+      directReturnAnalysisContext(observingNestedReturnGap),
+    )).toBe(false);
+  });
+
   it("x2 closed sign-change dot source crosses only transparent return helpers with context", () => {
     const transparentGap: IrOp[] = [
       jump("main"),
@@ -4634,6 +4680,61 @@ describe("ir passes on synthetic programs", () => {
         observingGap,
         9,
         observingStates[9],
+        directReturnAnalysisContext(observingGap),
+      ),
+    ).toBe(false);
+  });
+
+  it("x2 closed sign-change dot source crosses nested transparent return helper chains", () => {
+    const transparentGap: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("outer"),
+      call("transparent"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      call("outer"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const observingGap: IrOp[] = [
+      jump("main"),
+      label("observer"),
+      plain(0x0a, "."),
+      ret(),
+      label("outer"),
+      call("observer"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      call("outer"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const transparentStates = computeX2ValueStates(transparentGap);
+    const observingStates = computeX2ValueStates(observingGap);
+
+    expect(x2CanUseClosedSignChangeDotSourceAt(transparentGap, 12, transparentStates[12])).toBe(false);
+    expect(
+      x2CanUseClosedSignChangeDotSourceAt(
+        transparentGap,
+        12,
+        transparentStates[12],
+        directReturnAnalysisContext(transparentGap),
+      ),
+    ).toBe(true);
+    expect(
+      x2CanUseClosedSignChangeDotSourceAt(
+        observingGap,
+        12,
+        observingStates[12],
         directReturnAnalysisContext(observingGap),
       ),
     ).toBe(false);
@@ -4714,6 +4815,59 @@ describe("ir passes on synthetic programs", () => {
       x2NormalizedDecimalRestoreGapIsFreeStanding(
         observingGap,
         10,
+        directReturnAnalysisContext(observingGap),
+      ),
+    ).toBe(false);
+  });
+
+  it("x2 normalized decimal restore-gap crosses nested transparent return helper chains", () => {
+    const transparentGap: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("outer"),
+      call("transparent"),
+      ret(),
+      label("main"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x55, "К1"),
+      call("outer"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const observingGap: IrOp[] = [
+      jump("main"),
+      label("observer"),
+      plain(0x0a, "."),
+      ret(),
+      label("outer"),
+      call("observer"),
+      ret(),
+      label("main"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x55, "К1"),
+      call("outer"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+
+    expect(x2NormalizedDecimalRestoreGapIsFreeStanding(transparentGap, 13)).toBe(false);
+    expect(
+      x2NormalizedDecimalRestoreGapIsFreeStanding(
+        transparentGap,
+        13,
+        directReturnAnalysisContext(transparentGap),
+      ),
+    ).toBe(true);
+    expect(
+      x2NormalizedDecimalRestoreGapIsFreeStanding(
+        observingGap,
+        13,
         directReturnAnalysisContext(observingGap),
       ),
     ).toBe(false);

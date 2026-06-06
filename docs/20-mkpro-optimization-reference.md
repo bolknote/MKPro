@@ -1008,10 +1008,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     mantissas in this exponent-entry shape, and store-backed sign sources where
     the dot-restored mantissa matches the original hidden mantissa used by
     `/-/ ... ВП`, while role-bearing display cells still block the shortcut.
-    That restore-gap proof may cross a simple direct
-    or proved-indirect `ПП` helper that reaches `В/О` through only
+    That restore-gap proof may cross a direct or proved-indirect `ПП` helper
+    chain that reaches `В/О` through only nested transparent helper calls and
     restore-transparent empty/address cells; helpers that store, branch,
-    restore X2, or expose another entry remain barriers. The same direct-return
+    restore X2, recurse, or expose another entry remain barriers. The same direct-return
     context is used for closed-context `/-/` dot sources, so a transparent
     helper between the modeled sign-change and the candidate `.` does not reset
     the proof, while a helper that performs its own X2 restore still blocks it.
@@ -1021,9 +1021,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     X2 normalization, and the local gap back to the X2 sync contains no
     display-focused cell, `.` can still be removed. This escape hatch uses the
     same direct-return context as the `ВП` restore-gap and closed-context
-    `/-/` source proof: transparent direct or proved-indirect helpers may be
-    crossed, while helpers that store, branch, restore X2, or expose entry state
-    remain barriers. Display-byte gaps remain explicit.
+    `/-/` source proof: transparent direct or proved-indirect helper chains may
+    be crossed, while helpers that store, branch, restore X2, recurse, or expose
+    entry state remain barriers. Display-byte gaps remain explicit.
     Closed-context `/-/` is modeled for
     proved normalized decimal `X == X2` facts, including zero; this lets an
     immediately following `.`, or one reached only through free-standing

@@ -3312,7 +3312,7 @@ function x2RestoreGapDirectReturnDoesNotObserveRestore(
   call: KnownReturnCallOp,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return knownReturnCallReturnsThroughTransparentRange(ops, call, context, isLinearX2RestoreGapTransparentOp);
+  return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, isLinearX2RestoreGapTransparentOp);
 }
 
 function isLinearX2RestoreGapTransparentOp(op: IrOp): boolean {
