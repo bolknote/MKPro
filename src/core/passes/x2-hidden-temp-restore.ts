@@ -27,7 +27,7 @@ import {
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StatesHaveSameVpEntrySignSource,
   x2ValueFactIsNormalizedDecimal,
-  x2ValueSetsHaveSameRestoredVisibleDecimal,
+  x2ValueShapeSetsHaveSameRestoredVisibleDecimal,
   type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
@@ -219,7 +219,12 @@ function hiddenTempStoreSourceRestoresSameVisibleDecimalFromX2(
   storeState: X2ValueDataflowState | undefined,
   recallState: X2ValueDataflowState | undefined,
 ): boolean {
-  return x2ValueSetsHaveSameRestoredVisibleDecimal(storeState?.x, recallState?.x2);
+  return x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
+    storeState?.x,
+    storeState?.xShape,
+    recallState?.x2,
+    recallState?.x2Shape,
+  );
 }
 
 function hiddenTempStoreSourceRestoresSameVisibleShapeFromX2(

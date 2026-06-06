@@ -1336,7 +1336,12 @@ The pipeline currently contains:
   restore source merely because the visible display matches. The same canonical
   decimal display shapes may seed opaque stable-expression source keys for later
   hidden-temp proofs; those keys identify the displayed source shape but do not
-  infer a decimal result value for the operation. Closed-context `/-/ /-/`
+  infer a decimal result value for the operation. Restored visible-decimal
+  equality compares ordinary decimal value facts and exact decimal display-shape
+  facts through one helper, so `decimal:0.5:normalized` can match
+  `exponent:5:-1:decimal` when the surrounding dot-safety guard is independently
+  satisfied; raw entry spellings such as `mantissa:0.5:decimal` stay structural
+  and are not accepted as exact restored values. Closed-context `/-/ /-/`
   cancellation uses the same source-equality layer, so a pair can be removed
   when visible `X` and hidden X2 only prove the same display shape; that proof
   still does not make a single `.`/`/-/` restore dot-safe.
@@ -1677,7 +1682,9 @@ The pipeline currently contains:
   explicitly synced into X2, exact decimal display-shape equality can also
   discharge the unsafe-shape guard for scientific displays such as
   `exponent:1:8:decimal`; the inserted `.` is still allowed only by the normal
-  dot-safety/immediate-sync proof. For
+  dot-safety/immediate-sync proof. The same restored visible-decimal comparator
+  accepts mixed ordinary decimal facts and exact display-shape facts, but still
+  keeps raw decimal-entry shapes outside the dot-safe path. For
   computed structural temporaries, the pass can also use a
   synced `expr:*`/`expr-key:*` plus structural restore-shape equality to replace
   the scratch recall with `.`, while plain structural preload aliases that merely

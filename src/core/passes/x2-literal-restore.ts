@@ -16,7 +16,9 @@ import {
   x2HasOnlyRestoreGapBeforeVp,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2SyncCanExposeContextSensitiveRestore,
+  x2StateHasUnsafeDotRestoreShapeX2,
   x2ValueSetHasRestoredVisibleDecimal,
+  x2ValueShapeSetHasRestoredVisibleDecimal,
   x2ValueSetHasNormalizedDecimalFact,
   type DirectReturnAnalysisContext,
   type IrPass,
@@ -287,12 +289,16 @@ function replacingLiteralCanExposeContextSensitiveRestore(
   ops: readonly IrOp[],
   run: NumericLiteralRun,
   context: DirectReturnAnalysisContext,
+  redundantSync: { readonly value: boolean; readonly shape: boolean },
 ): boolean {
   if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
   if (run.dotPreservesVpEntrySource && x2HasOnlyRestoreGapBeforeVp(ops, run.end + 1, context)) return false;
   if (
     !literalReplacementCanReachVpRestore(ops, run.end + 1) &&
-    !x2SyncCanExposeContextSensitiveRestore(ops, run.end, { redundantSyncValue: true })
+    !x2SyncCanExposeContextSensitiveRestore(ops, run.end, {
+      redundantSyncValue: redundantSync.value,
+      redundantSyncShape: redundantSync.shape,
+    })
   ) return false;
   return true;
 }
@@ -387,9 +393,14 @@ const run: IrPassFn = (ops) => {
     const state = x2ValueStates[index];
     const runAtIndex = literalRunAt(ops, index);
     const exactX2Fact = runAtIndex === undefined ? false : x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact);
-    const visibleDecimalX2Fact = runAtIndex === undefined
+    const visibleDecimalX2ValueFact = runAtIndex === undefined
       ? false
       : x2ValueSetHasRestoredVisibleDecimal(state?.x2, runAtIndex.x2Fact);
+    const visibleDecimalX2ShapeFact = runAtIndex === undefined || visibleDecimalX2ValueFact
+      ? false
+      : x2ValueShapeSetHasRestoredVisibleDecimal(state?.x2, state?.x2Shape, runAtIndex.x2Fact);
+    const visibleDecimalX2Fact = visibleDecimalX2ValueFact ||
+      (visibleDecimalX2ShapeFact && !x2StateHasUnsafeDotRestoreShapeX2(state));
     if (
       runAtIndex !== undefined &&
       isFreshClosedDecimalEntry(state) &&
@@ -413,7 +424,10 @@ const run: IrPassFn = (ops) => {
       ) &&
       (exactX2Fact || visibleDecimalX2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
-      !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext)
+      !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext, {
+        value: exactX2Fact || visibleDecimalX2ValueFact,
+        shape: visibleDecimalX2ShapeFact,
+      })
     ) {
       result.push(dotRestoreOp(runAtIndex.displayValue, ops[index]!));
       removed += runAtIndex.end - index;

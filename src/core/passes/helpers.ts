@@ -2403,6 +2403,45 @@ export function x2ShapeSetRestoredVisibleDecimals(input: X2ShapeSet | undefined)
   return output;
 }
 
+function x2ValueSetRestoredVisibleDecimals(input: X2ValueSet | undefined): Set<string> {
+  const output = new Set<string>();
+  for (const fact of input ?? []) {
+    const visible = x2ValueFactRestoredVisibleDecimal(fact);
+    if (visible !== undefined) output.add(visible);
+  }
+  return output;
+}
+
+export function x2ValueShapeSetHasRestoredVisibleDecimal(
+  values: X2ValueSet | undefined,
+  shapes: X2ShapeSet | undefined,
+  fact: X2ValueFact,
+): boolean {
+  const visible = x2ValueFactRestoredVisibleDecimal(fact);
+  if (visible === undefined) return false;
+  if (x2ValueSetRestoredVisibleDecimals(values).has(visible)) return true;
+  return x2ShapeSetRestoredVisibleDecimals(shapes).has(visible);
+}
+
+export function x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
+  leftValues: X2ValueSet | undefined,
+  leftShapes: X2ShapeSet | undefined,
+  rightValues: X2ValueSet | undefined,
+  rightShapes: X2ShapeSet | undefined,
+): boolean {
+  const left = x2ValueSetRestoredVisibleDecimals(leftValues);
+  for (const decimal of x2ShapeSetRestoredVisibleDecimals(leftShapes)) left.add(decimal);
+  if (left.size === 0) return false;
+
+  for (const decimal of x2ValueSetRestoredVisibleDecimals(rightValues)) {
+    if (left.has(decimal)) return true;
+  }
+  for (const decimal of x2ShapeSetRestoredVisibleDecimals(rightShapes)) {
+    if (left.has(decimal)) return true;
+  }
+  return false;
+}
+
 export function x2ValueSetHasRestoredVisibleDecimal(
   input: X2ValueSet | undefined,
   fact: X2ValueFact,
@@ -2949,7 +2988,7 @@ export function x2StateHasSameDotRestoreValueInXAndX2(state: X2ValueDataflowStat
 export function x2StateHasSameRestoredVisibleDecimalInXAndX2(
   state: X2ValueDataflowState | undefined,
 ): boolean {
-  return x2ValueSetsHaveSameRestoredVisibleDecimal(state?.x, state?.x2);
+  return x2ValueShapeSetsHaveSameRestoredVisibleDecimal(state?.x, state?.xShape, state?.x2, state?.x2Shape);
 }
 
 export function x2CanUseDotRestoreAt(

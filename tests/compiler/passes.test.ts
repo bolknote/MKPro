@@ -77,6 +77,8 @@ import {
   x2StatesHaveSameVpEntrySignSource,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2ValueSetHasRestoredVisibleDecimal,
+  x2ValueShapeSetHasRestoredVisibleDecimal,
+  x2ValueShapeSetsHaveSameRestoredVisibleDecimal,
   x2ValueSetsHaveSameRestoredVisibleDecimal,
   type X2ShapeFact,
   type X2ShapeSet,
@@ -1336,6 +1338,40 @@ describe("ir passes on synthetic programs", () => {
         new Set(["decimal:1:normalized"]),
       ),
     ).toBe(false);
+  });
+
+  it("x2 value/shape algebra compares exact restored visible decimals across mixed facts", () => {
+    expect(
+      x2ValueShapeSetHasRestoredVisibleDecimal(
+        new Set(["reg:1"]),
+        new Set(["exponent:5:-1:decimal"]),
+        "decimal:0.5:normalized",
+      ),
+    ).toBe(true);
+    expect(
+      x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
+        new Set(["decimal:0.5:normalized"]),
+        undefined,
+        new Set(["reg:2"]),
+        new Set(["exponent:5:-1:decimal"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
+        new Set(["decimal:0.5:normalized"]),
+        undefined,
+        undefined,
+        new Set(["mantissa:0.5:decimal"]),
+      ),
+    ).toBe(false);
+    expect(
+      x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
+        new Set(["decimal:2:normalized"]),
+        new Set(["mantissa:02:decimal"]),
+        new Set(["reg:2"]),
+        new Set(["mantissa:2:decimal"]),
+      ),
+    ).toBe(true);
   });
 
   it("x2 restore safety flags structural and error-prone shape-only contexts", () => {
