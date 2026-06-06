@@ -4133,6 +4133,7 @@ function transferX2ValueDataflowState(
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: transferConditionalX2StructuralVpContextState(closed, effect),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
+        vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, effect),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
@@ -4164,6 +4165,7 @@ function transferX2ValueDataflowState(
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: transferConditionalX2StructuralVpContextState(stable, effect),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
+        vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(stable, x, xShape, x2Shape, effect),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
         memory: trackRegisterMemory ? deleteX2ValueMemory(stable.memory, counter) : undefined,
         shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(stable.shapeMemory, counter) : undefined,
@@ -4193,6 +4195,7 @@ function transferX2ValueDataflowState(
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: noneX2StructuralEntryState(),
         vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, "affects"),
+        vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, "affects"),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, "affects"),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
@@ -5254,6 +5257,7 @@ function transferIndirectConditionalX2ValueState(
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: transferConditionalX2StructuralVpContextState(closed, effect),
     vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
+    vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, effect),
     vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
     memory: closed.memory,
     shapeMemory: closed.shapeMemory,
@@ -5678,6 +5682,18 @@ function transferConditionalX2VpEntryMantissaState(
   return effect === "affects"
     ? sharedDecimalVpEntryMantissas({ x, x2: x, xShape, x2Shape })
     : undefined;
+}
+
+function transferConditionalX2VpEntrySignMantissaState(
+  input: X2ValueDataflowState,
+  x: X2ValueSet,
+  xShape: X2ShapeSet,
+  x2Shape: X2ShapeSet,
+  effect: ReturnType<typeof conditionalX2Effect>,
+): ReadonlySet<string> | undefined {
+  if (effect === "affects") return sharedDecimalVpEntryMantissas({ x, x2: x, xShape, x2Shape });
+  if (effect === "preserves") return cloneOptionalStringSet(input.vpEntrySignMantissa);
+  return undefined;
 }
 
 function transferConditionalX2VpEntryShapeState(

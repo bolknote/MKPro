@@ -390,6 +390,12 @@ function x2VpEntryMantissaText(state: ReturnType<typeof computeX2ValueStates>[nu
     : [...state.vpEntryMantissa].sort();
 }
 
+function x2VpEntrySignMantissaText(state: ReturnType<typeof computeX2ValueStates>[number]): string[] | undefined {
+  return state === undefined || state.vpEntrySignMantissa === undefined
+    ? undefined
+    : [...state.vpEntrySignMantissa].sort();
+}
+
 describe("ir passes on synthetic programs", () => {
   it("x2 register dataflow tracks register-valued X2 through preserving operations", () => {
     const program: IrOp[] = [
@@ -5851,6 +5857,32 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2EntryStateText(states[5])).toBe("closed");
     expect(x2EntryStateText(states[6])).toBe("unknown");
+  });
+
+  it("x2 value dataflow preserves raw sign sources on conditional jump edges", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      cjump("target"),
+      jump("done"),
+      label("target"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      jump("end"),
+      label("done"),
+      halt(),
+      label("end"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2VpEntryMantissaText(states[7])).toBeUndefined();
+    expect(x2VpEntrySignMantissaText(states[7])).toEqual(["02"]);
+    expect(x2EntryStateText(states[9])).toBe("exponent:-02:");
+    expect(x2EntryStateText(states[10])).toBe("exponent:-02:3");
   });
 
   it("x2 value dataflow carries a closed decimal ВП sync through empty op gaps", () => {

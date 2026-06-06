@@ -1100,7 +1100,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     from a raw decimal X2 value such as `decimal:02:unnormalized` seeds the next
     `ВП` mantissa source from its restored visible value (`2`), while the raw
     display shape remains separate metadata and is not promoted into a general
-    display-shape proof. Structural hex/super mantissas
+    display-shape proof. Direct conditional jump edges that preserve X2 remain
+    conservative for ordinary `ВП` sources, but they carry the explicit raw
+    sign-source metadata used by a following closed-context `/-/ ВП` sequence.
+    Structural hex/super mantissas
     consumed by `ВП` become shape-only `hex-exponent:*:*` /
     `super-exponent:*:*` forms; exponent digits and exponent `/-/` update that
     structural context without creating decimal value facts. The construction is
