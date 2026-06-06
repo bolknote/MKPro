@@ -1250,9 +1250,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     hard overwrite may sit after a direct/proved-indirect return-helper chain
     only when every nested helper is restore-transparent; display-sensitive separator cells are not
     transparent and are not removed from a same-segment dead restore run. A direct `П->X r` or proved stable-indirect
-    `К П->X R7..Re` is treated as the same kind of dead X/X2 restore before a
-    hard overwrite, but only when the shared stack-exposure proof shows that
-    the recall's stack lift cannot reach a later stack consumer. Free-standing
+    `К П->X R7..Re` is treated as a terminal overwrite for an earlier dead
+    restore, and as the same kind of dead X/X2 producer before a later hard
+    overwrite, but only when the shared stack-exposure proof shows that the
+    recall's stack lift cannot reach a later stack consumer. Free-standing
     stack-shifting producers such as `F pi` and X2-affecting lifts are handled
     by the same rule: they can be deleted before the hard overwrite only when
     their produced `X` is not observed and their implicit stack lift is dead.

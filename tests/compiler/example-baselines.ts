@@ -19,7 +19,7 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
   dungeon: 82,
   "e-94-digits": 64,
   "functions-demo": 25,
-  "fox-hunt-100": 105,
+  "fox-hunt-100": 104,
   "fox-hunt-mk61": 65,
   "game-100-pig": 103,
   human: 23,
@@ -47,6 +47,6 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
 export const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 134,
   "cave-treasure": 116,
-  "giants-country": 116,
+  "giants-country": 114,
   "tic-tac-toe-4x4": 317,
 };

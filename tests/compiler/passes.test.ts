@@ -10120,6 +10120,60 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite removes dead restore runs before unused recall stack lifts", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x55, "К1"),
+      recall("1"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      recall("1"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite removes dead recalls before unused recall stack lifts", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x55, "К1"),
+      recall("2"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("2"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps restore runs before observed recall stack lifts", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      recall("1"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-dead-restore-before-overwrite keeps display-sensitive separators in dead restore runs", () => {
     const displayEmpty: IrOp = {
       kind: "plain",

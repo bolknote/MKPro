@@ -39,6 +39,7 @@ const run: IrPassFn = (ops) => {
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const context = directReturnAnalysisContext(ops);
   const remove = new Set<number>();
+  const recallStackExposure = new Map<number, boolean>();
 
   for (let index = 0; index < ops.length; index += 1) {
     if (remove.has(index)) continue;
@@ -59,6 +60,7 @@ const run: IrPassFn = (ops) => {
       immediateSyncStates,
       index,
       context,
+      recallStackExposure,
     );
     if (deadRun === undefined) continue;
     if (isDeadRecallCandidate(op) && removingRecallCanExposeStackLift(ops, index)) continue;
@@ -164,6 +166,7 @@ function deadRestoreRunBeforeHardOverwrite(
   immediateSyncStates: readonly boolean[],
   start: number,
   context: DirectReturnAnalysisContext,
+  recallStackExposure: Map<number, boolean>,
 ): readonly number[] | undefined {
   const remove: number[] = [start];
   let sameSegment = true;
@@ -193,7 +196,7 @@ function deadRestoreRunBeforeHardOverwrite(
       continue;
     }
     if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
-    return isHardX2OverwriteWithoutStackUse(op) ? remove : undefined;
+    return isOverwriteEndpointThatCannotObserveRestoredX(ops, index, op, recallStackExposure) ? remove : undefined;
   }
   return undefined;
 }
@@ -215,6 +218,22 @@ function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
 
 function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
   return analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse;
+}
+
+function isOverwriteEndpointThatCannotObserveRestoredX(
+  ops: readonly IrOp[],
+  index: number,
+  op: IrOp,
+  recallStackExposure: Map<number, boolean>,
+): boolean {
+  if (isHardX2OverwriteWithoutStackUse(op)) return true;
+  if (removableRecallValueRegister(op) === undefined || isDisplayFocusSensitive(op)) return false;
+  let exposes = recallStackExposure.get(index);
+  if (exposes === undefined) {
+    exposes = removingRecallCanExposeStackLift(ops, index);
+    recallStackExposure.set(index, exposes);
+  }
+  return !exposes;
 }
 
 function simpleDirectReturnDoesNotObserveRestore(
