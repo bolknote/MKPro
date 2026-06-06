@@ -857,7 +857,10 @@ Display rewrites are separated into strategy selection + body lowering.
   restored mantissa when closure is available (`hex:Г; ВП 2` keys as
   `shape:hex:Г00:mantissa`); the raw `hex-exponent:*:*`/`super-exponent:*:*`
   source key remains only as a fallback when no closed structural mantissa can
-  be proved. Hex and super displays are not promoted to decimal shapes without
+  be proved. The same canonical structural source-key set is used by
+  `ВП`/source equality and closed sign-source proofs, so the comparison does
+  not carry both the raw exponent-entry spelling and its restored mantissa.
+  Hex and super displays are not promoted to decimal shapes without
   a separate display proof. For concrete decimal `X`, `К {x}` also
   seeds the exact normalized fractional decimal value in visible X while
   preserving the old X2 fact; its display shape is kept as a separate

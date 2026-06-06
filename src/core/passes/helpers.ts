@@ -7007,7 +7007,7 @@ function addVpEntryDisplaySourceKeys(
   for (const shape of decimalDisplayShapeFacts(shapes)) {
     keys.add(stableStructuralExpressionSourceKey(shape));
   }
-  for (const shape of x2StructuralRestoreShapeFacts(shapes)) {
+  for (const shape of canonicalStructuralRestoreSourceKeyFacts(shapes)) {
     keys.add(stableStructuralExpressionSourceKey(shape));
   }
 }
@@ -7679,24 +7679,27 @@ function sharedStructuralRestoreSourceKeys(
   xShapes: X2ShapeSet | undefined,
   x2Shapes: X2ShapeSet | undefined,
 ): Set<string> {
-  const xRestoreShapes = x2StructuralRestoreShapeFacts(xShapes);
+  const xRestoreShapes = canonicalStructuralRestoreSourceKeyFacts(xShapes);
   const keys = new Set<string>();
-  for (const fact of x2StructuralRestoreShapeFacts(x2Shapes)) {
+  for (const fact of canonicalStructuralRestoreSourceKeyFacts(x2Shapes)) {
     if (!xRestoreShapes.has(fact)) continue;
-    const keyFact = canonicalStructuralRestoreSourceKeyFact(fact, xRestoreShapes);
-    keys.add(stableStructuralExpressionSourceKey(keyFact));
+    keys.add(stableStructuralExpressionSourceKey(fact));
   }
   return keys;
 }
 
-function canonicalStructuralRestoreSourceKeyFact(
-  fact: X2ShapeFact,
-  sharedShapes: X2ShapeSet,
-): X2ShapeFact {
-  const model = x2ShapeDataModelForFact(fact);
-  if (model.kind !== "exponent-entry" || model.closedStructuralMantissa === undefined) return fact;
-  const closed = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
-  return closed !== undefined && sharedShapes.has(closed) ? closed : fact;
+export function canonicalStructuralRestoreSourceKeyFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const restored = x2StructuralRestoreShapeFacts(shapes);
+  const output = new Set<X2ShapeFact>();
+  for (const fact of restored) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind === "exponent-entry" && model.closedStructuralMantissa !== undefined) {
+      const closed = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+      if (closed !== undefined && restored.has(closed)) continue;
+    }
+    output.add(fact);
+  }
+  return output;
 }
 
 function sharedRestoredDisplaySourceKeys(

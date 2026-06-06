@@ -34,6 +34,7 @@ import {
   analyzeRecallRemoval,
   analyzeX2StackEffect,
   analyzeX2VpShapeContext,
+  canonicalStructuralRestoreSourceKeyFacts,
   computeX2ImmediateSyncStates,
   computeX2RegisterStates,
   computeX2ValueStates,
@@ -1233,6 +1234,15 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(x2StructuralRestoreShapeFacts(new Set(["super-exponent:FA:2"])))).toEqual([
       "hex:FA00:mantissa",
       "super-exponent:FA:2",
+    ]);
+    expect(x2ShapeStateText(canonicalStructuralRestoreSourceKeyFacts(new Set(["hex-exponent:Г:2"])))).toEqual([
+      "hex:Г00:mantissa",
+    ]);
+    expect(x2ShapeStateText(canonicalStructuralRestoreSourceKeyFacts(new Set(["super-exponent:FA:2"])))).toEqual([
+      "hex:FA00:mantissa",
+    ]);
+    expect(x2ShapeStateText(canonicalStructuralRestoreSourceKeyFacts(new Set(["hex-exponent:Г:99"])))).toEqual([
+      "hex-exponent:Г:99",
     ]);
   });
 
