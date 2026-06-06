@@ -3449,7 +3449,7 @@ export function x2StateCanDiscardRestoreRunBeforeProvedVp(
 ): boolean {
   const context = analyzeX2VpShapeContext(beforeRun);
   if (context.kind === "active-mantissa") {
-    return sameNonEmptyStringSet(context.mantissa, beforeVp?.vpEntryMantissa);
+    return stringSetsHaveIntersection(activeMantissaVpSourceKeys(context), vpEntrySourceKeys(beforeVp));
   }
   return x2StatesHaveSameVpEntrySource(beforeRun, beforeVp);
 }
@@ -7075,6 +7075,13 @@ function stringSetsHaveIntersection(left: ReadonlySet<string>, right: ReadonlySe
     if (right.has(value)) return true;
   }
   return false;
+}
+
+function activeMantissaVpSourceKeys(context: X2VpShapeContextAnalysis): Set<string> {
+  const keys = new Set<string>();
+  addVpEntryRawMantissaSourceKeys(keys, context.mantissa);
+  addVpEntryDisplaySourceKeys(keys, context.mantissa, undefined);
+  return keys;
 }
 
 function vpEntrySourceKeys(state: X2ValueDataflowState | undefined): Set<string> {

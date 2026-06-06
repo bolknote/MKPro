@@ -5088,6 +5088,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StateCanDiscardRestoreRunBeforeProvedVp(states[2], states[5])).toBe(true);
   });
 
+  it("x2 VP restore-run proof compares active mantissas through display source keys", () => {
+    const base = computeX2ValueStates([halt()])[0]!;
+    const activeMantissa: X2ValueDataflowState = {
+      ...base,
+      entry: { kind: "open", raw: new Set(["100"]) },
+    };
+    const sameExponentSource: X2ValueDataflowState = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+    };
+    const differentExponentSource: X2ValueDataflowState = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["exponent:10:0:decimal"]),
+    };
+    const activeZero: X2ValueDataflowState = {
+      ...base,
+      entry: { kind: "open", raw: new Set(["0"]) },
+    };
+    const signedZeroSource: X2ValueDataflowState = {
+      ...base,
+      vpEntryMantissa: new Set(["-0"]),
+    };
+
+    expect(x2StateCanDiscardRestoreRunBeforeProvedVp(activeMantissa, sameExponentSource)).toBe(true);
+    expect(x2StateCanDiscardRestoreRunBeforeProvedVp(activeMantissa, differentExponentSource)).toBe(false);
+    expect(x2StateCanDiscardRestoreRunBeforeProvedVp(activeZero, signedZeroSource)).toBe(false);
+  });
+
   it("x2 VP shape context uses structural source proofs for restore runs before ВП", () => {
     const program: IrOp[] = [
       recall("2", "preload const 8.70Е2-6С"),

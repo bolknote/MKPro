@@ -1474,7 +1474,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shows the same mantissa reaches `ВП`. Structural hex/super preload shapes
     use the same shape-source proof without becoming decimal values. The
     signed-zero forms are kept because `0 /-/ /-/ ВП` still differs from
-    `0 ВП`.
+    `0 ВП`. Active decimal mantissa restore-runs are also compared through the
+    shared VP source-key algebra: raw mantissas and their exact display shapes
+    can match the source recorded immediately before `ВП`, while signed zero
+    stays distinct.
     The pass consumes the shared VP shape-context classifier rather than
     decoding local `kind` strings: the classifier records active mantissa,
     active exponent-entry, and closed VP-context phases, decimal vs structural
