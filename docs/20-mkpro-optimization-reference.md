@@ -1132,7 +1132,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     (`hex:8.7` + `hex:0Е` proves `hex:8.70Е`) with eight-display-digit
     bounds and no signed/fractional right operand; the right operand may also
     be a pure decimal digit-run when the left operand is already structural
-    (`hex:8` + decimal `02` proves shape-only `hex:802`) without becoming a
+    (`hex:8` + decimal `02` proves shape-only `hex:802`) or a restored
+    structural exponent-entry with a pure mantissa (`hex:A` +
+    `hex-exponent:B:2` proves shape-only `hex:AB00`) without becoming a
     decimal value. Exact decimal display-shape facts can also feed shape-only
     unary display results, so `exponent:5:-1:decimal` proves the displayed
     fractional result of `К {x}` without adding an ordinary decimal value.

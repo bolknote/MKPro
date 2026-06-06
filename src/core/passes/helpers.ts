@@ -2911,16 +2911,33 @@ export function x2StructuralMantissaConcatShapeFacts(
   left: X2ShapeFact,
   right: X2ShapeFact,
 ): X2ShapeFact | undefined {
-  const rightModel = x2ShapeDataModelForFact(right);
+  const rightDigits = structuralConcatRightDigitRun(right);
+  return rightDigits === undefined ? undefined : x2StructuralMantissaAppendDigitsShapeFact(left, rightDigits);
+}
+
+function structuralConcatRightDigitRun(right: X2ShapeFact): string | undefined {
+  const rawDigits = pureMantissaDigitRunFromShapeFact(right);
+  if (rawDigits !== undefined) return rawDigits;
+
+  const restoredDigits = new Set<string>();
+  for (const fact of structuralMantissaShapeFacts(x2StructuralRestoreShapeFacts(new Set([right])))) {
+    const digits = pureMantissaDigitRunFromShapeFact(fact);
+    if (digits !== undefined) restoredDigits.add(digits);
+  }
+  return restoredDigits.size === 1 ? [...restoredDigits][0] : undefined;
+}
+
+function pureMantissaDigitRunFromShapeFact(fact: X2ShapeFact): string | undefined {
+  const model = x2ShapeDataModelForFact(fact);
   if (
-    rightModel.kind !== "mantissa" ||
-    (rightModel.radix !== "decimal" && rightModel.radix !== "hex" && rightModel.radix !== "super") ||
-    rightModel.sign !== "" ||
-    rightModel.hasDecimalPoint
+    model.kind !== "mantissa" ||
+    (model.radix !== "decimal" && model.radix !== "hex" && model.radix !== "super") ||
+    model.sign !== "" ||
+    model.hasDecimalPoint
   ) {
     return undefined;
   }
-  return x2StructuralMantissaAppendDigitsShapeFact(left, rightModel.digits.join(""));
+  return model.digits.join("");
 }
 
 export function x2StructuralMantissaFirstDigitSpliceShapeFact(
