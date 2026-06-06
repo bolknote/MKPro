@@ -1026,9 +1026,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     be crossed, while helpers that store, branch, restore X2, recurse, or expose
     entry state remain barriers. Display-byte gaps remain explicit.
     Closed-context `/-/` is modeled for
-    proved normalized decimal `X == X2` facts, including zero; this lets an
-    immediately following `.`, or one reached only through free-standing
-    `КНОП`/`К1`/`К2`, be removed unless it would shape a later X2 restore
+    proved normalized decimal `X == X2` facts, including zero, and for raw
+    decimal X2 facts that restore to the same visible decimal after the sign
+    toggle; this lets an immediately following `.`, or one reached only through
+    free-standing `КНОП`/`К1`/`К2`, be removed unless it would shape a later X2 restore
     context. `ВП` after an open mantissa creates both a structural exponent-entry
     state and a separate VP/exponent context. `ВП` after a proved closed
     decimal X2 sync (`Cx`, `В↑`, direct conditional/`F Lx` fallthrough, or `F0..FF`,

@@ -4774,6 +4774,37 @@ describe("ir passes on synthetic programs", () => {
     expect(x2CanUseClosedSignChangeDotSourceAt(displayEmptyProgram, 4, emptyStates[4])).toBe(false);
   });
 
+  it("x2 closed sign-change dot source accepts restored-visible decimal equality", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      store("2"),
+      store("3"),
+      plain(0x0b, "/-/"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:-2:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:-02:unnormalized"]);
+    expect(x2CanUseClosedSignChangeDotSourceAt(program, 5, states[5])).toBe(true);
+  });
+
+  it("x2 closed sign-change dot source keeps unsafe restored-visible structural shapes", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const D"),
+      store("2"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2CanUseClosedSignChangeDotSourceAt(program, 4, states[4])).toBe(false);
+  });
+
   it("x2 normalized decimal restore-gap crosses only transparent return helpers with context", () => {
     const transparentGap: IrOp[] = [
       jump("main"),

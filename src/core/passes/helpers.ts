@@ -3209,7 +3209,7 @@ export function x2CanUseClosedSignChangeDotSourceAt(
         !x2StateHasUnsafeDotRestoreShapeX2(state) ||
         x2StateHasOnlyDotSafeStructuralMantissaX2(state)
       ) &&
-      x2StateHasSameDotRestoreValueInXAndX2(state);
+      x2StateHasSameClosedSignChangeSourceInXAndX2(state);
   }
   return false;
 }
