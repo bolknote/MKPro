@@ -664,7 +664,9 @@ Display rewrites are separated into strategy selection + body lowering.
   entry labels keep the call as a barrier.
   The same
   proof also removes `В↑` before a hard X/X2 overwrite such as `Cx` when the
-  lift's Y value cannot reach any later stack consumer. A `В↑` after any proved
+  lift's Y value cannot reach any later stack consumer, or before a plain
+  X-preserving X2 sync such as `F0`..`FF` when that sync replaces the removed
+  lift's X2 update and the stack lift is dead. A `В↑` after any proved
   stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another
   `В↑`) is also removed when only stack/X2-preserving local gap cells stand
   between them and the lift's deeper stack cell is dead: the producer has

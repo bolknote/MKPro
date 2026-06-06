@@ -1940,10 +1940,10 @@ The pipeline currently contains:
   producer such as direct/indirect `П->X`, `F pi`, or another `В↑`, even through
   stack-preserving labels, stores, address bytes, and plain stack-neutral
   commands, when that producer already keeps the current X in Y for the
-  following consumer. It can also remove `В↑` before a direct conditional,
-  counted-loop fallthrough, a linear `В/О` return, or simple
-  direct/proved-indirect `ПП` helper whose `В/О` return syncs the same X into
-  X2, when that sync makes
+  following consumer. It can also remove `В↑` before a direct conditional or
+  counted-loop fallthrough sync, a plain X-preserving X2 sync such as `F0`..`FF`,
+  a linear `В/О` return, or simple direct/proved-indirect `ПП` helper whose
+  `В/О` return syncs the same X into X2, when that sync makes
   the explicit `В↑` redundant and skipped or downstream edges cannot observe the
   removed sync/lift. Such gaps are accepted only when the full call-return-aware
   CFG stack-difference proof and the X2-restore exposure proof both hold. Direct/proved-indirect

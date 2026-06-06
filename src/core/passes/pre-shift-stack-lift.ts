@@ -68,6 +68,12 @@ const run: IrPassFn = (ops) => {
       remove.add(index);
       continue;
     }
+    if (x2NextPlainX2SyncIndex(ops, index + 1, context) !== undefined) {
+      if (removingStackLiftCanExposeStack(ops, index)) continue;
+      if (removingRecallCanExposeX2Restore(ops, index)) continue;
+      remove.add(index);
+      continue;
+    }
     if (x2NextHardX2OverwriteIndex(ops, index + 1, context) === undefined) continue;
     if (removingStackLiftCanExposeStack(ops, index)) continue;
     if (removingRecallCanExposeX2Restore(ops, index)) continue;
@@ -159,6 +165,25 @@ function isFallthroughX2SyncConditional(op: IrOp): boolean {
   if (!effect.stackPreserves) return false;
   const conditional = getOpcode(op.opcode).conditionalX2Effect;
   return conditional?.fallthrough === "affects" && conditional.jump === "preserves";
+}
+
+function x2NextPlainX2SyncIndex(
+  ops: readonly IrOp[],
+  start: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (isPlainXPreservingX2Sync(op)) return index;
+    if (!isBackwardStackLiftX2SyncGap(ops, op, index, context)) return undefined;
+  }
+  return undefined;
+}
+
+function isPlainXPreservingX2Sync(op: IrOp): boolean {
+  if (op.kind !== "plain" || hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  const effect = analyzeX2StackEffect(op);
+  return effect.stackPreserves && effect.x2Affects && plainPreservesXValue(op);
 }
 
 function isBackwardStackLiftX2SyncGap(
