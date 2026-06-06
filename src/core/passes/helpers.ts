@@ -2792,6 +2792,7 @@ export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
   const mantissa = /^mantissa:(.*):decimal$/u.exec(fact);
   if (mantissa !== null) {
     const raw = mantissa[1]!;
+    if (!decimalMantissaShapeRawIsValid(raw)) return { kind: "unknown", raw: fact, safety: "unknown" };
     const normalized = normalizePlainDecimal(raw);
     return {
       kind: "decimal-mantissa",
@@ -2865,7 +2866,11 @@ export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
 
 export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
   const mantissa = /^mantissa:(.*):decimal$/u.exec(fact);
-  if (mantissa !== null) return decimalMantissaDataModel(mantissa[1]!);
+  if (mantissa !== null) {
+    return decimalMantissaShapeRawIsValid(mantissa[1]!)
+      ? decimalMantissaDataModel(mantissa[1]!)
+      : { kind: "unknown", raw: fact, safety: "unknown" };
+  }
   const exponent = /^exponent:([^:]*):([^:]*):decimal$/u.exec(fact);
   if (exponent !== null) {
     const exponentRaw = canonicalExponentShapeRaw(exponent[2]!);
@@ -2947,6 +2952,12 @@ export function x2MantissaShapeFactFromModel(model: X2MantissaDataModel): X2Shap
 export function x2ShapeFactFromDataModel(model: X2ShapeDataModel): X2ShapeFact | undefined {
   if (model.kind === "mantissa") return x2MantissaShapeFactFromModel(model);
   if (model.kind !== "exponent-entry") return undefined;
+  if (model.mantissa.radix === "decimal") {
+    const exponent = canonicalExponentShapeRaw(model.exponentRaw);
+    return exponent === undefined || !decimalExponentMantissaRawIsValid(model.mantissa.canonical)
+      ? undefined
+      : decimalExponentShapeFact(model.mantissa.canonical, exponent);
+  }
   const mantissa = x2MantissaShapeFactFromModel(model.mantissa);
   return mantissa === undefined ? undefined : x2ExponentShapeFactFromMantissaFact(mantissa, model.exponentRaw);
 }
@@ -2963,11 +2974,15 @@ export function x2ExponentShapeFactFromMantissaFact(
   fact: X2ShapeFact,
   exponentRaw: string,
 ): X2ShapeFact | undefined {
-  const model = x2ShapeDataModelForFact(fact);
-  if (model.kind !== "mantissa") return undefined;
   const exponent = canonicalExponentShapeRaw(exponentRaw);
   if (exponent === undefined) return undefined;
-  if (model.radix === "decimal") return decimalExponentShapeFact(model.canonical, exponent);
+  const decimalMantissa = /^mantissa:(.*):decimal$/u.exec(fact);
+  if (decimalMantissa !== null) {
+    const mantissa = canonicalShapeRaw(decimalMantissa[1]!);
+    return decimalExponentMantissaRawIsValid(mantissa) ? decimalExponentShapeFact(mantissa, exponent) : undefined;
+  }
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa") return undefined;
   if (model.radix === "hex") return `hex-exponent:${model.canonical}:${exponent}`;
   if (model.radix === "super") return `super-exponent:${model.canonical}:${exponent}`;
   return undefined;
@@ -6688,7 +6703,7 @@ function structuralFirstDigitSpliceRadix(
 }
 
 function x2MantissaShapeFactFromParts(radix: X2MantissaRadix, raw: string): X2ShapeFact | undefined {
-  if (radix === "decimal") return decimalMantissaShapeFact(raw);
+  if (radix === "decimal") return decimalMantissaShapeRawIsValid(raw) ? decimalMantissaShapeFact(raw) : undefined;
   if (radix === "hex") return structuralShapeRawIsValid(raw) ? `hex:${canonicalShapeRaw(raw)}:mantissa` : undefined;
   if (radix === "super") return superShapeRawIsValid(raw) ? `super:${canonicalShapeRaw(raw)}` : undefined;
   return undefined;
@@ -8328,7 +8343,7 @@ function canonicalDecimalMantissaEntrySet(input: ReadonlySet<string> | undefined
   const output = new Set<string>();
   for (const raw of input ?? []) {
     const canonical = canonicalShapeRaw(raw);
-    if (normalizeDecimalMantissaEntry(canonical) !== undefined) output.add(canonical);
+    if (decimalMantissaShapeRawIsValid(canonical)) output.add(canonical);
   }
   return output;
 }
@@ -8344,8 +8359,11 @@ function canonicalDecimalExponentMantissaSet(input: ReadonlySet<string> | undefi
 
 function decimalExponentMantissaRawIsValid(raw: string): boolean {
   const canonical = canonicalShapeRaw(raw);
-  return normalizeDecimalMantissaEntry(canonical) !== undefined ||
-    normalizePlainDecimal(canonical) !== undefined;
+  return decimalMantissaShapeRawIsValid(canonical) || normalizePlainDecimal(canonical) !== undefined;
+}
+
+function decimalMantissaShapeRawIsValid(raw: string): boolean {
+  return normalizeDecimalMantissaEntry(canonicalShapeRaw(raw)) !== undefined;
 }
 
 function canonicalExponentSet(input: ReadonlySet<string> | undefined): Set<string> {

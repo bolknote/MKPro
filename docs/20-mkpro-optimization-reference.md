@@ -1309,13 +1309,16 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `F[A-F]` slot forms
     stay in the super lattice; other structural displays stay hex-only or
     unknown. Set-level shape proofs first canonicalize and drop invalid shape
-    facts. Shape-memory stores only validated canonical structural spellings:
-    unknown/invalid display shapes are dropped before they can be recalled as
-    proof facts, while equivalent hex/super display shapes still join after
-    store/recall proofs; active decimal and structural exponent-entry/VP
-    contexts use validated canonical mantissa/exponent constructors, so invalid
-    entry text, structural shapes, or malformed exponents cannot survive as
-    splice proofs or single-fact shape safety claims. Dot restore and X2 sync
+    facts, including malformed decimal mantissas. Wide scientific decimal
+    mantissas such as `100000000` remain valid only as exponent-entry sources,
+    not as ordinary mantissa facts. Shape-memory stores only validated canonical
+    structural spellings: unknown/invalid display shapes are dropped before they
+    can be recalled as proof facts, while equivalent hex/super display shapes
+    still join after store/recall proofs; active decimal and structural
+    exponent-entry/VP contexts use validated canonical mantissa/exponent
+    constructors, so invalid entry text, structural shapes, or malformed
+    exponents cannot survive as splice proofs or single-fact shape safety claims.
+    Dot restore and X2 sync
     shape normalization use the same canonical set layer, so legacy invalid
     shape facts cannot be reintroduced while visible `X` is rebuilt from hidden X2;
     structural VP context is not considered plain closed

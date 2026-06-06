@@ -1144,6 +1144,11 @@ describe("ir passes on synthetic programs", () => {
       normalized: "0",
       safety: "errorProne",
     });
+    expect(parseX2ShapeFact("mantissa:BAD:decimal")).toEqual({
+      kind: "unknown",
+      raw: "mantissa:BAD:decimal",
+      safety: "unknown",
+    });
     expect(parseX2ShapeFact("exponent:5::decimal")).toEqual({
       kind: "decimal-exponent",
       mantissa: "5",
@@ -1239,8 +1244,10 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetSafety(new Set(["exponent:5::decimal"]))).toBe("errorProne");
     expect(x2ShapeFactSafety("hex-exponent:Г:BAD")).toBe("unknown");
     expect(x2ShapeFactSafety("super-exponent:FA:BAD")).toBe("unknown");
+    expect(x2ShapeFactSafety("mantissa:BAD:decimal")).toBe("unknown");
     expect(x2ShapeFactSafety("exponent:5:BAD:decimal")).toBe("unknown");
     expect(x2ShapeSetSafety(new Set(["hex-exponent:Г:BAD"]))).toBe("unknown");
+    expect(x2ShapeSetSafety(new Set(["mantissa:2:decimal", "mantissa:BAD:decimal"]))).toBe("dotSafeDecimal");
     expect(x2ShapeSetSafety(new Set(["mantissa:2:decimal", "hex:8Ж:mantissa"]))).toBe("dotSafeDecimal");
     expect(x2ShapeSetSafety(new Set(["hex:FABC:mantissa", "super:8A"]))).toBe("structuralOnly");
     expect(
@@ -1589,6 +1596,11 @@ describe("ir passes on synthetic programs", () => {
       normalizedSameAsRaw: false,
       significantDigits: 1,
       safety: "dotSafeDecimal",
+    });
+    expect(x2ShapeDataModelForFact("mantissa:BAD:decimal")).toMatchObject({
+      kind: "unknown",
+      raw: "mantissa:BAD:decimal",
+      safety: "unknown",
     });
     expect(x2ShapeDataModelForFact("hex:8.70Е2-6С:mantissa")).toMatchObject({
       kind: "mantissa",
@@ -3039,10 +3051,10 @@ describe("ir passes on synthetic programs", () => {
     const legacy: X2ValueDataflowState = {
       x: new Set(),
       x2: new Set(),
-      xShape: new Set<X2ShapeFact>(["super:8A", "super:FA", "hex:8Ж:mantissa"]),
-      x2Shape: new Set<X2ShapeFact>(["super:8A", "super:FA", "hex:8Ж:mantissa"]),
+      xShape: new Set<X2ShapeFact>(["mantissa:BAD:decimal", "super:8A", "super:FA", "hex:8Ж:mantissa"]),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:BAD:decimal", "super:8A", "super:FA", "hex:8Ж:mantissa"]),
       shapeMemory: {
-        "2": new Set<X2ShapeFact>(["super:8A", "super:FA", "hex:8Ж:mantissa"]),
+        "2": new Set<X2ShapeFact>(["mantissa:BAD:decimal", "super:8A", "super:FA", "hex:8Ж:mantissa"]),
       },
       entry: { kind: "closed" },
     };
