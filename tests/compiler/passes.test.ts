@@ -64,6 +64,7 @@ import {
   x2ShapeFactRestoredVisibleDecimal,
   x2ShapeFactSafety,
   x2RestoredDisplayShapeFacts,
+  x2RestoredDisplaySourceKeyShapeFacts,
   x2ShapeSetHasOnlyDotSafeStructuralMantissas,
   x2ShapeSetRestoredVisibleDecimals,
   x2ShapeSetsHaveSameDecimalDisplayShape,
@@ -1405,6 +1406,15 @@ describe("ir passes on synthetic programs", () => {
       "super-exponent:FA:2",
     ]);
     expect(x2ShapeStateText(x2RestoredDisplayShapeFacts(new Set(["mantissa:0.5:decimal"])))).toEqual([]);
+    expect(x2ShapeStateText(x2RestoredDisplaySourceKeyShapeFacts(new Set(["exponent:100000000:2:decimal"])))).toEqual([
+      "exponent:1:10:decimal",
+    ]);
+    expect(x2ShapeStateText(x2RestoredDisplaySourceKeyShapeFacts(new Set(["hex-exponent:Г:2"])))).toEqual([
+      "hex:Г00:mantissa",
+    ]);
+    expect(x2ShapeStateText(x2RestoredDisplaySourceKeyShapeFacts(new Set(["super-exponent:FA:2"])))).toEqual([
+      "hex:FA00:mantissa",
+    ]);
     expect(
       x2ShapeSetsHaveSameRestoredDisplayShape(
         new Set(["exponent:100:0:decimal"]),

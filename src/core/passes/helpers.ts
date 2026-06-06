@@ -7128,7 +7128,7 @@ function addVpEntryDisplaySourceKeys(
     const key = exactDecimalMantissaDisplaySourceKey(mantissa);
     if (key !== undefined) keys.add(key);
   }
-  for (const shape of restoredDisplaySourceKeyShapeFacts(shapes)) {
+  for (const shape of x2RestoredDisplaySourceKeyShapeFacts(shapes)) {
     keys.add(stableStructuralExpressionSourceKey(shape));
   }
 }
@@ -7232,7 +7232,7 @@ function canonicalX2ValueFactIfValid(fact: X2ValueFact): X2ValueFact | undefined
 }
 
 function canonicalStableShapeSourceKey(fact: X2ShapeFact): string | undefined {
-  const facts = restoredDisplaySourceKeyShapeFacts(new Set([fact]));
+  const facts = x2RestoredDisplaySourceKeyShapeFacts(new Set([fact]));
   return facts.size === 1 ? stableStructuralExpressionSourceKey([...facts][0]!) : undefined;
 }
 
@@ -7255,7 +7255,7 @@ function stableExpressionDisplayShapeSourceKeys(
 ): Set<string> {
   const keys = new Set<string>();
   const valueDecimals = normalizedDecimalValueSet(values);
-  for (const fact of restoredDisplaySourceKeyShapeFacts(shapes)) {
+  for (const fact of x2RestoredDisplaySourceKeyShapeFacts(shapes)) {
     const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
     if (decimal !== undefined && valueDecimals.has(decimal)) continue;
     keys.add(stableStructuralExpressionSourceKey(fact));
@@ -7263,7 +7263,7 @@ function stableExpressionDisplayShapeSourceKeys(
   return keys;
 }
 
-function restoredDisplaySourceKeyShapeFacts(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+export function x2RestoredDisplaySourceKeyShapeFacts(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
   const output = decimalDisplayShapeFacts(input);
   for (const fact of canonicalStructuralRestoreSourceKeyFacts(input)) output.add(fact);
   return output;
@@ -7871,10 +7871,10 @@ function sharedRestoredDisplaySourceKeys(
   xShapes: X2ShapeSet | undefined,
   x2Shapes: X2ShapeSet | undefined,
 ): Set<string> {
-  const keys = sharedStructuralRestoreSourceKeys(xShapes, x2Shapes);
-  const xDisplayShapes = decimalDisplayShapeFacts(xShapes);
-  for (const fact of decimalDisplayShapeFacts(x2Shapes)) {
-    if (xDisplayShapes.has(fact)) keys.add(stableStructuralExpressionSourceKey(fact));
+  const xSourceShapes = x2RestoredDisplaySourceKeyShapeFacts(xShapes);
+  const keys = new Set<string>();
+  for (const fact of x2RestoredDisplaySourceKeyShapeFacts(x2Shapes)) {
+    if (xSourceShapes.has(fact)) keys.add(stableStructuralExpressionSourceKey(fact));
   }
   return keys;
 }
@@ -8045,10 +8045,7 @@ function decimalMantissaShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeF
 }
 
 function restoredVpFirstDigitSourceShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
-  const output = new Set<X2ShapeFact>();
-  for (const fact of decimalDisplayShapeFacts(shapes)) output.add(fact);
-  for (const fact of x2StructuralRestoreShapeFacts(shapes)) output.add(fact);
-  return output;
+  return x2RestoredDisplayShapeFacts(shapes);
 }
 
 function mergeOptionalShapeSources(
