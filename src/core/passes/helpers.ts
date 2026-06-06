@@ -5409,8 +5409,10 @@ function transferIndirectFlowX2ValueState(
   trackRegisterMemory: boolean,
 ): X2ValueDataflowState {
   const closed = closeX2ValueEntry(input);
-  if (isStableIndirectSelector(op.register)) return closed;
-  return dropMutatedSelectorX2ValueFact(closed, op.register, trackRegisterMemory);
+  const stable = isStableIndirectSelector(op.register)
+    ? closed
+    : dropMutatedSelectorX2ValueFact(closed, op.register, trackRegisterMemory);
+  return withIndirectFlowVpSpliceSource(stable);
 }
 
 function transferIndirectConditionalX2ValueState(
@@ -5442,9 +5444,11 @@ function transferIndirectConditionalX2ValueState(
     vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, x, xShape, x2Shape, effect),
     ...cloneX2MemoryFields(closed),
   };
-  return edge === "jump" && !isStableIndirectSelector(op.register)
-    ? dropMutatedSelectorX2ValueFact(output, op.register, trackRegisterMemory)
-    : output;
+  if (edge !== "jump") return output;
+  const stable = isStableIndirectSelector(op.register)
+    ? output
+    : dropMutatedSelectorX2ValueFact(output, op.register, trackRegisterMemory);
+  return withIndirectFlowVpSpliceSource(stable);
 }
 
 function transferIndirectStoreX2ValueState(
@@ -6904,6 +6908,18 @@ function withStoreVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowSt
   };
 }
 
+function withIndirectFlowVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowState {
+  const vpEntryMantissa = vpEntryMantissasFromIndirectFlowSplice(input.x2Shape);
+  const vpEntryShape = vpEntryShapesFromIndirectFlowSplice(input.x2Shape);
+  return {
+    ...input,
+    vpEntryMantissa,
+    vpEntryShape,
+    ...(vpEntryMantissa === undefined ? {} : { vpEntryMantissaTransient: true as const }),
+    ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
+  };
+}
+
 function vpEntryMantissasFromStoreSplice(shapes: X2ShapeSet | undefined): ReadonlySet<string> | undefined {
   const mantissas = new Set<string>();
   for (const fact of shapes ?? []) {
@@ -6940,6 +6956,26 @@ function vpEntryShapesFromStoreSplice(shapes: X2ShapeSet | undefined): X2ShapeSe
   return output.size === 0 ? undefined : output;
 }
 
+function vpEntryMantissasFromIndirectFlowSplice(shapes: X2ShapeSet | undefined): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  for (const fact of shapes ?? []) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "mantissa" || model.radix !== "decimal") continue;
+    const spliced = indirectFlowVpSpliceMantissa(model);
+    if (spliced !== undefined) mantissas.add(spliced);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function vpEntryShapesFromIndirectFlowSplice(shapes: X2ShapeSet | undefined): X2ShapeSet | undefined {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+    const spliced = indirectFlowStructuralVpSpliceShapeFact(fact);
+    if (spliced !== undefined) output.add(spliced);
+  }
+  return output.size === 0 ? undefined : output;
+}
+
 function decimalStoreVpSpliceMantissa(raw: string): string | undefined {
   const canonical = canonicalShapeRaw(raw);
   if (decimalMantissaDigitCount(canonical) > 8) return undefined;
@@ -6962,6 +6998,28 @@ function decimalStoreVpSpliceMantissa(raw: string): string | undefined {
     return normalizeDecimalMantissaEntry(hasPoint ? `0.${fraction}` : "0.");
   }
   return normalizeDecimalMantissaEntry(hasPoint ? `${tail}.${fraction}` : tail);
+}
+
+function indirectFlowVpSpliceMantissa(model: X2MantissaDataModel): string | undefined {
+  if (model.radix !== "decimal" || model.digits.length === 0) return undefined;
+  const sourceDigit = indirectFlowVpFirstDigit(model);
+  const spliced = replaceFirstShapeDigit(model.canonical, sourceDigit);
+  if (spliced === undefined || decimalMantissaDigitCount(spliced) > 8) return undefined;
+  return normalizeDecimalMantissaEntry(spliced) === undefined ? undefined : spliced;
+}
+
+function indirectFlowStructuralVpSpliceShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super") || model.digits.length === 0) {
+    return undefined;
+  }
+  const spliced = replaceFirstShapeDigit(model.canonical, indirectFlowVpFirstDigit(model));
+  if (spliced === undefined || shapeDigits(spliced).length > 8) return undefined;
+  return x2MantissaShapeFactFromModel(structuralMantissaDataModel("hex", spliced, "structuralOnly"));
+}
+
+function indirectFlowVpFirstDigit(model: X2MantissaDataModel): "7" | "8" {
+  return model.digits.every((digit) => digit === "0") ? "8" : "7";
 }
 
 function negativeDecimalStoreVpSpliceMantissa(integer: string, fraction: string): string | undefined {

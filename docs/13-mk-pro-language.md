@@ -1658,7 +1658,10 @@ The pipeline currently contains:
   destroys both the restored X and the toggled X2. `ВП` is removed only when the X2 value dataflow
   still knows an open mantissa, active exponent entry, proved decimal
   `vpEntryMantissa` source, or structural hex/super `vpEntryShape` source from
-  the same general proof used by `vp-splice`. It also accepts a current
+  the same general proof used by `vp-splice`. Proved indirect jump edges seed a
+  transient source for the documented `ВП`-after-indirect-flow first-digit rule:
+  decimal X2 becomes a `7...` mantissa source, exact zero becomes `8...`, and
+  hex/super remains shape-only. It also accepts a current
   VP/X2-restore context, for example a repeated `ВП` in exponent entry or a
   `ВП` after an X2-preserving gap, when the following hard overwrite destroys
   the restored X. Structural sources outside the pinned A/B/C mantissa set are

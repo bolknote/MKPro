@@ -6673,6 +6673,74 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[3])).toBe("unknown");
   });
 
+  it("x2 value dataflow uses indirect jump as a ВП first-digit source", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x00, "0"),
+      knownTargetIndirectJump("8", 3),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2VpEntryMantissaText(states[3])).toEqual(["70"]);
+    expect(states[3]?.vpEntryMantissaTransient).toBe(true);
+    expect(x2EntryStateText(states[4])).toBe("exponent:70:");
+    expect(x2EntryStateText(states[5])).toBe("exponent:70:3");
+  });
+
+  it("x2 value dataflow uses 8 as the indirect ВП first digit for zero X2", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      knownTargetIndirectJump("8", 2),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2VpEntryMantissaText(states[2])).toEqual(["8"]);
+    expect(states[2]?.vpEntryMantissaTransient).toBe(true);
+    expect(x2EntryStateText(states[3])).toBe("exponent:8:");
+    expect(x2EntryStateText(states[4])).toBe("exponent:8:3");
+  });
+
+  it("x2 value dataflow uses indirect conditional jump edges as ВП first-digit sources", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x00, "0"),
+      knownTargetIndirectCjump("8", 5),
+      jump("done"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2VpEntryMantissaText(states[4])).toEqual(["70"]);
+    expect(x2EntryStateText(states[5])).toBe("exponent:70:");
+    expect(x2EntryStateText(states[6])).toBe("exponent:70:3");
+  });
+
+  it("x2 value dataflow uses indirect jump as a structural ВП first-digit source", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      knownTargetIndirectJump("8", 2),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2VpEntryShapeText(states[2])).toEqual(["hex:7ACE:mantissa"]);
+    expect(states[2]?.vpEntryShapeTransient).toBe(true);
+    expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["hex-exponent:7ACE:"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:7ACE:3"]);
+  });
+
   it("x2 value dataflow does not infer a ВП entry source on a conditional jump edge", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
