@@ -7,7 +7,7 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
-  knownReturnCallReturnsThroughTransparentRange,
+  knownReturnCallReturnsThroughNestedTransparentRange,
   plainPreservesXValue,
   type DirectReturnAnalysisContext,
   type IrPass,
@@ -133,7 +133,7 @@ function simpleDirectReturnPreservesX(
   call: KnownReturnCallOp,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return knownReturnCallReturnsThroughTransparentRange(ops, call, context, isXPreservingBoundaryGap);
+  return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, isXPreservingBoundaryGap);
 }
 
 const run: IrPassFn = (ops) => {

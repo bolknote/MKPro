@@ -8,7 +8,7 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
-  knownReturnCallReturnsThroughTransparentRange,
+  knownReturnCallReturnsThroughNestedTransparentRange,
   removingRecallCanExposeX2Restore,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
   x2StateHasX2RestoreContext,
@@ -191,7 +191,7 @@ function simpleDirectReturnDoesNotObserveRestore(
   call: KnownReturnCallOp,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return knownReturnCallReturnsThroughTransparentRange(ops, call, context, isRestoreTransparentLinearOp);
+  return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, isRestoreTransparentLinearOp);
 }
 
 function isRestoreTransparentLinearOp(op: IrOp): boolean {

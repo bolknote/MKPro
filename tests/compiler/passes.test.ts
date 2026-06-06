@@ -10612,6 +10612,63 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite crosses nested transparent return helpers before hard overwrite", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("outer"),
+      call("transparent"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      plain(0x0a, "."),
+      call("outer"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("outer"),
+      call("transparent"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      call("outer"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps restores before nested helpers that restore X2", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("restore"),
+      plain(0x0a, "."),
+      ret(),
+      label("outer"),
+      call("restore"),
+      ret(),
+      label("main"),
+      plain(0x0d, "Cx"),
+      plain(0x0a, "."),
+      call("outer"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-dead-restore-before-overwrite keeps restores before helpers that restore X2", () => {
     const program: IrOp[] = [
       jump("main"),
@@ -17684,6 +17741,43 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes an empty run before nested transparent return helpers and ВП", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("outer"),
+      call("transparent"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x55, "К1"),
+      call("outer"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("outer"),
+      call("transparent"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      call("outer"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice keeps an empty run before return helpers that restore X2", () => {
     const program: IrOp[] = [
       jump("main"),
@@ -17694,6 +17788,29 @@ describe("ir passes on synthetic programs", () => {
       plain(0x02, "2"),
       plain(0x55, "К1"),
       call("restore"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-splice keeps an empty run before nested return helpers that restore X2", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("restore"),
+      plain(0x0a, "."),
+      ret(),
+      label("outer"),
+      call("restore"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x55, "К1"),
+      call("outer"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),
@@ -19017,6 +19134,45 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-x2-peephole removes К {x} after a proved boundary through nested transparent return helpers", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      store("2"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("outer"),
+      call("noop"),
+      ret(),
+      label("main"),
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
+      call("outer"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      store("2"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("outer"),
+      call("noop"),
+      ret(),
+      label("main"),
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "ordinary X2 restore boundary" } },
+      call("outer"),
+      halt(),
+    ]);
+  });
+
   it("vp-x2-peephole keeps К {x} after direct-return helpers that change X", () => {
     const program: IrOp[] = [
       jump("main"),
@@ -19028,6 +19184,29 @@ describe("ir passes on synthetic programs", () => {
       plain(0x20, "F pi"),
       { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
       call("load"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-x2-peephole keeps К {x} after nested return helpers that change X", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("load"),
+      plain(0x20, "F pi"),
+      ret(),
+      label("outer"),
+      call("load"),
+      ret(),
+      label("main"),
+      recall("1"),
+      plain(0x20, "F pi"),
+      { kind: "plain", opcode: 0x0c, meta: { mnemonic: "ВП", comment: "mantissa splice" } },
+      call("outer"),
       plain(0x35, "К {x}"),
       halt(),
     ];

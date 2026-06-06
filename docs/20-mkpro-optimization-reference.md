@@ -755,10 +755,10 @@ Display rewrites are separated into strategy selection + body lowering.
   already synchronized the same value into X2; the non-fallthrough edge remains
   governed by ordinary liveness/DSE and does not create an X2 sync proof.
   Counted-loop crossings are refused when the scratch register is the loop
-  counter being decremented. It may also cross a simple direct `ПП` when the
-  callee reaches `В/О` linearly and does not touch the scratch register; nested
-  flow, unknown indirect memory access, or another entry label keeps the call
-  as a barrier.
+  counter being decremented. It may also cross direct/proved-indirect `ПП`
+  helper chains when every nested callee reaches `В/О` without touching the
+  scratch register; unknown indirect memory access, recursive helper cycles, or
+  another entry label keeps the call as a barrier.
   This exposes the scratch
   register store to ordinary DSE instead of
   requiring a membership-specific lowering; repeated reads of loop/state
@@ -768,9 +768,10 @@ Display rewrites are separated into strategy selection + body lowering.
   visible `X` result is immediately overwritten by a hard X/X2 replacement
   command. Consecutive same-segment restores and free-standing separators are
   removed as one run, while labels split the removable run. The overwrite
-  search may cross a simple direct `ПП` helper that reaches `В/О` linearly
-  through only restore-transparent empty/address cells; helpers that restore
-  X2, store X, consume stack, branch, or expose another entry remain barriers.
+  search may cross direct/proved-indirect `ПП` helper chains that reach `В/О`
+  through only nested transparent helper calls and restore-transparent
+  empty/address cells; helpers that restore X2, store X, consume stack, branch,
+  recurse, or expose another entry remain barriers.
   The proof uses
   decimal X2 value facts for `.`/`/-/` and mantissa/exponent-entry state for
   `ВП`; structural hex/super `ВП` sources are accepted only as shape facts,
@@ -1246,8 +1247,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     can make `.` signal `ЕГГ0Г`. `/-/` may also be removed from open mantissa, active
     exponent-entry, or VP/X2 restore contexts because the following hard
     overwrite destroys both the restored X and the toggled X2. The following
-    hard overwrite may sit after a simple direct-return helper only when that
-    helper is restore-transparent; display-sensitive separator cells are not
+    hard overwrite may sit after a direct/proved-indirect return-helper chain
+    only when every nested helper is restore-transparent; display-sensitive separator cells are not
     transparent and are not removed from a same-segment dead restore run. A direct `П->X r` or proved stable-indirect
     `К П->X R7..Re` is treated as the same kind of dead X/X2 restore before a
     hard overwrite, but only when the shared stack-exposure proof shows that
@@ -1378,9 +1379,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     the same marker-label/display-sensitive/role safety rules before deciding that a
     `КНОП`/`К1`/`К2`/`/-/` run, including an empty-only run, can be ignored
     before `ВП`. With a direct-return context, the same scanner can cross
-    simple direct or proved-indirect `ПП` helpers whose body is only restore-transparent
-    empty/address cells; helpers that store, branch, restore X2, or expose
-    another entry remain barriers. The non-zero open/closed mantissa sign-pair
+    direct or proved-indirect `ПП` helper chains whose bodies are only nested
+    transparent helper calls and restore-transparent empty/address cells;
+    helpers that store, branch, restore X2, recurse, or expose another entry
+    remain barriers. The non-zero open/closed mantissa sign-pair
     proof before `ВП` uses the same transparent-helper crossing, so it is no
     longer limited to an immediately adjacent `ВП`; mixed shape-only structural
     restore runs (`/-/` plus empty cells before a structural `ВП` source) use
@@ -1391,9 +1393,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     be dropped before a fresh digit (`5 ВП 3 Fπ /-/ 4`,
     `5 ВП 3 Fπ /-/ КНОП 4`, `5 ВП 3 Fπ /-/ /-/ КНОП 4`), because that digit
     starts new number entry and discards the restored `X`; labels inside the
-    run are preserved. The fresh-digit proof can cross the same simple direct
-    or proved-indirect `ПП` helper shape when the helper reaches `В/О` through
-    only restore-transparent empty/address cells, because the helper cannot
+    run are preserved. The fresh-digit proof can cross the same direct or
+    proved-indirect `ПП` helper-chain shape when every nested helper reaches
+    `В/О` through only restore-transparent empty/address cells, because the helper cannot
     observe the restored `X` and the following digit starts fresh entry. The
     same kind of restore run is likewise removed before a proved hard X/X2
     overwrite such as `Cx`, including across that transparent return-helper
@@ -1436,7 +1438,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     lives in both visible `X` and hidden X2, not merely because a transient
     store-splice tail exists.
 28. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
-29. `vp-x2-peephole` — removes redundant `К {x}` that follows a compiler-owned `ВП`/X2 marker, display or ordinary, possibly through free-standing `КНОП`/`К1`/`К2` empty ops, other role-free X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and simple direct-return helpers whose body also preserves X, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; the preceding `ВП` must carry a boundary marker because a plain opcode pattern such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}` redundant. The same pass also uses X2 value/shape dataflow to remove a role-free, non-display `К {x}` when closed-context `X` is proved to be an already-fractional decimal (`0`, `0.x`, or `-0.x`), including exact decimal display-shape facts that remain shape-only. Since `К {x}` preserves hidden X2, this no-op proof does not require hidden X2 to match visible `X`; a later context-sensitive `.`, `/-/`, or `ВП` is allowed after a preserving executable gap because the restore's previous-command context is unchanged. Negative-integer `К {x}` is handled through the same visible-zero proof, but the first signed-zero-producing `К {x}` is kept if a later X2 sync can feed a context-sensitive restore; only repeated no-op fractional operations after visible zero is already proved may be removed. Immediate restore boundaries remain conservative unless a separate VP/source proof covers them.
+29. `vp-x2-peephole` — removes redundant `К {x}` that follows a compiler-owned `ВП`/X2 marker, display or ordinary, possibly through free-standing `КНОП`/`К1`/`К2` empty ops, other role-free X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and direct/proved-indirect return-helper chains whose bodies also preserve X, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; the preceding `ВП` must carry a boundary marker because a plain opcode pattern such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}` redundant. The same pass also uses X2 value/shape dataflow to remove a role-free, non-display `К {x}` when closed-context `X` is proved to be an already-fractional decimal (`0`, `0.x`, or `-0.x`), including exact decimal display-shape facts that remain shape-only. Since `К {x}` preserves hidden X2, this no-op proof does not require hidden X2 to match visible `X`; a later context-sensitive `.`, `/-/`, or `ВП` is allowed after a preserving executable gap because the restore's previous-command context is unchanged. Negative-integer `К {x}` is handled through the same visible-zero proof, but the first signed-zero-producing `К {x}` is kept if a later X2 sync can feed a context-sensitive restore; only repeated no-op fractional operations after visible zero is already proved may be removed. Immediate restore boundaries remain conservative unless a separate VP/source proof covers them.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
 31. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
 32. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
