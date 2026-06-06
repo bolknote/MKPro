@@ -4023,6 +4023,36 @@ describe("ir passes on synthetic programs", () => {
       .not.toContain("decimal:0.5:normalized");
   });
 
+  it("x2 value dataflow treats closed single-hex exponent mantissas as exponent operands", () => {
+    const closedExponentOperand: X2ValueDataflowState = {
+      y: new Set(),
+      x: new Set<X2ValueFact>(["decimal:5:normalized"]),
+      x2: new Set(),
+      yShape: new Set<X2ShapeFact>(["hex:0.0Г:mantissa"]),
+      xShape: new Set<X2ShapeFact>(["mantissa:5:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const ambiguousTail: X2ValueDataflowState = {
+      ...closedExponentOperand,
+      yShape: new Set<X2ShapeFact>(["hex:0.0Г0:mantissa"]),
+    };
+    const positiveShift: X2ValueDataflowState = {
+      ...closedExponentOperand,
+      yShape: new Set<X2ShapeFact>(["hex:Г00:mantissa"]),
+    };
+
+    const result = transferX2ValueStateForEdge(closedExponentOperand, plain(0x12, "×"), "normal", {}, 0);
+    const rejected = transferX2ValueStateForEdge(ambiguousTail, plain(0x12, "×"), "normal", {}, 0);
+    const positiveRejected = transferX2ValueStateForEdge(positiveShift, plain(0x12, "×"), "normal", {}, 0);
+
+    expect(x2ValueStateText(result?.x) ?? []).toContain("decimal:0.53:normalized");
+    expect(x2ValueStateText(result?.x) ?? [])
+      .not.toContain("expr-key:12(decimal:5:normalized,shape:hex:0.0Г:mantissa)");
+    expect(x2ShapeStateText(result?.xShape)).toEqual(["exponent:5.3:-1:decimal"]);
+    expect(x2ValueStateText(rejected?.x) ?? []).not.toContain("decimal:0.53:normalized");
+    expect(x2ValueStateText(positiveRejected?.x) ?? []).not.toContain("decimal:0.53:normalized");
+  });
+
   it("x2 value dataflow preserves hex exponent multiply display shape for VP source", () => {
     const program: IrOp[] = [
       recall("2", "preload const 1"),

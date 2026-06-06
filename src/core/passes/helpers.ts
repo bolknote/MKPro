@@ -1225,21 +1225,43 @@ function structuralSingleHexExponentOperands(shapes: X2ShapeSet | undefined): St
   const output = new Map<string, StructuralHexExponentOperand>();
   for (const fact of canonicalStructuralShapeFacts(shapes)) {
     const model = x2ShapeDataModelForFact(fact);
-    if (
-      model.kind !== "exponent-entry" ||
-      model.mantissa.radix !== "hex" ||
-      model.mantissa.sign !== "" ||
-      model.mantissa.hasDecimalPoint ||
-      model.mantissa.digits.length !== 1
-    ) {
-      continue;
-    }
-    const digit = structuralHexNibbleValue(model.mantissa.digits[0]!);
-    const exponent = canonicalExponentShapeRaw(model.exponentRaw);
-    if (digit === undefined || exponent === undefined) continue;
+    const operand = structuralSingleHexExponentOperandFromShapeModel(model);
+    if (operand === undefined) continue;
+    const { digit, exponent } = operand;
     output.set(`${digit}:${exponent}`, { digit, exponent });
   }
   return [...output.values()];
+}
+
+function structuralSingleHexExponentOperandFromShapeModel(
+  model: X2ShapeDataModel,
+): StructuralHexExponentOperand | undefined {
+  if (
+    model.kind === "exponent-entry" &&
+    model.mantissa.radix === "hex" &&
+    model.mantissa.sign === "" &&
+    !model.mantissa.hasDecimalPoint &&
+    model.mantissa.digits.length === 1
+  ) {
+    const digit = structuralHexNibbleValue(model.mantissa.digits[0]!);
+    const exponent = canonicalExponentShapeRaw(model.exponentRaw);
+    if (digit === undefined || exponent === undefined) return undefined;
+    return { digit, exponent };
+  }
+  if (model.kind !== "mantissa" || model.radix !== "hex" || model.sign !== "") return undefined;
+  const integer = /^([A-FА-Я])(0*)$/u.exec(model.canonical);
+  if (integer !== null) {
+    const digit = structuralHexNibbleValue(integer[1]!);
+    if (digit === undefined) return undefined;
+    return { digit, exponent: String(integer[2]!.length) };
+  }
+  const fraction = /^0\.(0*)([A-FА-Я])$/u.exec(model.canonical);
+  if (fraction !== null) {
+    const digit = structuralHexNibbleValue(fraction[2]!);
+    if (digit === undefined) return undefined;
+    return { digit, exponent: `-${fraction[1]!.length + 1}` };
+  }
+  return undefined;
 }
 
 function structuralHexDigitPlusDecimalValue(leftDigit: number, right: string): string | undefined {

@@ -885,10 +885,15 @@ Display rewrites are separated into strategy selection + body lowering.
   expansion, and the normalized result fits the eight-significant-digit
   machine-mantissa proof bound. Integer trailing zeroes may be carried as an
   exact scientific exponent shift without creating an ordinary mantissa display
-  shape. Wider products/quotients, division by zero, non-terminating division,
-  irrational square roots, fractional powers of ten, remaining non-zero powers,
-  hardware-rounded sexagesimal conversions, and non-decimal cases remain
-  structural/opaque rather than pretending to be an ordinary decimal value.
+  shape. The structural hex exponent arithmetic also recognizes the strict
+  closed single-nibble forms produced by the same shape algebra (`Г`, `Г00`,
+  `0.Г`, `0.0Г`) as exponent operands, but only the already pinned table cases
+  are folded; signed, multi-nibble, trailing-tail, and unsupported-exponent
+  forms remain structural. Wider products/quotients, division by zero,
+  non-terminating division, irrational square roots, fractional powers of ten,
+  remaining non-zero powers, hardware-rounded sexagesimal conversions, and
+  non-decimal cases remain structural/opaque rather than pretending to be an
+  ordinary decimal value.
   Later passes can therefore distinguish visible no-op
   integer/fraction/sign transforms and exact arithmetic transforms from
   observable hidden-X2 restores.
