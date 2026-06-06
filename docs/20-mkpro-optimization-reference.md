@@ -819,6 +819,10 @@ Display rewrites are separated into strategy selection + body lowering.
   restored-visible normalization feeds concrete pure unary/binary decimal
   results, but it does not make the raw mantissa shape dot-safe and does not
   promote it to a `ВП` display-shape proof.
+  Closed-context `/-/` states that produce a decimal mantissa also record that
+  mantissa as an explicit `ВП` sign source; path-sensitive preserving branch
+  edges can carry this source onward for a later `/-/ ВП` without promoting the
+  same edge into an ordinary `ВП` entry source.
   The documented `F pi` stack producer seeds the stable `expr-key:20()`,
   the hardware decimal constant `3.1415926`, and its display shape
   `mantissa:3.1415926:decimal`. Emulator-verified exact

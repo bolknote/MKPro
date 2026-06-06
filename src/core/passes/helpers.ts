@@ -7341,6 +7341,7 @@ function signChangeClosedDecimalState(
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
+    vpEntrySignMantissa: vpEntryMantissasFromValueFacts(values),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
   };
@@ -7439,6 +7440,7 @@ function signChangedClosedDecimalExponentShapeState(
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntryMantissa: mantissas,
+    vpEntrySignMantissa: mantissas.size === 0 ? undefined : mantissas,
     vpEntryShape: vpEntryShapesFromShapeFacts(shapes),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
@@ -7775,6 +7777,7 @@ function x2ValueStateFromMantissaShapes(
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntryMantissa: mantissas,
+    vpEntrySignMantissa: mantissas,
     memory,
     shapeMemory,
   };

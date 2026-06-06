@@ -5885,6 +5885,35 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[10])).toBe("exponent:-02:3");
   });
 
+  it("x2 value dataflow preserves closed sign-change sources on conditional jump edges", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      plain(0x0b, "/-/"),
+      cjump("target"),
+      jump("done"),
+      label("target"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      jump("end"),
+      label("done"),
+      halt(),
+      label("end"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2VpEntryMantissaText(states[5])).toEqual(["-02"]);
+    expect(x2VpEntrySignMantissaText(states[5])).toEqual(["-02"]);
+    expect(x2VpEntryMantissaText(states[8])).toBeUndefined();
+    expect(x2VpEntrySignMantissaText(states[8])).toEqual(["-02"]);
+    expect(x2EntryStateText(states[10])).toBe("exponent:02:");
+    expect(x2EntryStateText(states[11])).toBe("exponent:02:3");
+  });
+
   it("x2 value dataflow carries a closed decimal ВП sync through empty op gaps", () => {
     const throughEmpty: IrOp[] = [
       plain(0x02, "2"),
