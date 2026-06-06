@@ -1330,7 +1330,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     closes to a mantissa whose first significant nibble is `D`/`Е`, a following
     `.` reached through at most one role-free X2-preserving non-empty command
     can be removed when its result is immediately overwritten; this does not
-    turn the shape into a general dot-safe value. `super:*` is narrower than `hex:*`: only optional-sign
+    turn the shape into a general dot-safe value. `ВП /-/` is modeled as a
+    signed exponent restore that materializes decimal value/display facts or
+    structural exponent shapes in `X` and hidden X2 while preserving the active
+    VP context; a later empty-op `ВП` can therefore splice a fresh first digit
+    into the same signed order. `super:*` is narrower than `hex:*`: only optional-sign
     `F[A-F]` slot forms
     stay in the super lattice; other structural displays stay hex-only or
     unknown. Set-level shape proofs first canonicalize and drop invalid shape

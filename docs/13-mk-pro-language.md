@@ -1365,7 +1365,10 @@ The pipeline currently contains:
   ordinary display digit. The `ВП .` structural exception is tracked separately:
   a `D`/`Е` first significant nibble after active structural `ВП` context can
   make a following `.` non-erroring through a very short X2-preserving gap, but
-  it is not promoted to a general dot-safe value. The documented `F pi` stack producer also seeds the
+  it is not promoted to a general dot-safe value. `ВП /-/` materializes the
+  signed exponent display in `X`/X2 while keeping VP context active; after a
+  preserving command plus an empty op, a following `ВП` can reuse that signed
+  order with a fresh first digit. The documented `F pi` stack producer also seeds the
   hardware decimal constant `3.1415926`, its stable expression key, and the
   display shape `mantissa:3.1415926:decimal`.
   Emulator-verified special values for documented functions are modeled only

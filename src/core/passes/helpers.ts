@@ -5032,12 +5032,14 @@ function transferPlainX2ValueState(
       effect,
       input.xShape,
       input.x2Shape,
+      input.vpContext?.kind === "exponent",
     ),
     vpEntryMantissaTransient: transferPlainX2VpEntryMantissaTransientState(
       op,
       effect,
       input.xShape,
       input.x2Shape,
+      input.vpContext?.kind === "exponent",
     ),
     vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
     vpEntrySignShape: transferPlainX2VpEntrySignShapeState(input, op, x, x2, xShape, x2Shape, effect),
@@ -5306,34 +5308,12 @@ function transferSignChangeX2ValueState(
     return x2ValueStateFromExponentEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
   }
   if (input.entry.kind === "closed" && input.structuralVpContext?.kind === "exponent") {
-    return {
-      x: new Set(),
-      y: cloneOptionalValueSet(input.y),
-      x2: new Set(),
-      xShape: new Set(),
-      yShape: cloneOptionalShapeSet(input.yShape),
-      x2Shape: new Set(),
-      entry: closedX2EntryState(),
-      vpContext: noneX2VpContextState(),
-      structuralEntry: noneX2StructuralEntryState(),
-      structuralVpContext: signChangeStructuralExponentEntry(input.structuralVpContext),
-      ...cloneX2MemoryFields(input),
-    };
+    const context = signChangeStructuralExponentEntry(input.structuralVpContext);
+    return x2ValueStateFromSignedStructuralVpContext(input, context);
   }
   if (input.entry.kind === "closed" && input.vpContext?.kind === "exponent") {
-    return {
-      x: new Set(),
-      y: cloneOptionalValueSet(input.y),
-      x2: new Set(),
-      xShape: new Set(),
-      yShape: cloneOptionalShapeSet(input.yShape),
-      x2Shape: new Set(),
-      entry: closedX2EntryState(),
-      vpContext: signChangeVpContext(input.vpContext),
-      structuralEntry: noneX2StructuralEntryState(),
-      structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
-      ...cloneX2MemoryFields(input),
-    };
+    const context = signChangeVpContext(input.vpContext);
+    return x2ValueStateFromSignedDecimalVpContext(input, context);
   }
   if (input.entry.kind === "closed" && (input.vpContext === undefined || input.vpContext.kind === "none")) {
     const state = signChangeClosedDecimalState(input, producerIndex);
@@ -5421,6 +5401,20 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
   if (input.structuralEntry?.kind === "exponent") {
     return x2ValueStateFromStructuralExponentEntry(
       input.structuralEntry,
+      input.memory,
+      input.shapeMemory,
+      input.y,
+      input.yShape,
+    );
+  }
+  if (
+    input.entry.kind === "closed" &&
+    input.vpContext?.kind === "exponent" &&
+    input.vpEntryMantissa !== undefined
+  ) {
+    const entry = x2EntryStateFromExponentParts(input.vpEntryMantissa, input.vpContext.exponent);
+    if (entry.kind === "exponent") return x2ValueStateFromExponentEntry(
+      entry,
       input.memory,
       input.shapeMemory,
       input.y,
@@ -5814,6 +5808,7 @@ function transferPlainX2VpEntryMantissaState(
   effect: ReturnType<typeof plainX2Effect>,
   firstDigitSourceShape: X2ShapeSet | undefined = xShape,
   firstDigitTargetShape: X2ShapeSet | undefined = x2Shape,
+  includeExponentTargets = false,
 ): ReadonlySet<string> | undefined {
   if (effect === "affects") return sharedDecimalVpEntryMantissas({ x, x2, xShape, x2Shape });
   if (effect === "preserves") {
@@ -5822,7 +5817,7 @@ function transferPlainX2VpEntryMantissaState(
       : undefined;
     return mergeOptionalStringSources(
       inherited,
-      decimalFirstDigitVpSpliceMantissas(firstDigitSourceShape, firstDigitTargetShape),
+      decimalFirstDigitVpSpliceMantissas(firstDigitSourceShape, firstDigitTargetShape, includeExponentTargets),
     );
   }
   return undefined;
@@ -5833,11 +5828,15 @@ function transferPlainX2VpEntryMantissaTransientState(
   effect: ReturnType<typeof plainX2Effect>,
   firstDigitSourceShape: X2ShapeSet | undefined,
   firstDigitTargetShape: X2ShapeSet | undefined,
+  includeExponentTargets = false,
 ): true | undefined {
   if (effect !== "preserves" || isEmptyPlainOp(op)) return undefined;
-  return decimalFirstDigitVpSpliceMantissas(firstDigitSourceShape, firstDigitTargetShape) === undefined
-    ? undefined
-    : true;
+  const spliced = decimalFirstDigitVpSpliceMantissas(
+    firstDigitSourceShape,
+    firstDigitTargetShape,
+    includeExponentTargets,
+  );
+  return spliced === undefined ? undefined : true;
 }
 
 function transferPlainX2VpEntrySignMantissaState(
@@ -8256,10 +8255,11 @@ function structuralFirstDigitVpSpliceShapeFacts(
 function decimalFirstDigitVpSpliceMantissas(
   xShape: X2ShapeSet | undefined,
   x2Shape: X2ShapeSet | undefined,
+  includeExponentTargets = false,
 ): ReadonlySet<string> | undefined {
   const mantissas = new Set<string>();
   const sources = restoredVpFirstDigitSourceShapeFacts(xShape);
-  const targets = decimalMantissaShapeFacts(x2Shape);
+  const targets = decimalVpFirstDigitSpliceTargetShapeFacts(x2Shape, includeExponentTargets);
   for (const source of sources) {
     const sourceDigit = x2FirstMantissaDigitFromShapeFact(source);
     if (sourceDigit === undefined || !/^[0-9]$/u.test(sourceDigit)) continue;
@@ -8269,6 +8269,21 @@ function decimalFirstDigitVpSpliceMantissas(
     }
   }
   return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function decimalVpFirstDigitSpliceTargetShapeFacts(
+  shapes: X2ShapeSet | undefined,
+  includeExponentTargets: boolean,
+): Set<X2ShapeFact> {
+  const output = decimalMantissaShapeFacts(shapes);
+  if (!includeExponentTargets) return output;
+  for (const fact of shapes ?? []) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "exponent-entry" || model.mantissa.radix !== "decimal") continue;
+    const mantissa = x2MantissaShapeFactFromModel(model.mantissa);
+    if (mantissa !== undefined) output.add(mantissa);
+  }
+  return output;
 }
 
 function decimalFirstDigitVpSpliceMantissa(
@@ -8512,6 +8527,43 @@ function x2ValueStateFromStructuralExponentEntry(
   };
 }
 
+function x2ValueStateFromSignedStructuralVpContext(
+  input: X2ValueDataflowState,
+  context: X2StructuralEntryState,
+): X2ValueDataflowState {
+  if (context.kind !== "exponent") {
+    return {
+      x: new Set(),
+      y: cloneOptionalValueSet(input.y),
+      x2: new Set(),
+      xShape: new Set(),
+      yShape: cloneOptionalShapeSet(input.yShape),
+      x2Shape: new Set(),
+      entry: closedX2EntryState(),
+      vpContext: noneX2VpContextState(),
+      structuralEntry: noneX2StructuralEntryState(),
+      structuralVpContext: cloneX2StructuralEntryState(context),
+      ...cloneX2MemoryFields(input),
+    };
+  }
+  const shapes = structuralExponentEntryShapeFacts(context);
+  return {
+    x: new Set(),
+    y: cloneOptionalValueSet(input.y),
+    x2: new Set(),
+    xShape: new Set(shapes),
+    yShape: cloneOptionalShapeSet(input.yShape),
+    x2Shape: new Set(shapes),
+    entry: closedX2EntryState(),
+    vpContext: noneX2VpContextState(),
+    structuralEntry: noneX2StructuralEntryState(),
+    structuralVpContext: x2StructuralContextFromEntry(context),
+    vpEntryShape: vpEntryShapesFromShapeFacts(shapes),
+    vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapes),
+    ...cloneX2MemoryFields(input),
+  };
+}
+
 function x2ValueStateFromExponentEntry(
   input: X2EntryState,
   memory: X2ValueMemory | undefined = undefined,
@@ -8552,6 +8604,61 @@ function x2ValueStateFromExponentEntry(
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapes),
     ...cloneX2MemoryFields({ memory, shapeMemory }),
+  };
+}
+
+function x2ValueStateFromSignedDecimalVpContext(
+  input: X2ValueDataflowState,
+  context: X2VpContextState,
+): X2ValueDataflowState {
+  if (context.kind !== "exponent") {
+    return {
+      x: new Set(),
+      y: cloneOptionalValueSet(input.y),
+      x2: new Set(),
+      xShape: new Set(),
+      yShape: cloneOptionalShapeSet(input.yShape),
+      x2Shape: new Set(),
+      entry: closedX2EntryState(),
+      vpContext: cloneX2VpContextState(context),
+      structuralEntry: noneX2StructuralEntryState(),
+      structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
+      ...cloneX2MemoryFields(input),
+    };
+  }
+  const entry = x2EntryStateFromExponentParts(context.mantissa, context.exponent);
+  if (entry.kind !== "exponent") {
+    return {
+      x: new Set(),
+      y: cloneOptionalValueSet(input.y),
+      x2: new Set(),
+      xShape: new Set(),
+      yShape: cloneOptionalShapeSet(input.yShape),
+      x2Shape: new Set(),
+      entry: closedX2EntryState(),
+      vpContext: cloneX2VpContextState(context),
+      structuralEntry: noneX2StructuralEntryState(),
+      structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
+      ...cloneX2MemoryFields(input),
+    };
+  }
+  const values = closedExponentEntryDecimalFacts(entry);
+  const shapes = closedExponentEntryShapeFacts(entry);
+  return {
+    x: new Set(values),
+    y: cloneOptionalValueSet(input.y),
+    x2: new Set(values),
+    xShape: new Set(shapes),
+    yShape: cloneOptionalShapeSet(input.yShape),
+    x2Shape: new Set(shapes),
+    entry: closedX2EntryState(),
+    vpContext: x2VpContextFromExponentEntry(entry),
+    structuralEntry: noneX2StructuralEntryState(),
+    structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
+    vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
+    vpEntryShape: vpEntryShapesFromShapeFacts(shapes),
+    vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapes),
+    ...cloneX2MemoryFields(input),
   };
 }
 

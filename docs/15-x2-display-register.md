@@ -116,7 +116,11 @@ exception without promoting it to ordinary dot safety: when the active
 structural `ВП` context closes to a mantissa whose first significant nibble is
 `D`/`Е`, `.` may be treated as non-erroring through zero or one role-free
 X2-preserving non-empty command, plus free-standing empty commands. Other
-hex/super contexts stay structural-only. Use only with a tested state table.
+hex/super contexts stay structural-only. The optimizer also materializes
+`ВП /-/` as a signed exponent restore: the signed decimal or structural
+exponent display becomes the current `X`/hidden `X2` shape while the VP context
+remains active, so a later empty-op `ВП` can re-enter the same signed order with
+a newly proved first digit. Use only with a tested state table.
 
 ## Error and Overflow Timing
 
