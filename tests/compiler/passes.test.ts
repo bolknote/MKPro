@@ -1010,7 +1010,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[6]?.xShape)).toEqual(["hex-exponent:Г00:3"]);
   });
 
-  it("x2 value dataflow exposes exact decimal exponent display sync as a shape-only VP source", () => {
+  it("x2 value dataflow exposes exact decimal exponent display sync as a VP source", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
       plain(0x0c, "ВП"),
@@ -1025,6 +1025,7 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["exponent:1:8:decimal"]);
     expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["exponent:1:8:decimal"]);
+    expect(x2ValueStateText(states[4]?.x2)).toContain("decimal:100000000:normalized");
     expect(x2VpEntryShapeText(states[4])).toEqual([]);
     expect(x2VpEntryMantissaText(states[4])).toEqual(["100000000"]);
     expect(activeExponent).toMatchObject({
@@ -1040,6 +1041,23 @@ describe("ir passes on synthetic programs", () => {
       "exponent:1:11:decimal",
     ]);
     expect(x2ValueStateText(states[6]?.x2)).toEqual([]);
+  });
+
+  it("x2 value dataflow restores synced exact decimal display shapes through dot", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[3]?.x2)).toEqual([]);
+    expect(x2ShapeStateText(states[3]?.x2Shape)).toEqual(["exponent:1:8:decimal"]);
+    expect(x2ValueStateText(states[4]?.x2)).toContain("decimal:100000000:normalized");
+    expect(x2ValueStateText(states[5]?.x)).toContain("decimal:100000000:normalized");
   });
 
   it("x2 value dataflow derives VP mantissa sources from conditional structural X2 syncs", () => {
@@ -5105,6 +5123,20 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(hiddenValueRaw?.xShape)).toEqual([]);
   });
 
+  it("x2 value dataflow creates decimal value facts from display shapes on return X2 sync", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:1:8:decimal"]),
+      x2Shape: new Set(),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(state, ret(), "normal");
+
+    expect(x2ValueStateText(result?.x2)).toContain("decimal:100000000:normalized");
+    expect(x2ShapeStateText(result?.x2Shape)).toEqual(["exponent:1:8:decimal"]);
+  });
+
   it("x2 value dataflow sign-changes decimal X2 shapes with visible decimal values", () => {
     const dotSafeShapeAndValue: X2ValueDataflowState = {
       x: new Set<X2ValueFact>(["decimal:2:normalized"]),
@@ -6632,6 +6664,23 @@ describe("ir passes on synthetic programs", () => {
     expect(states[2]?.vpEntryShapeTransient).toBe(true);
     expect(x2VpEntryShapeText(states[3])).toEqual(["hex:8.70Е2-6С:mantissa"]);
     expect(x2VpEntryShapeText(states[5])).toEqual([]);
+  });
+
+  it("x2 value dataflow creates decimal value facts from display shapes on conditional X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      cjump("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ShapeStateText(states[3]?.x2Shape)).toEqual(["exponent:1:8:decimal"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual([]);
+    expect(x2ValueStateText(states[4]?.x2)).toContain("decimal:100000000:normalized");
   });
 
   it("x2 value dataflow creates structural VP-entry shape on loop fallthrough X2 sync", () => {

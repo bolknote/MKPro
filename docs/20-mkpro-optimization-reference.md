@@ -1161,7 +1161,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     from a raw decimal X2 value such as `decimal:02:unnormalized` seeds the next
     `ВП` mantissa source from its restored visible value (`2`), while the raw
     display shape remains separate metadata and is not promoted into a general
-    display-shape proof. Direct conditional jump edges that preserve X2 remain
+    display-shape proof. Exact decimal display shapes can become normalized
+    value facts only at a real X2-sync boundary: plain X2-affecting commands,
+    branch-specific conditional syncs, and direct `В/О` returns copy the proved
+    visible decimal display value into hidden X2, while active exponent-entry
+    forms still remain shape-only. Direct conditional jump edges that preserve X2 remain
     conservative for ordinary `ВП` sources, but they carry the explicit raw
     decimal sign-source plus exact decimal display-shape and structural
     sign-shape metadata used by a following closed-context `/-/ ВП` sequence.

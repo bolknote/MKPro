@@ -1325,7 +1325,11 @@ The pipeline currently contains:
   exact exponent display-shape proofs in either direction. When hidden X2 is
   only the display shape, this still produces signed display-shape metadata plus
   the stable expression key, not a dot-safe hidden decimal value; when hidden
-  X2 is already a normalized decimal value, the signed value stays dot-safe. The
+  X2 is already a normalized decimal value, the signed value stays dot-safe.
+  An actual X2-syncing command is the boundary that can promote an exact
+  decimal display shape into a normalized hidden value: after `1 ВП 8 F0`,
+  hidden X2 carries `decimal:100000000:normalized` as well as the scientific
+  display shape, while the still-active `1 ВП 8` entry does not. The
   older raw-X2 path still preserves
   leading-zero hidden forms such as visible `2` with hidden `02`; a visible
   normalized decimal value may prove the sign source, but the hidden X2 fact
