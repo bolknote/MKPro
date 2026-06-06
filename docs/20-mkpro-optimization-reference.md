@@ -1241,7 +1241,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `В/О` return, and refuses display/raw/context-sensitive follow-up
     `.`/`/-/`/`ВП` cases. The context-sensitive follow-up check uses the shared
     CFG-aware X2 exposure walker: direct and proved-indirect branches are
-    followed path-sensitively, while opaque flow remains conservative.
+    followed path-sensitively, while opaque flow remains conservative. The
+    VP-source escape keeps ordinary mantissa sources and sign mantissa sources
+    as separate key sets, so a raw decimal dot restore can expose visible
+    mantissa `2` for `ВП` while still proving that a following sign-gap `/-/ ВП`
+    sees the raw sign source `02`.
 18. `x2-dead-restore-before-overwrite` — removes a safe context-sensitive
     `.`/`/-/`/`ВП` restore, plus adjacent free-standing `КНОП`/`К1`/`К2`
     separators, when a following hard X/X2 overwrite such as `Cx` destroys the

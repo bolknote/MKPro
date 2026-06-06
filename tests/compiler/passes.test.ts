@@ -1677,6 +1677,15 @@ describe("ir passes on synthetic programs", () => {
       xShape: new Set<X2ShapeFact>(["mantissa:0.5:decimal"]),
       x2Shape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
     };
+    const rawLeadingZeroSignSource = {
+      ...base,
+      vpEntrySignMantissa: new Set(["02"]),
+    };
+    const dotRestoredLeadingZeroSource = {
+      ...base,
+      vpEntryMantissa: new Set(["2"]),
+      vpEntrySignMantissa: new Set(["02"]),
+    };
 
     expect(x2StatesHaveSameVpEntrySource(exactMantissaSource, exactExponentDisplaySource)).toBe(true);
     expect(x2StatesHaveSameVpEntrySignSource(signSource, exactExponentDisplaySource)).toBe(true);
@@ -1684,6 +1693,8 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StatesHaveSameVpEntrySignSource(mixedDisplaySignSource, exactFractionDisplaySource)).toBe(true);
     expect(x2StatesHaveSameVpEntrySignSource(rawFractionSignSource, exactFractionDisplaySource)).toBe(false);
     expect(x2StatesHaveSameVpEntrySource(leadingZeroSource, normalizedDisplaySource)).toBe(false);
+    expect(x2StatesHaveSameVpEntrySource(rawLeadingZeroSignSource, dotRestoredLeadingZeroSource)).toBe(false);
+    expect(x2StatesHaveSameVpEntrySignSource(rawLeadingZeroSignSource, dotRestoredLeadingZeroSource)).toBe(true);
     expect(x2StatesHaveSameVpEntrySignSource({
       ...base,
       vpEntrySignMantissa: new Set(["02"]),
@@ -11403,6 +11414,33 @@ describe("ir passes on synthetic programs", () => {
       plain(0x02, "2"),
       plain(0xf0, "F* empty F0"),
       plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes repeated raw decimal dot before sign-gap ВП", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      plain(0x0a, "."),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x35, "К {x}"),
+      plain(0x0a, "."),
+      plain(0x0b, "/-/"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),

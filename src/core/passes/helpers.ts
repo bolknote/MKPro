@@ -3255,13 +3255,9 @@ export function x2StatesHaveSameVpEntrySignSource(
   right: X2ValueDataflowState | undefined,
 ): boolean {
   if (left === undefined || right === undefined) return false;
-  if (sameNonEmptyStringSet(
-    vpEntrySignSourceMantissas(left),
-    right?.vpEntryMantissa,
-  )) return true;
   return stringSetsHaveIntersection(
-    vpEntryDisplaySourceKeys(vpEntrySignSourceMantissas(left), vpEntrySignSourceShapes(left)),
-    vpEntryDisplaySourceKeys(right.vpEntryMantissa, right.vpEntryShape),
+    vpEntrySignSourceKeys(left),
+    mergeStringSets(vpEntrySourceKeys(right), vpEntrySignSourceKeys(right)),
   );
 }
 
@@ -6819,6 +6815,15 @@ function vpEntrySourceKeys(state: X2ValueDataflowState | undefined): Set<string>
   return keys;
 }
 
+function vpEntrySignSourceKeys(state: X2ValueDataflowState | undefined): Set<string> {
+  const mantissas = state === undefined ? undefined : vpEntrySignSourceMantissas(state);
+  const shapes = state === undefined ? undefined : vpEntrySignSourceShapes(state);
+  const keys = new Set<string>();
+  addVpEntryRawMantissaSourceKeys(keys, mantissas);
+  addVpEntryDisplaySourceKeys(keys, mantissas, shapes);
+  return keys;
+}
+
 function vpEntryDisplaySourceKeys(
   mantissas: ReadonlySet<string> | undefined,
   shapes: X2ShapeSet | undefined,
@@ -6830,6 +6835,14 @@ function vpEntryDisplaySourceKeys(
 
 function addVpEntryRawMantissaSourceKeys(keys: Set<string>, mantissas: ReadonlySet<string> | undefined): void {
   for (const mantissa of mantissas ?? []) keys.add(`decimal:${mantissa}`);
+}
+
+function mergeStringSets(...sources: readonly ReadonlySet<string>[]): Set<string> {
+  const output = new Set<string>();
+  for (const source of sources) {
+    for (const value of source) output.add(value);
+  }
+  return output;
 }
 
 function addVpEntryDisplaySourceKeys(
