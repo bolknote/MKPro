@@ -5560,7 +5560,13 @@ function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   for (const value of values) {
     const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):(normalized|unnormalized)$/u.exec(value);
-    if (decimal !== null) output.add(decimalMantissaShapeFact(decimal[1]!));
+    if (decimal === null) continue;
+    if (decimal[2] === "unnormalized") {
+      output.add(decimalMantissaShapeFact(decimal[1]!));
+      continue;
+    }
+    const shape = exactDecimalDisplayShapeFact(decimal[1]!);
+    if (shape !== undefined) output.add(shape);
   }
   return output;
 }
@@ -5750,7 +5756,10 @@ function preloadedConstantShapeFacts(op: IrOp | undefined): Set<X2ShapeFact> {
   const value = preloadedConstantLiteral(op);
   if (value === undefined) return new Set();
   const decimal = normalizePreloadedDecimalLiteral(value);
-  if (decimal !== undefined) return new Set([decimalMantissaShapeFact(decimal)]);
+  if (decimal !== undefined) {
+    const shape = exactDecimalDisplayShapeFact(decimal);
+    return shape === undefined ? new Set() : new Set([shape]);
+  }
   const structuralExponent = normalizePreloadedStructuralExponentShape(value);
   if (structuralExponent !== undefined) return new Set([structuralExponent]);
   const shape = normalizePreloadedShapeLiteral(value);
@@ -6109,7 +6118,8 @@ function closedExponentEntryShapeFacts(input: X2EntryState): Set<X2ShapeFact> {
   for (const mantissa of input.mantissa) {
     for (const exponent of input.exponent) {
       const value = normalizedExponentEntryValue(mantissa, exponent);
-      if (value !== undefined) shapes.add(decimalMantissaShapeFact(value));
+      const displayShape = value === undefined ? undefined : exactDecimalDisplayShapeFact(value);
+      if (displayShape !== undefined) shapes.add(displayShape);
     }
   }
   return shapes;
@@ -6154,6 +6164,7 @@ function normalizedExponentEntryValue(mantissa: string, exponent: string): strin
   const scale = exponentSign === "-"
     ? mantissaParts.scale + shift
     : mantissaParts.scale - shift;
+  if (mantissaParts.digits.length + Math.max(0, -scale) > 80) return undefined;
   const unsigned = scaledDecimalDigits(mantissaParts.digits, scale);
   const normalized = unsigned === undefined ? undefined : normalizePlainDecimal(`${mantissaParts.sign}${unsigned}`);
   if (normalized === undefined || significantDecimalDigits(normalized) > 8) return undefined;
@@ -6161,6 +6172,14 @@ function normalizedExponentEntryValue(mantissa: string, exponent: string): strin
 }
 
 function exponentMantissaDecimalParts(
+  mantissa: string,
+): { readonly sign: "" | "-"; readonly digits: string; readonly scale: number } | undefined {
+  const entryParts = exponentEntryMantissaDecimalParts(mantissa);
+  if (entryParts !== undefined) return entryParts;
+  return exactNormalizedExponentMantissaDecimalParts(mantissa);
+}
+
+function exponentEntryMantissaDecimalParts(
   mantissa: string,
 ): { readonly sign: "" | "-"; readonly digits: string; readonly scale: number } | undefined {
   const integer = /^(-?)([0-9]{1,8})$/u.exec(mantissa);
@@ -6180,10 +6199,62 @@ function exponentMantissaDecimalParts(
   };
 }
 
+function exactNormalizedExponentMantissaDecimalParts(
+  mantissa: string,
+): { readonly sign: "" | "-"; readonly digits: string; readonly scale: number } | undefined {
+  const canonical = canonicalShapeRaw(mantissa);
+  const normalized = normalizePlainDecimal(canonical);
+  if (normalized === undefined || normalized !== canonical || significantDecimalDigits(normalized) > 8) return undefined;
+  const parts = parseExactDecimal(normalized);
+  if (parts === undefined) return undefined;
+  const digits = parts.num.toString().replace(/^-/, "");
+  if (digits.length > 80) return undefined;
+  return {
+    sign: parts.num < 0n ? "-" : "",
+    digits,
+    scale: parts.scale,
+  };
+}
+
 function effectiveExponentMantissaDigits(rawDigits: string): string {
   const stripped = rawDigits.replace(/^0+/u, "");
   if (stripped.length > 0) return stripped;
   return `1${"0".repeat(Math.max(0, rawDigits.length - 1))}`;
+}
+
+function exactDecimalDisplayShapeFact(value: string): X2ShapeFact | undefined {
+  const normalized = normalizePlainDecimal(value);
+  if (normalized === undefined || significantDecimalDigits(normalized) > 8) return undefined;
+  if (normalized === "0") return decimalMantissaShapeFact("0");
+  const ordinary = exactOrdinaryDecimalMantissaDisplayShapeFact(normalized);
+  if (ordinary !== undefined) return ordinary;
+  return exactScientificDecimalDisplayShapeFact(normalized);
+}
+
+function exactOrdinaryDecimalMantissaDisplayShapeFact(value: string): X2ShapeFact | undefined {
+  const normalized = normalizePlainDecimal(value);
+  if (normalized === undefined) return undefined;
+  const unsigned = normalized.startsWith("-") ? normalized.slice(1) : normalized;
+  const [integer, fraction] = unsigned.split(".");
+  if ((integer ?? "0") === "0") return undefined;
+  if (`${integer ?? ""}${fraction ?? ""}`.length > 8) return undefined;
+  return decimalMantissaShapeFact(normalized);
+}
+
+function exactScientificDecimalDisplayShapeFact(value: string): X2ShapeFact | undefined {
+  const parts = parseExactDecimal(value);
+  if (parts === undefined || parts.num === 0n) return undefined;
+  const sign = parts.num < 0n ? "-" : "";
+  let digits = absBigInt(parts.num).toString();
+  let scale = parts.scale;
+  while (digits.endsWith("0") && digits.length > 1) {
+    digits = digits.slice(0, -1);
+    scale -= 1;
+  }
+  const exponent = digits.length - scale - 1;
+  if (Math.abs(exponent) > 99) return undefined;
+  const mantissa = digits.length === 1 ? `${sign}${digits}` : `${sign}${digits[0]!}.${digits.slice(1)}`;
+  return decimalExponentShapeFact(mantissa, String(exponent));
 }
 
 function normalizePlainDecimal(raw: string): string | undefined {
@@ -6258,7 +6329,8 @@ function normalizeX2RestoreShapesForX(input: X2ShapeSet | undefined): Set<X2Shap
     const mantissa = /^mantissa:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):decimal$/u.exec(fact);
     if (mantissa !== null) {
       const normalized = normalizePlainDecimal(mantissa[1]!);
-      if (normalized !== undefined) output.add(decimalMantissaShapeFact(normalized));
+      const shape = normalized === undefined ? undefined : exactDecimalDisplayShapeFact(normalized);
+      if (shape !== undefined) output.add(shape);
       continue;
     }
     output.add(fact);
@@ -6311,7 +6383,8 @@ function signChangeClosedDecimalState(
   const shapes = new Set<X2ShapeFact>();
   for (const value of values) {
     const decimal = normalizedDecimalValueFromFact(value);
-    if (decimal !== undefined) shapes.add(decimalMantissaShapeFact(decimal));
+    const shape = decimal === undefined ? undefined : exactDecimalDisplayShapeFact(decimal);
+    if (shape !== undefined) shapes.add(shape);
   }
   return {
     x: values,
@@ -6369,7 +6442,8 @@ function signChangedClosedDecimalExponentShapeState(
     const signedValue = decimalValueFact(signedDecimal, "normalized");
     values.add(signedValue);
     shapes.add(signedShape);
-    shapes.add(decimalMantissaShapeFact(signedDecimal));
+    const signedDisplayShape = exactDecimalDisplayShapeFact(signedDecimal);
+    if (signedDisplayShape !== undefined) shapes.add(signedDisplayShape);
     mantissas.add(signedDecimal);
   }
   if (values.size === 0) return undefined;

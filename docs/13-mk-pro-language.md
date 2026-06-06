@@ -1299,7 +1299,12 @@ The pipeline currently contains:
   closes that exponent-entry form, the proof normalizes fractional mantissas
   (`1.2 ВП 3` becomes `1200`) and leading-zero mantissas
   (`05 ВП 3` becomes `5000`, `00 ВП 3` becomes `10000`) and only then emits
-  dot-safe X2 value facts. A closed-context `/-/` after such a proved sync keeps
+  dot-safe X2 value facts. Dot-restored exact scientific decimal values are
+  also valid `ВП` sources as normalized decimal mantissas: `1E8; .; ВП; 2`
+  is modeled as `100000000 ВП 2` and proves `10000000000`, while `1E-8`
+  proves `0.000001` after the same exponent digit. Their display metadata stays
+  scientific (`exponent:*:*:decimal`) instead of becoming an ordinary mantissa
+  shape. A closed-context `/-/` after such a proved sync keeps
   both the signed normalized value and the signed exponent shape metadata, so
   `5 ВП 3 F0 /-/` carries `decimal:-5000:normalized` plus
   `exponent:-5:3:decimal` without making unsafe active exponent-entry forms
@@ -1309,8 +1314,10 @@ The pipeline currently contains:
   a leading-zero display value as the same hidden value. Preloaded constants
   recalled through `П->X r` also feed this proof: ordinary decimal and
   scientific-notation constants with a one- or two-digit exponent become
-  `decimal:*` facts, while longer display-glyph runs such as `8Е000000`,
-  hex-like display mantissas, and `FA`..`FF` super forms are tracked as
+  `decimal:*` facts. Their shape facts are display-accurate: ordinary decimal
+  displays use `mantissa:*:decimal`, while wide or small scientific decimal
+  displays use `exponent:*:*:decimal` instead of a fake ordinary mantissa.
+  Longer display-glyph runs such as `8Е000000`, hex-like display mantissas, and `FA`..`FF` super forms are tracked as
   shape-only `hex:*` / `super:*` facts until a later proof makes them dot-safe. Hex/super preloads
   with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural
   `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е` remains an
@@ -1448,7 +1455,10 @@ The pipeline currently contains:
   become unknown. A dot-restored leading-zero
   X2 form is also not promoted to an ordinary `ВП` mantissa: emulator probes
   show `02; К{x}; .; ВП; 3` produces `22000`, not the normalized `2 ВП 3`
-  result. Structural hex/super forms restored by `.` remain structural-only:
+  result. Exact normalized scientific decimals are different: after a proved
+  X2 sync, `.` restores the numeric decimal as the next `ВП` source without
+  inventing a raw mantissa shape, so `F 10^x(8); В↑; .; ВП; 2` proves
+  `1E10`. Structural hex/super forms restored by `.` remain structural-only:
   they may feed `ВП` shape analysis, but they still do not become decimal
   equality or dot-safe value facts. Direct `X->П r` and `К X->П r` can also
   seed the next `ВП` from the hidden decimal X2 mantissa shape when that shape

@@ -210,6 +210,7 @@ function normalizedExponentEntryValue(mantissa: string, exponent: string): strin
   const scale = exponentMatch[1] === "-"
     ? mantissaParts.scale + shift
     : mantissaParts.scale - shift;
+  if (mantissaParts.digits.length + Math.max(0, -scale) > 80) return undefined;
   const unsigned = scaledDecimalDigits(mantissaParts.digits, scale);
   const normalized = unsigned === undefined
     ? undefined

@@ -1018,7 +1018,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     state and a separate VP/exponent context. `ВП` after a proved closed
     decimal X2 sync (`Cx`, `В↑`, direct conditional/`F Lx` fallthrough, or `F0..FF`,
     possibly through only `КНОП`/`К1`/`К2`) also becomes a structural
-    exponent-entry state. Direct `X->П r` and `К X->П r` have a separate
+    exponent-entry state. Exact normalized scientific decimal X2 facts feed the
+    same source proof as decimal mantissas after `.` restore without becoming
+    ordinary mantissa shapes: `F 10^x(8); В↑; .; ВП; 2` proves `1E10`, and
+    `1E-8; .; ВП; 2` proves `1E-6` while keeping `exponent:*:*:decimal`
+    display metadata. Direct `X->П r` and `К X->П r` have a separate
     decimal store-splice proof: when the hidden X2 shape is a proved decimal
     mantissa, the following `ВП` gets the hardware-spliced source
     (`12; X->П; ВП` starts from `2`, `05; X->П; ВП` starts from `5`,
@@ -1131,9 +1135,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `ВП`-entry sources, while dot-restored leading-zero decimal forms are still
     not promoted to ordinary mantissas. Preloaded `П->X r` constants
     seed the same lattice: ordinary decimal/scientific constants with a one- or
-    two-digit exponent become `decimal:*` facts, while longer display-glyph runs
-    such as `8Е000000`, hex-like display mantissas, and `FA`..`FF` super forms
-    become structural-only `hex:*` / `super:*` shape facts. Structural
+    two-digit exponent become `decimal:*` facts and display-accurate decimal
+    shapes. Ordinary decimal displays seed `mantissa:*:decimal`, while wide or
+    small scientific decimal displays seed `exponent:*:*:decimal` rather than
+    fake ordinary mantissas. Longer display-glyph runs such as `8Е000000`,
+    hex-like display mantissas, and `FA`..`FF` super forms become
+    structural-only `hex:*` / `super:*` shape facts. Structural
     preloads with a Latin `E` exponent marker (`ГE-2`, `FAE2`) seed
     shape-only `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е`
     remains a display digit. Until those shapes are separately proved dot-safe,
@@ -1218,7 +1225,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Leading-zero exponent mantissas are normalized after
     that closing sync (`05 ВП 3` -> `5000`, `00 ВП 3` -> `10000`), but active
     exponent-entry X2 remains shape-only because an immediate `.` can still
-    signal `ЕГГ0Г`. Too-wide exponent forms, display/raw bytes, and later
+    signal `ЕГГ0Г`. Exact scientific decimal values with at most eight
+    significant digits may still be restored through `.` and then reused as
+    numeric `ВП` mantissas (`100000000 ВП 2`, `0.00000001 ВП 2`), but their
+    visible shape remains scientific rather than `mantissa:*:decimal`.
+    Too-wide exponent forms, display/raw bytes, and later
     context-sensitive `.`/`/-/`/`ВП`
     observations are kept. The same CFG-aware exposure guard is used for the
     inserted dot, so a branch without a reachable preserving-edge restore is no

@@ -713,10 +713,10 @@ describe("ir passes on synthetic programs", () => {
       "reg:2",
     ]);
     expect(x2ShapeStateText(states[1]?.xShape)).toEqual([
-      "mantissa:810200880000000:decimal",
+      "exponent:8.1020088:14:decimal",
     ]);
     expect(x2ShapeStateText(states[1]?.x2Shape)).toEqual([
-      "mantissa:810200880000000:decimal",
+      "exponent:8.1020088:14:decimal",
     ]);
   });
 
@@ -1022,6 +1022,23 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[2]?.xShape)).toEqual(["super-exponent:FA:2"]);
   });
 
+  it("x2 value dataflow gives preloaded decimal constants display-accurate shapes", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const 12.3"),
+      recall("2", "preload const 1E8"),
+      recall("3", "preload const 1E-8"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[1]?.x)).toEqual(["decimal:12.3:normalized", "reg:1"]);
+    expect(x2ShapeStateText(states[1]?.xShape)).toEqual(["mantissa:12.3:decimal"]);
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["decimal:100000000:normalized", "reg:2"]);
+    expect(x2ShapeStateText(states[2]?.xShape)).toEqual(["exponent:1:8:decimal"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:0.00000001:normalized", "reg:3"]);
+    expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["exponent:1:-8:decimal"]);
+  });
+
   it("x2 shape algebra classifies decimal, exponent, hex, and super facts", () => {
     expect(parseX2ShapeFact("mantissa:02:decimal")).toEqual({
       kind: "decimal-mantissa",
@@ -1268,6 +1285,20 @@ describe("ir passes on synthetic programs", () => {
       exponentRaw: "3",
       exponentDigits: ["3"],
       normalizedDecimal: "1200",
+      safety: "errorProne",
+    });
+    expect(x2ShapeDataModelForFact("exponent:100000000:2:decimal")).toMatchObject({
+      kind: "exponent-entry",
+      exponentRaw: "2",
+      exponentDigits: ["2"],
+      normalizedDecimal: "10000000000",
+      safety: "errorProne",
+    });
+    expect(x2ShapeDataModelForFact("exponent:0.00000001:2:decimal")).toMatchObject({
+      kind: "exponent-entry",
+      exponentRaw: "2",
+      exponentDigits: ["2"],
+      normalizedDecimal: "0.000001",
       safety: "errorProne",
     });
   });
@@ -3050,7 +3081,6 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[7]?.x) ?? []).toContain("decimal:0.1:normalized");
     expect(x2ShapeStateText(states[7]?.xShape)).toEqual([
       "exponent:1:-1:decimal",
-      "mantissa:0.1:decimal",
     ]);
     expect(x2EntryStateText(states[8])).toBe("exponent:0.1:");
     expect(x2ValueStateText(states[9]?.x) ?? []).toContain("decimal:100:normalized");
@@ -3283,6 +3313,28 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:-2:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:-2:normalized"]);
+  });
+
+  it("x2 value dataflow keeps closed scientific decimal sign-change display-shaped", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 1E8"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual(["decimal:-100000000:normalized"]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:-100000000:normalized"]);
+    expect(x2ShapeStateText(states[2]?.xShape)).toEqual(["exponent:-1:8:decimal"]);
+    expect(x2ShapeStateText(states[2]?.x2Shape)).toEqual(["exponent:-1:8:decimal"]);
+    expect(x2EntryStateText(states[3])).toBe("exponent:-100000000:");
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:-10000000000:normalized"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual([
+      "exponent:-100000000:2:decimal",
+      "exponent:-1:10:decimal",
+    ]);
   });
 
   it("x2 value dataflow carries non-zero closed sign-change into a following ВП", () => {
@@ -5032,6 +5084,47 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual([
       "exponent:1.2:3:decimal",
       "mantissa:1200:decimal",
+    ]);
+  });
+
+  it("x2 value dataflow carries scientific decimal VP-entry sources through dot restore", () => {
+    const wideProgram: IrOp[] = [
+      plain(0x08, "8"),
+      plain(0x15, "F 10^x"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const smallProgram: IrOp[] = [
+      plain(0x08, "8"),
+      plain(0x0b, "/-/"),
+      plain(0x15, "F 10^x"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const wideStates = computeX2ValueStates(wideProgram);
+    const smallStates = computeX2ValueStates(smallProgram);
+
+    expect(x2EntryStateText(wideStates[5])).toBe("exponent:100000000:");
+    expect(x2EntryStateText(wideStates[6])).toBe("exponent:100000000:2");
+    expect(x2ValueStateText(wideStates[6]?.x)).toEqual(["decimal:10000000000:normalized"]);
+    expect(x2ValueStateText(wideStates[6]?.x2)).toEqual([]);
+    expect(x2ShapeStateText(wideStates[6]?.x2Shape)).toEqual([
+      "exponent:100000000:2:decimal",
+      "exponent:1:10:decimal",
+    ]);
+    expect(x2EntryStateText(smallStates[6])).toBe("exponent:0.00000001:");
+    expect(x2EntryStateText(smallStates[7])).toBe("exponent:0.00000001:2");
+    expect(x2ValueStateText(smallStates[7]?.x)).toEqual(["decimal:0.000001:normalized"]);
+    expect(x2ValueStateText(smallStates[7]?.x2)).toEqual([]);
+    expect(x2ShapeStateText(smallStates[7]?.x2Shape)).toEqual([
+      "exponent:0.00000001:2:decimal",
+      "exponent:1:-6:decimal",
     ]);
   });
 
@@ -7636,6 +7729,37 @@ describe("ir passes on synthetic programs", () => {
       plain(0x15, "F 10^x"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 100000000 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses scientific VP-source X2 facts after a closing sync", () => {
+    const program: IrOp[] = [
+      plain(0x08, "8"),
+      plain(0x15, "F 10^x"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x01, "1"),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x08, "8"),
+      plain(0x15, "F 10^x"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 10000000000 from hidden X2 temp" } },
       halt(),
     ]);
   });
