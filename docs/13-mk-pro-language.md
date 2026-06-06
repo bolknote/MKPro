@@ -1722,7 +1722,11 @@ The pipeline currently contains:
   `exponent:1:8:decimal`; the inserted `.` is still allowed only by the normal
   dot-safety/immediate-sync proof. The same restored visible-decimal comparator
   accepts mixed ordinary decimal facts and exact display-shape facts, but still
-  keeps raw decimal-entry shapes outside the dot-safe path. For
+  keeps raw decimal-entry shapes outside the dot-safe path. A scratch recall
+  immediately feeding `ВП` can also use the recall-removal VP-shape proof as a
+  dot escape: when the recalled register's source is already the same X2
+  mantissa source, the inserted `.` recreates the same `ВП` entry context
+  without keeping the recall stack lift. For
   computed structural temporaries, the pass can also use a
   synced `expr:*`/`expr-key:*` plus structural restore-shape equality to replace
   the scratch recall with `.`, while plain structural preload aliases that merely
