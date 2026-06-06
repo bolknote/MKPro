@@ -6741,12 +6741,12 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:7ACE:3"]);
   });
 
-  it("x2 value dataflow does not infer a ВП entry source on a conditional jump edge", () => {
+  it("x2 value dataflow uses direct jump as a ВП first-digit source", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
       plain(0xf0, "F* empty F0"),
-      cjump("target"),
-      halt(),
+      plain(0x20, "F pi"),
+      jump("target"),
       label("target"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
@@ -6754,8 +6754,50 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2EntryStateText(states[5])).toBe("closed");
-    expect(x2EntryStateText(states[6])).toBe("unknown");
+    expect(x2VpEntryMantissaText(states[5])).toEqual(["3"]);
+    expect(states[5]?.vpEntryMantissaTransient).toBe(true);
+    expect(x2EntryStateText(states[6])).toBe("exponent:3:");
+    expect(x2EntryStateText(states[7])).toBe("exponent:3:3");
+  });
+
+  it("x2 value dataflow uses direct conditional jump edges as ВП first-digit sources", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x20, "F pi"),
+      cjump("target"),
+      jump("done"),
+      label("target"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2VpEntryMantissaText(states[6])).toEqual(["3"]);
+    expect(states[6]?.vpEntryMantissaTransient).toBe(true);
+    expect(x2EntryStateText(states[7])).toBe("exponent:3:");
+    expect(x2EntryStateText(states[8])).toBe("exponent:3:3");
+  });
+
+  it("x2 value dataflow uses direct jump as a structural ВП first-digit source", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x20, "F pi"),
+      jump("target"),
+      label("target"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2VpEntryShapeText(states[4])).toEqual(["hex:3ACE:mantissa"]);
+    expect(states[4]?.vpEntryShapeTransient).toBe(true);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:3ACE:"]);
+    expect(x2ShapeStateText(states[6]?.xShape)).toEqual(["hex-exponent:3ACE:3"]);
   });
 
   it("x2 value dataflow preserves raw sign sources on conditional jump edges", () => {

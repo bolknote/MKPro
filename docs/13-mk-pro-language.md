@@ -1659,9 +1659,10 @@ The pipeline currently contains:
   still knows an open mantissa, active exponent entry, proved decimal
   `vpEntryMantissa` source, or structural hex/super `vpEntryShape` source from
   the same general proof used by `vp-splice`. Proved indirect jump edges seed a
-  transient source for the documented `ВП`-after-indirect-flow first-digit rule:
-  decimal X2 becomes a `7...` mantissa source, exact zero becomes `8...`, and
-  hex/super remains shape-only. It also accepts a current
+  transient source for the documented flow-before-`ВП` first-digit rules:
+  direct flow takes the first digit from visible X, indirect flow turns decimal
+  X2 into a `7...` mantissa source, exact zero into `8...`, and hex/super
+  remains shape-only. It also accepts a current
   VP/X2-restore context, for example a repeated `ВП` in exponent entry or a
   `ВП` after an X2-preserving gap, when the following hard overwrite destroys
   the restored X. Structural sources outside the pinned A/B/C mantissa set are

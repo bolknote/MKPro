@@ -2575,7 +2575,14 @@ export function computeX2ValueStates(
       const input = inStates[index];
       if (input === undefined) continue;
       for (const edge of edges[index] ?? []) {
-        const transferred = transferX2ValueDataflowState(input, ops[index]!, edge.kind, trackRegisterMemory, index);
+        const transferred = transferX2ValueDataflowState(
+          input,
+          ops[index]!,
+          edge.kind,
+          trackRegisterMemory,
+          index,
+          edgeTargetStartsWithVp(ops, edge.target),
+        );
         const output = x2ValueEdgeDropsUnstableOpaqueExpressionFacts(ops[index]!, edge, index)
           ? dropUnstableOpaqueExpressionX2ValueFacts(transferred, trackRegisterMemory)
           : transferred;
@@ -2596,6 +2603,15 @@ export function computeX2ValueStates(
   }
   x2ValueStatesCache.set(ops, nextCachedByMode);
   return inStates;
+}
+
+function edgeTargetStartsWithVp(ops: readonly IrOp[], target: number): boolean {
+  for (let index = target; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    return op.kind === "plain" && op.opcode === 0x0c && !hasRewriteBarrier(op);
+  }
+  return false;
 }
 
 export function x2ValueSetHasIntersection(left: X2ValueSet | undefined, right: X2ValueSet | undefined): boolean {
@@ -4209,6 +4225,7 @@ function transferX2ValueDataflowState(
   edge: Edge["kind"],
   trackRegisterMemory: boolean,
   producerIndex: number | undefined,
+  targetStartsWithVp: boolean = false,
 ): X2ValueDataflowState {
   if (hasRewriteBarrier(op)) return emptyX2ValueDataflowState(trackRegisterMemory);
 
@@ -4217,6 +4234,9 @@ function transferX2ValueDataflowState(
       return cloneX2ValueDataflowState(input);
     case "jump":
     case "call":
+      return targetStartsWithVp
+        ? withDirectFlowVpSpliceSource(closeX2ValueEntry(input))
+        : closeX2ValueEntry(input);
     case "orphan-address":
       return closeX2ValueEntry(input);
     case "store": {
@@ -4304,7 +4324,7 @@ function transferX2ValueDataflowState(
       const x = syncUnknownSameValue(canonicalX2ValueSet(closed.x), effect, producerIndex);
       const xShape = cloneOptionalShapeSet(closed.xShape);
       const x2Shape = transferConditionalX2ShapeSet(closed, xShape, effect);
-      return {
+      const output: X2ValueDataflowState = {
         x,
         y: cloneOptionalValueSet(closed.y),
         x2: transferConditionalX2ValueSet(closed, x, effect),
@@ -4321,6 +4341,9 @@ function transferX2ValueDataflowState(
         vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, x, xShape, x2Shape, effect),
         ...cloneX2MemoryFields(closed),
       };
+      return edge === "jump" && effect === "preserves" && targetStartsWithVp
+        ? withDirectFlowVpSpliceSource(output)
+        : output;
     }
     case "loop": {
       const closed = closeX2ValueEntry(input);
@@ -4336,7 +4359,7 @@ function transferX2ValueDataflowState(
           ? canonicalX2ValueSet(x)
           : new Set<X2ValueFact>();
       const x2Shape = transferConditionalX2ShapeSet(stable, xShape, effect);
-      return {
+      const output: X2ValueDataflowState = {
         x,
         y: cloneOptionalValueSet(stable.y),
         x2,
@@ -4354,12 +4377,15 @@ function transferX2ValueDataflowState(
         memory: trackRegisterMemory ? deleteX2ValueMemory(stable.memory, counter) : undefined,
         shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(stable.shapeMemory, counter) : undefined,
       };
+      return edge === "jump" && effect === "preserves" && targetStartsWithVp
+        ? withDirectFlowVpSpliceSource(output)
+        : output;
     }
     case "indirect-jump":
     case "indirect-call":
-      return transferIndirectFlowX2ValueState(input, op, trackRegisterMemory);
+      return transferIndirectFlowX2ValueState(input, op, trackRegisterMemory, targetStartsWithVp);
     case "indirect-cjump":
-      return transferIndirectConditionalX2ValueState(input, op, edge, trackRegisterMemory);
+      return transferIndirectConditionalX2ValueState(input, op, edge, trackRegisterMemory, targetStartsWithVp);
     case "stop":
       return emptyX2ValueDataflowState(trackRegisterMemory);
     case "return": {
@@ -5407,12 +5433,13 @@ function transferIndirectFlowX2ValueState(
   input: X2ValueDataflowState,
   op: Extract<IrOp, { kind: "indirect-jump" | "indirect-call" }>,
   trackRegisterMemory: boolean,
+  targetStartsWithVp: boolean,
 ): X2ValueDataflowState {
   const closed = closeX2ValueEntry(input);
   const stable = isStableIndirectSelector(op.register)
     ? closed
     : dropMutatedSelectorX2ValueFact(closed, op.register, trackRegisterMemory);
-  return withIndirectFlowVpSpliceSource(stable);
+  return targetStartsWithVp ? withIndirectFlowVpSpliceSource(stable) : stable;
 }
 
 function transferIndirectConditionalX2ValueState(
@@ -5420,6 +5447,7 @@ function transferIndirectConditionalX2ValueState(
   op: Extract<IrOp, { kind: "indirect-cjump" }>,
   edge: Edge["kind"],
   trackRegisterMemory: boolean,
+  targetStartsWithVp: boolean,
 ): X2ValueDataflowState {
   const effect = indirectConditionalX2EffectForGraphEdge(op, edge);
   if (effect === "unknown") return emptyX2ValueDataflowState(trackRegisterMemory);
@@ -5448,7 +5476,7 @@ function transferIndirectConditionalX2ValueState(
   const stable = isStableIndirectSelector(op.register)
     ? output
     : dropMutatedSelectorX2ValueFact(output, op.register, trackRegisterMemory);
-  return withIndirectFlowVpSpliceSource(stable);
+  return targetStartsWithVp ? withIndirectFlowVpSpliceSource(stable) : stable;
 }
 
 function transferIndirectStoreX2ValueState(
@@ -6904,6 +6932,18 @@ function withStoreVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowSt
     vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(input.x2Shape),
     vpEntryShape,
     vpEntrySignShape: vpEntrySignShapesFromStoreSplice(input.x2Shape),
+    ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
+  };
+}
+
+function withDirectFlowVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowState {
+  const vpEntryMantissa = decimalFirstDigitVpSpliceMantissas(input.xShape, input.x2Shape);
+  const vpEntryShape = structuralFirstDigitVpSpliceShapeFacts(input.xShape, input.x2Shape);
+  return {
+    ...input,
+    vpEntryMantissa,
+    vpEntryShape,
+    ...(vpEntryMantissa === undefined ? {} : { vpEntryMantissaTransient: true as const }),
     ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
   };
 }

@@ -97,6 +97,14 @@ hex/super mantissas remain shape-only. The source is consumed only by an
 immediate executable `ВП`; any intervening executable command clears the
 transient fact, while labels do not.
 
+### `ВП` Immediately After Direct Flow
+
+Direct jumps, calls, and direct conditional jump edges also act as the previous
+executable command for `ВП`. Here the first digit comes from the visible X value,
+while the remaining mantissa/order comes from hidden X2. The optimizer models
+this as the same transient first-digit splice source used by the general
+mantissa shape algebra; structural hex/super targets stay shape-only.
+
 ### `ВП .` and `ВП /-/`
 
 These are not just exponent-entry combinations in program mode. They can be
