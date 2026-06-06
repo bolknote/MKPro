@@ -4016,8 +4016,8 @@ function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflow
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     vpEntrySignShape: cloneOptionalShapeSet(input.vpEntrySignShape),
     ...(input.vpEntryShapeTransient === true ? { vpEntryShapeTransient: true } : {}),
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    memory: input.memory === undefined ? undefined : cloneX2ValueMemory(input.memory),
+    shapeMemory: input.shapeMemory === undefined ? undefined : cloneX2ShapeMemory(input.shapeMemory),
   };
 }
 
