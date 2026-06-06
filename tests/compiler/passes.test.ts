@@ -78,6 +78,7 @@ import {
   x2StatesHaveSameVpEntrySource,
   x2StatesHaveSameVpEntrySignSource,
   x2StateHasUnsafeDotRestoreShapeX2,
+  x2ValueSetHasIntersection,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueShapeSetHasRestoredVisibleDecimal,
   x2ValueShapeSetsHaveSameRestoredVisibleDecimal,
@@ -2853,6 +2854,26 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(result?.x)).toContain("expr-key:31(expr-key:16(shape:hex:FA00:mantissa))");
     expect(x2ValueStateText(result?.x)).not.toContain("expr-key:31(expr-key:16(shape:hex-exponent:Г:2))");
     expect(x2ValueStateText(result?.x)).not.toContain("expr-key:31(expr-key:16(shape:super-exponent:FA:2))");
+  });
+
+  it("x2 value dataflow canonicalizes stable expr keys in set and memory operations", () => {
+    const raw = "expr-key:16(shape:hex-exponent:Г:2)" as X2ValueFact;
+    const canonical = "expr-key:16(shape:hex:Г00:mantissa)" as X2ValueFact;
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([raw]),
+      x2: new Set<X2ValueFact>([raw]),
+      entry: { kind: "closed" },
+    };
+    const stored = transferX2ValueStateForEdge(legacy, store("1"), "normal", { trackRegisterMemory: true }, 0);
+    const recalled = transferX2ValueStateForEdge(stored, recall("1"), "normal", { trackRegisterMemory: true }, 1);
+
+    expect(x2ValueSetHasIntersection(new Set([raw]), new Set([canonical]))).toBe(true);
+    expect(x2ValueStateText(stored?.x)).toContain(canonical);
+    expect(x2ValueStateText(stored?.x)).not.toContain(raw);
+    expect(x2ValueStateText(stored?.memory?.["1"])).toContain(canonical);
+    expect(x2ValueStateText(stored?.memory?.["1"])).not.toContain(raw);
+    expect(x2ValueStateText(recalled?.x)).toContain(canonical);
+    expect(x2ValueStateText(recalled?.x)).not.toContain(raw);
   });
 
   it("x2 value dataflow derives unary decimal facts from shape-only decimal mantissas", () => {

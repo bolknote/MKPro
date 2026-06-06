@@ -863,7 +863,9 @@ Display rewrites are separated into strategy selection + body lowering.
   Stable `expr-key:*` facts canonicalize structural `shape:*` operands
   recursively as well, so a hidden-temp proof that already contains
   `shape:hex-exponent:Г:2` is reused as `shape:hex:Г00:mantissa` instead of
-  becoming a separate computed value.
+  becoming a separate computed value. X2 value-set operations, register-memory
+  storage/recall, and CFG joins keep the same canonical form, so equivalent
+  stable-expression facts do not split after path-sensitive propagation.
   Hex and super displays are not promoted to decimal shapes without
   a separate display proof. For concrete decimal `X`, `К {x}` also
   seeds the exact normalized fractional decimal value in visible X while

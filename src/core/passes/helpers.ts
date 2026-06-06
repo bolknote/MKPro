@@ -2566,8 +2566,9 @@ export function computeX2ValueStates(
 
 export function x2ValueSetHasIntersection(left: X2ValueSet | undefined, right: X2ValueSet | undefined): boolean {
   if (left === undefined || right === undefined) return false;
-  for (const value of left) {
-    if (right.has(value)) return true;
+  const rightSet = canonicalX2ValueSet(right);
+  for (const value of canonicalX2ValueSet(left)) {
+    if (rightSet.has(value)) return true;
   }
   return false;
 }
@@ -3995,9 +3996,9 @@ function cloneRegisterDataflowState(input: RegisterDataflowState): RegisterDataf
 
 function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflowState {
   return {
-    x: new Set(input.x),
+    x: canonicalX2ValueSet(input.x),
     y: cloneOptionalValueSet(input.y),
-    x2: new Set(input.x2),
+    x2: canonicalX2ValueSet(input.x2),
     xShape: cloneOptionalShapeSet(input.xShape),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
@@ -4132,9 +4133,9 @@ function transferX2ValueDataflowState(
       const value = recallX2ValueFacts(input, op.register, trackRegisterMemory, op);
       const shape = recallX2ShapeFacts(value, op, trackRegisterMemory ? input.shapeMemory?.[op.register] : undefined);
       return {
-        x: new Set(value),
-        y: new Set(closed.x),
-        x2: new Set(value),
+        x: canonicalX2ValueSet(value),
+        y: cloneOptionalValueSet(closed.x),
+        x2: canonicalX2ValueSet(value),
         xShape: new Set(shape),
         yShape: cloneOptionalShapeSet(closed.xShape),
         x2Shape: new Set(shape),
@@ -4161,9 +4162,9 @@ function transferX2ValueDataflowState(
         target === undefined || !trackRegisterMemory ? undefined : input.shapeMemory?.[target],
       );
       return {
-        x: values,
-        y: new Set(closed.x),
-        x2: new Set(values),
+        x: canonicalX2ValueSet(values),
+        y: cloneOptionalValueSet(closed.x),
+        x2: canonicalX2ValueSet(values),
         xShape: new Set(shape),
         yShape: cloneOptionalShapeSet(closed.xShape),
         x2Shape: new Set(shape),
@@ -4183,7 +4184,7 @@ function transferX2ValueDataflowState(
     case "cjump": {
       const closed = closeX2ValueEntry(input);
       const effect = conditionalX2EffectForGraphEdge(op, edge);
-      const x = syncUnknownSameValue(new Set(closed.x), effect, producerIndex);
+      const x = syncUnknownSameValue(canonicalX2ValueSet(closed.x), effect, producerIndex);
       const xShape = cloneOptionalShapeSet(closed.xShape);
       const x2Shape = transferConditionalX2ShapeSet(closed, xShape, effect);
       return {
@@ -4216,7 +4217,7 @@ function transferX2ValueDataflowState(
       const x2 = effect === "preserves"
         ? removeX2Value(stable.x2, counterFact)
         : effect === "affects"
-          ? new Set(x)
+          ? canonicalX2ValueSet(x)
           : new Set<X2ValueFact>();
       const x2Shape = transferConditionalX2ShapeSet(stable, xShape, effect);
       return {
@@ -4247,13 +4248,13 @@ function transferX2ValueDataflowState(
       return emptyX2ValueDataflowState(trackRegisterMemory);
     case "return": {
       const closed = closeX2ValueEntry(input);
-      const x = syncUnknownSameValue(new Set(closed.x), "affects", producerIndex);
+      const x = syncUnknownSameValue(canonicalX2ValueSet(closed.x), "affects", producerIndex);
       const xShape = cloneOptionalShapeSet(closed.xShape);
       const x2Shape = x2SyncShapeSetFromVisibleX(xShape);
       return {
         x,
         y: cloneOptionalValueSet(closed.y),
-        x2: new Set(x),
+        x2: canonicalX2ValueSet(x),
         xShape,
         yShape: cloneOptionalShapeSet(closed.yShape),
         x2Shape,
@@ -5097,7 +5098,7 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
   return {
     x: normalizeX2RestoreFactsForX(input.x2),
     y: cloneOptionalValueSet(input.y),
-    x2: new Set(input.x2),
+    x2: cloneOptionalValueSet(input.x2),
     xShape: normalizeX2RestoreShapesForX(input.x2Shape),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
@@ -5323,7 +5324,7 @@ function transferIndirectConditionalX2ValueState(
   const effect = indirectConditionalX2EffectForGraphEdge(op, edge);
   if (effect === "unknown") return emptyX2ValueDataflowState(trackRegisterMemory);
   const closed = closeX2ValueEntry(input);
-  const x = syncUnknownSameValue(new Set(closed.x), effect);
+  const x = syncUnknownSameValue(canonicalX2ValueSet(closed.x), effect);
   const xShape = cloneOptionalShapeSet(closed.xShape);
   const x2Shape = transferConditionalX2ShapeSet(closed, xShape, effect);
   const output: X2ValueDataflowState = {
@@ -5426,8 +5427,8 @@ function transferPlainX2ValueSet(
   x: X2ValueSet,
   effect: ReturnType<typeof plainX2Effect>,
 ): Set<X2ValueFact> {
-  if (effect === "preserves") return new Set(input.x2);
-  if (effect === "affects") return new Set(x);
+  if (effect === "preserves") return canonicalX2ValueSet(input.x2);
+  if (effect === "affects") return canonicalX2ValueSet(x);
   return new Set();
 }
 
@@ -5741,8 +5742,8 @@ function transferConditionalX2ValueSet(
   x: X2ValueSet,
   effect: ReturnType<typeof conditionalX2Effect>,
 ): Set<X2ValueFact> {
-  if (effect === "preserves") return new Set(input.x2);
-  if (effect === "affects") return new Set(x);
+  if (effect === "preserves") return canonicalX2ValueSet(input.x2);
+  if (effect === "affects") return canonicalX2ValueSet(x);
   return new Set();
 }
 
@@ -5837,9 +5838,9 @@ function joinX2ValueDataflowStates(
   trackRegisterMemory = false,
 ): X2ValueDataflowState {
   if (current === undefined) return {
-    x: new Set(incoming.x),
+    x: canonicalX2ValueSet(incoming.x),
     y: cloneOptionalValueSet(incoming.y),
-    x2: new Set(incoming.x2),
+    x2: canonicalX2ValueSet(incoming.x2),
     xShape: cloneOptionalShapeSet(incoming.xShape),
     yShape: cloneOptionalShapeSet(incoming.yShape),
     x2Shape: cloneOptionalShapeSet(incoming.x2Shape),
@@ -5937,10 +5938,12 @@ function joinX2ValueSets(
   current: X2ValueSet | undefined,
   incoming: X2ValueSet,
 ): Set<X2ValueFact> {
-  if (current === undefined) return new Set(incoming);
+  if (current === undefined) return canonicalX2ValueSet(incoming);
+  const currentSet = canonicalX2ValueSet(current);
+  const incomingSet = canonicalX2ValueSet(incoming);
   const joined = new Set<X2ValueFact>();
-  for (const value of current) {
-    if (incoming.has(value)) joined.add(value);
+  for (const value of currentSet) {
+    if (incomingSet.has(value)) joined.add(value);
   }
   return joined;
 }
@@ -5962,9 +5965,11 @@ function sameX2ValueSet(
   right: X2ValueSet | undefined,
 ): boolean {
   if (left === undefined || right === undefined) return left === right;
-  if (left.size !== right.size) return false;
-  for (const value of left) {
-    if (!right.has(value)) return false;
+  const leftSet = canonicalX2ValueSet(left);
+  const rightSet = canonicalX2ValueSet(right);
+  if (leftSet.size !== rightSet.size) return false;
+  for (const value of leftSet) {
+    if (!rightSet.has(value)) return false;
   }
   return true;
 }
@@ -5973,7 +5978,7 @@ function cloneX2ValueMemory(input: X2ValueMemory | undefined): X2ValueMemory {
   const output: X2ValueMemory = {};
   for (const register of x2ValueMemoryRegisters(input)) {
     const values = input?.[register];
-    if (values !== undefined && values.size > 0) output[register] = new Set(values);
+    if (values !== undefined && values.size > 0) output[register] = canonicalX2ValueSet(values);
   }
   return output;
 }
@@ -6018,9 +6023,11 @@ function intersectKnownX2ValueSets(
   incoming: X2ValueSet | undefined,
 ): Set<X2ValueFact> {
   if (current === undefined || incoming === undefined) return new Set();
+  const currentSet = canonicalX2ValueSet(current);
+  const incomingSet = canonicalX2ValueSet(incoming);
   const joined = new Set<X2ValueFact>();
-  for (const value of current) {
-    if (incoming.has(value)) joined.add(value);
+  for (const value of currentSet) {
+    if (incomingSet.has(value)) joined.add(value);
   }
   return joined;
 }
@@ -6264,9 +6271,9 @@ function deleteX2ShapeMemory(input: X2ShapeMemory | undefined, register: Registe
 
 function clearX2ValueMemory(input: X2ValueDataflowState): X2ValueDataflowState {
   return {
-    x: new Set(input.x),
+    x: canonicalX2ValueSet(input.x),
     y: cloneOptionalValueSet(input.y),
-    x2: new Set(input.x2),
+    x2: canonicalX2ValueSet(input.x2),
     xShape: cloneOptionalShapeSet(input.xShape),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
@@ -6303,8 +6310,9 @@ function storableX2ShapeMemoryFacts(shapes: X2ShapeSet | undefined): Set<X2Shape
 }
 
 function storableX2MemoryValueFacts(values: X2ValueSet): Set<X2ValueFact> {
-  const output = concreteStoredX2ValueFacts(values);
-  for (const value of values) {
+  const canonicalValues = canonicalX2ValueSet(values);
+  const output = concreteStoredX2ValueFacts(canonicalValues);
+  for (const value of canonicalValues) {
     if (isExpressionX2ValueFact(value)) output.add(value);
   }
   return output;
@@ -6337,7 +6345,7 @@ function recallX2ValueFacts(
   const output = new Set<X2ValueFact>(trackRegisterMemory ? input.memory?.[register] ?? [] : []);
   for (const fact of preloadedConstantValueFacts(op)) output.add(fact);
   output.add(value);
-  return output;
+  return canonicalX2ValueSet(output);
 }
 
 function recallX2ShapeFacts(
@@ -7018,7 +7026,7 @@ function exactDecimalMantissaDisplaySourceKey(raw: string): string | undefined {
 }
 
 function cloneOptionalValueSet(input: X2ValueSet | undefined): Set<X2ValueFact> {
-  return input === undefined ? new Set() : new Set(input);
+  return input === undefined ? new Set() : canonicalX2ValueSet(input);
 }
 
 function sameNonEmptyStringSet(
@@ -7079,6 +7087,16 @@ function canonicalStableExpressionValueFact(fact: X2ValueFact): X2ValueFact {
     const canonical = canonicalStableShapeSourceKey(raw as X2ShapeFact);
     return canonical ?? source;
   }) as X2ValueFact;
+}
+
+function canonicalX2ValueSet(input: X2ValueSet | undefined): Set<X2ValueFact> {
+  const output = new Set<X2ValueFact>();
+  for (const fact of input ?? []) output.add(canonicalX2ValueFact(fact));
+  return output;
+}
+
+function canonicalX2ValueFact(fact: X2ValueFact): X2ValueFact {
+  return fact.startsWith("expr-key:") ? canonicalStableExpressionValueFact(fact) : fact;
 }
 
 function canonicalStableShapeSourceKey(fact: X2ShapeFact): string | undefined {
@@ -8252,9 +8270,9 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
     };
   }
   return {
-    x: new Set(input.x),
+    x: canonicalX2ValueSet(input.x),
     y: cloneOptionalValueSet(input.y),
-    x2: new Set(input.x2),
+    x2: canonicalX2ValueSet(input.x2),
     xShape: cloneOptionalShapeSet(input.xShape),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
@@ -8447,21 +8465,22 @@ function sameX2StructuralEntryState(
 }
 
 function addX2Value(input: X2ValueSet, value: X2ValueFact): Set<X2ValueFact> {
-  const output = new Set(input);
-  output.add(value);
+  const output = canonicalX2ValueSet(input);
+  output.add(canonicalX2ValueFact(value));
   return output;
 }
 
 function addStoredX2ValueAlias(input: X2ValueDataflowState, value: X2ValueFact): Set<X2ValueFact> {
-  const output = new Set(input.x2);
-  output.delete(value);
-  if (x2ValueSetHasIntersection(input.x, input.x2)) output.add(value);
+  const canonicalValue = canonicalX2ValueFact(value);
+  const output = canonicalX2ValueSet(input.x2);
+  output.delete(canonicalValue);
+  if (x2ValueSetHasIntersection(input.x, input.x2)) output.add(canonicalValue);
   return output;
 }
 
 function removeX2Value(input: X2ValueSet, value: X2ValueFact): Set<X2ValueFact> {
-  const output = new Set(input);
-  output.delete(value);
+  const output = canonicalX2ValueSet(input);
+  output.delete(canonicalX2ValueFact(value));
   return output;
 }
 
