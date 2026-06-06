@@ -10,6 +10,7 @@ import {
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
   knownReturnCallReturnsThroughNestedTransparentRange,
+  plainPreservesXValue,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingStackLiftCanExposeStack,
@@ -40,6 +41,7 @@ const run: IrPassFn = (ops) => {
   const context = directReturnAnalysisContext(ops);
   const remove = new Set<number>();
   const recallStackExposure = new Map<number, boolean>();
+  const stackProducerExposure = new Map<number, boolean>();
 
   for (let index = 0; index < ops.length; index += 1) {
     if (remove.has(index)) continue;
@@ -61,10 +63,13 @@ const run: IrPassFn = (ops) => {
       index,
       context,
       recallStackExposure,
+      stackProducerExposure,
     );
     if (deadRun === undefined) continue;
     if (isDeadRecallCandidate(op) && removingRecallCanExposeStackLift(ops, index)) continue;
-    if (isDeadStackShiftingProducerCandidate(op) && removingStackLiftCanExposeStack(ops, index)) continue;
+    if (isDeadStackShiftingProducerCandidate(op) && stackShiftCanExposeStack(ops, index, stackProducerExposure)) {
+      continue;
+    }
 
     for (const removeIndex of deadRun) remove.add(removeIndex);
   }
@@ -167,6 +172,7 @@ function deadRestoreRunBeforeHardOverwrite(
   start: number,
   context: DirectReturnAnalysisContext,
   recallStackExposure: Map<number, boolean>,
+  stackProducerExposure: Map<number, boolean>,
 ): readonly number[] | undefined {
   const remove: number[] = [start];
   let sameSegment = true;
@@ -196,7 +202,15 @@ function deadRestoreRunBeforeHardOverwrite(
       continue;
     }
     if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
-    return isOverwriteEndpointThatCannotObserveRestoredX(ops, index, op, recallStackExposure) ? remove : undefined;
+    return isOverwriteEndpointThatCannotObserveRestoredX(
+      ops,
+      index,
+      op,
+      recallStackExposure,
+      stackProducerExposure,
+    )
+      ? remove
+      : undefined;
   }
   return undefined;
 }
@@ -225,8 +239,12 @@ function isOverwriteEndpointThatCannotObserveRestoredX(
   index: number,
   op: IrOp,
   recallStackExposure: Map<number, boolean>,
+  stackProducerExposure: Map<number, boolean>,
 ): boolean {
   if (isHardX2OverwriteWithoutStackUse(op)) return true;
+  if (isStackShiftingOverwriteEndpoint(op)) {
+    return !stackShiftCanExposeStack(ops, index, stackProducerExposure);
+  }
   if (removableRecallValueRegister(op) === undefined || isDisplayFocusSensitive(op)) return false;
   let exposes = recallStackExposure.get(index);
   if (exposes === undefined) {
@@ -234,6 +252,25 @@ function isOverwriteEndpointThatCannotObserveRestoredX(
     recallStackExposure.set(index, exposes);
   }
   return !exposes;
+}
+
+function isStackShiftingOverwriteEndpoint(op: IrOp): boolean {
+  if (!isFreeStandingPlain(op)) return false;
+  const effect = analyzeX2StackEffect(op);
+  return effect.stackShifts && effect.x2Affects && !plainPreservesXValue(op);
+}
+
+function stackShiftCanExposeStack(
+  ops: readonly IrOp[],
+  index: number,
+  stackProducerExposure: Map<number, boolean>,
+): boolean {
+  let exposes = stackProducerExposure.get(index);
+  if (exposes === undefined) {
+    exposes = removingStackLiftCanExposeStack(ops, index);
+    stackProducerExposure.set(index, exposes);
+  }
+  return exposes;
 }
 
 function simpleDirectReturnDoesNotObserveRestore(

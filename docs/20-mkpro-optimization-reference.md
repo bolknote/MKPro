@@ -1254,9 +1254,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     restore, and as the same kind of dead X/X2 producer before a later hard
     overwrite, but only when the shared stack-exposure proof shows that the
     recall's stack lift cannot reach a later stack consumer. Free-standing
-    stack-shifting producers such as `F pi` and X2-affecting lifts are handled
-    by the same rule: they can be deleted before the hard overwrite only when
-    their produced `X` is not observed and their implicit stack lift is dead.
+    stack-shifting plain opcodes whose metadata says they affect X2 and replace
+    `X` are also terminal overwrite endpoints for earlier dead restores, and
+    are themselves deleted before a later hard overwrite only when their
+    produced `X` is not observed and their implicit stack lift is dead.
     `ВП` may also be removed from a structural
     hex/super `vpEntryShape` source, including one produced by an immediate
     direct/proved-indirect store-splice, a direct or proved-indirect `В/О` return continuation or the fallthrough side of a direct conditional/`F Lx`
