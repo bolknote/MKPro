@@ -78,6 +78,7 @@ import {
   x2StatesHaveSameVpEntrySource,
   x2StatesHaveSameVpEntrySignSource,
   x2StateHasUnsafeDotRestoreShapeX2,
+  x2ValueSetHasFact,
   x2ValueSetHasIntersection,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueShapeSetHasRestoredVisibleDecimal,
@@ -2874,6 +2875,14 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(stored?.memory?.["1"])).not.toContain(raw);
     expect(x2ValueStateText(recalled?.x)).toContain(canonical);
     expect(x2ValueStateText(recalled?.x)).not.toContain(raw);
+  });
+
+  it("x2 value dataflow matches stable expr keys canonically in value sets", () => {
+    const raw = "expr-key:16(shape:hex-exponent:Г:2)" as X2ValueFact;
+    const canonical = "expr-key:16(shape:hex:Г00:mantissa)" as X2ValueFact;
+
+    expect(x2ValueSetHasFact(new Set([raw]), canonical)).toBe(true);
+    expect(x2ValueSetHasFact(new Set([canonical]), raw)).toBe(true);
   });
 
   it("x2 value dataflow uses canonical stable expr keys for closed sign-change proofs", () => {

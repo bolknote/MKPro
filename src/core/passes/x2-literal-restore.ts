@@ -16,6 +16,7 @@ import {
   x2HasOnlyRestoreGapBeforeVp,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasUnsafeDotRestoreShapeX2,
+  x2ValueSetHasFact,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueShapeSetHasRestoredVisibleDecimal,
   x2ValueSetHasNormalizedDecimalFact,
@@ -24,7 +25,6 @@ import {
   type IrPassFn,
   type X2ValueDataflowState,
   type X2ValueFact,
-  type X2ValueSet,
 } from "./helpers.ts";
 
 const DOT = 0x0a;
@@ -274,10 +274,6 @@ function significantDecimalDigits(input: string): number {
   const digits = `${integer ?? ""}${fraction ?? ""}`.replace(/^0+/u, "");
   const significant = fraction === undefined ? digits.replace(/0+$/u, "") : digits;
   return significant.length === 0 ? 1 : significant.length;
-}
-
-function x2ValueSetHasFact(input: X2ValueSet | undefined, fact: X2ValueFact): boolean {
-  return input?.has(fact) === true;
 }
 
 function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {

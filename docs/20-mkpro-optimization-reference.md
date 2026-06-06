@@ -1195,7 +1195,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Non-empty X2-preserving commands create a transient proof for the immediate
     `ВП`; a later empty command drops that transient source and proves a fresh
     source from the current visible `X`. Structural forms remain shape-only and
-    are not used as decimal value or dot-safety evidence. The proved decimal
+    are not used as decimal value or dot-safety evidence. Value-set membership
+    checks for stable expression keys go through the same canonical structural
+    source-key layer as value-set joins, so a legacy/raw
+    `expr-key:...(shape:hex-exponent:...)` fact and the restored
+    `expr-key:...(shape:hex:...:mantissa)` spelling are treated as the same X2
+    computed value without promoting either shape to a decimal alias. The proved decimal
     first-digit source is visible to `vp-splice`, so an empty separator and a
     cancelling exponent sign pair before that `ВП` can be removed together. It
     also carries exact emulator-pinned single-digit hex

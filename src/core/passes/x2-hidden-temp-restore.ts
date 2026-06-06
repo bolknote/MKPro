@@ -26,6 +26,7 @@ import {
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StatesHaveSameVpEntrySignSource,
   x2ValueFactIsNormalizedDecimal,
+  x2ValueSetHasFact,
   x2ValueShapeSetsHaveSameRestoredVisibleDecimal,
   type DirectReturnAnalysisContext,
   type IrPass,
@@ -193,7 +194,7 @@ function hiddenTempStoreSourceAlreadySyncedInX2(
       !isStableStoredSourceFact(ops, storeIndex, recallIndex, fact, directReturnContext) &&
       !isStableRegisterStoredSourceFact(ops, storeIndex, recallIndex, fact, directReturnContext)
     ) continue;
-    if (recallState.x2.has(fact)) return true;
+    if (x2ValueSetHasFact(recallState.x2, fact)) return true;
   }
   return false;
 }
@@ -205,7 +206,7 @@ function hiddenTempStoreSourceAlreadyDotSafeInX2(
   if (storeState === undefined || recallState === undefined) return false;
   for (const fact of storeState.x) {
     if (!isNormalizedDecimalFact(fact)) continue;
-    if (recallState.x2.has(fact)) return true;
+    if (x2ValueSetHasFact(recallState.x2, fact)) return true;
   }
   return false;
 }
@@ -267,7 +268,7 @@ function hiddenTempStoreComputedSourceAlreadySyncedInX2(
   for (const fact of storeState.x) {
     if (!fact.startsWith("expr:") && !fact.startsWith("expr-key:")) continue;
     if (!isStableStoredSourceFact(ops, storeIndex, recallIndex, fact, directReturnContext)) continue;
-    if (recallState.x2.has(fact)) return true;
+    if (x2ValueSetHasFact(recallState.x2, fact)) return true;
   }
   return false;
 }

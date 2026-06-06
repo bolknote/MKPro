@@ -2573,6 +2573,10 @@ export function x2ValueSetHasIntersection(left: X2ValueSet | undefined, right: X
   return false;
 }
 
+export function x2ValueSetHasFact(input: X2ValueSet | undefined, fact: X2ValueFact): boolean {
+  return canonicalX2ValueSet(input).has(canonicalX2ValueFact(fact));
+}
+
 export function x2ValueSetHasRegister(input: X2ValueSet | undefined, register: RegisterName): boolean {
   return input?.has(registerValueFact(register)) === true;
 }
@@ -2688,7 +2692,7 @@ export function x2ValueSetHasNormalizedDecimalFact(
   input: X2ValueSet | undefined,
   fact: X2ValueFact,
 ): boolean {
-  return x2ValueFactIsNormalizedDecimal(fact) && input?.has(fact) === true;
+  return x2ValueFactIsNormalizedDecimal(fact) && x2ValueSetHasFact(input, fact);
 }
 
 export function x2StateHasSameNormalizedDecimalInXAndX2(
@@ -3690,7 +3694,7 @@ export function recallAlreadySyncedInX2MemoryValue(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   for (const fact of state.memory?.[register] ?? []) {
-    if (predicate(fact) && state.x2.has(fact)) return register;
+    if (predicate(fact) && x2ValueSetHasFact(state.x2, fact)) return register;
   }
   return undefined;
 }
@@ -3702,7 +3706,7 @@ export function recallAlreadySyncedInX2PreloadedDecimal(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   for (const fact of preloadedConstantValueFacts(op)) {
-    if (state.x2.has(fact)) return register;
+    if (x2ValueSetHasFact(state.x2, fact)) return register;
   }
   return undefined;
 }
@@ -3742,7 +3746,7 @@ export function recallAlreadyInXMemoryValue(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   for (const fact of state.memory?.[register] ?? []) {
-    if (predicate(fact) && state.x.has(fact)) return register;
+    if (predicate(fact) && x2ValueSetHasFact(state.x, fact)) return register;
   }
   return undefined;
 }
@@ -3754,7 +3758,7 @@ export function recallAlreadyInXPreloadedDecimal(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   for (const fact of preloadedConstantValueFacts(op)) {
-    if (state.x.has(fact)) return register;
+    if (x2ValueSetHasFact(state.x, fact)) return register;
   }
   return undefined;
 }
