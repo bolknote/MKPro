@@ -1325,7 +1325,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shape-only `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е`
     remains a display digit. Until those shapes are separately proved dot-safe,
     hex/super/display shapes remain
-    structural only. `super:*` is narrower than `hex:*`: only optional-sign
+    structural only. The `ВП .` exception is modeled as a separate
+    context-sensitive structural proof: if the active structural `ВП` context
+    closes to a mantissa whose first significant nibble is `D`/`Е`, a following
+    `.` reached through at most one role-free X2-preserving non-empty command
+    can be removed when its result is immediately overwritten; this does not
+    turn the shape into a general dot-safe value. `super:*` is narrower than `hex:*`: only optional-sign
     `F[A-F]` slot forms
     stay in the super lattice; other structural displays stay hex-only or
     unknown. Set-level shape proofs first canonicalize and drop invalid shape

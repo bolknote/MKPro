@@ -15,6 +15,7 @@ import {
   removingRecallCanExposeStackLift,
   removingStackLiftCanExposeStack,
   x2CanUseDotRestoreAt,
+  x2CanUseVpDotRestoreAt,
   x2StateHasDotSafeDecimalX2,
   x2StateHasOnlyDotSafeStructuralMantissaX2,
   x2StateHasStructuralShapeX2,
@@ -109,11 +110,15 @@ function isDeadRestoreCandidate(
   if (isDisplayFocusSensitive(op)) return false;
   if (op.opcode === DOT) {
     const hasDotSafeStructuralX2 = x2StateHasOnlyDotSafeStructuralMantissaX2(state);
-    if (!hasDotSafeStructuralX2 && x2StateHasUnsafeDotRestoreShapeX2(state)) return false;
-    return x2StateIsClosedPlainContext(state) &&
+    const hasVpDotSafeStructuralX2 = x2CanUseVpDotRestoreAt(ops, index, state);
+    if (!hasDotSafeStructuralX2 && !hasVpDotSafeStructuralX2 && x2StateHasUnsafeDotRestoreShapeX2(state)) {
+      return false;
+    }
+    return (x2StateIsClosedPlainContext(state) || hasVpDotSafeStructuralX2) &&
       (
         x2StateHasDotSafeDecimalX2(state) ||
         hasDotSafeStructuralX2 ||
+        hasVpDotSafeStructuralX2 ||
         x2CanUseDotRestoreAt(ops, index, state, dotSafe, immediateSync, context)
       );
   }

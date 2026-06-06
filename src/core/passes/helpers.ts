@@ -3173,6 +3173,53 @@ export function x2StateHasOnlyDotSafeStructuralMantissaX2(state: X2ValueDataflow
     x2ShapeSetHasOnlyDotSafeStructuralMantissas(state.x2Shape);
 }
 
+export function x2CanUseVpDotRestoreAt(
+  ops: readonly IrOp[],
+  index: number,
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  return x2StateHasVpDotSafeStructuralContextX2(state) && x2VpDotRestoreGapIsSafe(ops, index);
+}
+
+export function x2StateHasVpDotSafeStructuralContextX2(state: X2ValueDataflowState | undefined): boolean {
+  if (state === undefined || state.structuralVpContext?.kind !== "exponent") return false;
+  if (state.x2Shape === undefined || state.x2Shape.size === 0) return false;
+  for (const fact of state.x2Shape) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "exponent-entry" || model.safety !== "structuralOnly") return false;
+    const mantissa = model.closedStructuralMantissa ?? model.mantissa;
+    if (!structuralMantissaHasVpDotSafeLead(mantissa)) return false;
+  }
+  return true;
+}
+
+function structuralMantissaHasVpDotSafeLead(model: X2MantissaDataModel): boolean {
+  if ((model.radix !== "hex" && model.radix !== "super") || model.sign !== "") return false;
+  for (const digit of model.digits) {
+    const value = structuralHexNibbleValue(digit);
+    if (value === undefined) return false;
+    if (value === 0) continue;
+    return value === 13 || value === 14;
+  }
+  return false;
+}
+
+function x2VpDotRestoreGapIsSafe(ops: readonly IrOp[], index: number): boolean {
+  let preservingNonEmpty = 0;
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const op = ops[cursor]!;
+    if (op.kind === "label") continue;
+    if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+    if (op.kind !== "plain") return false;
+    if (op.opcode === 0x0c) return preservingNonEmpty <= 1;
+    if (isFreeStandingX2EmptyOp(op)) continue;
+    if (plainX2Effect(op) !== "preserves" || hasIrRoles(op)) return false;
+    preservingNonEmpty += 1;
+    if (preservingNonEmpty > 1) return false;
+  }
+  return false;
+}
+
 export function x2StateHasUnsafeDotRestoreShapeX2(state: X2ValueDataflowState | undefined): boolean {
   const safety = x2RestoreSafety(state);
   return safety === "structuralOnly" || safety === "errorProne";

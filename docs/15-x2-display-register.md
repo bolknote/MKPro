@@ -111,7 +111,12 @@ mantissa shape algebra; structural hex/super targets stay shape-only.
 
 These are not just exponent-entry combinations in program mode. They can be
 used as X2-restoration tools and can produce useful side effects before an error
-or display transition. Use only with a tested state table.
+or display transition. The optimizer models one safe structural `ВП .`
+exception without promoting it to ordinary dot safety: when the active
+structural `ВП` context closes to a mantissa whose first significant nibble is
+`D`/`Е`, `.` may be treated as non-erroring through zero or one role-free
+X2-preserving non-empty command, plus free-standing empty commands. Other
+hex/super contexts stay structural-only. Use only with a tested state table.
 
 ## Error and Overflow Timing
 

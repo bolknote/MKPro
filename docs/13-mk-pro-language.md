@@ -1362,7 +1362,10 @@ The pipeline currently contains:
   shape-only `hex:*` / `super:*` facts until a later proof makes them dot-safe. Hex/super preloads
   with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural
   `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е` remains an
-  ordinary display digit. The documented `F pi` stack producer also seeds the
+  ordinary display digit. The `ВП .` structural exception is tracked separately:
+  a `D`/`Е` first significant nibble after active structural `ВП` context can
+  make a following `.` non-erroring through a very short X2-preserving gap, but
+  it is not promoted to a general dot-safe value. The documented `F pi` stack producer also seeds the
   hardware decimal constant `3.1415926`, its stable expression key, and the
   display shape `mantissa:3.1415926:decimal`.
   Emulator-verified special values for documented functions are modeled only

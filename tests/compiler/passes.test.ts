@@ -45,6 +45,7 @@ import {
   transferX2ValueStateForEdge,
   x2CanUseClosedSignChangeDotSourceAt,
   x2CanUseSourceDotRestoreAt,
+  x2CanUseVpDotRestoreAt,
   x2CanonicalShapeFact,
   x2ClosedDecimalExponentDisplayShapeFact,
   x2ClosedStructuralExponentMantissaShapeFact,
@@ -61,6 +62,7 @@ import {
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
+  x2StateHasVpDotSafeStructuralContextX2,
   x2StateIsClosedPlainContext,
   x2ShapeDataModelForFact,
   x2ShapeFactRestoredVisibleDecimal,
@@ -1543,6 +1545,49 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetHasOnlyDotSafeStructuralMantissas(new Set(["hex:Г:mantissa"]))).toBe(false);
     expect(x2ShapeSetHasOnlyDotSafeStructuralMantissas(new Set(["hex:A:mantissa", "hex:F:mantissa"]))).toBe(false);
     expect(x2ShapeSetHasOnlyDotSafeStructuralMantissas(new Set(["hex-exponent:A:0"]))).toBe(false);
+  });
+
+  it("x2 shape algebra recognizes safe structural VP-dot contexts", () => {
+    const dProgram: IrOp[] = [
+      recall("1", "preload const D"),
+      plain(0x0c, "ВП"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const eGapProgram: IrOp[] = [
+      recall("1", "preload const Е"),
+      plain(0x0c, "ВП"),
+      plain(0x20, "F pi"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const twoGapProgram: IrOp[] = [
+      recall("1", "preload const Е"),
+      plain(0x0c, "ВП"),
+      plain(0x20, "F pi"),
+      plain(0x22, "F x^2"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const cProgram: IrOp[] = [
+      recall("1", "preload const C"),
+      plain(0x0c, "ВП"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const dStates = computeX2ValueStates(dProgram);
+    const eGapStates = computeX2ValueStates(eGapProgram);
+    const twoGapStates = computeX2ValueStates(twoGapProgram);
+    const cStates = computeX2ValueStates(cProgram);
+
+    expect(x2StateHasVpDotSafeStructuralContextX2(dStates[2])).toBe(true);
+    expect(x2CanUseVpDotRestoreAt(dProgram, 2, dStates[2])).toBe(true);
+    expect(x2StateHasVpDotSafeStructuralContextX2(eGapStates[3])).toBe(true);
+    expect(x2CanUseVpDotRestoreAt(eGapProgram, 3, eGapStates[3])).toBe(true);
+    expect(x2StateHasVpDotSafeStructuralContextX2(twoGapStates[4])).toBe(true);
+    expect(x2CanUseVpDotRestoreAt(twoGapProgram, 4, twoGapStates[4])).toBe(false);
+    expect(x2StateHasVpDotSafeStructuralContextX2(cStates[2])).toBe(false);
+    expect(x2CanUseVpDotRestoreAt(cProgram, 2, cStates[2])).toBe(false);
   });
 
   it("x2 value algebra compares decimal facts by restored visible value", () => {
@@ -11334,6 +11379,37 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0d, "Cx"),
       halt(),
     ]);
+  });
+
+  it("x2-dead-restore-before-overwrite removes safe structural VP-dot before hard overwrite", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const D"),
+      plain(0x0c, "ВП"),
+      plain(0x0a, "."),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite keeps unsafe structural VP-dot before hard overwrite", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const C"),
+      plain(0x0c, "ВП"),
+      plain(0x0a, "."),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("x2-dead-restore-before-overwrite keeps unsafe structural dot before hard overwrite", () => {
