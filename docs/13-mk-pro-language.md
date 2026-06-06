@@ -1412,7 +1412,9 @@ The pipeline currently contains:
   every resulting mantissa nibble remains `0`..`9`, including cases where one
   or both operands are structural hex/super display shapes. The original
   result display is still kept as shape-only metadata, so non-normal display
-  context is not promoted to a fresh decimal entry. A-F results seed
+  context is not promoted to a fresh decimal entry; decimal-only structural
+  bitwise results additionally keep their exact decimal display shape for
+  display-shape equality and later X2 sync proofs. A-F results seed
   shape-only structural `hex:*` mantissas when operands can be parsed as
   Latin hex nibbles or known MK-61 display glyphs `С`/`Г`/`Е`; unknown glyph
   cells remain conservative. Structural `К |x|` also stays shape-only: it removes

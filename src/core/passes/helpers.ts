@@ -930,11 +930,13 @@ function plainProducesConcreteStructuralUnaryDecimalShapeFacts(
   xShape: X2ShapeSet | undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  if (op.opcode !== 0x22 && op.opcode !== 0x32) return output;
+  if (op.opcode !== 0x22 && op.opcode !== 0x32 && op.opcode !== 0x3a) return output;
   for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShape))) {
     const result = op.opcode === 0x22
       ? structuralHexSquareDecimalDisplayShapeFact(fact)
-      : exactPlainIntegerDecimalMantissaShapeFact(structuralHexSignDecimalValue(fact) ?? "");
+      : op.opcode === 0x32
+        ? exactPlainIntegerDecimalMantissaShapeFact(structuralHexSignDecimalValue(fact) ?? "")
+        : structuralBitwiseNotDecimalDisplayShapeFact(fact);
     if (result !== undefined) output.add(result);
   }
   return output;
@@ -1039,6 +1041,7 @@ function plainProducesStructuralBinaryDecimalShapes(
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   for (const fact of structuralHexBinaryDecimalDisplayShapes(op, y, x, yShape, xShape)) output.add(fact);
+  for (const fact of structuralBitwiseDecimalDisplayShapes(op, y, x, yShape, xShape)) output.add(fact);
   return output;
 }
 
@@ -1513,6 +1516,13 @@ function structuralBitwiseNotDecimalValueFromFact(fact: X2ShapeFact): string | u
   return result === undefined ? undefined : decimalValueFromBitwiseMantissaNibbles(result);
 }
 
+function structuralBitwiseNotDecimalDisplayShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const nibbles = structuralMantissaNibbles(fact);
+  if (nibbles === undefined) return undefined;
+  const result = structuralBitwiseNotNibbles({ nibbles, structural: true });
+  return result === undefined ? undefined : decimalDisplayShapeFromBitwiseMantissaNibbles(result);
+}
+
 function structuralBitwiseNotNibbles(operand: StructuralBitwiseOperand): number[] | undefined {
   if (operand.nibbles.length !== 8) return undefined;
   const result = [8];
@@ -1561,6 +1571,28 @@ function structuralBitwiseDecimalValue(
   return result === undefined ? undefined : decimalValueFromBitwiseMantissaNibbles(result);
 }
 
+function structuralBitwiseDecimalDisplayShapes(
+  op: Extract<IrOp, { kind: "plain" }>,
+  y: X2ValueSet | undefined,
+  x: X2ValueSet | undefined,
+  yShape: X2ShapeSet | undefined,
+  xShape: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  if (op.opcode < 0x37 || op.opcode > 0x39) return output;
+  const left = bitwiseOperandsFromValuesAndShapes(y, yShape);
+  const right = bitwiseOperandsFromValuesAndShapes(x, xShape);
+  for (const leftOperand of left) {
+    for (const rightOperand of right) {
+      if (!leftOperand.structural && !rightOperand.structural) continue;
+      const result = structuralBitwiseNibbles(op.opcode, leftOperand, rightOperand);
+      const shape = result === undefined ? undefined : decimalDisplayShapeFromBitwiseMantissaNibbles(result);
+      if (shape !== undefined) output.add(shape);
+    }
+  }
+  return output;
+}
+
 function structuralBitwiseNibbles(
   opcode: number,
   left: StructuralBitwiseOperand,
@@ -1579,6 +1611,11 @@ function structuralBitwiseNibbles(
 function decimalValueFromBitwiseMantissaNibbles(nibbles: readonly number[]): string | undefined {
   if (nibbles.length !== 8 || nibbles.some((digit) => digit < 0 || digit > 9)) return undefined;
   return decimalFromMantissaDigits(nibbles);
+}
+
+function decimalDisplayShapeFromBitwiseMantissaNibbles(nibbles: readonly number[]): X2ShapeFact | undefined {
+  if (decimalValueFromBitwiseMantissaNibbles(nibbles) === undefined) return undefined;
+  return decimalMantissaShapeFact(bitwiseMantissaRaw(nibbles));
 }
 
 function structuralMantissaNibbles(fact: X2ShapeFact): number[] | undefined {

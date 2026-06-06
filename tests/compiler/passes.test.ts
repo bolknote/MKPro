@@ -4269,12 +4269,14 @@ describe("ir passes on synthetic programs", () => {
     );
     expect(x2ShapeStateText(computeX2ValueStates(structuralAndProgram)[4]?.xShape)).toEqual([
       "hex:8.0000000:mantissa",
+      "mantissa:8.0000000:decimal",
     ]);
     expect(x2ValueStateText(computeX2ValueStates(structuralNotProgram)[2]?.x)).toContain(
       "decimal:8.0666666:normalized",
     );
     expect(x2ShapeStateText(computeX2ValueStates(structuralNotProgram)[2]?.xShape)).toEqual([
       "hex:8.0666666:mantissa",
+      "mantissa:8.0666666:decimal",
     ]);
   });
 

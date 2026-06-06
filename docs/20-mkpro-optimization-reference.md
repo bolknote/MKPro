@@ -911,7 +911,9 @@ Display rewrites are separated into strategy selection + body lowering.
   still decimal, including results computed from structural hex/super display
   operands. The raw result display remains tracked as shape-only metadata, so
   non-normal hex-shaped displays are not treated as freshly entered decimal
-  mantissas. A-F/hex-cell results seed shape-only structural `hex:*` mantissas
+  mantissas; when the structural bitwise result is decimal-only, the proof also
+  records the exact decimal display shape alongside the structural spelling.
+  A-F/hex-cell results seed shape-only structural `hex:*` mantissas
   when both operands can be parsed as Latin hex nibbles or known
   MK-61 display glyphs `С`/`Г`/`Е`, while unknown glyph cells remain
   conservative. The shape parser and preload recognizer use that same closed
