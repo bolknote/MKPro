@@ -4016,6 +4016,14 @@ function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflow
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     vpEntrySignShape: cloneOptionalShapeSet(input.vpEntrySignShape),
     ...(input.vpEntryShapeTransient === true ? { vpEntryShapeTransient: true } : {}),
+    ...cloneX2MemoryFields(input),
+  };
+}
+
+function cloneX2MemoryFields(
+  input: Pick<X2ValueDataflowState, "memory" | "shapeMemory">,
+): Pick<X2ValueDataflowState, "memory" | "shapeMemory"> {
+  return {
     memory: input.memory === undefined ? undefined : cloneX2ValueMemory(input.memory),
     shapeMemory: input.shapeMemory === undefined ? undefined : cloneX2ShapeMemory(input.shapeMemory),
   };
@@ -4150,8 +4158,7 @@ function transferX2ValueDataflowState(
         vpEntryMantissa: vpEntryMantissasFromValueFacts(value),
         vpEntryShape: vpEntryShapesFromShapeFacts(shape),
         vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shape),
-        memory: input.memory,
-        shapeMemory: input.shapeMemory,
+        ...cloneX2MemoryFields(input),
       };
     }
     case "indirect-recall": {
@@ -4179,8 +4186,7 @@ function transferX2ValueDataflowState(
         vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
         vpEntryShape: vpEntryShapesFromShapeFacts(shape),
         vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shape),
-        memory: input.memory,
-        shapeMemory: input.shapeMemory,
+        ...cloneX2MemoryFields(input),
       };
     }
     case "plain":
@@ -4206,8 +4212,7 @@ function transferX2ValueDataflowState(
         vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, effect),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
         vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, x, xShape, x2Shape, effect),
-        memory: closed.memory,
-        shapeMemory: closed.shapeMemory,
+        ...cloneX2MemoryFields(closed),
       };
     }
     case "loop": {
@@ -4270,8 +4275,7 @@ function transferX2ValueDataflowState(
         vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, "affects"),
         vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, "affects"),
         vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, x, xShape, x2Shape, "affects"),
-        memory: closed.memory,
-        shapeMemory: closed.shapeMemory,
+        ...cloneX2MemoryFields(closed),
       };
     }
   }
@@ -4616,8 +4620,7 @@ function transferPlainX2ValueState(
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: noneX2StructuralEntryState(),
       vpEntryMantissa: new Set(["0"]),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   if (op.opcode === STACK_EXCHANGE_XY_OPCODE) {
@@ -4688,8 +4691,7 @@ function transferPlainX2ValueState(
         closedExponentShapes,
         closedExponentShapes,
       ),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
@@ -4747,8 +4749,7 @@ function transferPlainX2ValueState(
         closedExponentShapes,
         closedExponentShapes,
       ),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   const x = syncUnknownSameValue(
@@ -4827,8 +4828,7 @@ function transferPlainX2ValueState(
         closedStructuralShapes,
         closedStructuralShapes,
       ),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   return {
@@ -4876,8 +4876,7 @@ function transferPlainX2ValueState(
       input.xShape,
       input.x2Shape,
     ),
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    ...cloneX2MemoryFields(input),
   };
 }
 
@@ -5020,8 +5019,7 @@ function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: st
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: noneX2StructuralEntryState(),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   return x2ValueStateFromOpenDecimalEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
@@ -5059,8 +5057,7 @@ function x2ValueStateFromOpenDecimalEntry(
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
-    memory,
-    shapeMemory,
+    ...cloneX2MemoryFields({ memory, shapeMemory }),
   };
 }
 
@@ -5081,8 +5078,7 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: noneX2StructuralEntryState(),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   if (input.entry.kind !== "closed") {
@@ -5095,8 +5091,7 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
       vpContext: { kind: "unknown" },
       structuralEntry: { kind: "unknown" },
       structuralVpContext: { kind: "unknown" },
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   return {
@@ -5114,8 +5109,7 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
     vpEntrySignMantissa: vpEntrySignMantissasFromX2Restore(input.x2, input.x2Shape),
     vpEntryShape: vpEntryShapesFromShapeFacts(input.x2Shape),
     vpEntrySignShape: vpEntrySignShapesFromShapeFacts(input.x2Shape),
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    ...cloneX2MemoryFields(input),
   };
 }
 
@@ -5143,8 +5137,7 @@ function transferSignChangeX2ValueState(
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: signChangeStructuralExponentEntry(input.structuralVpContext),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   if (input.entry.kind === "closed" && input.vpContext?.kind === "exponent") {
@@ -5159,8 +5152,7 @@ function transferSignChangeX2ValueState(
       vpContext: signChangeVpContext(input.vpContext),
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   if (input.entry.kind === "closed" && (input.vpContext === undefined || input.vpContext.kind === "none")) {
@@ -5179,8 +5171,7 @@ function transferSignChangeX2ValueState(
       vpContext: { kind: "unknown" },
       structuralEntry: { kind: "unknown" },
       structuralVpContext: { kind: "unknown" },
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   const x = new Set<X2ValueFact>();
@@ -5210,8 +5201,7 @@ function transferSignChangeX2ValueState(
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntryMantissa: signChangedMantissaShapes(input.entry.raw),
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    ...cloneX2MemoryFields(input),
   };
 }
 
@@ -5242,8 +5232,7 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
       },
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: noneX2StructuralEntryState(),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   if (input.entry.kind === "exponent") {
@@ -5285,8 +5274,7 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
       },
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: noneX2StructuralEntryState(),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   if (input.entry.kind === "closed" && input.vpEntryShape !== undefined && input.vpEntryShape.size > 0) {
@@ -5304,8 +5292,7 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
     vpContext: { kind: "unknown" },
     structuralEntry: { kind: "unknown" },
     structuralVpContext: { kind: "unknown" },
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    ...cloneX2MemoryFields(input),
   };
 }
 
@@ -5346,8 +5333,7 @@ function transferIndirectConditionalX2ValueState(
     vpEntrySignMantissa: transferConditionalX2VpEntrySignMantissaState(closed, x, xShape, x2Shape, effect),
     vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
     vpEntrySignShape: transferConditionalX2VpEntrySignShapeState(closed, x, xShape, x2Shape, effect),
-    memory: closed.memory,
-    shapeMemory: closed.shapeMemory,
+    ...cloneX2MemoryFields(closed),
   };
   return edge === "jump" && !isStableIndirectSelector(op.register)
     ? dropMutatedSelectorX2ValueFact(output, op.register, trackRegisterMemory)
@@ -5492,8 +5478,7 @@ function transferExchangeXYX2ValueState(
       sourceXShape,
       input.x2Shape,
     ),
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    ...cloneX2MemoryFields(input),
   };
 }
 
@@ -5552,8 +5537,7 @@ function transferCopyYToXX2ValueState(
       closed.xShape,
       closed.x2Shape,
     ),
-    memory: closed.memory,
-    shapeMemory: closed.shapeMemory,
+    ...cloneX2MemoryFields(closed),
   };
 }
 
@@ -7530,8 +7514,7 @@ function signChangeClosedDecimalState(
     vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
     vpEntrySignMantissa: vpEntryMantissasFromValueFacts(values),
     vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapes),
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    ...cloneX2MemoryFields(input),
   };
 }
 
@@ -7633,8 +7616,7 @@ function signChangedClosedDecimalExponentShapeState(
     vpEntrySignMantissa: mantissas.size === 0 ? undefined : mantissas,
     vpEntryShape: vpEntryShapesFromShapeFacts(shapes),
     vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapes),
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    ...cloneX2MemoryFields(input),
   };
 }
 
@@ -7672,8 +7654,7 @@ function signChangedVpEntryDecimalShapeState(input: X2ValueDataflowState): X2Val
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapes),
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    ...cloneX2MemoryFields(input),
   };
 }
 
@@ -8057,8 +8038,7 @@ function x2ValueStateFromMantissaShapes(
     vpEntryMantissa: mantissas,
     vpEntrySignMantissa: mantissas,
     vpEntrySignShape: vpEntrySignShapesFromShapeFacts(x2Shape),
-    memory,
-    shapeMemory,
+    ...cloneX2MemoryFields({ memory, shapeMemory }),
   };
 }
 
@@ -8083,8 +8063,7 @@ function x2ValueStateFromStructuralShapes(
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntryShape: vpEntryShapesFromShapeFacts(shapeSet),
     vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapeSet),
-    memory,
-    shapeMemory,
+    ...cloneX2MemoryFields({ memory, shapeMemory }),
   };
 }
 
@@ -8107,8 +8086,7 @@ function x2ValueStateFromStructuralExponentEntry(
       vpContext: noneX2VpContextState(),
       structuralEntry: cloneX2StructuralEntryState(input),
       structuralVpContext: { kind: "unknown" },
-      memory,
-      shapeMemory,
+      ...cloneX2MemoryFields({ memory, shapeMemory }),
     };
   }
   const shapes = structuralExponentEntryShapeFacts(input);
@@ -8124,8 +8102,7 @@ function x2ValueStateFromStructuralExponentEntry(
     structuralEntry: cloneX2StructuralEntryState(input),
     structuralVpContext: x2StructuralContextFromEntry(input),
     vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapes),
-    memory,
-    shapeMemory,
+    ...cloneX2MemoryFields({ memory, shapeMemory }),
   };
 }
 
@@ -8148,8 +8125,7 @@ function x2ValueStateFromExponentEntry(
       vpContext: { kind: "unknown" },
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: noneX2StructuralEntryState(),
-      memory,
-      shapeMemory,
+      ...cloneX2MemoryFields({ memory, shapeMemory }),
     };
   }
   const values = closedExponentEntryDecimalFacts(input);
@@ -8169,8 +8145,7 @@ function x2ValueStateFromExponentEntry(
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
     vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapes),
-    memory,
-    shapeMemory,
+    ...cloneX2MemoryFields({ memory, shapeMemory }),
   };
 }
 
@@ -8254,8 +8229,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
       vpEntryMantissa: vpEntryMantissasFromValueFacts(closedExponentValues),
       vpEntryShape: vpEntryShapesFromShapeFacts(closedExponentShapes),
       vpEntrySignShape: vpEntrySignShapesFromShapeFacts(closedExponentShapes),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
@@ -8274,8 +8248,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
       structuralVpContext: x2StructuralContextFromEntry(structuralEntry),
       vpEntryShape: vpEntryShapesFromShapeFacts(shapes),
       vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapes),
-      memory: input.memory,
-      shapeMemory: input.shapeMemory,
+      ...cloneX2MemoryFields(input),
     };
   }
   return {
@@ -8293,8 +8266,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
     vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: input.vpEntryShapeTransient === true ? undefined : cloneOptionalShapeSet(input.vpEntryShape),
     vpEntrySignShape: cloneOptionalShapeSet(input.vpEntrySignShape),
-    memory: input.memory,
-    shapeMemory: input.shapeMemory,
+    ...cloneX2MemoryFields(input),
   };
 }
 
