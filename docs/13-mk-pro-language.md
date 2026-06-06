@@ -1753,23 +1753,27 @@ The pipeline currently contains:
   ops. It recognizes integer and fractional decimal digit-runs (`12`, `1.2`),
   fractional-mantissa exponent literals (`1.2 ВП 3`), and their open-entry
   sign-change forms; role-bearing `/-/` cells are not treated as literal sign
-  suffixes. A repeated literal may be replaced before a following `ВП` only
-  when the same-source proof survives the free-standing `КНОП`/`К1`/`К2` and
-  `/-/` restore gap, so standalone fractional digit-runs and unsafe
-  leading-zero/signed-zero shapes stay explicit until a separate proof exists.
+  suffixes. When the following cells also form a longer exponent literal, the
+  pass first tries that full literal and then the mantissa prefix before `ВП`;
+  the prefix form is accepted when the inserted `.` itself is the first X2
+  restore and recreates the same mantissa source for `ВП`. A repeated literal
+  may otherwise be replaced before a following `ВП` only when the same-source
+  proof survives the free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap, so
+  standalone fractional digit-runs and unsafe leading-zero/signed-zero shapes
+  stay explicit until a separate proof exists.
   The same shared CFG-aware X2 exposure walker used by `x2-noop-restore`
   protects the inserted `.`:
   branch/call edges are not
   automatic blockers, but a path that preserves X2 into a later
   context-sensitive `.`/`/-/`/`ВП` restore keeps the literal explicit. The one
   exception is a normalized non-zero digit run or normalized exponent-entry
-  literal with a non-leading-zero mantissa followed only by free-standing
-  `КНОП`/`К1`/`К2` cells before `ВП`: the inserted `.` is emulator-proved to
-  preserve the same mantissa source there. Leading-zero, signed-zero, and
-  leading-zero exponent mantissa forms still stay explicit because their
-  restored mantissa shape is observable. When only the restored visible decimal
-  matches, the proof is accepted for a later `.` exposure only; `/-/` and `ВП`
-  still require exact value/shape or mantissa-source evidence.
+  literal with a non-leading-zero mantissa followed immediately, or through
+  only free-standing `КНОП`/`К1`/`К2` cells, by `ВП`: the inserted `.` is
+  emulator-proved to preserve the same mantissa source there. Leading-zero,
+  signed-zero, and leading-zero exponent mantissa forms still stay explicit
+  because their restored mantissa shape is observable. When only the restored
+  visible decimal matches, the proof is accepted for a later `.` exposure only;
+  `/-/` and `ВП` still require exact value/shape or mantissa-source evidence.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
   `X->П r`, and stable-indirect `К X->П R7..Re` with a proved memory target,
   when liveOut at that point excludes the written cell, unless that store

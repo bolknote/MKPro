@@ -3626,6 +3626,25 @@ export function x2HasOnlyRestoreGapBeforeVp(
   return false;
 }
 
+export function x2ReplacementDotHasOnlyRestoreGapBeforeVp(
+  ops: readonly IrOp[],
+  start: number,
+  context?: DirectReturnAnalysisContext,
+): boolean {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    if (isFreeStandingX2RestoreGapOp(op)) continue;
+    if (
+      context !== undefined &&
+      isKnownReturnCallOp(op) &&
+      x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
+    ) continue;
+    return isFreeStandingX2VpOp(op);
+  }
+  return false;
+}
+
 export function x2HasSignRestoreGapBeforeVp(
   ops: readonly IrOp[],
   start: number,

@@ -1435,14 +1435,19 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `5 ВП 3`, `1.2 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
     X2-affecting sync; role-bearing `/-/` cells are not parsed as replaceable
-    literal sign suffixes. Fractional digit-runs remain explicit before a
-    following `ВП` source context; a repeated normalized non-zero integer
-    digit-run, signed digit-run, or normalized exponent-entry literal with a
-    non-leading-zero mantissa may also be replaced before a free-standing
-    `КНОП`/`К1`/`К2` and `/-/` restore gap followed by `ВП`, including when a
-    transparent direct/proved-indirect return helper sits between the gap and
-    `ВП`: emulator tests prove that the inserted `.` preserves the same
-    mantissa source for that exponent entry. Leading-zero and signed-zero forms are excluded from this
+    literal sign suffixes. When a cell range can be read both as a full
+    exponent-entry literal and as a mantissa prefix before `ВП`, the pass tries
+    the full literal first and then the prefix; the prefix is replaceable only
+    when the inserted `.` itself becomes the first X2 restore and recreates the
+    same mantissa source for that `ВП`. Fractional digit-runs remain explicit
+    before a following `ВП` source context; a repeated normalized non-zero
+    integer digit-run, signed digit-run, or normalized exponent-entry literal
+    with a non-leading-zero mantissa may also be replaced before an immediate
+    `ВП`, or before a free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap
+    followed by `ВП`, including when a transparent direct/proved-indirect
+    return helper sits between the gap and `ВП`: emulator tests prove that the
+    inserted `.` preserves the same mantissa source for that exponent entry.
+    Leading-zero and signed-zero forms are excluded from this
     shortcut because their restored mantissa shape is observable, and
     leading-zero exponent mantissas stay explicit for the same reason. If the
     following code cannot observe that raw mantissa shape, normalized X2 facts

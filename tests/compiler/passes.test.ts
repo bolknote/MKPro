@@ -57,6 +57,7 @@ import {
   x2MantissaShapeFactFromModel,
   x2MantissaSignChangedShapeFact,
   x2HasOnlyRestoreGapBeforeVp,
+  x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
@@ -5492,6 +5493,40 @@ describe("ir passes on synthetic programs", () => {
     expect(x2HasOnlyRestoreGapBeforeVp(displayCommentGap, 1)).toBe(false);
   });
 
+  it("x2 replacement-dot VP restore-gap scanner treats the inserted dot as the first restore", () => {
+    const immediateVp: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const transparentGap: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const roleBearingGap: IrOp[] = [
+      plain(0x02, "2"),
+      { kind: "plain", opcode: 0x54, meta: { mnemonic: "КНОП", roles: ["display-byte"] } },
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+
+    expect(x2HasOnlyRestoreGapBeforeVp(immediateVp, 1)).toBe(false);
+    expect(x2ReplacementDotHasOnlyRestoreGapBeforeVp(immediateVp, 1)).toBe(true);
+    expect(x2ReplacementDotHasOnlyRestoreGapBeforeVp(
+      transparentGap,
+      6,
+      directReturnAnalysisContext(transparentGap),
+    )).toBe(true);
+    expect(x2ReplacementDotHasOnlyRestoreGapBeforeVp(roleBearingGap, 1)).toBe(false);
+  });
+
   it("x2 VP restore-gap scanner crosses only transparent return helpers with context", () => {
     const directReturnGap: IrOp[] = [
       jump("main"),
@@ -9913,7 +9948,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("x2-literal-restore keeps digit runs that would change a following ВП context", () => {
+  it("x2-literal-restore replaces digit runs before immediate ВП context after X2-preserving ops", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
       plain(0x02, "2"),
@@ -9926,8 +9961,16 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2LiteralRestore.run(program, ctx);
 
-    expect(result.applied).toBe(0);
-    expect(result.ops).toEqual(program);
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
   });
 
   it("x2-literal-restore keeps fractional digit runs that would change a following ВП context", () => {
@@ -9988,6 +10031,31 @@ describe("ir passes on synthetic programs", () => {
       plain(0xf0, "F* empty F0"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
       plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces normalized digit runs before immediate ВП context", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),
@@ -10155,6 +10223,34 @@ describe("ir passes on synthetic programs", () => {
       plain(0xf0, "F* empty F0"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 5000 from hidden X2 temp" } },
       plain(0x55, "К 1"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces exponent literals before immediate ВП context", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 5000 from hidden X2 temp" } },
       plain(0x0c, "ВП"),
       plain(0x02, "2"),
       halt(),

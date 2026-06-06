@@ -19,6 +19,7 @@ import {
   x2CanUseSourceDotRestoreAt,
   x2HasSignRestoreGapBeforeVp,
   x2HasOnlyRestoreGapBeforeVp,
+  x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetsHaveSameDotSafeStructuralMantissa,
   x2ShapeSetsHaveSameRestoredDisplayShape,
@@ -117,7 +118,7 @@ const run: IrPassFn = (ops) => {
       directReturnContext,
     );
     const hasOnlyRestoreGapBeforeVp = x2HasOnlyRestoreGapBeforeVp(ops, index + 1, directReturnContext);
-    const insertedDotHasOnlyRestoreGapBeforeVp = dotReplacementHasOnlyRestoreGapBeforeVp(
+    const insertedDotHasOnlyRestoreGapBeforeVp = x2ReplacementDotHasOnlyRestoreGapBeforeVp(
       ops,
       index + 1,
       directReturnContext,
@@ -288,53 +289,6 @@ function hiddenTempStoreComputedSourceAlreadySyncedInX2(
     if (x2ValueSetHasFact(recallState.x2, fact)) return true;
   }
   return false;
-}
-
-function dotReplacementHasOnlyRestoreGapBeforeVp(
-  ops: readonly IrOp[],
-  start: number,
-  directReturnContext: DirectReturnAnalysisContext,
-): boolean {
-  for (let index = start; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") continue;
-    if (isFreeStandingRestoreGapOp(op)) continue;
-    if (
-      isKnownReturnCallOp(op) &&
-      knownReturnCallReturnsThroughNestedTransparentRange(
-        ops,
-        op,
-        directReturnContext,
-        isRestoreGapTransparentLinearOp,
-      )
-    ) continue;
-    return isFreeStandingVpOp(op);
-  }
-  return false;
-}
-
-function isRestoreGapTransparentLinearOp(op: IrOp): boolean {
-  return op.kind === "orphan-address" || isFreeStandingRestoreGapOp(op);
-}
-
-function isFreeStandingRestoreGapOp(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
-  return op.kind === "plain" &&
-    !hasRewriteBarrier(op) &&
-    !isDisplayFocusSensitive(op) &&
-    !hasRoles(op) &&
-    (op.opcode === 0x0b || (op.opcode >= 0x54 && op.opcode <= 0x56));
-}
-
-function isFreeStandingVpOp(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
-  return op.kind === "plain" &&
-    op.opcode === 0x0c &&
-    !hasRewriteBarrier(op) &&
-    !isDisplayFocusSensitive(op) &&
-    !hasRoles(op);
-}
-
-function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
-  return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
 }
 
 function isStableStoredSourceFact(

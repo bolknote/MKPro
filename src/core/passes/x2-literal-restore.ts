@@ -14,6 +14,7 @@ import {
   replacingNumberEntryCanExposeStackLift,
   x2CanUseSourceDotRestoreAt,
   x2HasOnlyRestoreGapBeforeVp,
+  x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2ValueSetHasFact,
@@ -168,8 +169,12 @@ function exponentLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiter
   };
 }
 
-function literalRunAt(ops: readonly IrOp[], start: number): NumericLiteralRun | undefined {
-  return exponentLiteralRunAt(ops, start) ?? decimalLiteralRunAt(ops, start);
+function literalRunsAt(ops: readonly IrOp[], start: number): readonly NumericLiteralRun[] {
+  const exponent = exponentLiteralRunAt(ops, start);
+  const decimal = decimalLiteralRunAt(ops, start);
+  if (exponent === undefined) return decimal === undefined ? [] : [decimal];
+  if (decimal === undefined || decimal.end === exponent.end) return [exponent];
+  return [exponent, decimal];
 }
 
 function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {
@@ -291,7 +296,13 @@ function replacingLiteralCanExposeContextSensitiveRestore(
   },
 ): boolean {
   if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
-  if (run.dotPreservesVpEntrySource && x2HasOnlyRestoreGapBeforeVp(ops, run.end + 1, context)) return false;
+  if (
+    run.dotPreservesVpEntrySource &&
+    (
+      x2HasOnlyRestoreGapBeforeVp(ops, run.end + 1, context) ||
+      x2ReplacementDotHasOnlyRestoreGapBeforeVp(ops, run.end + 1, context)
+    )
+  ) return false;
   if (
     !literalReplacementCanReachVpRestore(ops, run.end + 1) &&
     !x2SyncCanExposeContextSensitiveRestore(ops, run.end, {
@@ -389,49 +400,45 @@ const run: IrPassFn = (ops) => {
   const result: IrOp[] = [];
   let removed = 0;
 
+  opLoop:
   for (let index = 0; index < ops.length; index += 1) {
     const state = x2ValueStates[index];
-    const runAtIndex = literalRunAt(ops, index);
-    const exactX2Fact = runAtIndex === undefined ? false : x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact);
-    const visibleDecimalX2ValueFact = runAtIndex === undefined
-      ? false
-      : x2ValueSetHasRestoredVisibleDecimal(state?.x2, runAtIndex.x2Fact);
-    const visibleDecimalX2ShapeFact = runAtIndex === undefined || visibleDecimalX2ValueFact
-      ? false
-      : x2ValueShapeSetHasRestoredVisibleDecimal(state?.x2, state?.x2Shape, runAtIndex.x2Fact);
-    const visibleDecimalX2DisplayValueFact = visibleDecimalX2ValueFact && !exactX2Fact;
-    const visibleDecimalX2DotSafeShapeFact = visibleDecimalX2ShapeFact && !x2StateHasUnsafeDotRestoreShapeX2(state);
-    const visibleDecimalX2Fact = visibleDecimalX2ValueFact ||
-      visibleDecimalX2DotSafeShapeFact;
-    const sourceProvesFreeStandingRestore = runAtIndex !== undefined &&
-      (
-        x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) ||
-        visibleDecimalX2Fact
-      );
-    if (
-      runAtIndex !== undefined &&
-      isFreshClosedDecimalEntry(state) &&
-      x2CanUseSourceDotRestoreAt(
-        ops,
-        index,
-        state,
-        dotSafeStates[index] === true,
-        immediateSyncStates[index] === true,
-        sourceProvesFreeStandingRestore,
-        directReturnContext,
-      ) &&
-      (exactX2Fact || visibleDecimalX2Fact) &&
-      !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
-      !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext, {
-        value: exactX2Fact,
-        displayValue: visibleDecimalX2DisplayValueFact,
-        shape: visibleDecimalX2DotSafeShapeFact,
-      })
-    ) {
-      result.push(dotRestoreOp(runAtIndex.displayValue, ops[index]!));
-      removed += runAtIndex.end - index;
-      index = runAtIndex.end;
-      continue;
+    for (const runAtIndex of literalRunsAt(ops, index)) {
+      const exactX2Fact = x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact);
+      const visibleDecimalX2ValueFact = x2ValueSetHasRestoredVisibleDecimal(state?.x2, runAtIndex.x2Fact);
+      const visibleDecimalX2ShapeFact = visibleDecimalX2ValueFact
+        ? false
+        : x2ValueShapeSetHasRestoredVisibleDecimal(state?.x2, state?.x2Shape, runAtIndex.x2Fact);
+      const visibleDecimalX2DisplayValueFact = visibleDecimalX2ValueFact && !exactX2Fact;
+      const visibleDecimalX2DotSafeShapeFact = visibleDecimalX2ShapeFact && !x2StateHasUnsafeDotRestoreShapeX2(state);
+      const visibleDecimalX2Fact = visibleDecimalX2ValueFact ||
+        visibleDecimalX2DotSafeShapeFact;
+      const sourceProvesFreeStandingRestore = x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) ||
+        visibleDecimalX2Fact;
+      if (
+        isFreshClosedDecimalEntry(state) &&
+        x2CanUseSourceDotRestoreAt(
+          ops,
+          index,
+          state,
+          dotSafeStates[index] === true,
+          immediateSyncStates[index] === true,
+          sourceProvesFreeStandingRestore,
+          directReturnContext,
+        ) &&
+        (exactX2Fact || visibleDecimalX2Fact) &&
+        !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
+        !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext, {
+          value: exactX2Fact,
+          displayValue: visibleDecimalX2DisplayValueFact,
+          shape: visibleDecimalX2DotSafeShapeFact,
+        })
+      ) {
+        result.push(dotRestoreOp(runAtIndex.displayValue, ops[index]!));
+        removed += runAtIndex.end - index;
+        index = runAtIndex.end;
+        continue opLoop;
+      }
     }
     result.push(ops[index]!);
   }
