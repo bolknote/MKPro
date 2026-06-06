@@ -3569,6 +3569,7 @@ export function analyzeX2VpShapeContext(
   if (
     state.entry.kind === "closed" &&
     (state.vpContext === undefined || state.vpContext.kind === "none") &&
+    (state.structuralEntry === undefined || state.structuralEntry.kind === "none") &&
     (state.structuralVpContext === undefined || state.structuralVpContext.kind === "none")
   ) {
     return emptyX2VpShapeContextAnalysis("none");
@@ -7298,16 +7299,15 @@ function exponentEntryShapeFacts(input: Extract<X2EntryState, { kind: "exponent"
 }
 
 function structuralExponentEntryFromVpEntryShapes(shapes: X2ShapeSet): X2StructuralEntryState {
-  const mantissa = structuralMantissaShapeFacts(shapes);
-  return mantissa.size === 0
-    ? { kind: "unknown" }
-    : { kind: "exponent", mantissa, exponent: new Set([""]) };
+  return x2StructuralEntryStateFromParts(shapes, new Set([""]));
 }
 
 function structuralExponentEntryShapeFacts(input: Extract<X2StructuralEntryState, { kind: "exponent" }>): Set<X2ShapeFact> {
+  const entry = x2StructuralEntryStateFromParts(input.mantissa, input.exponent);
   const shapes = new Set<X2ShapeFact>();
-  for (const mantissa of input.mantissa) {
-    for (const exponent of input.exponent) {
+  if (entry.kind !== "exponent") return shapes;
+  for (const mantissa of entry.mantissa) {
+    for (const exponent of entry.exponent) {
       const fact = x2ExponentShapeFactFromMantissaFact(mantissa, exponent);
       if (fact !== undefined && x2ShapeFactSafety(fact) === "structuralOnly") shapes.add(fact);
     }
@@ -8262,6 +8262,26 @@ function noneX2StructuralEntryState(): X2StructuralEntryState {
   return { kind: "none" };
 }
 
+function x2StructuralEntryStateFromParts(
+  mantissaInput: X2ShapeSet | undefined,
+  exponentInput: ReadonlySet<string> | undefined,
+): X2StructuralEntryState {
+  const mantissa = structuralMantissaShapeFacts(canonicalShapeSet(mantissaInput));
+  const exponent = canonicalExponentSet(exponentInput);
+  return mantissa.size === 0 || exponent.size === 0
+    ? { kind: "unknown" }
+    : { kind: "exponent", mantissa, exponent };
+}
+
+function canonicalExponentSet(input: ReadonlySet<string> | undefined): Set<string> {
+  const output = new Set<string>();
+  for (const raw of input ?? []) {
+    const canonical = canonicalExponentShapeRaw(raw);
+    if (canonical !== undefined) output.add(canonical);
+  }
+  return output;
+}
+
 function cloneX2VpContextState(input: X2VpContextState | undefined): X2VpContextState {
   if (input === undefined || input.kind === "none" || input.kind === "unknown") return input ?? noneX2VpContextState();
   return {
@@ -8275,11 +8295,7 @@ function cloneX2StructuralEntryState(input: X2StructuralEntryState | undefined):
   if (input === undefined || input.kind === "none" || input.kind === "unknown") {
     return input ?? noneX2StructuralEntryState();
   }
-  return {
-    kind: "exponent",
-    mantissa: new Set(input.mantissa),
-    exponent: new Set(input.exponent),
-  };
+  return x2StructuralEntryStateFromParts(input.mantissa, input.exponent);
 }
 
 function x2VpContextFromExponentEntry(input: Extract<X2EntryState, { kind: "exponent" }>): X2VpContextState {
@@ -8293,11 +8309,7 @@ function x2VpContextFromExponentEntry(input: Extract<X2EntryState, { kind: "expo
 function x2StructuralContextFromEntry(
   input: Extract<X2StructuralEntryState, { kind: "exponent" }>,
 ): X2StructuralEntryState {
-  return {
-    kind: "exponent",
-    mantissa: new Set(input.mantissa),
-    exponent: new Set(input.exponent),
-  };
+  return x2StructuralEntryStateFromParts(input.mantissa, input.exponent);
 }
 
 function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
@@ -8407,11 +8419,7 @@ function advanceStructuralExponentDigitEntry(
     if (digits.length >= 2) return { kind: "unknown" };
     exponent.add(`${prefix}${digit}`);
   }
-  return {
-    kind: "exponent",
-    mantissa: new Set(input.mantissa),
-    exponent,
-  };
+  return x2StructuralEntryStateFromParts(input.mantissa, exponent);
 }
 
 function signChangeExponentEntry(input: Extract<X2EntryState, { kind: "exponent" }>): X2EntryState {
@@ -8433,11 +8441,7 @@ function signChangeStructuralExponentEntry(
   for (const raw of input.exponent) {
     exponent.add(raw.startsWith("-") ? raw.slice(1) : `-${raw}`);
   }
-  return {
-    kind: "exponent",
-    mantissa: new Set(input.mantissa),
-    exponent,
-  };
+  return x2StructuralEntryStateFromParts(input.mantissa, exponent);
 }
 
 function signChangeVpContext(input: Extract<X2VpContextState, { kind: "exponent" }>): X2VpContextState {
@@ -8498,9 +8502,7 @@ function joinX2StructuralEntryStates(
   }
   const mantissa = joinOptionalShapeSets(current.mantissa, incoming.mantissa);
   const exponent = joinStringSets(current.exponent, incoming.exponent);
-  return mantissa.size === 0 || exponent.size === 0
-    ? { kind: "unknown" }
-    : { kind: "exponent", mantissa, exponent };
+  return x2StructuralEntryStateFromParts(mantissa, exponent);
 }
 
 function sameX2EntryState(left: X2EntryState, right: X2EntryState): boolean {

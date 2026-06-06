@@ -1311,7 +1311,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     unknown. Shape-memory stores only validated canonical structural spellings:
     unknown/invalid display shapes are dropped before they can be recalled as
     proof facts, while equivalent hex/super display shapes still join after
-    store/recall proofs;
+    store/recall proofs; active structural exponent-entry and VP contexts use
+    the same validated canonical mantissa/exponent constructor, so invalid
+    structural shapes or malformed exponents cannot survive as splice proofs;
     structural VP context is not considered plain closed
     context by `.`/`/-/` rewrite guards. Closed-context
     `/-/` without a proved decimal, opaque, structural shape, or VP context stays
