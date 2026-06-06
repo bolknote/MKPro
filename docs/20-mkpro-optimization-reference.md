@@ -874,7 +874,10 @@ Display rewrites are separated into strategy selection + body lowering.
   source joins also use source keys: a raw decimal mantissa path and an exact
   decimal display-shape path can keep their shared mantissa/sign source without
   normalizing leading-zero text, while structural exponent/mantissa spellings
-  meet at the restored mantissa source.
+  meet at the restored mantissa source. These joins accumulate every proved
+  common source class instead of stopping at a direct raw/shape intersection, so
+  a CFG merge can preserve both a shared ordinary mantissa and a separate shared
+  exact display/structural source.
   Closed `/-/` shared-source proofs use the same canonical value sets before
   comparing visible `X` and hidden X2, so sign-change keys remain reusable
   after mixed raw/canonical paths meet.

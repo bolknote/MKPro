@@ -7145,12 +7145,16 @@ function joinVpSourceMantissas(
   rightShapes: X2ShapeSet | undefined,
 ): ReadonlySet<string> | undefined {
   const direct = joinOptionalStringSets(leftMantissas, rightMantissas);
-  if (direct !== undefined) return direct;
+  if (
+    direct !== undefined &&
+    (leftShapes?.size ?? 0) === 0 &&
+    (rightShapes?.size ?? 0) === 0
+  ) return direct;
+  const mantissas = new Set<string>(direct);
   const sharedKeys = joinStringSets(
     vpSourceKeys(leftMantissas, leftShapes),
     vpSourceKeys(rightMantissas, rightShapes),
   );
-  const mantissas = new Set<string>();
   for (const key of sharedKeys) {
     const mantissa = vpMantissaFromSourceKey(key);
     if (mantissa !== undefined) mantissas.add(mantissa);
@@ -7179,19 +7183,31 @@ function joinVpSourceShapeFacts(
   includeDecimal: boolean,
 ): X2ShapeSet | undefined {
   const direct = joinOptionalShapeSets(leftShapes, rightShapes);
-  if (direct.size > 0 || ((leftShapes?.size ?? 0) === 0 && (rightShapes?.size ?? 0) === 0)) return direct;
+  if (direct.size > 0 && !includeDecimal) return direct;
+  if (
+    direct.size > 0 &&
+    (leftMantissas?.size ?? 0) === 0 &&
+    (rightMantissas?.size ?? 0) === 0 &&
+    !shapeSetHasDecimalDisplaySource(leftShapes) &&
+    !shapeSetHasDecimalDisplaySource(rightShapes)
+  ) return direct;
+  const shapes = new Set<X2ShapeFact>(direct);
   const sharedKeys = joinStringSets(
     vpSourceKeys(leftMantissas, leftShapes),
     vpSourceKeys(rightMantissas, rightShapes),
   );
-  const shapes = new Set<X2ShapeFact>();
   for (const key of sharedKeys) {
     for (const fact of x2RestoredDisplayShapeFactsFromSourceKey(key) ?? []) {
       const safety = x2ShapeFactSafety(fact);
       if (safety === "structuralOnly" || (includeDecimal && safety !== "unknown")) shapes.add(fact);
     }
   }
+  if (shapes.size > 0 || ((leftShapes?.size ?? 0) === 0 && (rightShapes?.size ?? 0) === 0)) return shapes;
   return shapes.size === 0 ? undefined : shapes;
+}
+
+function shapeSetHasDecimalDisplaySource(shapes: X2ShapeSet | undefined): boolean {
+  return decimalDisplayShapeFacts(shapes).size > 0;
 }
 
 function vpEntryDisplaySourceKeys(

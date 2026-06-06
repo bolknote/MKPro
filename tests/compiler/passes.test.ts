@@ -1924,6 +1924,16 @@ describe("ir passes on synthetic programs", () => {
       { vpEntryShape: new Set<X2ShapeFact>(["exponent:1:8:decimal"]) },
       { vpEntryShape: new Set<X2ShapeFact>(["exponent:100000000:0:decimal"]) },
     ) ?? [])].sort()).toEqual(["100000000"]);
+    expect([...(x2JoinedVpEntryMantissaSources(
+      {
+        vpEntryMantissa: new Set(["7"]),
+        vpEntryShape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      },
+      {
+        vpEntryMantissa: new Set(["7"]),
+        vpEntryShape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      },
+    ) ?? [])].sort()).toEqual(["100", "7"]);
     expect(x2JoinedVpEntryMantissaSources(
       { vpEntryMantissa: new Set(["02"]) },
       { vpEntryShape: new Set<X2ShapeFact>(["mantissa:2:decimal"]) },
@@ -1936,6 +1946,20 @@ describe("ir passes on synthetic programs", () => {
       { vpEntrySignShape: new Set<X2ShapeFact>(["hex-exponent:Г:2"]) },
       { vpEntrySignShape: new Set<X2ShapeFact>(["hex:Г00:mantissa"]) },
     ))).toEqual(["hex:Г00:mantissa"]);
+    expect(x2ShapeStateText(x2JoinedVpEntrySignShapeSources(
+      {
+        vpEntrySignShape: new Set<X2ShapeFact>([
+          "hex-exponent:Г:2",
+          "exponent:100:0:decimal",
+        ]),
+      },
+      {
+        vpEntrySignShape: new Set<X2ShapeFact>([
+          "hex:Г00:mantissa",
+          "mantissa:100:decimal",
+        ]),
+      },
+    ))).toEqual(["hex:Г00:mantissa", "mantissa:100:decimal"]);
     expect(x2JoinedVpEntrySignShapeSources(
       { vpEntrySignMantissa: new Set(["02"]) },
       { vpEntrySignShape: new Set<X2ShapeFact>(["mantissa:2:decimal"]) },
