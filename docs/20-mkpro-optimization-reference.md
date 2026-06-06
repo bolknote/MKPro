@@ -844,9 +844,12 @@ Display rewrites are separated into strategy selection + body lowering.
   rewrites. These canonical decimal display shapes can also seed opaque
   stable-expression source keys; shape-only ordinary decimal mantissas do this
   only when an equivalent `decimal:*:normalized` value fact is not already
-  present. That records the source shape for hidden-temp equality without
-  inferring a decimal result value. Hex and super displays are not promoted to
-  decimal shapes without a separate display proof. For concrete decimal `X`, `К {x}` also
+  present or when the operation cannot prove an exact decimal result. When a
+  unary operation does prove an exact result from the restored-visible decimal
+  display, the result is recorded as a normal decimal value while the original
+  display-shape source still is not treated as a dot-safe X2 alias. Hex and
+  super displays are not promoted to decimal shapes without a separate display
+  proof. For concrete decimal `X`, `К {x}` also
   seeds the exact normalized fractional decimal value in visible X while
   preserving the old X2 fact; its display shape is kept as a separate
   exponent-entry fact for non-zero fractions (`0.2` as
@@ -1135,13 +1138,15 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     (`hex:8` + decimal `02` proves shape-only `hex:802`) or a restored
     structural exponent-entry with a pure mantissa (`hex:A` +
     `hex-exponent:B:2` proves shape-only `hex:AB00`) without becoming a
-    decimal value. Exact decimal display-shape facts can also feed shape-only
-    unary display results, so `exponent:5:-1:decimal` proves the displayed
-    fractional result of `К {x}` without adding an ordinary decimal value; the
-    same restored-visible decimal extractor is used for binary concrete
-    arithmetic operands, so shape-only decimal displays can participate in
-    exact `+`/`-`/`*`/finite-division proofs and in the pinned structural
-    hex-versus-decimal tables without becoming dot-safe X2 aliases.
+    decimal value. Exact decimal display-shape facts feed unary display-shape
+    results and, when the unary result itself is proved exact, concrete decimal
+    result facts: `exponent:5:-1:decimal` through `К {x}` yields both the
+    displayed fractional shape and `decimal:0.5:normalized`. The same
+    restored-visible decimal extractor is used for binary concrete arithmetic
+    operands, so shape-only decimal displays can participate in exact
+    `+`/`-`/`*`/finite-division proofs and in the pinned structural
+    hex-versus-decimal tables without making the original display-shape source
+    a dot-safe X2 alias.
     The same exact display-shape proof can feed a following ordinary `ВП`
     through the restored visible decimal mantissa: a synced
     `exponent:1:8:decimal` re-enters `ВП` as mantissa `100000000`, enabling

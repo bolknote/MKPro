@@ -2784,7 +2784,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[2]?.x)).toContain("expr-key:31(reg:1)");
   });
 
-  it("x2 value dataflow seeds stable expr keys from decimal display-shape operands", () => {
+  it("x2 value dataflow derives unary decimal facts from exact decimal display-shape operands", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
       plain(0x0c, "ВП"),
@@ -2795,11 +2795,12 @@ describe("ir passes on synthetic programs", () => {
     const states = computeX2ValueStates(program);
 
     expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["exponent:1:8:decimal"]);
-    expect(x2ValueStateText(states[4]?.x)).toContain("expr-key:31(shape:exponent:1:8:decimal)");
+    expect(x2ValueStateText(states[4]?.x)).toContain("decimal:100000000:normalized");
+    expect(x2ValueStateText(states[4]?.x)).not.toContain("expr-key:31(shape:exponent:1:8:decimal)");
     expect(x2ValueStateText(states[4]?.x)).not.toContain("expr-key:31(decimal:100000000:normalized)");
   });
 
-  it("x2 value dataflow seeds stable expr keys from shape-only decimal mantissas", () => {
+  it("x2 value dataflow derives unary decimal facts from shape-only decimal mantissas", () => {
     const shapeOnly: X2ValueDataflowState = {
       x: new Set(),
       x2: new Set(),
@@ -2815,7 +2816,8 @@ describe("ir passes on synthetic programs", () => {
     const shapeOnlyResult = transferX2ValueStateForEdge(shapeOnly, plain(0x31, "К |x|"), "normal", {}, 0);
     const valueBackedResult = transferX2ValueStateForEdge(valueBacked, plain(0x31, "К |x|"), "normal", {}, 0);
 
-    expect(x2ValueStateText(shapeOnlyResult?.x)).toContain("expr-key:31(shape:mantissa:100:decimal)");
+    expect(x2ValueStateText(shapeOnlyResult?.x)).toContain("decimal:100:normalized");
+    expect(x2ValueStateText(shapeOnlyResult?.x)).not.toContain("expr-key:31(shape:mantissa:100:decimal)");
     expect(x2ValueStateText(valueBackedResult?.x)).not.toContain("expr-key:31(shape:mantissa:100:decimal)");
   });
 
@@ -2853,7 +2855,8 @@ describe("ir passes on synthetic programs", () => {
     const result = transferX2ValueStateForEdge(shapeOnly, plain(0x35, "К {x}"), "normal", {}, 0);
 
     expect(x2ShapeStateText(result?.xShape)).toEqual(["exponent:5:-1:decimal"]);
-    expect(x2ValueStateText(result?.x)).toContain("expr-key:35(shape:exponent:5:-1:decimal)");
+    expect(x2ValueStateText(result?.x)).toContain("decimal:0.5:normalized");
+    expect(x2ValueStateText(result?.x)).not.toContain("expr-key:35(shape:exponent:5:-1:decimal)");
   });
 
   it("x2 value dataflow seeds stable expr keys from constant stack producers", () => {

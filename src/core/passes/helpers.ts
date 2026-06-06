@@ -683,7 +683,7 @@ function plainProducesStableExpressionValues(
   ) {
     return new Set();
   }
-  const output = plainProducesConcreteDecimalValues(op, x);
+  const output = plainProducesConcreteDecimalValues(op, x, xShape);
   for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op, xShape)) {
     output.add(decimalValueFact(value, "normalized"));
   }
@@ -709,6 +709,15 @@ function stableExpressionKeyHasConcreteDecimalResult(
   op: Extract<IrOp, { kind: "plain" }>,
   key: string,
 ): boolean {
+  if (
+    plainProducesConcreteDecimalValues(
+      op,
+      stableExpressionKeyValueSet(key),
+      stableExpressionKeyShapeSet(key),
+    ).size > 0
+  ) {
+    return true;
+  }
   if (op.opcode === 0x15) return decimalPowerOfTenFromFactKey(key) !== undefined;
   if (op.opcode === 0x16) return decimalExpFromFactKey(key) !== undefined;
   if (op.opcode === 0x17) return decimalCommonLogFromFactKey(key) !== undefined;
@@ -757,6 +766,7 @@ function stableBinaryExpressionKeyHasConcreteDecimalResult(
 function plainProducesConcreteDecimalValues(
   op: Extract<IrOp, { kind: "plain" }>,
   x: X2ValueSet | undefined,
+  xShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
   if (
@@ -788,6 +798,10 @@ function plainProducesConcreteDecimalValues(
     const concrete = value === undefined
       ? undefined
       : concreteDecimalUnaryValue(op.opcode, value);
+    if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
+  }
+  for (const value of x2ShapeSetRestoredVisibleDecimals(xShape)) {
+    const concrete = concreteDecimalUnaryValue(op.opcode, value);
     if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
   }
   return output;
