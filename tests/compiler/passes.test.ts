@@ -5974,6 +5974,55 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(activeExponent.shape)).toEqual(["hex:-FACE:mantissa"]);
   });
 
+  it("x2 value edge transfer preserves explicit decimal display sign-shape sources", () => {
+    const source: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set(),
+      entry: { kind: "closed" },
+      vpEntrySignShape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+    };
+    const afterJump = transferX2ValueStateForEdge(
+      source,
+      cjump("target"),
+      "jump",
+      { trackRegisterMemory: true },
+    );
+    const afterSign = transferX2ValueStateForEdge(
+      afterJump,
+      plain(0x0b, "/-/"),
+      "normal",
+      { trackRegisterMemory: true },
+    );
+
+    expect(x2VpEntryShapeText(afterJump)).toBeUndefined();
+    expect(x2VpEntrySignShapeText(afterJump)).toEqual(["exponent:5:-1:decimal"]);
+    expect(x2ValueStateText(afterSign?.x)).toEqual(["expr-key:0B(shape:exponent:5:-1:decimal)"]);
+    expect(x2ShapeStateText(afterSign?.xShape)).toContain("exponent:-5:-1:decimal");
+    expect(x2VpEntryShapeText(afterSign)).toBeUndefined();
+    expect(x2VpEntrySignShapeText(afterSign)).toContain("exponent:-5:-1:decimal");
+  });
+
+  it("x2 value edge transfer seeds decimal display sign-shapes on conditional fallthrough sync", () => {
+    const source: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const afterFallthrough = transferX2ValueStateForEdge(
+      source,
+      cjump("target"),
+      "fallthrough",
+      { trackRegisterMemory: true },
+    );
+
+    expect(x2VpEntryShapeText(afterFallthrough)).toBeUndefined();
+    expect(x2VpEntrySignShapeText(afterFallthrough)).toEqual(["exponent:5:-1:decimal"]);
+  });
+
   it("x2 value dataflow carries a closed decimal ВП sync through empty op gaps", () => {
     const throughEmpty: IrOp[] = [
       plain(0x02, "2"),
