@@ -3595,6 +3595,23 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2 value dataflow canonicalizes stable expr keys through stack value copies", () => {
+    const raw = "expr-key:16(shape:hex-exponent:Г:2)" as X2ValueFact;
+    const canonical = "expr-key:16(shape:hex:Г00:mantissa)" as X2ValueFact;
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([raw]),
+      x2: new Set<X2ValueFact>([raw]),
+      entry: { kind: "closed" },
+    };
+    const exchanged = transferX2ValueStateForEdge(legacy, plain(0x14, "X↔Y"), "normal", {}, 0);
+    const copied = transferX2ValueStateForEdge(exchanged, plain(0x3e, "Y->X"), "normal", {}, 1);
+
+    expect(x2ValueStateText(exchanged?.y)).toContain(canonical);
+    expect(x2ValueStateText(exchanged?.y)).not.toContain(raw);
+    expect(x2ValueStateText(copied?.x)).toContain(canonical);
+    expect(x2ValueStateText(copied?.x)).not.toContain(raw);
+  });
+
   it("x2 value dataflow copies Y facts through Y->X while preserving hidden X2", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),

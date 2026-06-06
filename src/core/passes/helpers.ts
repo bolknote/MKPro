@@ -5435,7 +5435,7 @@ function transferExchangeXYX2ValueState(
   const x2Shape = transferPlainX2ShapeSet(input, xShape, effect);
   return {
     x,
-    y: new Set(sourceX),
+    y: cloneOptionalValueSet(sourceX),
     x2,
     xShape,
     yShape: new Set(sourceXShape),
@@ -5560,9 +5560,9 @@ function transferPlainYValueSet(
   op: Extract<IrOp, { kind: "plain" }>,
 ): Set<X2ValueFact> {
   const info = getOpcode(op.opcode);
-  if (info.stackEffect === "shifts") return new Set(sourceX);
-  if (info.stackEffect === "preserves") return new Set(input.y ?? []);
-  if (info.stackEffect === "consume-y-keep" && info.risk === "documented") return new Set(input.y ?? []);
+  if (info.stackEffect === "shifts") return cloneOptionalValueSet(sourceX);
+  if (info.stackEffect === "preserves") return cloneOptionalValueSet(input.y);
+  if (info.stackEffect === "consume-y-keep" && info.risk === "documented") return cloneOptionalValueSet(input.y);
   return new Set();
 }
 
