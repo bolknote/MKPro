@@ -30,6 +30,23 @@ function runXWithRegisters(codes: number[], registers: Record<string, string>): 
   return calc.readRegister("x").replace(/\s/gu, "");
 }
 
+const MK61_HEX_DIGITS: Record<string, string> = {
+  A: "-",
+  B: "L",
+  C: "С",
+  D: "Г",
+  E: "Е",
+  F: "_",
+};
+
+function mk61HexLiteral(text: string): string {
+  return [...text.toUpperCase()].map((digit) => MK61_HEX_DIGITS[digit] ?? digit).join("");
+}
+
+function runXWithHexRegister(codes: number[], value: string): string {
+  return runXWithRegisters(codes, { "1": mk61HexLiteral(value) });
+}
+
 function runSignature(codes: number[]): string {
   const calc = new MK61();
   calc.loadProgram(codes);
@@ -58,6 +75,29 @@ describe("X2 restore context", () => {
     expect(runX([0x02, 0x0b, 0x41, 0x0c, 0x03, 0x50])).toBe("-9000,");
     expect(runX([0x01, 0x0a, 0x02, 0x0b, 0x41, 0x0c, 0x03, 0x50])).toBe("-9200,");
     expect(runX([0x00, 0x0b, 0x41, 0x0c, 0x03, 0x50])).toBe("-1000,");
+  });
+
+  it("X->П immediately before ВП preserves structural store-splice sign-pair equivalence", () => {
+    const base = [0x61, 0x41, 0x0c, 0x03, 0x50]; // П->X 1; X->П 1; ВП; 3; С/П
+    const signPair = [0x61, 0x41, 0x0c, 0x0b, 0x0b, 0x03, 0x50]; // ... ВП; /-/; /-/; 3; С/П
+
+    for (const value of ["FACE", "FA", "A", "D"]) {
+      expect(runXWithHexRegister(signPair, value)).toBe(runXWithHexRegister(base, value));
+    }
+  });
+
+  it("plain and X2-sync commands after structural X->П do not preserve the store-spliced tail", () => {
+    const immediate = [0x61, 0x41, 0x0c, 0x03, 0x50]; // П->X 1; X->П 1; ВП; 3; С/П
+    const delayedPrograms = [
+      [0x61, 0x41, 0x54, 0x0c, 0x03, 0x50], // КНОП
+      [0x61, 0x41, 0xf0, 0x0c, 0x03, 0x50], // F0
+      [0x61, 0x41, 0x0e, 0x0c, 0x03, 0x50], // В↑
+    ];
+
+    expect(runXWithHexRegister(immediate, "FACE")).toBe("3,");
+    for (const program of delayedPrograms) {
+      expect(runXWithHexRegister(program, "FACE")).toBe("1000,");
+    }
   });
 
   it("К X->П immediately before ВП splices decimal hidden X2 mantissa context", () => {

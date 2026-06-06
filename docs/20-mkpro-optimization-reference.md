@@ -995,7 +995,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     no-op restore. The value proof also treats `В↑` and `F0..FF` empty opcodes as
     X-preserving X2-affecting commands: when `X` is already proved, those
     opcodes sync the same fact into `X2`, including normalized visible values
-    whose old X2 form had leading zeroes. A dot-restored leading-zero X2 form
+    whose old X2 form had leading zeroes or came from a non-normal structural
+    arithmetic display such as `A^2 -> 00` or `A * 18 -> 020`. A dot-restored
+    leading-zero X2 form
     is deliberately not upgraded into an ordinary `ВП` mantissa source:
     `02; К{x}; .; ВП; 3` yields `22000` on the emulator, not `2 ВП 3`.
     When the same dataflow proves that `.` would keep the exact same
@@ -1126,7 +1128,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     source and proves a fresh source from the current visible `X`. This proof
     remains structural only and is not used as decimal value or dot-safety
     evidence. It also carries exact emulator-pinned single-digit hex
-    arithmetic tables as decimal value proofs. Operand order remains part of the
+    arithmetic tables as decimal value proofs. `F x^2` has a unary
+    single-significant-hex-digit model: leading zeros before the digit are
+    accepted, trailing digits are refused (`B0` is not treated like `B`), and
+    the display shape keeps the ROM spelling (`A^2` has normalized value `0`
+    but display shape `00`). A later explicit X2 sync records the normalized
+    hidden restore shape for non-normal decimal displays (`00 -> 0`,
+    `020 -> 20`), while signed zero remains sticky as `-0`. Operand order remains part of the binary
     proof. For `+` and `-`, a single `A`/`B`/`C`/`D`/`E` hex digit paired with a
     proved decimal digit `0..9` uses the verified operand-order-specific table,
     including cases such as `Г + 4 -> 17`, `3 + С -> 5`, `С - 2 -> 0`, and

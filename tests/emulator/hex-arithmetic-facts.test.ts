@@ -19,8 +19,12 @@ const IP2 = 0x62;
 const ADD = 0x10;
 const SUBTRACT = 0x11;
 const MULTIPLY = 0x12;
+const STACK_LIFT = 0x0e;
+const DOT = 0x0a;
+const F_PI = 0x20;
 const SQUARE = 0x22;
 const K_SIGN = 0x32;
+const F0 = 0xf0;
 const STOP = 0x50;
 
 // Adds R1 and R2 via ИП1 ИП2 + so that the second-recalled register lands in X.
@@ -110,6 +114,24 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(runUnaryRegisterProgram("С", [IP1, 0x01, SUBTRACT, SQUARE])).toBe("1,");
     expect(runUnaryRegisterProgram("Г", [IP1, 0x01, SUBTRACT, SQUARE])).toBe("4,");
     expect(runUnaryRegisterProgram("Е", [IP1, 0x01, SUBTRACT, SQUARE])).toBe("9,");
+  });
+
+  it("single significant hex digit square table is pinned", () => {
+    expect(runUnaryRegisterProgram("-", [IP1, SQUARE])).toBe("00,");
+    expect(runUnaryRegisterProgram("B", [IP1, SQUARE])).toBe("10,");
+    expect(runUnaryRegisterProgram("С", [IP1, SQUARE])).toBe("20,");
+    expect(runUnaryRegisterProgram("Г", [IP1, SQUARE])).toBe("30,");
+    expect(runUnaryRegisterProgram("Е", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("_", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("0С", [IP1, SQUARE])).toBe("20,");
+    expect(runUnaryRegisterProgram("-0Г", [IP1, SQUARE])).toBe("30,");
+    expect(runUnaryRegisterProgram("B0", [IP1, SQUARE])).toBe("1000,");
+  });
+
+  it("X2-affecting sync normalizes non-normal decimal display shapes", () => {
+    expect(runUnaryRegisterProgram("-", [IP1, SQUARE, F0, F_PI, DOT])).toBe("0,");
+    expect(runUnaryRegisterProgram("-", [IP1, STACK_LIFT, 0x01, 0x08, MULTIPLY])).toBe("020,");
+    expect(runUnaryRegisterProgram("-", [IP1, STACK_LIFT, 0x01, 0x08, MULTIPLY, F0, F_PI, DOT])).toBe("20,");
   });
 
   it("hex A multiplied by 18 renders a non-normal leading zero", () => {

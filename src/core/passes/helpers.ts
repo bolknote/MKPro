@@ -644,7 +644,10 @@ function stableExpressionKeyHasConcreteDecimalResult(
   if (op.opcode === 0x1d) return decimalCosFromFactKey(key) !== undefined;
   if (op.opcode === 0x1e) return decimalTanFromFactKey(key) !== undefined;
   if (op.opcode === 0x21) return decimalSquareRootFromFactKey(key) !== undefined;
-  if (op.opcode === 0x22) return decimalSquareFromFactKey(key) !== undefined;
+  if (op.opcode === 0x22) {
+    return decimalSquareFromFactKey(key) !== undefined ||
+      structuralHexSquareFromFactKey(key) !== undefined;
+  }
   if (op.opcode === 0x23) return decimalReciprocalFromFactKey(key) !== undefined;
   if (op.opcode === 0x26) return decimalToMinutesFromFactKey(key) !== undefined;
   if (op.opcode === 0x2a) return decimalToMinutesSecondsFromFactKey(key) !== undefined;
@@ -729,11 +732,8 @@ function plainProducesConcreteDecimalShapeFacts(
     const concrete = concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
     if (concrete !== undefined) output.add(concrete);
   }
-  if (op.opcode === 0x32) {
-    for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op, xShape)) {
-      const fact = exactPlainIntegerDecimalMantissaShapeFact(value);
-      if (fact !== undefined) output.add(fact);
-    }
+  for (const fact of plainProducesConcreteStructuralUnaryDecimalShapeFacts(op, xShape)) {
+    if (fact !== undefined) output.add(fact);
   }
   return output;
 }
@@ -825,10 +825,27 @@ function plainProducesConcreteStructuralUnaryDecimalValues(
   xShape: X2ShapeSet | undefined,
 ): Set<string> {
   const output = new Set<string>();
-  if (op.opcode !== 0x32) return output;
+  if (op.opcode !== 0x22 && op.opcode !== 0x32) return output;
   for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShape))) {
-    const value = structuralHexSignDecimalValue(fact);
+    const value = op.opcode === 0x22
+      ? structuralHexSquareDecimalValue(fact)
+      : structuralHexSignDecimalValue(fact);
     if (value !== undefined) output.add(value);
+  }
+  return output;
+}
+
+function plainProducesConcreteStructuralUnaryDecimalShapeFacts(
+  op: Extract<IrOp, { kind: "plain" }>,
+  xShape: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  if (op.opcode !== 0x22 && op.opcode !== 0x32) return output;
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShape))) {
+    const result = op.opcode === 0x22
+      ? structuralHexSquareDecimalDisplayShapeFact(fact)
+      : exactPlainIntegerDecimalMantissaShapeFact(structuralHexSignDecimalValue(fact) ?? "");
+    if (result !== undefined) output.add(result);
   }
   return output;
 }
@@ -844,6 +861,42 @@ function structuralHexSignDecimalValue(fact: X2ShapeFact): string | undefined {
     return model.sign === "-" ? "-1" : "1";
   }
   return "0";
+}
+
+function structuralHexSquareDecimalValue(fact: X2ShapeFact): string | undefined {
+  return structuralHexSquareDecimalProduct(fact)?.value;
+}
+
+function structuralHexSquareDecimalDisplayShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const product = structuralHexSquareDecimalProduct(fact);
+  if (product === undefined || product.display === undefined) return undefined;
+  return decimalMantissaShapeFact(product.display);
+}
+
+function structuralHexSquareDecimalProduct(
+  fact: X2ShapeFact,
+): StructuralHexDecimalProduct | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa" || model.radix !== "hex" || model.hasDecimalPoint) return undefined;
+  const raw = model.sign === "" ? model.canonical : model.canonical.slice(1);
+  const significant = /^0*([A-FА-Я])$/u.exec(raw)?.[1];
+  if (significant === undefined) return undefined;
+  const digit = structuralHexNibbleValue(significant);
+  switch (digit) {
+    case 10:
+      return { value: "0", display: "00" };
+    case 11:
+      return { value: "10", display: "10" };
+    case 12:
+      return { value: "20", display: "20" };
+    case 13:
+      return { value: "30", display: "30" };
+    case 14:
+    case 15:
+      return { value: "0", display: "0" };
+    default:
+      return undefined;
+  }
 }
 
 function plainProducesConcreteBinaryShapeFacts(
@@ -1573,6 +1626,11 @@ function decimalFromFactKey(key: string): string | undefined {
 function structuralHexSignFromFactKey(key: string): string | undefined {
   const fact = structuralShapeFactFromStableExpressionKey(key);
   return fact === undefined ? undefined : structuralHexSignDecimalValue(fact);
+}
+
+function structuralHexSquareFromFactKey(key: string): string | undefined {
+  const fact = structuralShapeFactFromStableExpressionKey(key);
+  return fact === undefined ? undefined : structuralHexSquareDecimalValue(fact);
 }
 
 function structuralShapeFactFromStableExpressionKey(key: string): X2ShapeFact | undefined {
@@ -5170,7 +5228,7 @@ function transferPlainX2ShapeSet(
   closedEntryShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   if (effect === "preserves") return cloneOptionalShapeSet(closedEntryShape ?? input.x2Shape);
-  if (effect === "affects") return new Set(xShape);
+  if (effect === "affects") return normalizeX2SyncShapesFromX(xShape);
   return new Set();
 }
 
@@ -6815,6 +6873,26 @@ function normalizeX2RestoreShapesForX(input: X2ShapeSet | undefined): Set<X2Shap
     const mantissa = /^mantissa:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):decimal$/u.exec(fact);
     if (mantissa !== null) {
       const normalized = normalizePlainDecimal(mantissa[1]!);
+      const shape = normalized === undefined ? undefined : exactDecimalDisplayShapeFact(normalized);
+      if (shape !== undefined) output.add(shape);
+      continue;
+    }
+    output.add(fact);
+  }
+  return output;
+}
+
+function normalizeX2SyncShapesFromX(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of input ?? []) {
+    const mantissa = /^mantissa:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):decimal$/u.exec(fact);
+    if (mantissa !== null) {
+      const raw = mantissa[1]!;
+      const normalized = normalizePlainDecimal(raw);
+      if (normalized === "0" && canonicalShapeRaw(raw).startsWith("-")) {
+        output.add(decimalMantissaShapeFact(raw));
+        continue;
+      }
       const shape = normalized === undefined ? undefined : exactDecimalDisplayShapeFact(normalized);
       if (shape !== undefined) output.add(shape);
       continue;

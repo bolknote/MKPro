@@ -2564,6 +2564,27 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore uses emulator-pinned structural square facts after X2 sync", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const B"),
+      plain(0x22, "F x^2"),
+      store("3"),
+      plain(0x0d, "Cx"),
+      recall("2", "preload const 0B"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      recall("3"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[7]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "3")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2-hidden-temp-restore uses emulator-pinned hex addition facts after X2 sync", () => {
     const program: IrOp[] = [
       recall("1", "preload const Г"),
@@ -3164,6 +3185,56 @@ describe("ir passes on synthetic programs", () => {
       .not.toContain("decimal:1:normalized");
   });
 
+  it("x2 value dataflow models emulator-pinned single hex digit square facts", () => {
+    function squareProgram(literal: string): IrOp[] {
+      return [
+        recall("1", `preload const ${literal}`),
+        plain(0x22, "F x^2"),
+        halt(),
+      ];
+    }
+    function syncedSquareProgram(literal: string): IrOp[] {
+      return [
+        recall("1", `preload const ${literal}`),
+        plain(0x22, "F x^2"),
+        plain(0xf0, "F* empty F0"),
+        halt(),
+      ];
+    }
+
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram("A"))[2]?.x) ?? [])
+      .toContain("decimal:0:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram("B"))[2]?.x) ?? [])
+      .toContain("decimal:10:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram("С"))[2]?.x) ?? [])
+      .toContain("decimal:20:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram("Г"))[2]?.x) ?? [])
+      .toContain("decimal:30:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram("Е"))[2]?.x) ?? [])
+      .toContain("decimal:0:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram("F"))[2]?.x) ?? [])
+      .toContain("decimal:0:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram("0C"))[2]?.x) ?? [])
+      .toContain("decimal:20:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram("-0D"))[2]?.x) ?? [])
+      .toContain("decimal:30:normalized");
+
+    expect(x2ShapeStateText(computeX2ValueStates(squareProgram("A"))[2]?.xShape)).toEqual([
+      "mantissa:00:decimal",
+    ]);
+    expect(x2ShapeStateText(computeX2ValueStates(syncedSquareProgram("A"))[3]?.x2Shape)).toEqual([
+      "mantissa:0:decimal",
+    ]);
+    const bStates = computeX2ValueStates(squareProgram("B"));
+    expect(x2ValueStateText(bStates[2]?.x) ?? [])
+      .not.toContain("expr-key:22(shape:hex:B:mantissa)");
+    expect(x2ShapeStateText(bStates[2]?.xShape)).toEqual(["mantissa:10:decimal"]);
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram("B0"))[2]?.x) ?? [])
+      .not.toContain("decimal:10:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(squareProgram("C.0"))[2]?.x) ?? [])
+      .not.toContain("decimal:20:normalized");
+  });
+
   it("x2 value dataflow models emulator-pinned single-digit hex addition facts", () => {
     function hexLeftPlusDecimalProgram(literal: string, digit: Extract<IrOp, { kind: "plain" }>): IrOp[] {
       return [
@@ -3266,15 +3337,26 @@ describe("ir passes on synthetic programs", () => {
       plain(0x12, "×"),
       halt(),
     ];
+    const syncedProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x08, "8"),
+      plain(0x12, "×"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
 
     const states = computeX2ValueStates(hexATimes18Program);
     const reverseStates = computeX2ValueStates(reverseProgram);
+    const syncedStates = computeX2ValueStates(syncedProgram);
     expect(x2ValueStateText(states[5]?.x) ?? []).toContain("decimal:20:normalized");
     expect(x2ValueStateText(states[5]?.x) ?? [])
       .not.toContain("expr-key:12(decimal:18:normalized,shape:hex:A:mantissa)");
     expect(x2ValueStateText(states[5]?.x2) ?? []).toContain("decimal:18:normalized");
     expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["mantissa:020:decimal"]);
     expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["mantissa:18:decimal"]);
+    expect(x2ShapeStateText(syncedStates[6]?.x2Shape)).toEqual(["mantissa:20:decimal"]);
     expect(x2ValueStateText(reverseStates[5]?.x) ?? []).toContain("decimal:180:normalized");
     expect(x2ValueStateText(reverseStates[5]?.x) ?? []).not.toContain("decimal:20:normalized");
     expect(x2ShapeStateText(reverseStates[5]?.xShape)).toEqual(["mantissa:180:decimal"]);
@@ -8178,6 +8260,44 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore uses structural square facts after normalized X2 sync", () => {
+    const bSquareProgram: IrOp[] = [
+      recall("1", "preload const B"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const aSquareProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x00, "0"),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const bSquareResult = x2LiteralRestore.run(bSquareProgram, ctx);
+    const aSquareResult = x2LiteralRestore.run(aSquareProgram, ctx);
+
+    expect(bSquareResult.applied).toBe(1);
+    expect(bSquareResult.ops).toEqual([
+      recall("1", "preload const B"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 10 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(aSquareResult.applied).toBe(1);
+    expect(aSquareResult.ops).toEqual([
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 00 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore uses emulator-pinned hex exponent multiply facts after X2 sync", () => {
     const decimalLeftProgram: IrOp[] = [
       recall("2", "preload const 1"),
@@ -9825,6 +9945,46 @@ describe("ir passes on synthetic programs", () => {
       plain(0x00, "0"),
       plain(0x02, "2"),
       plain(0x0e, "В↑"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot after structural arithmetic is normalized by X2 sync", () => {
+    const squareProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const multiplyProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x08, "8"),
+      plain(0x12, "×"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const squareResult = x2NoopRestore.run(squareProgram, ctx);
+    const multiplyResult = x2NoopRestore.run(multiplyProgram, ctx);
+
+    expect(squareResult.applied).toBe(1);
+    expect(squareResult.ops).toEqual([
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+    expect(multiplyResult.applied).toBe(1);
+    expect(multiplyResult.ops).toEqual([
+      recall("1", "preload const A"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x08, "8"),
+      plain(0x12, "×"),
+      plain(0xf0, "F* empty F0"),
       halt(),
     ]);
   });
