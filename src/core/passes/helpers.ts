@@ -3592,6 +3592,17 @@ export function x2StatesHaveSameVpEntrySignSource(
   );
 }
 
+export function x2StatesHaveSameExplicitVpEntrySignSource(
+  left: X2ValueDataflowState | undefined,
+  right: X2ValueDataflowState | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return false;
+  return stringSetsHaveIntersection(
+    explicitVpEntrySignSourceKeys(left),
+    explicitVpEntrySignSourceKeys(right),
+  );
+}
+
 export function x2StateCanDiscardRestoreRunBeforeProvedVp(
   beforeRun: X2ValueDataflowState | undefined,
   beforeVp: X2ValueDataflowState | undefined,
@@ -7400,6 +7411,10 @@ function vpEntrySignSourceKeys(state: X2ValueDataflowState | undefined): Set<str
   const mantissas = state === undefined ? undefined : vpEntrySignSourceMantissas(state);
   const shapes = state === undefined ? undefined : vpEntrySignSourceShapes(state);
   return vpSourceKeys(mantissas, shapes);
+}
+
+function explicitVpEntrySignSourceKeys(state: X2ValueDataflowState | undefined): Set<string> {
+  return vpSourceKeys(state?.vpEntrySignMantissa, state?.vpEntrySignShape);
 }
 
 function vpSourceKeys(

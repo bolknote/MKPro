@@ -1068,12 +1068,15 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     is deliberately not upgraded into an ordinary `ВП` mantissa source:
     `02; К{x}; .; ВП; 3` yields `22000` on the emulator, not `2 ВП 3`.
     When the same dataflow proves that `.` would keep the exact same
-    `ВП`-entry source and the next context-sensitive restore is reached only
-    through a free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap before `ВП`,
-    the dot is removed: emulator tests cover normalized and signed normalized
-    mantissas in this exponent-entry shape, and store-backed sign sources where
-    the dot-restored mantissa matches the original hidden mantissa used by
-    `/-/ ... ВП`, while role-bearing display cells still block the shortcut.
+    `ВП`-entry source, the dot is removable before immediate `ВП` only if the
+    explicit sign-source is also unchanged; signed-zero and unknown recall
+    contexts therefore stay conservative. The dot is also removed when the next
+    context-sensitive restore is reached only through a free-standing
+    `КНОП`/`К1`/`К2` and `/-/` restore gap before `ВП`: emulator tests cover
+    normalized and signed normalized mantissas in this exponent-entry shape,
+    and store-backed sign sources where the dot-restored mantissa matches the
+    original hidden mantissa used by `/-/ ... ВП`, while role-bearing display
+    cells still block the shortcut.
     That restore-gap proof may cross a direct or proved-indirect `ПП` helper
     chain that reaches `В/О` through only nested transparent helper calls and
     restore-transparent empty/address cells; helpers that store, branch,

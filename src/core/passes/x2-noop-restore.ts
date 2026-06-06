@@ -11,6 +11,7 @@ import {
   x2HasSignRestoreGapBeforeVp,
   x2SyncCanExposeContextSensitiveRestore,
   x2HasOnlyRestoreGapBeforeVp,
+  x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2StateHasSameDotRestoreValueInXAndX2,
   x2StateHasSameNormalizedDecimalInXAndX2,
   x2StateHasSameRestoredVisibleDecimalInXAndX2,
@@ -18,6 +19,7 @@ import {
   x2StateHasOnlyDotSafeStructuralMantissaX2,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateIsClosedPlainContext,
+  x2StatesHaveSameExplicitVpEntrySignSource,
   x2StatesHaveSameVpEntrySignSource,
   type DirectReturnAnalysisContext,
   type IrPass,
@@ -100,12 +102,50 @@ function dotPreservesVpEntrySourceThroughRestoreGap(
   stateAfterDot: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  if (!x2HasOnlyRestoreGapBeforeVp(ops, index + 1, context)) return false;
-  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterDot) ||
-    (
-      x2HasSignRestoreGapBeforeVp(ops, index + 1, context) &&
-      x2StatesHaveSameVpEntrySignSource(state, stateAfterDot)
-    );
+  if (x2HasOnlyRestoreGapBeforeVp(ops, index + 1, context)) {
+    return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterDot) ||
+      (
+        x2HasSignRestoreGapBeforeVp(ops, index + 1, context) &&
+        x2StatesHaveSameVpEntrySignSource(state, stateAfterDot)
+      );
+  }
+  if (
+    !x2ReplacementDotHasOnlyRestoreGapBeforeVp(ops, index + 1, context) ||
+    dotFollowsClosedSignChangeSource(ops, index)
+  ) return false;
+  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterDot) &&
+    x2StatesHaveSameExplicitVpEntrySignSource(state, stateAfterDot);
+}
+
+function dotFollowsClosedSignChangeSource(ops: readonly IrOp[], index: number): boolean {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const op = ops[cursor]!;
+    if (op.kind === "label") continue;
+    if (isFreeStandingEmptyOp(op)) continue;
+    return isFreeStandingSignChangeOp(op);
+  }
+  return false;
+}
+
+function isFreeStandingEmptyOp(op: IrOp): boolean {
+  return op.kind === "plain" &&
+    op.opcode >= 0x54 &&
+    op.opcode <= 0x56 &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    !hasRoles(op);
+}
+
+function isFreeStandingSignChangeOp(op: IrOp): boolean {
+  return op.kind === "plain" &&
+    op.opcode === 0x0b &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    !hasRoles(op);
+}
+
+function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
+  return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
 }
 
 function isDotSafeValueContext(

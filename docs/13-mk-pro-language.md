@@ -1607,12 +1607,15 @@ The pipeline currently contains:
   structural digits such as `D`/`F`, structural exponent forms, and observable
   next-`ВП` contexts stay conservative.
   A narrow exception is proved same-source exponent entry: if dataflow shows
-  that `.` would leave the same `ВП` mantissa source and the next restore is
-  reached only through a free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap
-  before `ВП`, the dot can be removed; role-bearing display cells still block
-  the proof. The same check handles the store-backed sign source: if `.` only
-  replaces the store's original hidden mantissa sign source with the identical
-  restored mantissa before `/-/ ... ВП`, the dot is removed.
+  that `.` would leave the same `ВП` mantissa source, the dot can be removed
+  before immediate `ВП` only when the explicit sign-source is also unchanged.
+  This keeps signed-zero and unknown recall contexts conservative. The same
+  source proof also removes `.` when the next restore is reached only through a
+  free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap before `ВП`;
+  role-bearing display cells still block the proof. The same check handles the
+  store-backed sign source: if `.` only replaces the store's original hidden
+  mantissa sign source with the identical restored mantissa before
+  `/-/ ... ВП`, the dot is removed.
   That reachability guard is the shared CFG-aware X2 exposure walker: direct and
   proved-indirect branches are followed path-sensitively instead of being blanket
   barriers, but any X2-preserving edge that can reach a context-sensitive restore

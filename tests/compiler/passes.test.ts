@@ -85,6 +85,7 @@ import {
   x2StructuralMantissaConcatShapeFacts,
   x2StructuralMantissaFirstDigitSpliceShapeFact,
   x2StructuralMantissaShiftShapeFact,
+  x2StatesHaveSameExplicitVpEntrySignSource,
   x2StatesHaveSameVpEntrySource,
   x2StatesHaveSameVpEntrySignSource,
   x2StateHasUnsafeDotRestoreShapeX2,
@@ -2066,6 +2067,10 @@ describe("ir passes on synthetic programs", () => {
       ...base,
       vpEntryShape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
     };
+    const exactSignDisplaySource = {
+      ...base,
+      vpEntrySignShape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+    };
     const rawFractionSignSource = {
       ...base,
       xShape: new Set<X2ShapeFact>(["mantissa:0.5:decimal"]),
@@ -2083,6 +2088,8 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2StatesHaveSameVpEntrySource(exactMantissaSource, exactExponentDisplaySource)).toBe(true);
     expect(x2StatesHaveSameVpEntrySignSource(signSource, exactExponentDisplaySource)).toBe(true);
+    expect(x2StatesHaveSameExplicitVpEntrySignSource(signSource, exactExponentDisplaySource)).toBe(false);
+    expect(x2StatesHaveSameExplicitVpEntrySignSource(signSource, exactSignDisplaySource)).toBe(true);
     expect(x2StatesHaveSameVpEntrySignSource(mixedValueSignSource, exactFractionDisplaySource)).toBe(true);
     expect(x2StatesHaveSameVpEntrySignSource(mixedDisplaySignSource, exactFractionDisplaySource)).toBe(true);
     expect(x2StatesHaveSameVpEntrySignSource(rawFractionSignSource, exactFractionDisplaySource)).toBe(false);
@@ -13055,6 +13062,29 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-noop-restore removes dot before immediate ВП when the VP source is unchanged", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("x2-noop-restore removes repeated raw decimal dot before sign-gap ВП", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
@@ -13076,6 +13106,41 @@ describe("ir passes on synthetic programs", () => {
       plain(0x35, "К {x}"),
       plain(0x0a, "."),
       plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot before transparent return helpers and immediate ВП", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0a, "."),
+      call("transparent"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      call("transparent"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),
