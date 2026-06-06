@@ -8291,6 +8291,37 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("recall value proof uses decimal display shape memory as an X2 value sync after a proved sync", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set<X2ValueFact>(["decimal:100000000:normalized"]),
+      xShape: new Set<X2ShapeFact>(["exponent:1:8:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:1:8:decimal"]),
+      entry: { kind: "closed" },
+      memory: {},
+      shapeMemory: {
+        "2": new Set<X2ShapeFact>(["exponent:1:8:decimal"]),
+      },
+    };
+
+    expect(recallValueProof(recall("2"), state)).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+      x2SyncDisplayValue: true,
+      x2SyncVpShape: true,
+    });
+    expect(analyzeRecallRemoval([recall("2"), plain(0x54, "КНОП"), plain(0x0a, "."), halt()], 0, undefined, state))
+      .toMatchObject({
+        redundantSyncValue: false,
+        redundantSyncDisplayValue: true,
+        x2SyncRedundant: true,
+        exposesX2Restore: false,
+        removable: true,
+      });
+  });
+
   it("recall value proof uses mixed decimal value and exact display-shape in-X evidence", () => {
     const exactShapeState: X2ValueDataflowState = {
       x: new Set(),

@@ -1799,8 +1799,11 @@ The pipeline currently contains:
   context-sensitive `.`/`/-/`/`ВП` restoration also blocks the rewrite when the recall
   is the last X2 sync. If X2-register dataflow proves the same register is
   already synced, or the value/shape proof shows hidden X2 already carries the
-  same decimal fact or structural hex/super shape across an X2-preserving gap,
-  the recall can be removed. A direct or proved stable-indirect decimal or
+  same decimal fact, exact decimal display-shape's synced normalized value, or
+  structural hex/super shape across an X2-preserving gap,
+  the recall can be removed. The exact-display normalized-value proof is used
+  for `.` restore exposure only; it is not treated as a general replacement for
+  `/-/` or `ВП` previous-command context. A direct or proved stable-indirect decimal or
   structural recall immediately before `ВП` can also be removed when the active
   decimal mantissa, exact decimal display-shape source, or structural `ВП`
   source already matches the recalled source. This `ВП`-only shape sync is not

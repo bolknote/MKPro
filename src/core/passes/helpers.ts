@@ -245,6 +245,7 @@ type X2StructuralEntryState =
 export interface X2RestoreExposureOptions {
   readonly redundantSyncRegister?: RegisterName | undefined;
   readonly redundantSyncValue?: boolean | undefined;
+  readonly redundantSyncDisplayValue?: boolean | undefined;
   readonly redundantSyncShape?: boolean | undefined;
 }
 
@@ -290,6 +291,7 @@ export interface RecallValueProof {
   readonly inX: boolean;
   readonly x2SyncRegister?: RegisterName | undefined;
   readonly x2SyncValue: boolean;
+  readonly x2SyncDisplayValue?: true | undefined;
   readonly x2SyncShape?: true | undefined;
   readonly x2SyncVpShape?: true | undefined;
 }
@@ -299,6 +301,7 @@ export interface RecallRemovalAnalysis {
   readonly valueProof?: RecallValueProof | undefined;
   readonly redundantSyncRegister?: RegisterName | undefined;
   readonly redundantSyncValue: boolean;
+  readonly redundantSyncDisplayValue: boolean;
   readonly redundantSyncShape: boolean;
   readonly x2SyncRedundant: boolean;
   readonly exposesStackLift: boolean;
@@ -3974,6 +3977,21 @@ export function recallAlreadySyncedInX2PreloadedDecimal(
   return undefined;
 }
 
+export function recallAlreadySyncedInX2RestoredVisibleDecimal(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  if (register === undefined || state === undefined) return undefined;
+  const hiddenDecimals = x2ValueSetRestoredVisibleDecimals(state.x2);
+  if (hiddenDecimals.size === 0) return undefined;
+
+  for (const visible of x2ShapeSetRestoredVisibleDecimals(recallDecimalDisplayShapeFacts(op, state, register))) {
+    if (hiddenDecimals.has(visible)) return register;
+  }
+  return undefined;
+}
+
 export function recallAlreadySyncedInX2StructuralShape(
   op: IrOp,
   state: X2ValueDataflowState | undefined,
@@ -4085,6 +4103,11 @@ export function recallValueProof(
   const x2SyncValue =
     (recallAlreadySyncedInX2MemoryValue(op, state) ??
       recallAlreadySyncedInX2PreloadedDecimal(op, state)) !== undefined;
+  const x2SyncDisplayValue =
+    x2SyncValue !== true &&
+      recallAlreadySyncedInX2RestoredVisibleDecimal(op, state) === register
+      ? true
+      : undefined;
   const x2SyncShape = recallAlreadySyncedInX2StructuralShape(op, state) === register ? true : undefined;
   const x2SyncVpShape =
     x2SyncShape !== true &&
@@ -4096,6 +4119,7 @@ export function recallValueProof(
     inX,
     x2SyncRegister,
     x2SyncValue,
+    ...(x2SyncDisplayValue === true ? { x2SyncDisplayValue } : {}),
     ...(x2SyncShape === true ? { x2SyncShape } : {}),
     ...(x2SyncVpShape === true ? { x2SyncVpShape } : {}),
   };
@@ -4117,12 +4141,14 @@ export function analyzeRecallRemoval(
   const valueProof = recallValueProof(op, x2ValueState);
   const redundantSyncRegister = recallAlreadySyncedInX2(op, x2RegisterState) ?? valueProof?.x2SyncRegister;
   const redundantSyncValue = valueProof?.x2SyncValue === true;
+  const redundantSyncDisplayValue = valueProof?.x2SyncDisplayValue === true;
   const redundantSyncShape = valueProof?.x2SyncShape === true;
   const exposesStackLift = removingRecallCanExposeStackLift(ops, recallIndex);
   const exposesX2Restore =
     removingRecallCanExposeX2Restore(ops, recallIndex, {
       redundantSyncRegister,
       redundantSyncValue,
+      redundantSyncDisplayValue,
       redundantSyncShape,
     }) &&
     !recallRemovalPreservesImmediateVpRestoreContext(ops, recallIndex, x2ValueState, valueProof, context);
@@ -4131,8 +4157,12 @@ export function analyzeRecallRemoval(
     valueProof,
     redundantSyncRegister,
     redundantSyncValue,
+    redundantSyncDisplayValue,
     redundantSyncShape,
-    x2SyncRedundant: redundantSyncRegister !== undefined || redundantSyncValue || redundantSyncShape,
+    x2SyncRedundant: redundantSyncRegister !== undefined ||
+      redundantSyncValue ||
+      redundantSyncDisplayValue ||
+      redundantSyncShape,
     exposesStackLift,
     exposesX2Restore,
     removable: !exposesStackLift && !exposesX2Restore,
@@ -9411,7 +9441,8 @@ export function x2SyncCanExposeContextSensitiveRestore(
             const redundantSync =
               options.redundantSyncRegister !== undefined ||
               options.redundantSyncValue === true ||
-              options.redundantSyncShape === true;
+              options.redundantSyncShape === true ||
+              (options.redundantSyncDisplayValue === true && op.opcode === 0x0a);
             return redundantSync && sawExecutableAfterSync ? false : true;
           }
           if (effect === "restores") return false;
