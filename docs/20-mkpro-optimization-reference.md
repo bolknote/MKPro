@@ -1334,7 +1334,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     signed exponent restore that materializes decimal value/display facts or
     structural exponent shapes in `X` and hidden X2 while preserving the active
     VP context; a later empty-op `ВП` can therefore splice a fresh first digit
-    into the same signed order. `super:*` is narrower than `hex:*`: only optional-sign
+    into the same signed decimal or structural order. `super:*` is narrower than `hex:*`: only optional-sign
     `F[A-F]` slot forms
     stay in the super lattice; other structural displays stay hex-only or
     unknown. Set-level shape proofs first canonicalize and drop invalid shape

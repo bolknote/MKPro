@@ -7834,6 +7834,26 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["hex-exponent:Г:-2"]);
   });
 
+  it("x2 value dataflow re-enters signed structural VP context through first-digit splice", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[8])).toBe("closed");
+    expect(x2StructuralVpContextStateText(states[8])).toBe("exponent:hex:3.0Г:mantissa:-2");
+    expect(x2ShapeStateText(states[8]?.xShape)).toEqual(["hex-exponent:3.0Г:-2"]);
+    expect(x2ShapeStateText(states[8]?.x2Shape)).toEqual(["hex-exponent:3.0Г:-2"]);
+  });
+
   it("x2 value dataflow uses fractional decimal recalls as VP-entry source", () => {
     const program: IrOp[] = [
       recall("2", "preload const 1.2"),

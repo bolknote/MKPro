@@ -1368,7 +1368,7 @@ The pipeline currently contains:
   it is not promoted to a general dot-safe value. `ВП /-/` materializes the
   signed exponent display in `X`/X2 while keeping VP context active; after a
   preserving command plus an empty op, a following `ВП` can reuse that signed
-  order with a fresh first digit. The documented `F pi` stack producer also seeds the
+  order with a fresh first digit for decimal and structural shapes. The documented `F pi` stack producer also seeds the
   hardware decimal constant `3.1415926`, its stable expression key, and the
   display shape `mantissa:3.1415926:decimal`.
   Emulator-verified special values for documented functions are modeled only

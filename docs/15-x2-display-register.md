@@ -120,7 +120,8 @@ hex/super contexts stay structural-only. The optimizer also materializes
 `ВП /-/` as a signed exponent restore: the signed decimal or structural
 exponent display becomes the current `X`/hidden `X2` shape while the VP context
 remains active, so a later empty-op `ВП` can re-enter the same signed order with
-a newly proved first digit. Use only with a tested state table.
+a newly proved first digit for both decimal and structural shapes. Use only with
+a tested state table.
 
 ## Error and Overflow Timing
 
