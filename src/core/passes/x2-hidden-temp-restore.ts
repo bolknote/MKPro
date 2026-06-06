@@ -17,10 +17,15 @@ import {
   removableRecallValueRegister,
   removingRecallCanExposeX2Restore,
   x2CanUseDotRestoreAt,
+  x2HasSignRestoreGapBeforeVp,
   x2HasOnlyRestoreGapBeforeVp,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
+  x2ShapeSetsHaveSameDotSafeDecimal,
+  x2ShapeSetsHaveSameDotSafeStructuralMantissa,
+  x2ShapeSetsHaveSameStructuralShape,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
+  x2StatesHaveSameVpEntrySignSource,
   x2ValueFactIsNormalizedDecimal,
   x2ValueSetsHaveSameRestoredVisibleDecimal,
   type DirectReturnAnalysisContext,
@@ -50,7 +55,7 @@ const run: IrPassFn = (ops) => {
     const storeIndex = findDeadScratchStore(ops, index, register, directReturnContext);
     if (storeIndex === undefined) return op;
     if (liveness.liveOut[index]?.has(register) === true) return op;
-    const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index]);
+    const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index], directReturnContext);
     if (removal === undefined) return op;
     const sourceAlreadySynced = hiddenTempStoreSourceAlreadySyncedInX2(
       ops,
@@ -67,8 +72,35 @@ const run: IrPassFn = (ops) => {
       x2ValueStates[storeIndex],
       x2ValueStates[index],
     );
-    if (removal.x2SyncRedundant !== true && !sourceAlreadySynced && !sourceRestoresSameVisibleDecimal) return op;
-    if (x2StateHasUnsafeDotRestoreShapeX2(x2ValueStates[index])) return op;
+    const sourceRestoresSameVisibleShape = hiddenTempStoreSourceRestoresSameVisibleShapeFromX2(
+      ops,
+      storeIndex,
+      index,
+      x2ValueStates[storeIndex],
+      x2ValueStates[index],
+    );
+    const sourceRestoresSameDotSafeDecimalShape = hiddenTempStoreSourceRestoresSameDotSafeDecimalShapeFromX2(
+      x2ValueStates[storeIndex],
+      x2ValueStates[index],
+    );
+    const sourceRestoresSameDotSafeStructuralShape = hiddenTempStoreSourceRestoresSameDotSafeStructuralShapeFromX2(
+      x2ValueStates[storeIndex],
+      x2ValueStates[index],
+    );
+    if (
+      removal.x2SyncRedundant !== true &&
+      !sourceAlreadySynced &&
+      !sourceRestoresSameVisibleDecimal &&
+      !sourceRestoresSameVisibleShape &&
+      !sourceRestoresSameDotSafeDecimalShape &&
+      !sourceRestoresSameDotSafeStructuralShape
+    ) return op;
+    if (
+      !sourceRestoresSameVisibleShape &&
+      !sourceRestoresSameDotSafeDecimalShape &&
+      !sourceRestoresSameDotSafeStructuralShape &&
+      x2StateHasUnsafeDotRestoreShapeX2(x2ValueStates[index])
+    ) return op;
     const canUseDotRestore = x2CanUseDotRestoreAt(
       ops,
       index,
@@ -81,15 +113,46 @@ const run: IrPassFn = (ops) => {
       x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext);
     const canUseVisibleDecimalEscape = sourceRestoresSameVisibleDecimal &&
       x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext);
+    const canUseDotSafeDecimalShapeEscape = sourceRestoresSameDotSafeDecimalShape &&
+      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext);
+    const canUseDotSafeStructuralEscape = sourceRestoresSameDotSafeStructuralShape &&
+      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext);
+    const hasOnlyRestoreGapBeforeVp = x2HasOnlyRestoreGapBeforeVp(ops, index + 1, directReturnContext);
     const canUseVpSourceEscape = sourceAlreadyDotSafe &&
-      x2StateCanDiscardRestoreRunBeforeProvedVp(x2ValueStates[index], x2ValueStates[index + 1]) &&
-      x2HasOnlyRestoreGapBeforeVp(ops, index + 1, directReturnContext);
-    if (!canUseDotRestore && !canUseNormalizedDecimalEscape && !canUseVisibleDecimalEscape && !canUseVpSourceEscape) {
+      hasOnlyRestoreGapBeforeVp &&
+      (
+        x2StateCanDiscardRestoreRunBeforeProvedVp(x2ValueStates[index], x2ValueStates[index + 1]) ||
+        (
+          x2HasSignRestoreGapBeforeVp(ops, index + 1, directReturnContext) &&
+          x2StatesHaveSameVpEntrySignSource(x2ValueStates[index], x2ValueStates[index + 1])
+        )
+      );
+    if (
+      !canUseDotRestore &&
+      !canUseNormalizedDecimalEscape &&
+      !canUseVisibleDecimalEscape &&
+      !canUseDotSafeDecimalShapeEscape &&
+      !canUseDotSafeStructuralEscape &&
+      !canUseVpSourceEscape
+    ) {
       return op;
     }
-    const exposesX2Restore = sourceAlreadySynced && removal.x2SyncRedundant !== true
-      ? removingRecallCanExposeX2Restore(ops, index, { redundantSyncValue: true })
-      : removal.exposesX2Restore;
+    const exposesX2Restore = canUseVpSourceEscape
+      ? false
+      : (
+          sourceAlreadySynced ||
+          sourceRestoresSameVisibleShape ||
+          sourceRestoresSameDotSafeDecimalShape ||
+          sourceRestoresSameDotSafeStructuralShape
+        ) &&
+          removal.x2SyncRedundant !== true
+        ? removingRecallCanExposeX2Restore(ops, index, {
+          redundantSyncValue: sourceAlreadySynced,
+          redundantSyncShape: sourceRestoresSameVisibleShape ||
+            sourceRestoresSameDotSafeDecimalShape ||
+            sourceRestoresSameDotSafeStructuralShape,
+        })
+        : removal.exposesX2Restore;
     if (removal.exposesStackLift || exposesX2Restore) return op;
 
     applied += 1;
@@ -157,6 +220,47 @@ function hiddenTempStoreSourceRestoresSameVisibleDecimalFromX2(
   recallState: X2ValueDataflowState | undefined,
 ): boolean {
   return x2ValueSetsHaveSameRestoredVisibleDecimal(storeState?.x, recallState?.x2);
+}
+
+function hiddenTempStoreSourceRestoresSameVisibleShapeFromX2(
+  ops: readonly IrOp[],
+  storeIndex: number,
+  recallIndex: number,
+  storeState: X2ValueDataflowState | undefined,
+  recallState: X2ValueDataflowState | undefined,
+): boolean {
+  return hiddenTempStoreComputedSourceAlreadySyncedInX2(ops, storeIndex, recallIndex, storeState, recallState) &&
+    x2ShapeSetsHaveSameStructuralShape(storeState?.xShape, recallState?.x2Shape);
+}
+
+function hiddenTempStoreSourceRestoresSameDotSafeDecimalShapeFromX2(
+  storeState: X2ValueDataflowState | undefined,
+  recallState: X2ValueDataflowState | undefined,
+): boolean {
+  return x2ShapeSetsHaveSameDotSafeDecimal(storeState?.xShape, recallState?.x2Shape);
+}
+
+function hiddenTempStoreSourceRestoresSameDotSafeStructuralShapeFromX2(
+  storeState: X2ValueDataflowState | undefined,
+  recallState: X2ValueDataflowState | undefined,
+): boolean {
+  return x2ShapeSetsHaveSameDotSafeStructuralMantissa(storeState?.xShape, recallState?.x2Shape);
+}
+
+function hiddenTempStoreComputedSourceAlreadySyncedInX2(
+  ops: readonly IrOp[],
+  storeIndex: number,
+  recallIndex: number,
+  storeState: X2ValueDataflowState | undefined,
+  recallState: X2ValueDataflowState | undefined,
+): boolean {
+  if (storeState === undefined || recallState === undefined) return false;
+  for (const fact of storeState.x) {
+    if (!fact.startsWith("expr:") && !fact.startsWith("expr-key:")) continue;
+    if (!isStableStoredSourceFact(ops, storeIndex, recallIndex, fact)) continue;
+    if (recallState.x2.has(fact)) return true;
+  }
+  return false;
 }
 
 function isStableStoredSourceFact(

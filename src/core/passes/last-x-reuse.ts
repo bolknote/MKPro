@@ -4,6 +4,7 @@ import {
   computeLabelEntryIndexes,
   computeX2RegisterStates,
   computeX2ValueStates,
+  directReturnAnalysisContext,
   plainPreservesXValue,
   removableRecallValueRegister,
   storedCurrentXValueRegister,
@@ -46,6 +47,7 @@ const run: IrPassFn = (ops) => {
   const removed = new Set<number>();
   const x2States = computeX2RegisterStates(ops);
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
+  const directReturnContext = directReturnAnalysisContext(ops);
   const labelEntries = computeLabelEntryIndexes(ops, { procedureBoundary: "start" });
   let xHolds: RegisterName | undefined;
   let canTrustValueX = true;
@@ -65,7 +67,7 @@ const run: IrPassFn = (ops) => {
       continue;
     }
     const recallRegister = removableRecallValueRegister(op);
-    const removal = analyzeRecallRemoval(ops, i, x2States[i], x2ValueStates[i]);
+    const removal = analyzeRecallRemoval(ops, i, x2States[i], x2ValueStates[i], directReturnContext);
     if (
       recallRegister !== undefined &&
       (xHolds === recallRegister || (canTrustValueX && removal?.valueProof?.inX === true)) &&

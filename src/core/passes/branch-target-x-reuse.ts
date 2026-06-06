@@ -3,47 +3,83 @@ import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import {
   analyzeRecallRemoval,
   addressIndexes,
+  analyzeX2StackEffect,
   computeX2RegisterStates,
   computeX2ValueStates,
+  directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
+  isDisplayFocusSensitive,
   knownIndirectFlowTarget,
+  plainPreservesXValue,
   removableRecallValueRegister,
+  transferX2RegisterStateForEdge,
+  transferX2ValueStateForEdge,
   type IrPass,
   type IrPassFn,
+  type X2ValueDataflowState,
 } from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
   const labels = labelIndexes(ops);
   const addresses = addressIndexes(ops);
-  const references = targetReferenceCounts(ops);
+  const references = targetReferenceCountsByEntryIndex(ops, labels, addresses);
   const x2States = computeX2RegisterStates(ops);
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
+  const directReturnContext = directReturnAnalysisContext(ops);
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (!isConditionalTargetOp(op) || hasRewriteBarrier(op)) continue;
-    const targetKey = branchTargetKey(op);
-    if (targetKey === undefined) continue;
-
-    if ((references.get(targetKey) ?? 0) !== 1) continue;
 
     const targetIndex = branchTargetEntryIndex(ops, op, labels, addresses);
-    if (targetIndex === undefined || remove.has(targetIndex)) continue;
+    if (targetIndex === undefined) continue;
+    if ((references.get(targetIndex) ?? 0) !== 1) continue;
     if (hasFallthroughIntoIndex(ops, targetIndex)) continue;
-    const target = ops[targetIndex]!;
+    const heldRegister = immediatelyHeldRegister(ops, index);
+    const targetRegisterState = transferX2RegisterStateForEdge(
+      {
+        x: heldRegister === undefined ? undefined : new Set<RegisterName>([heldRegister]),
+        x2: x2States[index],
+      },
+      op,
+      "jump",
+    );
+    const targetRecall = branchTargetRecallAfterTransparentPrefix(
+      ops,
+      targetIndex,
+      references,
+      targetRegisterState,
+      transferX2ValueStateForEdge(
+        x2ValueStates[index],
+        op,
+        "jump",
+        { trackRegisterMemory: true },
+        index,
+      ),
+    );
+    if (targetRecall === undefined || remove.has(targetRecall.index)) continue;
+    const target = ops[targetRecall.index]!;
     const targetRegister = removableRecallValueRegister(target);
     if (targetRegister === undefined) continue;
     if (op.kind === "loop" && loopCounterRegister(op.counter) === targetRegister) continue;
-    const preservedRegister = branchPreservedRegister(ops, index, op, targetRegister);
-    const removal = analyzeRecallRemoval(ops, targetIndex, x2States[targetIndex], x2ValueStates[targetIndex]);
+    const preservedRegister = branchPreservedRegister(heldRegister, op, targetRegister);
+    const targetX2RegisterState = targetRecall.x2RegisterState ?? x2States[targetRecall.index];
+    const targetValueState = targetRecall.valueState ?? x2ValueStates[targetRecall.index];
+    const removal = analyzeRecallRemoval(
+      ops,
+      targetRecall.index,
+      targetX2RegisterState,
+      targetValueState,
+      directReturnContext,
+    );
     if (preservedRegister !== targetRegister && removal?.valueProof?.inX !== true) continue;
     if (removal?.removable !== true) {
       continue;
     }
 
-    remove.add(targetIndex);
+    remove.add(targetRecall.index);
   }
 
   if (remove.size === 0) return emptyResult(ops);
@@ -65,12 +101,10 @@ export const branchTargetXReuse: IrPass = {
 };
 
 function branchPreservedRegister(
-  ops: readonly IrOp[],
-  branchIndex: number,
+  register: RegisterName | undefined,
   branch: Extract<IrOp, { kind: "cjump" | "loop" | "indirect-cjump" }>,
   targetRegister: RegisterName,
 ): RegisterName | undefined {
-  const register = immediatelyHeldRegister(ops, branchIndex);
   if (register === undefined) return undefined;
   if (branch.kind === "loop" && loopCounterRegister(branch.counter) === register) return undefined;
   if (branch.kind === "indirect-cjump" && branch.register === register && !isStableIndirectSelector(branch.register)) {
@@ -113,27 +147,39 @@ function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
   return result;
 }
 
-function targetReferenceCounts(ops: readonly IrOp[]): Map<string, number> {
-  const result = new Map<string, number>();
+function targetReferenceCountsByEntryIndex(
+  ops: readonly IrOp[],
+  labels: ReadonlyMap<string, number>,
+  addresses: ReadonlyMap<number, number>,
+): Map<number, number> {
+  const result = new Map<number, number>();
   for (const op of ops) {
-    const target = branchTargetKey(op);
+    const target = flowTargetEntryIndex(ops, op, labels, addresses);
     if (target !== undefined) result.set(target, (result.get(target) ?? 0) + 1);
   }
   return result;
 }
 
-function branchTargetKey(op: IrOp): string | undefined {
+function flowTargetEntryIndex(
+  ops: readonly IrOp[],
+  op: IrOp,
+  labels: ReadonlyMap<string, number>,
+  addresses: ReadonlyMap<number, number>,
+): number | undefined {
   switch (op.kind) {
     case "jump":
     case "cjump":
     case "call":
-    case "loop":
-      return typeof op.target === "string" ? `label:${op.target}` : `address:${op.target}`;
+    case "loop": {
+      if (typeof op.target === "number") return addresses.get(op.target);
+      const labelIndex = labels.get(op.target);
+      return labelIndex === undefined ? undefined : nextExecutableIndex(ops, labelIndex + 1);
+    }
     case "indirect-jump":
     case "indirect-call":
     case "indirect-cjump": {
       const target = knownIndirectFlowTarget(op);
-      return target === undefined ? undefined : `address:${target}`;
+      return target === undefined ? undefined : addresses.get(target);
     }
     default:
       return undefined;
@@ -156,11 +202,52 @@ function branchTargetEntryIndex(
     const labelIndex = labels.get(op.target);
     return labelIndex === undefined ? undefined : nextExecutableIndex(ops, labelIndex + 1);
   }
+  if ((op.kind === "cjump" || op.kind === "loop") && typeof op.target === "number") {
+    return addresses.get(op.target);
+  }
   if (op.kind === "indirect-cjump") {
     const target = knownIndirectFlowTarget(op);
     return target === undefined ? undefined : addresses.get(target);
   }
   return undefined;
+}
+
+function branchTargetRecallAfterTransparentPrefix(
+  ops: readonly IrOp[],
+  targetIndex: number,
+  references: ReadonlyMap<number, number>,
+  x2RegisterState: ReadonlySet<RegisterName> | undefined,
+  targetValueState: X2ValueDataflowState | undefined,
+): {
+  readonly index: number;
+  readonly x2RegisterState?: ReadonlySet<RegisterName> | undefined;
+  readonly valueState?: X2ValueDataflowState | undefined;
+} | undefined {
+  let valueState = targetValueState;
+  for (let index = targetIndex; index < ops.length; index += 1) {
+    if (index !== targetIndex && (references.get(index) ?? 0) > 0) return undefined;
+    const op = ops[index]!;
+    if (removableRecallValueRegister(op) !== undefined) return { index, x2RegisterState, valueState };
+    if (!isTransparentBranchTargetPrefixOp(op)) return undefined;
+    valueState = transferX2ValueStateForEdge(valueState, op, "normal", { trackRegisterMemory: true }, index);
+  }
+  return undefined;
+}
+
+function isTransparentBranchTargetPrefixOp(op: IrOp): boolean {
+  if (
+    op.kind !== "plain" ||
+    hasRewriteBarrier(op) ||
+    isDisplayFocusSensitive(op) ||
+    hasIrRoles(op) ||
+    !plainPreservesXValue(op)
+  ) return false;
+  const effect = analyzeX2StackEffect(op);
+  return effect.x2Preserves && effect.stackPreserves;
+}
+
+function hasIrRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
+  return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
 }
 
 function hasFallthroughIntoIndex(ops: readonly IrOp[], targetIndex: number): boolean {

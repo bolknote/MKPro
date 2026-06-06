@@ -3,6 +3,7 @@ import {
   analyzeRecallRemoval,
   computeX2RegisterStates,
   computeX2ValueStates,
+  directReturnAnalysisContext,
   removableRecallValueRegister,
   storedCurrentXValueRegister,
   type IrPass,
@@ -14,6 +15,7 @@ const run: IrPassFn = (ops) => {
   const result: IrOp[] = [];
   const x2States = computeX2RegisterStates(ops);
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
+  const directReturnContext = directReturnAnalysisContext(ops);
   let applied = 0;
   for (let i = 0; i < ops.length; i += 1) {
     const current = ops[i]!;
@@ -22,7 +24,7 @@ const run: IrPassFn = (ops) => {
     const recalledRegister = next === undefined ? undefined : removableRecallValueRegister(next);
     const removal = next === undefined
       ? undefined
-      : analyzeRecallRemoval(ops, i + 1, x2States[i + 1], x2ValueStates[i + 1]);
+      : analyzeRecallRemoval(ops, i + 1, x2States[i + 1], x2ValueStates[i + 1], directReturnContext);
     if (
       storedRegister !== undefined &&
       recalledRegister !== undefined &&

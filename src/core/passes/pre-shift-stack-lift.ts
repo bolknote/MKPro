@@ -62,6 +62,12 @@ const run: IrPassFn = (ops) => {
       remove.add(index);
       continue;
     }
+    if (x2NextLinearReturnSyncIndex(ops, index + 1, context) !== undefined) {
+      if (removingStackLiftCanExposeStack(ops, index)) continue;
+      if (removingRecallCanExposeX2Restore(ops, index)) continue;
+      remove.add(index);
+      continue;
+    }
     if (x2NextHardX2OverwriteIndex(ops, index + 1, context) === undefined) continue;
     if (removingStackLiftCanExposeStack(ops, index)) continue;
     if (removingRecallCanExposeX2Restore(ops, index)) continue;
@@ -124,6 +130,21 @@ function x2NextDirectReturnSyncIndex(
       !isDisplayFocusSensitive(op) &&
       directReturnPreservesStackXAndX2(ops, op, context)
     ) {
+      return index;
+    }
+    if (!isBackwardStackLiftX2SyncGap(ops, op, index, context)) return undefined;
+  }
+  return undefined;
+}
+
+function x2NextLinearReturnSyncIndex(
+  ops: readonly IrOp[],
+  start: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "return" && !hasRewriteBarrier(op) && !isDisplayFocusSensitive(op)) {
       return index;
     }
     if (!isBackwardStackLiftX2SyncGap(ops, op, index, context)) return undefined;

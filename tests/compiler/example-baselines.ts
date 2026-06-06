@@ -10,7 +10,7 @@
 // accompany a semantic/safety fix that behavioral tests cover.
 
 export const EXAMPLE_BASELINE: Record<string, number> = {
-  "99-bottles": 53,
+  "99-bottles": 52,
   alaram: 75,
   basic: 8,
   "cave-sketch": 47,

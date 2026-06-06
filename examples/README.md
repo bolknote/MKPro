@@ -19,7 +19,7 @@ Generated with `npm run examples:size`.
 
 | Example | MK-Pro | MK-61 ref | Delta | Size status | Emulator |
 | --- | ---: | ---: | ---: | --- | --- |
-| `99-bottles.mkpro` | 53 | 53 | 0 | ok: <= reference | main+setup load ok |
+| `99-bottles.mkpro` | 52 | 53 | -1 | ok: <= reference | main+setup load ok |
 | `alaram.mkpro` | 75 | 105 | -30 | ok: <= reference | main+setup load ok |
 | `basic.mkpro` | 8 | - | - | ok: no reference | load ok |
 | `cave-sketch.mkpro` | 47 | 105 | -58 | ok: <= reference | main+setup load ok |

@@ -148,6 +148,32 @@ const PURE_OPAQUE_EXPR_OPCODES = new Set<number>([
   0x39, // К ⊕
   0x3a, // К ИНВ
 ]);
+const EXACT_DECIMAL_INTEGER_MANTISSA_SHAPE_OPCODES = new Set<number>([
+  0x15, // F 10^x
+  0x16, // F e^x
+  0x17, // F lg
+  0x18, // F ln
+  0x19, // F sin^-1
+  0x1a, // F cos^-1
+  0x1b, // F tg^-1
+  0x1c, // F sin
+  0x1d, // F cos
+  0x1e, // F tg
+  0x21, // F sqrt
+  0x22, // F x^2
+  0x23, // F 1/x
+  0x31, // К |x|
+  0x32, // К ЗН
+  0x34, // К [x]
+]);
+const EXACT_DECIMAL_BINARY_MANTISSA_SHAPE_OPCODES = new Set<number>([
+  0x10, // +
+  0x11, // -
+  0x12, // *
+  0x13, // /
+  0x24, // F x^y
+  0x36, // К max
+]);
 const REGISTER_NAMES: readonly RegisterName[] = [
   "0",
   "1",
@@ -178,6 +204,7 @@ export interface X2ValueDataflowState {
   readonly structuralEntry?: X2StructuralEntryState;
   readonly structuralVpContext?: X2StructuralEntryState;
   readonly vpEntryMantissa?: ReadonlySet<string> | undefined;
+  readonly vpEntrySignMantissa?: ReadonlySet<string> | undefined;
   readonly vpEntryShape?: X2ShapeSet | undefined;
   readonly memory?: X2ValueMemory | undefined;
   readonly shapeMemory?: X2ShapeMemory | undefined;
@@ -579,6 +606,9 @@ function plainProducesStableExpressionValues(
     return new Set();
   }
   const output = plainProducesConcreteDecimalValues(op, x);
+  for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op, xShape)) {
+    output.add(decimalValueFact(value, "normalized"));
+  }
   const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
   if (info.stackEffect === "preserves") {
     for (const key of stableExpressionSourceKeys(x, xShape)) {
@@ -586,7 +616,7 @@ function plainProducesStableExpressionValues(
       output.add(stableExpressionValueFact(opcode, key));
     }
   } else if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") {
-    for (const fact of plainProducesConcreteBinaryDecimalValues(op, y, x)) output.add(fact);
+    for (const fact of plainProducesConcreteBinaryDecimalValues(op, y, x, yShape, xShape)) output.add(fact);
     for (const yKey of stableExpressionSourceKeys(y, yShape)) {
       for (const xKey of stableExpressionSourceKeys(x, xShape)) {
         if (stableBinaryExpressionKeyHasConcreteDecimalResult(op, yKey, xKey)) continue;
@@ -601,7 +631,6 @@ function stableExpressionKeyHasConcreteDecimalResult(
   op: Extract<IrOp, { kind: "plain" }>,
   key: string,
 ): boolean {
-  if (decimalFromFactKey(key) === undefined) return false;
   if (op.opcode === 0x15) return decimalPowerOfTenFromFactKey(key) !== undefined;
   if (op.opcode === 0x16) return decimalExpFromFactKey(key) !== undefined;
   if (op.opcode === 0x17) return decimalCommonLogFromFactKey(key) !== undefined;
@@ -623,7 +652,10 @@ function stableExpressionKeyHasConcreteDecimalResult(
   if (op.opcode === 0x35) return decimalFractionPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x34) return decimalIntegerPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x31) return decimalAbsFromFactKey(key) !== undefined;
-  if (op.opcode === 0x32) return decimalSignFromFactKey(key) !== undefined;
+  if (op.opcode === 0x32) {
+    return decimalSignFromFactKey(key) !== undefined ||
+      structuralHexSignFromFactKey(key) !== undefined;
+  }
   return false;
 }
 
@@ -632,11 +664,13 @@ function stableBinaryExpressionKeyHasConcreteDecimalResult(
   yKey: string,
   xKey: string,
 ): boolean {
-  const y = decimalFromFactKey(yKey);
-  const x = decimalFromFactKey(xKey);
-  return y !== undefined &&
-    x !== undefined &&
-    concreteDecimalBinaryValue(op.opcode, y, x) !== undefined;
+  return plainProducesConcreteBinaryDecimalValues(
+    op,
+    stableExpressionKeyValueSet(yKey),
+    stableExpressionKeyValueSet(xKey),
+    stableExpressionKeyShapeSet(yKey),
+    stableExpressionKeyShapeSet(xKey),
+  ).size > 0;
 }
 
 function plainProducesConcreteDecimalValues(
@@ -681,23 +715,43 @@ function plainProducesConcreteDecimalValues(
 function plainProducesConcreteDecimalShapeFacts(
   op: Extract<IrOp, { kind: "plain" }>,
   x: X2ValueSet | undefined,
+  xShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  if (op.opcode !== 0x35) return output;
   for (const fact of x ?? []) {
     const value = normalizedDecimalValueFromFact(fact);
-    const concrete = value === undefined
-      ? undefined
-      : decimalFractionPartShape(value);
-    if (concrete !== undefined) output.add(decimalMantissaShapeFact(concrete));
+    const concrete = value === undefined ? undefined : concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
+    if (concrete !== undefined) output.add(concrete);
+  }
+  if (op.opcode === 0x32) {
+    for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op, xShape)) {
+      const fact = exactPlainIntegerDecimalMantissaShapeFact(value);
+      if (fact !== undefined) output.add(fact);
+    }
   }
   return output;
+}
+
+function concreteDecimalUnaryDisplayShapeFact(opcode: number, value: string): X2ShapeFact | undefined {
+  if (opcode === 0x35) return decimalFractionPartShapeFact(value);
+  if (!EXACT_DECIMAL_INTEGER_MANTISSA_SHAPE_OPCODES.has(opcode)) return undefined;
+  const concrete = concreteDecimalUnaryValue(opcode, value);
+  return concrete === undefined ? undefined : exactPlainIntegerDecimalMantissaShapeFact(concrete);
+}
+
+function exactPlainIntegerDecimalMantissaShapeFact(value: string): X2ShapeFact | undefined {
+  const normalized = normalizePlainDecimal(value);
+  if (normalized === undefined || !/^-?[0-9]+$/u.test(normalized)) return undefined;
+  if (decimalMantissaDigitCount(normalized) > 8) return undefined;
+  return decimalMantissaShapeFact(normalized);
 }
 
 function plainProducesConcreteBinaryDecimalValues(
   op: Extract<IrOp, { kind: "plain" }>,
   y: X2ValueSet | undefined,
   x: X2ValueSet | undefined,
+  yShape: X2ShapeSet | undefined = undefined,
+  xShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
   if (
@@ -717,7 +771,652 @@ function plainProducesConcreteBinaryDecimalValues(
       if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
     }
   }
+  for (const fact of plainProducesStructuralBinaryDecimalValues(op, y, x, yShape, xShape)) output.add(fact);
   return output;
+}
+
+interface StructuralBitwiseOperand {
+  readonly nibbles: readonly number[];
+  readonly structural: boolean;
+}
+
+function plainProducesConcreteUnaryShapeFacts(
+  op: Extract<IrOp, { kind: "plain" }>,
+  x: X2ValueSet | undefined,
+  xShape: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  if (op.opcode === 0x31) {
+    for (const fact of structuralAbsMantissaShapeFacts(xShape)) output.add(fact);
+    return output;
+  }
+  if (op.opcode !== 0x3a) return output;
+  for (const operand of bitwiseOperandsFromValuesAndShapes(x, xShape)) {
+    const result = structuralBitwiseNotMantissaShapeFact(operand);
+    if (result !== undefined) output.add(result);
+  }
+  return output;
+}
+
+function structuralAbsMantissaShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+    const result = structuralAbsMantissaShapeFact(fact);
+    if (result !== undefined) output.add(result);
+  }
+  return output;
+}
+
+function structuralAbsMantissaShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) return undefined;
+  const unsigned = model.sign === "-" ? model.canonical.slice(1) : model.canonical;
+  return x2MantissaShapeFactFromModel(structuralMantissaDataModel(model.radix, unsigned, "structuralOnly"));
+}
+
+function plainProducesConcreteStructuralUnaryDecimalValues(
+  op: Extract<IrOp, { kind: "plain" }>,
+  xShape: X2ShapeSet | undefined,
+): Set<string> {
+  const output = new Set<string>();
+  if (op.opcode !== 0x32) return output;
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShape))) {
+    const value = structuralHexSignDecimalValue(fact);
+    if (value !== undefined) output.add(value);
+  }
+  return output;
+}
+
+function structuralHexSignDecimalValue(fact: X2ShapeFact): string | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa" || model.radix !== "hex") return undefined;
+  for (const digit of model.digits) {
+    const value = structuralHexNibbleValue(digit);
+    if (value === undefined) return undefined;
+    if (value === 0) continue;
+    if (value === 15) return undefined;
+    return model.sign === "-" ? "-1" : "1";
+  }
+  return "0";
+}
+
+function plainProducesConcreteBinaryShapeFacts(
+  op: Extract<IrOp, { kind: "plain" }>,
+  y: X2ValueSet | undefined,
+  x: X2ValueSet | undefined,
+  yShape: X2ShapeSet | undefined,
+  xShape: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of plainProducesConcreteDecimalBinaryShapeFacts(op, y, x)) output.add(fact);
+  for (const fact of plainProducesStructuralBinaryDecimalShapes(op, y, x, yShape, xShape)) output.add(fact);
+  if (op.opcode < 0x37 || op.opcode > 0x39) return output;
+  const left = bitwiseOperandsFromValuesAndShapes(y, yShape);
+  const right = bitwiseOperandsFromValuesAndShapes(x, xShape);
+  for (const leftOperand of left) {
+    for (const rightOperand of right) {
+      const result = structuralBitwiseMantissaShapeFact(op.opcode, leftOperand, rightOperand);
+      if (result !== undefined) output.add(result);
+    }
+  }
+  return output;
+}
+
+function plainProducesConcreteDecimalBinaryShapeFacts(
+  op: Extract<IrOp, { kind: "plain" }>,
+  y: X2ValueSet | undefined,
+  x: X2ValueSet | undefined,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  if (!EXACT_DECIMAL_BINARY_MANTISSA_SHAPE_OPCODES.has(op.opcode)) return output;
+  for (const yFact of y ?? []) {
+    const yValue = normalizedDecimalValueFromFact(yFact);
+    if (yValue === undefined) continue;
+    for (const xFact of x ?? []) {
+      const xValue = normalizedDecimalValueFromFact(xFact);
+      const concrete = xValue === undefined ? undefined : concreteDecimalBinaryValue(op.opcode, yValue, xValue);
+      const shape = concrete === undefined ? undefined : exactPlainIntegerDecimalMantissaShapeFact(concrete);
+      if (shape !== undefined) output.add(shape);
+    }
+  }
+  return output;
+}
+
+function plainProducesStructuralBinaryDecimalShapes(
+  op: Extract<IrOp, { kind: "plain" }>,
+  y: X2ValueSet | undefined,
+  x: X2ValueSet | undefined,
+  yShape: X2ShapeSet | undefined,
+  xShape: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of structuralHexBinaryDecimalDisplayShapes(op, y, x, yShape, xShape)) output.add(fact);
+  return output;
+}
+
+function plainProducesStructuralBinaryDecimalValues(
+  op: Extract<IrOp, { kind: "plain" }>,
+  y: X2ValueSet | undefined,
+  x: X2ValueSet | undefined,
+  yShape: X2ShapeSet | undefined,
+  xShape: X2ShapeSet | undefined,
+): Set<X2ValueFact> {
+  const output = new Set<X2ValueFact>();
+  for (const value of structuralHexBinaryDecimalValues(op, y, x, yShape, xShape)) {
+    output.add(decimalValueFact(value, "normalized"));
+  }
+  return output;
+}
+
+function structuralHexBinaryDecimalValues(
+  op: Extract<IrOp, { kind: "plain" }>,
+  y: X2ValueSet | undefined,
+  x: X2ValueSet | undefined,
+  yShape: X2ShapeSet | undefined,
+  xShape: X2ShapeSet | undefined,
+): Set<string> {
+  const output = new Set<string>();
+  if (op.opcode === 0x10) {
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const right of normalizedDecimalValues(x)) {
+        const result = structuralHexDigitPlusDecimalValue(leftDigit, right);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const left of normalizedDecimalValues(y)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = decimalPlusStructuralHexDigitValue(left, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    return output;
+  }
+  if (op.opcode === 0x11) {
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const right of normalizedDecimalValues(x)) {
+        const result = structuralHexDigitMinusDecimalValue(leftDigit, right);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const left of normalizedDecimalValues(y)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = decimalMinusStructuralHexDigitValue(left, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    return output;
+  }
+  if (op.opcode === 0x12) {
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const right of normalizedDecimalValues(x)) {
+        const result = structuralHexDigitTimesDecimalValue(leftDigit, right);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const left of normalizedDecimalValues(y)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = decimalTimesStructuralHexDigitValue(left, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const leftExponent of structuralSingleHexExponentOperands(yShape)) {
+      for (const right of normalizedDecimalValues(x)) {
+        const result = structuralHexExponentTimesDecimalValue(leftExponent, right);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const left of normalizedDecimalValues(y)) {
+      for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
+        const result = decimalTimesStructuralHexExponentValue(left, rightExponent);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    return output;
+  }
+  return output;
+}
+
+function structuralHexBinaryDecimalDisplayShapes(
+  op: Extract<IrOp, { kind: "plain" }>,
+  y: X2ValueSet | undefined,
+  x: X2ValueSet | undefined,
+  yShape: X2ShapeSet | undefined,
+  xShape: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  if (op.opcode === 0x10) {
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const right of normalizedDecimalValues(x)) {
+        const result = structuralHexDigitPlusDecimalValue(leftDigit, right);
+        if (result !== undefined) output.add(decimalMantissaShapeFact(result));
+      }
+    }
+    for (const left of normalizedDecimalValues(y)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = decimalPlusStructuralHexDigitValue(left, rightDigit);
+        if (result !== undefined) output.add(decimalMantissaShapeFact(result));
+      }
+    }
+    return output;
+  }
+  if (op.opcode === 0x11) {
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const right of normalizedDecimalValues(x)) {
+        const result = structuralHexDigitMinusDecimalValue(leftDigit, right);
+        if (result !== undefined) output.add(decimalMantissaShapeFact(result));
+      }
+    }
+    for (const left of normalizedDecimalValues(y)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = decimalMinusStructuralHexDigitValue(left, rightDigit);
+        if (result !== undefined) output.add(decimalMantissaShapeFact(result));
+      }
+    }
+    return output;
+  }
+  if (op.opcode !== 0x12) return output;
+  for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+    for (const right of normalizedDecimalValues(x)) {
+      const result = structuralHexDigitTimesDecimalDisplayShape(leftDigit, right);
+      if (result !== undefined) output.add(result);
+    }
+  }
+  for (const left of normalizedDecimalValues(y)) {
+    for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+      const result = decimalTimesStructuralHexDigitDisplayShape(left, rightDigit);
+      if (result !== undefined) output.add(result);
+    }
+  }
+  for (const leftExponent of structuralSingleHexExponentOperands(yShape)) {
+    for (const right of normalizedDecimalValues(x)) {
+      const result = structuralHexExponentTimesDecimalDisplayShape(leftExponent, right);
+      if (result !== undefined) output.add(result);
+    }
+  }
+  for (const left of normalizedDecimalValues(y)) {
+    for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
+      const result = decimalTimesStructuralHexExponentDisplayShape(left, rightExponent);
+      if (result !== undefined) output.add(result);
+    }
+  }
+  return output;
+}
+
+function normalizedDecimalValues(values: X2ValueSet | undefined): Set<string> {
+  const output = new Set<string>();
+  for (const fact of values ?? []) {
+    const value = normalizedDecimalValueFromFact(fact);
+    if (value !== undefined) output.add(value);
+  }
+  return output;
+}
+
+function structuralSingleHexDigitValues(shapes: X2ShapeSet | undefined): Set<number> {
+  const output = new Set<number>();
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (
+      model.kind !== "mantissa" ||
+      model.radix !== "hex" ||
+      model.sign !== "" ||
+      model.hasDecimalPoint ||
+      model.digits.length !== 1
+    ) {
+      continue;
+    }
+    const value = structuralHexNibbleValue(model.digits[0]!);
+    if (value !== undefined) output.add(value);
+  }
+  return output;
+}
+
+interface StructuralHexExponentOperand {
+  readonly digit: number;
+  readonly exponent: string;
+}
+
+function structuralSingleHexExponentOperands(shapes: X2ShapeSet | undefined): StructuralHexExponentOperand[] {
+  const output = new Map<string, StructuralHexExponentOperand>();
+  for (const fact of canonicalStructuralShapeFacts(shapes)) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (
+      model.kind !== "exponent-entry" ||
+      model.mantissa.radix !== "hex" ||
+      model.mantissa.sign !== "" ||
+      model.mantissa.hasDecimalPoint ||
+      model.mantissa.digits.length !== 1
+    ) {
+      continue;
+    }
+    const digit = structuralHexNibbleValue(model.mantissa.digits[0]!);
+    const exponent = canonicalExponentShapeRaw(model.exponentRaw);
+    if (digit === undefined || exponent === undefined) continue;
+    output.set(`${digit}:${exponent}`, { digit, exponent });
+  }
+  return [...output.values()];
+}
+
+function structuralHexDigitPlusDecimalValue(leftDigit: number, right: string): string | undefined {
+  if (!isVerifiedArithmeticHexDigit(leftDigit)) return undefined;
+  const rightDigit = singleDecimalDigitValue(right);
+  return rightDigit === undefined ? undefined : String(leftDigit + rightDigit);
+}
+
+function decimalPlusStructuralHexDigitValue(left: string, rightDigit: number): string | undefined {
+  if (!isVerifiedArithmeticHexDigit(rightDigit)) return undefined;
+  const leftDigit = singleDecimalDigitValue(left);
+  if (leftDigit === undefined) return undefined;
+  const value = (leftDigit + rightDigit) % 16;
+  return String(value >= 10 ? value - 10 : value);
+}
+
+function structuralHexDigitMinusDecimalValue(leftDigit: number, right: string): string | undefined {
+  if (!isVerifiedArithmeticHexDigit(leftDigit)) return undefined;
+  const rightDigit = singleDecimalDigitValue(right);
+  if (rightDigit === undefined) return undefined;
+  const value = leftDigit - rightDigit;
+  return String(rightDigit === 0 || value < 10 ? value : value - 10);
+}
+
+function decimalMinusStructuralHexDigitValue(left: string, rightDigit: number): string | undefined {
+  if (!isVerifiedArithmeticHexDigit(rightDigit)) return undefined;
+  const leftDigit = singleDecimalDigitValue(left);
+  if (leftDigit === undefined) return undefined;
+  const value = leftDigit - rightDigit;
+  return String(value <= -11 ? value + 10 : value);
+}
+
+function isVerifiedArithmeticHexDigit(digit: number): boolean {
+  return digit === 10 || digit === 11 || digit === 12 || digit === 13 || digit === 14;
+}
+
+function singleDecimalDigitValue(value: string): number | undefined {
+  return /^[0-9]$/u.test(value) ? Number(value) : undefined;
+}
+
+function structuralHexDigitTimesDecimalValue(leftDigit: number, right: string): string | undefined {
+  return structuralHexDigitTimesDecimalProduct(leftDigit, right)?.value;
+}
+
+function decimalTimesStructuralHexDigitValue(left: string, rightDigit: number): string | undefined {
+  return decimalTimesStructuralHexDigitProduct(left, rightDigit)?.value;
+}
+
+function structuralHexDigitTimesDecimalDisplayShape(leftDigit: number, right: string): X2ShapeFact | undefined {
+  const product = structuralHexDigitTimesDecimalProduct(leftDigit, right);
+  return product === undefined ? undefined : decimalMantissaShapeFact(product.display);
+}
+
+function decimalTimesStructuralHexDigitDisplayShape(left: string, rightDigit: number): X2ShapeFact | undefined {
+  const product = decimalTimesStructuralHexDigitProduct(left, rightDigit);
+  return product === undefined ? undefined : decimalMantissaShapeFact(product.display);
+}
+
+interface StructuralHexDecimalProduct {
+  readonly value: string;
+  readonly display: string;
+}
+
+const STRUCTURAL_HEX_DIGIT_TIMES_DECIMAL_TABLE: ReadonlyMap<string, StructuralHexDecimalProduct> = new Map([
+  ["10:0", { value: "0", display: "0" }],
+  ["10:1", { value: "0", display: "0" }],
+  ["10:2", { value: "4", display: "4" }],
+  ["10:3", { value: "4", display: "4" }],
+  ["10:4", { value: "8", display: "8" }],
+  ["10:5", { value: "50", display: "50" }],
+  ["10:6", { value: "0", display: "0" }],
+  ["10:7", { value: "10", display: "10" }],
+  ["10:8", { value: "20", display: "20" }],
+  ["10:9", { value: "30", display: "30" }],
+  ["10:18", { value: "20", display: "020" }],
+  ["11:0", { value: "0", display: "0" }],
+  ["11:1", { value: "1", display: "1" }],
+  ["11:2", { value: "6", display: "6" }],
+  ["11:3", { value: "1", display: "1" }],
+  ["11:4", { value: "2", display: "2" }],
+  ["11:5", { value: "11", display: "11" }],
+  ["11:6", { value: "22", display: "22" }],
+  ["11:7", { value: "33", display: "33" }],
+  ["11:8", { value: "44", display: "44" }],
+  ["11:9", { value: "55", display: "55" }],
+  ["11:18", { value: "54", display: "054" }],
+  ["12:0", { value: "0", display: "0" }],
+  ["12:1", { value: "2", display: "2" }],
+  ["12:2", { value: "8", display: "8" }],
+  ["12:3", { value: "4", display: "4" }],
+  ["12:4", { value: "0", display: "0" }],
+  ["12:5", { value: "32", display: "32" }],
+  ["12:6", { value: "44", display: "44" }],
+  ["12:7", { value: "40", display: "40" }],
+  ["12:8", { value: "52", display: "52" }],
+  ["12:9", { value: "64", display: "64" }],
+  ["12:18", { value: "912", display: "912" }],
+  ["13:0", { value: "0", display: "0" }],
+  ["13:1", { value: "3", display: "3" }],
+  ["13:2", { value: "10", display: "10" }],
+  ["13:3", { value: "23", display: "23" }],
+  ["13:4", { value: "20", display: "20" }],
+  ["13:5", { value: "53", display: "53" }],
+  ["13:6", { value: "50", display: "50" }],
+  ["13:7", { value: "63", display: "63" }],
+  ["13:8", { value: "60", display: "60" }],
+  ["13:9", { value: "73", display: "73" }],
+  ["13:18", { value: "930", display: "930" }],
+  ["14:0", { value: "0", display: "0" }],
+  ["14:1", { value: "4", display: "4" }],
+  ["14:2", { value: "12", display: "12" }],
+  ["14:3", { value: "10", display: "10" }],
+  ["14:4", { value: "24", display: "24" }],
+  ["14:5", { value: "42", display: "42" }],
+  ["14:6", { value: "40", display: "40" }],
+  ["14:7", { value: "54", display: "54" }],
+  ["14:8", { value: "68", display: "68" }],
+  ["14:9", { value: "82", display: "82" }],
+  ["14:18", { value: "948", display: "948" }],
+]);
+
+function structuralHexDigitTimesDecimalProduct(
+  leftDigit: number,
+  right: string,
+): StructuralHexDecimalProduct | undefined {
+  return STRUCTURAL_HEX_DIGIT_TIMES_DECIMAL_TABLE.get(`${leftDigit}:${right}`);
+}
+
+function decimalTimesStructuralHexDigitProduct(
+  left: string,
+  rightDigit: number,
+): StructuralHexDecimalProduct | undefined {
+  if (!DECIMAL_TIMES_STRUCTURAL_HEX_INPUTS.has(left)) return undefined;
+  if (rightDigit === 10 || rightDigit === 11 || rightDigit === 12 || rightDigit === 13) {
+    const value = exactDecimalToNormalized(BigInt(left) * 10n, 0);
+    return value === undefined ? undefined : { value, display: value };
+  }
+  if (rightDigit === 14) return { value: "0", display: "0" };
+  return undefined;
+}
+
+const DECIMAL_TIMES_STRUCTURAL_HEX_INPUTS = new Set(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "18"]);
+
+function structuralHexExponentTimesDecimalValue(
+  left: StructuralHexExponentOperand,
+  right: string,
+): string | undefined {
+  if (left.digit !== 13 || left.exponent !== "-2") return undefined;
+  switch (right) {
+    case "1":
+      return "0.03";
+    case "2":
+      return "0.1";
+    case "4":
+      return "0.2";
+    case "5":
+      return "0.53";
+    case "8":
+      return "0.6";
+    case "16":
+      return "9.2";
+    default:
+      return undefined;
+  }
+}
+
+function decimalTimesStructuralHexExponentValue(
+  left: string,
+  right: StructuralHexExponentOperand,
+): string | undefined {
+  if (right.digit !== 13 || right.exponent !== "-2") return undefined;
+  switch (left) {
+    case "1":
+      return "0.1";
+    case "2":
+      return "0.2";
+    case "4":
+      return "0.4";
+    case "5":
+      return "0.5";
+    case "8":
+      return "0.8";
+    case "16":
+      return "1.6";
+    default:
+      return undefined;
+  }
+}
+
+function structuralHexExponentTimesDecimalDisplayShape(
+  left: StructuralHexExponentOperand,
+  right: string,
+): X2ShapeFact | undefined {
+  if (left.digit !== 13 || left.exponent !== "-2") return undefined;
+  switch (right) {
+    case "1":
+      return decimalExponentShapeFact("3", "-2");
+    case "2":
+      return decimalExponentShapeFact("1", "-1");
+    case "4":
+      return decimalExponentShapeFact("2", "-1");
+    case "5":
+      return decimalExponentShapeFact("5.3", "-1");
+    case "8":
+      return decimalExponentShapeFact("6", "-1");
+    case "16":
+      return decimalMantissaShapeFact("9.2");
+    default:
+      return undefined;
+  }
+}
+
+function decimalTimesStructuralHexExponentDisplayShape(
+  left: string,
+  right: StructuralHexExponentOperand,
+): X2ShapeFact | undefined {
+  if (right.digit !== 13 || right.exponent !== "-2") return undefined;
+  switch (left) {
+    case "1":
+      return decimalExponentShapeFact("1", "-1");
+    case "2":
+      return decimalExponentShapeFact("2", "-1");
+    case "4":
+      return decimalExponentShapeFact("4", "-1");
+    case "5":
+      return decimalExponentShapeFact("5", "-1");
+    case "8":
+      return decimalExponentShapeFact("8", "-1");
+    case "16":
+      return decimalMantissaShapeFact("1.6");
+    default:
+      return undefined;
+  }
+}
+
+function structuralHexSubtractOneDecimalValue(digit: number): string | undefined {
+  if (digit === 12) return "1";
+  if (digit === 13) return "2";
+  if (digit === 14) return "3";
+  return undefined;
+}
+
+function structuralBitwiseNotMantissaShapeFact(
+  operand: StructuralBitwiseOperand,
+): X2ShapeFact | undefined {
+  if (operand.nibbles.length !== 8) return undefined;
+  const result = [8];
+  let hasHexCell = false;
+  for (let index = 1; index < 8; index += 1) {
+    const digit = (~operand.nibbles[index]!) & 0x0f;
+    if (digit > 9) hasHexCell = true;
+    result.push(digit);
+  }
+  if (!hasHexCell && !operand.structural) return undefined;
+  return x2MantissaShapeFactFromParts("hex", bitwiseMantissaRaw(result));
+}
+
+function bitwiseOperandsFromValuesAndShapes(
+  values: X2ValueSet | undefined,
+  shapes: X2ShapeSet | undefined,
+): StructuralBitwiseOperand[] {
+  const output: StructuralBitwiseOperand[] = [];
+  for (const fact of values ?? []) {
+    const value = normalizedDecimalValueFromFact(fact);
+    const nibbles = value === undefined ? undefined : decimalMantissaDigits(value);
+    if (nibbles !== undefined) output.push({ nibbles, structural: false });
+  }
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+    const nibbles = structuralMantissaNibbles(fact);
+    if (nibbles !== undefined) output.push({ nibbles, structural: true });
+  }
+  return output;
+}
+
+function structuralBitwiseMantissaShapeFact(
+  opcode: number,
+  left: StructuralBitwiseOperand,
+  right: StructuralBitwiseOperand,
+): X2ShapeFact | undefined {
+  if (left.nibbles.length !== 8 || right.nibbles.length !== 8) return undefined;
+  const result = [8];
+  let hasHexCell = false;
+  for (let index = 1; index < 8; index += 1) {
+    const digit = bitwiseMantissaDigit(opcode, left.nibbles[index]!, right.nibbles[index]!);
+    if (digit === undefined || digit < 0 || digit > 15) return undefined;
+    if (digit > 9) hasHexCell = true;
+    result.push(digit);
+  }
+  if (!hasHexCell && !left.structural && !right.structural) return undefined;
+  return x2MantissaShapeFactFromParts("hex", bitwiseMantissaRaw(result));
+}
+
+function structuralMantissaNibbles(fact: X2ShapeFact): number[] | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) return undefined;
+  const nibbles: number[] = [];
+  for (const digit of model.digits.slice(0, 8)) {
+    const value = structuralHexNibbleValue(digit);
+    if (value === undefined) return undefined;
+    nibbles.push(value);
+  }
+  while (nibbles.length < 8) nibbles.push(0);
+  return nibbles;
+}
+
+function structuralHexNibbleValue(digit: string): number | undefined {
+  const index = "0123456789ABCDEF".indexOf(digit);
+  if (index >= 0) return index;
+  switch (digit) {
+    case "С":
+      return 12;
+    case "Г":
+      return 13;
+    case "Е":
+      return 14;
+    default:
+      return undefined;
+  }
+}
+
+function bitwiseMantissaRaw(digits: readonly number[]): string {
+  const rendered = digits.map((digit) => "0123456789ABCDEF"[digit] ?? "0");
+  return `${rendered[0]}.${rendered.slice(1).join("")}`;
 }
 
 function concreteDecimalUnaryValue(opcode: number, value: string): string | undefined {
@@ -883,6 +1582,19 @@ function decimalSignFromFactKey(key: string): string | undefined {
 
 function decimalFromFactKey(key: string): string | undefined {
   return /^decimal:([^:]+):normalized$/u.exec(key)?.[1];
+}
+
+function structuralHexSignFromFactKey(key: string): string | undefined {
+  const fact = structuralShapeFactFromStableExpressionKey(key);
+  return fact === undefined ? undefined : structuralHexSignDecimalValue(fact);
+}
+
+function structuralShapeFactFromStableExpressionKey(key: string): X2ShapeFact | undefined {
+  const raw = /^shape:(.*)$/u.exec(key)?.[1];
+  if (raw === undefined) return undefined;
+  const canonical = x2ShapeFactFromDataModel(x2ShapeDataModelForFact(raw as X2ShapeFact));
+  if (canonical === undefined || x2ShapeFactSafety(canonical) !== "structuralOnly") return undefined;
+  return canonical;
 }
 
 function decimalAbs(value: string): string | undefined {
@@ -1278,19 +1990,24 @@ function decimalIntegerPart(value: string): string | undefined {
 function decimalFractionPart(value: string): string | undefined {
   const match = /^(-?)([0-9]+)(?:\.([0-9]+))?$/u.exec(value);
   if (match === null) return undefined;
-  const sign = match[1]!;
   const fraction = (match[3] ?? "").replace(/0+$/u, "");
-  if (fraction.length === 0) return sign === "-" ? undefined : "0";
-  return `${sign}0.${fraction}`;
+  if (fraction.length === 0) return "0";
+  return `${match[1]!}0.${fraction}`;
 }
 
-function decimalFractionPartShape(value: string): string | undefined {
+function decimalFractionPartShapeFact(value: string): X2ShapeFact | undefined {
   const match = /^(-?)([0-9]+)(?:\.([0-9]+))?$/u.exec(value);
   if (match === null) return undefined;
   const sign = match[1]!;
   const fraction = (match[3] ?? "").replace(/0+$/u, "");
-  if (fraction.length === 0) return sign === "-" ? "-0" : "0";
-  return `${sign}0.${fraction}`;
+  if (fraction.length === 0) return decimalMantissaShapeFact(sign === "-" ? "-0" : "0");
+  const leadingZeroes = /^0*/u.exec(fraction)?.[0].length ?? 0;
+  const significant = fraction.slice(leadingZeroes);
+  if (significant.length === 0) return decimalMantissaShapeFact(sign === "-" ? "-0" : "0");
+  const mantissa = significant.length === 1
+    ? `${sign}${significant}`
+    : `${sign}${significant[0]!}.${significant.slice(1)}`;
+  return decimalExponentShapeFact(mantissa, `-${leadingZeroes + 1}`);
 }
 
 function plainProducesStableConstantExpressionValue(
@@ -1356,8 +2073,14 @@ function plainXValueAfterNonPreservingOp(
 function plainXShapeAfterNonPreservingOp(
   op: Extract<IrOp, { kind: "plain" }>,
   x: X2ValueSet | undefined = undefined,
+  y: X2ValueSet | undefined = undefined,
+  xShape: X2ShapeSet | undefined = undefined,
+  yShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
-  return plainProducesConcreteDecimalShapeFacts(op, x);
+  const output = plainProducesConcreteDecimalShapeFacts(op, x, xShape);
+  for (const fact of plainProducesConcreteUnaryShapeFacts(op, x, xShape)) output.add(fact);
+  for (const fact of plainProducesConcreteBinaryShapeFacts(op, y, x, yShape, xShape)) output.add(fact);
+  return output;
 }
 
 export function analyzeX2StackEffect(op: IrOp | undefined): X2StackEffectAnalysis {
@@ -1546,9 +2269,17 @@ interface RegisterDataflowState {
   readonly x2: RegisterValueSet;
 }
 
-interface X2ValueDataflowOptions {
+export interface X2RegisterEdgeState {
+  readonly x?: RegisterValueSet | undefined;
+  readonly y?: RegisterValueSet | undefined;
+  readonly x2?: RegisterValueSet | undefined;
+}
+
+export interface X2ValueDataflowOptions {
   readonly trackRegisterMemory?: boolean;
 }
+
+export type X2DataflowEdgeKind = Edge["kind"];
 
 export function computeX2RegisterStates(ops: readonly IrOp[]): Array<RegisterValueSet | undefined> {
   if (ops.length === 0) return [];
@@ -1995,6 +2726,12 @@ export function x2StateHasStructuralShapeX2(state: X2ValueDataflowState | undefi
   return x2RestoreSafety(state) === "structuralOnly";
 }
 
+export function x2StateHasOnlyDotSafeStructuralMantissaX2(state: X2ValueDataflowState | undefined): boolean {
+  return state !== undefined &&
+    !x2ValueSetHasConcreteDecimal(state.x2) &&
+    x2ShapeSetHasOnlyDotSafeStructuralMantissas(state.x2Shape);
+}
+
 export function x2StateHasUnsafeDotRestoreShapeX2(state: X2ValueDataflowState | undefined): boolean {
   const safety = x2RestoreSafety(state);
   return safety === "structuralOnly" || safety === "errorProne";
@@ -2024,6 +2761,48 @@ export function x2ShapeSetsHaveSameStructuralShape(
     if (rightShapes.has(shape)) return true;
   }
   return false;
+}
+
+export function x2ShapeSetsHaveSameDotSafeStructuralMantissa(
+  left: X2ShapeSet | undefined,
+  right: X2ShapeSet | undefined,
+): boolean {
+  const leftKeys = dotSafeStructuralMantissaRestoreKeys(left);
+  if (leftKeys.size === 0) return false;
+  for (const key of dotSafeStructuralMantissaRestoreKeys(right)) {
+    if (leftKeys.has(key)) return true;
+  }
+  return false;
+}
+
+export function x2ShapeSetHasOnlyDotSafeStructuralMantissas(input: X2ShapeSet | undefined): boolean {
+  const shapes = canonicalStructuralShapeFacts(input);
+  if (shapes.size === 0) return false;
+  for (const fact of shapes) {
+    if (dotSafeStructuralMantissaRestoreKeys(new Set([fact])).size === 0) return false;
+  }
+  return true;
+}
+
+function dotSafeStructuralMantissaRestoreKeys(input: X2ShapeSet | undefined): Set<string> {
+  const keys = new Set<string>();
+  for (const fact of structuralMantissaShapeFacts(canonicalStructuralShapeFacts(input))) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (
+      model.kind !== "mantissa" ||
+      model.radix !== "hex" ||
+      model.sign !== "" ||
+      model.hasDecimalPoint ||
+      model.digits.length !== 1
+    ) {
+      continue;
+    }
+    const digit = structuralHexNibbleValue(model.digits[0]!);
+    // Emulator probes show that single A/B/C hidden-X2 dot restores are
+    // display-equivalent to recalls; D/E error and F normalizes to zero.
+    if (digit === 10 || digit === 11 || digit === 12) keys.add(`hex-digit:${digit}`);
+  }
+  return keys;
 }
 
 export function x2SignChangedSharedStructuralShapeFacts(
@@ -2068,6 +2847,12 @@ export function x2StateHasSameStructuralShapeInXAndX2(state: X2ValueDataflowStat
   return state !== undefined && x2ShapeSetsHaveSameStructuralShape(state.xShape, state.x2Shape);
 }
 
+export function x2StateHasSameDotSafeStructuralMantissaInXAndX2(
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  return state !== undefined && x2ShapeSetsHaveSameDotSafeStructuralMantissa(state.xShape, state.x2Shape);
+}
+
 export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefined): boolean {
   return state?.entry.kind === "closed" &&
     (state.vpContext === undefined || state.vpContext.kind === "none") &&
@@ -2075,7 +2860,9 @@ export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefi
 }
 
 export function x2StateHasSameDotRestoreValueInXAndX2(state: X2ValueDataflowState | undefined): boolean {
-  return x2ValueSetHasIntersection(state?.x, state?.x2) || x2StateHasSameDotSafeDecimalInXAndX2(state);
+  return x2ValueSetHasIntersection(state?.x, state?.x2) ||
+    x2StateHasSameDotSafeDecimalInXAndX2(state) ||
+    x2StateHasSameDotSafeStructuralMantissaInXAndX2(state);
 }
 
 export function x2StateHasSameRestoredVisibleDecimalInXAndX2(
@@ -2113,6 +2900,10 @@ export function x2CanUseClosedSignChangeDotSourceAt(
     if (hasRewriteBarrier(op)) return false;
     return isFreeStandingX2SignChange(op) &&
       x2StateIsClosedPlainContext(state) &&
+      (
+        !x2StateHasUnsafeDotRestoreShapeX2(state) ||
+        x2StateHasOnlyDotSafeStructuralMantissaX2(state)
+      ) &&
       x2StateHasSameDotRestoreValueInXAndX2(state);
   }
   return false;
@@ -2151,9 +2942,21 @@ export function x2StatesHaveSameVpEntrySource(
   left: X2ValueDataflowState | undefined,
   right: X2ValueDataflowState | undefined,
 ): boolean {
-  return sameNonEmptyStringSet(left?.vpEntryMantissa, right?.vpEntryMantissa) ||
-    sameNonEmptyShapeSet(left?.vpEntryShape, right?.vpEntryShape) ||
-    x2ShapeSetsHaveSameStructuralShape(left?.vpEntryShape, right?.vpEntryShape);
+  return stringSetsHaveIntersection(vpEntrySourceKeys(left), vpEntrySourceKeys(right));
+}
+
+export function x2StatesHaveSameVpEntrySignSource(
+  left: X2ValueDataflowState | undefined,
+  right: X2ValueDataflowState | undefined,
+): boolean {
+  if (sameNonEmptyStringSet(
+    left === undefined ? undefined : vpEntrySignSourceMantissas(left),
+    right?.vpEntryMantissa,
+  )) return true;
+  return x2ShapeSetsHaveSameStructuralShape(
+    left === undefined ? undefined : vpEntrySignSourceShapes(left),
+    right?.vpEntryShape,
+  );
 }
 
 export function x2StateCanDiscardRestoreRunBeforeProvedVp(
@@ -2186,6 +2989,30 @@ export function x2HasOnlyRestoreGapBeforeVp(
       x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
     ) continue;
     return sawRestoreGap && isFreeStandingX2VpOp(op);
+  }
+  return false;
+}
+
+export function x2HasSignRestoreGapBeforeVp(
+  ops: readonly IrOp[],
+  start: number,
+  context?: DirectReturnAnalysisContext,
+): boolean {
+  let sawSign = false;
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    if (isFreeStandingX2SignChange(op)) {
+      sawSign = true;
+      continue;
+    }
+    if (isFreeStandingX2EmptyOp(op)) continue;
+    if (
+      context !== undefined &&
+      isKnownReturnCallOp(op) &&
+      x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
+    ) continue;
+    return sawSign && isFreeStandingX2VpOp(op);
   }
   return false;
 }
@@ -2586,6 +3413,7 @@ export function analyzeRecallRemoval(
   recallIndex: number,
   x2RegisterState: RegisterValueSet | undefined,
   x2ValueState: X2ValueDataflowState | undefined,
+  context?: DirectReturnAnalysisContext,
 ): RecallRemovalAnalysis | undefined {
   const op = ops[recallIndex];
   if (op === undefined) return undefined;
@@ -2602,7 +3430,7 @@ export function analyzeRecallRemoval(
       redundantSyncValue,
       redundantSyncShape,
     }) &&
-    !recallRemovalPreservesImmediateVpRestoreContext(ops, recallIndex, x2ValueState, valueProof);
+    !recallRemovalPreservesImmediateVpRestoreContext(ops, recallIndex, x2ValueState, valueProof, context);
   return {
     register,
     valueProof,
@@ -2621,6 +3449,7 @@ function recallRemovalPreservesImmediateVpRestoreContext(
   recallIndex: number,
   state: X2ValueDataflowState | undefined,
   valueProof: RecallValueProof | undefined,
+  context?: DirectReturnAnalysisContext,
 ): boolean {
   if (
     state === undefined ||
@@ -2629,17 +3458,25 @@ function recallRemovalPreservesImmediateVpRestoreContext(
   ) return false;
   const op = ops[recallIndex];
   if (op === undefined) return false;
-  const nextRestore = nextImmediateX2RestoreOp(ops, recallIndex + 1);
-  if (nextRestore?.kind !== "plain" || nextRestore.opcode !== 0x0c) return false;
   const recalledValues = recallX2ValueFacts(state, valueProof.register, true, op);
   const recalledMantissas = vpEntryMantissasFromValueFacts(recalledValues);
+  const recalledShapes = recallStructuralShapeFacts(op, state, valueProof.register);
+  if (
+    x2HasSignRestoreGapBeforeVp(ops, recallIndex + 1, context) &&
+    x2HasOnlyRestoreGapBeforeVp(ops, recallIndex + 1, context) &&
+    (
+      sameNonEmptyStringSet(vpEntrySignSourceMantissas(state), recalledMantissas) ||
+      x2ShapeSetsHaveSameStructuralShape(vpEntrySignSourceShapes(state), recalledShapes)
+    )
+  ) return true;
+  const nextRestore = nextImmediateX2RestoreOp(ops, recallIndex + 1);
+  if (nextRestore?.kind !== "plain" || nextRestore.opcode !== 0x0c) return false;
   const vpContext = analyzeX2VpShapeContext(state);
   if (
     vpContext.kind === "active-mantissa" &&
     sameNonEmptyStringSet(vpContext.mantissa, recalledMantissas)
   ) return true;
   if (sameNonEmptyStringSet(state.vpEntryMantissa, recalledMantissas)) return true;
-  const recalledShapes = recallStructuralShapeFacts(op, state, valueProof.register);
   return x2ShapeSetsHaveSameStructuralShape(state.vpEntryShape, recalledShapes);
 }
 
@@ -2690,6 +3527,7 @@ function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflow
     structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
     structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
@@ -2795,6 +3633,8 @@ function transferX2ValueDataflowState(
         vpContext: cloneX2VpContextState(stable.vpContext),
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: cloneX2StructuralEntryState(stable.structuralVpContext),
+        vpEntryMantissa: vpEntryMantissasFromStoreSplice(stable.x2Shape),
+        vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(stable.x2Shape),
         memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, op.register, stable.x) : undefined,
         shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, op.register, stable.xShape) : undefined,
       };
@@ -3289,7 +4129,7 @@ function transferPlainX2ValueState(
       : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape);
     const xShape = plainPreservesXValue(op)
       ? new Set(closedExponentShapes)
-      : plainXShapeAfterNonPreservingOp(op, sourceX);
+      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedExponentShapes, input.yShape);
     const x2 = effect === "preserves"
       ? new Set(closedExponentValues)
       : effect === "affects"
@@ -3308,6 +4148,7 @@ function transferPlainX2ValueState(
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: transferPlainX2StructuralVpContextState(input, effect),
       vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, xShape, x2Shape, effect),
+      vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
       vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
@@ -3321,7 +4162,7 @@ function transferPlainX2ValueState(
       : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape);
     const xShape = plainPreservesXValue(op)
       ? new Set(closedExponentShapes)
-      : plainXShapeAfterNonPreservingOp(op, sourceX);
+      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedExponentShapes, input.yShape);
     const x2Shape = transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes);
     return {
       x,
@@ -3335,6 +4176,7 @@ function transferPlainX2ValueState(
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: transferPlainX2StructuralVpContextState(input, effect),
       vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, new Set(), xShape, x2Shape, effect),
+      vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
       vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
@@ -3350,7 +4192,7 @@ function transferPlainX2ValueState(
   const x2 = transferPlainX2ValueSet(input, x, effect);
   const xShape = plainPreservesXValue(op)
     ? cloneOptionalShapeSet(input.xShape)
-    : plainXShapeAfterNonPreservingOp(op, input.x);
+    : plainXShapeAfterNonPreservingOp(op, input.x, input.y, input.xShape, input.yShape);
   const x2Shape = transferPlainX2ShapeSet(input, xShape, effect);
   const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
   if (structuralEntry.kind === "exponent") {
@@ -3361,7 +4203,7 @@ function transferPlainX2ValueState(
       : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedStructuralShapes, input.yShape);
     const structuralXShape = plainPreservesXValue(op)
       ? new Set(closedStructuralShapes)
-      : plainXShapeAfterNonPreservingOp(op, sourceX);
+      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedStructuralShapes, input.yShape);
     const structuralX2Shape = transferPlainX2ShapeSet(input, structuralXShape, effect, closedStructuralShapes);
     return {
       x: structuralXValue,
@@ -3383,6 +4225,7 @@ function transferPlainX2ValueState(
         structuralX2Shape,
         effect,
       ),
+      vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
       vpEntryShape: transferPlainX2VpEntryShapeState(input, op, structuralXShape, structuralX2Shape, effect),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
@@ -3400,10 +4243,128 @@ function transferPlainX2ValueState(
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: transferPlainX2StructuralVpContextState(input, effect),
     vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, xShape, x2Shape, effect),
+    vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
     vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
   };
+}
+
+export function transferX2ValueStateForEdge(
+  input: X2ValueDataflowState | undefined,
+  op: IrOp,
+  edge: X2DataflowEdgeKind,
+  options: X2ValueDataflowOptions = {},
+  producerIndex?: number,
+): X2ValueDataflowState | undefined {
+  if (input === undefined) return undefined;
+  return transferX2ValueDataflowState(
+    input,
+    op,
+    edge,
+    options.trackRegisterMemory === true,
+    producerIndex,
+  );
+}
+
+export function transferX2RegisterStateForEdge(
+  input: X2RegisterEdgeState | undefined,
+  op: IrOp,
+  edge: X2DataflowEdgeKind,
+): RegisterValueSet | undefined {
+  if (input === undefined || input.x2 === undefined) return undefined;
+  if (hasRewriteBarrier(op)) return new Set();
+
+  switch (op.kind) {
+    case "label":
+    case "jump":
+    case "call":
+    case "orphan-address":
+      return new Set(input.x2);
+    case "store":
+      return input.x === undefined ? undefined : addProjectedStoredX2Alias(input.x2, input.x, op.register);
+    case "indirect-store": {
+      const target = knownIndirectMemoryTarget(op);
+      if (target === undefined) return new Set(input.x2);
+      return input.x === undefined ? undefined : addProjectedStoredX2Alias(input.x2, input.x, target);
+    }
+    case "recall":
+      return new Set([op.register]);
+    case "indirect-recall": {
+      const target = knownIndirectMemoryTarget(op);
+      return target === undefined ? new Set() : new Set([target]);
+    }
+    case "plain":
+      return transferPlainX2RegisterSetForKnownEdge(input, op);
+    case "cjump": {
+      const effect = conditionalX2EffectForGraphEdge(op, edge);
+      return transferConditionalX2RegisterSetForKnownEdge(input, effect);
+    }
+    case "loop": {
+      const effect = conditionalX2EffectForGraphEdge(op, edge);
+      const counter = loopCounterRegister(op.counter);
+      const x2 = removeRegisterValue(input.x2, counter);
+      if (effect === "preserves") return x2;
+      if (effect !== "affects") return new Set();
+      return input.x === undefined ? undefined : removeRegisterValue(input.x, counter);
+    }
+    case "indirect-jump":
+    case "indirect-call":
+      return isStableIndirectSelector(op.register) ? new Set(input.x2) : removeRegisterValue(input.x2, op.register);
+    case "indirect-cjump": {
+      const effect = indirectConditionalX2EffectForGraphEdge(op, edge);
+      const projected = transferConditionalX2RegisterSetForKnownEdge(input, effect);
+      if (projected === undefined) return undefined;
+      return edge === "jump" && !isStableIndirectSelector(op.register)
+        ? removeRegisterValue(projected, op.register)
+        : projected;
+    }
+    case "return":
+      return input.x === undefined ? undefined : new Set(input.x);
+    case "stop":
+      return new Set();
+  }
+}
+
+function addProjectedStoredX2Alias(
+  x2: RegisterValueSet,
+  x: RegisterValueSet,
+  register: RegisterName,
+): Set<RegisterName> {
+  const output = removeRegisterValue(x2, register);
+  if (setsIntersect(x, x2)) output.add(register);
+  return output;
+}
+
+function transferPlainX2RegisterSetForKnownEdge(
+  input: X2RegisterEdgeState,
+  op: Extract<IrOp, { kind: "plain" }>,
+): RegisterValueSet | undefined {
+  const effect = plainX2Effect(op);
+  if (effect === "preserves") return new Set(input.x2);
+  if (effect !== "affects") return new Set();
+  const x = projectedPlainVisibleXRegisterSet(input, op);
+  return x === undefined ? undefined : new Set(x);
+}
+
+function projectedPlainVisibleXRegisterSet(
+  input: X2RegisterEdgeState,
+  op: Extract<IrOp, { kind: "plain" }>,
+): RegisterValueSet | undefined {
+  if (op.opcode === STACK_EXCHANGE_XY_OPCODE || op.opcode === STACK_COPY_Y_TO_X_OPCODE) {
+    return input.y === undefined ? undefined : new Set(input.y);
+  }
+  if (plainPreservesXValue(op)) return input.x === undefined ? undefined : new Set(input.x);
+  return new Set();
+}
+
+function transferConditionalX2RegisterSetForKnownEdge(
+  input: X2RegisterEdgeState,
+  effect: ReturnType<typeof conditionalX2Effect>,
+): RegisterValueSet | undefined {
+  if (effect === "preserves") return new Set(input.x2);
+  if (effect === "affects") return input.x === undefined ? undefined : new Set(input.x);
+  return new Set();
 }
 
 function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: string): X2ValueDataflowState {
@@ -3765,7 +4726,7 @@ function transferIndirectStoreX2ValueState(
 ): X2ValueDataflowState {
   const target = knownIndirectMemoryTarget(op);
   if (target === undefined) {
-    const closed = closeX2ValueEntry(input);
+    const closed = withStoreVpSpliceSource(closeX2ValueEntry(input));
     return trackRegisterMemory ? clearX2ValueMemory(closed) : closed;
   }
   const closed = closeX2ValueEntry(input);
@@ -3784,6 +4745,8 @@ function transferIndirectStoreX2ValueState(
     vpContext: cloneX2VpContextState(stable.vpContext),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: cloneX2StructuralEntryState(stable.structuralVpContext),
+    vpEntryMantissa: vpEntryMantissasFromStoreSplice(stable.x2Shape),
+    vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(stable.x2Shape),
     memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, target, stable.x) : undefined,
     shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, target, stable.xShape) : undefined,
   };
@@ -3851,6 +4814,7 @@ function transferExchangeXYX2ValueState(
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: transferPlainX2StructuralVpContextState(input, effect),
     vpEntryMantissa: transferPlainX2VpEntryMantissaState(input, op, x, x2, xShape, x2Shape, effect),
+    vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
     vpEntryShape: transferPlainX2VpEntryShapeState(input, op, xShape, x2Shape, effect),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
@@ -3879,6 +4843,7 @@ function transferCopyYToXX2ValueState(
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: transferPlainX2StructuralVpContextState(closed, effect),
     vpEntryMantissa: transferPlainX2VpEntryMantissaState(closed, op, x, x2, xShape, x2Shape, effect),
+    vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(closed, op, effect),
     vpEntryShape: transferPlainX2VpEntryShapeState(closed, op, xShape, x2Shape, effect),
     memory: closed.memory,
     shapeMemory: closed.shapeMemory,
@@ -3973,6 +4938,15 @@ function transferPlainX2VpEntryMantissaState(
 ): ReadonlySet<string> | undefined {
   if (effect === "affects") return sharedDecimalVpEntryMantissas({ x, x2, xShape, x2Shape });
   if (effect === "preserves" && isEmptyPlainOp(op)) return cloneOptionalStringSet(input.vpEntryMantissa);
+  return undefined;
+}
+
+function transferPlainX2VpEntrySignMantissaState(
+  input: X2ValueDataflowState,
+  op: Extract<IrOp, { kind: "plain" }>,
+  effect: ReturnType<typeof plainX2Effect>,
+): ReadonlySet<string> | undefined {
+  if (effect === "preserves" && isEmptyPlainOp(op)) return cloneOptionalStringSet(input.vpEntrySignMantissa);
   return undefined;
 }
 
@@ -4088,6 +5062,7 @@ function joinX2ValueDataflowStates(
     structuralEntry: cloneX2StructuralEntryState(incoming.structuralEntry),
     structuralVpContext: cloneX2StructuralEntryState(incoming.structuralVpContext),
     vpEntryMantissa: cloneOptionalStringSet(incoming.vpEntryMantissa),
+    vpEntrySignMantissa: cloneOptionalStringSet(incoming.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(incoming.vpEntryShape),
     memory: trackRegisterMemory ? cloneX2ValueMemory(incoming.memory) : undefined,
     shapeMemory: trackRegisterMemory ? cloneX2ShapeMemory(incoming.shapeMemory) : undefined,
@@ -4104,6 +5079,7 @@ function joinX2ValueDataflowStates(
     structuralEntry: joinX2StructuralEntryStates(current.structuralEntry, incoming.structuralEntry),
     structuralVpContext: joinX2StructuralEntryStates(current.structuralVpContext, incoming.structuralVpContext),
     vpEntryMantissa: joinOptionalStringSets(current.vpEntryMantissa, incoming.vpEntryMantissa),
+    vpEntrySignMantissa: joinOptionalStringSets(current.vpEntrySignMantissa, incoming.vpEntrySignMantissa),
     vpEntryShape: joinOptionalShapeSets(current.vpEntryShape, incoming.vpEntryShape),
     memory: trackRegisterMemory ? joinX2ValueMemories(current.memory, incoming.memory) : undefined,
     shapeMemory: trackRegisterMemory ? joinX2ShapeMemories(current.shapeMemory, incoming.shapeMemory) : undefined,
@@ -4136,6 +5112,7 @@ function sameX2ValueDataflowState(
     sameX2StructuralEntryState(left.structuralEntry, right.structuralEntry) &&
     sameX2StructuralEntryState(left.structuralVpContext, right.structuralVpContext) &&
     sameOptionalStringSet(left.vpEntryMantissa, right.vpEntryMantissa) &&
+    sameOptionalStringSet(left.vpEntrySignMantissa, right.vpEntrySignMantissa) &&
     sameOptionalShapeSet(left.vpEntryShape, right.vpEntryShape) &&
     sameX2ValueMemory(left.memory, right.memory) &&
     sameX2ShapeMemory(left.shapeMemory, right.shapeMemory);
@@ -4372,6 +5349,7 @@ function invalidateRegisterDependentX2ValueState(
     structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
     structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     memory: trackRegisterMemory ? removeRegisterDependentX2ValueMemory(input.memory, register) : undefined,
     shapeMemory: trackRegisterMemory ? cloneX2ShapeMemory(input.shapeMemory) : undefined,
@@ -4398,6 +5376,7 @@ function dropUnstableOpaqueExpressionX2ValueFacts(
     structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
     structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     memory: trackRegisterMemory ? removeUnstableOpaqueExpressionValueMemory(input.memory) : undefined,
     shapeMemory: trackRegisterMemory ? cloneX2ShapeMemory(input.shapeMemory) : undefined,
@@ -4487,6 +5466,7 @@ function clearX2ValueMemory(input: X2ValueDataflowState): X2ValueDataflowState {
     structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
     structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     memory: {},
     shapeMemory: {},
@@ -4809,7 +5789,7 @@ function normalizePreloadedStructuralExponentShape(input: string): X2ShapeFact |
 
 function normalizePreloadedDecimalLiteral(input: string): string | undefined {
   const normalized = input.trim().replace(/,/gu, ".").replace(/[Ее]/gu, "e");
-  const match = /^(-?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:e([+-]?\d+))?$/iu.exec(normalized);
+  const match = /^(-?)(?:(\d+)(?:\.(\d*))?|\.(\d+))(?:e([+-]?\d{1,2}))?$/iu.exec(normalized);
   if (match === null) return undefined;
   const sign = match[1]!;
   const integer = match[2] ?? "0";
@@ -4845,14 +5825,93 @@ function vpEntryMantissasFromX2Restore(
   shapes: X2ShapeSet | undefined,
 ): ReadonlySet<string> | undefined {
   const mantissas = new Set<string>();
-  addStringSet(mantissas, vpEntryMantissasFromValueFacts(values));
-  addStringSet(mantissas, signedZeroDecimalMantissaShapes(shapes));
+  const signedZero = signedZeroDecimalMantissaShapes(shapes);
+  for (const raw of vpEntryMantissasFromValueFacts(values) ?? []) {
+    if (raw !== "0" || signedZero.size === 0) mantissas.add(raw);
+  }
+  addStringSet(mantissas, signedZero);
   return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function withStoreVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowState {
+  return {
+    ...input,
+    vpEntryMantissa: vpEntryMantissasFromStoreSplice(input.x2Shape),
+    vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(input.x2Shape),
+    vpEntryShape: undefined,
+  };
+}
+
+function vpEntryMantissasFromStoreSplice(shapes: X2ShapeSet | undefined): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  for (const fact of shapes ?? []) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "mantissa" || model.radix !== "decimal") continue;
+    const spliced = decimalStoreVpSpliceMantissa(model.canonical);
+    if (spliced !== undefined) mantissas.add(spliced);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function vpEntrySignMantissasFromStoreSplice(shapes: X2ShapeSet | undefined): ReadonlySet<string> | undefined {
+  const mantissas = new Set<string>();
+  for (const fact of shapes ?? []) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "mantissa" || model.radix !== "decimal") continue;
+    if (decimalMantissaDigitCount(model.canonical) > 8) continue;
+    if (normalizeDecimalMantissaEntry(model.canonical) === undefined) continue;
+    mantissas.add(model.canonical);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function decimalStoreVpSpliceMantissa(raw: string): string | undefined {
+  const canonical = canonicalShapeRaw(raw);
+  if (decimalMantissaDigitCount(canonical) > 8) return undefined;
+  const match = /^(-?)([0-9]{1,8})(?:\.([0-9]*))?$/u.exec(canonical);
+  if (match === null) return undefined;
+  const sign = match[1]!;
+  const integer = match[2]!;
+  const hasPoint = match[3] !== undefined;
+  const fraction = match[3] ?? "";
+  if (sign === "-") return negativeDecimalStoreVpSpliceMantissa(integer, fraction);
+  if (/^0+$/u.test(integer)) {
+    if (fraction.length === 0 || /^0*$/u.test(fraction)) return integer;
+    return normalizeDecimalMantissaEntry(`0.${fraction}`);
+  }
+  const tail = integer.length === 1 ? "" : integer.slice(1);
+  const zeroTail = tail.length === 0 || /^0+$/u.test(tail);
+  const zeroFraction = fraction.length === 0 || /^0*$/u.test(fraction);
+  if (zeroTail && zeroFraction) return "0.";
+  if (tail.length === 0) {
+    return normalizeDecimalMantissaEntry(hasPoint ? `0.${fraction}` : "0.");
+  }
+  return normalizeDecimalMantissaEntry(hasPoint ? `${tail}.${fraction}` : tail);
+}
+
+function negativeDecimalStoreVpSpliceMantissa(integer: string, fraction: string): string | undefined {
+  const raw = fraction.length === 0 ? integer : `${integer}.${fraction}`;
+  let replaced = false;
+  let spliced = "";
+  for (const char of raw) {
+    if (char !== "." && char !== "0" && !replaced) {
+      spliced += "9";
+      replaced = true;
+    } else {
+      spliced += char;
+    }
+  }
+  if (!replaced) return "-1";
+  return normalizeDecimalMantissaEntry(`-${spliced}`);
 }
 
 function vpEntryShapesFromShapeFacts(shapes: X2ShapeSet | undefined): X2ShapeSet | undefined {
   if (shapes === undefined) return undefined;
-  const structural = structuralMantissaShapeFacts(shapes);
+  const structural = new Set<X2ShapeFact>();
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) structural.add(fact);
+  }
   return structural.size === 0 ? undefined : structural;
 }
 
@@ -4910,6 +5969,23 @@ function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): b
     if (!right.has(value)) return false;
   }
   return true;
+}
+
+function stringSetsHaveIntersection(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size === 0 || right.size === 0) return false;
+  for (const value of left) {
+    if (right.has(value)) return true;
+  }
+  return false;
+}
+
+function vpEntrySourceKeys(state: X2ValueDataflowState | undefined): Set<string> {
+  const keys = new Set<string>();
+  for (const mantissa of state?.vpEntryMantissa ?? []) keys.add(`decimal:${mantissa}`);
+  for (const shape of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(state?.vpEntryShape))) {
+    keys.add(stableStructuralExpressionSourceKey(shape));
+  }
+  return keys;
 }
 
 function cloneOptionalValueSet(input: X2ValueSet | undefined): Set<X2ValueFact> {
@@ -4984,6 +6060,17 @@ function stableExpressionSourceKeys(
 
 function stableStructuralExpressionSourceKey(fact: X2ShapeFact): string {
   return `shape:${x2CanonicalShapeFact(fact)}`;
+}
+
+function stableExpressionKeyValueSet(key: string): X2ValueSet | undefined {
+  return decimalFromFactKey(key) === undefined
+    ? undefined
+    : new Set<X2ValueFact>([key as X2ValueFact]);
+}
+
+function stableExpressionKeyShapeSet(key: string): X2ShapeSet | undefined {
+  const fact = structuralShapeFactFromStableExpressionKey(key);
+  return fact === undefined ? undefined : new Set<X2ShapeFact>([fact]);
 }
 
 function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {
@@ -5177,7 +6264,8 @@ function normalizeX2RestoreShapesForX(input: X2ShapeSet | undefined): Set<X2Shap
 
 function signChangedDecimalEntry(raw: string): string {
   const normalized = normalizeDecimalMantissaEntry(raw);
-  if (normalized === undefined || normalized === "0") return "0";
+  if (normalized === undefined) return "0";
+  if (normalized === "0") return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
   return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
 }
 
@@ -5185,6 +6273,8 @@ function signChangeClosedDecimalState(
   input: X2ValueDataflowState,
   producerIndex: number | undefined,
 ): X2ValueDataflowState | undefined {
+  const exponentShapeBacked = signChangedClosedDecimalExponentShapeState(input);
+  if (exponentShapeBacked !== undefined) return exponentShapeBacked;
   const shaped = signChangedVpEntryMantissas(input);
   if (shaped !== undefined) {
     return x2ValueStateFromMantissaShapes(shaped, input.memory, input.shapeMemory, input.y, input.yShape);
@@ -5193,14 +6283,8 @@ function signChangeClosedDecimalState(
   if (shapeBacked !== undefined) {
     return x2ValueStateFromMantissaShapes(shapeBacked, input.memory, input.shapeMemory, input.y, input.yShape);
   }
-  const structuralShapes = signChangedClosedStructuralShapeFacts(input);
-  if (structuralShapes !== undefined) return x2ValueStateFromStructuralShapes(
-    structuralShapes,
-    input.memory,
-    input.shapeMemory,
-    input.y,
-    input.yShape,
-  );
+  const structuralState = signChangedClosedStructuralState(input, producerIndex);
+  if (structuralState !== undefined) return structuralState;
 
   const values = new Set<X2ValueFact>();
   const opaque = producerIndex === undefined ? SAME_UNKNOWN_VALUE : expressionValueFact(producerIndex);
@@ -5262,9 +6346,88 @@ function signChangedClosedShapeMantissas(input: X2ValueDataflowState): ReadonlyS
   return mantissas.size === 0 ? undefined : mantissas;
 }
 
+function signChangedClosedDecimalExponentShapeState(
+  input: X2ValueDataflowState,
+): X2ValueDataflowState | undefined {
+  const values = new Set<X2ValueFact>();
+  const shapes = new Set<X2ShapeFact>();
+  const mantissas = new Set<string>();
+  for (const fact of input.x2Shape ?? []) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "exponent-entry" || model.mantissa.radix !== "decimal") continue;
+    const normalized = model.normalizedDecimal;
+    if (normalized === undefined) continue;
+    const sourceValue = decimalValueFact(normalized, "normalized");
+    if (!input.x.has(sourceValue) || !input.x2.has(sourceValue)) continue;
+    const signedShape = x2ExponentMantissaSignChangedShapeFact(fact);
+    if (signedShape === undefined) continue;
+    const signedDecimal = signChangedNormalizedDecimalValue(normalized);
+    const signedValue = decimalValueFact(signedDecimal, "normalized");
+    values.add(signedValue);
+    shapes.add(signedShape);
+    shapes.add(decimalMantissaShapeFact(signedDecimal));
+    mantissas.add(signedDecimal);
+  }
+  if (values.size === 0) return undefined;
+  return {
+    x: values,
+    y: cloneOptionalValueSet(input.y),
+    x2: new Set(values),
+    xShape: shapes,
+    yShape: cloneOptionalShapeSet(input.yShape),
+    x2Shape: new Set(shapes),
+    entry: closedX2EntryState(),
+    vpContext: noneX2VpContextState(),
+    structuralEntry: noneX2StructuralEntryState(),
+    structuralVpContext: noneX2StructuralEntryState(),
+    vpEntryMantissa: mantissas,
+    vpEntryShape: vpEntryShapesFromShapeFacts(shapes),
+    memory: input.memory,
+    shapeMemory: input.shapeMemory,
+  };
+}
+
 function signChangedClosedStructuralShapeFacts(input: X2ValueDataflowState): ReadonlySet<X2ShapeFact> | undefined {
   const shapes = x2SignChangedSharedStructuralShapeFacts(input.xShape, input.x2Shape);
   return shapes.size === 0 ? undefined : shapes;
+}
+
+function signChangedClosedStructuralState(
+  input: X2ValueDataflowState,
+  producerIndex: number | undefined,
+): X2ValueDataflowState | undefined {
+  const structuralShapes = signChangedClosedStructuralShapeFacts(input);
+  if (structuralShapes === undefined) return undefined;
+  const state = x2ValueStateFromStructuralShapes(
+    structuralShapes,
+    input.memory,
+    input.shapeMemory,
+    input.y,
+    input.yShape,
+  );
+  const values = new Set<X2ValueFact>();
+  if (producerIndex !== undefined) values.add(expressionValueFact(producerIndex));
+  for (const key of sharedStructuralRestoreSourceKeys(input.xShape, input.x2Shape)) {
+    values.add(stableExpressionValueFact("0B", key));
+  }
+  if (values.size === 0) return state;
+  return {
+    ...state,
+    x: values,
+    x2: new Set(values),
+  };
+}
+
+function sharedStructuralRestoreSourceKeys(
+  xShapes: X2ShapeSet | undefined,
+  x2Shapes: X2ShapeSet | undefined,
+): Set<string> {
+  const xRestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShapes));
+  const keys = new Set<string>();
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(x2Shapes))) {
+    if (xRestoreShapes.has(fact)) keys.add(stableStructuralExpressionSourceKey(fact));
+  }
+  return keys;
 }
 
 function signChangedStructuralMantissaShapeFact(
@@ -5285,8 +6448,11 @@ function sharedDecimalVpEntryMantissas(
   input: Pick<X2ValueDataflowState, "x" | "x2" | "xShape" | "x2Shape">,
 ): ReadonlySet<string> | undefined {
   const mantissas = new Set<string>();
-  addStringSet(mantissas, sharedNormalizedDecimalMantissas(input));
-  addStringSet(mantissas, sharedSignedZeroDecimalMantissas(input.xShape, input.x2Shape));
+  const signedZero = sharedSignedZeroDecimalMantissas(input.xShape, input.x2Shape);
+  for (const raw of sharedNormalizedDecimalMantissas(input) ?? []) {
+    if (raw !== "0" || signedZero === undefined) mantissas.add(raw);
+  }
+  addStringSet(mantissas, signedZero);
   return mantissas.size === 0 ? undefined : mantissas;
 }
 
@@ -5318,18 +6484,21 @@ function isEmptyPlainOp(op: Extract<IrOp, { kind: "plain" }>): boolean {
   return op.opcode >= 0x54 && op.opcode <= 0x56;
 }
 
+function vpEntrySignSourceMantissas(input: X2ValueDataflowState): ReadonlySet<string> | undefined {
+  const explicitSource = input.vpEntrySignMantissa ?? input.vpEntryMantissa;
+  return explicitSource ?? sharedNormalizedDecimalMantissas(input);
+}
+
+function vpEntrySignSourceShapes(input: X2ValueDataflowState): X2ShapeSet | undefined {
+  const explicitSource = input.vpEntryShape;
+  if (explicitSource !== undefined && explicitSource.size > 0) return explicitSource;
+  return sharedStructuralShapeFacts(input);
+}
+
 function signChangedVpEntryMantissas(input: X2ValueDataflowState): ReadonlySet<string> | undefined {
-  if (input.vpEntryMantissa !== undefined) return signChangedMantissaShapes(input.vpEntryMantissa);
-  const mantissas = new Set<string>();
-  for (const fact of input.x2) {
-    if (!input.x.has(fact)) continue;
-    const decimal = normalizedDecimalValueFromFact(fact);
-    if (decimal === undefined) continue;
-    const signed = signChangedMantissaShape(decimal);
-    if (signed === undefined) return undefined;
-    mantissas.add(signed);
-  }
-  return mantissas.size > 0 ? mantissas : undefined;
+  const signSource = vpEntrySignSourceMantissas(input);
+  if (signSource !== undefined) return signChangedMantissaShapes(signSource);
+  return undefined;
 }
 
 function sharedSignedZeroDecimalMantissas(
@@ -5624,7 +6793,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
       vpContext: cloneX2VpContextState(input.vpContext),
       structuralEntry: noneX2StructuralEntryState(),
       structuralVpContext: x2StructuralContextFromEntry(structuralEntry),
-      vpEntryShape: undefined,
+      vpEntryShape: vpEntryShapesFromShapeFacts(shapes),
       memory: input.memory,
       shapeMemory: input.shapeMemory,
     };
@@ -5641,6 +6810,7 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: cloneX2StructuralEntryState(input.structuralVpContext),
     vpEntryMantissa: cloneOptionalStringSet(input.vpEntryMantissa),
+    vpEntrySignMantissa: cloneOptionalStringSet(input.vpEntrySignMantissa),
     vpEntryShape: cloneOptionalShapeSet(input.vpEntryShape),
     memory: input.memory,
     shapeMemory: input.shapeMemory,
@@ -5954,6 +7124,7 @@ function stackDifferenceCanReachConsumer(
 ): boolean {
   const labels = labelIndexes(ops);
   const addresses = addressIndexes(ops);
+  const callReturnIndexes = stackDifferenceCallReturnIndexes(ops);
   const visited = new Set<string>();
   const visit = (
     start: number,
@@ -6040,7 +7211,12 @@ function stackDifferenceCanReachConsumer(
           );
         }
         case "return":
-          if (returnStack.length === 0) return false;
+          if (returnStack.length === 0) {
+            for (const target of callReturnIndexes) {
+              if (visit(target, depth, [])) return true;
+            }
+            return false;
+          }
           return visit(returnStack[0]!, depth, returnStack.slice(1));
         case "stop":
           return false;
@@ -6050,6 +7226,17 @@ function stackDifferenceCanReachConsumer(
   };
 
   return visit(start, initialDepth);
+}
+
+function stackDifferenceCallReturnIndexes(ops: readonly IrOp[]): number[] {
+  const returns: number[] = [];
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    const next = index + 1;
+    if (next >= ops.length) continue;
+    if (op.kind === "call" || op.kind === "indirect-call") returns.push(next);
+  }
+  return returns;
 }
 
 export function removingRecallCanExposeStackLift(ops: readonly IrOp[], recallIndex: number): boolean {

@@ -5,6 +5,7 @@ import {
   cellsPerOp,
   computeX2RegisterStates,
   computeX2ValueStates,
+  directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
   knownIndirectFlowTarget,
@@ -35,13 +36,14 @@ const run: IrPassFn = (ops) => {
   const inStates = computeXRegisterStates(ops, graph);
   const x2States = computeX2RegisterStates(ops);
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
+  const directReturnContext = directReturnAnalysisContext(ops);
   const remove = new Set<number>();
 
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
     const recallRegister = removableRecallValueRegister(op);
     if (recallRegister === undefined) continue;
-    const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index]);
+    const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index], directReturnContext);
     if (removal?.removable !== true) continue;
     const alreadyInX =
       inStates[index]?.has(recallRegister) === true ||

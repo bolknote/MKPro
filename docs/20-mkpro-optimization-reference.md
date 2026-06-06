@@ -77,7 +77,7 @@ the same generalized lowering strategy.
   while respecting real label entry points, `.`/`/-/`/`ВП` X2-sync boundaries, and
   downstream stack consumers.
 - `flow-x-reuse` — avoids recalls when all CFG predecessors already carry the same register value in X, or the same concrete decimal value proved through X2 register-memory/preload metadata, with the same X2-sync and downstream stack-lift guards.
-- `branch-target-x-reuse` — avoids the first recall in a branch target when the source branch still preserves that value in X, or the target-entry value proof shows the same decimal/structural shape is already visible, and the target has no other entry, including counted-loop targets for non-counter registers and labels separated by `С/П`, unless that recall supplies the target-side X2 sync or a stack lift that reaches a downstream consumer through direct call returns.
+- `branch-target-x-reuse` — avoids the first recall in a branch target when the source branch still preserves that value in X, or the target-entry value proof shows the same decimal/structural shape is already visible, and the target has no other entry, including counted-loop targets for non-counter registers and labels separated by `С/П`. X2-sensitive target checks use the source branch's projected jump-edge value state, so the pass does not lose a unique-entry proof to unrelated global target joins, unless that recall supplies the target-side X2 sync or a stack lift that reaches a downstream consumer through direct call returns.
 - `constant-folding` — precomputes constant parts before code generation.
 - `cse-display-block` — merges identical display logic blocks.
 - `jump-thread` — rewires jump chains into one direct jump path.
@@ -653,11 +653,12 @@ Display rewrites are separated into strategy selection + body lowering.
   stack-preserving labels, stores, address bytes, and plain stack-neutral
   commands, when the producer already supplies the current X in Y and the
   shared stack-difference proof shows the extra Z/T difference cannot reach a
-  later consumer. The gap may include a direct conditional, counted-loop, or
-  proved-indirect conditional fallthrough, or a simple direct/proved-indirect
-  `ПП` helper whose `В/О` return itself syncs the same X into X2, when both the
-  CFG stack proof and the X2-restore exposure proof show that skipped or
-  downstream edges cannot observe the removed sync/lift. Such `ПП` helpers must
+  later consumer. The gap may include a direct conditional, counted-loop,
+  proved-indirect conditional fallthrough, a linear `В/О` return, or a simple
+  direct/proved-indirect `ПП` helper whose `В/О` return itself syncs the same X
+  into X2, when both the call-return-aware CFG stack proof and the X2-restore
+  exposure proof show that skipped or downstream edges cannot observe the
+  removed sync/lift. Such `ПП` helpers must
   reach `В/О` linearly through only stack-preserving commands; stack consumers,
   X2 restores, nested flow, and other entry labels keep the call as a barrier.
   The same
@@ -709,6 +710,10 @@ Display rewrites are separated into strategy selection + body lowering.
   a path-sensitive X2 profile to these proofs: fallthrough syncs X2, while the
   jump edge preserves the previous hidden value. When X itself is proved to
   equal a register on the sync edge, the X2 proof records the same register.
+  Register and value/shape edge projections now share helper semantics, so
+  local passes such as branch-target rewrites consume the same direct
+  conditional, counted-loop, and proved-indirect selector rules as global X2
+  dataflow.
   Indirect conditionals are also path-sensitive for control flow, but both
   edges preserve the previous X2 value; they do not create an X-to-X2 sync. The
   stricter value proof also remembers concrete decimal facts stored by direct
@@ -816,24 +821,34 @@ Display rewrites are separated into strategy selection + body lowering.
   `x^0`). For concrete normalized decimal `X`, `F x^2`, finite `F 1/x`,
   perfect-square `F sqrt`, integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and
   `К [x]` seed exact decimal results in visible X while preserving the old X2
-  fact. For non-negative concrete decimal `X`, and for negative non-integer
-  concrete
-  decimal `X`, `К {x}` also seeds the exact normalized fractional decimal value
-  while preserving the old X2 fact; negative integers stay value-opaque but seed
-  an `errorProne` `mantissa:-0:decimal` shape so later X2 analysis can remember
-  the signed-zero display context without treating it as ordinary zero. Once a
+  fact. If that exact result is a short ordinary integer display, the shape
+  layer also records a dot-safe `mantissa:*:decimal` fact; fractional,
+  scientific, hex, and super displays are not promoted to decimal shapes
+  without a separate display proof. For concrete decimal `X`, `К {x}` also
+  seeds the exact normalized fractional decimal value in visible X while
+  preserving the old X2 fact; its display shape is kept as a separate
+  exponent-entry fact for non-zero fractions (`0.2` as
+  `exponent:2:-1:decimal`, `0.0012` as `exponent:1.2:-3:decimal`) so later
+  `ВП`/`.` context sees the same scientific display shape as the calculator;
+  negative integers produce visible decimal zero and still seed an `errorProne`
+  `mantissa:-0:decimal` shape so later X2 analysis can remember the signed-zero
+  display context without treating hidden X2 as ordinary zero. Once a
   later X2 sync proves that same signed-zero shape in both visible `X` and
   hidden X2, it can seed a `-0` `ВП` mantissa source while still remaining
   error-prone for dot-safety.
   Concrete normalized decimal `Y,X` operands for `+`, `-`, and `*` also seed
   exact decimal results when the normalized result stays within the dataflow's
   eight-significant-digit bound; `/` does the same only when the reduced
-  quotient has a finite decimal expansion. `К max`
+  quotient has a finite decimal expansion. Short ordinary integer results from
+  exact decimal binary operations also seed dot-safe `mantissa:*:decimal`
+  display shapes; fractional and wide results stay value-only. `К max`
   is modeled for concrete normalized decimal operands with the MK-61 zero quirk
   preserved: if either operand is exactly zero, the proved result is zero.
   `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ` share the MK-61 mantissa-nibble model used
   by constant folding and seed decimal facts only when every resulting nibble is
-  still decimal; A-F/hex-cell results remain structural/opaque. `К °->′`,
+  still decimal; A-F/hex-cell results seed shape-only structural `hex:*`
+  mantissas when both operands can be parsed as Latin hex nibbles or known
+  MK-61 display glyphs `С`/`Г`/`Е`, while unknown glyph cells remain conservative. `К °->′`,
   `К °->′"`, `К °<-′"`, and `К °<-′` seed exact decimal facts only when the
   domain is safe, the rational sexagesimal conversion has a finite decimal
   expansion, and the normalized result fits the eight-significant-digit proof
@@ -884,8 +899,13 @@ Display rewrites are separated into strategy selection + body lowering.
   the recall is no longer considered the required sync. The same shared guard
   also permits a direct or proved stable-indirect decimal/structural recall
   immediately before `ВП` when the active decimal mantissa or structural `ВП`
-  source already matches the recalled source; a store or other context-closing
-  command keeps the recall as the visible source. Mutating `R0..R6` indirect
+  source already matches the recalled source; recalls before a free-standing
+  `/-/ ... ВП` gap are handled the same way when the store-backed decimal sign
+  source, a proved closed `X == X2` normalized-decimal sign source, or a proved
+  shared structural hex/super source shape already matches the recalled source,
+  including through transparent direct/proved-indirect return helpers. A store or other
+  context-closing command keeps the recall as the visible source. Mutating
+  `R0..R6` indirect
   selectors are kept because their selector side effects are observable.
 - `dead-store-elimination` — full pass removing pointless direct stores and
   stable-indirect `К X->П R7..Re` stores with proved memory targets, while
@@ -915,8 +935,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 5. `return-suffix-gadget` — finds repeated return-ending blocks ending in `return`, extracts one shared suffix, and redirects additional copies to it.
 6. `shared-terminal-tail` — finds repeated straight-line suffixes that already end in unconditional flow (`БП`, `К БП r`, or `В/О`) and replaces extra copies with a jump into the canonical suffix; it refuses programs with absolute numeric flow targets.
 7. `return-zero-jump` — when no procedure calls are used, replaces a backward jump to `01` with `В/О` and tags it as an empty-stack optimization.
-8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, or an adjacent recall to another cell when the shared value/shape proof shows the recalled decimal value or structural hex/super display shape is already visible in X, including non-negative structural exponent shifts such as `hex:Г; ВП 2` matching `hex:Г00`. The rewrite fires only when the recall is not the last X2 sync before a context-sensitive `.`/`/-/`/`ВП` restoration before the next X2-affecting op, including direct conditional/`F Lx` fallthrough syncs and direct `В/О` returns, or when the same shared proof shows X2 already carries the recalled decimal value or structural hex/super shape across an X2-preserving gap. A direct or proved stable-indirect decimal/structural recall immediately before `ВП` can also be removed when the active decimal mantissa or structural `ВП` source already matches the recalled source; a store or other context-closing command keeps the recall as the visible source. Its stack lift still cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors and loop-counter recalls are not folded when the hardware side effect is observable.
-9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, another stack-shifting producer, or a direct conditional/counted-loop fallthrough X2 sync, possibly through stack-preserving labels/stores/plain ops, path-safe direct conditional/counted-loop/proved-indirect conditional fallthroughs, and simple stack-preserving direct-return callees, when that following operation already supplies the current X in Y or syncs the same X into X2, unless the full CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync. It also removes a `В↑` after any proved stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another `В↑`) across local stack/X2-preserving gap cells, path-safe conditional fallthroughs with known X2 effects, and simple direct/proved-indirect return helpers that preserve X, stack, and X2, when the added stack lift cannot reach a consumer and no targeted entry label, display/X2 restore context, stack consumer, X-changing helper, unknown indirect conditional, or other flow command interrupts the producer-to-lift proof.
+8. `store-recall-peephole` — removes `X->П r` immediately followed by `П->X r`, stable-indirect proved same-cell `К X->П R7..Re` followed by `К П->X R7..Re`, or an adjacent recall to another cell when the shared value/shape proof shows the recalled decimal value or structural hex/super display shape is already visible in X, including non-negative structural exponent shifts such as `hex:Г; ВП 2` matching `hex:Г00`. The rewrite fires only when the recall is not the last X2 sync before a context-sensitive `.`/`/-/`/`ВП` restoration before the next X2-affecting op, including direct conditional/`F Lx` fallthrough syncs and direct `В/О` returns, or when the same shared proof shows X2 already carries the recalled decimal value or structural hex/super shape across an X2-preserving gap. A direct or proved stable-indirect decimal/structural recall immediately before `ВП` can also be removed when the active decimal mantissa or structural `ВП` source already matches the recalled source; decimal recalls before a free-standing `/-/ ... ВП` gap are also removable when the store-backed sign source or proved closed `X == X2` normalized-decimal sign source already matches the recalled mantissa, including through transparent direct/proved-indirect return helpers. A store or other context-closing command keeps the recall as the visible source. Its stack lift still cannot reach a downstream binary/stack-consuming op through direct or proved-indirect flow; mutating `R0..R6` indirect selectors and loop-counter recalls are not folded when the hardware side effect is observable.
+9. `pre-shift-stack-lift` — removes `В↑` before direct/indirect `П->X`, `F pi`, another stack-shifting producer, a linear `В/О` return, or a direct conditional/counted-loop fallthrough X2 sync, possibly through stack-preserving labels/stores/plain ops, path-safe direct conditional/counted-loop/proved-indirect conditional fallthroughs, and simple stack-preserving direct-return callees, when that following operation already supplies the current X in Y or syncs the same X into X2, unless the call-return-aware CFG stack/X2 exposure proofs show that some skipped or downstream edge can observe the removed lift/sync. It also removes a `В↑` after any proved stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another `В↑`) across local stack/X2-preserving gap cells, path-safe conditional fallthroughs with known X2 effects, and simple direct/proved-indirect return helpers that preserve X, stack, and X2, when the added stack lift cannot reach a consumer and no targeted entry label, display/X2 restore context, stack consumer, X-changing helper, unknown indirect conditional, or other flow command interrupts the producer-to-lift proof.
     The scan for the next stack-shifting producer or dead hard X2 overwrite is
     shared helper code (`x2NextStackShiftingProducerIndex`,
     `x2NextHardX2OverwriteIndex`), so later stack+X2 scheduler rewrites use
@@ -927,7 +947,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
 12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X, including concrete decimal equality proved through X2 register-memory or decimal preload metadata after X was rebuilt; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, counted-loop `F L0`..`F L3` backedges preserve visible X for non-counter registers while dropping the decremented counter alias, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept.
-13. `branch-target-x-reuse` — removes the first direct or stable-indirect proved recall in a unique branch target when the source direct conditional, counted loop, or proved stable-indirect conditional target preserves the same recalled value in X, or when the target-entry X2 value/shape proof shows the same decimal value or structural hex/super shape is already visible. Loop-counter recalls and mutating indirect selector recalls are excluded because `F Lx`/`К x?0 R0..R6` mutate those registers. `С/П` counts as a no-fallthrough separator for the uniqueness check. The rewrite is refused when the target recall is needed as a `.`/`/-/`/`ВП` X2-sync boundary before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow.
+13. `branch-target-x-reuse` — removes the first direct or stable-indirect proved recall in a unique branch target when the source direct conditional, counted loop, or proved stable-indirect conditional target preserves the same recalled value in X, or when the target-entry X2 register/value/shape proof shows the same register, decimal value, or structural hex/super shape is already visible. Loop-counter recalls and mutating indirect selector recalls are excluded because `F Lx`/`К x?0 R0..R6` mutate those registers. `С/П` counts as a no-fallthrough separator for the uniqueness check. Target uniqueness is resolved by the actual executable entry index, so alias labels or alternate numeric/indirect entries to the same cell keep the recall. The proof may cross free-standing stack/X2-preserving empty prefix cells before the target recall, carrying the branch's projected jump-edge X2 register and value/shape state through those cells. X2-sensitive checks are run against that projected path state, not only the globally joined target state, so unique branch entries can reuse X2/sign-source facts even when ordinary dataflow also models continuation after `С/П` or cannot follow numeric direct targets. The rewrite is refused when the target recall is needed as a `.`/`/-/`/`ВП` X2-sync boundary before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow.
     These recall-removal guards read the shared `OpcodeInfo.stackEffect`
     profile, so stack-preserving, shifting, Y-consuming, exposing, and barrier
     opcodes are modeled consistently across passes.
@@ -948,7 +968,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     vs `-02`) so they do not satisfy the exact equality proof, but a separate
     visible-decimal proof can still remove `.` when the restored display value
     is the same and no later context-sensitive restore observes the raw X2
-    mantissa shape. The value proof also
+    mantissa shape. The same proof accepts emulator-pinned dot-safe structural
+    single-hex mantissas `A`/`B`/`C` after closed-context sign-pair modeling:
+    when visible `X` and hidden X2 carry the same structural restore key, the
+    trailing `.` is removable under the existing exposure guards. Unsafe
+    structural digits (`D`/`F`), structural exponent shapes, and observable
+    next-`ВП` contexts remain blocked. The value proof also
     models closed-context `.` as a real X2-to-X restore, normalizing decimal
     facts only for visible `X`. Open number-entry dots are modeled separately
     as decimal separators: `1.` remains an open raw mantissa with
@@ -964,8 +989,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `ВП`-entry source and the next context-sensitive restore is reached only
     through a free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap before `ВП`,
     the dot is removed: emulator tests cover normalized and signed normalized
-    mantissas in this exponent-entry shape, while role-bearing display cells
-    still block the shortcut. That restore-gap proof may cross a simple direct
+    mantissas in this exponent-entry shape, and store-backed sign sources where
+    the dot-restored mantissa matches the original hidden mantissa used by
+    `/-/ ... ВП`, while role-bearing display cells still block the shortcut.
+    That restore-gap proof may cross a simple direct
     or proved-indirect `ПП` helper that reaches `В/О` through only
     restore-transparent empty/address cells; helpers that store, branch,
     restore X2, or expose another entry remain barriers. The same direct-return
@@ -989,12 +1016,23 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     state and a separate VP/exponent context. `ВП` after a proved closed
     decimal X2 sync (`Cx`, `В↑`, direct conditional/`F Lx` fallthrough, or `F0..FF`,
     possibly through only `КНОП`/`К1`/`К2`) also becomes a structural
-    exponent-entry state; this
-    proof is deliberately not inferred through stores or general X-preserving
-    commands because the MK-61 previous-command context changes what `ВП`
-    restores. A proved `/-/` carries the same fact with the mantissa sign
-    toggled. Zero is represented as a distinct `-0` mantissa shape rather than
-    normalized away, because the emulator distinguishes `Cx /-/ ВП` from
+    exponent-entry state. Direct `X->П r` and `К X->П r` have a separate
+    decimal store-splice proof: when the hidden X2 shape is a proved decimal
+    mantissa, the following `ВП` gets the hardware-spliced source
+    (`12; X->П; ВП` starts from `2`, `05; X->П; ВП` starts from `5`,
+    `1.2; X->П; ВП` starts from `0.2`, non-zero integer tails that become all
+    zero start from raw `0.` rather than normalized `0`, all-zero integer runs
+    preserve their raw length, `-2; X->П; ВП` starts from `-9`, and signed zero
+    starts from `-1`). This proof is deliberately derived from
+    hidden X2 shape, not visible `X`, and it is not generalized to hex/super or
+    arbitrary X-preserving commands because the MK-61 previous-command context
+    changes what `ВП` restores. A proved `/-/` carries the same fact with the mantissa sign
+    toggled; after a closed, value-proved decimal exponent-entry sync it also
+    keeps the signed exponent shape (`5 ВП 3 F0 /-/` carries
+    `exponent:-5:3:decimal`, and leading-zero forms stay shape-only metadata).
+    Zero is represented as a distinct `-0` mantissa shape rather than
+    normalized away, including during open digit entry (`0 /-/`) and after
+    closed zero syncs, because the emulator distinguishes `Cx /-/ ВП` from
     `Cx ВП` even though visible `X` normalizes both decimal values to `0`.
     Ordinary digits after an
     X2-preserving gap start fresh number entry, but `/-/` can still see and
@@ -1023,10 +1061,49 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shifts (`hex:Г` through `ВП 2` is the same structural display shape as
     `hex:Г00`; `hex:Г ВП -2` is the same structural display shape as
     `hex:0.0Г`; shifted two-byte `super:FA` forms compare as the resulting
-    hex-like display mantissa). The same algebra now has shape-only structural
+    hex-like display mantissa). `ВП` source comparisons now use the same
+    source-key algebra for decimal mantissas and structural restore shapes,
+    rather than separate exact-set checks. Closed structural exponent-entry
+    shapes also feed `ВП` source proofs through that restored mantissa form, so a
+    later `.` restore of `hex-exponent:Г:2` exposes `hex:Г00` as the next
+    structural mantissa source instead of dropping the context. The same algebra now has shape-only structural
     digit append/concat operations (`hex:8.7` + `hex:0Е` proves
     `hex:8.70Е`) with eight-display-digit bounds and no signed/fractional
-    right operand. These are structural display proofs only: they still refuse
+    right operand. It also carries exact emulator-pinned single-digit hex
+    arithmetic tables as decimal value proofs. Operand order remains part of the
+    proof. For `+` and `-`, a single `A`/`B`/`C`/`D`/`E` hex digit paired with a
+    proved decimal digit `0..9` uses the verified operand-order-specific table,
+    including cases such as `Г + 4 -> 17`, `3 + С -> 5`, `С - 2 -> 0`, and
+    `0 - С -> -2`; the regular `F x^2` value model can then derive follow-on
+    values such as `1`/`4`/`9`. The verified
+    single-hex-digit multiplication table is also operand-order-specific:
+    `A`/`B`/`C`/`D`/`E` in `Y` is modeled only for the pinned decimal right operands
+    (`1`, `2`, `3`, `4`, `5`, `8`, `9`, `18`), preserving display shape such as
+    non-normal `A * 18 -> 020`; with a hex digit in `X`, verified `A`/`B`/`C`/`D`
+    behave as decimal-times-ten display results while `E` gives zero. Hidden X2
+    remains the right operand until an explicit sync, so literal/scratch restore
+    rewrites consume these table facts only after a later X2-syncing command. A
+    second verified table covers structural
+    `ГE-2` exponent multiplication: decimal `1`/`2`/`4`/`5`/`8`/`16` with
+    `ГE-2` in `X` prove `0.1`/`0.2`/`0.4`/`0.5`/`0.8`/`1.6`, and the reverse
+    operand order uses only its own emulator-pinned results. The table records
+    display shape independently from value shape: `1 * ГE-2` is a value proof
+    for `0.1`, but the visible/stored shape is `exponent:1:-1:decimal`, which
+    keeps later store/recall/`ВП` context equivalent to the MK-61 display state.
+    This is not a
+    general multiply, borrow/carry, or decimalization rule. Structural `К |x|` removes the sign from canonical hex/super
+    mantissa or closed exponent-entry restore shapes as another shape-only
+    transform; the hidden X2 shape is still preserved by the opcode and is not
+    decimalized. Structural `К ЗН` has a narrow emulator-pinned value model:
+    canonical hex mantissas or closed structural exponent mantissas whose first
+    significant nibble is `1..E` seed exact decimal `1`/`-1` facts plus the
+    matching decimal display shape, while `F`-leading forms and `super:*` shapes
+    remain opaque. Closed-context `/-/` on a proved shared structural X/X2
+    source is still shape-only, but it also emits a stable
+    `expr-key:0B(shape:...)` fact keyed by the canonical restored structural
+    source. That lets repeated structural sign toggles meet in hidden-temp
+    dataflow after an explicit X2 sync without promoting either side to a
+    decimal value. These are structural display proofs only: they still refuse
     hex/super arithmetic, carry, or decimalization proofs.
     Structural equality uses canonical shape reconstruction, so equivalent
     hex/super spellings compare as the same shape without becoming decimal
@@ -1051,9 +1128,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `ВП`-entry sources and carry signed-zero decimal shapes forward as `-0`
     `ВП`-entry sources, while dot-restored leading-zero decimal forms are still
     not promoted to ordinary mantissas. Preloaded `П->X r` constants
-    seed the same lattice: ordinary decimal/scientific constants become
-    `decimal:*` facts, while hex-like display mantissas and `FA`..`FF` super
-    forms become structural-only `hex:*` / `super:*` shape facts. Structural
+    seed the same lattice: ordinary decimal/scientific constants with a one- or
+    two-digit exponent become `decimal:*` facts, while longer display-glyph runs
+    such as `8Е000000`, hex-like display mantissas, and `FA`..`FF` super forms
+    become structural-only `hex:*` / `super:*` shape facts. Structural
     preloads with a Latin `E` exponent marker (`ГE-2`, `FAE2`) seed
     shape-only `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е`
     remains a display digit. Until those shapes are separately proved dot-safe,
@@ -1076,11 +1154,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     restored `X` before it can be observed. Consecutive same-segment dead
     restores and free-standing separators are removed as one run, while labels
     split the run. `.` requires a closed, non-`ВП`
-    context with a proved decimal X2 value or the same shared dot-restore
-    safety proof used by `x2-noop-restore` (for example an immediate sync or
-    closed sign-change dot source); a bare `reg:r` fact after only an
-    X2-preserving gap is intentionally rejected because a preloaded hex or
-    non-normal register value can make `.` signal `ЕГГ0Г`. `/-/` may also be removed from open mantissa, active
+    context with a proved decimal X2 value, an emulator-pinned single-hex
+    A/B/C structural mantissa, or the same shared dot-restore safety proof used
+    by `x2-noop-restore` (for example an immediate sync or closed sign-change
+    dot source); a bare `reg:r` fact after only an X2-preserving gap is
+    intentionally rejected because a preloaded hex or non-normal register value
+    can make `.` signal `ЕГГ0Г`. `/-/` may also be removed from open mantissa, active
     exponent-entry, or VP/X2 restore contexts because the following hard
     overwrite destroys both the restored X and the toggled X2. The following
     hard overwrite may sit after a simple direct-return helper only when that
@@ -1097,8 +1176,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     proved-indirect `В/О` return continuation or the fallthrough side of a direct conditional/`F Lx`
     loop, or from an already active VP/X2 restore context, when the following
     overwrite destroys its visible result; the conditional jump edge does not
-    invent such a source, and none of this makes structural `.`/`/-/` restores
-    dot-safe. Closed structural exponent sign restores are treated as structural
+    invent such a source, and structural sources outside the pinned A/B/C
+    mantissa set are not treated as dot-safe. Closed structural exponent sign restores are treated as structural
     shape-only `/-/` restores here: removable before a hard overwrite, but never
     promoted into decimal or dot-safe facts.
     This pass requests the register value-memory layer and also consumes decimal preload facts from `П->X r` metadata:
@@ -1106,7 +1185,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     for later recalls, joins keep only facts common to every path, and unknown
     indirect stores clear the memory. Hex-like preload facts remain shape-only,
     so they do not make `.`/`/-/` dead-restore candidates.
-19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, a raw decimal X2 fact whose restored visible value equals the stored scratch value, an opaque `expr:<step>` or stable `expr-key:*` computed value, including one produced by a whitelisted pure X or X/Y computation and then explicitly synced into X2, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. A dead scratch store whose source is `reg:r` or an `expr-key:*reg:r*` value can also be matched after a later X2 sync of the same source, but only through a straight-line proof that every referenced register was not overwritten between the store and the scratch recall; stores to a referenced register, indirect stores with unknown or matching targets, loop-counter mutation, and flow barriers keep the old scratch recall. Stable `expr-key:*` operands may come from canonical structural shape sources as well as decimal/register facts, so equivalent hex/super display forms such as `hex:Г ВП 2` and `hex:Г00` can prove the same opaque computed value without promoting either source to a decimal value; stable constant stack producers such as `F pi` also seed opaque keys without assigning a decimal approximation to the constant. The VP-source escape uses the shared restore-gap scanner, so a transparent direct/proved-indirect return helper between that gap and `ВП` is allowed when the helper body cannot observe the restore. The raw decimal case covers visible-only leading-zero forms such as `01.2 -> 1.2`; it remains blocked when removing the recall would expose a following context-sensitive `.`/`/-/`/`ВП` restore that can observe the raw mantissa shape. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
+19. `x2-hidden-temp-restore` — replaces a direct or stable-indirect proved scratch recall with `.` when X2 already carries the same value and either the `.` restore gap, a CFG-proven immediate X2 sync, a normalized decimal source fact already synced in X2 through a display-free local gap, a raw decimal X2 fact whose restored visible value equals the stored scratch value, a dot-safe decimal `mantissa:*:decimal` shape already restored by X2, an opaque `expr:<step>` or stable `expr-key:*` computed value, including one produced by a whitelisted pure X or X/Y computation and then explicitly synced into X2, an emulator-pinned dot-safe structural single hex mantissa (`A`/`B`/`C`) with the same restored shape already in X2, or a modeled closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2` empty ops is available, while also proving the recall stack lift is unobserved. A dead scratch store whose source is `reg:r` or an `expr-key:*reg:r*` value can also be matched after a later X2 sync of the same source, but only through a straight-line proof that every referenced register was not overwritten between the store and the scratch recall; stores to a referenced register, indirect stores with unknown or matching targets, loop-counter mutation, and flow barriers keep the old scratch recall. Stable `expr-key:*` operands may come from canonical structural shape sources as well as decimal/register facts, so equivalent hex/super display forms such as `hex:Г ВП 2` and `hex:Г00` can prove the same opaque computed value without promoting either source to a decimal value; stable constant stack producers such as `F pi` also seed opaque keys without assigning a decimal approximation to the constant. For computed structural temporaries, a synced `expr:*`/`expr-key:*` plus structural restore-shape equality can make the replacement `.` safe even though the shape remains non-decimal; plain structural preload/register aliases that merely survived in X2 stay conservative outside the pinned `A`/`B`/`C` dot-safe set. The VP-source escape uses the shared restore-gap scanner, so a transparent direct/proved-indirect return helper between that gap and `ВП` is allowed when the helper body cannot observe the restore. The raw decimal case covers visible-only leading-zero forms such as `01.2 -> 1.2`; it remains blocked when removing the recall would expose a following context-sensitive `.`/`/-/`/`ВП` restore that can observe the raw mantissa shape. The scratch-store proof can cross direct conditional/loop fallthrough syncs, proved stable-indirect conditional fallthroughs that do not mention the scratch register, and simple direct-return calls that do not mention the scratch register; it can also use stable source facts from the dead scratch store when register-memory is too conservative. This lets later DSE remove now-unused scratch stores.
 20. `x2-literal-restore` — replaces a repeated explicit numeric literal with
     `.` when X2 value dataflow proves the same normalized decimal value is
     already in the hidden X2 register, the dot-restore gap is safe (or CFG
@@ -1182,7 +1261,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     VP/exponent context to remove empty separators before `/-/` after
     X2-preserving gaps such as `ВП 3 Fπ КНОП /-/`, and it can remove exponent
     sign toggles after a closed decimal X2-sync-fed `ВП` such as
-    `2 F0 ВП /-/ /-/ 3`; a non-zero restore run before the proved `ВП`
+    `2 F0 ВП /-/ /-/ 3`, or after a store-backed decimal splice such as
+    `2 F0 X->П ВП /-/ /-/ 3` / `2 F0 К X->П ВП /-/ /-/ 3`; a non-zero restore run before the proved `ВП`
     (`2 F0 /-/ /-/ ВП 3`, `02 /-/ /-/ ВП 3`,
     `02 /-/ КНОП /-/ ВП 3`) can also collapse when the shared source proof
     shows the same mantissa reaches `ВП`. Structural hex/super preload shapes
@@ -1242,9 +1322,16 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     classifier carries `hex-exponent:*:*` / `super-exponent:*:*` through
     exponent signs/digits, so structural exponent sign pairs can collapse by the
     same rule as decimal exponent sign pairs, still without promoting those
-    shapes into decimal value facts.
+    shapes into decimal value facts. Store-backed decimal `ВП` sources keep a
+    separate closed-sign source: `X->П`/`К X->П` followed by `ВП` uses the
+    store-spliced hidden mantissa, but `X->П`/`К X->П` followed by `/-/ ВП`
+    toggles the original hidden decimal mantissa. Only empty X2-preserving
+    cells preserve that decimal sign source. Structural hex/super sources stay
+    shape-only: they can satisfy the same sign-source guard only when ordinary
+    X2 dataflow proves the shared structural source shape already lives in both
+    visible `X` and hidden X2.
 28. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
-29. `vp-x2-peephole` — removes redundant `К {x}` that follows a compiler-owned `ВП`/X2 marker, display or ordinary, possibly through free-standing `КНОП`/`К1`/`К2` empty ops, other role-free X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and simple direct-return helpers whose body also preserves X, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; the preceding `ВП` must carry a boundary marker because a plain opcode pattern such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}` redundant. The same pass also uses X2 value dataflow to remove a role-free, non-display `К {x}` when closed-context `X` is proved to be an already-fractional decimal (`0`, `0.x`, or `-0.x`). Since `К {x}` preserves hidden X2, this no-op proof does not require hidden X2 to match visible `X`; a later context-sensitive `.`, `/-/`, or `ВП` is allowed after a preserving executable gap because the restore's previous-command context is unchanged. Immediate restore boundaries remain conservative unless a separate VP/source proof covers them.
+29. `vp-x2-peephole` — removes redundant `К {x}` that follows a compiler-owned `ВП`/X2 marker, display or ordinary, possibly through free-standing `КНОП`/`К1`/`К2` empty ops, other role-free X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and simple direct-return helpers whose body also preserves X, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; the preceding `ВП` must carry a boundary marker because a plain opcode pattern such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}` redundant. The same pass also uses X2 value dataflow to remove a role-free, non-display `К {x}` when closed-context `X` is proved to be an already-fractional decimal (`0`, `0.x`, or `-0.x`). Since `К {x}` preserves hidden X2, this no-op proof does not require hidden X2 to match visible `X`; a later context-sensitive `.`, `/-/`, or `ВП` is allowed after a preserving executable gap because the restore's previous-command context is unchanged. Negative-integer `К {x}` is handled through the same visible-zero proof, but the first signed-zero-producing `К {x}` is kept if a later X2 sync can feed a context-sensitive restore; only repeated no-op fractional operations after visible zero is already proved may be removed. Immediate restore boundaries remain conservative unless a separate VP/source proof covers them.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
 31. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
 32. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.

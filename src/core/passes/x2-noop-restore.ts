@@ -7,6 +7,7 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   x2CanUseDotRestoreAt,
+  x2HasSignRestoreGapBeforeVp,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2SyncCanExposeContextSensitiveRestore,
   x2HasOnlyRestoreGapBeforeVp,
@@ -14,7 +15,10 @@ import {
   x2StateHasSameNormalizedDecimalInXAndX2,
   x2StateHasSameRestoredVisibleDecimalInXAndX2,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
+  x2StateHasOnlyDotSafeStructuralMantissaX2,
+  x2StateHasUnsafeDotRestoreShapeX2,
   x2StateIsClosedPlainContext,
+  x2StatesHaveSameVpEntrySignSource,
   type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
@@ -54,6 +58,10 @@ const run: IrPassFn = (ops) => {
       )
     ) continue;
     if (!isDotSafeValueContext(state)) continue;
+    if (
+      x2StateHasUnsafeDotRestoreShapeX2(state) &&
+      !x2StateHasOnlyDotSafeStructuralMantissaX2(state)
+    ) continue;
     if (
       !x2StateHasSameDotRestoreValueInXAndX2(state) &&
       !x2StateHasSameRestoredVisibleDecimalInXAndX2(state)
@@ -97,8 +105,12 @@ function dotPreservesVpEntrySourceThroughRestoreGap(
   stateAfterDot: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterDot) &&
-    x2HasOnlyRestoreGapBeforeVp(ops, index + 1, context);
+  if (!x2HasOnlyRestoreGapBeforeVp(ops, index + 1, context)) return false;
+  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterDot) ||
+    (
+      x2HasSignRestoreGapBeforeVp(ops, index + 1, context) &&
+      x2StatesHaveSameVpEntrySignSource(state, stateAfterDot)
+    );
 }
 
 function isDotSafeValueContext(
