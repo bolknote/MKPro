@@ -820,9 +820,11 @@ Display rewrites are separated into strategy selection + body lowering.
   results, but it does not make the raw mantissa shape dot-safe and does not
   promote it to a `ВП` display-shape proof.
   Closed-context `/-/` states that produce a decimal mantissa also record that
-  mantissa as an explicit `ВП` sign source; path-sensitive preserving branch
-  edges can carry this source onward for a later `/-/ ВП` without promoting the
-  same edge into an ordinary `ВП` entry source.
+  mantissa as an explicit `ВП` sign source. Structural hex/super sources have a
+  separate explicit sign-shape channel, distinct from ordinary `vpEntryShape`;
+  path-sensitive preserving branch edges can carry these sign sources onward for
+  a later `/-/ ВП` without promoting the same edge into an ordinary `ВП` entry
+  source.
   The documented `F pi` stack producer seeds the stable `expr-key:20()`,
   the hardware decimal constant `3.1415926`, and its display shape
   `mantissa:3.1415926:decimal`. Emulator-verified exact
@@ -1106,7 +1108,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     display shape remains separate metadata and is not promoted into a general
     display-shape proof. Direct conditional jump edges that preserve X2 remain
     conservative for ordinary `ВП` sources, but they carry the explicit raw
-    sign-source metadata used by a following closed-context `/-/ ВП` sequence.
+    decimal sign-source and explicit structural sign-shape metadata used by a
+    following closed-context `/-/ ВП` sequence.
     Structural hex/super mantissas
     consumed by `ВП` become shape-only `hex-exponent:*:*` /
     `super-exponent:*:*` forms; exponent digits and exponent `/-/` update that
@@ -1459,10 +1462,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     tails such as `FACE -> ACE`; but `X->П`/`К X->П` followed by `/-/ ВП`
     toggles the original hidden decimal or structural mantissa. Only empty
     X2-preserving cells preserve that sign source. Structural hex/super sources
-    stay shape-only: they can satisfy the same sign-source guard only when
-    ordinary X2 dataflow proves the shared structural source shape already
-    lives in both visible `X` and hidden X2, not merely because a transient
-    store-splice tail exists.
+    stay shape-only: the optimizer first prefers the ordinary shared structural
+    equality proof, because it also carries stable `expr-key:*` facts; explicit
+    sign-shape metadata is used as a fallback source and never promotes a
+    transient store-splice tail into an ordinary `ВП` source.
 28. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
 29. `vp-x2-peephole` — removes redundant `К {x}` that follows a compiler-owned `ВП`/X2 marker, display or ordinary, possibly through free-standing `КНОП`/`К1`/`К2` empty ops, other role-free X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and direct/proved-indirect return-helper chains whose bodies also preserve X, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; the preceding `ВП` must carry a boundary marker because a plain opcode pattern such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}` redundant. The same pass also uses X2 value/shape dataflow to remove a role-free, non-display `К {x}` when closed-context `X` is proved to be an already-fractional decimal (`0`, `0.x`, or `-0.x`), including exact decimal display-shape facts that remain shape-only. Since `К {x}` preserves hidden X2, this no-op proof does not require hidden X2 to match visible `X`; a later context-sensitive `.`, `/-/`, or `ВП` is allowed after a preserving executable gap because the restore's previous-command context is unchanged. Negative-integer `К {x}` is handled through the same visible-zero proof, but the first signed-zero-producing `К {x}` is kept if a later X2 sync can feed a context-sensitive restore; only repeated no-op fractional operations after visible zero is already proved may be removed. Immediate restore boundaries remain conservative unless a separate VP/source proof covers them.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.

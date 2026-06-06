@@ -7357,6 +7357,8 @@ function signChangeClosedDecimalState(
   if (shapeBacked !== undefined) {
     return x2ValueStateFromMantissaShapes(shapeBacked, input.memory, input.shapeMemory, input.y, input.yShape);
   }
+  const structuralState = signChangedClosedStructuralState(input, producerIndex);
+  if (structuralState !== undefined) return structuralState;
   const structuralSource = signChangedVpEntryStructuralShapeFacts(input);
   if (structuralSource !== undefined) {
     return x2ValueStateFromStructuralShapes(
@@ -7367,8 +7369,6 @@ function signChangeClosedDecimalState(
       input.yShape,
     );
   }
-  const structuralState = signChangedClosedStructuralState(input, producerIndex);
-  if (structuralState !== undefined) return structuralState;
 
   const values = new Set<X2ValueFact>();
   const opaque = producerIndex === undefined ? SAME_UNKNOWN_VALUE : expressionValueFact(producerIndex);
@@ -7521,10 +7521,10 @@ function signChangedClosedStructuralShapeFacts(input: X2ValueDataflowState): Rea
 }
 
 function signChangedVpEntryStructuralShapeFacts(input: X2ValueDataflowState): ReadonlySet<X2ShapeFact> | undefined {
-  const source = vpEntrySignSourceShapes(input);
+  const source = input.vpEntrySignShape;
   if (source === undefined) return undefined;
   const shapes = new Set<X2ShapeFact>();
-  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(source))) {
+  for (const fact of canonicalStructuralShapeFacts(source)) {
     const signed = x2ExponentMantissaSignChangedShapeFact(fact) ?? x2MantissaSignChangedShapeFact(fact);
     if (signed === undefined) continue;
     const canonical = x2CanonicalShapeFact(signed);

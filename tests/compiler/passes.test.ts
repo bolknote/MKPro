@@ -5935,23 +5935,38 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[11])).toBe("exponent:02:3");
   });
 
-  it("x2 value dataflow preserves structural sign-shape sources on conditional jump edges", () => {
-    const program: IrOp[] = [
-      recall("1", "preload const FACE"),
+  it("x2 value edge transfer preserves explicit structural sign-shape sources on conditional jump edges", () => {
+    const source: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set(),
+      x2Shape: new Set(),
+      entry: { kind: "closed" },
+      vpEntrySignShape: new Set<X2ShapeFact>(["hex:FACE:mantissa"]),
+    };
+    const afterJump = transferX2ValueStateForEdge(
+      source,
       cjump("target"),
-      halt(),
-      label("target"),
+      "jump",
+      { trackRegisterMemory: true },
+    );
+    const afterSign = transferX2ValueStateForEdge(
+      afterJump,
       plain(0x0b, "/-/"),
+      "normal",
+      { trackRegisterMemory: true },
+    );
+    const afterVp = transferX2ValueStateForEdge(
+      afterSign,
       plain(0x0c, "ВП"),
-      plain(0x03, "3"),
-      halt(),
-    ];
-    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
-    const activeExponent = analyzeX2VpShapeContext(states[6]);
+      "normal",
+      { trackRegisterMemory: true },
+    );
+    const activeExponent = analyzeX2VpShapeContext(afterVp);
 
-    expect(x2VpEntryShapeText(states[4])).toBeUndefined();
-    expect(x2VpEntrySignShapeText(states[4])).toEqual(["hex:FACE:mantissa"]);
-    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex:-FACE:mantissa"]);
+    expect(x2VpEntryShapeText(afterJump)).toBeUndefined();
+    expect(x2VpEntrySignShapeText(afterJump)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(afterSign?.xShape)).toEqual(["hex:-FACE:mantissa"]);
     expect(activeExponent).toMatchObject({
       kind: "active-structural-exponent",
       source: "structural",
