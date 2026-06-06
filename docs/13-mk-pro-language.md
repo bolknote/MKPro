@@ -1541,11 +1541,15 @@ The pipeline currently contains:
   Negative decimal forms use the MK-61 complement-like shape rule:
   `-2; X->П r; ВП; 3` uses `-9`, `-1.2; X->П r; ВП; 3` uses `-9.2`, and
   signed zero uses `-1`. This source is derived only from the hidden X2 shape,
-  not from visible `X`; hex/super and otherwise structural store-splice cases
-  stay conservative. A closed-context `/-/` after the same store is tracked
-  separately: it toggles the original hidden decimal mantissa (`2; X->П r;
-  /-/; ВП; 3` uses `-2`, not the store-spliced `0.`), and only empty
-  X2-preserving cells keep that sign source live.
+  not from visible `X`. Structural hex/super mantissas use the same immediate
+  store-splice boundary as shape-only transient sources: the first structural
+  display digit is removed (`FACE; X->П r; ВП; 3` feeds structural source
+  `ACE`), and the result remains `hex:*`/`super:*` metadata rather than a
+  decimal value. A closed-context `/-/` after the same store is tracked
+  separately: it toggles the original hidden decimal or structural mantissa
+  (`2; X->П r; /-/; ВП; 3` uses `-2`, not the store-spliced `0.`), and only
+  empty X2-preserving cells keep that sign source live. The transient structural
+  store-splice source is therefore not used as the sign source for `/-/ ВП`.
   The proof now also keeps a
   register value-memory layer: a direct `X->П r` remembers only concrete
   decimal facts proved for visible `X`, and a later direct or proved indirect

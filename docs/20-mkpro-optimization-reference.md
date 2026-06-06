@@ -1040,10 +1040,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `1.2; X->П; ВП` starts from `0.2`, non-zero integer tails that become all
     zero start from raw `0.` rather than normalized `0`, all-zero integer runs
     preserve their raw length, `-2; X->П; ВП` starts from `-9`, and signed zero
-    starts from `-1`). This proof is deliberately derived from
-    hidden X2 shape, not visible `X`, and it is not generalized to hex/super or
-    arbitrary X-preserving commands because the MK-61 previous-command context
-    changes what `ВП` restores. A proved `/-/` carries the same fact with the mantissa sign
+    starts from `-1`). Structural hex/super mantissas use the same immediate
+    store-splice boundary as shape-only transient sources: the first structural
+    display digit is removed (`FACE; X->П; ВП` starts from structural `ACE`),
+    and no decimal value or dot-safe restore fact is created. This proof is
+    deliberately derived from hidden X2 shape, not visible `X`, and it is not
+    generalized to arbitrary X-preserving commands because the MK-61
+    previous-command context changes what `ВП` restores. A proved `/-/` carries the same fact with the mantissa sign
     toggled; after a closed, value-proved decimal exponent-entry sync it also
     keeps the signed exponent shape (`5 ВП 3 F0 /-/` carries
     `exponent:-5:3:decimal`, and leading-zero forms stay shape-only metadata).
@@ -1234,8 +1237,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     by the same rule: they can be deleted before the hard overwrite only when
     their produced `X` is not observed and their implicit stack lift is dead.
     `ВП` may also be removed from a structural
-    hex/super `vpEntryShape` source, including one produced by a direct or
-    proved-indirect `В/О` return continuation or the fallthrough side of a direct conditional/`F Lx`
+    hex/super `vpEntryShape` source, including one produced by an immediate
+    direct/proved-indirect store-splice, a direct or proved-indirect `В/О` return continuation or the fallthrough side of a direct conditional/`F Lx`
     loop, or from an already active VP/X2 restore context, when the following
     overwrite destroys its visible result; the conditional jump edge does not
     invent such a source, and structural sources outside the pinned A/B/C
@@ -1401,14 +1404,16 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     classifier carries `hex-exponent:*:*` / `super-exponent:*:*` through
     exponent signs/digits, so structural exponent sign pairs can collapse by the
     same rule as decimal exponent sign pairs, still without promoting those
-    shapes into decimal value facts. Store-backed decimal `ВП` sources keep a
+    shapes into decimal value facts. Store-backed `ВП` sources keep a
     separate closed-sign source: `X->П`/`К X->П` followed by `ВП` uses the
-    store-spliced hidden mantissa, but `X->П`/`К X->П` followed by `/-/ ВП`
-    toggles the original hidden decimal mantissa. Only empty X2-preserving
-    cells preserve that decimal sign source. Structural hex/super sources stay
-    shape-only: they can satisfy the same sign-source guard only when ordinary
-    X2 dataflow proves the shared structural source shape already lives in both
-    visible `X` and hidden X2.
+    store-spliced hidden mantissa, including transient shape-only structural
+    tails such as `FACE -> ACE`; but `X->П`/`К X->П` followed by `/-/ ВП`
+    toggles the original hidden decimal or structural mantissa. Only empty
+    X2-preserving cells preserve that sign source. Structural hex/super sources
+    stay shape-only: they can satisfy the same sign-source guard only when
+    ordinary X2 dataflow proves the shared structural source shape already
+    lives in both visible `X` and hidden X2, not merely because a transient
+    store-splice tail exists.
 28. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
 29. `vp-x2-peephole` — removes redundant `К {x}` that follows a compiler-owned `ВП`/X2 marker, display or ordinary, possibly through free-standing `КНОП`/`К1`/`К2` empty ops, other role-free X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and simple direct-return helpers whose body also preserves X, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; the preceding `ВП` must carry a boundary marker because a plain opcode pattern such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}` redundant. The same pass also uses X2 value/shape dataflow to remove a role-free, non-display `К {x}` when closed-context `X` is proved to be an already-fractional decimal (`0`, `0.x`, or `-0.x`), including exact decimal display-shape facts that remain shape-only. Since `К {x}` preserves hidden X2, this no-op proof does not require hidden X2 to match visible `X`; a later context-sensitive `.`, `/-/`, or `ВП` is allowed after a preserving executable gap because the restore's previous-command context is unchanged. Negative-integer `К {x}` is handled through the same visible-zero proof, but the first signed-zero-producing `К {x}` is kept if a later X2 sync can feed a context-sensitive restore; only repeated no-op fractional operations after visible zero is already proved may be removed. Immediate restore boundaries remain conservative unless a separate VP/source proof covers them.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.

@@ -4911,7 +4911,8 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program, { trackRegisterMemory: true });
 
-    expect(x2VpEntryShapeText(states[2])).toEqual([]);
+    expect(x2VpEntryShapeText(states[2])).toEqual(["hex:.70Е2-6С:mantissa"]);
+    expect(states[2]?.vpEntryShapeTransient).toBe(true);
     expect(x2VpEntryShapeText(states[3])).toEqual(["hex:8.70Е2-6С:mantissa"]);
     expect(x2VpEntryShapeText(states[5])).toEqual([]);
   });
@@ -4928,7 +4929,8 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program, { trackRegisterMemory: true });
 
-    expect(x2VpEntryShapeText(states[2])).toEqual([]);
+    expect(x2VpEntryShapeText(states[2])).toEqual(["hex:.70Е2-6С:mantissa"]);
+    expect(states[2]?.vpEntryShapeTransient).toBe(true);
     expect(x2VpEntryShapeText(states[3])).toEqual(["hex:8.70Е2-6С:mantissa"]);
     expect(x2VpEntryShapeText(states[5])).toEqual([]);
   });
@@ -5219,7 +5221,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(throughEmptyStates[7])).toBe("exponent:-2:3");
   });
 
-  it("x2 value dataflow keeps structural store-to-ВП splice conservative", () => {
+  it("x2 value dataflow models structural store-to-ВП splice shape-only", () => {
     const directStore: IrOp[] = [
       recall("2", "preload const FACE"),
       store("1"),
@@ -5237,12 +5239,34 @@ describe("ir passes on synthetic programs", () => {
 
     const directStates = computeX2ValueStates(directStore, { trackRegisterMemory: true });
     expect(x2ShapeStateText(directStates[2]?.x2Shape)).toEqual(["hex:FACE:mantissa"]);
-    expect(x2VpEntryShapeText(directStates[2])).toEqual([]);
-    expect(x2EntryStateText(directStates[3])).toBe("unknown");
+    expect(x2VpEntryShapeText(directStates[2])).toEqual(["hex:ACE:mantissa"]);
+    expect(directStates[2]?.vpEntryShapeTransient).toBe(true);
+    expect(x2ShapeStateText(directStates[3]?.xShape)).toEqual(["hex-exponent:ACE:"]);
+    expect(x2ShapeStateText(directStates[4]?.xShape)).toEqual(["hex-exponent:ACE:3"]);
+    expect(x2ValueStateText(directStates[4]?.x)).toEqual([]);
     const indirectStates = computeX2ValueStates(indirectStore, { trackRegisterMemory: true });
     expect(x2ShapeStateText(indirectStates[2]?.x2Shape)).toEqual(["hex:FACE:mantissa"]);
-    expect(x2VpEntryShapeText(indirectStates[2])).toEqual([]);
-    expect(x2EntryStateText(indirectStates[3])).toBe("unknown");
+    expect(x2VpEntryShapeText(indirectStates[2])).toEqual(["hex:ACE:mantissa"]);
+    expect(indirectStates[2]?.vpEntryShapeTransient).toBe(true);
+    expect(x2ShapeStateText(indirectStates[3]?.xShape)).toEqual(["hex-exponent:ACE:"]);
+    expect(x2ShapeStateText(indirectStates[4]?.xShape)).toEqual(["hex-exponent:ACE:3"]);
+    expect(x2ValueStateText(indirectStates[4]?.x)).toEqual([]);
+
+    const throughEmpty: IrOp[] = [
+      recall("2", "preload const FACE"),
+      store("1"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const emptyStates = computeX2ValueStates(throughEmpty, { trackRegisterMemory: true });
+    expect(x2VpEntryShapeText(emptyStates[2])).toEqual(["hex:ACE:mantissa"]);
+    expect(emptyStates[2]?.vpEntryShapeTransient).toBe(true);
+    expect(x2VpEntryShapeText(emptyStates[3])).toEqual(["hex:FACE:mantissa"]);
+    expect(emptyStates[3]?.vpEntryShapeTransient).toBeUndefined();
+    expect(x2ShapeStateText(emptyStates[4]?.xShape)).toEqual(["hex-exponent:FACE:"]);
+    expect(x2ShapeStateText(emptyStates[5]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
   });
 
   it("x2 value dataflow models indirect store as a decimal ВП splice source", () => {
@@ -16134,6 +16158,50 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       plain(0x02, "2"),
       plain(0xf0, "F* empty F0"),
+      knownTargetIndirectStore("7", "1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes exponent sign toggles after store-backed structural ВП splice", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      store("1"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("2", "preload const FACE"),
+      store("1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes exponent sign toggles after indirect-store-backed structural ВП splice", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      knownTargetIndirectStore("7", "1"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("2", "preload const FACE"),
       knownTargetIndirectStore("7", "1"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),

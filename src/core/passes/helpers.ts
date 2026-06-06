@@ -3806,6 +3806,7 @@ function transferX2ValueDataflowState(
       const stable = registerWritePreservesStoredValue(closed, op.register)
         ? closed
         : invalidateRegisterDependentX2ValueState(closed, op.register, trackRegisterMemory);
+      const vpEntryShape = vpEntryShapesFromStoreSplice(stable.x2Shape);
       return {
         x: addX2Value(stable.x, registerValueFact(op.register)),
         y: cloneOptionalValueSet(stable.y),
@@ -3819,6 +3820,8 @@ function transferX2ValueDataflowState(
         structuralVpContext: cloneX2StructuralEntryState(stable.structuralVpContext),
         vpEntryMantissa: vpEntryMantissasFromStoreSplice(stable.x2Shape),
         vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(stable.x2Shape),
+        vpEntryShape,
+        ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
         memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, op.register, stable.x) : undefined,
         shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, op.register, stable.xShape) : undefined,
       };
@@ -4974,6 +4977,7 @@ function transferIndirectStoreX2ValueState(
     ? closed
     : invalidateRegisterDependentX2ValueState(closed, target, trackRegisterMemory);
   const value = registerValueFact(target);
+  const vpEntryShape = vpEntryShapesFromStoreSplice(stable.x2Shape);
   return {
     x: addX2Value(stable.x, value),
     y: cloneOptionalValueSet(stable.y),
@@ -4987,6 +4991,8 @@ function transferIndirectStoreX2ValueState(
     structuralVpContext: cloneX2StructuralEntryState(stable.structuralVpContext),
     vpEntryMantissa: vpEntryMantissasFromStoreSplice(stable.x2Shape),
     vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(stable.x2Shape),
+    vpEntryShape,
+    ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
     memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, target, stable.x) : undefined,
     shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, target, stable.xShape) : undefined,
   };
@@ -6228,11 +6234,13 @@ function vpEntryMantissasFromX2Restore(
 }
 
 function withStoreVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowState {
+  const vpEntryShape = vpEntryShapesFromStoreSplice(input.x2Shape);
   return {
     ...input,
     vpEntryMantissa: vpEntryMantissasFromStoreSplice(input.x2Shape),
     vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(input.x2Shape),
-    vpEntryShape: undefined,
+    vpEntryShape,
+    ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
   };
 }
 
@@ -6257,6 +6265,15 @@ function vpEntrySignMantissasFromStoreSplice(shapes: X2ShapeSet | undefined): Re
     mantissas.add(model.canonical);
   }
   return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function vpEntryShapesFromStoreSplice(shapes: X2ShapeSet | undefined): X2ShapeSet | undefined {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of structuralMantissaShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+    const spliced = structuralStoreVpSpliceShapeFact(fact);
+    if (spliced !== undefined) output.add(spliced);
+  }
+  return output.size === 0 ? undefined : output;
 }
 
 function decimalStoreVpSpliceMantissa(raw: string): string | undefined {
@@ -6297,6 +6314,30 @@ function negativeDecimalStoreVpSpliceMantissa(integer: string, fraction: string)
   }
   if (!replaced) return "-1";
   return normalizeDecimalMantissaEntry(`-${spliced}`);
+}
+
+function structuralStoreVpSpliceShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) return undefined;
+  const spliced = removeFirstStructuralMantissaDigit(model.canonical);
+  if (spliced === undefined) return undefined;
+  return x2MantissaShapeFactFromModel(structuralMantissaDataModel("hex", spliced, "structuralOnly"));
+}
+
+function removeFirstStructuralMantissaDigit(raw: string): string | undefined {
+  const sign = raw.startsWith("-") ? "-" : "";
+  const unsigned = sign === "" ? raw : raw.slice(1);
+  let removed = false;
+  let output = sign;
+  for (const char of unsigned) {
+    if (!removed && /^[0-9A-FА-Я]$/u.test(char)) {
+      removed = true;
+      continue;
+    }
+    output += char;
+  }
+  if (!removed || shapeDigits(output).length === 0 || shapeDigits(output).length > 8) return undefined;
+  return output;
 }
 
 function vpEntryShapesFromShapeFacts(shapes: X2ShapeSet | undefined): X2ShapeSet | undefined {
@@ -7137,7 +7178,7 @@ function vpEntrySignSourceMantissas(input: X2ValueDataflowState): ReadonlySet<st
 }
 
 function vpEntrySignSourceShapes(input: X2ValueDataflowState): X2ShapeSet | undefined {
-  const explicitSource = input.vpEntryShape;
+  const explicitSource = input.vpEntryShapeTransient === true ? undefined : input.vpEntryShape;
   if (explicitSource !== undefined && explicitSource.size > 0) return explicitSource;
   return mergeOptionalShapeSources(
     sharedStructuralShapeFacts(input),
