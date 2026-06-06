@@ -61,6 +61,7 @@ import {
   x2StateIsClosedPlainContext,
   x2ShapeDataModelForFact,
   x2ShapeFactRestoredVisibleDecimal,
+  x2ShapeFactSafety,
   x2ShapeSetHasOnlyDotSafeStructuralMantissas,
   x2ShapeSetRestoredVisibleDecimals,
   x2ShapeSetsHaveSameDecimalDisplayShape,
@@ -1150,6 +1151,11 @@ describe("ir passes on synthetic programs", () => {
       normalized: undefined,
       safety: "errorProne",
     });
+    expect(parseX2ShapeFact("exponent:5:BAD:decimal")).toEqual({
+      kind: "unknown",
+      raw: "exponent:5:BAD:decimal",
+      safety: "unknown",
+    });
     expect(parseX2ShapeFact("hex:FABC:mantissa")).toEqual({
       kind: "hex-mantissa",
       raw: "FABC",
@@ -1160,6 +1166,11 @@ describe("ir passes on synthetic programs", () => {
       mantissa: "FABC",
       exponent: "-3",
       safety: "structuralOnly",
+    });
+    expect(parseX2ShapeFact("hex-exponent:FABC:BAD")).toEqual({
+      kind: "unknown",
+      raw: "hex-exponent:FABC:BAD",
+      safety: "unknown",
     });
     expect(parseX2ShapeFact("super:FA")).toEqual({
       kind: "super-mantissa",
@@ -1176,6 +1187,11 @@ describe("ir passes on synthetic programs", () => {
       mantissa: "FA",
       exponent: "3",
       safety: "structuralOnly",
+    });
+    expect(parseX2ShapeFact("super-exponent:FA:BAD")).toEqual({
+      kind: "unknown",
+      raw: "super-exponent:FA:BAD",
+      safety: "unknown",
     });
     expect(parseX2ShapeFact("hex:8Ж:mantissa")).toEqual({
       kind: "unknown",
@@ -1221,6 +1237,10 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetSafety(new Set(["hex:8Ж:mantissa"]))).toBe("unknown");
     expect(x2ShapeSetSafety(new Set(["super:8A"]))).toBe("unknown");
     expect(x2ShapeSetSafety(new Set(["exponent:5::decimal"]))).toBe("errorProne");
+    expect(x2ShapeFactSafety("hex-exponent:Г:BAD")).toBe("unknown");
+    expect(x2ShapeFactSafety("super-exponent:FA:BAD")).toBe("unknown");
+    expect(x2ShapeFactSafety("exponent:5:BAD:decimal")).toBe("unknown");
+    expect(x2ShapeSetSafety(new Set(["hex-exponent:Г:BAD"]))).toBe("unknown");
     expect(x2ShapeSetSafety(new Set(["mantissa:2:decimal", "hex:8Ж:mantissa"]))).toBe("dotSafeDecimal");
     expect(x2ShapeSetSafety(new Set(["hex:FABC:mantissa", "super:8A"]))).toBe("structuralOnly");
     expect(
@@ -1595,6 +1615,21 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeDataModelForFact("super-exponent:8A:2")).toMatchObject({
       kind: "unknown",
       raw: "super-exponent:8A:2",
+      safety: "unknown",
+    });
+    expect(x2ShapeDataModelForFact("exponent:5:BAD:decimal")).toMatchObject({
+      kind: "unknown",
+      raw: "exponent:5:BAD:decimal",
+      safety: "unknown",
+    });
+    expect(x2ShapeDataModelForFact("hex-exponent:Г:BAD")).toMatchObject({
+      kind: "unknown",
+      raw: "hex-exponent:Г:BAD",
+      safety: "unknown",
+    });
+    expect(x2ShapeDataModelForFact("super-exponent:FA:BAD")).toMatchObject({
+      kind: "unknown",
+      raw: "super-exponent:FA:BAD",
       safety: "unknown",
     });
     expect(x2ShapeDataModelForFact("exponent:5:3:decimal")).toMatchObject({

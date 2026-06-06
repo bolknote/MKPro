@@ -1315,9 +1315,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     store/recall proofs; active decimal and structural exponent-entry/VP
     contexts use validated canonical mantissa/exponent constructors, so invalid
     entry text, structural shapes, or malformed exponents cannot survive as
-    splice proofs. Dot restore and X2 sync shape normalization use the same
-    canonical set layer, so legacy invalid shape facts cannot be reintroduced
-    while visible `X` is rebuilt from hidden X2;
+    splice proofs or single-fact shape safety claims. Dot restore and X2 sync
+    shape normalization use the same canonical set layer, so legacy invalid
+    shape facts cannot be reintroduced while visible `X` is rebuilt from hidden X2;
     structural VP context is not considered plain closed
     context by `.`/`/-/` rewrite guards. Closed-context
     `/-/` without a proved decimal, opaque, structural shape, or VP context stays

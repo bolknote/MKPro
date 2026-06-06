@@ -2804,6 +2804,12 @@ export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
   if (exponent !== null) {
     const mantissaRaw = exponent[1]!;
     const exponentRaw = exponent[2]!;
+    if (
+      !decimalExponentMantissaRawIsValid(mantissaRaw) ||
+      canonicalExponentShapeRaw(exponentRaw) === undefined
+    ) {
+      return { kind: "unknown", raw: fact, safety: "unknown" };
+    }
     return {
       kind: "decimal-exponent",
       mantissa: mantissaRaw,
@@ -2820,7 +2826,12 @@ export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
   }
   const hexExponent = /^hex-exponent:([^:]*):([^:]*)$/u.exec(fact);
   if (hexExponent !== null) {
-    if (!structuralShapeRawIsValid(hexExponent[1]!)) return { kind: "unknown", raw: fact, safety: "unknown" };
+    if (
+      !structuralShapeRawIsValid(hexExponent[1]!) ||
+      canonicalExponentShapeRaw(hexExponent[2]!) === undefined
+    ) {
+      return { kind: "unknown", raw: fact, safety: "unknown" };
+    }
     return {
       kind: "hex-exponent",
       mantissa: hexExponent[1]!,
@@ -2836,7 +2847,12 @@ export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
   }
   const superExponent = /^super-exponent:([^:]*):([^:]*)$/u.exec(fact);
   if (superExponent !== null) {
-    if (!superShapeRawIsValid(superExponent[1]!)) return { kind: "unknown", raw: fact, safety: "unknown" };
+    if (
+      !superShapeRawIsValid(superExponent[1]!) ||
+      canonicalExponentShapeRaw(superExponent[2]!) === undefined
+    ) {
+      return { kind: "unknown", raw: fact, safety: "unknown" };
+    }
     return {
       kind: "super-exponent",
       mantissa: superExponent[1]!,
@@ -2852,8 +2868,11 @@ export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
   if (mantissa !== null) return decimalMantissaDataModel(mantissa[1]!);
   const exponent = /^exponent:([^:]*):([^:]*):decimal$/u.exec(fact);
   if (exponent !== null) {
+    const exponentRaw = canonicalExponentShapeRaw(exponent[2]!);
+    if (!decimalExponentMantissaRawIsValid(exponent[1]!) || exponentRaw === undefined) {
+      return { kind: "unknown", raw: fact, safety: "unknown" };
+    }
     const mantissaModel = decimalMantissaDataModel(exponent[1]!);
-    const exponentRaw = exponent[2]!;
     return {
       kind: "exponent-entry",
       mantissa: mantissaModel,
@@ -2873,15 +2892,18 @@ export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
   }
   const hexExponent = /^hex-exponent:([^:]*):([^:]*)$/u.exec(fact);
   if (hexExponent !== null) {
-    if (!structuralShapeRawIsValid(hexExponent[1]!)) return { kind: "unknown", raw: fact, safety: "unknown" };
+    const exponentRaw = canonicalExponentShapeRaw(hexExponent[2]!);
+    if (!structuralShapeRawIsValid(hexExponent[1]!) || exponentRaw === undefined) {
+      return { kind: "unknown", raw: fact, safety: "unknown" };
+    }
     const mantissa = structuralMantissaDataModel("hex", hexExponent[1]!, "structuralOnly");
     return {
       kind: "exponent-entry",
       mantissa,
-      exponentRaw: hexExponent[2]!,
-      exponentSign: hexExponent[2]!.startsWith("-") ? "-" : "",
-      exponentDigits: shapeDigits(hexExponent[2]!),
-      closedStructuralMantissa: closedStructuralExponentMantissaModel(mantissa, hexExponent[2]!),
+      exponentRaw,
+      exponentSign: exponentRaw.startsWith("-") ? "-" : "",
+      exponentDigits: shapeDigits(exponentRaw),
+      closedStructuralMantissa: closedStructuralExponentMantissaModel(mantissa, exponentRaw),
       safety: "structuralOnly",
     };
   }
@@ -2894,15 +2916,18 @@ export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
   }
   const superExponent = /^super-exponent:([^:]*):([^:]*)$/u.exec(fact);
   if (superExponent !== null) {
-    if (!superShapeRawIsValid(superExponent[1]!)) return { kind: "unknown", raw: fact, safety: "unknown" };
+    const exponentRaw = canonicalExponentShapeRaw(superExponent[2]!);
+    if (!superShapeRawIsValid(superExponent[1]!) || exponentRaw === undefined) {
+      return { kind: "unknown", raw: fact, safety: "unknown" };
+    }
     const mantissa = structuralMantissaDataModel("super", superExponent[1]!, "structuralOnly");
     return {
       kind: "exponent-entry",
       mantissa,
-      exponentRaw: superExponent[2]!,
-      exponentSign: superExponent[2]!.startsWith("-") ? "-" : "",
-      exponentDigits: shapeDigits(superExponent[2]!),
-      closedStructuralMantissa: closedStructuralExponentMantissaModel(mantissa, superExponent[2]!),
+      exponentRaw,
+      exponentSign: exponentRaw.startsWith("-") ? "-" : "",
+      exponentDigits: shapeDigits(exponentRaw),
+      closedStructuralMantissa: closedStructuralExponentMantissaModel(mantissa, exponentRaw),
       safety: "structuralOnly",
     };
   }
@@ -8312,12 +8337,15 @@ function canonicalDecimalExponentMantissaSet(input: ReadonlySet<string> | undefi
   const output = new Set<string>();
   for (const raw of input ?? []) {
     const canonical = canonicalShapeRaw(raw);
-    if (
-      normalizeDecimalMantissaEntry(canonical) !== undefined ||
-      normalizePlainDecimal(canonical) !== undefined
-    ) output.add(canonical);
+    if (decimalExponentMantissaRawIsValid(canonical)) output.add(canonical);
   }
   return output;
+}
+
+function decimalExponentMantissaRawIsValid(raw: string): boolean {
+  const canonical = canonicalShapeRaw(raw);
+  return normalizeDecimalMantissaEntry(canonical) !== undefined ||
+    normalizePlainDecimal(canonical) !== undefined;
 }
 
 function canonicalExponentSet(input: ReadonlySet<string> | undefined): Set<string> {
