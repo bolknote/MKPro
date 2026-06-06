@@ -1308,8 +1308,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     structural only. `super:*` is narrower than `hex:*`: only optional-sign
     `F[A-F]` slot forms
     stay in the super lattice; other structural displays stay hex-only or
-    unknown. Shape-memory stores canonical structural spellings, so
-    equivalent hex/super display shapes still join after store/recall proofs;
+    unknown. Shape-memory stores only validated canonical structural spellings:
+    unknown/invalid display shapes are dropped before they can be recalled as
+    proof facts, while equivalent hex/super display shapes still join after
+    store/recall proofs;
     structural VP context is not considered plain closed
     context by `.`/`/-/` rewrite guards. Closed-context
     `/-/` without a proved decimal, opaque, structural shape, or VP context stays

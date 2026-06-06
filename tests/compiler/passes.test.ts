@@ -2992,6 +2992,27 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(result?.x)).not.toContain("expr-key:31(expr-key:16(shape:hex:8Ж:mantissa))");
   });
 
+  it("x2 value dataflow drops invalid shape facts from state and shape memory", () => {
+    const legacy: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["super:8A", "super:FA", "hex:8Ж:mantissa"]),
+      x2Shape: new Set<X2ShapeFact>(["super:8A", "super:FA", "hex:8Ж:mantissa"]),
+      shapeMemory: {
+        "2": new Set<X2ShapeFact>(["super:8A", "super:FA", "hex:8Ж:mantissa"]),
+      },
+      entry: { kind: "closed" },
+    };
+    const cloned = transferX2ValueStateForEdge(legacy, label("clone"), "normal", { trackRegisterMemory: true }, 0);
+    const recalled = transferX2ValueStateForEdge(cloned, recall("2"), "normal", { trackRegisterMemory: true }, 1);
+
+    expect(x2ShapeStateText(cloned?.xShape)).toEqual(["super:FA"]);
+    expect(x2ShapeStateText(cloned?.x2Shape)).toEqual(["super:FA"]);
+    expect(x2ShapeStateText(cloned?.shapeMemory?.["2"])).toEqual(["super:FA"]);
+    expect(x2ShapeStateText(recalled?.xShape)).toEqual(["super:FA"]);
+    expect(x2ShapeStateText(recalled?.x2Shape)).toEqual(["super:FA"]);
+  });
+
   it("x2 value dataflow canonicalizes stable expr survivors after selector mutation", () => {
     const raw = "expr-key:16(shape:hex-exponent:Г:2)" as X2ValueFact;
     const canonical = "expr-key:16(shape:hex:Г00:mantissa)" as X2ValueFact;

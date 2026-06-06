@@ -2927,7 +2927,11 @@ export function x2ShapeFactFromDataModel(model: X2ShapeDataModel): X2ShapeFact |
 }
 
 export function x2CanonicalShapeFact(fact: X2ShapeFact): X2ShapeFact {
-  return x2ShapeFactFromDataModel(x2ShapeDataModelForFact(fact)) ?? fact;
+  return x2CanonicalShapeFactIfValid(fact) ?? fact;
+}
+
+function x2CanonicalShapeFactIfValid(fact: X2ShapeFact): X2ShapeFact | undefined {
+  return x2ShapeFactFromDataModel(x2ShapeDataModelForFact(fact));
 }
 
 export function x2ExponentShapeFactFromMantissaFact(
@@ -6031,8 +6035,8 @@ function cloneX2ValueMemory(input: X2ValueMemory | undefined): X2ValueMemory {
 function cloneX2ShapeMemory(input: X2ShapeMemory | undefined): X2ShapeMemory {
   const output: X2ShapeMemory = {};
   for (const register of x2ShapeMemoryRegisters(input)) {
-    const shapes = input?.[register];
-    if (shapes !== undefined && shapes.size > 0) output[register] = new Set(shapes);
+    const shapes = canonicalShapeSet(input?.[register]);
+    if (shapes.size > 0) output[register] = new Set(shapes);
   }
   return output;
 }
@@ -6348,8 +6352,8 @@ function concreteStoredX2ValueFacts(values: X2ValueSet): Set<X2ValueFact> {
 function storableX2ShapeMemoryFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   for (const shape of shapes ?? []) {
-    const canonical = x2ShapeFactFromDataModel(x2ShapeDataModelForFact(shape));
-    output.add(canonical ?? shape);
+    const canonical = x2CanonicalShapeFactIfValid(shape);
+    if (canonical !== undefined) output.add(canonical);
   }
   return output;
 }
@@ -6401,7 +6405,7 @@ function recallX2ShapeFacts(
   const output = x2ShapesFromValueFacts(values);
   for (const fact of memoryShapes ?? []) output.add(fact);
   for (const fact of preloadedConstantShapeFacts(op)) output.add(fact);
-  return output;
+  return canonicalShapeSet(output);
 }
 
 function recallStructuralShapeFacts(
@@ -6986,7 +6990,10 @@ function sameNonEmptyShapeSet(left: X2ShapeSet | undefined, right: X2ShapeSet | 
 
 function canonicalShapeSet(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  for (const fact of input ?? []) output.add(x2CanonicalShapeFact(fact));
+  for (const fact of input ?? []) {
+    const canonical = x2CanonicalShapeFactIfValid(fact);
+    if (canonical !== undefined) output.add(canonical);
+  }
   return output;
 }
 
@@ -7992,7 +7999,10 @@ function mergeOptionalShapeSources(
 ): X2ShapeSet | undefined {
   const output = new Set<X2ShapeFact>();
   for (const source of sources) {
-    for (const fact of source ?? []) output.add(x2CanonicalShapeFact(fact));
+    for (const fact of source ?? []) {
+      const canonical = x2CanonicalShapeFactIfValid(fact);
+      if (canonical !== undefined) output.add(canonical);
+    }
   }
   return output.size === 0 ? undefined : output;
 }
