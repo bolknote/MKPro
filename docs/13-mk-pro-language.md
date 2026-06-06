@@ -1319,7 +1319,7 @@ The pipeline currently contains:
   Emulator-verified special values for documented functions are modeled only
   where they are exact on MK-61: `F e^x` on `0`, `F lg`/`F ln` on `1`,
   inverse/direct sine and tangent on `0`, inverse cosine on `1`, direct cosine
-  on `0`, and `F x^y` identity cases (`1^y` and positive `x^0`).
+  on `0`, and `F x^y` exact cases (`0^y`, `1^y`, and positive `x^0`).
   For concrete normalized decimal values, `F x^2`, finite `F 1/x`,
   perfect-square `F sqrt`, integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and
   `К [x]` are modeled as exact decimal results in visible `X`
@@ -1395,7 +1395,7 @@ The pipeline currently contains:
   and still fits the eight-significant-digit proof bound; hardware-rounded
   sexagesimal cases remain opaque. Wider results, division by zero,
   non-terminating division, irrational square roots, fractional powers of ten,
-  non-identity powers, and structural hex/super operands keep only structural
+  non-identity non-zero powers, and structural hex/super operands keep only structural
   or opaque expression facts. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context

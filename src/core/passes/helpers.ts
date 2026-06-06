@@ -1878,6 +1878,7 @@ function exactDecimalMaxToNormalized(left: ExactDecimalParts, right: ExactDecima
 }
 
 function exactDecimalPowerIdentityToNormalized(exponent: ExactDecimalParts, base: ExactDecimalParts): string | undefined {
+  if (base.num === 0n) return "0";
   if (base.num === 1n && base.scale === 0) return "1";
   if (exponent.num === 0n && base.num > 0n) return "1";
   return undefined;

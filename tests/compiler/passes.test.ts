@@ -3174,7 +3174,14 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("x2 value dataflow models exact F x^y identity cases only", () => {
+  it("x2 value dataflow models exact F x^y zero-base and identity cases only", () => {
+    const zeroBaseProgram: IrOp[] = [
+      plain(0x03, "3"),
+      plain(0x0e, "В↑"),
+      plain(0x00, "0"),
+      plain(0x24, "F x^y"),
+      halt(),
+    ];
     const baseOneProgram: IrOp[] = [
       plain(0x07, "7"),
       plain(0x0e, "В↑"),
@@ -3197,6 +3204,10 @@ describe("ir passes on synthetic programs", () => {
       halt(),
     ];
 
+    expect(x2ValueStateText(computeX2ValueStates(zeroBaseProgram)[4]?.x)).toEqual([
+      "decimal:0:normalized",
+      "expr:3",
+    ]);
     expect(x2ValueStateText(computeX2ValueStates(baseOneProgram)[4]?.x)).toEqual([
       "decimal:1:normalized",
       "expr:3",
@@ -7508,6 +7519,36 @@ describe("ir passes on synthetic programs", () => {
       plain(0x24, "F x^y"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.0 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses exact F x^y zero-base X2 facts", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0x0e, "В↑"),
+      plain(0x00, "0"),
+      plain(0x24, "F x^y"),
+      plain(0x0e, "В↑"),
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0x0e, "В↑"),
+      plain(0x00, "0"),
+      plain(0x24, "F x^y"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.0 from hidden X2 temp" } },
       halt(),
     ]);
   });
