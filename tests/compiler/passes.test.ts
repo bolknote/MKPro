@@ -2324,6 +2324,62 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore keeps register-dependent expr keys stable through nested helpers that read the source", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("read_source"),
+      recall("1"),
+      ret(),
+      label("outer"),
+      call("read_source"),
+      ret(),
+      label("main"),
+      recall("1"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      call("outer"),
+      recall("1"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[15]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps register-dependent expr recalls when nested helpers overwrite the source", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("overwrite_source"),
+      plain(0x05, "5"),
+      store("1"),
+      ret(),
+      label("outer"),
+      call("overwrite_source"),
+      ret(),
+      label("main"),
+      recall("1"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      call("outer"),
+      recall("1"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+
+    expect(restored.applied).toBe(0);
+    expect(restored.ops).toEqual(program);
+  });
+
   it("x2-hidden-temp-restore keeps register-dependent expr recalls when a helper overwrites the source", () => {
     const program: IrOp[] = [
       jump("main"),

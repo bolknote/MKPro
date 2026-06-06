@@ -11,7 +11,7 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
-  knownReturnCallReturnsThroughTransparentRange,
+  knownReturnCallTargetIndex,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   removableRecallValueRegister,
@@ -492,12 +492,7 @@ function directReturningCallDoesNotMentionRegister(
   register: RegisterName,
   directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
-  return knownReturnCallReturnsThroughTransparentRange(
-    ops,
-    call,
-    directReturnContext,
-    (op) => memoryAccessDoesNotMentionRegister(op, register) && !stopsStraightLineSearch(op),
-  );
+  return directReturningCallHasRegisterSafeBody(ops, call, register, directReturnContext, "does-not-mention");
 }
 
 function directReturningCallDoesNotOverwriteRegister(
@@ -506,12 +501,106 @@ function directReturningCallDoesNotOverwriteRegister(
   register: RegisterName,
   directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
-  return knownReturnCallReturnsThroughTransparentRange(
+  return directReturningCallHasRegisterSafeBody(ops, call, register, directReturnContext, "does-not-overwrite");
+}
+
+type RegisterSafeBodyMode = "does-not-mention" | "does-not-overwrite";
+
+function directReturningCallHasRegisterSafeBody(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  register: RegisterName,
+  directReturnContext: DirectReturnAnalysisContext,
+  mode: RegisterSafeBodyMode,
+): boolean {
+  const memo = new Map<string, boolean>();
+  const active = new Set<string>();
+  return knownReturnCallBodyIsRegisterSafe(
     ops,
     call,
+    register,
     directReturnContext,
-    (op) => !memoryAccessMayOverwriteRegister(op, register) && !stopsStraightLineSearch(op),
+    mode,
+    memo,
+    active,
   );
+}
+
+function knownReturnCallBodyIsRegisterSafe(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  register: RegisterName,
+  directReturnContext: DirectReturnAnalysisContext,
+  mode: RegisterSafeBodyMode,
+  memo: Map<string, boolean>,
+  active: Set<string>,
+): boolean {
+  const targetIndex = knownReturnCallTargetIndex(call, directReturnContext);
+  if (targetIndex === undefined) return false;
+  const key = `${targetIndex}:${register}:${mode}`;
+  const cached = memo.get(key);
+  if (cached !== undefined) return cached;
+  if (active.has(key)) return false;
+
+  active.add(key);
+  const result = linearReturnBodyIsRegisterSafe(
+    ops,
+    targetIndex,
+    register,
+    directReturnContext,
+    mode,
+    memo,
+    active,
+  );
+  active.delete(key);
+  memo.set(key, result);
+  return result;
+}
+
+function linearReturnBodyIsRegisterSafe(
+  ops: readonly IrOp[],
+  targetIndex: number,
+  register: RegisterName,
+  directReturnContext: DirectReturnAnalysisContext,
+  mode: RegisterSafeBodyMode,
+  memo: Map<string, boolean>,
+  active: Set<string>,
+): boolean {
+  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
+  for (let index = startIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      if (directReturnContext.labelEntries.has(index)) return false;
+      continue;
+    }
+    if (hasRewriteBarrier(op)) return false;
+    if (op.kind === "return") return true;
+    if (isKnownReturnCallOp(op)) {
+      if (!knownReturnCallBodyIsRegisterSafe(
+        ops,
+        op,
+        register,
+        directReturnContext,
+        mode,
+        memo,
+        active,
+      )) return false;
+      continue;
+    }
+    if (!linearRegisterSafetyPredicate(op, register, mode)) return false;
+  }
+  return false;
+}
+
+function linearRegisterSafetyPredicate(
+  op: IrOp,
+  register: RegisterName,
+  mode: RegisterSafeBodyMode,
+): boolean {
+  if (mode === "does-not-mention") {
+    return memoryAccessDoesNotMentionRegister(op, register) && !stopsStraightLineSearch(op);
+  }
+  return !memoryAccessMayOverwriteRegister(op, register) && !stopsStraightLineSearch(op);
 }
 
 function memoryAccessDoesNotMentionRegister(op: IrOp, register: RegisterName): boolean {
