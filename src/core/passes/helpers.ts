@@ -8601,8 +8601,7 @@ function advanceDecimalPointEntry(input: Extract<X2EntryState, { kind: "open" }>
   const source = canonicalDecimalMantissaEntrySet(input.raw);
   if (source.size === 0) return { kind: "unknown" };
   for (const prefix of source) {
-    if (prefix.includes(".")) return { kind: "unknown" };
-    raw.add(`${prefix}.`);
+    raw.add(prefix.includes(".") ? prefix : `${prefix}.`);
   }
   return x2EntryStateFromOpenRaw(raw);
 }

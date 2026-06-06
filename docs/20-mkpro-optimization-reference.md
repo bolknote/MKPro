@@ -1341,6 +1341,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Dot restore and X2 sync
     shape normalization use the same canonical set layer, so legacy invalid
     shape facts cannot be reintroduced while visible `X` is rebuilt from hidden X2;
+    during linear open decimal entry a repeated `.` is modeled as the MK-61
+    no-op continuation of the same mantissa (`1 . 2 . 3 -> 1.23`), while a
+    CFG entry to that `.` still remains a closed-context X2 restore and the
+    following digit starts fresh input.
     structural VP context is not considered plain closed
     context by `.`/`/-/` rewrite guards. Closed-context
     `/-/` without a proved decimal, opaque, structural shape, or VP context stays

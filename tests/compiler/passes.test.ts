@@ -5804,7 +5804,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:1.2:normalized", "reg:2"]);
   });
 
-  it("x2 value dataflow treats duplicate decimal points as unknown", () => {
+  it("x2 value dataflow keeps duplicate decimal point during direct open-number entry", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
       plain(0x0a, "."),
@@ -5813,9 +5813,50 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(x2EntryStateText(states[3])).toBe("unknown");
-    expect(x2ValueStateText(states[3]?.x)).toEqual([]);
-    expect(x2ValueStateText(states[3]?.x2)).toEqual([]);
+    expect(x2EntryStateText(states[3])).toBe("open:1.");
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:1:normalized"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:1.:unnormalized"]);
+    expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["mantissa:1:decimal"]);
+    expect(x2ShapeStateText(states[3]?.x2Shape)).toEqual(["mantissa:1.:decimal"]);
+  });
+
+  it("x2 value dataflow follows direct repeated-dot entry example", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0a, "."),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[5])).toBe("open:1.23");
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:1.23:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:1.23:normalized"]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["mantissa:1.23:decimal"]);
+    expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["mantissa:1.23:decimal"]);
+  });
+
+  it("x2 value dataflow treats jumped-to decimal point as restore before new digit entry", () => {
+    const program: IrOp[] = [
+      jump("second_dot"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      label("second_dot"),
+      plain(0x0a, "."),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2EntryStateText(states[6])).toBe("closed");
+    expect(x2ValueStateText(states[6]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[6]?.x2)).toEqual([]);
+    expect(x2EntryStateText(states[7])).toBe("open:3");
+    expect(x2ValueStateText(states[7]?.x)).toEqual(["decimal:3:normalized"]);
+    expect(x2ValueStateText(states[7]?.x2)).toEqual(["decimal:3:normalized"]);
   });
 
   it("x2 value dataflow keeps leading-zero fractional X2 separate from normalized X", () => {
