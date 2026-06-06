@@ -1597,6 +1597,13 @@ function structuralShapeFactFromStableExpressionKey(key: string): X2ShapeFact | 
   return canonical;
 }
 
+function decimalDisplayShapeFactFromStableExpressionKey(key: string): X2ShapeFact | undefined {
+  const raw = /^shape:(.*)$/u.exec(key)?.[1];
+  if (raw === undefined) return undefined;
+  const displayShapes = decimalDisplayShapeFacts(new Set<X2ShapeFact>([raw as X2ShapeFact]));
+  return displayShapes.size === 1 ? [...displayShapes][0] : undefined;
+}
+
 function decimalAbs(value: string): string | undefined {
   if (!/^-?[0-9]+(?:\.[0-9]+)?$/u.test(value)) return undefined;
   return value.startsWith("-") ? value.slice(1) : value;
@@ -2763,6 +2770,18 @@ export function x2ShapeSetsHaveSameDotSafeDecimal(
   return false;
 }
 
+export function x2ShapeSetsHaveSameDecimalDisplayShape(
+  left: X2ShapeSet | undefined,
+  right: X2ShapeSet | undefined,
+): boolean {
+  const leftShapes = decimalDisplayShapeFacts(left);
+  if (leftShapes.size === 0) return false;
+  for (const shape of decimalDisplayShapeFacts(right)) {
+    if (leftShapes.has(shape)) return true;
+  }
+  return false;
+}
+
 export function x2ShapeSetsHaveSameStructuralShape(
   left: X2ShapeSet | undefined,
   right: X2ShapeSet | undefined,
@@ -3396,6 +3415,16 @@ export function recallAlreadyInXStructuralShape(
   return x2ShapeSetsHaveSameStructuralShape(state.xShape, shapes) ? register : undefined;
 }
 
+export function recallAlreadyInXDecimalDisplayShape(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  if (register === undefined || state === undefined) return undefined;
+  const shapes = recallDecimalDisplayShapeFacts(op, state, register);
+  return x2ShapeSetsHaveSameDecimalDisplayShape(state.xShape, shapes) ? register : undefined;
+}
+
 export function recallValueProof(
   op: IrOp,
   state: X2ValueDataflowState | undefined,
@@ -3406,6 +3435,7 @@ export function recallValueProof(
     x2ValueSetHasRegister(state.x, register) ||
     recallAlreadyInXMemoryValue(op, state) === register ||
     recallAlreadyInXPreloadedDecimal(op, state) === register ||
+    recallAlreadyInXDecimalDisplayShape(op, state) === register ||
     recallAlreadyInXStructuralShape(op, state) === register;
   const x2SyncRegister = recallAlreadySyncedInX2Value(op, state);
   const x2SyncValue =
@@ -5567,6 +5597,17 @@ function recallStructuralShapeFacts(
   return output;
 }
 
+function recallDecimalDisplayShapeFacts(
+  op: IrOp,
+  state: X2ValueDataflowState,
+  register: RegisterName,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of decimalDisplayShapeFacts(state.shapeMemory?.[register])) output.add(fact);
+  for (const fact of decimalDisplayShapeFacts(preloadedConstantShapeFacts(op))) output.add(fact);
+  return output;
+}
+
 function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   for (const value of values) {
@@ -5587,6 +5628,33 @@ function dotSafeDecimalShapeValues(input: X2ShapeSet | undefined): Set<string> {
   for (const model of x2ShapeDataModels(input)) {
     if (model.kind !== "mantissa" || model.radix !== "decimal" || model.safety !== "dotSafeDecimal") continue;
     if (model.normalizedDecimal !== undefined && model.normalizedSameAsRaw) output.add(model.normalizedDecimal);
+  }
+  return output;
+}
+
+function decimalDisplayShapeFacts(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const model of x2ShapeDataModels(input)) {
+    if (model.kind === "mantissa" && model.radix === "decimal") {
+      if (model.normalizedDecimal === undefined || !model.normalizedSameAsRaw) continue;
+      const shape = exactDecimalDisplayShapeFact(model.normalizedDecimal);
+      if (shape !== undefined && shape === x2ShapeFactFromDataModel(model)) output.add(shape);
+      continue;
+    }
+    if (model.kind === "exponent-entry" && model.mantissa.radix === "decimal") {
+      const shape = model.normalizedDecimal === undefined ? undefined : exactDecimalDisplayShapeFact(model.normalizedDecimal);
+      if (shape !== undefined) output.add(shape);
+    }
+  }
+  return output;
+}
+
+function decimalExponentDisplayShapeFacts(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const model of x2ShapeDataModels(input)) {
+    if (model.kind !== "exponent-entry" || model.mantissa.radix !== "decimal") continue;
+    const shape = model.normalizedDecimal === undefined ? undefined : exactDecimalDisplayShapeFact(model.normalizedDecimal);
+    if (shape !== undefined) output.add(shape);
   }
   return output;
 }
@@ -6077,6 +6145,9 @@ function stableExpressionSourceKeys(
   for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
     keys.add(stableStructuralExpressionSourceKey(fact));
   }
+  for (const fact of decimalExponentDisplayShapeFacts(shapes)) {
+    keys.add(stableStructuralExpressionSourceKey(fact));
+  }
   return keys;
 }
 
@@ -6091,7 +6162,7 @@ function stableExpressionKeyValueSet(key: string): X2ValueSet | undefined {
 }
 
 function stableExpressionKeyShapeSet(key: string): X2ShapeSet | undefined {
-  const fact = structuralShapeFactFromStableExpressionKey(key);
+  const fact = structuralShapeFactFromStableExpressionKey(key) ?? decimalDisplayShapeFactFromStableExpressionKey(key);
   return fact === undefined ? undefined : new Set<X2ShapeFact>([fact]);
 }
 
@@ -6446,18 +6517,22 @@ function signChangedClosedDecimalExponentShapeState(
     const normalized = model.normalizedDecimal;
     if (normalized === undefined) continue;
     const sourceValue = decimalValueFact(normalized, "normalized");
-    if (!input.x.has(sourceValue) || !input.x2.has(sourceValue)) continue;
+    const hasSharedValue = input.x.has(sourceValue) && input.x2.has(sourceValue);
+    const hasSharedDisplayShape = x2ShapeSetsHaveSameDecimalDisplayShape(input.xShape, new Set([fact]));
+    if (!hasSharedValue && !hasSharedDisplayShape) continue;
     const signedShape = x2ExponentMantissaSignChangedShapeFact(fact);
     if (signedShape === undefined) continue;
     const signedDecimal = signChangedNormalizedDecimalValue(normalized);
-    const signedValue = decimalValueFact(signedDecimal, "normalized");
-    values.add(signedValue);
     shapes.add(signedShape);
     const signedDisplayShape = exactDecimalDisplayShapeFact(signedDecimal);
     if (signedDisplayShape !== undefined) shapes.add(signedDisplayShape);
-    mantissas.add(signedDecimal);
+    if (hasSharedValue) {
+      const signedValue = decimalValueFact(signedDecimal, "normalized");
+      values.add(signedValue);
+      mantissas.add(signedDecimal);
+    }
   }
-  if (values.size === 0) return undefined;
+  if (values.size === 0 && shapes.size === 0) return undefined;
   return {
     x: values,
     y: cloneOptionalValueSet(input.y),

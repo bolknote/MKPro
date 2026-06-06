@@ -1308,7 +1308,12 @@ The pipeline currently contains:
   both the signed normalized value and the signed exponent shape metadata, so
   `5 ВП 3 F0 /-/` carries `decimal:-5000:normalized` plus
   `exponent:-5:3:decimal` without making unsafe active exponent-entry forms
-  dot-safe. The fact spelling is normalization-aware: `12` produces the shared fact
+  dot-safe. If only the decimal exponent display shape is proved in both
+  visible `X` and hidden X2, closed-context `/-/` still toggles that display
+  shape (`exponent:100:0:decimal` becomes `exponent:-100:0:decimal` plus the
+  visible `mantissa:-100:decimal` display), but it does not invent a decimal
+  value fact or a dot-safe restore source. The fact spelling is
+  normalization-aware: `12` produces the shared fact
   `decimal:12:normalized`, while `02` produces `decimal:2:normalized` in `X`
   and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally treat
   a leading-zero display value as the same hidden value. Preloaded constants
@@ -1317,6 +1322,13 @@ The pipeline currently contains:
   `decimal:*` facts. Their shape facts are display-accurate: ordinary decimal
   displays use `mantissa:*:decimal`, while wide or small scientific decimal
   displays use `exponent:*:*:decimal` instead of a fake ordinary mantissa.
+  The shape algebra can compare those exact decimal display shapes as visible
+  `X` equality, including closed exponent forms, but this is separate from
+  dot-safety: `exponent:*:*:decimal` is not promoted to a safe `.` restore
+  source merely because the visible display matches. The same canonical decimal
+  display shapes may seed opaque stable-expression source keys for later
+  hidden-temp proofs; those keys identify the displayed source shape but do not
+  infer a decimal result value for the operation.
   Longer display-glyph runs such as `8Е000000`, hex-like display mantissas, and `FA`..`FF` super forms are tracked as
   shape-only `hex:*` / `super:*` facts until a later proof makes them dot-safe. Hex/super preloads
   with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural
@@ -1618,10 +1630,17 @@ The pipeline currently contains:
   refused when the scratch register is the loop counter being decremented. It
   can also prove the hidden temp from the dead scratch store's own stable source
   fact (`decimal:*:normalized`, `expr:*`, or a stable `expr-key:*` whose
-  operands include canonical structural shape sources or constant stack
-  producers such as `F pi`) when register-memory at a join has become too
-  conservative. The same escape can use dot-safe decimal restore-shape equality
-  when both sides prove the same ordinary `mantissa:*:decimal` display. For
+  operands include canonical structural shape sources, canonical decimal
+  exponent display-shape sources, or constant stack producers such as `F pi`)
+  when register-memory at a join has become too conservative. Decimal exponent
+  display keys only prove that the same displayed source was recomputed; they do
+  not make that source dot-safe. The same escape can use dot-safe decimal
+  restore-shape equality when both sides prove the same ordinary
+  `mantissa:*:decimal` display. When the computed value has already been
+  explicitly synced into X2, exact decimal display-shape equality can also
+  discharge the unsafe-shape guard for scientific displays such as
+  `exponent:1:8:decimal`; the inserted `.` is still allowed only by the normal
+  dot-safety/immediate-sync proof. For
   computed structural temporaries, the pass can also use a
   synced `expr:*`/`expr-key:*` plus structural restore-shape equality to replace
   the scratch recall with `.`, while plain structural preload aliases that merely
@@ -1678,13 +1697,15 @@ The pipeline currently contains:
   counted-loop fallthroughs do the same for non-counter registers while dropping
   the alias to the decremented `R0`..`R3` counter.
   The proof can also come from X2 decimal value-memory, decimal preload
-  metadata, or structural hex/super shape-memory: if a register was stored with
-  a concrete decimal literal or structural display shape, or recalled from
-  matching `preload const N`, and X was later rebuilt as the same value/shape,
-  the recall is redundant even after the register alias itself was lost. Shape
-  proofs use the same structural exponent-shift equality as X2 dataflow, so a
-  recalled `hex:Г00` can match an X value built as `hex:Г; ВП 2`. They only
-  remove recalls whose X2/previous-command side effects are already proven
+  metadata, decimal display-shape memory, or structural hex/super shape-memory:
+  if a register was stored with a concrete decimal literal, an exact decimal
+  scientific display such as `exponent:1:8:decimal`, or a structural display
+  shape, or recalled from matching `preload const N`, and X was later rebuilt
+  as the same value/shape, the recall is redundant even after the register
+  alias itself was lost. Shape proofs use decimal display-shape equality and
+  the same structural exponent-shift equality as X2 dataflow, so a recalled
+  `hex:Г00` can match an X value built as `hex:Г; ВП 2`. They only remove
+  recalls whose X2/previous-command side effects are already proven
   unobservable; they do not make `.`/`/-/` restores dot-safe.
   Compiler marker labels that are not reachable branch/call targets also
   preserve the fact, while string targets, numeric-address targets, proved

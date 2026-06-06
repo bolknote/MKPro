@@ -41,6 +41,7 @@ import {
   parseX2ShapeFact,
   recallValueProof,
   transferX2RegisterStateForEdge,
+  transferX2ValueStateForEdge,
   x2CanUseClosedSignChangeDotSourceAt,
   x2CanonicalShapeFact,
   x2ClosedStructuralExponentMantissaShapeFact,
@@ -57,6 +58,7 @@ import {
   x2StateIsClosedPlainContext,
   x2ShapeDataModelForFact,
   x2ShapeSetHasOnlyDotSafeStructuralMantissas,
+  x2ShapeSetsHaveSameDecimalDisplayShape,
   x2ShapeSetsHaveSameDotSafeStructuralMantissa,
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetsHaveSameStructuralShape,
@@ -71,6 +73,7 @@ import {
   x2ValueSetsHaveSameRestoredVisibleDecimal,
   type X2ShapeFact,
   type X2ShapeSet,
+  type X2ValueDataflowState,
   type X2ValueSet,
 } from "../../src/core/passes/helpers.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
@@ -1162,6 +1165,39 @@ describe("ir passes on synthetic programs", () => {
     ).toBe(true);
   });
 
+  it("x2 shape algebra compares decimal display shapes without making them dot-safe", () => {
+    expect(
+      x2ShapeSetsHaveSameDecimalDisplayShape(
+        new Set(["exponent:1:8:decimal"]),
+        new Set(["exponent:1:8:decimal"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameDotSafeDecimal(
+        new Set(["exponent:1:8:decimal"]),
+        new Set(["exponent:1:8:decimal"]),
+      ),
+    ).toBe(false);
+    expect(
+      x2ShapeSetsHaveSameDecimalDisplayShape(
+        new Set(["exponent:100:0:decimal"]),
+        new Set(["mantissa:100:decimal"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameDecimalDisplayShape(
+        new Set(["mantissa:02:decimal"]),
+        new Set(["mantissa:2:decimal"]),
+      ),
+    ).toBe(false);
+    expect(
+      x2ShapeSetsHaveSameDecimalDisplayShape(
+        new Set(["mantissa:100000000:decimal"]),
+        new Set(["exponent:1:8:decimal"]),
+      ),
+    ).toBe(false);
+  });
+
   it("x2 shape algebra recognizes emulator-pinned dot-safe structural mantissas", () => {
     expect(
       x2ShapeSetsHaveSameDotSafeStructuralMantissa(
@@ -2081,6 +2117,21 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[2]?.x)).toContain("expr-key:31(reg:1)");
   });
 
+  it("x2 value dataflow seeds stable expr keys from decimal display-shape operands", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0x31, "К |x|"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["exponent:1:8:decimal"]);
+    expect(x2ValueStateText(states[4]?.x)).toContain("expr-key:31(shape:exponent:1:8:decimal)");
+    expect(x2ValueStateText(states[4]?.x)).not.toContain("expr-key:31(decimal:100000000:normalized)");
+  });
+
   it("x2 value dataflow seeds stable expr keys from constant stack producers", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -2163,6 +2214,35 @@ describe("ir passes on synthetic programs", () => {
 
     expect(restored.applied).toBe(1);
     expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "3")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore uses decimal exponent display-shape expr keys", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0x31, "К |x|"),
+      store("3"),
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["exponent:1:8:decimal"]);
+    expect(x2ShapeStateText(states[10]?.x2Shape)).toEqual(["exponent:1:8:decimal"]);
+    expect(x2ShapeSetsHaveSameDotSafeDecimal(states[4]?.xShape, states[10]?.x2Shape)).toBe(false);
+    expect(x2ShapeSetsHaveSameDecimalDisplayShape(states[4]?.xShape, states[10]?.x2Shape)).toBe(true);
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[10]).toMatchObject({ kind: "plain", opcode: 0x0a });
     expect(dse.ops.some((op) => op.kind === "store" && op.register === "3")).toBe(false);
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
@@ -3353,6 +3433,45 @@ describe("ir passes on synthetic programs", () => {
       "exponent:-100000000:2:decimal",
       "exponent:-1:10:decimal",
     ]);
+  });
+
+  it("x2 value dataflow sign-changes shape-only decimal exponent displays without value promotion", () => {
+    const sameExponentState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:1:8:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:1:8:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const equivalentDisplayState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      entry: { kind: "closed" },
+    };
+
+    const sameExponent = transferX2ValueStateForEdge(sameExponentState, plain(0x0b, "/-/"), "normal");
+    const equivalentDisplay = transferX2ValueStateForEdge(equivalentDisplayState, plain(0x0b, "/-/"), "normal");
+
+    expect(x2ValueStateText(sameExponent?.x)).toEqual([]);
+    expect(x2ValueStateText(sameExponent?.x2)).toEqual([]);
+    expect(x2ShapeStateText(sameExponent?.xShape)).toEqual(["exponent:-1:8:decimal"]);
+    expect(x2ShapeStateText(sameExponent?.x2Shape)).toEqual(["exponent:-1:8:decimal"]);
+    expect(x2ShapeSetSafety(sameExponent?.x2Shape)).toBe("errorProne");
+    expect(x2StateHasUnsafeDotRestoreShapeX2(sameExponent)).toBe(true);
+
+    expect(x2ValueStateText(equivalentDisplay?.x)).toEqual([]);
+    expect(x2ValueStateText(equivalentDisplay?.x2)).toEqual([]);
+    expect(x2ShapeStateText(equivalentDisplay?.xShape)).toEqual([
+      "exponent:-100:0:decimal",
+      "mantissa:-100:decimal",
+    ]);
+    expect(x2ShapeStateText(equivalentDisplay?.x2Shape)).toEqual([
+      "exponent:-100:0:decimal",
+      "mantissa:-100:decimal",
+    ]);
+    expect(x2ShapeSetSafety(equivalentDisplay?.x2Shape)).toBe("errorProne");
   });
 
   it("x2 value dataflow carries non-zero closed sign-change into a following ВП", () => {
@@ -5406,6 +5525,27 @@ describe("ir passes on synthetic programs", () => {
       x2SyncRegister: undefined,
       x2SyncValue: false,
       x2SyncShape: true,
+    });
+  });
+
+  it("recall value proof uses decimal display shape memory as in-X evidence only", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:1:8:decimal"]),
+      x2Shape: new Set(),
+      entry: { kind: "closed" },
+      memory: {},
+      shapeMemory: {
+        "2": new Set<X2ShapeFact>(["exponent:1:8:decimal"]),
+      },
+    };
+
+    expect(recallValueProof(recall("2"), state)).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
     });
   });
 

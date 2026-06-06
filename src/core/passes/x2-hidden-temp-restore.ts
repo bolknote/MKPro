@@ -20,6 +20,7 @@ import {
   x2HasSignRestoreGapBeforeVp,
   x2HasOnlyRestoreGapBeforeVp,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
+  x2ShapeSetsHaveSameDecimalDisplayShape,
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetsHaveSameDotSafeStructuralMantissa,
   x2ShapeSetsHaveSameStructuralShape,
@@ -230,7 +231,10 @@ function hiddenTempStoreSourceRestoresSameVisibleShapeFromX2(
   recallState: X2ValueDataflowState | undefined,
 ): boolean {
   return hiddenTempStoreComputedSourceAlreadySyncedInX2(ops, storeIndex, recallIndex, storeState, recallState) &&
-    x2ShapeSetsHaveSameStructuralShape(storeState?.xShape, recallState?.x2Shape);
+    (
+      x2ShapeSetsHaveSameStructuralShape(storeState?.xShape, recallState?.x2Shape) ||
+      x2ShapeSetsHaveSameDecimalDisplayShape(storeState?.xShape, recallState?.x2Shape)
+    );
 }
 
 function hiddenTempStoreSourceRestoresSameDotSafeDecimalShapeFromX2(
