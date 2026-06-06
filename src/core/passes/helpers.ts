@@ -6219,7 +6219,7 @@ function removeUnstableOpaqueExpressionValueMemory(input: X2ValueMemory | undefi
 function removeUnstableOpaqueExpressionValueFacts(input: X2ValueSet | undefined): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
   for (const fact of input ?? []) {
-    if (!isUnstableOpaqueExpressionValueFact(fact)) output.add(fact);
+    if (!isUnstableOpaqueExpressionValueFact(fact)) output.add(canonicalX2ValueFact(fact));
   }
   return output;
 }
@@ -6246,7 +6246,7 @@ function removeRegisterDependentValueFacts(
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
   for (const fact of input ?? []) {
-    if (!x2ValueFactDependsOnRegister(fact, register)) output.add(fact);
+    if (!x2ValueFactDependsOnRegister(fact, register)) output.add(canonicalX2ValueFact(fact));
   }
   return output;
 }

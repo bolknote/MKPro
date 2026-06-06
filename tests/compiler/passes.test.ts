@@ -2885,6 +2885,37 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueSetHasFact(new Set([canonical]), raw)).toBe(true);
   });
 
+  it("x2 value dataflow canonicalizes stable expr survivors after selector mutation", () => {
+    const raw = "expr-key:16(shape:hex-exponent:Г:2)" as X2ValueFact;
+    const canonical = "expr-key:16(shape:hex:Г00:mantissa)" as X2ValueFact;
+    const dependent = "expr-key:31(reg:1)" as X2ValueFact;
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([raw, dependent]),
+      y: new Set<X2ValueFact>([raw]),
+      x2: new Set<X2ValueFact>([raw, dependent]),
+      memory: {
+        "2": new Set<X2ValueFact>([raw, dependent]),
+      },
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(
+      legacy,
+      indirectJump("1"),
+      "normal",
+      { trackRegisterMemory: true },
+      0,
+    );
+
+    expect(x2ValueStateText(result?.x)).toContain(canonical);
+    expect(x2ValueStateText(result?.x)).not.toContain(raw);
+    expect(x2ValueStateText(result?.x)).not.toContain(dependent);
+    expect(x2ValueStateText(result?.y)).toContain(canonical);
+    expect(x2ValueStateText(result?.x2)).toContain(canonical);
+    expect(x2ValueStateText(result?.x2)).not.toContain(dependent);
+    expect(x2ValueStateText(result?.memory?.["2"])).toContain(canonical);
+    expect(x2ValueStateText(result?.memory?.["2"])).not.toContain(dependent);
+  });
+
   it("x2 value dataflow uses canonical stable expr keys for closed sign-change proofs", () => {
     const raw = "expr-key:16(shape:hex-exponent:Г:2)" as X2ValueFact;
     const canonical = "expr-key:16(shape:hex:Г00:mantissa)" as X2ValueFact;
