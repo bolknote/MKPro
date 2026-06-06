@@ -3064,6 +3064,62 @@ describe("ir passes on synthetic programs", () => {
     expect(invalid.kind).toBe("unknown");
   });
 
+  it("x2 value dataflow canonicalizes decimal entry and VP contexts", () => {
+    const openLegacy: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      entry: { kind: "open", raw: new Set([" 01 ", "BAD"]) },
+    };
+    const activeLegacy: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      entry: {
+        kind: "exponent",
+        mantissa: new Set([" 02 ", "100000000", "BAD"]),
+        exponent: new Set([" 3 ", "BAD"]),
+      },
+    };
+    const vpLegacy: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      entry: { kind: "closed" },
+      vpContext: {
+        kind: "exponent",
+        mantissa: new Set([" 5 ", "BAD"]),
+        exponent: new Set([" -1 ", "BAD"]),
+      },
+    };
+    const invalidLegacy: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      entry: {
+        kind: "exponent",
+        mantissa: new Set(["BAD"]),
+        exponent: new Set(["2"]),
+      },
+    };
+
+    const open = transferX2ValueStateForEdge(openLegacy, label("open"), "normal", { trackRegisterMemory: true }, 0);
+    const active = analyzeX2VpShapeContext(
+      transferX2ValueStateForEdge(activeLegacy, label("active"), "normal", { trackRegisterMemory: true }, 0),
+    );
+    const vpContext = analyzeX2VpShapeContext(
+      transferX2ValueStateForEdge(vpLegacy, label("vp"), "normal", { trackRegisterMemory: true }, 0),
+    );
+    const invalid = analyzeX2VpShapeContext(
+      transferX2ValueStateForEdge(invalidLegacy, label("invalid"), "normal", { trackRegisterMemory: true }, 0),
+    );
+
+    expect(x2EntryStateText(open)).toBe("open:01");
+    expect(active.kind).toBe("active-exponent");
+    expect([...(active.mantissa ?? [])].sort()).toEqual(["02", "100000000"]);
+    expect([...(active.exponent ?? [])]).toEqual(["3"]);
+    expect(vpContext.kind).toBe("vp-exponent-context");
+    expect([...(vpContext.mantissa ?? [])]).toEqual(["5"]);
+    expect([...(vpContext.exponent ?? [])]).toEqual(["-1"]);
+    expect(invalid.kind).toBe("unknown");
+  });
+
   it("x2 value dataflow canonicalizes stable expr survivors after selector mutation", () => {
     const raw = "expr-key:16(shape:hex-exponent:Г:2)" as X2ValueFact;
     const canonical = "expr-key:16(shape:hex:Г00:mantissa)" as X2ValueFact;

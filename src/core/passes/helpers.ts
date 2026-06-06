@@ -7265,8 +7265,10 @@ function decimalExponentShapeFact(mantissa: string, exponent: string): X2ShapeFa
 function closedExponentEntryDecimalFacts(input: X2EntryState): Set<X2ValueFact> {
   const values = new Set<X2ValueFact>();
   if (input.kind !== "exponent") return values;
-  for (const mantissa of input.mantissa) {
-    for (const exponent of input.exponent) {
+  const entry = x2EntryStateFromExponentParts(input.mantissa, input.exponent);
+  if (entry.kind !== "exponent") return values;
+  for (const mantissa of entry.mantissa) {
+    for (const exponent of entry.exponent) {
       const value = normalizedExponentEntryValue(mantissa, exponent);
       if (value !== undefined) values.add(decimalValueFact(value, "normalized"));
     }
@@ -7276,9 +7278,11 @@ function closedExponentEntryDecimalFacts(input: X2EntryState): Set<X2ValueFact> 
 
 function closedExponentEntryShapeFacts(input: X2EntryState): Set<X2ShapeFact> {
   if (input.kind !== "exponent") return new Set();
-  const shapes = exponentEntryShapeFacts(input);
-  for (const mantissa of input.mantissa) {
-    for (const exponent of input.exponent) {
+  const entry = x2EntryStateFromExponentParts(input.mantissa, input.exponent);
+  if (entry.kind !== "exponent") return new Set();
+  const shapes = exponentEntryShapeFacts(entry);
+  for (const mantissa of entry.mantissa) {
+    for (const exponent of entry.exponent) {
       const value = normalizedExponentEntryValue(mantissa, exponent);
       const displayShape = value === undefined ? undefined : exactDecimalDisplayShapeFact(value);
       if (displayShape !== undefined) shapes.add(displayShape);
@@ -7288,9 +7292,11 @@ function closedExponentEntryShapeFacts(input: X2EntryState): Set<X2ShapeFact> {
 }
 
 function exponentEntryShapeFacts(input: Extract<X2EntryState, { kind: "exponent" }>): Set<X2ShapeFact> {
+  const entry = x2EntryStateFromExponentParts(input.mantissa, input.exponent);
   const shapes = new Set<X2ShapeFact>();
-  for (const mantissa of input.mantissa) {
-    for (const exponent of input.exponent) {
+  if (entry.kind !== "exponent") return shapes;
+  for (const mantissa of entry.mantissa) {
+    for (const exponent of entry.exponent) {
       const fact = x2ExponentShapeFactFromMantissaFact(decimalMantissaShapeFact(mantissa), exponent);
       if (fact !== undefined) shapes.add(fact);
     }
@@ -8243,14 +8249,8 @@ function closedX2EntryState(): X2EntryState {
 }
 
 function cloneX2EntryState(input: X2EntryState): X2EntryState {
-  if (input.kind === "open") return { kind: "open", raw: new Set(input.raw) };
-  if (input.kind === "exponent") {
-    return {
-      kind: "exponent",
-      mantissa: new Set(input.mantissa),
-      exponent: new Set(input.exponent),
-    };
-  }
+  if (input.kind === "open") return x2EntryStateFromOpenRaw(input.raw);
+  if (input.kind === "exponent") return x2EntryStateFromExponentParts(input.mantissa, input.exponent);
   return input;
 }
 
@@ -8273,6 +8273,53 @@ function x2StructuralEntryStateFromParts(
     : { kind: "exponent", mantissa, exponent };
 }
 
+function x2EntryStateFromOpenRaw(input: ReadonlySet<string> | undefined): X2EntryState {
+  const raw = canonicalDecimalMantissaEntrySet(input);
+  return raw.size === 0 ? { kind: "unknown" } : { kind: "open", raw };
+}
+
+function x2EntryStateFromExponentParts(
+  mantissaInput: ReadonlySet<string> | undefined,
+  exponentInput: ReadonlySet<string> | undefined,
+): X2EntryState {
+  const mantissa = canonicalDecimalExponentMantissaSet(mantissaInput);
+  const exponent = canonicalExponentSet(exponentInput);
+  return mantissa.size === 0 || exponent.size === 0
+    ? { kind: "unknown" }
+    : { kind: "exponent", mantissa, exponent };
+}
+
+function x2VpContextStateFromExponentParts(
+  mantissaInput: ReadonlySet<string> | undefined,
+  exponentInput: ReadonlySet<string> | undefined,
+): X2VpContextState {
+  const entry = x2EntryStateFromExponentParts(mantissaInput, exponentInput);
+  return entry.kind === "exponent"
+    ? { kind: "exponent", mantissa: entry.mantissa, exponent: entry.exponent }
+    : { kind: "unknown" };
+}
+
+function canonicalDecimalMantissaEntrySet(input: ReadonlySet<string> | undefined): Set<string> {
+  const output = new Set<string>();
+  for (const raw of input ?? []) {
+    const canonical = canonicalShapeRaw(raw);
+    if (normalizeDecimalMantissaEntry(canonical) !== undefined) output.add(canonical);
+  }
+  return output;
+}
+
+function canonicalDecimalExponentMantissaSet(input: ReadonlySet<string> | undefined): Set<string> {
+  const output = new Set<string>();
+  for (const raw of input ?? []) {
+    const canonical = canonicalShapeRaw(raw);
+    if (
+      normalizeDecimalMantissaEntry(canonical) !== undefined ||
+      normalizePlainDecimal(canonical) !== undefined
+    ) output.add(canonical);
+  }
+  return output;
+}
+
 function canonicalExponentSet(input: ReadonlySet<string> | undefined): Set<string> {
   const output = new Set<string>();
   for (const raw of input ?? []) {
@@ -8284,11 +8331,7 @@ function canonicalExponentSet(input: ReadonlySet<string> | undefined): Set<strin
 
 function cloneX2VpContextState(input: X2VpContextState | undefined): X2VpContextState {
   if (input === undefined || input.kind === "none" || input.kind === "unknown") return input ?? noneX2VpContextState();
-  return {
-    kind: "exponent",
-    mantissa: new Set(input.mantissa),
-    exponent: new Set(input.exponent),
-  };
+  return x2VpContextStateFromExponentParts(input.mantissa, input.exponent);
 }
 
 function cloneX2StructuralEntryState(input: X2StructuralEntryState | undefined): X2StructuralEntryState {
@@ -8299,11 +8342,7 @@ function cloneX2StructuralEntryState(input: X2StructuralEntryState | undefined):
 }
 
 function x2VpContextFromExponentEntry(input: Extract<X2EntryState, { kind: "exponent" }>): X2VpContextState {
-  return {
-    kind: "exponent",
-    mantissa: new Set(input.mantissa),
-    exponent: new Set(input.exponent),
-  };
+  return x2VpContextStateFromExponentParts(input.mantissa, input.exponent);
 }
 
 function x2StructuralContextFromEntry(
@@ -8374,38 +8413,39 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
 function advanceDecimalDigitEntry(input: X2EntryState, digit: string): X2EntryState {
   if (input.kind === "unknown") return { kind: "unknown" };
   if (input.kind === "exponent") return advanceExponentDigitEntry(input, digit);
-  const source = input.kind === "closed" ? new Set([""]) : input.raw;
+  const source = input.kind === "closed" ? new Set([""]) : canonicalDecimalMantissaEntrySet(input.raw);
+  if (source.size === 0) return { kind: "unknown" };
   const raw = new Set<string>();
   for (const prefix of source) {
     const next = `${prefix}${digit}`;
     if (decimalMantissaDigitCount(next) > 8) return { kind: "unknown" };
     raw.add(next);
   }
-  return { kind: "open", raw };
+  return x2EntryStateFromOpenRaw(raw);
 }
 
 function advanceDecimalPointEntry(input: Extract<X2EntryState, { kind: "open" }>): X2EntryState {
   const raw = new Set<string>();
-  for (const prefix of input.raw) {
+  const source = canonicalDecimalMantissaEntrySet(input.raw);
+  if (source.size === 0) return { kind: "unknown" };
+  for (const prefix of source) {
     if (prefix.includes(".")) return { kind: "unknown" };
     raw.add(`${prefix}.`);
   }
-  return { kind: "open", raw };
+  return x2EntryStateFromOpenRaw(raw);
 }
 
 function advanceExponentDigitEntry(input: Extract<X2EntryState, { kind: "exponent" }>, digit: string): X2EntryState {
+  const entry = x2EntryStateFromExponentParts(input.mantissa, input.exponent);
+  if (entry.kind !== "exponent") return { kind: "unknown" };
   const exponent = new Set<string>();
-  for (const prefix of input.exponent) {
+  for (const prefix of entry.exponent) {
     const sign = prefix.startsWith("-") ? "-" : "";
     const digits = prefix.slice(sign.length);
     if (digits.length >= 2) return { kind: "unknown" };
     exponent.add(`${prefix}${digit}`);
   }
-  return {
-    kind: "exponent",
-    mantissa: new Set(input.mantissa),
-    exponent,
-  };
+  return x2EntryStateFromExponentParts(entry.mantissa, exponent);
 }
 
 function advanceStructuralExponentDigitEntry(
@@ -8423,15 +8463,13 @@ function advanceStructuralExponentDigitEntry(
 }
 
 function signChangeExponentEntry(input: Extract<X2EntryState, { kind: "exponent" }>): X2EntryState {
+  const entry = x2EntryStateFromExponentParts(input.mantissa, input.exponent);
+  if (entry.kind !== "exponent") return { kind: "unknown" };
   const exponent = new Set<string>();
-  for (const raw of input.exponent) {
+  for (const raw of entry.exponent) {
     exponent.add(raw.startsWith("-") ? raw.slice(1) : `-${raw}`);
   }
-  return {
-    kind: "exponent",
-    mantissa: new Set(input.mantissa),
-    exponent,
-  };
+  return x2EntryStateFromExponentParts(entry.mantissa, exponent);
 }
 
 function signChangeStructuralExponentEntry(
@@ -8445,15 +8483,13 @@ function signChangeStructuralExponentEntry(
 }
 
 function signChangeVpContext(input: Extract<X2VpContextState, { kind: "exponent" }>): X2VpContextState {
+  const context = x2VpContextStateFromExponentParts(input.mantissa, input.exponent);
+  if (context.kind !== "exponent") return { kind: "unknown" };
   const exponent = new Set<string>();
-  for (const raw of input.exponent) {
+  for (const raw of context.exponent) {
     exponent.add(raw.startsWith("-") ? raw.slice(1) : `-${raw}`);
   }
-  return {
-    kind: "exponent",
-    mantissa: new Set(input.mantissa),
-    exponent,
-  };
+  return x2VpContextStateFromExponentParts(context.mantissa, exponent);
 }
 
 function joinX2EntryStates(current: X2EntryState, incoming: X2EntryState): X2EntryState {
@@ -8462,15 +8498,19 @@ function joinX2EntryStates(current: X2EntryState, incoming: X2EntryState): X2Ent
     return current.kind === incoming.kind ? closedX2EntryState() : { kind: "unknown" };
   }
   if (current.kind === "exponent" && incoming.kind === "exponent") {
-    const mantissa = joinStringSets(current.mantissa, incoming.mantissa);
-    const exponent = joinStringSets(current.exponent, incoming.exponent);
-    return mantissa.size === 0 || exponent.size === 0
-      ? { kind: "unknown" }
-      : { kind: "exponent", mantissa, exponent };
+    const left = x2EntryStateFromExponentParts(current.mantissa, current.exponent);
+    const right = x2EntryStateFromExponentParts(incoming.mantissa, incoming.exponent);
+    if (left.kind !== "exponent" || right.kind !== "exponent") return { kind: "unknown" };
+    return x2EntryStateFromExponentParts(
+      joinStringSets(left.mantissa, right.mantissa),
+      joinStringSets(left.exponent, right.exponent),
+    );
   }
   if (current.kind !== "open" || incoming.kind !== "open") return { kind: "unknown" };
-  const joined = joinStringSets(current.raw, incoming.raw);
-  return joined.size === 0 ? { kind: "unknown" } : { kind: "open", raw: joined };
+  const left = x2EntryStateFromOpenRaw(current.raw);
+  const right = x2EntryStateFromOpenRaw(incoming.raw);
+  if (left.kind !== "open" || right.kind !== "open") return { kind: "unknown" };
+  return x2EntryStateFromOpenRaw(joinStringSets(left.raw, right.raw));
 }
 
 function joinX2VpContextStates(
@@ -8483,11 +8523,13 @@ function joinX2VpContextStates(
   if (left.kind === "none" || right.kind === "none" || left.kind !== right.kind) {
     return left.kind === right.kind ? noneX2VpContextState() : { kind: "unknown" };
   }
-  const mantissa = joinStringSets(left.mantissa, right.mantissa);
-  const exponent = joinStringSets(left.exponent, right.exponent);
-  return mantissa.size === 0 || exponent.size === 0
-    ? { kind: "unknown" }
-    : { kind: "exponent", mantissa, exponent };
+  const leftContext = x2VpContextStateFromExponentParts(left.mantissa, left.exponent);
+  const rightContext = x2VpContextStateFromExponentParts(right.mantissa, right.exponent);
+  if (leftContext.kind !== "exponent" || rightContext.kind !== "exponent") return { kind: "unknown" };
+  return x2VpContextStateFromExponentParts(
+    joinStringSets(leftContext.mantissa, rightContext.mantissa),
+    joinStringSets(leftContext.exponent, rightContext.exponent),
+  );
 }
 
 function joinX2StructuralEntryStates(
