@@ -7487,13 +7487,15 @@ function signChangeClosedDecimalState(
 
   const values = new Set<X2ValueFact>();
   const opaque = producerIndex === undefined ? SAME_UNKNOWN_VALUE : expressionValueFact(producerIndex);
-  if (input.x.has(SAME_UNKNOWN_VALUE) && input.x2.has(SAME_UNKNOWN_VALUE)) {
+  const xValues = canonicalX2ValueSet(input.x);
+  const x2Values = canonicalX2ValueSet(input.x2);
+  if (xValues.has(SAME_UNKNOWN_VALUE) && x2Values.has(SAME_UNKNOWN_VALUE)) {
     values.add(opaque);
   }
-  for (const fact of input.x2) {
+  for (const fact of x2Values) {
     const sameVisibleValue =
-      input.x.has(fact) ||
-      x2ValueShapeSetHasRestoredVisibleDecimal(input.x, input.xShape, fact);
+      xValues.has(fact) ||
+      x2ValueShapeSetHasRestoredVisibleDecimal(xValues, input.xShape, fact);
     if (!sameVisibleValue) continue;
     const decimal = normalizedDecimalValueFromFact(fact);
     if (decimal === undefined && isOpaqueSharedValueFact(fact)) {
@@ -7513,9 +7515,9 @@ function signChangeClosedDecimalState(
     if (shape !== undefined) shapes.add(shape);
   }
   return {
-    x: values,
+    x: canonicalX2ValueSet(values),
     y: cloneOptionalValueSet(input.y),
-    x2: new Set(values),
+    x2: canonicalX2ValueSet(values),
     xShape: shapes,
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: new Set(shapes),
@@ -7574,13 +7576,15 @@ function signChangedClosedDecimalExponentShapeState(
   const values = new Set<X2ValueFact>();
   const shapes = new Set<X2ShapeFact>();
   const mantissas = new Set<string>();
+  const xValues = canonicalX2ValueSet(input.x);
+  const x2Values = canonicalX2ValueSet(input.x2);
   for (const fact of input.x2Shape ?? []) {
     const model = x2ShapeDataModelForFact(fact);
     if (model.kind !== "exponent-entry" || model.mantissa.radix !== "decimal") continue;
     const normalized = model.normalizedDecimal;
     if (normalized === undefined) continue;
     const sourceValue = decimalValueFact(normalized, "normalized");
-    const hasSharedValue = input.x.has(sourceValue) && input.x2.has(sourceValue);
+    const hasSharedValue = xValues.has(sourceValue) && x2Values.has(sourceValue);
     const hasSharedDisplayShape = x2ShapeSetsHaveSameDecimalDisplayShape(input.xShape, new Set([fact]));
     const hasSharedRestoredVisibleDecimal = x2ValueShapeSetHasRestoredVisibleDecimal(
       input.x,
@@ -7611,9 +7615,9 @@ function signChangedClosedDecimalExponentShapeState(
   }
   if (values.size === 0 && shapes.size === 0) return undefined;
   return {
-    x: values,
+    x: canonicalX2ValueSet(values),
     y: cloneOptionalValueSet(input.y),
-    x2: new Set(values),
+    x2: canonicalX2ValueSet(values),
     xShape: shapes,
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: new Set(shapes),
@@ -7653,9 +7657,9 @@ function signChangedVpEntryDecimalShapeState(input: X2ValueDataflowState): X2Val
   }
   if (values.size === 0 || shapes.size === 0) return undefined;
   return {
-    x: values,
+    x: canonicalX2ValueSet(values),
     y: cloneOptionalValueSet(input.y),
-    x2: new Set(values),
+    x2: canonicalX2ValueSet(values),
     xShape: shapes,
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: new Set(shapes),
@@ -7703,8 +7707,8 @@ function signChangedClosedStructuralState(
   if (values.size === 0) return state;
   return {
     ...state,
-    x: values,
-    x2: new Set(values),
+    x: canonicalX2ValueSet(values),
+    x2: canonicalX2ValueSet(values),
   };
 }
 
@@ -7810,8 +7814,9 @@ function sharedExactDecimalDisplayMantissas(
 
 function sharedNormalizedDecimalMantissas(input: Pick<X2ValueDataflowState, "x" | "x2">): ReadonlySet<string> | undefined {
   const mantissas = new Set<string>();
-  for (const fact of input.x2) {
-    if (!input.x.has(fact)) continue;
+  const xValues = canonicalX2ValueSet(input.x);
+  for (const fact of canonicalX2ValueSet(input.x2)) {
+    if (!xValues.has(fact)) continue;
     const decimal = normalizedDecimalValueFromFact(fact);
     if (decimal !== undefined) mantissas.add(decimal);
   }

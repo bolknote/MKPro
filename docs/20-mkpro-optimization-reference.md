@@ -866,6 +866,9 @@ Display rewrites are separated into strategy selection + body lowering.
   becoming a separate computed value. X2 value-set operations, register-memory
   storage/recall, and CFG joins keep the same canonical form, so equivalent
   stable-expression facts do not split after path-sensitive propagation.
+  Closed `/-/` shared-source proofs use the same canonical value sets before
+  comparing visible `X` and hidden X2, so sign-change keys remain reusable
+  after mixed raw/canonical paths meet.
   Hex and super displays are not promoted to decimal shapes without
   a separate display proof. For concrete decimal `X`, `К {x}` also
   seeds the exact normalized fractional decimal value in visible X while

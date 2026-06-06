@@ -2876,6 +2876,22 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(recalled?.x)).not.toContain(raw);
   });
 
+  it("x2 value dataflow uses canonical stable expr keys for closed sign-change proofs", () => {
+    const raw = "expr-key:16(shape:hex-exponent:Г:2)" as X2ValueFact;
+    const canonical = "expr-key:16(shape:hex:Г00:mantissa)" as X2ValueFact;
+    const state: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([raw]),
+      x2: new Set<X2ValueFact>([canonical]),
+      entry: { kind: "closed" },
+    };
+    const signed = transferX2ValueStateForEdge(state, plain(0x0b, "/-/"), "normal", {}, 0);
+
+    expect(x2ValueStateText(signed?.x)).toContain("expr-key:0B(expr-key:16(shape:hex:Г00:mantissa))");
+    expect(x2ValueStateText(signed?.x)).toContain("expr:0");
+    expect(x2ValueStateText(signed?.x)).not.toContain("expr-key:0B(expr-key:16(shape:hex-exponent:Г:2))");
+    expect(x2ValueStateText(signed?.x2)).toEqual(x2ValueStateText(signed?.x));
+  });
+
   it("x2 value dataflow derives unary decimal facts from shape-only decimal mantissas", () => {
     const shapeOnly: X2ValueDataflowState = {
       x: new Set(),
