@@ -69,6 +69,7 @@ import {
   x2StructuralRestoreShapeFacts,
   x2StructuralMantissaAppendDigitsShapeFact,
   x2StructuralMantissaConcatShapeFacts,
+  x2StructuralMantissaFirstDigitSpliceShapeFact,
   x2StructuralMantissaShiftShapeFact,
   x2StatesHaveSameVpEntrySource,
   x2StatesHaveSameVpEntrySignSource,
@@ -1463,6 +1464,41 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:0.1:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:-1:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "hex:1:mantissa")).toBeUndefined();
+  });
+
+  it("x2 shape algebra splices a VP first digit into structural X2 mantissas", () => {
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:A:mantissa",
+      "hex:8.70:mantissa",
+    )).toBe("hex:A.70:mantissa");
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "mantissa:3:decimal",
+      "hex:8.70:mantissa",
+    )).toBe("hex:3.70:mantissa");
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:1:mantissa",
+      "super:FA",
+    )).toBe("hex:1A:mantissa");
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:A:mantissa",
+      "mantissa:800:decimal",
+    )).toBe("hex:A00:mantissa");
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:A:mantissa",
+      "mantissa:000:decimal",
+    )).toBe("hex:A00:mantissa");
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "mantissa:3:decimal",
+      "mantissa:800:decimal",
+    )).toBeUndefined();
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:-A:mantissa",
+      "hex:8.70:mantissa",
+    )).toBeUndefined();
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:A:mantissa",
+      "hex:-8.70:mantissa",
+    )).toBeUndefined();
   });
 
   it("x2 VP source proof uses structural shape algebra equality", () => {
@@ -3693,6 +3729,102 @@ describe("ir passes on synthetic programs", () => {
 
     expect(analyzeX2VpShapeContext(states[1]).kind).toBe("none");
     expect(x2StateCanDiscardRestoreRunBeforeProvedVp(states[1], states[4])).toBe(true);
+  });
+
+  it("x2 value dataflow models VP first-digit structural splice after empty X2-preserving gap", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const A"),
+      recall("2", "preload const 8A0"),
+      plain(0x14, "←→"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const beforeVp = states[4];
+    const activeExponent = analyzeX2VpShapeContext(states[5]);
+    expect(x2ShapeStateText(beforeVp?.vpEntryShape)).toEqual(["hex:AA0:mantissa"]);
+    expect(activeExponent).toMatchObject({
+      kind: "active-structural-exponent",
+      source: "structural",
+      hasExponentDigit: false,
+      restoresX2: true,
+    });
+    expect(x2ShapeStateText(activeExponent.shape)).toEqual(["hex:AA0:mantissa"]);
+    expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual(["hex-exponent:AA0:3"]);
+  });
+
+  it("x2 value dataflow models structural VP first-digit splice over decimal X2 tails", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const A"),
+      recall("2", "preload const 800"),
+      plain(0x14, "←→"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const beforeVp = states[4];
+    const activeExponent = analyzeX2VpShapeContext(states[5]);
+
+    expect(x2ShapeStateText(beforeVp?.x2Shape)).toEqual(["mantissa:800:decimal"]);
+    expect(x2ShapeStateText(beforeVp?.vpEntryShape)).toEqual(["hex:A00:mantissa"]);
+    expect(activeExponent).toMatchObject({
+      kind: "active-structural-exponent",
+      source: "structural",
+    });
+    expect(x2ShapeStateText(activeExponent.shape)).toEqual(["hex:A00:mantissa"]);
+    expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual(["hex-exponent:A00:3"]);
+  });
+
+  it("x2 value dataflow models transient VP first-digit splice after non-empty X2-preserving ops", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const A"),
+      recall("2", "preload const 8A0"),
+      plain(0x14, "←→"),
+      plain(0x20, "Fπ"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const beforeVp = states[4];
+    const activeExponent = analyzeX2VpShapeContext(states[5]);
+
+    expect(x2ShapeStateText(beforeVp?.xShape)).toEqual(["mantissa:3.1415926:decimal"]);
+    expect(x2ShapeStateText(beforeVp?.vpEntryShape)).toEqual(["hex:AA0:mantissa"]);
+    expect(beforeVp?.vpEntryShapeTransient).toBe(true);
+    expect(activeExponent).toMatchObject({
+      kind: "active-structural-exponent",
+      source: "structural",
+    });
+    expect(x2ShapeStateText(activeExponent.shape)).toEqual(["hex:AA0:mantissa"]);
+  });
+
+  it("x2 value dataflow drops transient VP first-digit sources across a later empty op", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const A"),
+      recall("2", "preload const 8A0"),
+      plain(0x14, "←→"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const afterPi = states[4];
+    const beforeVp = states[5];
+    const activeExponent = analyzeX2VpShapeContext(states[6]);
+
+    expect(x2ShapeStateText(afterPi?.vpEntryShape)).toEqual(["hex:AA0:mantissa"]);
+    expect(afterPi?.vpEntryShapeTransient).toBe(true);
+    expect(x2ShapeStateText(beforeVp?.vpEntryShape)).toEqual(["hex:3A0:mantissa"]);
+    expect(beforeVp?.vpEntryShapeTransient).toBeUndefined();
+    expect(x2ShapeStateText(activeExponent.shape)).toEqual(["hex:3A0:mantissa"]);
+    expect(x2ShapeStateText(states[7]?.x2Shape)).toEqual(["hex-exponent:3A0:3"]);
   });
 
   it("x2 VP restore-gap scanner shares label and role safety", () => {

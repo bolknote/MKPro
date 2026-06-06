@@ -1090,10 +1090,20 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     rather than separate exact-set checks. Closed structural exponent-entry
     shapes also feed `ВП` source proofs through that restored mantissa form, so a
     later `.` restore of `hex-exponent:Г:2` exposes `hex:Г00` as the next
-    structural mantissa source instead of dropping the context. The same algebra now has shape-only structural
-    digit append/concat operations (`hex:8.7` + `hex:0Е` proves
-    `hex:8.70Е`) with eight-display-digit bounds and no signed/fractional
-    right operand. It also carries exact emulator-pinned single-digit hex
+    structural mantissa source instead of dropping the context. The same
+    algebra now has shape-only structural digit append/concat operations
+    (`hex:8.7` + `hex:0Е` proves `hex:8.70Е`) with eight-display-digit
+    bounds and no signed/fractional right operand. It also models the
+    X2-preserving first-command `ВП` first-digit splice as a structural source:
+    a proved visible first digit and a proved hidden decimal/structural mantissa
+    tail can form a new shape-only source (`hex:A` with hidden `hex:8A0` gives
+    `hex:AA0`; hidden decimal `800` gives `hex:A00`) for the following exponent
+    entry. Decimal first-digit plus decimal tail is deliberately left outside
+    this structural proof. Non-empty X2-preserving commands create a transient
+    proof for the immediate `ВП`; a later empty command drops that transient
+    source and proves a fresh source from the current visible `X`. This proof
+    remains structural only and is not used as decimal value or dot-safety
+    evidence. It also carries exact emulator-pinned single-digit hex
     arithmetic tables as decimal value proofs. Operand order remains part of the
     proof. For `+` and `-`, a single `A`/`B`/`C`/`D`/`E` hex digit paired with a
     proved decimal digit `0..9` uses the verified operand-order-specific table,
@@ -1315,6 +1325,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     sources; structural source equality now goes through the shared shape
     algebra, so shifted exponent-entry shapes such as `hex-exponent:Г:2` can
     match the equivalent `hex:Г00` source without becoming decimal values.
+    First-digit splices use that same structural source path, so an immediate
+    X2-preserving command before `ВП` can expose a proved pre-command `X` first
+    digit plus a hidden decimal/structural X2 tail as the following
+    exponent-entry source without adding a special-case rewrite. Decimal tails
+    only become structural when the first digit proves a non-decimal display
+    shape. The non-empty-command proof is transient: another executable command
+    must establish its own source.
     The helper's restore-gap scanner is shared with `x2-noop-restore`,
     `x2-hidden-temp-restore`, and `x2-literal-restore`, so all three passes use
     the same marker-label/display-sensitive/role safety rules before deciding that a

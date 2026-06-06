@@ -1453,7 +1453,19 @@ The pipeline currently contains:
   branch-merged `ВП`/restore facts stable without changing their safety class.
   Structural exponent shapes remain shape-only, but the shared restore-shape
   algebra can close them back into structural mantissas for VP-source proofs
-  (`hex:Г ВП 2` can feed a later `ВП` as `hex:Г00`). `ВП` source equality is
+  (`hex:Г ВП 2` can feed a later `ВП` as `hex:Г00`). The same structural
+  source layer is aware of the X2-preserving first-command splice: when a
+  visible decimal/structural display supplies a proved first mantissa digit and
+  hidden X2 supplies a decimal/structural mantissa tail, an immediate
+  X2-preserving command before `ВП` can create a shape-only structural source
+  such as `hex:A` with hidden `hex:8A0` becoming `hex:AA0`, or `hex:A` with
+  hidden decimal `800` becoming `hex:A00`, for the following exponent entry.
+  Decimal first-digit plus decimal tail is deliberately not promoted by this
+  structural helper. Non-empty commands create only a transient source for an
+  immediate `ВП`; if `КНОП`/`К1`/`К2` follows later, that empty command supplies
+  a fresh source from the current visible `X` instead. This stays
+  structural-only and does not grant a decimal value or a dot-safe restore fact.
+  `ВП` source equality is
   represented as source keys, so exact ordinary decimal mantissa sources,
   decimal exponent-display shapes (`exponent:100:0:decimal` vs
   `mantissa:100:decimal`), and structural restored-shape sources are compared
