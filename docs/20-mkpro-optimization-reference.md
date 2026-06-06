@@ -1180,7 +1180,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     without making them dot-safe hidden-X2 values: `exponent:5:3:decimal`
     closes to `mantissa:5000:decimal`, while wide scientific forms such as
     `exponent:100000000:2:decimal` close to `exponent:1:10:decimal` and remain
-    error-prone shape metadata. The same
+    error-prone shape metadata. Decimal display closure and structural
+    exponent closure now feed one restored-display shape set, while stable
+    source keys use the canonical source subset (for example
+    `hex-exponent:Г:2` keys as `hex:Г00:mantissa`). The same
     restored-visible decimal extractor is used for binary concrete arithmetic
     operands, so shape-only decimal displays can participate in exact
     `+`/`-`/`*`/finite-division proofs and in the pinned structural

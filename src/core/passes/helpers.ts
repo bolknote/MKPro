@@ -3196,8 +3196,18 @@ export function x2ShapeSetsHaveSameRestoredDisplayShape(
   left: X2ShapeSet | undefined,
   right: X2ShapeSet | undefined,
 ): boolean {
-  return x2ShapeSetsHaveSameDecimalDisplayShape(left, right) ||
-    x2ShapeSetsHaveSameStructuralShape(left, right);
+  const leftShapes = x2RestoredDisplayShapeFacts(left);
+  if (leftShapes.size === 0) return false;
+  for (const shape of x2RestoredDisplayShapeFacts(right)) {
+    if (leftShapes.has(shape)) return true;
+  }
+  return false;
+}
+
+export function x2RestoredDisplayShapeFacts(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = decimalDisplayShapeFacts(input);
+  for (const fact of x2StructuralRestoreShapeFacts(input)) output.add(fact);
+  return output;
 }
 
 export function x2ShapeSetsHaveSameStructuralShape(
@@ -7118,10 +7128,7 @@ function addVpEntryDisplaySourceKeys(
     const key = exactDecimalMantissaDisplaySourceKey(mantissa);
     if (key !== undefined) keys.add(key);
   }
-  for (const shape of decimalDisplayShapeFacts(shapes)) {
-    keys.add(stableStructuralExpressionSourceKey(shape));
-  }
-  for (const shape of canonicalStructuralRestoreSourceKeyFacts(shapes)) {
+  for (const shape of restoredDisplaySourceKeyShapeFacts(shapes)) {
     keys.add(stableStructuralExpressionSourceKey(shape));
   }
 }
@@ -7225,10 +7232,8 @@ function canonicalX2ValueFactIfValid(fact: X2ValueFact): X2ValueFact | undefined
 }
 
 function canonicalStableShapeSourceKey(fact: X2ShapeFact): string | undefined {
-  const structural = canonicalStructuralRestoreSourceKeyFacts(new Set([fact]));
-  if (structural.size === 1) return stableStructuralExpressionSourceKey([...structural][0]!);
-  const decimal = decimalDisplayShapeFacts(new Set([fact]));
-  return decimal.size === 1 ? stableStructuralExpressionSourceKey([...decimal][0]!) : undefined;
+  const facts = restoredDisplaySourceKeyShapeFacts(new Set([fact]));
+  return facts.size === 1 ? stableStructuralExpressionSourceKey([...facts][0]!) : undefined;
 }
 
 function stableExpressionSourceKeys(
@@ -7250,22 +7255,18 @@ function stableExpressionDisplayShapeSourceKeys(
 ): Set<string> {
   const keys = new Set<string>();
   const valueDecimals = normalizedDecimalValueSet(values);
-  for (const fact of x2StructuralRestoreShapeFacts(shapes)) {
-    const model = x2ShapeDataModelForFact(fact);
-    if (model.kind === "exponent-entry" && model.closedStructuralMantissa !== undefined) continue;
-    keys.add(stableStructuralExpressionSourceKey(fact));
-  }
-  for (const fact of decimalDisplayShapeFacts(shapes)) {
-    const model = x2ShapeDataModelForFact(fact);
-    const decimal = model.kind === "mantissa" && model.radix === "decimal"
-      ? model.normalizedDecimal
-      : model.kind === "exponent-entry" && model.mantissa.radix === "decimal"
-        ? model.normalizedDecimal
-        : undefined;
+  for (const fact of restoredDisplaySourceKeyShapeFacts(shapes)) {
+    const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
     if (decimal !== undefined && valueDecimals.has(decimal)) continue;
     keys.add(stableStructuralExpressionSourceKey(fact));
   }
   return keys;
+}
+
+function restoredDisplaySourceKeyShapeFacts(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = decimalDisplayShapeFacts(input);
+  for (const fact of canonicalStructuralRestoreSourceKeyFacts(input)) output.add(fact);
+  return output;
 }
 
 function normalizedDecimalValueSet(values: X2ValueSet | undefined): Set<string> {

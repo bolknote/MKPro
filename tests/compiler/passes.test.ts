@@ -63,6 +63,7 @@ import {
   x2ShapeDataModelForFact,
   x2ShapeFactRestoredVisibleDecimal,
   x2ShapeFactSafety,
+  x2RestoredDisplayShapeFacts,
   x2ShapeSetHasOnlyDotSafeStructuralMantissas,
   x2ShapeSetRestoredVisibleDecimals,
   x2ShapeSetsHaveSameDecimalDisplayShape,
@@ -1392,6 +1393,18 @@ describe("ir passes on synthetic programs", () => {
   });
 
   it("x2 shape algebra compares restored display shapes across decimal and structural facts", () => {
+    expect(x2ShapeStateText(x2RestoredDisplayShapeFacts(new Set(["exponent:100000000:2:decimal"])))).toEqual([
+      "exponent:1:10:decimal",
+    ]);
+    expect(x2ShapeStateText(x2RestoredDisplayShapeFacts(new Set(["hex-exponent:Г:2"])))).toEqual([
+      "hex-exponent:Г:2",
+      "hex:Г00:mantissa",
+    ]);
+    expect(x2ShapeStateText(x2RestoredDisplayShapeFacts(new Set(["super-exponent:FA:2"])))).toEqual([
+      "hex:FA00:mantissa",
+      "super-exponent:FA:2",
+    ]);
+    expect(x2ShapeStateText(x2RestoredDisplayShapeFacts(new Set(["mantissa:0.5:decimal"])))).toEqual([]);
     expect(
       x2ShapeSetsHaveSameRestoredDisplayShape(
         new Set(["exponent:100:0:decimal"]),
