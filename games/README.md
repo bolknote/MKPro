@@ -3,6 +3,6 @@
 All game program `.txt` files and markdown description `.md` files are stored directly in this `games` folder.
 Unified index: [manifest.tsv](./manifest.tsv)
 
-Columns: `program`, `description`, `title`, `author`, `source_url`
+Columns: `program`, `description`, `title`, `author`, `real_name`, `source_url`
 
-Total programs: 323.
+Total programs: 358.
