@@ -2612,7 +2612,8 @@ export function x2ValueSetHasIntersection(left: X2ValueSet | undefined, right: X
 }
 
 export function x2ValueSetHasFact(input: X2ValueSet | undefined, fact: X2ValueFact): boolean {
-  return canonicalX2ValueSet(input).has(canonicalX2ValueFact(fact));
+  const canonical = canonicalX2ValueFactIfValid(fact);
+  return canonical !== undefined && canonicalX2ValueSet(input).has(canonical);
 }
 
 export function x2ValueSetHasRegister(input: X2ValueSet | undefined, register: RegisterName): boolean {
@@ -7122,28 +7123,47 @@ function stableExpressionValueFact(opcode: string, source: string): X2ValueFact 
 
 function stableExpressionSourceKey(fact: X2ValueFact): string | undefined {
   if (fact.startsWith("reg:")) return fact;
-  if (fact.startsWith("expr-key:")) return canonicalStableExpressionValueFact(fact);
+  if (fact.startsWith("expr-key:")) return canonicalStableExpressionValueFactIfValid(fact);
   const decimal = computationDecimalValueFromFact(fact);
   if (decimal !== undefined) return decimalValueFact(decimal, "normalized");
   return undefined;
 }
 
 function canonicalStableExpressionValueFact(fact: X2ValueFact): X2ValueFact {
+  return canonicalStableExpressionValueFactIfValid(fact) ?? fact;
+}
+
+function canonicalStableExpressionValueFactIfValid(fact: X2ValueFact): X2ValueFact | undefined {
   if (!fact.startsWith("expr-key:")) return fact;
+  if (stableExpressionValueFactHasInvalidShapeSource(fact)) return undefined;
   return fact.replace(/shape:([^,()]+)/gu, (source, raw: string) => {
     const canonical = canonicalStableShapeSourceKey(raw as X2ShapeFact);
     return canonical ?? source;
   }) as X2ValueFact;
 }
 
+function stableExpressionValueFactHasInvalidShapeSource(fact: X2ValueFact): boolean {
+  for (const match of fact.matchAll(/shape:([^,()]+)/gu)) {
+    if (canonicalStableShapeSourceKey(match[1] as X2ShapeFact) === undefined) return true;
+  }
+  return false;
+}
+
 function canonicalX2ValueSet(input: X2ValueSet | undefined): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
-  for (const fact of input ?? []) output.add(canonicalX2ValueFact(fact));
+  for (const fact of input ?? []) {
+    const canonical = canonicalX2ValueFactIfValid(fact);
+    if (canonical !== undefined) output.add(canonical);
+  }
   return output;
 }
 
 function canonicalX2ValueFact(fact: X2ValueFact): X2ValueFact {
-  return fact.startsWith("expr-key:") ? canonicalStableExpressionValueFact(fact) : fact;
+  return canonicalX2ValueFactIfValid(fact) ?? fact;
+}
+
+function canonicalX2ValueFactIfValid(fact: X2ValueFact): X2ValueFact | undefined {
+  return fact.startsWith("expr-key:") ? canonicalStableExpressionValueFactIfValid(fact) : fact;
 }
 
 function canonicalStableShapeSourceKey(fact: X2ShapeFact): string | undefined {
@@ -8506,13 +8526,15 @@ function sameX2StructuralEntryState(
 
 function addX2Value(input: X2ValueSet, value: X2ValueFact): Set<X2ValueFact> {
   const output = canonicalX2ValueSet(input);
-  output.add(canonicalX2ValueFact(value));
+  const canonical = canonicalX2ValueFactIfValid(value);
+  if (canonical !== undefined) output.add(canonical);
   return output;
 }
 
 function addStoredX2ValueAlias(input: X2ValueDataflowState, value: X2ValueFact): Set<X2ValueFact> {
-  const canonicalValue = canonicalX2ValueFact(value);
+  const canonicalValue = canonicalX2ValueFactIfValid(value);
   const output = canonicalX2ValueSet(input.x2);
+  if (canonicalValue === undefined) return output;
   output.delete(canonicalValue);
   if (x2ValueSetHasIntersection(input.x, input.x2)) output.add(canonicalValue);
   return output;
@@ -8520,7 +8542,8 @@ function addStoredX2ValueAlias(input: X2ValueDataflowState, value: X2ValueFact):
 
 function removeX2Value(input: X2ValueSet, value: X2ValueFact): Set<X2ValueFact> {
   const output = canonicalX2ValueSet(input);
-  output.delete(canonicalX2ValueFact(value));
+  const canonical = canonicalX2ValueFactIfValid(value);
+  if (canonical !== undefined) output.delete(canonical);
   return output;
 }
 

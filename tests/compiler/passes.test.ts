@@ -2971,6 +2971,27 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueSetHasFact(new Set([canonical]), raw)).toBe(true);
   });
 
+  it("x2 value dataflow drops stable expr keys with invalid shape operands", () => {
+    const invalidSuper = "expr-key:16(shape:super:8A)" as X2ValueFact;
+    const invalidHex = "expr-key:16(shape:hex:8Ж:mantissa)" as X2ValueFact;
+    const valid = "expr-key:16(shape:super:FA)" as X2ValueFact;
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([invalidSuper, invalidHex, valid]),
+      x2: new Set<X2ValueFact>([invalidSuper, invalidHex, valid]),
+      memory: {
+        "2": new Set<X2ValueFact>([invalidSuper, valid]),
+      },
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(legacy, plain(0x31, "К |x|"), "normal", { trackRegisterMemory: true }, 0);
+
+    expect(x2ValueSetHasFact(new Set([invalidSuper]), invalidSuper)).toBe(false);
+    expect(x2ValueSetHasIntersection(new Set([invalidHex]), new Set([invalidHex]))).toBe(false);
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(expr-key:16(shape:super:FA))");
+    expect(x2ValueStateText(result?.x)).not.toContain("expr-key:31(expr-key:16(shape:super:8A))");
+    expect(x2ValueStateText(result?.x)).not.toContain("expr-key:31(expr-key:16(shape:hex:8Ж:mantissa))");
+  });
+
   it("x2 value dataflow canonicalizes stable expr survivors after selector mutation", () => {
     const raw = "expr-key:16(shape:hex-exponent:Г:2)" as X2ValueFact;
     const canonical = "expr-key:16(shape:hex:Г00:mantissa)" as X2ValueFact;
