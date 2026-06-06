@@ -2813,6 +2813,21 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(result?.x)).not.toContain("expr-key:16(shape:exponent:1:8:decimal)");
   });
 
+  it("x2 value dataflow uses restored structural mantissas as stable expr keys", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const Г"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0x16, "F e^x"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["hex-exponent:Г:2"]);
+    expect(x2ValueStateText(states[4]?.x)).toContain("expr-key:16(shape:hex:Г00:mantissa)");
+    expect(x2ValueStateText(states[4]?.x)).not.toContain("expr-key:16(shape:hex-exponent:Г:2)");
+  });
+
   it("x2 value dataflow derives unary decimal facts from shape-only decimal mantissas", () => {
     const shapeOnly: X2ValueDataflowState = {
       x: new Set(),

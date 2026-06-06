@@ -848,9 +848,13 @@ Display rewrites are separated into strategy selection + body lowering.
   operation cannot prove an exact decimal result. When a
   unary operation does prove an exact result from the restored-visible decimal
   display, the result is recorded as a normal decimal value while the original
-  display-shape source still is not treated as a dot-safe X2 alias. Hex and
-  super displays are not promoted to decimal shapes without a separate display
-  proof. For concrete decimal `X`, `К {x}` also
+  display-shape source still is not treated as a dot-safe X2 alias. Stable
+  expression keys for structural exponent-entry sources prefer the proved
+  restored mantissa when closure is available (`hex:Г; ВП 2` keys as
+  `shape:hex:Г00:mantissa`); the raw `hex-exponent:*:*`/`super-exponent:*:*`
+  source key remains only as a fallback when no closed structural mantissa can
+  be proved. Hex and super displays are not promoted to decimal shapes without
+  a separate display proof. For concrete decimal `X`, `К {x}` also
   seeds the exact normalized fractional decimal value in visible X while
   preserving the old X2 fact; its display shape is kept as a separate
   exponent-entry fact for non-zero fractions (`0.2` as

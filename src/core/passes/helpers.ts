@@ -7061,6 +7061,8 @@ function stableExpressionDisplayShapeSourceKeys(
   const keys = new Set<string>();
   const valueDecimals = normalizedDecimalValueSet(values);
   for (const fact of x2StructuralRestoreShapeFacts(shapes)) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind === "exponent-entry" && model.closedStructuralMantissa !== undefined) continue;
     keys.add(stableStructuralExpressionSourceKey(fact));
   }
   for (const fact of decimalDisplayShapeFacts(shapes)) {
