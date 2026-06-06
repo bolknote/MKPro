@@ -1,7 +1,7 @@
 # Ханойская башня, вариант В. Хмелюка
 
 - Автор: В. Хмелюк
-- Источник: "Наука и жизнь", N12 за 1989 год, стр. 76-77; архив [pmk_nauka_i_zhizn.rar](file:///Users/bolk/Downloads/pmk_nauka_i_zhizn.rar)
+- Источник: "Наука и жизнь", N12 за 1989 год, стр. 76-77
 - Программа: [hanoyskaya-bashnya-khmelyuk.txt](hanoyskaya-bashnya-khmelyuk.txt)
 
 ## Описание

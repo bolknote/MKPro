@@ -1,7 +1,7 @@
 # Ханойская башня, вариант Ю. Карабанова
 
 - Автор: Ю. Карабанов
-- Источник: "Наука и жизнь", N12 за 1989 год, стр. 76; архив [pmk_nauka_i_zhizn.rar](file:///Users/bolk/Downloads/pmk_nauka_i_zhizn.rar)
+- Источник: "Наука и жизнь", N12 за 1989 год, стр. 76
 - Программа: [hanoyskaya-bashnya-karabanov.txt](hanoyskaya-bashnya-karabanov.txt)
 
 ## Описание

@@ -1,6 +1,6 @@
 # Electronic Fortune-Teller
 
-- Source: *Техника - молодежи*, No. 7, 1985, article «Генератор сюжетов»; local archive `/Users/bolk/Downloads/pmk_tehnika-molodezhi.rar`
+- Source: *Техника - молодежи*, No. 7, 1985, article «Генератор сюжетов»
 - Program: [electronic-fortune-teller.txt](electronic-fortune-teller.txt)
 - Listing restored from DjVu scan with macOS Vision OCR and manual table check.
 

@@ -1,7 +1,7 @@
 # Ханойская башня, вариант Ю. Сивкова
 
 - Автор: Ю. Сивков
-- Источник: "Наука и жизнь", N12 за 1989 год, стр. 75-76; архив [pmk_nauka_i_zhizn.rar](file:///Users/bolk/Downloads/pmk_nauka_i_zhizn.rar)
+- Источник: "Наука и жизнь", N12 за 1989 год, стр. 75-76
 - Программа: [hanoyskaya-bashnya-sivkov.txt](hanoyskaya-bashnya-sivkov.txt)
 
 ## Описание

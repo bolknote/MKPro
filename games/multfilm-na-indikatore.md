@@ -1,7 +1,7 @@
 # Мультфильм на индикаторе
 
 - Автор: К. Котин
-- Источник: "Наука и жизнь", N6 за 1989 год, стр. 106; архив [pmk_nauka_i_zhizn.rar](file:///Users/bolk/Downloads/pmk_nauka_i_zhizn.rar)
+- Источник: "Наука и жизнь", N6 за 1989 год, стр. 106
 - Программа: [multfilm-na-indikatore.txt](multfilm-na-indikatore.txt)
 
 ## Описание

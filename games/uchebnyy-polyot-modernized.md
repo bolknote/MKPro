@@ -2,7 +2,7 @@
 
 - Author: Sergey Hramov
 - Based on: Sergey Chuprin's `Training Flight`
-- Source: local archive `uchebnyj_polet.zip`
+- Source: modernized listing by Сергей Храмов, based on Сергей Чуприн's "Учебный полёт".
 - Program: [uchebnyy-polyot-modernized.txt](uchebnyy-polyot-modernized.txt)
 
 ## Description

@@ -1,7 +1,7 @@
 # Fox Hunt 3 (For Poli)
 
 - Author: Sergey Hramov
-- Source: local archive `ohota_na_lis.zip`
+- Source: Poli variant by Сергей Храмов.
 - Program: [okhota-na-lis-3-poli.txt](okhota-na-lis-3-poli.txt)
 
 ## Description

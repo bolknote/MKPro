@@ -1,7 +1,7 @@
 # Fox Hunt 4 (Hramov)
 
 - Author: Sergey Hramov
-- Source: local archive `ohota_na_lis.zip`
+- Source: four-field variant by Сергей Храмов.
 - Program: [okhota-na-lis-4-hramov.txt](okhota-na-lis-4-hramov.txt)
 
 ## Description

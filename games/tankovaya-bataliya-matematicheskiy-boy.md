@@ -1,7 +1,7 @@
 # Танковая баталия, математический бой
 
 - Автор: Сергей Храмов
-- Источник: архив [8_Танковая+баталия.zip](file:///Users/bolk/Downloads/8_Танковая+баталия.zip), PDF "Танковая баталия", редакция 2016
+- Источник: PDF "Танковая баталия", редакция 2016
 - Программа: [tankovaya-bataliya-matematicheskiy-boy.txt](tankovaya-bataliya-matematicheskiy-boy.txt)
 
 ## Описание

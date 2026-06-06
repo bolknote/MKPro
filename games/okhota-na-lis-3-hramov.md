@@ -1,7 +1,7 @@
 # Fox Hunt 3 (Hramov)
 
 - Author: Sergey Hramov
-- Source: local archive `ohota_na_lis.zip`
+- Source: variant by Сергей Храмов.
 - Program: [okhota-na-lis-3-hramov.txt](okhota-na-lis-3-hramov.txt)
 
 ## Description

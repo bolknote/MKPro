@@ -1,7 +1,7 @@
 # Perpetual Calendar
 
 - Authors: I. D. Danilov and G. V. Slavin
-- Source: local archive `vechnyj_kalendar.zip`; originally published in `Five Evenings with a Microcalculator`
+- Source: originally published in `Five Evenings with a Microcalculator`
 - Program: [vechnyy-kalendar.txt](vechnyy-kalendar.txt)
 
 ## Description

@@ -1,7 +1,7 @@
 # Самолет
 
 - Author: Владимир Лозовой
-- Source: *Техника - молодежи*, No. 11, 1986; local archive `/Users/bolk/Downloads/pmk_tehnika-molodezhi.rar`
+- Source: *Техника - молодежи*, No. 11, 1986
 - Program: [samolet-tm-1986.txt](samolet-tm-1986.txt)
 - Listing restored from DjVu scan with macOS Vision OCR and manual table check.
 

@@ -1,7 +1,7 @@
 # Fox Hunt 1 (Danilov-Slavin)
 
 - Authors: I. D. Danilov and G. V. Slavin
-- Source: local archive `ohota_na_lis.zip`
+- Source: MK-61 adaptation by Сергей Храмов, based on I. D. Danilov and G. V. Slavin's "Fox Hunt".
 - Program: [okhota-na-lis-1-danilov-slavin.txt](okhota-na-lis-1-danilov-slavin.txt)
 
 ## Description

@@ -1,7 +1,7 @@
 # Fox Hunt 4 (For Poli)
 
 - Author: Sergey Hramov
-- Source: local archive `ohota_na_lis.zip`
+- Source: four-field Poli variant by Сергей Храмов.
 - Program: [okhota-na-lis-4-poli.txt](okhota-na-lis-4-poli.txt)
 
 ## Description

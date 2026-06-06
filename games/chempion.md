@@ -1,7 +1,7 @@
 # Чемпион
 
 - Author: КЭИ
-- Source: *Техника - молодежи*, No. 11, 1986, «Требуется выигрышная стратегия»; local archive `/Users/bolk/Downloads/pmk_tehnika-molodezhi.rar`
+- Source: *Техника - молодежи*, No. 11, 1986, «Требуется выигрышная стратегия»
 - Program: [chempion.txt](chempion.txt)
 - Listing restored from DjVu scan with macOS Vision OCR and manual table check.
 - This file includes the article's MK-61/MK-52 patch.

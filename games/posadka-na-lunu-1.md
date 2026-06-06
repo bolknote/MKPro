@@ -1,7 +1,7 @@
 # Landing on the Moon 1
 
 - Author: unknown
-- Source: local archive `posadka_na_lunu.zip`
+- Source: "Посадка на Луну", program 1.
 - Program: [posadka-na-lunu-1.txt](posadka-na-lunu-1.txt)
 
 ## Description

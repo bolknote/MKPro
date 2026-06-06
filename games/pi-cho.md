@@ -1,7 +1,7 @@
 # Пи-чо
 
 - Author: А. В. Раков
-- Source: *Техника - молодежи*, No. 7, 1988, «Вверх по лестнице, бегущей вбок»; local archive `/Users/bolk/Downloads/pmk_tehnika-molodezhi.rar`
+- Source: *Техника - молодежи*, No. 7, 1988, «Вверх по лестнице, бегущей вбок»
 - Program: [pi-cho.txt](pi-cho.txt)
 - Listing restored from DjVu scan with macOS Vision OCR and manual table check.
 - This file includes the article's MK-61/MK-52 patch.

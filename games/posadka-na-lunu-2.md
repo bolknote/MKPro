@@ -1,7 +1,7 @@
 # Landing on the Moon 2
 
 - Author: unknown
-- Source: local archive `posadka_na_lunu.zip`
+- Source: "Посадка на Луну", program 2.
 - Program: [posadka-na-lunu-2.txt](posadka-na-lunu-2.txt)
 
 ## Description

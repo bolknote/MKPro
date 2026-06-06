@@ -1,7 +1,7 @@
 # Термодирижабль
 
 - Author: Ю. Пшенник
-- Source: *Техника - молодежи*, No. 10, 1986; local archive `/Users/bolk/Downloads/pmk_tehnika-molodezhi.rar`
+- Source: *Техника - молодежи*, No. 10, 1986
 - Program: [termodirizhabl.txt](termodirizhabl.txt)
 - Listing restored from DjVu scan with macOS Vision OCR and manual table check.
 
