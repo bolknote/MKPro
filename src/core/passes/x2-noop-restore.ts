@@ -7,9 +7,8 @@ import {
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
-  x2CanUseDotRestoreAt,
+  x2CanUseSourceDotRestoreAt,
   x2HasSignRestoreGapBeforeVp,
-  x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2SyncCanExposeContextSensitiveRestore,
   x2HasOnlyRestoreGapBeforeVp,
   x2StateHasSameDotRestoreValueInXAndX2,
@@ -41,24 +40,18 @@ const run: IrPassFn = (ops) => {
     if (!isPlainDot(op)) continue;
     if (isDisplayFocusSensitive(op)) continue;
     const state = valueStates[index];
-    if (
-      !x2CanUseDotRestoreAt(
-        ops,
-        index,
-        state,
-        dotSafeStates[index] === true,
-        immediateSyncStates[index] === true,
-        directReturnContext,
-      ) &&
-      !(
-        x2StateHasSameNormalizedDecimalInXAndX2(state) &&
-        x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext)
-      ) &&
-      !(
-        x2StateHasSameRestoredVisibleDecimalInXAndX2(state) &&
-        x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext)
-      )
-    ) continue;
+    const sourceProvesFreeStandingRestore =
+      x2StateHasSameNormalizedDecimalInXAndX2(state) ||
+      x2StateHasSameRestoredVisibleDecimalInXAndX2(state);
+    if (!x2CanUseSourceDotRestoreAt(
+      ops,
+      index,
+      state,
+      dotSafeStates[index] === true,
+      immediateSyncStates[index] === true,
+      sourceProvesFreeStandingRestore,
+      directReturnContext,
+    )) continue;
     if (!isDotSafeValueContext(state)) continue;
     if (
       x2StateHasUnsafeDotRestoreShapeX2(state) &&

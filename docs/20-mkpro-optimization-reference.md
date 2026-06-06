@@ -1376,11 +1376,15 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     only become structural when the first digit proves a non-decimal display
     shape. The non-empty-command proof is transient: another executable command
     must establish its own source.
-    The helper's restore-gap scanner is shared with `x2-noop-restore`,
-    `x2-hidden-temp-restore`, and `x2-literal-restore`, so all three passes use
-    the same marker-label/display-sensitive/role safety rules before deciding that a
+    The helper's restore-gap scanner and source-backed `.`-restore admission are
+    shared with `x2-noop-restore`, `x2-hidden-temp-restore`, and
+    `x2-literal-restore`, so all three passes use the same
+    marker-label/display-sensitive/role safety rules before deciding that a
     `КНОП`/`К1`/`К2`/`/-/` run, including an empty-only run, can be ignored
-    before `ВП`. With a direct-return context, the same scanner can cross
+    before `ВП` or before a proved source restore. The shared admission only
+    proves that `.` is available as a restore mechanism; each pass still proves
+    the concrete value, visible decimal, or structural source separately. With a
+    direct-return context, the same scanner can cross
     direct or proved-indirect `ПП` helper chains whose bodies are only nested
     transparent helper calls and restore-transparent empty/address cells;
     helpers that store, branch, restore X2, recurse, or expose another entry

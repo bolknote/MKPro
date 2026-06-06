@@ -12,9 +12,8 @@ import {
   labelIndexes,
   analyzeX2StackEffect,
   replacingNumberEntryCanExposeStackLift,
-  x2CanUseDotRestoreAt,
+  x2CanUseSourceDotRestoreAt,
   x2HasOnlyRestoreGapBeforeVp,
-  x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2ValueSetHasRestoredVisibleDecimal,
@@ -401,26 +400,22 @@ const run: IrPassFn = (ops) => {
       : x2ValueShapeSetHasRestoredVisibleDecimal(state?.x2, state?.x2Shape, runAtIndex.x2Fact);
     const visibleDecimalX2Fact = visibleDecimalX2ValueFact ||
       (visibleDecimalX2ShapeFact && !x2StateHasUnsafeDotRestoreShapeX2(state));
+    const sourceProvesFreeStandingRestore = runAtIndex !== undefined &&
+      (
+        x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) ||
+        visibleDecimalX2Fact
+      );
     if (
       runAtIndex !== undefined &&
       isFreshClosedDecimalEntry(state) &&
-      (
-        x2CanUseDotRestoreAt(
-          ops,
-          index,
-          state,
-          dotSafeStates[index] === true,
-          immediateSyncStates[index] === true,
-          directReturnContext,
-        ) ||
-        (
-          x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) &&
-          x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext)
-        ) ||
-        (
-          visibleDecimalX2Fact &&
-          x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext)
-        )
+      x2CanUseSourceDotRestoreAt(
+        ops,
+        index,
+        state,
+        dotSafeStates[index] === true,
+        immediateSyncStates[index] === true,
+        sourceProvesFreeStandingRestore,
+        directReturnContext,
       ) &&
       (exactX2Fact || visibleDecimalX2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&

@@ -16,10 +16,9 @@ import {
   knownIndirectMemoryTarget,
   removableRecallValueRegister,
   removingRecallCanExposeX2Restore,
-  x2CanUseDotRestoreAt,
+  x2CanUseSourceDotRestoreAt,
   x2HasSignRestoreGapBeforeVp,
   x2HasOnlyRestoreGapBeforeVp,
-  x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2ShapeSetsHaveSameDotSafeDecimal,
   x2ShapeSetsHaveSameDotSafeStructuralMantissa,
   x2ShapeSetsHaveSameRestoredDisplayShape,
@@ -103,22 +102,19 @@ const run: IrPassFn = (ops) => {
       !sourceRestoresSameDotSafeStructuralShape &&
       x2StateHasUnsafeDotRestoreShapeX2(x2ValueStates[index])
     ) return op;
-    const canUseDotRestore = x2CanUseDotRestoreAt(
+    const sourceProvesFreeStandingRestore = sourceAlreadyDotSafe ||
+      sourceRestoresSameVisibleDecimal ||
+      sourceRestoresSameDotSafeDecimalShape ||
+      sourceRestoresSameDotSafeStructuralShape;
+    const canUseSourceDotRestore = x2CanUseSourceDotRestoreAt(
       ops,
       index,
       x2ValueStates[index],
       dotSafeStates[index] === true,
       immediateSyncStates[index] === true,
+      sourceProvesFreeStandingRestore,
       directReturnContext,
     );
-    const canUseNormalizedDecimalEscape = sourceAlreadyDotSafe &&
-      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext);
-    const canUseVisibleDecimalEscape = sourceRestoresSameVisibleDecimal &&
-      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext);
-    const canUseDotSafeDecimalShapeEscape = sourceRestoresSameDotSafeDecimalShape &&
-      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext);
-    const canUseDotSafeStructuralEscape = sourceRestoresSameDotSafeStructuralShape &&
-      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, directReturnContext);
     const hasOnlyRestoreGapBeforeVp = x2HasOnlyRestoreGapBeforeVp(ops, index + 1, directReturnContext);
     const canUseVpSourceEscape = sourceAlreadyDotSafe &&
       hasOnlyRestoreGapBeforeVp &&
@@ -130,11 +126,7 @@ const run: IrPassFn = (ops) => {
         )
       );
     if (
-      !canUseDotRestore &&
-      !canUseNormalizedDecimalEscape &&
-      !canUseVisibleDecimalEscape &&
-      !canUseDotSafeDecimalShapeEscape &&
-      !canUseDotSafeStructuralEscape &&
+      !canUseSourceDotRestore &&
       !canUseVpSourceEscape
     ) {
       return op;

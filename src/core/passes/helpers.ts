@@ -3171,6 +3171,22 @@ export function x2CanUseDotRestoreAt(
   return dotSafe || immediateSync || x2CanUseClosedSignChangeDotSourceAt(ops, index, state, context);
 }
 
+export function x2CanUseSourceDotRestoreAt(
+  ops: readonly IrOp[],
+  index: number,
+  state: X2ValueDataflowState | undefined,
+  dotSafe: boolean,
+  immediateSync: boolean,
+  sourceProvesFreeStandingRestore: boolean,
+  context?: DirectReturnAnalysisContext,
+): boolean {
+  return x2CanUseDotRestoreAt(ops, index, state, dotSafe, immediateSync, context) ||
+    (
+      sourceProvesFreeStandingRestore &&
+      x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, context)
+    );
+}
+
 export function x2CanUseClosedSignChangeDotSourceAt(
   ops: readonly IrOp[],
   index: number,

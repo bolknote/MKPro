@@ -43,6 +43,7 @@ import {
   transferX2RegisterStateForEdge,
   transferX2ValueStateForEdge,
   x2CanUseClosedSignChangeDotSourceAt,
+  x2CanUseSourceDotRestoreAt,
   x2CanonicalShapeFact,
   x2ClosedStructuralExponentMantissaShapeFact,
   x2ExponentMantissaSignChangedShapeFact,
@@ -4818,6 +4819,29 @@ describe("ir passes on synthetic programs", () => {
         directReturnAnalysisContext(observingGap),
       ),
     ).toBe(false);
+  });
+
+  it("x2 source dot-restore admission shares transparent return-helper crossing", () => {
+    const transparentGap: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x55, "К1"),
+      call("transparent"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const states = computeX2ValueStates(transparentGap);
+    const context = directReturnAnalysisContext(transparentGap);
+
+    expect(x2CanUseSourceDotRestoreAt(transparentGap, 10, states[10], false, false, true)).toBe(false);
+    expect(x2CanUseSourceDotRestoreAt(transparentGap, 10, states[10], false, false, false, context)).toBe(false);
+    expect(x2CanUseSourceDotRestoreAt(transparentGap, 10, states[10], false, false, true, context)).toBe(true);
   });
 
   it("x2 normalized decimal restore-gap crosses nested transparent return helper chains", () => {
