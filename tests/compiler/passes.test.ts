@@ -71,12 +71,14 @@ import {
   x2StructuralMantissaConcatShapeFacts,
   x2StructuralMantissaShiftShapeFact,
   x2StatesHaveSameVpEntrySource,
+  x2StatesHaveSameVpEntrySignSource,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueSetsHaveSameRestoredVisibleDecimal,
   type X2ShapeFact,
   type X2ShapeSet,
   type X2ValueDataflowState,
+  type X2ValueFact,
   type X2ValueSet,
 } from "../../src/core/passes/helpers.ts";
 import type { IrOp, RegisterName } from "../../src/core/types.ts";
@@ -1511,6 +1513,38 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StatesHaveSameVpEntrySource(decimalSource, structuralSource)).toBe(false);
   });
 
+  it("x2 VP source proof compares exact decimal display shapes without normalizing entry text", () => {
+    const base = computeX2ValueStates([halt()])[0]!;
+    const exactMantissaSource = {
+      ...base,
+      vpEntryMantissa: new Set(["100"]),
+    };
+    const exactExponentDisplaySource = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+    };
+    const leadingZeroSource = {
+      ...base,
+      vpEntryMantissa: new Set(["02"]),
+    };
+    const normalizedDisplaySource = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["mantissa:2:decimal"]),
+    };
+    const signSource = {
+      ...base,
+      vpEntrySignMantissa: new Set(["100"]),
+    };
+
+    expect(x2StatesHaveSameVpEntrySource(exactMantissaSource, exactExponentDisplaySource)).toBe(true);
+    expect(x2StatesHaveSameVpEntrySignSource(signSource, exactExponentDisplaySource)).toBe(true);
+    expect(x2StatesHaveSameVpEntrySource(leadingZeroSource, normalizedDisplaySource)).toBe(false);
+    expect(x2StatesHaveSameVpEntrySignSource({
+      ...base,
+      vpEntrySignMantissa: new Set(["02"]),
+    }, normalizedDisplaySource)).toBe(false);
+  });
+
   it("x2 shape algebra toggles mantissa and exponent signs structurally", () => {
     expect(x2MantissaSignChangedShapeFact("mantissa:02:decimal")).toBe("mantissa:-02:decimal");
     expect(x2MantissaSignChangedShapeFact("mantissa:0:decimal")).toBe("mantissa:-0:decimal");
@@ -2200,6 +2234,26 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[3]?.xShape)).toEqual(["exponent:1:8:decimal"]);
     expect(x2ValueStateText(states[4]?.x)).toContain("expr-key:31(shape:exponent:1:8:decimal)");
     expect(x2ValueStateText(states[4]?.x)).not.toContain("expr-key:31(decimal:100000000:normalized)");
+  });
+
+  it("x2 value dataflow seeds stable expr keys from shape-only decimal mantissas", () => {
+    const shapeOnly: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const valueBacked: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:100:normalized"]),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const shapeOnlyResult = transferX2ValueStateForEdge(shapeOnly, plain(0x31, "К |x|"), "normal", {}, 0);
+    const valueBackedResult = transferX2ValueStateForEdge(valueBacked, plain(0x31, "К |x|"), "normal", {}, 0);
+
+    expect(x2ValueStateText(shapeOnlyResult?.x)).toContain("expr-key:31(shape:mantissa:100:decimal)");
+    expect(x2ValueStateText(valueBackedResult?.x)).not.toContain("expr-key:31(shape:mantissa:100:decimal)");
   });
 
   it("x2 value dataflow seeds stable expr keys from constant stack producers", () => {
@@ -3524,15 +3578,15 @@ describe("ir passes on synthetic programs", () => {
     const sameExponent = transferX2ValueStateForEdge(sameExponentState, plain(0x0b, "/-/"), "normal");
     const equivalentDisplay = transferX2ValueStateForEdge(equivalentDisplayState, plain(0x0b, "/-/"), "normal");
 
-    expect(x2ValueStateText(sameExponent?.x)).toEqual([]);
-    expect(x2ValueStateText(sameExponent?.x2)).toEqual([]);
+    expect(x2ValueStateText(sameExponent?.x)).toEqual(["expr-key:0B(shape:exponent:1:8:decimal)"]);
+    expect(x2ValueStateText(sameExponent?.x2)).toEqual(["expr-key:0B(shape:exponent:1:8:decimal)"]);
     expect(x2ShapeStateText(sameExponent?.xShape)).toEqual(["exponent:-1:8:decimal"]);
     expect(x2ShapeStateText(sameExponent?.x2Shape)).toEqual(["exponent:-1:8:decimal"]);
     expect(x2ShapeSetSafety(sameExponent?.x2Shape)).toBe("errorProne");
     expect(x2StateHasUnsafeDotRestoreShapeX2(sameExponent)).toBe(true);
 
-    expect(x2ValueStateText(equivalentDisplay?.x)).toEqual([]);
-    expect(x2ValueStateText(equivalentDisplay?.x2)).toEqual([]);
+    expect(x2ValueStateText(equivalentDisplay?.x)).toEqual(["expr-key:0B(shape:mantissa:100:decimal)"]);
+    expect(x2ValueStateText(equivalentDisplay?.x2)).toEqual(["expr-key:0B(shape:mantissa:100:decimal)"]);
     expect(x2ShapeStateText(equivalentDisplay?.xShape)).toEqual([
       "exponent:-100:0:decimal",
       "mantissa:-100:decimal",
@@ -5039,6 +5093,22 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["mantissa:-02:decimal"]);
   });
 
+  it("x2 value dataflow models closed sign-change from exact decimal display-shape equality", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const next = transferX2ValueStateForEdge(state, plain(0x0b, "/-/"), "normal", {}, 0);
+
+    expect(x2ValueStateText(next?.x)).toEqual(["decimal:-100:normalized"]);
+    expect(x2ValueStateText(next?.x2)).toEqual(["decimal:-100:normalized"]);
+    expect(x2ShapeStateText(next?.xShape)).toEqual(["mantissa:-100:decimal"]);
+    expect(x2ShapeStateText(next?.x2Shape)).toEqual(["mantissa:-100:decimal"]);
+  });
+
   it("x2 value dataflow keeps sign-change in exponent-entry state", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -5616,6 +5686,63 @@ describe("ir passes on synthetic programs", () => {
       inX: true,
       x2SyncRegister: undefined,
       x2SyncValue: false,
+    });
+  });
+
+  it("recall value proof uses decimal display shape equality as a VP-only X2 sync", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      entry: { kind: "closed" },
+      memory: {},
+      shapeMemory: {
+        "2": new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      },
+    };
+
+    expect(recallValueProof(recall("2"), state)).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+      x2SyncVpShape: true,
+    });
+  });
+
+  it("recall removal preserves immediate VP context through VP-only decimal shape sync", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      entry: { kind: "closed" },
+      vpEntryMantissa: new Set(["100"]),
+      memory: {},
+      shapeMemory: {
+        "2": new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      },
+    };
+
+    expect(analyzeRecallRemoval(program, 0, undefined, state)).toMatchObject({
+      redundantSyncValue: false,
+      redundantSyncShape: false,
+      x2SyncRedundant: false,
+      exposesStackLift: false,
+      exposesX2Restore: false,
+      removable: true,
+      valueProof: {
+        register: "2",
+        inX: true,
+        x2SyncValue: false,
+        x2SyncVpShape: true,
+      },
     });
   });
 

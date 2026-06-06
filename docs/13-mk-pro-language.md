@@ -1312,7 +1312,14 @@ The pipeline currently contains:
   visible `X` and hidden X2, closed-context `/-/` still toggles that display
   shape (`exponent:100:0:decimal` becomes `exponent:-100:0:decimal` plus the
   visible `mantissa:-100:decimal` display), but it does not invent a decimal
-  value fact or a dot-safe restore source. The fact spelling is
+  value fact or a dot-safe restore source. It does seed the same stable
+  sign-change expression key (`expr-key:0B(shape:...)`) used by structural
+  shape-only sign toggles, so repeated display-shaped `/-/` computations can be
+  matched by hidden-temp dataflow after an explicit X2 sync. The same exact
+  display-shape proof also works when one side is an ordinary mantissa display
+  and the other side is an exponent-display shape (`mantissa:100:decimal` and
+  `exponent:100:0:decimal`), while the older raw-X2 path still preserves
+  leading-zero hidden forms such as visible `2` with hidden `02`. The fact spelling is
   normalization-aware: `12` produces the shared fact
   `decimal:12:normalized`, while `02` produces `decimal:2:normalized` in `X`
   and `decimal:02:unnormalized` in `X2`, so a restore cannot accidentally treat
@@ -1447,9 +1454,12 @@ The pipeline currently contains:
   Structural exponent shapes remain shape-only, but the shared restore-shape
   algebra can close them back into structural mantissas for VP-source proofs
   (`hex:Г ВП 2` can feed a later `ВП` as `hex:Г00`). `ВП` source equality is
-  represented as source keys, so decimal mantissa sources and structural
-  restored-shape sources are compared by one algebra while remaining separate
-  safety classes. Structural mantissa forms
+  represented as source keys, so exact ordinary decimal mantissa sources,
+  decimal exponent-display shapes (`exponent:100:0:decimal` vs
+  `mantissa:100:decimal`), and structural restored-shape sources are compared
+  by one algebra while remaining separate safety classes. Leading-zero decimal
+  entry text such as `02` still stays text-sensitive and is not normalized to
+  the `2` source key. Structural mantissa forms
   seed a separate shape-only `ВП`-entry source after direct/proved recalls,
   closed-context `.` restores of structural hidden X2, direct/proved-indirect
   `В/О` return continuations, and path-sensitive direct-conditional fallthrough X2 syncs; the
@@ -1460,11 +1470,13 @@ The pipeline currently contains:
   splice passes a real model for structural `ВП ... /-/` sequences without
   promoting hex/super forms into ordinary decimal values. Such structural
   `ВП` context is not treated as a plain closed context by `.`/`/-/` rewrite
-  guards. Pure documented X computations can still use structural shapes as
-  stable expression operands: the key is built from the canonical restored
-  shape (`hex:Г ВП 2` and `hex:Г00` share the same operand key), but the result
-  stays an opaque `expr-key:*` value and does not make the source shape decimal
-  or dot-safe. Stable constant stack producers such as `F pi` use the same
+  guards. Pure documented X computations can still use restored-display shapes
+  as stable expression operands: the key is built from the canonical restored
+  shape (`hex:Г ВП 2` and `hex:Г00` share the same operand key), exact decimal
+  display shapes can seed the same opaque key model, and shape-only ordinary
+  decimal mantissas do so only when an equivalent `decimal:*:normalized` value
+  fact is not already present. The result stays an opaque `expr-key:*` value and
+  does not make the source shape decimal or dot-safe. Stable constant stack producers such as `F pi` use the same
   opaque key model (`expr-key:20()`) without assigning a decimal approximation
   to the constant. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are
@@ -1725,11 +1737,14 @@ The pipeline currently contains:
   same decimal fact or structural hex/super shape across an X2-preserving gap,
   the recall can be removed. A direct or proved stable-indirect decimal or
   structural recall immediately before `ВП` can also be removed when the active
-  decimal mantissa or structural `ВП` source already matches the recalled
-  source; a recall before a free-standing `/-/ ... ВП` gap can likewise be
-  removed when the store-backed decimal sign source, proved closed `X == X2`
-  normalized-decimal sign source, or proved shared structural hex/super source
-  shape already names that recalled source, including through transparent
+  decimal mantissa, exact decimal display-shape source, or structural `ВП`
+  source already matches the recalled source. This `ВП`-only shape sync is not
+  reported as a general redundant shape sync for `.`/`/-/`; it only preserves the
+  immediate exponent-entry context. A recall before a free-standing
+  `/-/ ... ВП` gap can likewise be removed when the store-backed decimal sign
+  source, proved closed `X == X2` normalized-decimal sign source, exact decimal
+  display-shape source, or proved shared structural hex/super source shape
+  already names that recalled source, including through transparent
   direct/proved-indirect return helpers.
   If a store closed that source, the recall stays. Structural
   shape sync proofs do not make a later

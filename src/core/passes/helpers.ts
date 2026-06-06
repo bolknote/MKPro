@@ -287,6 +287,7 @@ export interface RecallValueProof {
   readonly x2SyncRegister?: RegisterName | undefined;
   readonly x2SyncValue: boolean;
   readonly x2SyncShape?: true | undefined;
+  readonly x2SyncVpShape?: true | undefined;
 }
 
 export interface RecallRemovalAnalysis {
@@ -2984,13 +2985,14 @@ export function x2StatesHaveSameVpEntrySignSource(
   left: X2ValueDataflowState | undefined,
   right: X2ValueDataflowState | undefined,
 ): boolean {
+  if (left === undefined || right === undefined) return false;
   if (sameNonEmptyStringSet(
-    left === undefined ? undefined : vpEntrySignSourceMantissas(left),
+    vpEntrySignSourceMantissas(left),
     right?.vpEntryMantissa,
   )) return true;
-  return x2ShapeSetsHaveSameStructuralShape(
-    left === undefined ? undefined : vpEntrySignSourceShapes(left),
-    right?.vpEntryShape,
+  return stringSetsHaveIntersection(
+    vpEntryDisplaySourceKeys(vpEntrySignSourceMantissas(left), vpEntrySignSourceShapes(left)),
+    vpEntryDisplaySourceKeys(right.vpEntryMantissa, right.vpEntryShape),
   );
 }
 
@@ -3376,6 +3378,16 @@ export function recallAlreadySyncedInX2StructuralShape(
   return x2ShapeSetsHaveSameStructuralShape(state.x2Shape, shapes) ? register : undefined;
 }
 
+export function recallAlreadySyncedInX2VpShape(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  if (register === undefined || state === undefined) return undefined;
+  const shapes = recallVpEntryShapeSourceFacts(op, state, register);
+  return x2ShapeSetsHaveSameRestoredDisplayShape(state.x2Shape, shapes) ? register : undefined;
+}
+
 export function recallAlreadyInXDecimalMemory(
   op: IrOp,
   state: X2ValueDataflowState | undefined,
@@ -3418,6 +3430,16 @@ export function recallAlreadyInXStructuralShape(
   return x2ShapeSetsHaveSameStructuralShape(state.xShape, shapes) ? register : undefined;
 }
 
+export function recallAlreadyInXRestoredDisplayShape(
+  op: IrOp,
+  state: X2ValueDataflowState | undefined,
+): RegisterName | undefined {
+  const register = removableRecallValueRegister(op);
+  if (register === undefined || state === undefined) return undefined;
+  const shapes = recallVpEntryShapeSourceFacts(op, state, register);
+  return x2ShapeSetsHaveSameRestoredDisplayShape(state.xShape, shapes) ? register : undefined;
+}
+
 export function recallAlreadyInXDecimalDisplayShape(
   op: IrOp,
   state: X2ValueDataflowState | undefined,
@@ -3438,19 +3460,24 @@ export function recallValueProof(
     x2ValueSetHasRegister(state.x, register) ||
     recallAlreadyInXMemoryValue(op, state) === register ||
     recallAlreadyInXPreloadedDecimal(op, state) === register ||
-    recallAlreadyInXDecimalDisplayShape(op, state) === register ||
-    recallAlreadyInXStructuralShape(op, state) === register;
+    recallAlreadyInXRestoredDisplayShape(op, state) === register;
   const x2SyncRegister = recallAlreadySyncedInX2Value(op, state);
   const x2SyncValue =
     (recallAlreadySyncedInX2MemoryValue(op, state) ??
       recallAlreadySyncedInX2PreloadedDecimal(op, state)) !== undefined;
   const x2SyncShape = recallAlreadySyncedInX2StructuralShape(op, state) === register ? true : undefined;
+  const x2SyncVpShape =
+    x2SyncShape !== true &&
+      recallAlreadySyncedInX2VpShape(op, state) === register
+      ? true
+      : undefined;
   return {
     register,
     inX,
     x2SyncRegister,
     x2SyncValue,
     ...(x2SyncShape === true ? { x2SyncShape } : {}),
+    ...(x2SyncVpShape === true ? { x2SyncVpShape } : {}),
   };
 }
 
@@ -3500,19 +3527,27 @@ function recallRemovalPreservesImmediateVpRestoreContext(
   if (
     state === undefined ||
     valueProof === undefined ||
-    (valueProof.x2SyncShape !== true && valueProof.x2SyncValue !== true)
+    (
+      valueProof.x2SyncShape !== true &&
+      valueProof.x2SyncValue !== true &&
+      valueProof.x2SyncVpShape !== true
+    )
   ) return false;
   const op = ops[recallIndex];
   if (op === undefined) return false;
   const recalledValues = recallX2ValueFacts(state, valueProof.register, true, op);
   const recalledMantissas = vpEntryMantissasFromValueFacts(recalledValues);
-  const recalledShapes = recallStructuralShapeFacts(op, state, valueProof.register);
+  const recalledShapes = recallVpEntryShapeSourceFacts(op, state, valueProof.register);
+  const recalledDisplaySourceKeys = vpEntryDisplaySourceKeys(recalledMantissas, recalledShapes);
   if (
     x2HasSignRestoreGapBeforeVp(ops, recallIndex + 1, context) &&
     x2HasOnlyRestoreGapBeforeVp(ops, recallIndex + 1, context) &&
     (
       sameNonEmptyStringSet(vpEntrySignSourceMantissas(state), recalledMantissas) ||
-      x2ShapeSetsHaveSameStructuralShape(vpEntrySignSourceShapes(state), recalledShapes)
+      stringSetsHaveIntersection(
+        vpEntryDisplaySourceKeys(vpEntrySignSourceMantissas(state), vpEntrySignSourceShapes(state)),
+        recalledDisplaySourceKeys,
+      )
     )
   ) return true;
   const nextRestore = nextImmediateX2RestoreOp(ops, recallIndex + 1);
@@ -3523,7 +3558,10 @@ function recallRemovalPreservesImmediateVpRestoreContext(
     sameNonEmptyStringSet(vpContext.mantissa, recalledMantissas)
   ) return true;
   if (sameNonEmptyStringSet(state.vpEntryMantissa, recalledMantissas)) return true;
-  return x2ShapeSetsHaveSameStructuralShape(state.vpEntryShape, recalledShapes);
+  return stringSetsHaveIntersection(
+    vpEntryDisplaySourceKeys(state.vpEntryMantissa, state.vpEntryShape),
+    recalledDisplaySourceKeys,
+  );
 }
 
 function nextImmediateX2RestoreOp(ops: readonly IrOp[], start: number): IrOp | undefined {
@@ -5600,6 +5638,17 @@ function recallStructuralShapeFacts(
   return output;
 }
 
+function recallVpEntryShapeSourceFacts(
+  op: IrOp,
+  state: X2ValueDataflowState,
+  register: RegisterName,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of recallDecimalDisplayShapeFacts(op, state, register)) output.add(fact);
+  for (const fact of recallStructuralShapeFacts(op, state, register)) output.add(fact);
+  return output;
+}
+
 function recallDecimalDisplayShapeFacts(
   op: IrOp,
   state: X2ValueDataflowState,
@@ -6074,11 +6123,44 @@ function stringSetsHaveIntersection(left: ReadonlySet<string>, right: ReadonlySe
 
 function vpEntrySourceKeys(state: X2ValueDataflowState | undefined): Set<string> {
   const keys = new Set<string>();
-  for (const mantissa of state?.vpEntryMantissa ?? []) keys.add(`decimal:${mantissa}`);
-  for (const shape of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(state?.vpEntryShape))) {
+  addVpEntryRawMantissaSourceKeys(keys, state?.vpEntryMantissa);
+  addVpEntryDisplaySourceKeys(keys, state?.vpEntryMantissa, state?.vpEntryShape);
+  return keys;
+}
+
+function vpEntryDisplaySourceKeys(
+  mantissas: ReadonlySet<string> | undefined,
+  shapes: X2ShapeSet | undefined,
+): Set<string> {
+  const keys = new Set<string>();
+  addVpEntryDisplaySourceKeys(keys, mantissas, shapes);
+  return keys;
+}
+
+function addVpEntryRawMantissaSourceKeys(keys: Set<string>, mantissas: ReadonlySet<string> | undefined): void {
+  for (const mantissa of mantissas ?? []) keys.add(`decimal:${mantissa}`);
+}
+
+function addVpEntryDisplaySourceKeys(
+  keys: Set<string>,
+  mantissas: ReadonlySet<string> | undefined,
+  shapes: X2ShapeSet | undefined,
+): void {
+  for (const mantissa of mantissas ?? []) {
+    const key = exactDecimalMantissaDisplaySourceKey(mantissa);
+    if (key !== undefined) keys.add(key);
+  }
+  for (const shape of decimalDisplayShapeFacts(shapes)) {
     keys.add(stableStructuralExpressionSourceKey(shape));
   }
-  return keys;
+  for (const shape of x2StructuralRestoreShapeFacts(shapes)) {
+    keys.add(stableStructuralExpressionSourceKey(shape));
+  }
+}
+
+function exactDecimalMantissaDisplaySourceKey(raw: string): string | undefined {
+  const shape = decimalMantissaShapeFact(raw);
+  return exactDecimalDisplayShapeFact(raw) === shape ? stableStructuralExpressionSourceKey(shape) : undefined;
 }
 
 function cloneOptionalValueSet(input: X2ValueSet | undefined): Set<X2ValueFact> {
@@ -6145,13 +6227,39 @@ function stableExpressionSourceKeys(
     const key = stableExpressionSourceKey(fact);
     if (key !== undefined) keys.add(key);
   }
-  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+  for (const key of stableExpressionDisplayShapeSourceKeys(values, shapes)) keys.add(key);
+  return keys;
+}
+
+function stableExpressionDisplayShapeSourceKeys(
+  values: X2ValueSet | undefined,
+  shapes: X2ShapeSet | undefined,
+): Set<string> {
+  const keys = new Set<string>();
+  const valueDecimals = normalizedDecimalValueSet(values);
+  for (const fact of x2StructuralRestoreShapeFacts(shapes)) {
     keys.add(stableStructuralExpressionSourceKey(fact));
   }
-  for (const fact of decimalExponentDisplayShapeFacts(shapes)) {
+  for (const fact of decimalDisplayShapeFacts(shapes)) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (
+      model.kind === "mantissa" &&
+      model.radix === "decimal" &&
+      model.normalizedDecimal !== undefined &&
+      valueDecimals.has(model.normalizedDecimal)
+    ) continue;
     keys.add(stableStructuralExpressionSourceKey(fact));
   }
   return keys;
+}
+
+function normalizedDecimalValueSet(values: X2ValueSet | undefined): Set<string> {
+  const output = new Set<string>();
+  for (const fact of values ?? []) {
+    const value = normalizedDecimalValueFromFact(fact);
+    if (value !== undefined) output.add(value);
+  }
+  return output;
 }
 
 function stableStructuralExpressionSourceKey(fact: X2ShapeFact): string {
@@ -6500,12 +6608,21 @@ function signChangedClosedShapeMantissas(input: X2ValueDataflowState): ReadonlyS
     const raw = model.canonical;
     const normalized = normalizeDecimalMantissaEntry(raw);
     if (normalized === undefined || model.normalizedDecimal === undefined) continue;
-    if (input.xShape?.has(decimalMantissaShapeFact(normalized)) !== true) continue;
+    if (!xShapeCanFeedClosedDecimalSignChange(input.xShape, fact, normalized)) continue;
     const signed = signChangedMantissaShape(raw);
     if (signed === undefined) return undefined;
     mantissas.add(signed);
   }
   return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function xShapeCanFeedClosedDecimalSignChange(
+  xShape: X2ShapeSet | undefined,
+  x2Shape: X2ShapeFact,
+  normalized: string,
+): boolean {
+  if (xShape?.has(decimalMantissaShapeFact(normalized)) === true) return true;
+  return x2ShapeSetsHaveSameDecimalDisplayShape(xShape, new Set([x2Shape]));
 }
 
 function signChangedClosedDecimalExponentShapeState(
@@ -6533,6 +6650,11 @@ function signChangedClosedDecimalExponentShapeState(
       const signedValue = decimalValueFact(signedDecimal, "normalized");
       values.add(signedValue);
       mantissas.add(signedDecimal);
+    }
+    if (!hasSharedValue) {
+      for (const key of sharedRestoredDisplaySourceKeys(input.xShape, new Set([fact]))) {
+        values.add(stableExpressionValueFact("0B", key));
+      }
     }
   }
   if (values.size === 0 && shapes.size === 0) return undefined;
@@ -6589,10 +6711,22 @@ function sharedStructuralRestoreSourceKeys(
   xShapes: X2ShapeSet | undefined,
   x2Shapes: X2ShapeSet | undefined,
 ): Set<string> {
-  const xRestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShapes));
+  const xRestoreShapes = x2StructuralRestoreShapeFacts(xShapes);
   const keys = new Set<string>();
-  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(x2Shapes))) {
+  for (const fact of x2StructuralRestoreShapeFacts(x2Shapes)) {
     if (xRestoreShapes.has(fact)) keys.add(stableStructuralExpressionSourceKey(fact));
+  }
+  return keys;
+}
+
+function sharedRestoredDisplaySourceKeys(
+  xShapes: X2ShapeSet | undefined,
+  x2Shapes: X2ShapeSet | undefined,
+): Set<string> {
+  const keys = sharedStructuralRestoreSourceKeys(xShapes, x2Shapes);
+  const xDisplayShapes = decimalDisplayShapeFacts(xShapes);
+  for (const fact of decimalDisplayShapeFacts(x2Shapes)) {
+    if (xDisplayShapes.has(fact)) keys.add(stableStructuralExpressionSourceKey(fact));
   }
   return keys;
 }
