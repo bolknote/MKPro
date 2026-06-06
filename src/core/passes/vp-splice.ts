@@ -280,8 +280,18 @@ function removableExponentSeparatorRun(
   return [];
 }
 
+function canRemoveSecondVpAfterPreviousVp(
+  stateBeforePreviousVp: X2ValueDataflowState | undefined,
+): boolean {
+  const context = analyzeX2VpShapeContext(stateBeforePreviousVp);
+  return context.kind === "active-mantissa" ||
+    context.kind === "active-exponent" ||
+    context.kind === "active-structural-exponent";
+}
+
 // These rewrites are proven behaviorally equivalent on the MK-61 emulator:
-//   ВП ВП  ≡ ВП   (a second exponent-entry while already in exponent mode is inert)
+//   ВП ВП  ≡ ВП   only when the first ВП is entered from an active number-entry
+//       context; a closed-context X2 ВП restore can make the second ВП observable.
 //   КНОП/К1/К2 ... ВП ≡ ВП  (empty ops immediately before exponent entry are removable)
 //   ВП ... /-/ /-/ ... ≡ ВП ... ... while the dataflow proves exponent-entry
 //   value-safe /-/ /-/ ≡ empty in closed context when X and X2 are proven equal,
@@ -300,7 +310,11 @@ const run: IrPassFn = (ops) => {
     const cur = ops[i]!;
     if (remove.has(i - 1)) continue;
     // ВП ВП -> ВП : drop the redundant second exponent entry.
-    if (isFreeStandingVp(prev) && isFreeStandingVp(cur)) {
+    if (
+      isFreeStandingVp(prev) &&
+      isFreeStandingVp(cur) &&
+      canRemoveSecondVpAfterPreviousVp(x2ValueStates[i - 1])
+    ) {
       remove.add(i);
       continue;
     }
@@ -315,7 +329,12 @@ const run: IrPassFn = (ops) => {
       if (emptyRun.length > 0) {
         for (const emptyIndex of emptyRun) remove.add(emptyIndex);
         const firstEmpty = emptyRun[0]!;
-        if (firstEmpty === i - emptyRun.length && firstEmpty > 0 && isFreeStandingVp(ops[firstEmpty - 1]!)) {
+        if (
+          firstEmpty === i - emptyRun.length &&
+          firstEmpty > 0 &&
+          isFreeStandingVp(ops[firstEmpty - 1]!) &&
+          canRemoveSecondVpAfterPreviousVp(x2ValueStates[firstEmpty - 1])
+        ) {
           remove.add(i);
         }
         continue;
@@ -405,7 +424,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ and empty restore runs before proved ВП/fresh digit -> empty, closed value /-/ /-/ -> empty).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (active-entry ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ and empty restore runs before proved ВП/fresh digit -> empty, closed value /-/ /-/ -> empty).`,
       },
     ],
   };

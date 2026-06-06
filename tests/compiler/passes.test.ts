@@ -18894,6 +18894,38 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("vp-splice removes adjacent ВП only after active number-entry ВП", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps adjacent ВП after closed-context X2 restore", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x0c, "ВП"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-splice removes an empty run plus redundant ВП in one segment", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
@@ -18911,6 +18943,26 @@ describe("ir passes on synthetic programs", () => {
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps an empty run before adjacent ВП after closed-context X2 restore", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x0c, "ВП"),
+      plain(0x54, "КНОП"),
+      plain(0x55, "К1"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x0d, "Cx"),
+      plain(0x0c, "ВП"),
+      plain(0x0c, "ВП"),
       halt(),
     ]);
   });

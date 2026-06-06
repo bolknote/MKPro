@@ -1470,7 +1470,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shrinking would move their real target. The same verifier can move the
     branch target label onto the branch's own address byte, allowing that
     operand byte to be the first executed opcode.
-27. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`),
+27. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) only
+    when the first `ВП` is entered from a proved active number-entry context
+    (`active-mantissa`, decimal exponent-entry, or structural exponent-entry);
+    a closed-context X2 restore `ВП` can make a following `ВП` observable and
+    is not treated as redundant,
     inert empty-op runs before `ВП`, including marker labels between the
     empty ops and the exponent-entry command, adjacent `/-/ /-/`
     exponent-sign toggles, and shape-proved empty separators after at least
