@@ -1737,7 +1737,10 @@ The pipeline currently contains:
   `A`/`B`/`C` hex mantissas: those dot-restore exactly like their recall display,
   so they can be used when the same shape is proved in X2 and the usual
   stack/context exposure guards show no following `.`/`/-/`/`ВП` observes the
-  removed recall. It
+  removed recall. A separate VP-only escape accepts structural shape equality
+  for a scratch recall that immediately feeds a proved same-source `ВП`, because
+  the inserted `.` recreates the same mantissa source while the ordinary
+  unsafe-dot path remains blocked for later display or sign contexts. It
   may also cross a simple direct `ПП` whose target reaches `В/О` linearly
   without touching the scratch register; nested flow, unknown memory access, or
   another entry label keeps the call as a barrier. The

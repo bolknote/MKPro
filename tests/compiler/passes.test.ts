@@ -13483,6 +13483,24 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 2);
   });
 
+  it("x2-hidden-temp-restore uses structural VP-shape proof as a dot escape", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[2]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2-hidden-temp-restore keeps structural scratch recalls", () => {
     const program: IrOp[] = [
       recall("1", "preload const 8.70Е2-6С"),
@@ -13514,13 +13532,32 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
-  it("x2-hidden-temp-restore keeps dot-safe structural scratch recalls before observable VP context", () => {
+  it("x2-hidden-temp-restore uses dot-safe structural scratch recalls before immediate VP context", () => {
     const program: IrOp[] = [
       recall("1", "preload const C"),
       store("2"),
       recall("2"),
       plain(0x0c, "ВП"),
       plain(0x02, "2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[2]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps structural scratch recalls before sign VP context", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      recall("2"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
       halt(),
     ];
     const restored = x2HiddenTempRestore.run(program, ctx);

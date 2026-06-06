@@ -98,12 +98,6 @@ const run: IrPassFn = (ops) => {
       !sourceRestoresSameDotSafeDecimalShape &&
       !sourceRestoresSameDotSafeStructuralShape
     ) return op;
-    if (
-      !sourceRestoresSameVisibleShape &&
-      !sourceRestoresSameDotSafeDecimalShape &&
-      !sourceRestoresSameDotSafeStructuralShape &&
-      x2StateHasUnsafeDotRestoreShapeX2(x2ValueStates[index])
-    ) return op;
     const sourceProvesFreeStandingRestore = sourceAlreadyDotSafe ||
       sourceRestoresSameVisibleDecimal ||
       sourceRestoresSameDotSafeDecimalShape ||
@@ -124,7 +118,9 @@ const run: IrPassFn = (ops) => {
       directReturnContext,
     );
     const hasSignRestoreGapBeforeVp = x2HasSignRestoreGapBeforeVp(ops, index + 1, directReturnContext);
-    const recallSyncProvesVpSource = removal.valueProof?.x2SyncVpShape === true;
+    const recallSyncProvesVpSource =
+      removal.valueProof?.x2SyncVpShape === true ||
+      removal.valueProof?.x2SyncShape === true;
     const canUseVpSourceEscape =
       (
         (
@@ -144,6 +140,13 @@ const run: IrPassFn = (ops) => {
           !hasSignRestoreGapBeforeVp
         )
       );
+    if (
+      !canUseVpSourceEscape &&
+      !sourceRestoresSameVisibleShape &&
+      !sourceRestoresSameDotSafeDecimalShape &&
+      !sourceRestoresSameDotSafeStructuralShape &&
+      x2StateHasUnsafeDotRestoreShapeX2(x2ValueStates[index])
+    ) return op;
     if (
       !canUseSourceDotRestore &&
       !canUseVpSourceEscape
