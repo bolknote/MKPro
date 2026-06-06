@@ -4965,6 +4965,45 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[5])).toBe("exponent:2:3");
   });
 
+  it("x2 value dataflow normalizes structural shapes on path-sensitive X2 sync", () => {
+    const conditionalProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      cjump("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const loopProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      loop("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const returnProgram: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x0a, "."),
+      halt(),
+      label("load"),
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      ret(),
+    ];
+    const conditionalStates = computeX2ValueStates(conditionalProgram, { trackRegisterMemory: true });
+    const loopStates = computeX2ValueStates(loopProgram, { trackRegisterMemory: true });
+    const returnStates = computeX2ValueStates(returnProgram, { trackRegisterMemory: true });
+
+    for (const state of [conditionalStates[3], loopStates[3], returnStates[2]]) {
+      expect(x2ShapeStateText(state?.xShape)).toEqual(["mantissa:00:decimal"]);
+      expect(x2ShapeStateText(state?.x2Shape)).toEqual(["mantissa:0:decimal"]);
+    }
+  });
+
   it("x2 value dataflow drops only the mutated loop-counter alias", () => {
     const program: IrOp[] = [
       recall("0"),
@@ -5057,6 +5096,37 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["hex-exponent:-FACE:3"]);
     expect(x2VpEntryShapeText(states[5])).toEqual(["hex:-FACE000:mantissa"]);
     expect(x2StateIsClosedPlainContext(states[5])).toBe(true);
+  });
+
+  it("x2 value dataflow sign-changes normalized structural arithmetic after path-sensitive X2 sync", () => {
+    const conditionalProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      cjump("done"),
+      plain(0x0b, "/-/"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const returnProgram: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x0b, "/-/"),
+      halt(),
+      label("load"),
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      ret(),
+    ];
+    const conditionalStates = computeX2ValueStates(conditionalProgram, { trackRegisterMemory: true });
+    const returnStates = computeX2ValueStates(returnProgram, { trackRegisterMemory: true });
+
+    for (const state of [conditionalStates[4], returnStates[3]]) {
+      expect(x2ValueStateText(state?.x)).toEqual(["decimal:0:normalized"]);
+      expect(x2ValueStateText(state?.x2)).toEqual(["decimal:-0:unnormalized"]);
+      expect(x2ShapeStateText(state?.xShape)).toEqual(["mantissa:0:decimal"]);
+      expect(x2ShapeStateText(state?.x2Shape)).toEqual(["mantissa:-0:decimal"]);
+    }
   });
 
   it("x2 value dataflow keeps indirect conditional fallthrough ВП structural-only", () => {
@@ -9592,6 +9662,50 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite removes normalized path-sensitive structural dots", () => {
+    const conditionalProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      cjump("done"),
+      plain(0x0a, "."),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const returnProgram: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x0a, "."),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("load"),
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      ret(),
+    ];
+
+    expect(x2DeadRestoreBeforeOverwrite.run(conditionalProgram, ctx).ops).toEqual([
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      cjump("done"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+    expect(x2DeadRestoreBeforeOverwrite.run(returnProgram, ctx).ops).toEqual([
+      label("main"),
+      call("load"),
+      plain(0x0d, "Cx"),
+      halt(),
+      label("load"),
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      ret(),
+    ]);
+  });
+
   it("x2-dead-restore-before-overwrite removes repeated active ВП before hard overwrite", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
@@ -9986,6 +10100,63 @@ describe("ir passes on synthetic programs", () => {
       plain(0x12, "×"),
       plain(0xf0, "F* empty F0"),
       halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot after path-sensitive structural arithmetic syncs", () => {
+    const conditionalProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      cjump("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const loopProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      loop("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const returnProgram: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x0a, "."),
+      halt(),
+      label("load"),
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      ret(),
+    ];
+
+    expect(x2NoopRestore.run(conditionalProgram, ctx).ops).toEqual([
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      cjump("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+    expect(x2NoopRestore.run(loopProgram, ctx).ops).toEqual([
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      loop("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+    expect(x2NoopRestore.run(returnProgram, ctx).ops).toEqual([
+      label("main"),
+      call("load"),
+      halt(),
+      label("load"),
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      ret(),
     ]);
   });
 
@@ -10780,6 +10951,52 @@ describe("ir passes on synthetic programs", () => {
     expect(restored.ops[3]).toMatchObject({ kind: "plain", opcode: 0x0a });
     expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore uses normalized structural shapes after path-sensitive syncs", () => {
+    const conditionalProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      store("2"),
+      cjump("done"),
+      recall("2"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const loopProgram: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      store("2"),
+      loop("done"),
+      recall("2"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const returnProgram: IrOp[] = [
+      jump("main"),
+      label("sync"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      store("2"),
+      call("sync"),
+      recall("2"),
+      halt(),
+    ];
+
+    for (const program of [conditionalProgram, loopProgram, returnProgram]) {
+      const restored = x2HiddenTempRestore.run(program, ctx);
+      const dse = deadStoreElimination.run(restored.ops, ctx);
+
+      expect(restored.applied).toBe(1);
+      expect(restored.ops.some((op) => op.kind === "plain" && op.opcode === 0x0a)).toBe(true);
+      expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+      expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+    }
   });
 
   it("x2-hidden-temp-restore crosses stable known indirect conditional fallthrough", () => {
@@ -16076,6 +16293,70 @@ describe("ir passes on synthetic programs", () => {
       label("done"),
       halt(),
     ]);
+  });
+
+  it("vp-splice removes non-zero sign pairs after normalized structural arithmetic syncs", () => {
+    const conditionalProgram: IrOp[] = [
+      recall("1", "preload const B"),
+      plain(0x22, "F x^2"),
+      cjump("done"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const returnProgram: IrOp[] = [
+      label("main"),
+      call("load"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("load"),
+      recall("1", "preload const B"),
+      plain(0x22, "F x^2"),
+      ret(),
+    ];
+
+    expect(vpSplice.run(conditionalProgram, ctx).ops).toEqual([
+      recall("1", "preload const B"),
+      plain(0x22, "F x^2"),
+      cjump("done"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+    expect(vpSplice.run(returnProgram, ctx).ops).toEqual([
+      label("main"),
+      call("load"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("load"),
+      recall("1", "preload const B"),
+      plain(0x22, "F x^2"),
+      ret(),
+    ]);
+  });
+
+  it("vp-splice keeps zero sign pairs after normalized structural arithmetic syncs", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      cjump("done"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("vp-splice removes a structural sign pair before ВП after conditional fallthrough X2 sync", () => {

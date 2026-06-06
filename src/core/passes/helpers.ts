@@ -3942,19 +3942,20 @@ function transferX2ValueDataflowState(
       const effect = conditionalX2EffectForGraphEdge(op, edge);
       const x = syncUnknownSameValue(new Set(closed.x), effect, producerIndex);
       const xShape = cloneOptionalShapeSet(closed.xShape);
+      const x2Shape = transferConditionalX2ShapeSet(closed, xShape, effect);
       return {
         x,
         y: cloneOptionalValueSet(closed.y),
         x2: transferConditionalX2ValueSet(closed, x, effect),
         xShape,
         yShape: cloneOptionalShapeSet(closed.yShape),
-        x2Shape: transferConditionalX2ShapeSet(closed, xShape, effect),
+        x2Shape,
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(closed, effect),
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: transferConditionalX2StructuralVpContextState(closed, effect),
-        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, effect),
-        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, effect),
+        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
+        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
       };
@@ -3972,19 +3973,20 @@ function transferX2ValueDataflowState(
         : effect === "affects"
           ? new Set(x)
           : new Set<X2ValueFact>();
+      const x2Shape = transferConditionalX2ShapeSet(stable, xShape, effect);
       return {
         x,
         y: cloneOptionalValueSet(stable.y),
         x2,
         xShape,
         yShape: cloneOptionalShapeSet(stable.yShape),
-        x2Shape: transferConditionalX2ShapeSet(stable, xShape, effect),
+        x2Shape,
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(stable, effect),
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: transferConditionalX2StructuralVpContextState(stable, effect),
-        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, effect),
-        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, effect),
+        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
+        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
         memory: trackRegisterMemory ? deleteX2ValueMemory(stable.memory, counter) : undefined,
         shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(stable.shapeMemory, counter) : undefined,
       };
@@ -4000,19 +4002,20 @@ function transferX2ValueDataflowState(
       const closed = closeX2ValueEntry(input);
       const x = syncUnknownSameValue(new Set(closed.x), "affects", producerIndex);
       const xShape = cloneOptionalShapeSet(closed.xShape);
+      const x2Shape = x2SyncShapeSetFromVisibleX(xShape);
       return {
         x,
         y: cloneOptionalValueSet(closed.y),
         x2: new Set(x),
         xShape,
         yShape: cloneOptionalShapeSet(closed.yShape),
-        x2Shape: cloneOptionalShapeSet(xShape),
+        x2Shape,
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: noneX2StructuralEntryState(),
-        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, "affects"),
-        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, "affects"),
+        vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, "affects"),
+        vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, "affects"),
         memory: closed.memory,
         shapeMemory: closed.shapeMemory,
       };
@@ -5010,8 +5013,8 @@ function transferIndirectConditionalX2ValueState(
     vpContext: transferConditionalX2VpContextState(closed, effect),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: transferConditionalX2StructuralVpContextState(closed, effect),
-    vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, effect),
-    vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, effect),
+    vpEntryMantissa: transferConditionalX2VpEntryMantissaState(x, xShape, x2Shape, effect),
+    vpEntryShape: transferConditionalX2VpEntryShapeState(xShape, x2Shape, effect),
     memory: closed.memory,
     shapeMemory: closed.shapeMemory,
   };
@@ -5228,7 +5231,7 @@ function transferPlainX2ShapeSet(
   closedEntryShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   if (effect === "preserves") return cloneOptionalShapeSet(closedEntryShape ?? input.x2Shape);
-  if (effect === "affects") return normalizeX2SyncShapesFromX(xShape);
+  if (effect === "affects") return x2SyncShapeSetFromVisibleX(xShape);
   return new Set();
 }
 
@@ -5346,7 +5349,7 @@ function transferConditionalX2ShapeSet(
   effect: ReturnType<typeof conditionalX2Effect>,
 ): Set<X2ShapeFact> {
   if (effect === "preserves") return cloneOptionalShapeSet(input.x2Shape);
-  if (effect === "affects") return new Set(xShape);
+  if (effect === "affects") return x2SyncShapeSetFromVisibleX(xShape);
   return new Set();
 }
 
@@ -5369,18 +5372,20 @@ function transferConditionalX2StructuralVpContextState(
 function transferConditionalX2VpEntryMantissaState(
   x: X2ValueSet,
   xShape: X2ShapeSet,
+  x2Shape: X2ShapeSet,
   effect: ReturnType<typeof conditionalX2Effect>,
 ): ReadonlySet<string> | undefined {
   return effect === "affects"
-    ? sharedDecimalVpEntryMantissas({ x, x2: x, xShape, x2Shape: xShape })
+    ? sharedDecimalVpEntryMantissas({ x, x2: x, xShape, x2Shape })
     : undefined;
 }
 
 function transferConditionalX2VpEntryShapeState(
   xShape: X2ShapeSet,
+  x2Shape: X2ShapeSet,
   effect: ReturnType<typeof conditionalX2Effect>,
 ): X2ShapeSet | undefined {
-  return effect === "affects" ? sharedStructuralShapeFacts({ xShape, x2Shape: xShape }) : undefined;
+  return effect === "affects" ? sharedStructuralShapeFacts({ xShape, x2Shape }) : undefined;
 }
 
 function joinRegisterDataflowStates(
@@ -6880,6 +6885,10 @@ function normalizeX2RestoreShapesForX(input: X2ShapeSet | undefined): Set<X2Shap
     output.add(fact);
   }
   return output;
+}
+
+function x2SyncShapeSetFromVisibleX(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  return normalizeX2SyncShapesFromX(input);
 }
 
 function normalizeX2SyncShapesFromX(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
