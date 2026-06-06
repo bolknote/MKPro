@@ -5599,7 +5599,7 @@ function syncUnknownSameValue(
   if (effect === "affects" && x.size === 0) {
     x.add(producerIndex === undefined ? SAME_UNKNOWN_VALUE : expressionValueFact(producerIndex));
   }
-  return x;
+  return canonicalX2ValueSet(x);
 }
 
 function transferPlainX2VpContextState(

@@ -2967,6 +2967,7 @@ describe("ir passes on synthetic programs", () => {
       0,
     );
 
+    expect(x2ValueStateText(result?.x)).toContain(canonical);
     expect(x2ValueStateText(result?.x2)).toContain(canonical);
     expect(x2ValueStateText(result?.memory?.["2"])).toContain(canonical);
     expect(x2ValueStateText(result?.memory?.["2"])).not.toContain(raw);

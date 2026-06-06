@@ -1202,12 +1202,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `expr-key:...(shape:hex:...:mantissa)` spelling are treated as the same X2
     computed value without promoting either shape to a decimal alias. The same
     canonicalization is applied after register-dependency and address-local
-    opaque-expression cleanup, so surviving stable `expr-key:*` facts do not
-    drift back to raw structural spellings after selector mutation, calls, or
-    backedges. X2-preserving transfers that carry register value/shape memory
-    clone it through this canonical layer instead of sharing raw memory
-    objects, including labels, empty/plain opcodes, dot/sign/VP entry
-    transitions, stack moves, and conditional/return close paths. The proved decimal
+    opaque-expression cleanup, and when sync/preserve transfer functions carry
+    visible X/X2 value facts forward, so surviving stable `expr-key:*` facts do
+    not drift back to raw structural spellings after selector mutation, calls,
+    backedges, or empty plain opcodes. X2-preserving transfers that carry
+    register value/shape memory clone it through this canonical layer instead
+    of sharing raw memory objects, including labels, empty/plain opcodes,
+    dot/sign/VP entry transitions, stack moves, and conditional/return close
+    paths. The proved decimal
     first-digit source is visible to `vp-splice`, so an empty separator and a
     cancelling exponent sign pair before that `ВП` can be removed together. It
     also carries exact emulator-pinned single-digit hex
