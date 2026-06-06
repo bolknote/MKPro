@@ -1761,7 +1761,9 @@ The pipeline currently contains:
   `КНОП`/`К1`/`К2` cells before `ВП`: the inserted `.` is emulator-proved to
   preserve the same mantissa source there. Leading-zero, signed-zero, and
   leading-zero exponent mantissa forms still stay explicit because their
-  restored mantissa shape is observable.
+  restored mantissa shape is observable. When only the restored visible decimal
+  matches, the proof is accepted for a later `.` exposure only; `/-/` and `ВП`
+  still require exact value/shape or mantissa-source evidence.
 - **dead-store-elimination** — whole-program liveness-driven DSE: removes
   `X->П r`, and stable-indirect `К X->П R7..Re` with a proved memory target,
   when liveOut at that point excludes the written cell, unless that store

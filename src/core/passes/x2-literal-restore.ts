@@ -284,7 +284,11 @@ function replacingLiteralCanExposeContextSensitiveRestore(
   ops: readonly IrOp[],
   run: NumericLiteralRun,
   context: DirectReturnAnalysisContext,
-  redundantSync: { readonly value: boolean; readonly shape: boolean },
+  redundantSync: {
+    readonly value: boolean;
+    readonly displayValue: boolean;
+    readonly shape: boolean;
+  },
 ): boolean {
   if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
   if (run.dotPreservesVpEntrySource && x2HasOnlyRestoreGapBeforeVp(ops, run.end + 1, context)) return false;
@@ -292,6 +296,7 @@ function replacingLiteralCanExposeContextSensitiveRestore(
     !literalReplacementCanReachVpRestore(ops, run.end + 1) &&
     !x2SyncCanExposeContextSensitiveRestore(ops, run.end, {
       redundantSyncValue: redundantSync.value,
+      redundantSyncDisplayValue: redundantSync.displayValue,
       redundantSyncShape: redundantSync.shape,
     })
   ) return false;
@@ -394,8 +399,10 @@ const run: IrPassFn = (ops) => {
     const visibleDecimalX2ShapeFact = runAtIndex === undefined || visibleDecimalX2ValueFact
       ? false
       : x2ValueShapeSetHasRestoredVisibleDecimal(state?.x2, state?.x2Shape, runAtIndex.x2Fact);
+    const visibleDecimalX2DisplayValueFact = visibleDecimalX2ValueFact && !exactX2Fact;
+    const visibleDecimalX2DotSafeShapeFact = visibleDecimalX2ShapeFact && !x2StateHasUnsafeDotRestoreShapeX2(state);
     const visibleDecimalX2Fact = visibleDecimalX2ValueFact ||
-      (visibleDecimalX2ShapeFact && !x2StateHasUnsafeDotRestoreShapeX2(state));
+      visibleDecimalX2DotSafeShapeFact;
     const sourceProvesFreeStandingRestore = runAtIndex !== undefined &&
       (
         x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) ||
@@ -416,8 +423,9 @@ const run: IrPassFn = (ops) => {
       (exactX2Fact || visibleDecimalX2Fact) &&
       !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
       !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext, {
-        value: exactX2Fact || visibleDecimalX2ValueFact,
-        shape: visibleDecimalX2ShapeFact,
+        value: exactX2Fact,
+        displayValue: visibleDecimalX2DisplayValueFact,
+        shape: visibleDecimalX2DotSafeShapeFact,
       })
     ) {
       result.push(dotRestoreOp(runAtIndex.displayValue, ops[index]!));

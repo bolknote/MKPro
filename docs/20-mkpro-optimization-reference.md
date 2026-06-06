@@ -1446,7 +1446,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     leading-zero exponent mantissas stay explicit for the same reason. If the
     following code cannot observe that raw mantissa shape, normalized X2 facts
     may still replace leading-zero decimal literals by visible restored value
-    (`02 -> .` after X2 holds `2`).
+    (`02 -> .` after X2 holds `2`), but that restored-visible proof is accepted
+    only for later `.` exposure, not as a general previous-command proof for
+    `/-/` or `ВП`.
     Leading-zero exponent mantissas are normalized after
     that closing sync (`05 ВП 3` -> `5000`, `00 ВП 3` -> `10000`), but active
     exponent-entry X2 remains shape-only because an immediate `.` can still
@@ -1459,10 +1461,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     observations are kept. The same CFG-aware exposure guard is used for the
     inserted dot, so a branch without a reachable preserving-edge restore is no
     longer a blanket blocker. When the only newly exposed context restore is a
-    non-`ВП` `.`/`/-/` reached after an executable gap and the replacement dot
-    restores the same X2 value, the pass treats the original literal sync as
-    redundant; reachable `ВП` restores still require the stricter mantissa-source
-    proof above. Register value-memory can supply the same decimal
+    non-`ВП` `.` reached after an executable gap and the replacement dot
+    restores the same exact or restored-visible X2 value, the pass treats the
+    original literal sync as redundant; `/-/` and reachable `ВП` restores still
+    require the stricter value/shape or mantissa-source proof above. Register value-memory can supply the same decimal
     fact after a direct or proved-indirect recall of a previously stored
     literal-shaped decimal.
 21. `dead-store-before-commutative` — removes temporary stores that are followed by immediate `recall` + commutative ALU (`+` or `*`) and never read again before the next write of that register.
