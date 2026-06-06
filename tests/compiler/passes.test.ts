@@ -383,6 +383,12 @@ function x2VpEntryShapeText(state: ReturnType<typeof computeX2ValueStates>[numbe
   return state === undefined ? undefined : x2ShapeStateText(state.vpEntryShape);
 }
 
+function x2VpEntryMantissaText(state: ReturnType<typeof computeX2ValueStates>[number]): string[] | undefined {
+  return state === undefined || state.vpEntryMantissa === undefined
+    ? undefined
+    : [...state.vpEntryMantissa].sort();
+}
+
 describe("ir passes on synthetic programs", () => {
   it("x2 register dataflow tracks register-valued X2 through preserving operations", () => {
     const program: IrOp[] = [
@@ -4060,6 +4066,69 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual(["hex-exponent:A00:3"]);
   });
 
+  it("x2 value dataflow models decimal VP first-digit splice over decimal X2 tails", () => {
+    const immediate: IrOp[] = [
+      recall("1", "preload const 3"),
+      recall("2", "preload const 800"),
+      plain(0x14, "←→"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const throughEmpty: IrOp[] = [
+      recall("1", "preload const 3"),
+      recall("2", "preload const 800"),
+      plain(0x14, "←→"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const nonEmptyTransient: IrOp[] = [
+      recall("1", "preload const 4"),
+      recall("2", "preload const 800"),
+      plain(0x14, "←→"),
+      plain(0x20, "Fπ"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const nonEmptyThenEmpty: IrOp[] = [
+      recall("1", "preload const 4"),
+      recall("2", "preload const 800"),
+      plain(0x14, "←→"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+
+    const immediateStates = computeX2ValueStates(immediate, { trackRegisterMemory: true });
+    expect(x2VpEntryMantissaText(immediateStates[3])).toEqual(["800"]);
+    expect(immediateStates[3]?.vpEntryMantissaTransient).toBe(true);
+    expect(x2EntryStateText(immediateStates[4])).toBe("exponent:800:");
+    expect(x2EntryStateText(immediateStates[5])).toBe("exponent:800:3");
+    expect(x2ValueStateText(immediateStates[5]?.x)).toEqual(["decimal:800000:normalized"]);
+
+    const emptyStates = computeX2ValueStates(throughEmpty, { trackRegisterMemory: true });
+    expect(x2VpEntryMantissaText(emptyStates[4])).toEqual(["300"]);
+    expect(emptyStates[4]?.vpEntryMantissaTransient).toBeUndefined();
+    expect(x2EntryStateText(emptyStates[5])).toBe("exponent:300:");
+    expect(x2EntryStateText(emptyStates[6])).toBe("exponent:300:3");
+    expect(x2ValueStateText(emptyStates[6]?.x)).toEqual(["decimal:300000:normalized"]);
+
+    const transientStates = computeX2ValueStates(nonEmptyTransient, { trackRegisterMemory: true });
+    expect(x2VpEntryMantissaText(transientStates[4])).toEqual(["400"]);
+    expect(transientStates[4]?.vpEntryMantissaTransient).toBe(true);
+    expect(x2EntryStateText(transientStates[5])).toBe("exponent:400:");
+
+    const laterEmptyStates = computeX2ValueStates(nonEmptyThenEmpty, { trackRegisterMemory: true });
+    expect(x2VpEntryMantissaText(laterEmptyStates[5])).toEqual(["300"]);
+    expect(laterEmptyStates[5]?.vpEntryMantissaTransient).toBeUndefined();
+    expect(x2EntryStateText(laterEmptyStates[6])).toBe("exponent:300:");
+  });
+
   it("x2 value dataflow models transient VP first-digit splice after non-empty X2-preserving ops", () => {
     const program: IrOp[] = [
       recall("1", "preload const A"),
@@ -5419,6 +5488,54 @@ describe("ir passes on synthetic programs", () => {
     expect(emptyStates[3]?.vpEntryShapeTransient).toBeUndefined();
     expect(x2ShapeStateText(emptyStates[4]?.xShape)).toEqual(["hex-exponent:FACE:"]);
     expect(x2ShapeStateText(emptyStates[5]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
+  });
+
+  it("x2 value dataflow models structural exponent store-to-ВП splice through restored shape", () => {
+    const directStore: IrOp[] = [
+      recall("2", "preload const ГE2"),
+      store("1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const indirectStore: IrOp[] = [
+      recall("2", "preload const ГE2"),
+      knownTargetIndirectStore("7", "1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const throughEmpty: IrOp[] = [
+      recall("2", "preload const ГE2"),
+      store("1"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+
+    const directStates = computeX2ValueStates(directStore, { trackRegisterMemory: true });
+    expect(x2ShapeStateText(directStates[1]?.x2Shape)).toEqual(["hex-exponent:Г:2"]);
+    expect(x2ShapeStateText(directStates[2]?.x2Shape)).toEqual(["hex-exponent:Г:2"]);
+    expect(x2VpEntryShapeText(directStates[2])).toEqual(["hex:00:mantissa"]);
+    expect(directStates[2]?.vpEntryShapeTransient).toBe(true);
+    expect(x2ShapeStateText(directStates[3]?.xShape)).toEqual(["hex-exponent:00:"]);
+    expect(x2ShapeStateText(directStates[4]?.xShape)).toEqual(["hex-exponent:00:3"]);
+
+    const indirectStates = computeX2ValueStates(indirectStore, { trackRegisterMemory: true });
+    expect(x2ShapeStateText(indirectStates[2]?.x2Shape)).toEqual(["hex-exponent:Г:2"]);
+    expect(x2VpEntryShapeText(indirectStates[2])).toEqual(["hex:00:mantissa"]);
+    expect(indirectStates[2]?.vpEntryShapeTransient).toBe(true);
+    expect(x2ShapeStateText(indirectStates[3]?.xShape)).toEqual(["hex-exponent:00:"]);
+    expect(x2ShapeStateText(indirectStates[4]?.xShape)).toEqual(["hex-exponent:00:3"]);
+
+    const emptyStates = computeX2ValueStates(throughEmpty, { trackRegisterMemory: true });
+    expect(x2VpEntryShapeText(emptyStates[2])).toEqual(["hex:00:mantissa"]);
+    expect(emptyStates[2]?.vpEntryShapeTransient).toBe(true);
+    expect(x2VpEntryShapeText(emptyStates[3])).toEqual(["hex:Г00:mantissa"]);
+    expect(emptyStates[3]?.vpEntryShapeTransient).toBeUndefined();
+    expect(x2ShapeStateText(emptyStates[4]?.xShape)).toEqual(["hex-exponent:Г00:"]);
+    expect(x2ShapeStateText(emptyStates[5]?.xShape)).toEqual(["hex-exponent:Г00:3"]);
   });
 
   it("x2 value dataflow models indirect store as a decimal ВП splice source", () => {
