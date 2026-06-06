@@ -1444,6 +1444,14 @@ The pipeline currently contains:
   lower-case hex digits or whitespace do not split otherwise identical `hex:*`
   / `super:*` proofs. Negative structural exponents, carry/borrow cases, and
   decimalization stay structural-only and are not treated as dot-safe.
+  Structural concatenation also accepts a pure decimal digit-run as the right
+  operand when the left operand is already structural (`hex:8` + decimal `02`
+  proves shape-only `hex:802`), preserving leading zeroes and the
+  eight-display-digit bound without promoting the result to a decimal value.
+  Exact decimal display-shape facts can also feed shape-only unary display
+  results, so an exact fractional scientific shape such as
+  `exponent:5:-1:decimal` proves that `К {x}` leaves the displayed fractional
+  shape unchanged without adding an ordinary decimal value fact.
   Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are deliberately
   `errorProne` shape facts rather than dot-safe decimal facts; when the same
   signed-zero shape is proved in visible `X` and hidden X2 after an X2 sync, it
@@ -1922,11 +1930,12 @@ The pipeline currently contains:
   not enough: emulator probes show that it restores X2 but does not generally
   make `К {x}` redundant. Display lowering is just one producer of valid
   boundary markers. The pass can also drop a role-free, non-display `К {x}` when
-  X2 value dataflow proves a closed plain-context `X` is already fractional
-  (`0`, `0.x`, or `-0.x`). Because `К {x}` preserves hidden X2, the rewrite
-  does not require hidden X2 to already match visible `X`; it only requires a
-  preserving executable gap before any later context-sensitive `.`, `/-/`, or
-  `ВП` restore so removing the opcode cannot change the restore's
+  X2 value/shape dataflow proves a closed plain-context `X` is already
+  fractional (`0`, `0.x`, or `-0.x`), including exact decimal display-shape
+  facts that remain shape-only. Because `К {x}` preserves hidden X2, the
+  rewrite does not require hidden X2 to already match visible `X`; it only
+  requires a preserving executable gap before any later context-sensitive `.`,
+  `/-/`, or `ВП` restore so removing the opcode cannot change the restore's
   previous-command context. Negative-integer `К {x}` uses this visible-zero
   proof only after the signed-zero-producing operation is already present: the
   first such operation is kept when a later sync can feed `.`, `/-/`, or `ВП`,

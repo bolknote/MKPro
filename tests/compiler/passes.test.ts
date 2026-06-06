@@ -58,7 +58,9 @@ import {
   x2StateHasSameClosedSignChangeSourceInXAndX2,
   x2StateIsClosedPlainContext,
   x2ShapeDataModelForFact,
+  x2ShapeFactRestoredVisibleDecimal,
   x2ShapeSetHasOnlyDotSafeStructuralMantissas,
+  x2ShapeSetRestoredVisibleDecimals,
   x2ShapeSetsHaveSameDecimalDisplayShape,
   x2ShapeSetsHaveSameDotSafeStructuralMantissa,
   x2ShapeSetsHaveSameDotSafeDecimal,
@@ -1421,6 +1423,18 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetSafety(new Set(["hex-exponent:8.70Е2-6С:-2"]))).toBe("structuralOnly");
   });
 
+  it("x2 shape algebra extracts exact visible decimals without accepting raw entry spellings", () => {
+    expect(x2ShapeFactRestoredVisibleDecimal("exponent:5:-1:decimal")).toBe("0.5");
+    expect(x2ShapeFactRestoredVisibleDecimal("mantissa:0.5:decimal")).toBeUndefined();
+    expect(x2ShapeFactRestoredVisibleDecimal("mantissa:05:decimal")).toBeUndefined();
+    expect(x2ShapeFactRestoredVisibleDecimal("mantissa:-0:decimal")).toBeUndefined();
+    expect([...x2ShapeSetRestoredVisibleDecimals(new Set([
+      "exponent:5:-1:decimal",
+      "mantissa:0.5:decimal",
+      "mantissa:05:decimal",
+    ]))]).toEqual(["0.5"]);
+  });
+
   it("x2 shape algebra closes non-negative structural exponent shifts as mantissa shapes", () => {
     expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:Г:2")).toBe("hex:Г00:mantissa");
     expect(x2ClosedStructuralExponentMantissaShapeFact("hex-exponent:8.70:2")).toBe("hex:870:mantissa");
@@ -1461,9 +1475,15 @@ describe("ir passes on synthetic programs", () => {
       "hex:8.70Е:mantissa",
     );
     expect(x2StructuralMantissaConcatShapeFacts("super:FA", "hex:12:mantissa")).toBe("hex:FA12:mantissa");
+    expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "mantissa:02:decimal")).toBe(
+      "hex:802:mantissa",
+    );
+    expect(x2StructuralMantissaConcatShapeFacts("super:FA", "mantissa:02:decimal")).toBe("hex:FA02:mantissa");
+    expect(x2StructuralMantissaConcatShapeFacts("hex:1234567:mantissa", "mantissa:89:decimal")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:0.1:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:-1:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "hex:1:mantissa")).toBeUndefined();
+    expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "mantissa:1:decimal")).toBeUndefined();
   });
 
   it("x2 shape algebra splices a VP first digit into structural X2 mantissas", () => {
@@ -2290,6 +2310,19 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(shapeOnlyResult?.x)).toContain("expr-key:31(shape:mantissa:100:decimal)");
     expect(x2ValueStateText(valueBackedResult?.x)).not.toContain("expr-key:31(shape:mantissa:100:decimal)");
+  });
+
+  it("x2 value dataflow derives unary display shapes from shape-only exact decimal sources", () => {
+    const shapeOnly: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:5:-1:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(shapeOnly, plain(0x35, "К {x}"), "normal", {}, 0);
+
+    expect(x2ShapeStateText(result?.xShape)).toEqual(["exponent:5:-1:decimal"]);
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:35(shape:exponent:5:-1:decimal)");
   });
 
   it("x2 value dataflow seeds stable expr keys from constant stack producers", () => {
@@ -17203,6 +17236,29 @@ describe("ir passes on synthetic programs", () => {
       plain(0x00, "0"),
       plain(0x0a, "."),
       plain(0x05, "5"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole removes a no-op К {x} for an exact fractional display shape", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x01, "1"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x0b, "/-/"),
+      plain(0x01, "1"),
       plain(0xf0, "F* empty F0"),
       halt(),
     ]);

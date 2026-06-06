@@ -15,6 +15,7 @@ import {
   type X2ValueDataflowState,
   x2StateIsClosedPlainContext,
   x2SyncCanExposeContextSensitiveRestore,
+  x2ShapeSetRestoredVisibleDecimals,
   x2ValueFactRestoredVisibleDecimal,
 } from "./helpers.ts";
 
@@ -53,6 +54,9 @@ function stateHasFractionalNoopX(state: X2ValueDataflowState | undefined): boole
     const visible = x2ValueFactRestoredVisibleDecimal(fact);
     if (visible !== undefined && isFractionalNoopValue(visible)) return true;
   }
+  for (const visible of x2ShapeSetRestoredVisibleDecimals(state.xShape)) {
+    if (isFractionalNoopValue(visible)) return true;
+  }
   return false;
 }
 
@@ -72,7 +76,7 @@ function isKnownFractionalNoopFraction(
     !x2SyncCanExposeContextSensitiveRestore(
       ops,
       index,
-      { redundantSyncValue: true },
+      { redundantSyncValue: true, redundantSyncShape: true },
     );
 }
 

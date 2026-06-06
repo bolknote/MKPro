@@ -725,6 +725,10 @@ function plainProducesConcreteDecimalShapeFacts(
     const concrete = value === undefined ? undefined : concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
     if (concrete !== undefined) output.add(concrete);
   }
+  for (const value of x2ShapeSetRestoredVisibleDecimals(xShape)) {
+    const concrete = concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
+    if (concrete !== undefined) output.add(concrete);
+  }
   if (op.opcode === 0x32) {
     for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op, xShape)) {
       const fact = exactPlainIntegerDecimalMantissaShapeFact(value);
@@ -2381,6 +2385,24 @@ export function x2ValueFactRestoredVisibleDecimal(fact: X2ValueFact): string | u
   return decimal === null ? undefined : normalizePlainDecimal(decimal[1]!);
 }
 
+export function x2ShapeFactRestoredVisibleDecimal(fact: X2ShapeFact): string | undefined {
+  for (const shape of decimalDisplayShapeFacts(new Set([fact]))) {
+    const model = x2ShapeDataModelForFact(shape);
+    if (model.kind === "mantissa" && model.radix === "decimal") return model.normalizedDecimal;
+    if (model.kind === "exponent-entry" && model.mantissa.radix === "decimal") return model.normalizedDecimal;
+  }
+  return undefined;
+}
+
+export function x2ShapeSetRestoredVisibleDecimals(input: X2ShapeSet | undefined): Set<string> {
+  const output = new Set<string>();
+  for (const fact of input ?? []) {
+    const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
+    if (decimal !== undefined) output.add(decimal);
+  }
+  return output;
+}
+
 export function x2ValueSetHasRestoredVisibleDecimal(
   input: X2ValueSet | undefined,
   fact: X2ValueFact,
@@ -2684,7 +2706,7 @@ export function x2StructuralMantissaConcatShapeFacts(
   const rightModel = x2ShapeDataModelForFact(right);
   if (
     rightModel.kind !== "mantissa" ||
-    (rightModel.radix !== "hex" && rightModel.radix !== "super") ||
+    (rightModel.radix !== "decimal" && rightModel.radix !== "hex" && rightModel.radix !== "super") ||
     rightModel.sign !== "" ||
     rightModel.hasDecimalPoint
   ) {
