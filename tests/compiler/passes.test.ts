@@ -46,6 +46,7 @@ import {
   x2CanUseClosedSignChangeDotSourceAt,
   x2CanUseSourceDotRestoreAt,
   x2CanonicalShapeFact,
+  x2ClosedDecimalExponentDisplayShapeFact,
   x2ClosedStructuralExponentMantissaShapeFact,
   x2ExponentMantissaSignChangedShapeFact,
   x2ExponentShapeFactFromMantissaFact,
@@ -1649,6 +1650,7 @@ describe("ir passes on synthetic programs", () => {
       exponentRaw: "3",
       exponentDigits: ["3"],
       normalizedDecimal: "5000",
+      closedDecimalDisplay: "mantissa:5000:decimal",
       safety: "errorProne",
     });
     expect(x2ShapeDataModelForFact("exponent:1.2:3:decimal")).toMatchObject({
@@ -1656,6 +1658,7 @@ describe("ir passes on synthetic programs", () => {
       exponentRaw: "3",
       exponentDigits: ["3"],
       normalizedDecimal: "1200",
+      closedDecimalDisplay: "mantissa:1200:decimal",
       safety: "errorProne",
     });
     expect(x2ShapeDataModelForFact("exponent:100000000:2:decimal")).toMatchObject({
@@ -1663,6 +1666,7 @@ describe("ir passes on synthetic programs", () => {
       exponentRaw: "2",
       exponentDigits: ["2"],
       normalizedDecimal: "10000000000",
+      closedDecimalDisplay: "exponent:1:10:decimal",
       safety: "errorProne",
     });
     expect(x2ShapeDataModelForFact("exponent:0.00000001:2:decimal")).toMatchObject({
@@ -1670,6 +1674,7 @@ describe("ir passes on synthetic programs", () => {
       exponentRaw: "2",
       exponentDigits: ["2"],
       normalizedDecimal: "0.000001",
+      closedDecimalDisplay: "exponent:1:-6:decimal",
       safety: "errorProne",
     });
   });
@@ -1713,6 +1718,26 @@ describe("ir passes on synthetic programs", () => {
         safety: "structuralOnly",
       },
     });
+  });
+
+  it("x2 shape algebra exposes closed decimal exponent display shapes without dot-safety promotion", () => {
+    expect(x2ClosedDecimalExponentDisplayShapeFact("exponent:5:3:decimal")).toBe("mantissa:5000:decimal");
+    expect(x2ClosedDecimalExponentDisplayShapeFact("exponent:100000000:2:decimal")).toBe(
+      "exponent:1:10:decimal",
+    );
+    expect(x2ClosedDecimalExponentDisplayShapeFact("exponent:0.00000001:2:decimal")).toBe(
+      "exponent:1:-6:decimal",
+    );
+    expect(x2ClosedDecimalExponentDisplayShapeFact("mantissa:5:decimal")).toBeUndefined();
+    expect(x2ClosedDecimalExponentDisplayShapeFact("hex-exponent:Г:2")).toBeUndefined();
+    expect(x2ClosedDecimalExponentDisplayShapeFact("exponent:5:BAD:decimal")).toBeUndefined();
+    expect(x2ShapeSetSafety(new Set(["exponent:100000000:2:decimal"]))).toBe("errorProne");
+    expect(
+      x2ShapeSetsHaveSameDecimalDisplayShape(
+        new Set(["exponent:100000000:2:decimal"]),
+        new Set(["exponent:1:10:decimal"]),
+      ),
+    ).toBe(true);
   });
 
   it("x2 shape algebra shifts and appends structural mantissa digits without decimalizing", () => {

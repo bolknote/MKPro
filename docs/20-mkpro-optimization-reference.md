@@ -1175,7 +1175,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     decimal value. Exact decimal display-shape facts feed unary display-shape
     results and, when the unary result itself is proved exact, concrete decimal
     result facts: `exponent:5:-1:decimal` through `К {x}` yields both the
-    displayed fractional shape and `decimal:0.5:normalized`. The same
+    displayed fractional shape and `decimal:0.5:normalized`. The same shape
+    algebra exposes a closed display form for decimal exponent-entry facts
+    without making them dot-safe hidden-X2 values: `exponent:5:3:decimal`
+    closes to `mantissa:5000:decimal`, while wide scientific forms such as
+    `exponent:100000000:2:decimal` close to `exponent:1:10:decimal` and remain
+    error-prone shape metadata. The same
     restored-visible decimal extractor is used for binary concrete arithmetic
     operands, so shape-only decimal displays can participate in exact
     `+`/`-`/`*`/finite-division proofs and in the pinned structural

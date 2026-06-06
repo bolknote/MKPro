@@ -90,6 +90,7 @@ export type X2ShapeDataModel =
       readonly exponentSign: "" | "-";
       readonly exponentDigits: readonly string[];
       readonly normalizedDecimal?: string | undefined;
+      readonly closedDecimalDisplay?: X2ShapeFact | undefined;
       readonly closedStructuralMantissa?: X2MantissaDataModel | undefined;
       readonly safety: X2ShapeSafety;
     }
@@ -2877,6 +2878,7 @@ export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
     if (!decimalExponentMantissaRawIsValid(exponent[1]!) || exponentRaw === undefined) {
       return { kind: "unknown", raw: fact, safety: "unknown" };
     }
+    const normalizedDecimal = normalizedExponentEntryValue(exponent[1]!, exponentRaw);
     const mantissaModel = decimalMantissaDataModel(exponent[1]!);
     return {
       kind: "exponent-entry",
@@ -2884,7 +2886,8 @@ export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
       exponentRaw,
       exponentSign: exponentRaw.startsWith("-") ? "-" : "",
       exponentDigits: shapeDigits(exponentRaw),
-      normalizedDecimal: normalizedExponentEntryValue(exponent[1]!, exponentRaw),
+      normalizedDecimal,
+      closedDecimalDisplay: normalizedDecimal === undefined ? undefined : exactDecimalDisplayShapeFact(normalizedDecimal),
       safety: "errorProne",
     };
   }
@@ -3026,6 +3029,13 @@ export function x2ClosedStructuralExponentMantissaShapeFact(fact: X2ShapeFact): 
   if (model.kind !== "exponent-entry") return undefined;
   const mantissa = x2MantissaShapeFactFromModel(model.mantissa);
   return mantissa === undefined ? undefined : x2StructuralMantissaShiftShapeFact(mantissa, model.exponentRaw);
+}
+
+export function x2ClosedDecimalExponentDisplayShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  return model.kind === "exponent-entry" && model.mantissa.radix === "decimal"
+    ? model.closedDecimalDisplay
+    : undefined;
 }
 
 export function x2StructuralMantissaShiftShapeFact(
@@ -6520,7 +6530,7 @@ function decimalDisplayShapeFacts(input: X2ShapeSet | undefined): Set<X2ShapeFac
       continue;
     }
     if (model.kind === "exponent-entry" && model.mantissa.radix === "decimal") {
-      const shape = model.normalizedDecimal === undefined ? undefined : exactDecimalDisplayShapeFact(model.normalizedDecimal);
+      const shape = model.closedDecimalDisplay;
       if (shape !== undefined) output.add(shape);
     }
   }
@@ -6531,7 +6541,7 @@ function decimalExponentDisplayShapeFacts(input: X2ShapeSet | undefined): Set<X2
   const output = new Set<X2ShapeFact>();
   for (const model of x2ShapeDataModels(input)) {
     if (model.kind !== "exponent-entry" || model.mantissa.radix !== "decimal") continue;
-    const shape = model.normalizedDecimal === undefined ? undefined : exactDecimalDisplayShapeFact(model.normalizedDecimal);
+    const shape = model.closedDecimalDisplay;
     if (shape !== undefined) output.add(shape);
   }
   return output;
