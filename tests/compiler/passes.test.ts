@@ -1221,10 +1221,18 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetSafety(new Set(["hex:8Ж:mantissa"]))).toBe("unknown");
     expect(x2ShapeSetSafety(new Set(["super:8A"]))).toBe("unknown");
     expect(x2ShapeSetSafety(new Set(["exponent:5::decimal"]))).toBe("errorProne");
+    expect(x2ShapeSetSafety(new Set(["mantissa:2:decimal", "hex:8Ж:mantissa"]))).toBe("dotSafeDecimal");
+    expect(x2ShapeSetSafety(new Set(["hex:FABC:mantissa", "super:8A"]))).toBe("structuralOnly");
     expect(
       x2ShapeSetsHaveSameDotSafeDecimal(
         new Set(["mantissa:2:decimal"]),
         new Set(["mantissa:2:decimal"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameDotSafeDecimal(
+        new Set(["mantissa:2:decimal", "hex:8Ж:mantissa"]),
+        new Set(["mantissa:2:decimal", "super:8A"]),
       ),
     ).toBe(true);
     expect(

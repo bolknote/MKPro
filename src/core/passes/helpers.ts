@@ -2911,7 +2911,7 @@ export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
 
 export function x2ShapeDataModels(input: X2ShapeSet | undefined): X2ShapeDataModel[] {
   const models: X2ShapeDataModel[] = [];
-  for (const fact of input ?? []) models.push(x2ShapeDataModelForFact(fact));
+  for (const fact of canonicalShapeSet(input)) models.push(x2ShapeDataModelForFact(fact));
   return models;
 }
 
@@ -3080,8 +3080,8 @@ export function x2ShapeSetSafety(input: X2ShapeSet | undefined): X2ShapeSafety {
   let sawDotSafe = false;
   let sawStructural = false;
   let sawUnknown = false;
-  for (const fact of input) {
-    const safety = x2ShapeFactSafety(fact);
+  for (const model of x2ShapeDataModels(input)) {
+    const safety = model.safety;
     if (safety === "errorProne") return "errorProne";
     if (safety === "structuralOnly") sawStructural = true;
     else if (safety === "dotSafeDecimal") sawDotSafe = true;
