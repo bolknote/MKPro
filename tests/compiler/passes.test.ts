@@ -55,15 +55,18 @@ import {
   x2NextStackShiftingProducerIndex,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
+  x2StateHasSameClosedSignChangeSourceInXAndX2,
   x2StateIsClosedPlainContext,
   x2ShapeDataModelForFact,
   x2ShapeSetHasOnlyDotSafeStructuralMantissas,
   x2ShapeSetsHaveSameDecimalDisplayShape,
   x2ShapeSetsHaveSameDotSafeStructuralMantissa,
   x2ShapeSetsHaveSameDotSafeDecimal,
+  x2ShapeSetsHaveSameRestoredDisplayShape,
   x2ShapeSetsHaveSameStructuralShape,
   x2ShapeSetSafety,
   x2SignChangedSharedStructuralShapeFacts,
+  x2StructuralRestoreShapeFacts,
   x2StructuralMantissaAppendDigitsShapeFact,
   x2StructuralMantissaConcatShapeFacts,
   x2StructuralMantissaShiftShapeFact,
@@ -1163,6 +1166,18 @@ describe("ir passes on synthetic programs", () => {
         new Set(["hex:FA00:mantissa"]),
       ),
     ).toBe(true);
+    expect(x2ShapeStateText(x2StructuralRestoreShapeFacts(new Set(["hex-exponent:Г:2"])))).toEqual([
+      "hex-exponent:Г:2",
+      "hex:Г00:mantissa",
+    ]);
+    expect(x2ShapeStateText(x2StructuralRestoreShapeFacts(new Set(["hex-exponent:Г:-2"])))).toEqual([
+      "hex-exponent:Г:-2",
+      "hex:0.0Г:mantissa",
+    ]);
+    expect(x2ShapeStateText(x2StructuralRestoreShapeFacts(new Set(["super-exponent:FA:2"])))).toEqual([
+      "hex:FA00:mantissa",
+      "super-exponent:FA:2",
+    ]);
   });
 
   it("x2 shape algebra compares decimal display shapes without making them dot-safe", () => {
@@ -1196,6 +1211,61 @@ describe("ir passes on synthetic programs", () => {
         new Set(["exponent:1:8:decimal"]),
       ),
     ).toBe(false);
+  });
+
+  it("x2 shape algebra compares restored display shapes across decimal and structural facts", () => {
+    expect(
+      x2ShapeSetsHaveSameRestoredDisplayShape(
+        new Set(["exponent:100:0:decimal"]),
+        new Set(["mantissa:100:decimal"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameRestoredDisplayShape(
+        new Set(["hex-exponent:Г:-2"]),
+        new Set(["hex:0.0Г:mantissa"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameRestoredDisplayShape(
+        new Set(["super-exponent:FA:2"]),
+        new Set(["hex:FA00:mantissa"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ShapeSetsHaveSameRestoredDisplayShape(
+        new Set(["mantissa:02:decimal"]),
+        new Set(["mantissa:2:decimal"]),
+      ),
+    ).toBe(false);
+  });
+
+  it("x2 closed sign-change source equality accepts shape-only display proofs", () => {
+    const decimalDisplayState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const structuralState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:Г00:mantissa"]),
+      x2Shape: new Set<X2ShapeFact>(["hex-exponent:Г:2"]),
+      entry: { kind: "closed" },
+    };
+    const leadingZeroState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:2:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:02:decimal"]),
+      entry: { kind: "closed" },
+    };
+
+    expect(x2StateHasSameClosedSignChangeSourceInXAndX2(decimalDisplayState)).toBe(true);
+    expect(x2StateHasSameClosedSignChangeSourceInXAndX2(structuralState)).toBe(true);
+    expect(x2StateHasSameClosedSignChangeSourceInXAndX2(leadingZeroState)).toBe(false);
   });
 
   it("x2 shape algebra recognizes emulator-pinned dot-safe structural mantissas", () => {

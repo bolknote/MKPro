@@ -1144,17 +1144,25 @@ function decimalTimesStructuralHexDigitValue(left: string, rightDigit: number): 
 
 function structuralHexDigitTimesDecimalDisplayShape(leftDigit: number, right: string): X2ShapeFact | undefined {
   const product = structuralHexDigitTimesDecimalProduct(leftDigit, right);
-  return product === undefined ? undefined : decimalMantissaShapeFact(product.display);
+  return structuralHexDecimalProductDisplayShape(product);
 }
 
 function decimalTimesStructuralHexDigitDisplayShape(left: string, rightDigit: number): X2ShapeFact | undefined {
   const product = decimalTimesStructuralHexDigitProduct(left, rightDigit);
-  return product === undefined ? undefined : decimalMantissaShapeFact(product.display);
+  return structuralHexDecimalProductDisplayShape(product);
 }
 
 interface StructuralHexDecimalProduct {
   readonly value: string;
-  readonly display: string;
+  readonly display?: string;
+  readonly displayShape?: X2ShapeFact;
+}
+
+function structuralHexDecimalProductDisplayShape(
+  product: StructuralHexDecimalProduct | undefined,
+): X2ShapeFact | undefined {
+  if (product === undefined) return undefined;
+  return product.displayShape ?? (product.display === undefined ? undefined : decimalMantissaShapeFact(product.display));
 }
 
 const STRUCTURAL_HEX_DIGIT_TIMES_DECIMAL_TABLE: ReadonlyMap<string, StructuralHexDecimalProduct> = new Map([
@@ -1241,92 +1249,64 @@ function structuralHexExponentTimesDecimalValue(
   left: StructuralHexExponentOperand,
   right: string,
 ): string | undefined {
-  if (left.digit !== 13 || left.exponent !== "-2") return undefined;
-  switch (right) {
-    case "1":
-      return "0.03";
-    case "2":
-      return "0.1";
-    case "4":
-      return "0.2";
-    case "5":
-      return "0.53";
-    case "8":
-      return "0.6";
-    case "16":
-      return "9.2";
-    default:
-      return undefined;
-  }
+  return structuralHexExponentTimesDecimalProduct(left, right)?.value;
 }
 
 function decimalTimesStructuralHexExponentValue(
   left: string,
   right: StructuralHexExponentOperand,
 ): string | undefined {
-  if (right.digit !== 13 || right.exponent !== "-2") return undefined;
-  switch (left) {
-    case "1":
-      return "0.1";
-    case "2":
-      return "0.2";
-    case "4":
-      return "0.4";
-    case "5":
-      return "0.5";
-    case "8":
-      return "0.8";
-    case "16":
-      return "1.6";
-    default:
-      return undefined;
-  }
+  return decimalTimesStructuralHexExponentProduct(left, right)?.value;
 }
 
 function structuralHexExponentTimesDecimalDisplayShape(
   left: StructuralHexExponentOperand,
   right: string,
 ): X2ShapeFact | undefined {
-  if (left.digit !== 13 || left.exponent !== "-2") return undefined;
-  switch (right) {
-    case "1":
-      return decimalExponentShapeFact("3", "-2");
-    case "2":
-      return decimalExponentShapeFact("1", "-1");
-    case "4":
-      return decimalExponentShapeFact("2", "-1");
-    case "5":
-      return decimalExponentShapeFact("5.3", "-1");
-    case "8":
-      return decimalExponentShapeFact("6", "-1");
-    case "16":
-      return decimalMantissaShapeFact("9.2");
-    default:
-      return undefined;
-  }
+  return structuralHexDecimalProductDisplayShape(structuralHexExponentTimesDecimalProduct(left, right));
 }
 
 function decimalTimesStructuralHexExponentDisplayShape(
   left: string,
   right: StructuralHexExponentOperand,
 ): X2ShapeFact | undefined {
-  if (right.digit !== 13 || right.exponent !== "-2") return undefined;
-  switch (left) {
-    case "1":
-      return decimalExponentShapeFact("1", "-1");
-    case "2":
-      return decimalExponentShapeFact("2", "-1");
-    case "4":
-      return decimalExponentShapeFact("4", "-1");
-    case "5":
-      return decimalExponentShapeFact("5", "-1");
-    case "8":
-      return decimalExponentShapeFact("8", "-1");
-    case "16":
-      return decimalMantissaShapeFact("1.6");
-    default:
-      return undefined;
-  }
+  return structuralHexDecimalProductDisplayShape(decimalTimesStructuralHexExponentProduct(left, right));
+}
+
+const STRUCTURAL_HEX_EXPONENT_TIMES_DECIMAL_TABLE: ReadonlyMap<string, StructuralHexDecimalProduct> = new Map([
+  ["1", { value: "0.03", displayShape: decimalExponentShapeFact("3", "-2") }],
+  ["2", { value: "0.1", displayShape: decimalExponentShapeFact("1", "-1") }],
+  ["4", { value: "0.2", displayShape: decimalExponentShapeFact("2", "-1") }],
+  ["5", { value: "0.53", displayShape: decimalExponentShapeFact("5.3", "-1") }],
+  ["8", { value: "0.6", displayShape: decimalExponentShapeFact("6", "-1") }],
+  ["16", { value: "9.2", display: "9.2" }],
+]);
+
+const DECIMAL_TIMES_STRUCTURAL_HEX_EXPONENT_TABLE: ReadonlyMap<string, StructuralHexDecimalProduct> = new Map([
+  ["1", { value: "0.1", displayShape: decimalExponentShapeFact("1", "-1") }],
+  ["2", { value: "0.2", displayShape: decimalExponentShapeFact("2", "-1") }],
+  ["4", { value: "0.4", displayShape: decimalExponentShapeFact("4", "-1") }],
+  ["5", { value: "0.5", displayShape: decimalExponentShapeFact("5", "-1") }],
+  ["8", { value: "0.8", displayShape: decimalExponentShapeFact("8", "-1") }],
+  ["16", { value: "1.6", display: "1.6" }],
+]);
+
+function structuralHexExponentTimesDecimalProduct(
+  left: StructuralHexExponentOperand,
+  right: string,
+): StructuralHexDecimalProduct | undefined {
+  return left.digit === 13 && left.exponent === "-2"
+    ? STRUCTURAL_HEX_EXPONENT_TIMES_DECIMAL_TABLE.get(right)
+    : undefined;
+}
+
+function decimalTimesStructuralHexExponentProduct(
+  left: string,
+  right: StructuralHexExponentOperand,
+): StructuralHexDecimalProduct | undefined {
+  return right.digit === 13 && right.exponent === "-2"
+    ? DECIMAL_TIMES_STRUCTURAL_HEX_EXPONENT_TABLE.get(left)
+    : undefined;
 }
 
 function structuralHexSubtractOneDecimalValue(digit: number): string | undefined {
@@ -2782,17 +2762,29 @@ export function x2ShapeSetsHaveSameDecimalDisplayShape(
   return false;
 }
 
+export function x2ShapeSetsHaveSameRestoredDisplayShape(
+  left: X2ShapeSet | undefined,
+  right: X2ShapeSet | undefined,
+): boolean {
+  return x2ShapeSetsHaveSameDecimalDisplayShape(left, right) ||
+    x2ShapeSetsHaveSameStructuralShape(left, right);
+}
+
 export function x2ShapeSetsHaveSameStructuralShape(
   left: X2ShapeSet | undefined,
   right: X2ShapeSet | undefined,
 ): boolean {
   if (left === undefined || right === undefined) return false;
-  const leftShapes = structuralRestoreShapeFacts(left);
-  const rightShapes = structuralRestoreShapeFacts(right);
+  const leftShapes = x2StructuralRestoreShapeFacts(left);
+  const rightShapes = x2StructuralRestoreShapeFacts(right);
   for (const shape of leftShapes) {
     if (rightShapes.has(shape)) return true;
   }
   return false;
+}
+
+export function x2StructuralRestoreShapeFacts(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  return structuralRestoreShapeFacts(canonicalStructuralShapeFacts(input));
 }
 
 export function x2ShapeSetsHaveSameDotSafeStructuralMantissa(
@@ -2877,6 +2869,17 @@ export function x2StateHasSameDotSafeDecimalInXAndX2(state: X2ValueDataflowState
 
 export function x2StateHasSameStructuralShapeInXAndX2(state: X2ValueDataflowState | undefined): boolean {
   return state !== undefined && x2ShapeSetsHaveSameStructuralShape(state.xShape, state.x2Shape);
+}
+
+export function x2StateHasSameClosedSignChangeSourceInXAndX2(
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  return state !== undefined &&
+    (
+      x2ValueSetHasIntersection(state.x, state.x2) ||
+      x2StateHasSameDotSafeDecimalInXAndX2(state) ||
+      x2ShapeSetsHaveSameRestoredDisplayShape(state.xShape, state.x2Shape)
+    );
 }
 
 export function x2StateHasSameDotSafeStructuralMantissaInXAndX2(

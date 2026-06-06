@@ -1140,8 +1140,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Closed structural exponent shapes become fresh `ВП`-entry sources only
     after X2 value/shape dataflow proves the same structural restore-shape is
     visible in both `X` and hidden `X2`; the source is the restored mantissa
-    shape (`hex-exponent:Г:2` seeds `hex:Г00`), not a decimal value and not the
-    old exponent-entry marker.
+    shape (`hex-exponent:Г:2` seeds `hex:Г00`, and negative shifts such as
+    `hex-exponent:Г:-2` seed `hex:0.0Г`), not a decimal value and not the old
+    exponent-entry marker.
     Closed-context `.`
     restores carry structural hex/super hidden X2 shapes forward as structural
     `ВП`-entry sources and carry signed-zero decimal shapes forward as `-0`
@@ -1333,10 +1334,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     rewrite is deliberately shape-sensitive: the same empty op before the
     first exponent digit, or before another exponent digit, changes number
     entry and is kept. Closed-context `/-/ /-/` pairs are removed only when
-    value dataflow proves an ordinary decimal `X == X2` fact, including
-    fractional exponent-derived values such as `decimal:0.005:normalized`, and
-    structural shape equality, including synced structural exponent shapes, can
-    prove the same cancellation without decimalizing the shape. The downstream
+    value dataflow proves the same sign source in visible `X` and hidden X2:
+    an ordinary decimal/register/opaque fact, exact decimal display-shape
+    equality such as `exponent:*:*:decimal`, or structural restored-display
+    equality, including synced structural exponent shapes. Shape-only proofs
+    cancel the pair without decimalizing the shape or making single restores dot-safe. The downstream
     scan still proves the pair is not acting as the previous-command
     shield for a later context-sensitive `.`/`/-/`/`ВП` restore. Register
     value-memory and decimal preload metadata can supply the same proved

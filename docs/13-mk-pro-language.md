@@ -1322,13 +1322,17 @@ The pipeline currently contains:
   `decimal:*` facts. Their shape facts are display-accurate: ordinary decimal
   displays use `mantissa:*:decimal`, while wide or small scientific decimal
   displays use `exponent:*:*:decimal` instead of a fake ordinary mantissa.
-  The shape algebra can compare those exact decimal display shapes as visible
-  `X` equality, including closed exponent forms, but this is separate from
-  dot-safety: `exponent:*:*:decimal` is not promoted to a safe `.` restore
-  source merely because the visible display matches. The same canonical decimal
-  display shapes may seed opaque stable-expression source keys for later
+  The shape algebra compares exact decimal display shapes and structural
+  restored-display shapes through one restored-display equality layer, including
+  closed decimal exponent forms and structural exponent shifts. This is
+  separate from dot-safety: `exponent:*:*:decimal` is not promoted to a safe `.`
+  restore source merely because the visible display matches. The same canonical
+  decimal display shapes may seed opaque stable-expression source keys for later
   hidden-temp proofs; those keys identify the displayed source shape but do not
-  infer a decimal result value for the operation.
+  infer a decimal result value for the operation. Closed-context `/-/ /-/`
+  cancellation uses the same source-equality layer, so a pair can be removed
+  when visible `X` and hidden X2 only prove the same display shape; that proof
+  still does not make a single `.`/`/-/` restore dot-safe.
   Longer display-glyph runs such as `8Е000000`, hex-like display mantissas, and `FA`..`FF` super forms are tracked as
   shape-only `hex:*` / `super:*` facts until a later proof makes them dot-safe. Hex/super preloads
   with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural
@@ -1424,8 +1428,9 @@ The pipeline currently contains:
   or opaque expression facts. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
-  mantissa sign toggles, and non-negative exponent shifts that are pure display
-  concatenation (`hex:Г` through `ВП 2` compares as `hex:Г00`) without
+  mantissa sign toggles, and exponent shifts that are pure restored-display
+  facts (`hex:Г` through `ВП 2` compares as `hex:Г00`, while
+  `hex:Г ВП -2` compares as `hex:0.0Г`) without
   promoting them to ordinary decimal value facts; shifted two-byte `super:FA`
   forms compare as the resulting hex-like display mantissa. Structural shape
   equality is based on the canonical shape model, so spelling differences such as
