@@ -20,13 +20,13 @@ level. Reaching the hatch on the fourth level sets `Y` to `5`.
 ## MK-61 patch
 
 The printed program is for B3-34/MK-54. The article's MK-61/MK-52 note replaces
-the original command at address `69` with `ИП0 ПЕ F↻ КИПЕ` and updates branch
+the original command at address `69` with `Пх0 хПЕ F↻ КПхЕ` and updates branch
 targets:
 
 - `55.80` -> `55.83`
 - `60.94` -> `60.97`
 - `62.80` -> `62.83`
-- `93 ПС` -> `96 ПС`
+- `93 хПС` -> `96 хПС`
 
 The note prints the last two old `97` targets as `A1`, but the same +3 shift
 used by the rest of the patch places the shifted final `В/О` at `A0`; this
@@ -36,10 +36,10 @@ listing uses `A0` at addresses `87` and `92`.
 
 Before the first run:
 
-- `5 П9`
-- `63 ПД`
-- `96 ПС`
-- `Сx П0`
+- `5 хП9`
+- `63 хПД`
+- `96 хПС`
+- `Сx хП0`
 
 Put the difficulty, from `1` to `9`, into registers `R1`..`R4`. Put starting
 cell coordinates into `R5`..`R8`; the article's simple setup uses the same

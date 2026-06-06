@@ -21,10 +21,10 @@ transitions through the subroutine stack.
 
 First load the program and initialize the helper constants:
 
-- `1 П9`
-- `73 ПВ`
-- `7 ПС`
-- `0.1 ПД`
+- `1 хП9`
+- `73 хПВ`
+- `7 хПС`
+- `0.1 хПД`
 
 Enter the piece coordinates:
 
@@ -37,9 +37,9 @@ Enter the piece coordinates:
 
 The diagrammed starting position from the article is entered as:
 
-`3 П7 5 П0 7 П1 1 П8 П2 ПА 5 П4 8 П5`
+`3 хП7 5 хП0 7 хП1 1 хП8 хП2 хПА 5 хП4 8 хП5`
 
-Put the end-of-game signal `E50` in `R3` with `150 ВП 99 ВП П3`, then jump to
+Put the end-of-game signal `E50` in `R3` with `150 ВП 99 ВП хП3`, then jump to
 the move generator with `БП 52`.
 
 ## Play

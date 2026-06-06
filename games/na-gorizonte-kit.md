@@ -10,14 +10,14 @@
 
 The magazine listing uses the undocumented B3-34/MK-54 command `КП↑` at address
 13. On those calculators it behaves like an indirect store through `R0` without
-decrementing `R0`; on MK-61 the same key code is the ordinary `КПЕ`, so the
+decrementing `R0`; on MK-61 the same key code is the ordinary `КхПЕ`, so the
 listing must be patched.
 
 This version keeps the original addresses 00-96 and replaces address 13 with a
 jump to a helper at 97-A4:
 
 ```text
-97 ИП0  98 П7  99 ↔  A0 КП7  A1 FL0  A2 05  A3 БП  A4 16
+97 Пх0  98 хП7  99 ↔  A0 КхП7  A1 FL0  A2 05  A3 БП  A4 16
 ```
 
 The helper copies the loop selector from `R0` into `R7`, performs the indirect
@@ -32,13 +32,13 @@ counterclockwise; set the `Р-Г` switch to `Г`.
 
 Before the first run, initialize:
 
-- `R6`: move counter, `Сх П6`;
-- `R8`: harpoon speed, `180 П8`;
+- `R6`: move counter, `Сх хП6`;
+- `R8`: harpoon speed, `180 хП8`;
 - `RA`: pseudo-random seed, any number from 0 to 1;
-- `RB`: message and indirect jump to address 68, `10000068 K- ВП ПВ`;
+- `RB`: message and indirect jump to address 68, `10000068 K- ВП хПВ`;
 - `RC`: indirect jump to address 73, maneuver time, and approach threshold,
-  `573 ПС`;
-- `RD`: indirect jump to address 04, `4 ПД`.
+  `573 хПС`;
+- `RD`: indirect jump to address 04, `4 хПД`.
 
 Start with `В/О С/П`. Enter the ship direction, press `В↑`, enter ship speed
 `0..3`, press `В↑`, then `С/П`. Each stop shows the whale X coordinate; use

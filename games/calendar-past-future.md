@@ -14,10 +14,10 @@ The MK-61 version displays a seven-position weekday marker: `Г` for Monday or F
 
 Before use, enter the program and then the constants:
 
-- `1918 ПВ`
-- `2.6 ПС`
-- `0.4 ПД`
-- `95 П8`
-- `10008 П9`
-- `94 ПА`
-- `88 ПЕ`
+- `1918 хПВ`
+- `2.6 хПС`
+- `0.4 хПД`
+- `95 хП8`
+- `10008 хП9`
+- `94 хПА`
+- `88 хПЕ`

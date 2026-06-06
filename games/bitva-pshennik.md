@@ -23,7 +23,7 @@ The source article uses these starting values:
 | Register | Role |
 | --- | --- |
 | `R0` | loss coefficient |
-| `R1` | total calculator army strength, for example `9000 П1` |
+| `R1` | total calculator army strength, for example `9000 хП1` |
 | `R2`, `R3` | calculator reserve and equivalent strength; clear `R3` before the game |
 | `R4` | battle time; clear before the game |
 | `R5` | player's forward regiment, then total engaged player strength |
@@ -37,7 +37,7 @@ The source article uses these starting values:
 
 One published setup is:
 
-`9000 П1 Сх П3 Сх П4 5000 П5 3000 П6 1000 П7 Сх П8 600 П9 500 ПА`
+`9000 хП1 Сх хП3 Сх хП4 5000 хП5 3000 хП6 1000 хП7 Сх хП8 600 хП9 500 хПА`
 
 Enter the program, set the `Р-Г` switch to `Г`, then start with `В/О С/П`.
 

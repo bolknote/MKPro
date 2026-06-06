@@ -23,11 +23,11 @@ The article gives these register roles:
 | Register | Role |
 | --- | --- |
 | `R0`, `R2`, `R8` | operational registers |
-| `R1` | calculator army strength, for example `10000 П1` |
+| `R1` | calculator army strength, for example `10000 хП1` |
 | `R3` | losses for both sides, computed by the calculator |
 | `R4`, `R5` | unused |
 | `R6` | battle time; clear before the game |
-| `R7` | subroutine entry address, usually `92 П7` |
+| `R7` | subroutine entry address, usually `92 хП7` |
 | `R9` | `3ГГОГ`, the victory signal over the calculator army |
 | `Ra` | player reserve |
 | `Rb` | player's central regiment |
@@ -36,7 +36,7 @@ The article gives these register roles:
 
 One setup mentioned in the source is:
 
-`10000 П1 Сх П6 92 П7 1000 ПА 3700 ПВ 1800 ПС ПД`
+`10000 хП1 Сх хП6 92 хП7 1000 хПА 3700 хПВ 1800 хПС хПД`
 
 Enter the program, set the `Р-Г` switch to `Г`, then start with `В/О С/П`.
 
@@ -45,7 +45,7 @@ Enter the program, set the `Р-Г` switch to `Г`, then start with `В/О С/П`
 At each stop the display shows the active regiment number, and `Y` contains its
 strength. Enter a positive number and press `С/П` to reinforce the regiment,
 or use `Сх С/П` to leave it fighting with current strength. To send reserve
-troops on an independent rear raid, enter `3ГГОГ` with `ИП9 С/П`; the later the
+troops on an independent rear raid, enter `3ГГОГ` with `Пх9 С/П`; the later the
 raid, the stronger the panic effect on the calculator army, but the opponent can
 counter it on the next hour.
 

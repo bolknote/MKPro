@@ -23,9 +23,9 @@ the fractional part and the black checker in the integer part.
 
 For the diagrammed starting position enter:
 
-`17.13 П1 26.22 П2 37.33 П3 46.42 П4 57.53 П5 66.62 П6 77.73 П7 86.82 П8`
+`17.13 хП1 26.22 хП2 37.33 хП3 46.42 хП4 57.53 хП5 66.62 хП6 77.73 хП7 86.82 хП8`
 
-Then enter `100 П9`, set the `Р-Г` switch to `Г`, and start with
+Then enter `100 хП9`, set the `Р-Г` switch to `Г`, and start with
 `Сх БП 47 С/П`.
 
 ## Play

@@ -14,8 +14,8 @@ The goat tries to break through to the last rank; the wolves try to trap it
 against the board edge.
 
 The printed program is for B3-34/MK-54. For MK-61/MK-52, the article says to
-insert the standard bridge `ИП0 ПЕ XY` between original addresses `80` and `81`,
-change the call target at address `58` from `88` to `91`, and use `97 ПД`.
+insert the standard bridge `Пх0 хПЕ XY` between original addresses `80` and `81`,
+change the call target at address `58` from `88` to `91`, and use `97 хПД`.
 Those changes are already applied here.
 
 ## Setup
@@ -24,19 +24,19 @@ Set the angle switch to grads.
 
 Enter transition addresses:
 
-- `20 П8`
-- `42 ПА`
-- `65 ПВ`
-- `69 ПС`
-- `97 ПД`
+- `20 хП8`
+- `42 хПА`
+- `65 хПВ`
+- `69 хПС`
+- `97 хПД`
 
 Enter the starting pieces:
 
-- `19 П1`
-- `39 П2`
-- `79 П3`
-- `99 П4`
-- `55 П5`
+- `19 хП1`
+- `39 хП2`
+- `79 хП3`
+- `99 хП4`
+- `55 хП5`
 
 Start with `Сx В/О С/П`. At each stop the display shows the square chosen by
 the PMK. To move, enter the piece number, `ПП`, the target square, and `С/П`.
