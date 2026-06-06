@@ -895,7 +895,10 @@ Display rewrites are separated into strategy selection + body lowering.
   by constant folding and seed decimal facts only when every resulting nibble is
   still decimal; A-F/hex-cell results seed shape-only structural `hex:*`
   mantissas when both operands can be parsed as Latin hex nibbles or known
-  MK-61 display glyphs `С`/`Г`/`Е`, while unknown glyph cells remain conservative. `К °->′`,
+  MK-61 display glyphs `С`/`Г`/`Е`, while unknown glyph cells remain
+  conservative. The shape parser and preload recognizer use that same closed
+  digit set, so arbitrary Cyrillic display letters such as `Ж` no longer enter
+  the structural X2 lattice as if they were proved hex digits. `К °->′`,
   `К °->′"`, `К °<-′"`, and `К °<-′` seed exact decimal facts only when the
   domain is safe, the rational sexagesimal conversion has a finite decimal
   expansion, and the normalized result fits the eight-significant-digit

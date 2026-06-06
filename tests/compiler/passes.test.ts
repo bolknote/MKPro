@@ -770,6 +770,19 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2 value dataflow rejects unknown Cyrillic glyphs as structural hex facts", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8Ж000000"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[1]?.x)).toEqual(["reg:2"]);
+    expect(x2ValueStateText(states[1]?.x2)).toEqual(["reg:2"]);
+    expect(x2ShapeStateText(states[1]?.xShape)).toEqual([]);
+    expect(x2ShapeStateText(states[1]?.x2Shape)).toEqual([]);
+  });
+
   it("x2 value dataflow gives closed super sign-change a structural expr key", () => {
     const program: IrOp[] = [
       recall("2", "preload const FA"),
@@ -1146,12 +1159,23 @@ describe("ir passes on synthetic programs", () => {
       exponent: "3",
       safety: "structuralOnly",
     });
+    expect(parseX2ShapeFact("hex:8Ж:mantissa")).toEqual({
+      kind: "unknown",
+      raw: "hex:8Ж:mantissa",
+      safety: "unknown",
+    });
+    expect(parseX2ShapeFact("hex:8Е:mantissa")).toEqual({
+      kind: "hex-mantissa",
+      raw: "8Е",
+      safety: "structuralOnly",
+    });
   });
 
   it("x2 shape algebra keeps leading-zero and structural shapes out of no-op equality", () => {
     expect(x2ShapeSetSafety(new Set(["mantissa:2:decimal"]))).toBe("dotSafeDecimal");
     expect(x2ShapeSetSafety(new Set(["mantissa:-0:decimal"]))).toBe("errorProne");
     expect(x2ShapeSetSafety(new Set(["hex:FABC:mantissa"]))).toBe("structuralOnly");
+    expect(x2ShapeSetSafety(new Set(["hex:8Ж:mantissa"]))).toBe("unknown");
     expect(x2ShapeSetSafety(new Set(["exponent:5::decimal"]))).toBe("errorProne");
     expect(
       x2ShapeSetsHaveSameDotSafeDecimal(
