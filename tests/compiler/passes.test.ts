@@ -3811,6 +3811,38 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(reverseStates[5]?.xShape)).toEqual(["mantissa:180:decimal"]);
   });
 
+  it("x2 value dataflow uses exact decimal display shapes as binary operands", () => {
+    const shapeOnly: X2ValueDataflowState = {
+      y: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x: new Set(),
+      x2: new Set(),
+      yShape: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:1:7:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(shapeOnly, plain(0x10, "+"), "normal", {}, 0);
+
+    expect(x2ValueStateText(result?.x) ?? []).toContain("decimal:10000002:normalized");
+    expect(x2ShapeStateText(result?.xShape)).toEqual(["mantissa:10000002:decimal"]);
+  });
+
+  it("x2 value dataflow feeds exact decimal display shapes to structural hex arithmetic", () => {
+    const shapeOnly: X2ValueDataflowState = {
+      y: new Set(),
+      x: new Set(),
+      x2: new Set(),
+      yShape: new Set<X2ShapeFact>(["hex:A:mantissa"]),
+      xShape: new Set<X2ShapeFact>(["exponent:1.8:1:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(shapeOnly, plain(0x12, "×"), "normal", {}, 0);
+
+    expect(x2ValueStateText(result?.x) ?? []).toContain("decimal:20:normalized");
+    expect(x2ValueStateText(result?.x) ?? [])
+      .not.toContain("expr-key:12(shape:hex:A:mantissa,shape:exponent:1.8:1:decimal)");
+    expect(x2ShapeStateText(result?.xShape)).toEqual(["mantissa:020:decimal"]);
+  });
+
   it("x2 value dataflow models emulator-pinned single hex digit multiply table", () => {
     const leftHex: IrOp[] = [
       recall("1", "preload const С"),

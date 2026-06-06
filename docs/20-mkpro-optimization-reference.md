@@ -1137,7 +1137,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `hex-exponent:B:2` proves shape-only `hex:AB00`) without becoming a
     decimal value. Exact decimal display-shape facts can also feed shape-only
     unary display results, so `exponent:5:-1:decimal` proves the displayed
-    fractional result of `К {x}` without adding an ordinary decimal value.
+    fractional result of `К {x}` without adding an ordinary decimal value; the
+    same restored-visible decimal extractor is used for binary concrete
+    arithmetic operands, so shape-only decimal displays can participate in
+    exact `+`/`-`/`*`/finite-division proofs and in the pinned structural
+    hex-versus-decimal tables without becoming dot-safe X2 aliases.
     The same exact display-shape proof can feed a following ordinary `ВП`
     through the restored visible decimal mantissa: a synced
     `exponent:1:8:decimal` re-enters `ВП` as mantissa `100000000`, enabling
