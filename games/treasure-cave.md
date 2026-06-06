@@ -3,7 +3,7 @@
 - Author: Vasiliy Zakharenko
 - Source: *Tekhnika Molodezhi*, No. 7, 1987, «Клуб электронных игр» (KEI column)
 - Program: [treasure-cave.txt](treasure-cave.txt)
-- Listing restored from scan `TM.1987-07.KEI.pdf` (macOS Vision OCR + manual table check)
+- Listing restored from the public scan at `https://img-fotki.yandex.ru/get/44951/137106206.6d5/0_1d841d_dc897752_orig` (macOS Vision OCR + manual table check)
 
 ## Description
 

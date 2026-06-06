@@ -3,7 +3,7 @@
 - Author: Mikhail Pukhov
 - Source: *Tekhnika Molodezhi*, No. 7, 1987, «Клуб электронных игр» (KEI column)
 - Program: [winner.txt](winner.txt)
-- Listing restored from scan `TM.1987-07.KEI.pdf` with MK-61 patches from the article
+- Listing restored from a *Tekhnika Molodezhi*, No. 7, 1987 scan with MK-61 patches from the article
 
 ## Description
 
