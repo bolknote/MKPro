@@ -34,6 +34,23 @@ quadrant hints in battleship.
 
 Lord_BSS listings span both types; see [05-reading-lordbss-games.md](./05-reading-lordbss-games.md).
 
+## Historical Context: KLIP and Ekspress
+
+Lord_BSS describes KLIP, the `Klub Lyubiteley Igrovyh Programm`, as the largest
+Soviet PMK game club. It was organized by Mihail Hramov from Samara and worked
+as a correspondence hub: Hramov collected a game bank and coordinated program
+exchange between PMK enthusiasts.
+
+In 1990 KLIP began publishing its own irregular printed organ, `Byulleten
+KLIPa`. Only two issues were produced, with a print run of 40 copies. In 1991
+Vladimir Trofimchuk from Vladivostok joined the publishing effort with access
+to copying facilities: Hramov remained editor-in-chief, Trofimchuk became
+technical editor, and Sergey Chursanov handled artwork. The bulletin then grew
+into a brochure named `Ekspress`, which carried programs, exchange notices, and
+eventually advertising.
+
+Source: [Lord_BSS, PMK history](https://lordbss.narod.ru/pmk_story.html).
+
 ## Design Constraints
 
 Before choosing a game, list hard limits:

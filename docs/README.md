@@ -62,6 +62,7 @@ Hardware internals and chip-level detail live separately in
 
 - Igor Danilov, *Secrets of the Programmable Microcalculator* (Kvant library #55, 1986) — pedagogical baseline, written mainly for the B3-34 family
 - Independent MK-61 notes on undocumented behavior and command appendices
+- [Lord_BSS: PMK history](https://lordbss.narod.ru/pmk_story.html) — context on the PMK game movement, KLIP, `Byulleten KLIPa`, and `Ekspress`
 - [Elektronika MK-61 operating manual scan](https://www.wass.net/manuals/Elektronika%20MK-61.pdf)
 - [Habr: MK-61 history, emulation, and internals](https://habr.com/ru/articles/505612/)
 
