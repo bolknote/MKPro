@@ -7492,7 +7492,7 @@ function normalizeX2RestoreFactsForX(input: X2ValueSet): Set<X2ValueFact> {
 
 function normalizeX2RestoreShapesForX(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  for (const fact of input ?? []) {
+  for (const fact of canonicalShapeSet(input)) {
     const mantissa = /^mantissa:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):decimal$/u.exec(fact);
     if (mantissa !== null) {
       const normalized = normalizePlainDecimal(mantissa[1]!);
@@ -7511,7 +7511,7 @@ function x2SyncShapeSetFromVisibleX(input: X2ShapeSet | undefined): Set<X2ShapeF
 
 function normalizeX2SyncShapesFromX(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  for (const fact of input ?? []) {
+  for (const fact of canonicalShapeSet(input)) {
     const mantissa = /^mantissa:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):decimal$/u.exec(fact);
     if (mantissa !== null) {
       const raw = mantissa[1]!;

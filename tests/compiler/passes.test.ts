@@ -3021,6 +3021,24 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(recalled?.x2Shape)).toEqual(["super:FA"]);
   });
 
+  it("x2 value dataflow drops invalid shape facts while restoring X through dot", () => {
+    const legacy: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      x2Shape: new Set<X2ShapeFact>([
+        "mantissa:02:decimal",
+        "super:8A",
+        "super:FA",
+        "hex:8Ж:mantissa",
+      ]),
+      entry: { kind: "closed" },
+    };
+    const restored = transferX2ValueStateForEdge(legacy, plain(0x0a, "."), "normal", {}, 0);
+
+    expect(x2ShapeStateText(restored?.xShape)).toEqual(["mantissa:2:decimal", "super:FA"]);
+    expect(x2ShapeStateText(restored?.x2Shape)).toEqual(["mantissa:02:decimal", "super:FA"]);
+  });
+
   it("x2 value dataflow canonicalizes structural exponent contexts", () => {
     const activeLegacy: X2ValueDataflowState = {
       x: new Set(),
