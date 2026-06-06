@@ -5963,13 +5963,23 @@ function joinX2ValueDataflowStates(
     vpContext: joinX2VpContextStates(current.vpContext, incoming.vpContext),
     structuralEntry: joinX2StructuralEntryStates(current.structuralEntry, incoming.structuralEntry),
     structuralVpContext: joinX2StructuralEntryStates(current.structuralVpContext, incoming.structuralVpContext),
-    vpEntryMantissa: joinOptionalStringSets(current.vpEntryMantissa, incoming.vpEntryMantissa),
+    vpEntryMantissa: joinVpSourceMantissas(
+      current.vpEntryMantissa,
+      current.vpEntryShape,
+      incoming.vpEntryMantissa,
+      incoming.vpEntryShape,
+    ),
     ...(
       current.vpEntryMantissaTransient === true || incoming.vpEntryMantissaTransient === true
         ? { vpEntryMantissaTransient: true as const }
         : {}
     ),
-    vpEntrySignMantissa: joinOptionalStringSets(current.vpEntrySignMantissa, incoming.vpEntrySignMantissa),
+    vpEntrySignMantissa: joinVpSourceMantissas(
+      current.vpEntrySignMantissa,
+      current.vpEntrySignShape,
+      incoming.vpEntrySignMantissa,
+      incoming.vpEntrySignShape,
+    ),
     vpEntryShape: joinVpSourceShapeFacts(
       current.vpEntryMantissa,
       current.vpEntryShape,
@@ -7103,6 +7113,18 @@ function vpSourceKeys(
   return keys;
 }
 
+export function x2JoinedVpEntryMantissaSources(
+  left: Pick<X2ValueDataflowState, "vpEntryMantissa" | "vpEntryShape"> | undefined,
+  right: Pick<X2ValueDataflowState, "vpEntryMantissa" | "vpEntryShape"> | undefined,
+): ReadonlySet<string> | undefined {
+  return joinVpSourceMantissas(
+    left?.vpEntryMantissa,
+    left?.vpEntryShape,
+    right?.vpEntryMantissa,
+    right?.vpEntryShape,
+  );
+}
+
 export function x2JoinedVpEntrySignShapeSources(
   left: Pick<X2ValueDataflowState, "vpEntrySignMantissa" | "vpEntrySignShape"> | undefined,
   right: Pick<X2ValueDataflowState, "vpEntrySignMantissa" | "vpEntrySignShape"> | undefined,
@@ -7114,6 +7136,39 @@ export function x2JoinedVpEntrySignShapeSources(
     right?.vpEntrySignShape,
     true,
   );
+}
+
+function joinVpSourceMantissas(
+  leftMantissas: ReadonlySet<string> | undefined,
+  leftShapes: X2ShapeSet | undefined,
+  rightMantissas: ReadonlySet<string> | undefined,
+  rightShapes: X2ShapeSet | undefined,
+): ReadonlySet<string> | undefined {
+  const direct = joinOptionalStringSets(leftMantissas, rightMantissas);
+  if (direct !== undefined) return direct;
+  const sharedKeys = joinStringSets(
+    vpSourceKeys(leftMantissas, leftShapes),
+    vpSourceKeys(rightMantissas, rightShapes),
+  );
+  const mantissas = new Set<string>();
+  for (const key of sharedKeys) {
+    const mantissa = vpMantissaFromSourceKey(key);
+    if (mantissa !== undefined) mantissas.add(mantissa);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function vpMantissaFromSourceKey(key: string): string | undefined {
+  const raw = /^decimal:(.*)$/u.exec(key)?.[1];
+  if (raw !== undefined) {
+    const canonical = canonicalShapeRaw(raw);
+    return decimalExponentMantissaRawIsValid(canonical) ? canonical : undefined;
+  }
+  for (const fact of x2RestoredDisplayShapeFactsFromSourceKey(key) ?? []) {
+    const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
+    if (decimal !== undefined && decimalExponentMantissaRawIsValid(decimal)) return decimal;
+  }
+  return undefined;
 }
 
 function joinVpSourceShapeFacts(

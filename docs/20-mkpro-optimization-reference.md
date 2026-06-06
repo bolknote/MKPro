@@ -871,8 +871,8 @@ Display rewrites are separated into strategy selection + body lowering.
   same canonical shape facts that originally created the key. X2 value-set
   operations, register-memory storage/recall, and CFG joins keep the same canonical form, so equivalent
   stable-expression facts do not split after path-sensitive propagation. VP
-  sign-source joins also use source keys: a raw decimal mantissa path and an
-  exact decimal display-shape path can keep their shared sign source without
+  source joins also use source keys: a raw decimal mantissa path and an exact
+  decimal display-shape path can keep their shared mantissa/sign source without
   normalizing leading-zero text, while structural exponent/mantissa spellings
   meet at the restored mantissa source.
   Closed `/-/` shared-source proofs use the same canonical value sets before

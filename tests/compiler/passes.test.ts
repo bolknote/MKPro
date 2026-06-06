@@ -51,6 +51,7 @@ import {
   x2ExponentMantissaSignChangedShapeFact,
   x2ExponentShapeFactFromMantissaFact,
   x2ExponentSignChangedShapeFact,
+  x2JoinedVpEntryMantissaSources,
   x2JoinedVpEntrySignShapeSources,
   x2MantissaShapeFactFromModel,
   x2MantissaSignChangedShapeFact,
@@ -1915,6 +1916,18 @@ describe("ir passes on synthetic programs", () => {
   });
 
   it("x2 VP sign source join uses display source keys without normalizing raw text", () => {
+    expect([...(x2JoinedVpEntryMantissaSources(
+      { vpEntryMantissa: new Set(["100"]) },
+      { vpEntryShape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]) },
+    ) ?? [])].sort()).toEqual(["100"]);
+    expect([...(x2JoinedVpEntryMantissaSources(
+      { vpEntryShape: new Set<X2ShapeFact>(["exponent:1:8:decimal"]) },
+      { vpEntryShape: new Set<X2ShapeFact>(["exponent:100000000:0:decimal"]) },
+    ) ?? [])].sort()).toEqual(["100000000"]);
+    expect(x2JoinedVpEntryMantissaSources(
+      { vpEntryMantissa: new Set(["02"]) },
+      { vpEntryShape: new Set<X2ShapeFact>(["mantissa:2:decimal"]) },
+    )).toBeUndefined();
     expect(x2ShapeStateText(x2JoinedVpEntrySignShapeSources(
       { vpEntrySignMantissa: new Set(["100"]) },
       { vpEntrySignShape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]) },
