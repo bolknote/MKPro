@@ -1389,7 +1389,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     context with a proved decimal X2 value, an emulator-pinned single-hex
     A/B/C structural mantissa, or the same shared dot-restore safety proof used
     by `x2-noop-restore` (for example an immediate sync or closed sign-change
-    dot source); a bare `reg:r` fact after only an X2-preserving gap is
+    dot source); active decimal/exponent-entry `.` cells are also dead when the
+    following hard overwrite destroys that input context before observation. A bare `reg:r` fact after only an X2-preserving gap is
     intentionally rejected because a preloaded hex or non-normal register value
     can make `.` signal `ЕГГ0Г`. `/-/` may also be removed from open mantissa, active
     exponent-entry, or VP/X2 restore contexts because the following hard

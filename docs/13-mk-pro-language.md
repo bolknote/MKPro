@@ -1665,7 +1665,9 @@ The pipeline currently contains:
   narrower than `x2-noop-restore`: `.` is
   accepted only from a closed, non-`ВП` context with a proved decimal X2 value
   fact, an emulator-pinned single-hex A/B/C structural mantissa, or another
-  shared dot-restore safety proof. A plain `reg:r` fact is not enough, because
+  shared dot-restore safety proof; active decimal/exponent-entry `.` cells are
+  also removed when the following hard overwrite destroys that input context
+  before it is observed. A plain `reg:r` fact is not enough, because
   a preloaded hexadecimal or other non-normal register value may make `.`
   signal `ЕГГ0Г` before the overwrite can run. `/-/` may also be removed from closed proved structural
   shapes, including synced structural exponent shapes, open mantissa, active

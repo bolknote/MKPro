@@ -109,6 +109,7 @@ function isDeadRestoreCandidate(
   if (state === undefined || !isFreeStandingPlain(op)) return false;
   if (isDisplayFocusSensitive(op)) return false;
   if (op.opcode === DOT) {
+    if (state.entry.kind === "open" || state.entry.kind === "exponent") return true;
     const hasDotSafeStructuralX2 = x2StateHasOnlyDotSafeStructuralMantissaX2(state);
     const hasVpDotSafeStructuralX2 = x2CanUseVpDotRestoreAt(ops, index, state);
     if (!hasDotSafeStructuralX2 && !hasVpDotSafeStructuralX2 && x2StateHasUnsafeDotRestoreShapeX2(state)) {
