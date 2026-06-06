@@ -1772,38 +1772,33 @@ function decimalFromFactKey(key: string): string | undefined {
 }
 
 function structuralHexSignFromFactKey(key: string): string | undefined {
-  const fact = structuralShapeFactFromStableExpressionKey(key);
-  if (fact === undefined) return undefined;
-  for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
-    const value = structuralHexSignDecimalValue(restored);
-    if (value !== undefined) return value;
+  for (const fact of structuralShapeFactsFromStableExpressionKey(key) ?? []) {
+    for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
+      const value = structuralHexSignDecimalValue(restored);
+      if (value !== undefined) return value;
+    }
   }
   return undefined;
 }
 
 function structuralHexSquareFromFactKey(key: string): string | undefined {
-  const fact = structuralShapeFactFromStableExpressionKey(key);
-  if (fact === undefined) return undefined;
-  for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
-    const value = structuralHexSquareDecimalValue(restored);
-    if (value !== undefined) return value;
+  for (const fact of structuralShapeFactsFromStableExpressionKey(key) ?? []) {
+    for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
+      const value = structuralHexSquareDecimalValue(restored);
+      if (value !== undefined) return value;
+    }
   }
   return undefined;
 }
 
-function structuralShapeFactFromStableExpressionKey(key: string): X2ShapeFact | undefined {
-  const raw = /^shape:(.*)$/u.exec(key)?.[1];
-  if (raw === undefined) return undefined;
-  const canonical = x2ShapeFactFromDataModel(x2ShapeDataModelForFact(raw as X2ShapeFact));
-  if (canonical === undefined || x2ShapeFactSafety(canonical) !== "structuralOnly") return undefined;
-  return canonical;
-}
-
-function decimalDisplayShapeFactFromStableExpressionKey(key: string): X2ShapeFact | undefined {
-  const raw = /^shape:(.*)$/u.exec(key)?.[1];
-  if (raw === undefined) return undefined;
-  const displayShapes = decimalDisplayShapeFacts(new Set<X2ShapeFact>([raw as X2ShapeFact]));
-  return displayShapes.size === 1 ? [...displayShapes][0] : undefined;
+function structuralShapeFactsFromStableExpressionKey(key: string): X2ShapeSet | undefined {
+  const facts = x2RestoredDisplayShapeFactsFromSourceKey(key);
+  if (facts === undefined) return undefined;
+  const structural = new Set<X2ShapeFact>();
+  for (const fact of facts) {
+    if (x2ShapeFactSafety(fact) === "structuralOnly") structural.add(fact);
+  }
+  return structural.size === 0 ? undefined : structural;
 }
 
 function decimalAbs(value: string): string | undefined {
@@ -7269,6 +7264,13 @@ export function x2RestoredDisplaySourceKeyShapeFacts(input: X2ShapeSet | undefin
   return output;
 }
 
+export function x2RestoredDisplayShapeFactsFromSourceKey(key: string): X2ShapeSet | undefined {
+  const raw = /^shape:(.*)$/u.exec(key)?.[1];
+  if (raw === undefined) return undefined;
+  const facts = x2RestoredDisplaySourceKeyShapeFacts(new Set<X2ShapeFact>([raw as X2ShapeFact]));
+  return facts.size === 0 ? undefined : facts;
+}
+
 function normalizedDecimalValueSet(values: X2ValueSet | undefined): Set<string> {
   const output = new Set<string>();
   for (const fact of values ?? []) {
@@ -7289,8 +7291,7 @@ function stableExpressionKeyValueSet(key: string): X2ValueSet | undefined {
 }
 
 function stableExpressionKeyShapeSet(key: string): X2ShapeSet | undefined {
-  const fact = structuralShapeFactFromStableExpressionKey(key) ?? decimalDisplayShapeFactFromStableExpressionKey(key);
-  return fact === undefined ? undefined : new Set<X2ShapeFact>([fact]);
+  return x2RestoredDisplayShapeFactsFromSourceKey(key);
 }
 
 function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {

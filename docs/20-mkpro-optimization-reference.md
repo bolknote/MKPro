@@ -865,8 +865,11 @@ Display rewrites are separated into strategy selection + body lowering.
   `shape:hex-exponent:Г:2` is reused as `shape:hex:Г00:mantissa` instead of
   becoming a separate computed value. If an `expr-key:*` contains a `shape:*`
   operand that the shape algebra cannot prove, the key is discarded instead of
-  being kept as an opaque stable proof. X2 value-set operations, register-memory
-  storage/recall, and CFG joins keep the same canonical form, so equivalent
+  being kept as an opaque stable proof. The reverse `shape:*` source-key decode
+  uses the same restored-display algebra, so exact decimal exponent displays
+  and closed hex/super exponent entries feed concrete-result checks through the
+  same canonical shape facts that originally created the key. X2 value-set
+  operations, register-memory storage/recall, and CFG joins keep the same canonical form, so equivalent
   stable-expression facts do not split after path-sensitive propagation.
   Closed `/-/` shared-source proofs use the same canonical value sets before
   comparing visible `X` and hidden X2, so sign-change keys remain reusable
