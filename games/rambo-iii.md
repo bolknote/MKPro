@@ -1,6 +1,7 @@
 # Rambo-III
 
-- Автор: Евгений Век
+- Автор: Евгений Кузниченко
+- Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk53.html)
 - Программа: [rambo-iii.txt](rambo-iii.txt)
 

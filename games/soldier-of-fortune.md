@@ -1,6 +1,7 @@
 # Soldier Of Fortune
 
-- Автор: Евгений Век
+- Автор: Евгений Кузниченко
+- Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk107.html)
 - Программа: [pmk107.txt](pmk107.txt)
 

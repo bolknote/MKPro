@@ -1,6 +1,7 @@
 # The Last Sapper Of The Galaxy
 
-- Автор: Евгений Век
+- Автор: Евгений Кузниченко
+- Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk111.html)
 - Программа: [pmk111.txt](pmk111.txt)
 
