@@ -2307,8 +2307,8 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("x2 value dataflow keeps wide binary decimal results opaque", () => {
-    const program: IrOp[] = [
+  it("x2 value dataflow keeps only machine-representable wide binary decimal results concrete", () => {
+    const exactScientificProgram: IrOp[] = [
       plain(0x09, "9"),
       plain(0x09, "9"),
       plain(0x09, "9"),
@@ -2322,10 +2322,28 @@ describe("ir passes on synthetic programs", () => {
       plain(0x10, "+"),
       halt(),
     ];
-    const states = computeX2ValueStates(program);
+    const nonRepresentableProgram: IrOp[] = [
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x09, "9"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      halt(),
+    ];
 
-    expect(x2ValueStateText(states[11]?.x)).toEqual([
-      "expr-key:10(decimal:1:normalized,decimal:99999999:normalized)",
+    expect(x2ValueStateText(computeX2ValueStates(exactScientificProgram)[11]?.x)).toEqual([
+      "decimal:100000000:normalized",
+      "expr:10",
+    ]);
+    expect(x2ShapeStateText(computeX2ValueStates(exactScientificProgram)[11]?.xShape)).toEqual([]);
+    expect(x2ValueStateText(computeX2ValueStates(nonRepresentableProgram)[11]?.x)).toEqual([
+      "expr-key:10(decimal:2:normalized,decimal:99999999:normalized)",
       "expr:10",
     ]);
   });
@@ -3196,6 +3214,15 @@ describe("ir passes on synthetic programs", () => {
       plain(0x24, "F x^y"),
       halt(),
     ];
+    const exponentOneProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x24, "F x^y"),
+      halt(),
+    ];
     const approximateProgram: IrOp[] = [
       plain(0x03, "3"),
       plain(0x0e, "В↑"),
@@ -3215,6 +3242,10 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(computeX2ValueStates(exponentZeroProgram)[4]?.x)).toEqual([
       "decimal:1:normalized",
       "expr:3",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(exponentOneProgram)[6]?.x)).toEqual([
+      "decimal:1.2:normalized",
+      "expr:5",
     ]);
     expect(x2ValueStateText(computeX2ValueStates(approximateProgram)[4]?.x)).toEqual([
       "expr-key:24(decimal:3:normalized,decimal:2:normalized)",
@@ -3942,7 +3973,7 @@ describe("ir passes on synthetic programs", () => {
     }
   });
 
-  it("x2 value dataflow keeps fractional or too-wide unary results value-only", () => {
+  it("x2 value dataflow keeps fractional or scientific unary results value-only", () => {
     const reciprocalStates = computeX2ValueStates([
       plain(0x04, "4"),
       plain(0x23, "F 1/x"),
@@ -3964,6 +3995,10 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(reciprocalStates[2]?.xShape)).toEqual([]);
     expect(x2ValueStateText(negativePow10States[3]?.x)).toContain("decimal:0.01:normalized");
     expect(x2ShapeStateText(negativePow10States[3]?.xShape)).toEqual([]);
+    expect(x2ValueStateText(widePow10States[2]?.x)).toEqual([
+      "decimal:100000000:normalized",
+      "expr:1",
+    ]);
     expect(x2ShapeStateText(widePow10States[2]?.xShape)).toEqual([]);
   });
 
@@ -7549,6 +7584,58 @@ describe("ir passes on synthetic programs", () => {
       plain(0x24, "F x^y"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.0 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses exact F x^y exponent-one X2 facts", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x24, "F x^y"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x24, "F x^y"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.2 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses scientific exact decimal X2 facts", () => {
+    const program: IrOp[] = [
+      plain(0x08, "8"),
+      plain(0x15, "F 10^x"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x08, "8"),
+      plain(0x15, "F 10^x"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 100000000 from hidden X2 temp" } },
       halt(),
     ]);
   });

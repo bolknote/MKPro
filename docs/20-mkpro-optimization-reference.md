@@ -817,8 +817,8 @@ Display rewrites are separated into strategy selection + body lowering.
   and the hardware decimal constant `3.1415926`. Emulator-verified exact
   special values for documented functions are also modeled: `F e^x` on `0`,
   `F lg`/`F ln` on `1`, inverse/direct sine and tangent on `0`, inverse cosine
-  on `1`, direct cosine on `0`, and `F x^y` exact cases (`0^y`, `1^y`, and
-  positive `x^0`). For concrete normalized decimal `X`, `F x^2`, finite `F 1/x`,
+  on `1`, direct cosine on `0`, and `F x^y` exact cases (`0^y`, `1^y`, `x^1`,
+  and positive `x^0`). For concrete normalized decimal `X`, `F x^2`, finite `F 1/x`,
   perfect-square `F sqrt`, integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and
   `К [x]` seed exact decimal results in visible X while preserving the old X2
   fact. If that exact result is a short ordinary integer display, the shape
@@ -851,9 +851,11 @@ Display rewrites are separated into strategy selection + body lowering.
   MK-61 display glyphs `С`/`Г`/`Е`, while unknown glyph cells remain conservative. `К °->′`,
   `К °->′"`, `К °<-′"`, and `К °<-′` seed exact decimal facts only when the
   domain is safe, the rational sexagesimal conversion has a finite decimal
-  expansion, and the normalized result fits the eight-significant-digit proof
-  bound. Wider products/quotients, division by zero, non-terminating division,
-  irrational square roots, fractional powers of ten, non-identity non-zero powers,
+  expansion, and the normalized result fits the eight-significant-digit
+  machine-mantissa proof bound. Integer trailing zeroes may be carried as an
+  exact scientific exponent shift without creating an ordinary mantissa display
+  shape. Wider products/quotients, division by zero, non-terminating division,
+  irrational square roots, fractional powers of ten, remaining non-zero powers,
   hardware-rounded sexagesimal conversions, and non-decimal cases remain
   structural/opaque rather than pretending to be an ordinary decimal value.
   Later passes can therefore distinguish visible no-op

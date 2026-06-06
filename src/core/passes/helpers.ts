@@ -1879,6 +1879,7 @@ function exactDecimalMaxToNormalized(left: ExactDecimalParts, right: ExactDecima
 
 function exactDecimalPowerIdentityToNormalized(exponent: ExactDecimalParts, base: ExactDecimalParts): string | undefined {
   if (base.num === 0n) return "0";
+  if (exponent.num === 1n && exponent.scale === 0) return exactDecimalToNormalized(base.num, base.scale);
   if (base.num === 1n && base.scale === 0) return "1";
   if (exponent.num === 0n && base.num > 0n) return "1";
   return undefined;
@@ -6198,8 +6199,10 @@ function normalizePlainDecimal(raw: string): string | undefined {
 
 function significantDecimalDigits(input: string): number {
   const unsigned = input.startsWith("-") ? input.slice(1) : input;
-  const digits = unsigned.replace(".", "").replace(/^0+/u, "");
-  return digits.length === 0 ? 1 : digits.length;
+  const [integer, fraction] = unsigned.split(".");
+  const digits = `${integer ?? ""}${fraction ?? ""}`.replace(/^0+/u, "");
+  const significant = fraction === undefined ? digits.replace(/0+$/u, "") : digits;
+  return significant.length === 0 ? 1 : significant.length;
 }
 
 function normalizeDecimalEntry(raw: string): string | undefined {

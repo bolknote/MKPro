@@ -267,8 +267,11 @@ function normalizeSignedPlainDecimal(raw: string): string | undefined {
 }
 
 function significantDecimalDigits(input: string): number {
-  const digits = input.replace(/^-/, "").replace(".", "").replace(/^0+/u, "");
-  return digits.length === 0 ? 1 : digits.length;
+  const unsigned = input.startsWith("-") ? input.slice(1) : input;
+  const [integer, fraction] = unsigned.split(".");
+  const digits = `${integer ?? ""}${fraction ?? ""}`.replace(/^0+/u, "");
+  const significant = fraction === undefined ? digits.replace(/0+$/u, "") : digits;
+  return significant.length === 0 ? 1 : significant.length;
 }
 
 function x2ValueSetHasFact(input: X2ValueSet | undefined, fact: X2ValueFact): boolean {
