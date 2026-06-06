@@ -813,18 +813,21 @@ Display rewrites are separated into strategy selection + body lowering.
   X-only computations
   additionally seed a stable `expr-key:<opcode>(<source>)` fact when the source
   is a proved register, normalized decimal, or earlier stable expression key.
-  The documented `F pi` stack producer seeds both the stable `expr-key:20()`
-  and the hardware decimal constant `3.1415926`. Emulator-verified exact
+  The documented `F pi` stack producer seeds the stable `expr-key:20()`,
+  the hardware decimal constant `3.1415926`, and its display shape
+  `mantissa:3.1415926:decimal`. Emulator-verified exact
   special values for documented functions are also modeled: `F e^x` on `0`,
   `F lg`/`F ln` on `1`, inverse/direct sine and tangent on `0`, inverse cosine
   on `1`, direct cosine on `0`, and `F x^y` exact cases (`0^y`, `1^y`, `x^1`,
   and positive `x^0`). For concrete normalized decimal `X`, `F x^2`, finite `F 1/x`,
   perfect-square `F sqrt`, integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and
   `К [x]` seed exact decimal results in visible X while preserving the old X2
-  fact. If that exact result is a short ordinary integer display, the shape
-  layer also records a dot-safe `mantissa:*:decimal` fact; fractional,
-  scientific, hex, and super displays are not promoted to decimal shapes
-  without a separate display proof. For concrete decimal `X`, `К {x}` also
+  fact. If that exact result has a provable display form within the mantissa
+  width, the shape layer records it as either dot-safe `mantissa:*:decimal`
+  or structural scientific `exponent:*:*:decimal`; fractional and wide/small
+  exact decimals therefore keep their calculator display shape without being
+  flattened into ordinary mantissas. Hex and super displays are not promoted to
+  decimal shapes without a separate display proof. For concrete decimal `X`, `К {x}` also
   seeds the exact normalized fractional decimal value in visible X while
   preserving the old X2 fact; its display shape is kept as a separate
   exponent-entry fact for non-zero fractions (`0.2` as
@@ -840,8 +843,9 @@ Display rewrites are separated into strategy selection + body lowering.
   exact decimal results when the normalized result stays within the dataflow's
   eight-significant-digit bound; `/` does the same only when the reduced
   quotient has a finite decimal expansion. Short ordinary integer results from
-  exact decimal binary operations also seed dot-safe `mantissa:*:decimal`
-  display shapes; fractional and wide results stay value-only. `К max`
+  exact decimal binary operations also seed the same display-shape proof:
+  ordinary results use dot-safe `mantissa:*:decimal`, while fractional and
+  wide/small scientific results use `exponent:*:*:decimal`. `К max`
   is modeled for concrete normalized decimal operands with the MK-61 zero quirk
   preserved: if either operand is exactly zero, the proved result is zero.
   `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ` share the MK-61 mantissa-nibble model used

@@ -148,7 +148,7 @@ const PURE_OPAQUE_EXPR_OPCODES = new Set<number>([
   0x39, // К ⊕
   0x3a, // К ИНВ
 ]);
-const EXACT_DECIMAL_INTEGER_MANTISSA_SHAPE_OPCODES = new Set<number>([
+const EXACT_DECIMAL_DISPLAY_SHAPE_OPCODES = new Set<number>([
   0x15, // F 10^x
   0x16, // F e^x
   0x17, // F lg
@@ -717,7 +717,7 @@ function plainProducesConcreteDecimalShapeFacts(
   x: X2ValueSet | undefined,
   xShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
-  const output = new Set<X2ShapeFact>();
+  const output = plainProducesStableConstantShapeFacts(op);
   for (const fact of x ?? []) {
     const value = normalizedDecimalValueFromFact(fact);
     const concrete = value === undefined ? undefined : concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
@@ -734,9 +734,9 @@ function plainProducesConcreteDecimalShapeFacts(
 
 function concreteDecimalUnaryDisplayShapeFact(opcode: number, value: string): X2ShapeFact | undefined {
   if (opcode === 0x35) return decimalFractionPartShapeFact(value);
-  if (!EXACT_DECIMAL_INTEGER_MANTISSA_SHAPE_OPCODES.has(opcode)) return undefined;
+  if (!EXACT_DECIMAL_DISPLAY_SHAPE_OPCODES.has(opcode)) return undefined;
   const concrete = concreteDecimalUnaryValue(opcode, value);
-  return concrete === undefined ? undefined : exactPlainIntegerDecimalMantissaShapeFact(concrete);
+  return concrete === undefined ? undefined : exactDecimalDisplayShapeFact(concrete);
 }
 
 function exactPlainIntegerDecimalMantissaShapeFact(value: string): X2ShapeFact | undefined {
@@ -875,7 +875,7 @@ function plainProducesConcreteDecimalBinaryShapeFacts(
     for (const xFact of x ?? []) {
       const xValue = normalizedDecimalValueFromFact(xFact);
       const concrete = xValue === undefined ? undefined : concreteDecimalBinaryValue(op.opcode, yValue, xValue);
-      const shape = concrete === undefined ? undefined : exactPlainIntegerDecimalMantissaShapeFact(concrete);
+      const shape = concrete === undefined ? undefined : exactDecimalDisplayShapeFact(concrete);
       if (shape !== undefined) output.add(shape);
     }
   }
@@ -2046,6 +2046,17 @@ function plainProducesStableConstantDecimalValue(
     return undefined;
   }
   return decimalValueFact("3.1415926", "normalized");
+}
+
+function plainProducesStableConstantShapeFacts(
+  op: Extract<IrOp, { kind: "plain" }>,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  const decimal = plainProducesStableConstantDecimalValue(op);
+  const value = decimal === undefined ? undefined : normalizedDecimalValueFromFact(decimal);
+  const shape = value === undefined ? undefined : exactDecimalDisplayShapeFact(value);
+  if (shape !== undefined) output.add(shape);
+  return output;
 }
 
 function stableBinaryExpressionValueFact(

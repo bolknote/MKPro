@@ -2093,8 +2093,24 @@ describe("ir passes on synthetic programs", () => {
       "decimal:3.1415926:normalized",
       "expr-key:20()",
     ]);
+    expect(x2ShapeStateText(states[2]?.xShape)).toEqual(["mantissa:3.1415926:decimal"]);
     expect(x2ValueStateText(states[2]?.y)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:2:normalized"]);
+  });
+
+  it("x2 value dataflow stores stable constant display shapes", () => {
+    const program: IrOp[] = [
+      plain(0x20, "F pi"),
+      store("3"),
+      plain(0x0d, "Cx"),
+      recall("3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[2]?.shapeMemory?.["3"])).toEqual(["mantissa:3.1415926:decimal"]);
+    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["mantissa:3.1415926:decimal"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["mantissa:3.1415926:decimal"]);
   });
 
   it("x2 value dataflow derives concrete decimal facts from F pi", () => {
@@ -2372,7 +2388,9 @@ describe("ir passes on synthetic programs", () => {
       "decimal:100000000:normalized",
       "expr:10",
     ]);
-    expect(x2ShapeStateText(computeX2ValueStates(exactScientificProgram)[11]?.xShape)).toEqual([]);
+    expect(x2ShapeStateText(computeX2ValueStates(exactScientificProgram)[11]?.xShape)).toEqual([
+      "exponent:1:8:decimal",
+    ]);
     expect(x2ValueStateText(computeX2ValueStates(nonRepresentableProgram)[11]?.x)).toEqual([
       "expr-key:10(decimal:2:normalized,decimal:99999999:normalized)",
       "expr:10",
@@ -2407,7 +2425,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("x2 value dataflow seeds ordinary mantissa shapes for exact integer binary results", () => {
+  it("x2 value dataflow seeds display shapes for exact binary results", () => {
     const additionStates = computeX2ValueStates([
       plain(0x01, "1"),
       plain(0x0e, "В↑"),
@@ -2455,7 +2473,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(subtractionStates[4]?.xShape)).toEqual(["mantissa:-1:decimal"]);
     expect(x2ShapeStateText(multiplyStates[4]?.xShape)).toEqual(["mantissa:6:decimal"]);
     expect(x2ShapeStateText(integerDivisionStates[4]?.xShape)).toEqual(["mantissa:2:decimal"]);
-    expect(x2ShapeStateText(fractionalDivisionStates[4]?.xShape)).toEqual([]);
+    expect(x2ShapeStateText(fractionalDivisionStates[4]?.xShape)).toEqual(["exponent:2.5:-1:decimal"]);
     expect(x2ShapeStateText(maxStates[4]?.xShape)).toEqual(["mantissa:0:decimal"]);
   });
 
@@ -3981,7 +3999,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("x2 value dataflow seeds ordinary mantissa shapes for exact integer unary results", () => {
+  it("x2 value dataflow seeds display shapes for exact unary results", () => {
     const cases: Array<{
       readonly program: IrOp[];
       readonly index: number;
@@ -4001,6 +4019,16 @@ describe("ir passes on synthetic programs", () => {
         program: [plain(0x03, "3"), plain(0x15, "F 10^x"), halt()],
         index: 2,
         shape: ["mantissa:1000:decimal"],
+      },
+      {
+        program: [plain(0x08, "8"), plain(0x15, "F 10^x"), halt()],
+        index: 2,
+        shape: ["exponent:1:8:decimal"],
+      },
+      {
+        program: [plain(0x04, "4"), plain(0x23, "F 1/x"), halt()],
+        index: 2,
+        shape: ["exponent:2.5:-1:decimal"],
       },
       {
         program: [plain(0x02, "2"), plain(0x0b, "/-/"), plain(0x31, "К |x|"), halt()],
@@ -4025,7 +4053,7 @@ describe("ir passes on synthetic programs", () => {
     }
   });
 
-  it("x2 value dataflow keeps fractional or scientific unary results value-only", () => {
+  it("x2 value dataflow keeps exact fractional and scientific unary results display-shaped", () => {
     const reciprocalStates = computeX2ValueStates([
       plain(0x04, "4"),
       plain(0x23, "F 1/x"),
@@ -4044,14 +4072,14 @@ describe("ir passes on synthetic programs", () => {
     ]);
 
     expect(x2ValueStateText(reciprocalStates[2]?.x)).toContain("decimal:0.25:normalized");
-    expect(x2ShapeStateText(reciprocalStates[2]?.xShape)).toEqual([]);
+    expect(x2ShapeStateText(reciprocalStates[2]?.xShape)).toEqual(["exponent:2.5:-1:decimal"]);
     expect(x2ValueStateText(negativePow10States[3]?.x)).toContain("decimal:0.01:normalized");
-    expect(x2ShapeStateText(negativePow10States[3]?.xShape)).toEqual([]);
+    expect(x2ShapeStateText(negativePow10States[3]?.xShape)).toEqual(["exponent:1:-2:decimal"]);
     expect(x2ValueStateText(widePow10States[2]?.x)).toEqual([
       "decimal:100000000:normalized",
       "expr:1",
     ]);
-    expect(x2ShapeStateText(widePow10States[2]?.xShape)).toEqual([]);
+    expect(x2ShapeStateText(widePow10States[2]?.xShape)).toEqual(["exponent:1:8:decimal"]);
   });
 
   it("x2 value dataflow models negative integer fractional parts as visible signed-zero", () => {

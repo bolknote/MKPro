@@ -1322,7 +1322,8 @@ The pipeline currently contains:
   with a Latin `E` exponent marker, such as `ГE-2` or `FAE2`, seed structural
   `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е` remains an
   ordinary display digit. The documented `F pi` stack producer also seeds the
-  hardware decimal constant `3.1415926` alongside its stable expression key.
+  hardware decimal constant `3.1415926`, its stable expression key, and the
+  display shape `mantissa:3.1415926:decimal`.
   Emulator-verified special values for documented functions are modeled only
   where they are exact on MK-61: `F e^x` on `0`, `F lg`/`F ln` on `1`,
   inverse/direct sine and tangent on `0`, inverse cosine on `1`, direct cosine
@@ -1330,11 +1331,13 @@ The pipeline currently contains:
   For concrete normalized decimal values, `F x^2`, finite `F 1/x`,
   perfect-square `F sqrt`, integer-exponent `F 10^x`, `К |x|`, `К ЗН`, and
   `К [x]` are modeled as exact decimal results in visible `X`
-  while preserving the previous hidden X2 fact. When such a result is a
-  short ordinary integer display, the optimizer also seeds the corresponding
-  dot-safe `mantissa:*:decimal` shape; fractional, scientific, hex, and
-  super displays remain value-only or structural-only until a separate display
-  proof exists. For non-negative concrete
+  while preserving the previous hidden X2 fact. When such a result has a
+  provable calculator display form within the mantissa width, the optimizer
+  also seeds either the corresponding dot-safe `mantissa:*:decimal` shape or a
+  structural `exponent:*:*:decimal` shape; fractional and wide/small scientific
+  results keep that display shape without being flattened into ordinary
+  mantissas. Hex and super displays remain structural-only until a separate
+  display proof exists. For non-negative concrete
   decimal values, `К {x}` is also modeled as an exact normalized fractional
   decimal in visible `X` while preserving the previous hidden X2 fact. Its
   display shape is tracked separately from that normalized value: a non-zero
@@ -1347,9 +1350,10 @@ The pipeline currently contains:
   decimal `Y,X` operands for `+`, `-`, and `*` are also modeled exactly when
   the normalized result fits the eight-significant-digit dataflow bound; `/` is
   modeled exactly only for finite decimal quotients. Short ordinary integer
-  results from exact decimal binary operations also seed dot-safe
-  `mantissa:*:decimal` display shapes; fractional and wide results stay
-  value-only. `К max` is modeled exactly
+  results from exact decimal binary operations also seed the same display-shape
+  proof: ordinary results use dot-safe `mantissa:*:decimal`, while fractional
+  and wide/small scientific results use structural
+  `exponent:*:*:decimal`. `К max` is modeled exactly
   for concrete normalized decimal operands while preserving the hardware zero
   quirk: if either operand is exactly zero, the result fact is zero. Stack
   transfers keep the same value and shape lattice: `X↔Y` swaps visible `X`/`Y`
