@@ -1409,8 +1409,11 @@ The pipeline currently contains:
   and preserves the previous hidden X2 fact until a later X2-syncing command.
   `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ`
   use the shared MK-61 mantissa-nibble model and seed decimal facts only when
-  every resulting mantissa nibble remains `0`..`9`; A-F results seed
-  shape-only structural `hex:*` mantissas when both operands can be parsed as
+  every resulting mantissa nibble remains `0`..`9`, including cases where one
+  or both operands are structural hex/super display shapes. The original
+  result display is still kept as shape-only metadata, so non-normal display
+  context is not promoted to a fresh decimal entry. A-F results seed
+  shape-only structural `hex:*` mantissas when operands can be parsed as
   Latin hex nibbles or known MK-61 display glyphs `С`/`Г`/`Е`; unknown glyph
   cells remain conservative. Structural `К |x|` also stays shape-only: it removes
   the visible sign from canonical hex/super mantissa or closed exponent-entry

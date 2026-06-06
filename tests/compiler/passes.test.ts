@@ -4250,6 +4250,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(computeX2ValueStates(unknownGlyphProgram)[4]?.xShape)).toEqual([]);
   });
 
+  it("x2 value dataflow lowers decimal-only structural bitwise results to value facts", () => {
+    const structuralAndProgram: IrOp[] = [
+      recall("1", "preload const 8A000000"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 85000000"),
+      plain(0x37, "К ∧"),
+      halt(),
+    ];
+    const structuralNotProgram: IrOp[] = [
+      recall("1", "preload const 8F999999"),
+      plain(0x3a, "К ИНВ"),
+      halt(),
+    ];
+
+    expect(x2ValueStateText(computeX2ValueStates(structuralAndProgram)[4]?.x)).toContain(
+      "decimal:8:normalized",
+    );
+    expect(x2ShapeStateText(computeX2ValueStates(structuralAndProgram)[4]?.xShape)).toEqual([
+      "hex:8.0000000:mantissa",
+    ]);
+    expect(x2ValueStateText(computeX2ValueStates(structuralNotProgram)[2]?.x)).toContain(
+      "decimal:8.0666666:normalized",
+    );
+    expect(x2ShapeStateText(computeX2ValueStates(structuralNotProgram)[2]?.xShape)).toEqual([
+      "hex:8.0666666:mantissa",
+    ]);
+  });
+
   it("x2 value dataflow models documented single-digit hex subtract-one decimal facts", () => {
     function subtractOneProgram(literal: string, right: Extract<IrOp, { kind: "plain" }> = plain(0x01, "1")): IrOp[] {
       return [
@@ -10845,6 +10873,32 @@ describe("ir passes on synthetic programs", () => {
       plain(0x3a, "К ИНВ"),
       plain(0x0e, "В↑"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 8.6666666 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses decimal-only structural bitwise X2 facts", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const 8A000000"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 85000000"),
+      plain(0x37, "К ∧"),
+      plain(0x0e, "В↑"),
+      plain(0x08, "8"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("1", "preload const 8A000000"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 85000000"),
+      plain(0x37, "К ∧"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 8.0 from hidden X2 temp" } },
       halt(),
     ]);
   });

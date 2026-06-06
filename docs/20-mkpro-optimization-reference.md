@@ -908,8 +908,11 @@ Display rewrites are separated into strategy selection + body lowering.
   preserved: if either operand is exactly zero, the proved result is zero.
   `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ` share the MK-61 mantissa-nibble model used
   by constant folding and seed decimal facts only when every resulting nibble is
-  still decimal; A-F/hex-cell results seed shape-only structural `hex:*`
-  mantissas when both operands can be parsed as Latin hex nibbles or known
+  still decimal, including results computed from structural hex/super display
+  operands. The raw result display remains tracked as shape-only metadata, so
+  non-normal hex-shaped displays are not treated as freshly entered decimal
+  mantissas. A-F/hex-cell results seed shape-only structural `hex:*` mantissas
+  when both operands can be parsed as Latin hex nibbles or known
   MK-61 display glyphs `С`/`Г`/`Е`, while unknown glyph cells remain
   conservative. The shape parser and preload recognizer use that same closed
   digit set, so arbitrary Cyrillic display letters such as `Ж` no longer enter

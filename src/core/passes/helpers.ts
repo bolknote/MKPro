@@ -913,11 +913,13 @@ function plainProducesConcreteStructuralUnaryDecimalValues(
   xShape: X2ShapeSet | undefined,
 ): Set<string> {
   const output = new Set<string>();
-  if (op.opcode !== 0x22 && op.opcode !== 0x32) return output;
+  if (op.opcode !== 0x22 && op.opcode !== 0x32 && op.opcode !== 0x3a) return output;
   for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShape))) {
     const value = op.opcode === 0x22
       ? structuralHexSquareDecimalValue(fact)
-      : structuralHexSignDecimalValue(fact);
+      : op.opcode === 0x32
+        ? structuralHexSignDecimalValue(fact)
+        : structuralBitwiseNotDecimalValueFromFact(fact);
     if (value !== undefined) output.add(value);
   }
   return output;
@@ -1062,6 +1064,15 @@ function structuralHexBinaryDecimalValues(
   xShape: X2ShapeSet | undefined,
 ): Set<string> {
   const output = new Set<string>();
+  if (op.opcode >= 0x37 && op.opcode <= 0x39) {
+    for (const left of bitwiseOperandsFromValuesAndShapes(y, yShape)) {
+      for (const right of bitwiseOperandsFromValuesAndShapes(x, xShape)) {
+        const result = structuralBitwiseDecimalValue(op.opcode, left, right);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    return output;
+  }
   if (op.opcode === 0x10) {
     for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
       for (const right of normalizedDecimalValues(x, xShape)) {
@@ -1488,16 +1499,27 @@ function structuralHexSubtractOneDecimalValue(digit: number): string | undefined
 function structuralBitwiseNotMantissaShapeFact(
   operand: StructuralBitwiseOperand,
 ): X2ShapeFact | undefined {
-  if (operand.nibbles.length !== 8) return undefined;
-  const result = [8];
-  let hasHexCell = false;
-  for (let index = 1; index < 8; index += 1) {
-    const digit = (~operand.nibbles[index]!) & 0x0f;
-    if (digit > 9) hasHexCell = true;
-    result.push(digit);
-  }
+  const result = structuralBitwiseNotNibbles(operand);
+  if (result === undefined) return undefined;
+  const hasHexCell = result.some((digit) => digit > 9);
   if (!hasHexCell && !operand.structural) return undefined;
   return x2MantissaShapeFactFromParts("hex", bitwiseMantissaRaw(result));
+}
+
+function structuralBitwiseNotDecimalValueFromFact(fact: X2ShapeFact): string | undefined {
+  const nibbles = structuralMantissaNibbles(fact);
+  if (nibbles === undefined) return undefined;
+  const result = structuralBitwiseNotNibbles({ nibbles, structural: true });
+  return result === undefined ? undefined : decimalValueFromBitwiseMantissaNibbles(result);
+}
+
+function structuralBitwiseNotNibbles(operand: StructuralBitwiseOperand): number[] | undefined {
+  if (operand.nibbles.length !== 8) return undefined;
+  const result = [8];
+  for (let index = 1; index < 8; index += 1) {
+    result.push((~operand.nibbles[index]!) & 0x0f);
+  }
+  return result;
 }
 
 function bitwiseOperandsFromValuesAndShapes(
@@ -1522,17 +1544,41 @@ function structuralBitwiseMantissaShapeFact(
   left: StructuralBitwiseOperand,
   right: StructuralBitwiseOperand,
 ): X2ShapeFact | undefined {
+  const result = structuralBitwiseNibbles(opcode, left, right);
+  if (result === undefined) return undefined;
+  const hasHexCell = result.some((digit) => digit > 9);
+  if (!hasHexCell && !left.structural && !right.structural) return undefined;
+  return x2MantissaShapeFactFromParts("hex", bitwiseMantissaRaw(result));
+}
+
+function structuralBitwiseDecimalValue(
+  opcode: number,
+  left: StructuralBitwiseOperand,
+  right: StructuralBitwiseOperand,
+): string | undefined {
+  if (!left.structural && !right.structural) return undefined;
+  const result = structuralBitwiseNibbles(opcode, left, right);
+  return result === undefined ? undefined : decimalValueFromBitwiseMantissaNibbles(result);
+}
+
+function structuralBitwiseNibbles(
+  opcode: number,
+  left: StructuralBitwiseOperand,
+  right: StructuralBitwiseOperand,
+): number[] | undefined {
   if (left.nibbles.length !== 8 || right.nibbles.length !== 8) return undefined;
   const result = [8];
-  let hasHexCell = false;
   for (let index = 1; index < 8; index += 1) {
     const digit = bitwiseMantissaDigit(opcode, left.nibbles[index]!, right.nibbles[index]!);
     if (digit === undefined || digit < 0 || digit > 15) return undefined;
-    if (digit > 9) hasHexCell = true;
     result.push(digit);
   }
-  if (!hasHexCell && !left.structural && !right.structural) return undefined;
-  return x2MantissaShapeFactFromParts("hex", bitwiseMantissaRaw(result));
+  return result;
+}
+
+function decimalValueFromBitwiseMantissaNibbles(nibbles: readonly number[]): string | undefined {
+  if (nibbles.length !== 8 || nibbles.some((digit) => digit < 0 || digit > 9)) return undefined;
+  return decimalFromMantissaDigits(nibbles);
 }
 
 function structuralMantissaNibbles(fact: X2ShapeFact): number[] | undefined {
