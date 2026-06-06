@@ -783,6 +783,19 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[1]?.x2Shape)).toEqual([]);
   });
 
+  it("x2 value dataflow rejects malformed structural mantissa shapes", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const 8..A"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[1]?.x)).toEqual(["reg:2"]);
+    expect(x2ValueStateText(states[1]?.x2)).toEqual(["reg:2"]);
+    expect(x2ShapeStateText(states[1]?.xShape)).toEqual([]);
+    expect(x2ShapeStateText(states[1]?.x2Shape)).toEqual([]);
+  });
+
   it("x2 value dataflow gives closed super sign-change a structural expr key", () => {
     const program: IrOp[] = [
       recall("2", "preload const FA"),
@@ -1168,6 +1181,16 @@ describe("ir passes on synthetic programs", () => {
       kind: "hex-mantissa",
       raw: "8Е",
       safety: "structuralOnly",
+    });
+    expect(parseX2ShapeFact("hex:8.70Е2-6С:mantissa")).toEqual({
+      kind: "hex-mantissa",
+      raw: "8.70Е2-6С",
+      safety: "structuralOnly",
+    });
+    expect(parseX2ShapeFact("hex:8..A:mantissa")).toEqual({
+      kind: "unknown",
+      raw: "hex:8..A:mantissa",
+      safety: "unknown",
     });
   });
 

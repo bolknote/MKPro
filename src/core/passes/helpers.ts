@@ -1580,9 +1580,15 @@ function hasStructuralNonDecimalDigit(raw: string): boolean {
 
 function structuralShapeRawIsValid(raw: string): boolean {
   let sawDigit = false;
+  let sawDecimalPoint = false;
   for (const char of canonicalShapeRaw(raw)) {
     if (isStructuralHexDigit(char)) {
       sawDigit = true;
+      continue;
+    }
+    if (char === ".") {
+      if (sawDecimalPoint) return false;
+      sawDecimalPoint = true;
       continue;
     }
     if (!isStructuralHexShapeChar(char)) return false;

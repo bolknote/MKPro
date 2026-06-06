@@ -898,7 +898,10 @@ Display rewrites are separated into strategy selection + body lowering.
   MK-61 display glyphs `С`/`Г`/`Е`, while unknown glyph cells remain
   conservative. The shape parser and preload recognizer use that same closed
   digit set, so arbitrary Cyrillic display letters such as `Ж` no longer enter
-  the structural X2 lattice as if they were proved hex digits. `К °->′`,
+  the structural X2 lattice as if they were proved hex digits. They also reject
+  malformed mantissa spellings with multiple decimal points, while preserving
+  MK-61 display separator cells such as the embedded `-` in `8.70Е2-6С`.
+  `К °->′`,
   `К °->′"`, `К °<-′"`, and `К °<-′` seed exact decimal facts only when the
   domain is safe, the rational sexagesimal conversion has a finite decimal
   expansion, and the normalized result fits the eight-significant-digit
