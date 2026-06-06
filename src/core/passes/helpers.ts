@@ -5970,8 +5970,20 @@ function joinX2ValueDataflowStates(
         : {}
     ),
     vpEntrySignMantissa: joinOptionalStringSets(current.vpEntrySignMantissa, incoming.vpEntrySignMantissa),
-    vpEntryShape: joinOptionalShapeSets(current.vpEntryShape, incoming.vpEntryShape),
-    vpEntrySignShape: joinOptionalShapeSets(current.vpEntrySignShape, incoming.vpEntrySignShape),
+    vpEntryShape: joinVpSourceShapeFacts(
+      current.vpEntryMantissa,
+      current.vpEntryShape,
+      incoming.vpEntryMantissa,
+      incoming.vpEntryShape,
+      false,
+    ),
+    vpEntrySignShape: joinVpSourceShapeFacts(
+      current.vpEntrySignMantissa,
+      current.vpEntrySignShape,
+      incoming.vpEntrySignMantissa,
+      incoming.vpEntrySignShape,
+      true,
+    ),
     ...(
       current.vpEntryShapeTransient === true || incoming.vpEntryShapeTransient === true
         ? { vpEntryShapeTransient: true as const }
@@ -7089,6 +7101,42 @@ function vpSourceKeys(
   addVpEntryRawMantissaSourceKeys(keys, mantissas);
   addVpEntryDisplaySourceKeys(keys, mantissas, shapes);
   return keys;
+}
+
+export function x2JoinedVpEntrySignShapeSources(
+  left: Pick<X2ValueDataflowState, "vpEntrySignMantissa" | "vpEntrySignShape"> | undefined,
+  right: Pick<X2ValueDataflowState, "vpEntrySignMantissa" | "vpEntrySignShape"> | undefined,
+): X2ShapeSet | undefined {
+  return joinVpSourceShapeFacts(
+    left?.vpEntrySignMantissa,
+    left?.vpEntrySignShape,
+    right?.vpEntrySignMantissa,
+    right?.vpEntrySignShape,
+    true,
+  );
+}
+
+function joinVpSourceShapeFacts(
+  leftMantissas: ReadonlySet<string> | undefined,
+  leftShapes: X2ShapeSet | undefined,
+  rightMantissas: ReadonlySet<string> | undefined,
+  rightShapes: X2ShapeSet | undefined,
+  includeDecimal: boolean,
+): X2ShapeSet | undefined {
+  const direct = joinOptionalShapeSets(leftShapes, rightShapes);
+  if (direct.size > 0 || ((leftShapes?.size ?? 0) === 0 && (rightShapes?.size ?? 0) === 0)) return direct;
+  const sharedKeys = joinStringSets(
+    vpSourceKeys(leftMantissas, leftShapes),
+    vpSourceKeys(rightMantissas, rightShapes),
+  );
+  const shapes = new Set<X2ShapeFact>();
+  for (const key of sharedKeys) {
+    for (const fact of x2RestoredDisplayShapeFactsFromSourceKey(key) ?? []) {
+      const safety = x2ShapeFactSafety(fact);
+      if (safety === "structuralOnly" || (includeDecimal && safety !== "unknown")) shapes.add(fact);
+    }
+  }
+  return shapes.size === 0 ? undefined : shapes;
 }
 
 function vpEntryDisplaySourceKeys(

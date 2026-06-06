@@ -51,6 +51,7 @@ import {
   x2ExponentMantissaSignChangedShapeFact,
   x2ExponentShapeFactFromMantissaFact,
   x2ExponentSignChangedShapeFact,
+  x2JoinedVpEntrySignShapeSources,
   x2MantissaShapeFactFromModel,
   x2MantissaSignChangedShapeFact,
   x2HasOnlyRestoreGapBeforeVp,
@@ -1911,6 +1912,21 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2StatesHaveSameVpEntrySource(transientOrdinarySource, sameStructuralSource)).toBe(false);
     expect(x2StatesHaveSameVpEntrySignSource(transientOrdinarySource, sameStructuralSource)).toBe(true);
+  });
+
+  it("x2 VP sign source join uses display source keys without normalizing raw text", () => {
+    expect(x2ShapeStateText(x2JoinedVpEntrySignShapeSources(
+      { vpEntrySignMantissa: new Set(["100"]) },
+      { vpEntrySignShape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]) },
+    ))).toEqual(["mantissa:100:decimal"]);
+    expect(x2ShapeStateText(x2JoinedVpEntrySignShapeSources(
+      { vpEntrySignShape: new Set<X2ShapeFact>(["hex-exponent:Г:2"]) },
+      { vpEntrySignShape: new Set<X2ShapeFact>(["hex:Г00:mantissa"]) },
+    ))).toEqual(["hex:Г00:mantissa"]);
+    expect(x2JoinedVpEntrySignShapeSources(
+      { vpEntrySignMantissa: new Set(["02"]) },
+      { vpEntrySignShape: new Set<X2ShapeFact>(["mantissa:2:decimal"]) },
+    )).toBeUndefined();
   });
 
   it("x2 VP source proof compares exact decimal display shapes without normalizing entry text", () => {
