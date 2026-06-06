@@ -63,6 +63,7 @@ const run: IrPassFn = (ops) => {
       index,
       x2ValueStates[storeIndex],
       x2ValueStates[index],
+      directReturnContext,
     );
     const sourceAlreadyDotSafe = hiddenTempStoreSourceAlreadyDotSafeInX2(
       x2ValueStates[storeIndex],
@@ -78,6 +79,7 @@ const run: IrPassFn = (ops) => {
       index,
       x2ValueStates[storeIndex],
       x2ValueStates[index],
+      directReturnContext,
     );
     const sourceRestoresSameDotSafeDecimalShape = hiddenTempStoreSourceRestoresSameDotSafeDecimalShapeFromX2(
       x2ValueStates[storeIndex],
@@ -191,12 +193,13 @@ function hiddenTempStoreSourceAlreadySyncedInX2(
   recallIndex: number,
   storeState: X2ValueDataflowState | undefined,
   recallState: X2ValueDataflowState | undefined,
+  directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
   if (storeState === undefined || recallState === undefined) return false;
   for (const fact of storeState.x) {
     if (
-      !isStableStoredSourceFact(ops, storeIndex, recallIndex, fact) &&
-      !isStableRegisterStoredSourceFact(ops, storeIndex, recallIndex, fact)
+      !isStableStoredSourceFact(ops, storeIndex, recallIndex, fact, directReturnContext) &&
+      !isStableRegisterStoredSourceFact(ops, storeIndex, recallIndex, fact, directReturnContext)
     ) continue;
     if (recallState.x2.has(fact)) return true;
   }
@@ -233,8 +236,16 @@ function hiddenTempStoreSourceRestoresSameVisibleShapeFromX2(
   recallIndex: number,
   storeState: X2ValueDataflowState | undefined,
   recallState: X2ValueDataflowState | undefined,
+  directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
-  return hiddenTempStoreComputedSourceAlreadySyncedInX2(ops, storeIndex, recallIndex, storeState, recallState) &&
+  return hiddenTempStoreComputedSourceAlreadySyncedInX2(
+    ops,
+    storeIndex,
+    recallIndex,
+    storeState,
+    recallState,
+    directReturnContext,
+  ) &&
     x2ShapeSetsHaveSameRestoredDisplayShape(storeState?.xShape, recallState?.x2Shape);
 }
 
@@ -258,11 +269,12 @@ function hiddenTempStoreComputedSourceAlreadySyncedInX2(
   recallIndex: number,
   storeState: X2ValueDataflowState | undefined,
   recallState: X2ValueDataflowState | undefined,
+  directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
   if (storeState === undefined || recallState === undefined) return false;
   for (const fact of storeState.x) {
     if (!fact.startsWith("expr:") && !fact.startsWith("expr-key:")) continue;
-    if (!isStableStoredSourceFact(ops, storeIndex, recallIndex, fact)) continue;
+    if (!isStableStoredSourceFact(ops, storeIndex, recallIndex, fact, directReturnContext)) continue;
     if (recallState.x2.has(fact)) return true;
   }
   return false;
@@ -273,11 +285,12 @@ function isStableStoredSourceFact(
   storeIndex: number,
   recallIndex: number,
   fact: X2ValueFact,
+  directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
   if (fact.startsWith("expr:")) return true;
   if (fact.startsWith("expr-key:")) {
     return [...registerDependenciesInValueFact(fact)].every((register) =>
-      !registerMayBeOverwrittenBetween(ops, storeIndex + 1, recallIndex, register)
+      !registerMayBeOverwrittenBetween(ops, storeIndex + 1, recallIndex, register, directReturnContext)
     );
   }
   return fact.startsWith("decimal:") && fact.endsWith(":normalized");
@@ -288,9 +301,11 @@ function isStableRegisterStoredSourceFact(
   storeIndex: number,
   recallIndex: number,
   fact: X2ValueFact,
+  directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
   const register = registerSourceValueFact(fact);
-  return register !== undefined && !registerMayBeOverwrittenBetween(ops, storeIndex + 1, recallIndex, register);
+  return register !== undefined &&
+    !registerMayBeOverwrittenBetween(ops, storeIndex + 1, recallIndex, register, directReturnContext);
 }
 
 function registerSourceValueFact(fact: X2ValueFact): RegisterName | undefined {
@@ -310,6 +325,7 @@ function registerMayBeOverwrittenBetween(
   start: number,
   end: number,
   register: RegisterName,
+  directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
   for (let index = start; index < end; index += 1) {
     const op = ops[index]!;
@@ -324,6 +340,12 @@ function registerMayBeOverwrittenBetween(
       continue;
     }
     if (op.kind === "loop" && loopCounterRegister(op.counter) === register) return true;
+    if (isKnownReturnCallOp(op) && directReturningCallDoesNotMentionRegister(
+      ops,
+      op,
+      register,
+      directReturnContext,
+    )) continue;
     if (stopsStraightLineSearch(op)) return true;
   }
   return false;
