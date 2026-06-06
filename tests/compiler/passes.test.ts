@@ -987,17 +987,20 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["exponent:1:8:decimal"]);
     expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["exponent:1:8:decimal"]);
-    expect(x2VpEntryShapeText(states[4])).toEqual(["exponent:1:8:decimal"]);
+    expect(x2VpEntryShapeText(states[4])).toEqual([]);
     expect(x2VpEntryMantissaText(states[4])).toEqual(["100000000"]);
     expect(activeExponent).toMatchObject({
       kind: "active-exponent",
       source: "decimal",
-      hasExponentDigit: true,
+      hasExponentDigit: false,
       restoresX2: true,
     });
-    expect([...(activeExponent.mantissa ?? [])]).toEqual(["1"]);
-    expect([...(activeExponent.exponent ?? [])]).toEqual(["8"]);
-    expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual(["exponent:1:83:decimal"]);
+    expect([...(activeExponent.mantissa ?? [])]).toEqual(["100000000"]);
+    expect([...(activeExponent.exponent ?? [])]).toEqual([""]);
+    expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual([
+      "exponent:100000000:3:decimal",
+      "exponent:1:11:decimal",
+    ]);
     expect(x2ValueStateText(states[6]?.x2)).toEqual([]);
   });
 
@@ -6048,7 +6051,8 @@ describe("ir passes on synthetic programs", () => {
       { trackRegisterMemory: true },
     );
 
-    expect(x2VpEntryShapeText(afterFallthrough)).toEqual(["exponent:5:-1:decimal"]);
+    expect(x2VpEntryMantissaText(afterFallthrough)).toEqual(["0.5"]);
+    expect(x2VpEntryShapeText(afterFallthrough)).toBeUndefined();
     expect(x2VpEntrySignShapeText(afterFallthrough)).toEqual(["exponent:5:-1:decimal"]);
   });
 

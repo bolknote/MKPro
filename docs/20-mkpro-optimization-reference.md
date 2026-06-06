@@ -1136,10 +1136,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     decimal value. Exact decimal display-shape facts can also feed shape-only
     unary display results, so `exponent:5:-1:decimal` proves the displayed
     fractional result of `К {x}` without adding an ordinary decimal value.
-    The same exact display-shape proof can feed a following ordinary `ВП` as a
-    shape-only exponent-entry source: a synced `exponent:1:8:decimal` re-enters
-    `ВП` as mantissa `1`, exponent `8`, enabling exponent separator/sign
-    rewrites while still withholding any dot-safe `decimal:*` hidden-X2 alias.
+    The same exact display-shape proof can feed a following ordinary `ВП`
+    through the restored visible decimal mantissa: a synced
+    `exponent:1:8:decimal` re-enters `ВП` as mantissa `100000000`, enabling
+    exponent separator/sign rewrites while still withholding any dot-safe
+    `decimal:*` hidden-X2 alias.
     Restored visible-decimal comparisons also mix ordinary decimal value facts
     with exact decimal display-shape facts (`decimal:0.5:normalized` equals
     `exponent:5:-1:decimal`), while raw entry spellings such as
