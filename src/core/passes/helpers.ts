@@ -4055,30 +4055,20 @@ function recallRemovalPreservesImmediateVpRestoreContext(
   const recalledValues = recallX2ValueFacts(state, valueProof.register, true, op);
   const recalledMantissas = vpEntryMantissasFromValueFacts(recalledValues);
   const recalledShapes = recallVpEntryShapeSourceFacts(op, state, valueProof.register);
-  const recalledDisplaySourceKeys = vpEntryDisplaySourceKeys(recalledMantissas, recalledShapes);
+  const recalledSourceKeys = vpSourceKeys(recalledMantissas, recalledShapes);
   if (
     x2HasSignRestoreGapBeforeVp(ops, recallIndex + 1, context) &&
     x2HasOnlyRestoreGapBeforeVp(ops, recallIndex + 1, context) &&
-    (
-      sameNonEmptyStringSet(vpEntrySignSourceMantissas(state), recalledMantissas) ||
-      stringSetsHaveIntersection(
-        vpEntryDisplaySourceKeys(vpEntrySignSourceMantissas(state), vpEntrySignSourceShapes(state)),
-        recalledDisplaySourceKeys,
-      )
-    )
+    stringSetsHaveIntersection(vpEntrySignSourceKeys(state), recalledSourceKeys)
   ) return true;
   const nextRestore = nextImmediateX2RestoreOp(ops, recallIndex + 1);
   if (nextRestore?.kind !== "plain" || nextRestore.opcode !== 0x0c) return false;
   const vpContext = analyzeX2VpShapeContext(state);
   if (
     vpContext.kind === "active-mantissa" &&
-    sameNonEmptyStringSet(vpContext.mantissa, recalledMantissas)
+    stringSetsHaveIntersection(activeMantissaVpSourceKeys(vpContext), recalledSourceKeys)
   ) return true;
-  if (sameNonEmptyStringSet(state.vpEntryMantissa, recalledMantissas)) return true;
-  return stringSetsHaveIntersection(
-    vpEntryDisplaySourceKeys(state.vpEntryMantissa, state.vpEntryShape),
-    recalledDisplaySourceKeys,
-  );
+  return stringSetsHaveIntersection(vpEntrySourceKeys(state), recalledSourceKeys);
 }
 
 function nextImmediateX2RestoreOp(ops: readonly IrOp[], start: number): IrOp | undefined {
@@ -7078,22 +7068,23 @@ function stringSetsHaveIntersection(left: ReadonlySet<string>, right: ReadonlySe
 }
 
 function activeMantissaVpSourceKeys(context: X2VpShapeContextAnalysis): Set<string> {
-  const keys = new Set<string>();
-  addVpEntryRawMantissaSourceKeys(keys, context.mantissa);
-  addVpEntryDisplaySourceKeys(keys, context.mantissa, undefined);
-  return keys;
+  return vpSourceKeys(context.mantissa, undefined);
 }
 
 function vpEntrySourceKeys(state: X2ValueDataflowState | undefined): Set<string> {
-  const keys = new Set<string>();
-  addVpEntryRawMantissaSourceKeys(keys, state?.vpEntryMantissa);
-  addVpEntryDisplaySourceKeys(keys, state?.vpEntryMantissa, state?.vpEntryShape);
-  return keys;
+  return vpSourceKeys(state?.vpEntryMantissa, state?.vpEntryShape);
 }
 
 function vpEntrySignSourceKeys(state: X2ValueDataflowState | undefined): Set<string> {
   const mantissas = state === undefined ? undefined : vpEntrySignSourceMantissas(state);
   const shapes = state === undefined ? undefined : vpEntrySignSourceShapes(state);
+  return vpSourceKeys(mantissas, shapes);
+}
+
+function vpSourceKeys(
+  mantissas: ReadonlySet<string> | undefined,
+  shapes: X2ShapeSet | undefined,
+): Set<string> {
   const keys = new Set<string>();
   addVpEntryRawMantissaSourceKeys(keys, mantissas);
   addVpEntryDisplaySourceKeys(keys, mantissas, shapes);
