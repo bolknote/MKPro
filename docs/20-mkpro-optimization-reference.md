@@ -1489,7 +1489,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     The after-digit separator
     rewrite is deliberately shape-sensitive: the same empty op before the
     first exponent digit, or before another exponent digit, changes number
-    entry and is kept. Closed-context `/-/ /-/` pairs are removed only when
+    entry and is kept. The check now uses the next executable opcode rather
+    than the next IR cell, so marker labels between the separator and a
+    following digit keep the separator, while marker labels before a real
+    non-digit close command are preserved and the separator can still drop.
+    Closed-context `/-/ /-/` pairs are removed only when
     value dataflow proves the same sign source in visible `X` and hidden X2:
     an ordinary decimal/register/opaque fact, exact decimal display-shape
     equality such as `exponent:*:*:decimal`, mixed ordinary decimal value versus

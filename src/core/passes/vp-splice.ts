@@ -254,6 +254,32 @@ function nextFreshDigitIndex(ops: readonly IrOp[], start: number): number | unde
   return undefined;
 }
 
+function removableExponentSeparatorRun(
+  ops: readonly IrOp[],
+  startIndex: number,
+  state: X2ValueDataflowState | undefined,
+): readonly number[] {
+  const context = analyzeX2VpShapeContext(state);
+  if (!context.canDiscardSeparatorBeforeNonDigit && !context.canDiscardSeparatorBeforeSignChange) return [];
+
+  const run: number[] = [];
+  for (let index = startIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    if (isFreeStandingEmptyOp(op)) {
+      run.push(index);
+      continue;
+    }
+    if (run.length === 0) return [];
+    if (isDecimalDigit(op)) return [];
+    if (isFreeStandingSignChange(op)) {
+      return context.canDiscardSeparatorBeforeSignChange || context.canDiscardSeparatorBeforeNonDigit ? run : [];
+    }
+    return context.canDiscardSeparatorBeforeNonDigit ? run : [];
+  }
+  return [];
+}
+
 // These rewrites are proven behaviorally equivalent on the MK-61 emulator:
 //   ВП ВП  ≡ ВП   (a second exponent-entry while already in exponent mode is inert)
 //   КНОП/К1/К2 ... ВП ≡ ВП  (empty ops immediately before exponent entry are removable)
@@ -297,17 +323,17 @@ const run: IrPassFn = (ops) => {
     }
     // After at least one exponent digit, an empty op only separates the number
     // from the following non-digit command. Removing it leaves that following
-    // command to close exponent entry in the same place.
+    // command to close exponent entry in the same place. Labels are not
+    // commands here: the scanner decides from the next executable opcode.
     const previousContext = analyzeX2VpShapeContext(x2ValueStates[i - 1]);
-    if (
-      isFreeStandingEmptyOp(prev) &&
-      previousContext.canDiscardSeparatorBeforeNonDigit &&
-      !isDecimalDigit(cur)
-    ) {
-      remove.add(i - 1);
-      continue;
+    if (isFreeStandingEmptyOp(cur)) {
+      const separatorRun = removableExponentSeparatorRun(ops, i, x2ValueStates[i]);
+      if (separatorRun.length > 0) {
+        for (const separatorIndex of separatorRun) remove.add(separatorIndex);
+        continue;
+      }
     }
-    // The same separator is also inert before /-/ after X2-preserving commands:
+    // The same separator scanner also handles /-/ after X2-preserving commands:
     // the digit entry is closed for ordinary digits, but the VP/X2 exponent
     // context is still visible to /-/.
     if (
