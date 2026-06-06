@@ -1,5 +1,6 @@
 # Морской бой
 
+- Author: [С. Р. Анваров](https://4pda.to/forum/index.php?showuser=9123742)
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D0%BC%D0%BE%D1%80%D1%81%D0%BA%D0%BE%D0%B9%20%D0%B1%D0%BE%D0%B9/%D0%BC%D0%BE%D1%80%D1%81%D0%BA%D0%BE%D0%B9%20%D0%B1%D0%BE%D0%B9.html)
 - Program: [sea-battle.txt](./sea-battle.txt)
 
