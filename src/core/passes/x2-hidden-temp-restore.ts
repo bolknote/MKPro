@@ -344,16 +344,11 @@ function registerMayBeOverwrittenBetween(
           maybeOverwritten = maybeOverwritten || op.register === register;
           continue;
         case "indirect-store": {
-          const target = knownIndirectMemoryTarget(op);
-          maybeOverwritten = maybeOverwritten ||
-            target === undefined ||
-            target === register ||
-            op.register === register;
+          maybeOverwritten = maybeOverwritten || memoryAccessMayOverwriteRegister(op, register);
           continue;
         }
         case "indirect-recall":
-          maybeOverwritten = maybeOverwritten ||
-            (!isStableIndirectSelector(op.register) && op.register === register);
+          maybeOverwritten = maybeOverwritten || memoryAccessMayOverwriteRegister(op, register);
           continue;
         case "loop": {
           const nextOverwritten = maybeOverwritten || loopCounterRegister(op.counter) === register;
@@ -370,8 +365,7 @@ function registerMayBeOverwrittenBetween(
         }
         case "indirect-cjump": {
           const target = knownIndirectFlowStartIndex(ops, op, directReturnContext);
-          const nextOverwritten = maybeOverwritten ||
-            (!isStableIndirectSelector(op.register) && op.register === register);
+          const nextOverwritten = maybeOverwritten || memoryAccessMayOverwriteRegister(op, register);
           return target === undefined ||
             visit(cursor + 1, nextOverwritten) ||
             visit(target, nextOverwritten);
@@ -382,13 +376,12 @@ function registerMayBeOverwrittenBetween(
         }
         case "indirect-jump": {
           const target = knownIndirectFlowStartIndex(ops, op, directReturnContext);
-          const nextOverwritten = maybeOverwritten ||
-            (!isStableIndirectSelector(op.register) && op.register === register);
+          const nextOverwritten = maybeOverwritten || memoryAccessMayOverwriteRegister(op, register);
           return target === undefined || visit(target, nextOverwritten);
         }
         case "call":
         case "indirect-call":
-          if (isKnownReturnCallOp(op) && directReturningCallDoesNotMentionRegister(
+          if (isKnownReturnCallOp(op) && directReturningCallDoesNotOverwriteRegister(
             ops,
             op,
             register,
@@ -507,10 +500,46 @@ function directReturningCallDoesNotMentionRegister(
   );
 }
 
+function directReturningCallDoesNotOverwriteRegister(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  register: RegisterName,
+  directReturnContext: DirectReturnAnalysisContext,
+): boolean {
+  return knownReturnCallReturnsThroughTransparentRange(
+    ops,
+    call,
+    directReturnContext,
+    (op) => !memoryAccessMayOverwriteRegister(op, register) && !stopsStraightLineSearch(op),
+  );
+}
+
 function memoryAccessDoesNotMentionRegister(op: IrOp, register: RegisterName): boolean {
   if (mentionsRegister(op, register)) return false;
   if (op.kind !== "indirect-store" && op.kind !== "indirect-recall") return true;
   return isStableIndirectSelector(op.register) && knownIndirectMemoryTarget(op) !== undefined;
+}
+
+function memoryAccessMayOverwriteRegister(op: IrOp, register: RegisterName): boolean {
+  switch (op.kind) {
+    case "store":
+      return op.register === register;
+    case "indirect-store": {
+      const target = knownIndirectMemoryTarget(op);
+      return target === undefined ||
+        target === register ||
+        (!isStableIndirectSelector(op.register) && op.register === register);
+    }
+    case "indirect-recall":
+    case "indirect-jump":
+    case "indirect-call":
+    case "indirect-cjump":
+      return !isStableIndirectSelector(op.register) && op.register === register;
+    case "loop":
+      return loopCounterRegister(op.counter) === register;
+    default:
+      return false;
+  }
 }
 
 function mentionsRegister(op: IrOp, register: RegisterName): boolean {

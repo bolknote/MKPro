@@ -2272,6 +2272,58 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore keeps register-dependent expr keys stable when helpers read the source", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("read_source"),
+      recall("1"),
+      ret(),
+      label("main"),
+      recall("1"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      call("read_source"),
+      recall("1"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[12]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore keeps register-dependent expr keys stable when proved indirect helpers read the source", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("read_source"),
+      recall("1"),
+      ret(),
+      label("main"),
+      recall("1"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      knownTargetIndirectCall("7", 2),
+      recall("1"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[12]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2-hidden-temp-restore keeps register-dependent expr recalls when a helper overwrites the source", () => {
     const program: IrOp[] = [
       jump("main"),
@@ -2285,6 +2337,45 @@ describe("ir passes on synthetic programs", () => {
       store("2"),
       call("overwrite_source"),
       recall("1"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+
+    expect(restored.applied).toBe(0);
+    expect(restored.ops).toEqual(program);
+  });
+
+  it("x2-hidden-temp-restore keeps register-dependent expr keys stable across stable indirect selector reads", () => {
+    const program: IrOp[] = [
+      recall("8"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      knownTargetIndirectStore("8", "3"),
+      recall("8"),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[7]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 2);
+  });
+
+  it("x2-hidden-temp-restore keeps register-dependent expr recalls across mutating indirect selector reads", () => {
+    const program: IrOp[] = [
+      recall("4"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      knownTargetIndirectStore("4", "3"),
+      recall("4"),
       plain(0x31, "К |x|"),
       plain(0x0e, "В↑"),
       recall("2"),
@@ -2443,6 +2534,30 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[3]?.memory?.["2"])).toContain("expr-key:31(reg:1)");
     expect(x2ValueStateText(states[7]?.x)).not.toContain("expr-key:31(reg:1)");
     expect(x2ValueStateText(states[7]?.memory?.["2"]) ?? []).not.toContain("expr-key:31(reg:1)");
+  });
+
+  it("x2 value dataflow invalidates register-dependent expr keys after mutating indirect store selectors", () => {
+    const mutatingProgram: IrOp[] = [
+      recall("4"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      knownTargetIndirectStore("4", "3"),
+      halt(),
+    ];
+    const stableProgram: IrOp[] = [
+      recall("8"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      knownTargetIndirectStore("8", "3"),
+      halt(),
+    ];
+    const mutatingStates = computeX2ValueStates(mutatingProgram, { trackRegisterMemory: true });
+    const stableStates = computeX2ValueStates(stableProgram, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(mutatingStates[3]?.memory?.["2"])).toContain("expr-key:31(reg:4)");
+    expect(x2ValueStateText(mutatingStates[4]?.memory?.["2"]) ?? []).not.toContain("expr-key:31(reg:4)");
+    expect(x2ValueStateText(stableStates[3]?.memory?.["2"])).toContain("expr-key:31(reg:8)");
+    expect(x2ValueStateText(stableStates[4]?.memory?.["2"])).toContain("expr-key:31(reg:8)");
   });
 
   it("x2 value dataflow invalidates register-dependent expr keys only on mutating indirect conditional jump edges", () => {

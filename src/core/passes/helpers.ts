@@ -4386,12 +4386,17 @@ function transferIndirectStoreRegisterState(
   op: Extract<IrOp, { kind: "indirect-store" }>,
 ): RegisterDataflowState {
   const target = knownIndirectMemoryTarget(op);
-  if (target === undefined) return cloneRegisterDataflowState(input);
-  return {
+  if (target === undefined) {
+    return isStableIndirectSelector(op.register)
+      ? cloneRegisterDataflowState(input)
+      : dropMutatedSelectorFact(input, op.register);
+  }
+  const output: RegisterDataflowState = {
     x: addRegisterValue(input.x, target),
     y: transferStoreYRegisterSet(input, target),
     x2: addStoredX2Alias(input, target),
   };
+  return isStableIndirectSelector(op.register) ? output : dropMutatedSelectorFact(output, op.register);
 }
 
 function transferPlainRegisterDataflowState(
@@ -5185,7 +5190,10 @@ function transferIndirectStoreX2ValueState(
   const target = knownIndirectMemoryTarget(op);
   if (target === undefined) {
     const closed = withStoreVpSpliceSource(closeX2ValueEntry(input));
-    return trackRegisterMemory ? clearX2ValueMemory(closed) : closed;
+    const cleared = trackRegisterMemory ? clearX2ValueMemory(closed) : closed;
+    return isStableIndirectSelector(op.register)
+      ? cleared
+      : dropMutatedSelectorX2ValueFact(cleared, op.register, trackRegisterMemory);
   }
   const closed = closeX2ValueEntry(input);
   const stable = registerWritePreservesStoredValue(closed, target)
@@ -5193,7 +5201,7 @@ function transferIndirectStoreX2ValueState(
     : invalidateRegisterDependentX2ValueState(closed, target, trackRegisterMemory);
   const value = registerValueFact(target);
   const vpEntryShape = vpEntryShapesFromStoreSplice(stable.x2Shape);
-  return {
+  const output: X2ValueDataflowState = {
     x: addX2Value(stable.x, value),
     y: cloneOptionalValueSet(stable.y),
     x2: addStoredX2ValueAlias(stable, value),
@@ -5211,6 +5219,9 @@ function transferIndirectStoreX2ValueState(
     memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, target, stable.x) : undefined,
     shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, target, stable.xShape) : undefined,
   };
+  return isStableIndirectSelector(op.register)
+    ? output
+    : dropMutatedSelectorX2ValueFact(output, op.register, trackRegisterMemory);
 }
 
 function setsIntersect(left: RegisterValueSet, right: RegisterValueSet): boolean {
