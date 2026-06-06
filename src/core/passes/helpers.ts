@@ -4378,7 +4378,7 @@ function transferX2ValueDataflowState(
         shapeMemory: trackRegisterMemory ? deleteX2ShapeMemory(stable.shapeMemory, counter) : undefined,
       };
       return edge === "jump" && effect === "preserves" && targetStartsWithVp
-        ? withDirectFlowVpSpliceSource(output)
+        ? withIndirectFlowVpSpliceSource(output)
         : output;
     }
     case "indirect-jump":

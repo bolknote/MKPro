@@ -6782,6 +6782,50 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(states[8])).toBe("exponent:3:3");
   });
 
+  it("x2 value dataflow uses counted-loop jump edges as indirect ВП first-digit sources", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x20, "F pi"),
+      loop("target"),
+      jump("done"),
+      label("target"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2VpEntryMantissaText(states[6])).toEqual(["7"]);
+    expect(states[6]?.vpEntryMantissaTransient).toBe(true);
+    expect(x2EntryStateText(states[7])).toBe("exponent:7:");
+    expect(x2EntryStateText(states[8])).toBe("exponent:7:3");
+  });
+
+  it("x2 value dataflow uses 8 as the counted-loop ВП first digit for zero X2", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x20, "F pi"),
+      loop("target"),
+      jump("done"),
+      label("target"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2VpEntryMantissaText(states[6])).toEqual(["8"]);
+    expect(states[6]?.vpEntryMantissaTransient).toBe(true);
+    expect(x2EntryStateText(states[7])).toBe("exponent:8:");
+    expect(x2EntryStateText(states[8])).toBe("exponent:8:3");
+  });
+
   it("x2 value dataflow uses direct jump as a structural ВП first-digit source", () => {
     const program: IrOp[] = [
       recall("2", "preload const FACE"),
@@ -6798,6 +6842,27 @@ describe("ir passes on synthetic programs", () => {
     expect(states[4]?.vpEntryShapeTransient).toBe(true);
     expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:3ACE:"]);
     expect(x2ShapeStateText(states[6]?.xShape)).toEqual(["hex-exponent:3ACE:3"]);
+  });
+
+  it("x2 value dataflow uses counted-loop jump edges as structural indirect ВП sources", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x20, "F pi"),
+      loop("target"),
+      jump("done"),
+      label("target"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2VpEntryShapeText(states[5])).toEqual(["hex:7ACE:mantissa"]);
+    expect(states[5]?.vpEntryShapeTransient).toBe(true);
+    expect(x2ShapeStateText(states[6]?.xShape)).toEqual(["hex-exponent:7ACE:"]);
+    expect(x2ShapeStateText(states[7]?.xShape)).toEqual(["hex-exponent:7ACE:3"]);
   });
 
   it("x2 value dataflow preserves raw sign sources on conditional jump edges", () => {

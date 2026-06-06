@@ -93,16 +93,18 @@ programs it can be used as part of a dispatch/input decoding sequence, but it is
 fragile because it depends on the exact previous flow command and X2 state.
 The optimizer models the proved indirect jump edge as a transient `ВП` source:
 decimal X2 mantissas get a `7` first digit, exact zero gets `8`, and structural
-hex/super mantissas remain shape-only. The source is consumed only by an
-immediate executable `ВП`; any intervening executable command clears the
-transient fact, while labels do not.
+hex/super mantissas remain shape-only. Counted-loop `F L0`..`F L3` jump edges
+that land on `ВП` use the same indirect-style source, after the counter mutation
+has been applied to dataflow facts. The source is consumed only by an immediate
+executable `ВП`; any intervening executable command clears the transient fact,
+while labels do not.
 
 ### `ВП` Immediately After Direct Flow
 
-Direct jumps, calls, and direct conditional jump edges also act as the previous
-executable command for `ВП`. Here the first digit comes from the visible X value,
-while the remaining mantissa/order comes from hidden X2. The optimizer models
-this as the same transient first-digit splice source used by the general
+Direct jumps, calls, and direct non-loop conditional jump edges also act as the
+previous executable command for `ВП`. Here the first digit comes from the visible
+X value, while the remaining mantissa/order comes from hidden X2. The optimizer
+models this as the same transient first-digit splice source used by the general
 mantissa shape algebra; structural hex/super targets stay shape-only.
 
 ### `ВП .` and `ВП /-/`
