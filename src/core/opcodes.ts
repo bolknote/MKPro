@@ -312,6 +312,8 @@ function normalizeAliases(item: OpcodeInfo): string[] {
   if (item.name === "К ∨") aliases.add("К OR");
   if (item.name === "К ⊕") aliases.add("K⊕");
   if (item.name === "К ⊕") aliases.add("К XOR");
+  if (item.name === "К °->′") aliases.add("К+");
+  if (item.name === "К °->′") aliases.add("K+");
   if (item.name === "К ИНВ") aliases.add("Кинв");
   if (item.name === "К ЗН") aliases.add("Кзн");
   if (item.name === "К |x|") aliases.add("K|x|");
