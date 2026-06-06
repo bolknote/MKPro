@@ -5410,6 +5410,8 @@ describe("ir passes on synthetic programs", () => {
       .toContain("decimal:1:normalized");
     expect(x2ValueStateText(computeX2ValueStates(exponentProgram)[5]?.x) ?? [])
       .toContain("decimal:1:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(exponentProgram)[5]?.x) ?? [])
+      .not.toContain("expr-key:32(shape:hex-exponent:A:2)");
     expect(x2ValueStateText(computeX2ValueStates(unsafeFProgram)[2]?.x) ?? [])
       .not.toContain("decimal:1:normalized");
     expect(x2ValueStateText(computeX2ValueStates(unsafeFProgram)[2]?.x) ?? [])
@@ -5940,6 +5942,11 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
     expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["hex-exponent:FACE:3"]);
     expect(x2StateIsClosedPlainContext(states[4])).toBe(true);
+    expect(x2ValueStateText(states[5]?.x)).toEqual([
+      "expr-key:0B(shape:hex:FACE000:mantissa)",
+      "expr:4",
+    ]);
+    expect(x2ValueStateText(states[5]?.x)).not.toContain("expr-key:0B(shape:hex-exponent:FACE:3)");
     expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:-FACE:3"]);
     expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["hex-exponent:-FACE:3"]);
     expect(x2VpEntryShapeText(states[5])).toEqual(["hex:-FACE000:mantissa"]);

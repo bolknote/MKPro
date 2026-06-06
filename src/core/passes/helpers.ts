@@ -1734,12 +1734,22 @@ function decimalFromFactKey(key: string): string | undefined {
 
 function structuralHexSignFromFactKey(key: string): string | undefined {
   const fact = structuralShapeFactFromStableExpressionKey(key);
-  return fact === undefined ? undefined : structuralHexSignDecimalValue(fact);
+  if (fact === undefined) return undefined;
+  for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
+    const value = structuralHexSignDecimalValue(restored);
+    if (value !== undefined) return value;
+  }
+  return undefined;
 }
 
 function structuralHexSquareFromFactKey(key: string): string | undefined {
   const fact = structuralShapeFactFromStableExpressionKey(key);
-  return fact === undefined ? undefined : structuralHexSquareDecimalValue(fact);
+  if (fact === undefined) return undefined;
+  for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
+    const value = structuralHexSquareDecimalValue(restored);
+    if (value !== undefined) return value;
+  }
+  return undefined;
 }
 
 function structuralShapeFactFromStableExpressionKey(key: string): X2ShapeFact | undefined {
@@ -7672,9 +7682,21 @@ function sharedStructuralRestoreSourceKeys(
   const xRestoreShapes = x2StructuralRestoreShapeFacts(xShapes);
   const keys = new Set<string>();
   for (const fact of x2StructuralRestoreShapeFacts(x2Shapes)) {
-    if (xRestoreShapes.has(fact)) keys.add(stableStructuralExpressionSourceKey(fact));
+    if (!xRestoreShapes.has(fact)) continue;
+    const keyFact = canonicalStructuralRestoreSourceKeyFact(fact, xRestoreShapes);
+    keys.add(stableStructuralExpressionSourceKey(keyFact));
   }
   return keys;
+}
+
+function canonicalStructuralRestoreSourceKeyFact(
+  fact: X2ShapeFact,
+  sharedShapes: X2ShapeSet,
+): X2ShapeFact {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "exponent-entry" || model.closedStructuralMantissa === undefined) return fact;
+  const closed = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+  return closed !== undefined && sharedShapes.has(closed) ? closed : fact;
 }
 
 function sharedRestoredDisplaySourceKeys(

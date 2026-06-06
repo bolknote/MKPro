@@ -803,7 +803,11 @@ Display rewrites are separated into strategy selection + body lowering.
   expression token rather than collapsing the value to undifferentiated
   `same:unknown`, and also creates a stable `expr-key:0B(<source>)` when the
   closed-context source is already a proved register, normalized decimal, or
-  stable expression key. Whitelisted documented pure computations such as
+  stable expression key. For shared structural exponent sources, the sign
+  source key is canonicalized through the proved restored mantissa when that
+  closed form is also shared, so `hex-exponent:FACE:3` records
+  `shape:hex:FACE000:mantissa` rather than a duplicate raw-exponent key.
+  Whitelisted documented pure computations such as
   `F sqrt`, `F x^2`, `К [x]`, `К {x}`, arithmetic `+`/`-`/`*`/`/`, `F x^y`,
   `К max`, and `К ∧`/`К ∨`/`К ⊕` also seed an opaque `expr:<step>` value in
   visible X while leaving X2 untouched; a later explicit X2 sync (`В↑`, F*
