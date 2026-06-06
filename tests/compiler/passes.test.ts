@@ -1166,6 +1166,11 @@ describe("ir passes on synthetic programs", () => {
       raw: "FA",
       safety: "structuralOnly",
     });
+    expect(parseX2ShapeFact("super:-FA")).toEqual({
+      kind: "super-mantissa",
+      raw: "-FA",
+      safety: "structuralOnly",
+    });
     expect(parseX2ShapeFact("super-exponent:FA:3")).toEqual({
       kind: "super-exponent",
       mantissa: "FA",
@@ -1192,6 +1197,21 @@ describe("ir passes on synthetic programs", () => {
       raw: "hex:8..A:mantissa",
       safety: "unknown",
     });
+    expect(parseX2ShapeFact("super:8A")).toEqual({
+      kind: "unknown",
+      raw: "super:8A",
+      safety: "unknown",
+    });
+    expect(parseX2ShapeFact("super:FС")).toEqual({
+      kind: "unknown",
+      raw: "super:FС",
+      safety: "unknown",
+    });
+    expect(parseX2ShapeFact("super:FA.")).toEqual({
+      kind: "unknown",
+      raw: "super:FA.",
+      safety: "unknown",
+    });
   });
 
   it("x2 shape algebra keeps leading-zero and structural shapes out of no-op equality", () => {
@@ -1199,6 +1219,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetSafety(new Set(["mantissa:-0:decimal"]))).toBe("errorProne");
     expect(x2ShapeSetSafety(new Set(["hex:FABC:mantissa"]))).toBe("structuralOnly");
     expect(x2ShapeSetSafety(new Set(["hex:8Ж:mantissa"]))).toBe("unknown");
+    expect(x2ShapeSetSafety(new Set(["super:8A"]))).toBe("unknown");
     expect(x2ShapeSetSafety(new Set(["exponent:5::decimal"]))).toBe("errorProne");
     expect(
       x2ShapeSetsHaveSameDotSafeDecimal(
@@ -1252,6 +1273,12 @@ describe("ir passes on synthetic programs", () => {
       x2ShapeSetsHaveSameStructuralShape(
         new Set(["super:FA"]),
         new Set(["hex:FA:mantissa"]),
+      ),
+    ).toBe(false);
+    expect(
+      x2ShapeSetsHaveSameStructuralShape(
+        new Set(["super:8A"]),
+        new Set(["super:8A"]),
       ),
     ).toBe(false);
     expect(
@@ -1551,6 +1578,16 @@ describe("ir passes on synthetic programs", () => {
       raw: "FA",
       digits: ["F", "A"],
       safety: "structuralOnly",
+    });
+    expect(x2ShapeDataModelForFact("super:FС")).toMatchObject({
+      kind: "unknown",
+      raw: "super:FС",
+      safety: "unknown",
+    });
+    expect(x2ShapeDataModelForFact("super-exponent:8A:2")).toMatchObject({
+      kind: "unknown",
+      raw: "super-exponent:8A:2",
+      safety: "unknown",
     });
     expect(x2ShapeDataModelForFact("exponent:5:3:decimal")).toMatchObject({
       kind: "exponent-entry",
@@ -1877,6 +1914,8 @@ describe("ir passes on synthetic programs", () => {
     expect(x2CanonicalShapeFact("mantissa: 02 :decimal")).toBe("mantissa:02:decimal");
     expect(x2CanonicalShapeFact("hex: fa.ce :mantissa")).toBe("hex:FA.CE:mantissa");
     expect(x2CanonicalShapeFact("super: fa")).toBe("super:FA");
+    expect(x2CanonicalShapeFact("super: -fa")).toBe("super:-FA");
+    expect(x2CanonicalShapeFact("super:FС")).toBe("super:FС");
     expect(x2CanonicalShapeFact("hex-exponent: fa.ce : -3")).toBe("hex-exponent:FA.CE:-3");
     expect(x2CanonicalShapeFact("super-exponent: fa : 3")).toBe("super-exponent:FA:3");
   });

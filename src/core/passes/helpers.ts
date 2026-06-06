@@ -1596,6 +1596,10 @@ function structuralShapeRawIsValid(raw: string): boolean {
   return sawDigit;
 }
 
+function superShapeRawIsValid(raw: string): boolean {
+  return /^-?F[A-F]$/u.test(canonicalShapeRaw(raw));
+}
+
 function bitwiseMantissaRaw(digits: readonly number[]): string {
   const rendered = digits.map((digit) => "0123456789ABCDEF"[digit] ?? "0");
   return `${rendered[0]}.${rendered.slice(1).join("")}`;
@@ -2826,12 +2830,12 @@ export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
   const superMantissa = /^super:(.*)$/u.exec(fact);
   if (superMantissa !== null) {
     const raw = superMantissa[1]!;
-    if (!structuralShapeRawIsValid(raw)) return { kind: "unknown", raw: fact, safety: "unknown" };
+    if (!superShapeRawIsValid(raw)) return { kind: "unknown", raw: fact, safety: "unknown" };
     return { kind: "super-mantissa", raw, safety: "structuralOnly" };
   }
   const superExponent = /^super-exponent:([^:]*):([^:]*)$/u.exec(fact);
   if (superExponent !== null) {
-    if (!structuralShapeRawIsValid(superExponent[1]!)) return { kind: "unknown", raw: fact, safety: "unknown" };
+    if (!superShapeRawIsValid(superExponent[1]!)) return { kind: "unknown", raw: fact, safety: "unknown" };
     return {
       kind: "super-exponent",
       mantissa: superExponent[1]!,
@@ -2883,13 +2887,13 @@ export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
   const superMantissa = /^super:(.*)$/u.exec(fact);
   if (superMantissa !== null) {
     const raw = superMantissa[1]!;
-    return structuralShapeRawIsValid(raw)
+    return superShapeRawIsValid(raw)
       ? structuralMantissaDataModel("super", raw, "structuralOnly")
       : { kind: "unknown", raw: fact, safety: "unknown" };
   }
   const superExponent = /^super-exponent:([^:]*):([^:]*)$/u.exec(fact);
   if (superExponent !== null) {
-    if (!structuralShapeRawIsValid(superExponent[1]!)) return { kind: "unknown", raw: fact, safety: "unknown" };
+    if (!superShapeRawIsValid(superExponent[1]!)) return { kind: "unknown", raw: fact, safety: "unknown" };
     const mantissa = structuralMantissaDataModel("super", superExponent[1]!, "structuralOnly");
     return {
       kind: "exponent-entry",
@@ -6654,8 +6658,8 @@ function structuralFirstDigitSpliceRadix(
 
 function x2MantissaShapeFactFromParts(radix: X2MantissaRadix, raw: string): X2ShapeFact | undefined {
   if (radix === "decimal") return decimalMantissaShapeFact(raw);
-  if (radix === "hex") return `hex:${raw}:mantissa`;
-  if (radix === "super") return `super:${raw}`;
+  if (radix === "hex") return structuralShapeRawIsValid(raw) ? `hex:${canonicalShapeRaw(raw)}:mantissa` : undefined;
+  if (radix === "super") return superShapeRawIsValid(raw) ? `super:${canonicalShapeRaw(raw)}` : undefined;
   return undefined;
 }
 
@@ -6709,7 +6713,7 @@ function preloadedConstantShapeFacts(op: IrOp | undefined): Set<X2ShapeFact> {
   if (structuralExponent !== undefined) return new Set([structuralExponent]);
   const shape = normalizePreloadedShapeLiteral(value);
   if (shape === undefined) return new Set();
-  if (/^F[A-F]$/u.test(shape)) return new Set<X2ShapeFact>([`super:${shape}`]);
+  if (superShapeRawIsValid(shape)) return new Set<X2ShapeFact>([`super:${canonicalShapeRaw(shape)}`]);
   if (structuralShapeRawIsValid(shape) && hasStructuralNonDecimalDigit(shape)) {
     return new Set<X2ShapeFact>([`hex:${shape}:mantissa`]);
   }
@@ -6739,8 +6743,8 @@ function normalizePreloadedStructuralExponentShape(input: string): X2ShapeFact |
   const mantissa = match[1]!;
   if (!structuralShapeRawIsValid(mantissa) || !hasStructuralNonDecimalDigit(mantissa)) return undefined;
   const exponent = match[2]!.replace(/^\+/u, "");
-  const mantissaFact = /^F[A-F]$/u.test(mantissa)
-    ? `super:${mantissa}` as X2ShapeFact
+  const mantissaFact = superShapeRawIsValid(mantissa)
+    ? `super:${canonicalShapeRaw(mantissa)}` as X2ShapeFact
     : `hex:${mantissa}:mantissa` as X2ShapeFact;
   return x2ExponentShapeFactFromMantissaFact(mantissaFact, exponent);
 }

@@ -1303,7 +1303,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shape-only `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е`
     remains a display digit. Until those shapes are separately proved dot-safe,
     hex/super/display shapes remain
-    structural only. Shape-memory stores canonical structural spellings, so
+    structural only. `super:*` is narrower than `hex:*`: only optional-sign
+    `F[A-F]` slot forms
+    stay in the super lattice; other structural displays stay hex-only or
+    unknown. Shape-memory stores canonical structural spellings, so
     equivalent hex/super display shapes still join after store/recall proofs;
     structural VP context is not considered plain closed
     context by `.`/`/-/` rewrite guards. Closed-context
