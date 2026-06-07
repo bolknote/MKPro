@@ -9304,6 +9304,22 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("recall value proof uses stable expr-key structural shapes as X and X2 evidence", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      x2: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      entry: { kind: "closed" },
+    };
+
+    expect(recallValueProof(recall("2", "preload const A"), state)).toEqual({
+      register: "2",
+      inX: true,
+      x2SyncRegister: undefined,
+      x2SyncValue: false,
+      x2SyncShape: true,
+    });
+  });
+
   it("recall value proof uses stored structural exponent shapes as in-X evidence", () => {
     const program: IrOp[] = [
       recall("1", "preload const FACE"),

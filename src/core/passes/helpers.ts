@@ -3836,7 +3836,9 @@ export function x2ValueShapeSetRestoredVisibleDecimals(
   shapes: X2ShapeSet | undefined,
 ): Set<string> {
   const output = x2ValueSetRestoredVisibleDecimals(values);
-  for (const decimal of x2ShapeSetRestoredVisibleDecimals(shapes)) output.add(decimal);
+  for (const decimal of x2ShapeSetRestoredVisibleDecimals(shapeSetWithStableExpressionValueShapes(shapes, values))) {
+    output.add(decimal);
+  }
   return output;
 }
 
@@ -5187,7 +5189,7 @@ export function recallAlreadySyncedInX2RestoredVisibleDecimal(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   const hiddenDecimals = x2ValueSetRestoredVisibleDecimals(state.x2);
-  for (const decimal of dotSafeDecimalShapeValues(state.x2Shape)) hiddenDecimals.add(decimal);
+  for (const decimal of dotSafeDecimalShapeValues(effectiveX2StateShape(state))) hiddenDecimals.add(decimal);
   if (hiddenDecimals.size === 0) return undefined;
 
   for (const visible of x2ShapeSetRestoredVisibleDecimals(recallDecimalDisplayShapeFacts(op, state, register))) {
@@ -5203,7 +5205,7 @@ export function recallAlreadySyncedInX2StructuralShape(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   const shapes = recallStructuralShapeFacts(op, state, register);
-  return x2ShapeSetsHaveSameStructuralShape(state.x2Shape, shapes) ? register : undefined;
+  return x2ShapeSetsHaveSameStructuralShape(effectiveX2StateShape(state), shapes) ? register : undefined;
 }
 
 export function recallAlreadySyncedInX2VpShape(
@@ -5213,7 +5215,7 @@ export function recallAlreadySyncedInX2VpShape(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   const shapes = recallVpEntryShapeSourceFacts(op, state, register);
-  return x2ShapeSetsHaveSameRestoredDisplayShape(state.x2Shape, shapes) ? register : undefined;
+  return x2ShapeSetsHaveSameRestoredDisplayShape(effectiveX2StateShape(state), shapes) ? register : undefined;
 }
 
 export function recallAlreadyInXDecimalMemory(
@@ -5255,7 +5257,7 @@ export function recallAlreadyInXStructuralShape(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   const shapes = recallStructuralShapeFacts(op, state, register);
-  return x2ShapeSetsHaveSameStructuralShape(state.xShape, shapes) ? register : undefined;
+  return x2ShapeSetsHaveSameStructuralShape(effectiveVisibleXStateShape(state), shapes) ? register : undefined;
 }
 
 export function recallAlreadyInXRestoredDisplayShape(
@@ -5265,7 +5267,7 @@ export function recallAlreadyInXRestoredDisplayShape(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   const shapes = recallVpEntryShapeSourceFacts(op, state, register);
-  return x2ShapeSetsHaveSameRestoredDisplayShape(state.xShape, shapes) ? register : undefined;
+  return x2ShapeSetsHaveSameRestoredDisplayShape(effectiveVisibleXStateShape(state), shapes) ? register : undefined;
 }
 
 export function recallAlreadyInXRestoredVisibleDecimal(
@@ -5288,7 +5290,7 @@ export function recallAlreadyInXDecimalDisplayShape(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   const shapes = recallDecimalDisplayShapeFacts(op, state, register);
-  return x2ShapeSetsHaveSameDecimalDisplayShape(state.xShape, shapes) ? register : undefined;
+  return x2ShapeSetsHaveSameDecimalDisplayShape(effectiveVisibleXStateShape(state), shapes) ? register : undefined;
 }
 
 export function recallValueProof(
