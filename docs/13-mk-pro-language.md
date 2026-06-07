@@ -1449,7 +1449,9 @@ The pipeline currently contains:
   `A`/`B`/`C`/`D` act as a decimal-times-ten display result while `E` gives zero;
   verified hex-pair products `A`..`E` by `A`..`E` are also modeled with their
   observed display spelling, including non-normal `A * A -> 00` and
-  `B * Г -> 10`.
+  `B * Г -> 10`. Division has a separate emulator-pinned `A`..`E` by
+  `A`..`E` table with its own display shapes, for example `A / Г -> 4E-1`,
+  `С / B -> 1.2525252`, and `A / С -> ЕГГ0Г` remains unmodeled.
   Hidden X2 is still the previous right operand until a later X2-syncing
   command, so literal/scratch restore rewrites can use these table results only
   after that sync. The same table-backed rule covers the verified `ГE-2` coefficient
@@ -1461,7 +1463,7 @@ The pipeline currently contains:
   `exponent:1:-1:decimal`, so a later store/recall/`ВП` sequence follows the
   same context as the calculator instead of treating the result as a freshly
   entered `0.1` mantissa. Wider
-  hex/super multiplication, subtraction, and carry/borrow cases remain opaque. The degree/minute conversion opcodes `К °->′`,
+  hex/super multiplication, division, subtraction, and carry/borrow cases remain opaque. The degree/minute conversion opcodes `К °->′`,
   `К °->′"`, `К °<-′"`, and `К °<-′` also seed exact decimal facts only for
   domain-safe conversions whose rational result has a finite decimal expansion
   and still fits the eight-significant-digit machine-mantissa proof bound;

@@ -19,6 +19,7 @@ const IP2 = 0x62;
 const ADD = 0x10;
 const SUBTRACT = 0x11;
 const MULTIPLY = 0x12;
+const DIVIDE = 0x13;
 const STACK_LIFT = 0x0e;
 const DOT = 0x0a;
 const F_PI = 0x20;
@@ -52,6 +53,16 @@ function multiplyRegisters(r1: string, r2: string): string {
   calc.setRegister("1", r1);
   calc.setRegister("2", r2);
   calc.loadProgram([IP1, IP2, MULTIPLY, STOP]);
+  calc.pressSequence(["В/О", "С/П"]);
+  calc.runUntilStable({ maxFrames: 300, stableFrames: 4 });
+  return calc.displayText().replace(/\s/gu, "");
+}
+
+function divideRegisters(r1: string, r2: string): string {
+  const calc = new MK61();
+  calc.setRegister("1", r1);
+  calc.setRegister("2", r2);
+  calc.loadProgram([IP1, IP2, DIVIDE, STOP]);
   calc.pressSequence(["В/О", "С/П"]);
   calc.runUntilStable({ maxFrames: 300, stableFrames: 4 });
   return calc.displayText().replace(/\s/gu, "");
@@ -187,6 +198,16 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     for (const [left, right, display] of rightHexCases) {
       expect(multiplyRegisters(left, right)).toBe(display.replace(/\s/gu, ""));
     }
+  });
+
+  it("single hex digit division table is operand-order-sensitive", () => {
+    expect(divideRegisters("-", "-")).toBe("1,");
+    expect(divideRegisters("-", "Г")).toBe("4,-01");
+    expect(divideRegisters("B", "Г")).toBe("6,-01");
+    expect(divideRegisters("С", "B")).toBe("1,2525252");
+    expect(divideRegisters("Г", "С")).toBe("1,23");
+    expect(divideRegisters("Е", "Г")).toBe("1,2");
+    expect(divideRegisters("-", "С")).toBe("ЕГГ0Г");
   });
 
   it("K ЗН has a pinned sign result for verified structural hex mantissas", () => {

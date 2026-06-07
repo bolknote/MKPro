@@ -5011,6 +5011,18 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(multiplyLeadingZeroStates[4]?.x) ?? []).toContain("decimal:0:normalized");
     expect(x2ShapeStateText(multiplyLeadingZeroStates[4]?.xShape)).toEqual(["mantissa:00:decimal"]);
 
+    const divideIdentityStates = computeX2ValueStates(hexPairProgram("Г", "Г", plain(0x13, "÷")));
+    expect(x2ValueStateText(divideIdentityStates[4]?.x) ?? []).toContain("decimal:1:normalized");
+    expect(x2ShapeStateText(divideIdentityStates[4]?.xShape)).toEqual(["mantissa:1:decimal"]);
+
+    const divideScientificStates = computeX2ValueStates(hexPairProgram("A", "Г", plain(0x13, "÷")));
+    expect(x2ValueStateText(divideScientificStates[4]?.x) ?? []).toContain("decimal:0.4:normalized");
+    expect(x2ShapeStateText(divideScientificStates[4]?.xShape)).toEqual(["exponent:4:-1:decimal"]);
+
+    const divideWideStates = computeX2ValueStates(hexPairProgram("С", "B", plain(0x13, "÷")));
+    expect(x2ValueStateText(divideWideStates[4]?.x) ?? []).toContain("decimal:1.2525252:normalized");
+    expect(x2ShapeStateText(divideWideStates[4]?.xShape)).toEqual(["mantissa:1.2525252:decimal"]);
+
     const rejectedFStates = computeX2ValueStates(hexPairProgram("F", "A", plain(0x10, "+")));
     expect(x2ValueStateText(rejectedFStates[4]?.x) ?? []).not.toContain("decimal:0:normalized");
     expect(x2ShapeStateText(rejectedFStates[4]?.xShape)).toEqual([]);

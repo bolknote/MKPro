@@ -1138,6 +1138,15 @@ function structuralHexBinaryDecimalValues(
     }
     return output;
   }
+  if (op.opcode === 0x13) {
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = structuralHexDigitDivideStructuralHexDigitValue(leftDigit, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    return output;
+  }
   return output;
 }
 
@@ -1191,34 +1200,43 @@ function structuralHexBinaryDecimalDisplayShapes(
     }
     return output;
   }
-  if (op.opcode !== 0x12) return output;
+  if (op.opcode === 0x12) {
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const right of normalizedDecimalValues(x, xShape)) {
+        const result = structuralHexDigitTimesDecimalDisplayShape(leftDigit, right);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const left of normalizedDecimalValues(y, yShape)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = decimalTimesStructuralHexDigitDisplayShape(left, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const leftExponent of structuralSingleHexExponentOperands(yShape)) {
+      for (const right of normalizedDecimalValues(x, xShape)) {
+        const result = structuralHexExponentTimesDecimalDisplayShape(leftExponent, right);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const left of normalizedDecimalValues(y, yShape)) {
+      for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
+        const result = decimalTimesStructuralHexExponentDisplayShape(left, rightExponent);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = structuralHexDigitTimesStructuralHexDigitDisplayShape(leftDigit, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    return output;
+  }
+  if (op.opcode !== 0x13) return output;
   for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
-    for (const right of normalizedDecimalValues(x, xShape)) {
-      const result = structuralHexDigitTimesDecimalDisplayShape(leftDigit, right);
-      if (result !== undefined) output.add(result);
-    }
-  }
-  for (const left of normalizedDecimalValues(y, yShape)) {
     for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
-      const result = decimalTimesStructuralHexDigitDisplayShape(left, rightDigit);
-      if (result !== undefined) output.add(result);
-    }
-  }
-  for (const leftExponent of structuralSingleHexExponentOperands(yShape)) {
-    for (const right of normalizedDecimalValues(x, xShape)) {
-      const result = structuralHexExponentTimesDecimalDisplayShape(leftExponent, right);
-      if (result !== undefined) output.add(result);
-    }
-  }
-  for (const left of normalizedDecimalValues(y, yShape)) {
-    for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
-      const result = decimalTimesStructuralHexExponentDisplayShape(left, rightExponent);
-      if (result !== undefined) output.add(result);
-    }
-  }
-  for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
-    for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
-      const result = structuralHexDigitTimesStructuralHexDigitDisplayShape(leftDigit, rightDigit);
+      const result = structuralHexDigitDivideStructuralHexDigitDisplayShape(leftDigit, rightDigit);
       if (result !== undefined) output.add(result);
     }
   }
@@ -1394,6 +1412,19 @@ function structuralHexDigitTimesStructuralHexDigitDisplayShape(
   );
 }
 
+function structuralHexDigitDivideStructuralHexDigitValue(leftDigit: number, rightDigit: number): string | undefined {
+  return structuralHexDigitDivideStructuralHexDigitProduct(leftDigit, rightDigit)?.value;
+}
+
+function structuralHexDigitDivideStructuralHexDigitDisplayShape(
+  leftDigit: number,
+  rightDigit: number,
+): X2ShapeFact | undefined {
+  return structuralHexDecimalProductDisplayShape(
+    structuralHexDigitDivideStructuralHexDigitProduct(leftDigit, rightDigit),
+  );
+}
+
 interface StructuralHexDecimalProduct {
   readonly value: string;
   readonly display?: string;
@@ -1497,6 +1528,43 @@ function structuralHexDigitTimesStructuralHexDigitProduct(
 }
 
 const DECIMAL_TIMES_STRUCTURAL_HEX_INPUTS = new Set(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "18"]);
+
+const STRUCTURAL_HEX_DIGIT_DIVIDE_STRUCTURAL_HEX_DIGIT_TABLE: ReadonlyMap<string, string> = new Map([
+  ["10:10", "1"],
+  ["10:11", "0.84444443"],
+  ["10:13", "0.4"],
+  ["10:14", "0.52929292"],
+  ["11:10", "1.1"],
+  ["11:11", "1"],
+  ["11:13", "0.6"],
+  ["11:14", "0.22929292"],
+  ["12:10", "1.2"],
+  ["12:11", "1.2525252"],
+  ["12:12", "1"],
+  ["12:13", "0.8"],
+  ["12:14", "0.52929292"],
+  ["13:10", "1.3"],
+  ["13:11", "1.3434343"],
+  ["13:12", "1.23"],
+  ["13:13", "1"],
+  ["13:14", "0.82929292"],
+  ["14:10", "1.4"],
+  ["14:11", "1.4343434"],
+  ["14:12", "1.3"],
+  ["14:13", "1.2"],
+  ["14:14", "1"],
+]);
+
+function structuralHexDigitDivideStructuralHexDigitProduct(
+  leftDigit: number,
+  rightDigit: number,
+): StructuralHexDecimalProduct | undefined {
+  if (!isVerifiedArithmeticHexDigit(leftDigit) || !isVerifiedArithmeticHexDigit(rightDigit)) return undefined;
+  const value = STRUCTURAL_HEX_DIGIT_DIVIDE_STRUCTURAL_HEX_DIGIT_TABLE.get(`${leftDigit}:${rightDigit}`);
+  if (value === undefined) return undefined;
+  const displayShape = exactDecimalDisplayShapeFact(value);
+  return displayShape === undefined ? undefined : { value, displayShape };
+}
 
 function structuralHexExponentTimesDecimalValue(
   left: StructuralHexExponentOperand,
