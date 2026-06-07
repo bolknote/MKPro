@@ -1321,7 +1321,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     including cases such as `Г + 4 -> 17`, `3 + С -> 5`, `A + B -> 5`,
     `A + 18 -> 28`, `18 - B -> 23`, `Г + Е -> 11`, `С - 2 -> 0`,
     `0 - С -> -2`, and `A - Е -> -4`;
-    the regular `F x^2` value model can then derive follow-on
+    `+`/`-` now use the same product-backed value/display-shape proof path as
+    `*`/`/`, so future hex/super arithmetic extensions cannot split numeric and
+    display evidence by accident.
+    The regular `F x^2` value model can then derive follow-on
     values such as `1`/`4`/`9`. The verified
     single-hex-digit multiplication table is also operand-order-specific:
     `A`/`B`/`C`/`D`/`E` in `Y` is modeled for pinned decimal right operands

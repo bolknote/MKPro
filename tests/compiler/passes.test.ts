@@ -4823,8 +4823,12 @@ describe("ir passes on synthetic programs", () => {
       .toContain("decimal:28:normalized");
     expect(x2ValueStateText(computeX2ValueStates(hexLeftPlusDecimalLiteralProgram("С", "16"))[4]?.x) ?? [])
       .toContain("decimal:28:normalized");
+    expect(x2ShapeStateText(computeX2ValueStates(hexLeftPlusDecimalLiteralProgram("С", "16"))[4]?.xShape))
+      .toEqual(["mantissa:28:decimal"]);
     expect(x2ValueStateText(computeX2ValueStates(decimalLeftPlusHexLiteralProgram("18", "Е"))[4]?.x) ?? [])
       .toContain("decimal:32:normalized");
+    expect(x2ShapeStateText(computeX2ValueStates(decimalLeftPlusHexLiteralProgram("18", "Е"))[4]?.xShape))
+      .toEqual(["mantissa:32:decimal"]);
     expect(x2ValueStateText(computeX2ValueStates(hexLeftPlusDecimalLiteralProgram("F", "18"))[4]?.x) ?? [])
       .not.toContain("decimal:33:normalized");
   });
@@ -4893,8 +4897,12 @@ describe("ir passes on synthetic programs", () => {
       .toContain("decimal:-2:normalized");
     expect(x2ValueStateText(computeX2ValueStates(decimalLeftMinusHexLiteralProgram("18", "B"))[4]?.x) ?? [])
       .toContain("decimal:23:normalized");
+    expect(x2ShapeStateText(computeX2ValueStates(decimalLeftMinusHexLiteralProgram("18", "B"))[4]?.xShape))
+      .toEqual(["mantissa:23:decimal"]);
     expect(x2ValueStateText(computeX2ValueStates(decimalLeftMinusHexLiteralProgram("10", "Е"))[4]?.x) ?? [])
       .toContain("decimal:12:normalized");
+    expect(x2ShapeStateText(computeX2ValueStates(decimalLeftMinusHexLiteralProgram("10", "Е"))[4]?.xShape))
+      .toEqual(["mantissa:12:decimal"]);
     expect(x2ValueStateText(computeX2ValueStates(hexLeftMinusDecimalLiteralProgram("F", "18"))[4]?.x) ?? [])
       .not.toContain("decimal:-3:normalized");
   });
