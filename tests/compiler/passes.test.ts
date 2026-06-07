@@ -1886,11 +1886,22 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StructuralMantissaConcatShapeFacts("hex:A:mantissa", "super-exponent:FA:1")).toBe(
       "hex:AFA0:mantissa",
     );
+    expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "hex:1:mantissa")).toBe(
+      "hex:81:mantissa",
+    );
+    expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "super:FA")).toBe(
+      "hex:8FA:mantissa",
+    );
+    expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "hex-exponent:B:2")).toBe(
+      "hex:8B00:mantissa",
+    );
     expect(x2StructuralMantissaConcatShapeFacts("hex:1234567:mantissa", "mantissa:89:decimal")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:0.1:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex-exponent:A:-1")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:-1:mantissa")).toBeUndefined();
-    expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "hex:1:mantissa")).toBeUndefined();
+    expect(x2StructuralMantissaConcatShapeFacts("mantissa:1234567:decimal", "hex:89:mantissa")).toBeUndefined();
+    expect(x2StructuralMantissaConcatShapeFacts("mantissa:8.1:decimal", "hex:1:mantissa")).toBeUndefined();
+    expect(x2StructuralMantissaConcatShapeFacts("mantissa:-8:decimal", "hex:1:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "mantissa:1:decimal")).toBeUndefined();
   });
 

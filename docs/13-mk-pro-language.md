@@ -1487,9 +1487,10 @@ The pipeline currently contains:
   lower-case hex digits or whitespace do not split otherwise identical `hex:*`
   / `super:*` proofs. Negative structural exponents, carry/borrow cases, and
   decimalization stay structural-only and are not treated as dot-safe.
-  Structural concatenation also accepts a pure decimal digit-run as the right
-  operand when the left operand is already structural (`hex:8` + decimal `02`
-  proves shape-only `hex:802`), preserving leading zeroes and the
+  Structural concatenation also accepts a pure decimal digit-run as either the
+  structural tail or prefix when the other operand proves structural content
+  (`hex:8` + decimal `02` proves shape-only `hex:802`, while decimal `8` +
+  `hex:1` proves shape-only `hex:81`), preserving leading zeroes and the
   eight-display-digit bound without promoting the result to a decimal value.
   Exact decimal display-shape facts can also feed shape-only unary display
   results, so an exact fractional scientific shape such as

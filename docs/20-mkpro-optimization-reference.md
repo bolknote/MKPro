@@ -1214,12 +1214,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     structural mantissa source instead of dropping the context. The same
     algebra now has shape-only structural digit append/concat operations
     (`hex:8.7` + `hex:0Е` proves `hex:8.70Е`) with eight-display-digit
-    bounds and no signed/fractional right operand; the right operand may also
-    be a pure decimal digit-run when the left operand is already structural
-    (`hex:8` + decimal `02` proves shape-only `hex:802`) or a restored
-    structural exponent-entry with a pure mantissa (`hex:A` +
-    `hex-exponent:B:2` proves shape-only `hex:AB00`) without becoming a
-    decimal value. Exact decimal display-shape facts feed unary display-shape
+    bounds and no signed/fractional structural operand; either side may also
+    be a pure decimal digit-run when the other side proves structural content
+    (`hex:8` + decimal `02` proves shape-only `hex:802`, decimal `8` +
+    `hex:1` proves shape-only `hex:81`) or a restored structural
+    exponent-entry with a pure mantissa (`hex:A` + `hex-exponent:B:2` proves
+    shape-only `hex:AB00`) without becoming a decimal value. Exact decimal
+    display-shape facts feed unary display-shape
     results and, when the unary result itself is proved exact, concrete decimal
     result facts: `exponent:5:-1:decimal` through `К {x}` yields both the
     displayed fractional shape and `decimal:0.5:normalized`. The same shape

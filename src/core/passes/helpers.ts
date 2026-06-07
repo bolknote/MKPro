@@ -3780,7 +3780,18 @@ export function x2StructuralMantissaConcatShapeFacts(
   right: X2ShapeFact,
 ): X2ShapeFact | undefined {
   const rightDigits = structuralConcatRightDigitRun(right);
-  return rightDigits === undefined ? undefined : x2StructuralMantissaAppendDigitsShapeFact(left, rightDigits);
+  if (rightDigits !== undefined) {
+    const appended = x2StructuralMantissaAppendDigitsShapeFact(left, rightDigits);
+    if (appended !== undefined) return appended;
+  }
+
+  const leftDigits = decimalConcatLeftDigitRun(left);
+  const rightStructuralDigits = structuralConcatRightStructuralDigitRun(right);
+  if (leftDigits === undefined || rightStructuralDigits === undefined) return undefined;
+  const raw = `${leftDigits}${rightStructuralDigits}`;
+  return shapeDigits(raw).length > 8
+    ? undefined
+    : x2MantissaShapeFactFromModel(structuralMantissaDataModel("hex", raw, "structuralOnly"));
 }
 
 function structuralConcatRightDigitRun(right: X2ShapeFact): string | undefined {
@@ -3793,6 +3804,23 @@ function structuralConcatRightDigitRun(right: X2ShapeFact): string | undefined {
     if (digits !== undefined) restoredDigits.add(digits);
   }
   return restoredDigits.size === 1 ? [...restoredDigits][0] : undefined;
+}
+
+function structuralConcatRightStructuralDigitRun(right: X2ShapeFact): string | undefined {
+  const restoredDigits = new Set<string>();
+  for (const fact of structuralMantissaShapeFacts(x2StructuralRestoreShapeFacts(new Set([right])))) {
+    const digits = pureMantissaDigitRunFromShapeFact(fact);
+    if (digits !== undefined) restoredDigits.add(digits);
+  }
+  return restoredDigits.size === 1 ? [...restoredDigits][0] : undefined;
+}
+
+function decimalConcatLeftDigitRun(left: X2ShapeFact): string | undefined {
+  const model = x2ShapeDataModelForFact(left);
+  if (model.kind !== "mantissa" || model.radix !== "decimal" || model.sign !== "" || model.hasDecimalPoint) {
+    return undefined;
+  }
+  return model.digits.join("");
 }
 
 function pureMantissaDigitRunFromShapeFact(fact: X2ShapeFact): string | undefined {
