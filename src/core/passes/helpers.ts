@@ -329,6 +329,8 @@ export function emptyResult(ops: readonly IrOp[]): PassResult {
 }
 
 const directReturnAnalysisContextCache = new WeakMap<readonly IrOp[], DirectReturnAnalysisContext>();
+const x2StackXAndX2ReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
+const x2StrictStackReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
 
 export function cellsPerOp(op: IrOp): number {
   switch (op.kind) {
@@ -2289,6 +2291,24 @@ export function x2NextXPreservingX2SyncIndex(
   return undefined;
 }
 
+export function x2PreviousXPreservingX2SyncIndex(
+  ops: readonly IrOp[],
+  end: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = end - 1; index >= 0; index -= 1) {
+    const op = ops[index]!;
+    if (
+      x2IsPreviousXPreservingSyncOp(ops, op, context) &&
+      !x2ConditionalJumpCanEnterScannedRange(op, index, end, context)
+    ) {
+      return index;
+    }
+    if (!x2IsStackXAndX2PreservingGapOp(ops, op, index, context)) return undefined;
+  }
+  return undefined;
+}
+
 function x2IsXPreservingSyncOp(
   ops: readonly IrOp[],
   op: IrOp,
@@ -2298,6 +2318,29 @@ function x2IsXPreservingSyncOp(
   if (isKnownReturnCallOp(op) && x2KnownReturnCallPreservesStackXAndX2(ops, op, context)) return true;
   if (op.kind === "return" && !hasRewriteBarrier(op) && !isDisplayFocusSensitive(op)) return true;
   return x2IsPlainXPreservingX2Sync(op);
+}
+
+function x2IsPreviousXPreservingSyncOp(
+  ops: readonly IrOp[],
+  op: IrOp,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  if (x2IsFallthroughSyncConditionalOp(op)) return true;
+  if (isKnownReturnCallOp(op) && x2KnownReturnCallPreservesStackXAndX2(ops, op, context)) return true;
+  return x2IsPlainXPreservingX2Sync(op);
+}
+
+function x2ConditionalJumpCanEnterScannedRange(
+  op: IrOp,
+  index: number,
+  end: number,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  if (op.kind !== "cjump" && op.kind !== "loop") return false;
+  const target = typeof op.target === "string"
+    ? context.labels.get(op.target)
+    : context.addresses.get(op.target);
+  return target !== undefined && target > index && target <= end;
 }
 
 function x2IsFallthroughSyncConditionalOp(op: IrOp): boolean {
@@ -2340,12 +2383,19 @@ function x2IsStackXAndX2PreservingGapOp(
   }
 }
 
-function x2KnownReturnCallPreservesStackXAndX2(
+export function x2KnownReturnCallPreservesStackXAndX2(
   ops: readonly IrOp[],
   call: KnownReturnCallOp,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, x2IsStackXAndX2PreservingLinearOp);
+  return nestedReturnCallRangeIsTransparent(
+    ops,
+    call,
+    context,
+    x2IsStackXAndX2PreservingLinearOp,
+    x2ReturnMemo(ops, x2StackXAndX2ReturnMemo),
+    new Set(),
+  );
 }
 
 function x2IsFallthroughX2PreservingGapOp(op: IrOp): boolean {
@@ -2411,7 +2461,26 @@ function x2SimpleDirectReturnPreservesStack(
   call: KnownReturnCallOp,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, x2IsStrictStackPreservingLinearOp);
+  return nestedReturnCallRangeIsTransparent(
+    ops,
+    call,
+    context,
+    x2IsStrictStackPreservingLinearOp,
+    x2ReturnMemo(ops, x2StrictStackReturnMemo),
+    new Set(),
+  );
+}
+
+function x2ReturnMemo(
+  ops: readonly IrOp[],
+  cache: WeakMap<readonly IrOp[], Map<number, boolean>>,
+): Map<number, boolean> {
+  let memo = cache.get(ops);
+  if (memo === undefined) {
+    memo = new Map();
+    cache.set(ops, memo);
+  }
+  return memo;
 }
 
 function x2IsStrictStackPreservingLinearOp(op: IrOp): boolean {

@@ -62,6 +62,7 @@ import {
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
   x2NextXPreservingX2SyncIndex,
+  x2PreviousXPreservingX2SyncIndex,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
@@ -16389,6 +16390,77 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("pre-shift-stack-lift removes В↑ after a direct fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      cjump("done"),
+      plain(0x54, "К НОП"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      cjump("done"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ after a conditional when the jump edge enters the lift", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      cjump("entry"),
+      label("entry"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("pre-shift-stack-lift removes В↑ after a transparent return-call X2 sync", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      call("noop"),
+      plain(0x54, "К НОП"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      call("noop"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
   it("pre-shift-stack-lift stops post-plain-sync scanning at X-changing gaps", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -16581,6 +16653,52 @@ describe("ir passes on synthetic programs", () => {
       6,
       directReturnAnalysisContext(returnSyncProgram),
     )).toBe(6);
+  });
+
+  it("stack/X2 scheduler helpers find previous X-preserving syncs conservatively", () => {
+    const fallthroughSyncProgram: IrOp[] = [
+      plain(0x02, "2"),
+      cjump("done"),
+      plain(0x54, "К НОП"),
+      plain(0x0e, "В↑"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const returnSyncProgram: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      call("noop"),
+      plain(0x54, "К НОП"),
+      plain(0x0e, "В↑"),
+      halt(),
+    ];
+    const numericTargetProgram: IrOp[] = [
+      plain(0x02, "2"),
+      numericCjump(3),
+      plain(0x0e, "В↑"),
+      halt(),
+    ];
+
+    expect(x2PreviousXPreservingX2SyncIndex(
+      fallthroughSyncProgram,
+      3,
+      directReturnAnalysisContext(fallthroughSyncProgram),
+    )).toBe(1);
+    expect(x2PreviousXPreservingX2SyncIndex(
+      returnSyncProgram,
+      8,
+      directReturnAnalysisContext(returnSyncProgram),
+    )).toBe(6);
+    expect(x2PreviousXPreservingX2SyncIndex(
+      numericTargetProgram,
+      2,
+      directReturnAnalysisContext(numericTargetProgram),
+    )).toBeUndefined();
   });
 
   it("stack/X2 scheduler helpers refuse context-sensitive X2 restore gaps", () => {
