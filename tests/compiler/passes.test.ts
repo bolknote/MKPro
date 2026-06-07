@@ -3265,6 +3265,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(result?.shapeMemory?.["2"])).toContain("hex:8F:mantissa");
   });
 
+  it("x2 recall proof derives structural sync shapes from stable value memory", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      x2Shape: new Set<X2ShapeFact>(["hex:8F:mantissa"]),
+      entry: { kind: "closed" },
+      memory: {
+        "1": new Set<X2ValueFact>(["expr-key:31(shape:hex:-8F:mantissa)"]),
+      },
+    };
+
+    expect(recallValueProof(recall("1"), state)?.x2SyncShape).toBe(true);
+  });
+
+  it("x2 recall proof derives decimal display sync shapes from stable value memory", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:4:decimal"]),
+      entry: { kind: "closed" },
+      memory: {
+        "1": new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
+      },
+    };
+
+    expect(recallValueProof(recall("1"), state)?.x2SyncDisplayValue).toBe(true);
+  });
+
   it("x2 value dataflow canonicalizes structural shape sources inside stable expr keys", () => {
     const legacy: X2ValueDataflowState = {
       x: new Set<X2ValueFact>([

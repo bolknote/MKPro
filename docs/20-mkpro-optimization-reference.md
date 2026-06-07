@@ -1287,7 +1287,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     close paths. Direct and proved-indirect stores also materialize proved
     stable-key decimal values and display/structural shapes into register
     value/shape memory, so later recall and recall-elimination proofs see the
-    same facts without waiting for an actual recall sync. The proved decimal
+    same facts without waiting for an actual recall sync. If a join or older
+    path still has only stable value-memory, recall-elimination shape proofs
+    derive the same display/structural facts from those stable keys instead of
+    requiring a separate shape-memory fact. The proved decimal
     first-digit source is visible to `vp-splice`, so an empty separator and a
     cancelling exponent sign pair before that `ВП` can be removed together. It
     also carries exact emulator-pinned single-digit hex

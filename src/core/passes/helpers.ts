@@ -6787,6 +6787,9 @@ function recallStructuralShapeFacts(
   register: RegisterName,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
+  for (const fact of stableExpressionShapeFactsFromValueFacts(recallX2ValueFacts(state, register, true, op))) {
+    for (const structural of structuralRestoreShapeFacts(new Set([fact]))) output.add(structural);
+  }
   for (const fact of state.shapeMemory?.[register] ?? []) {
     for (const structural of structuralRestoreShapeFacts(new Set([fact]))) output.add(structural);
   }
@@ -6813,9 +6816,16 @@ function recallDecimalDisplayShapeFacts(
   register: RegisterName,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
+  for (const fact of decimalDisplayShapeFacts(
+    stableExpressionShapeFactsFromValueFacts(recallX2ValueFacts(state, register, true, op)),
+  )) output.add(fact);
   for (const fact of decimalDisplayShapeFacts(state.shapeMemory?.[register])) output.add(fact);
   for (const fact of decimalDisplayShapeFacts(preloadedConstantShapeFacts(op))) output.add(fact);
   return output;
+}
+
+function stableExpressionShapeFactsFromValueFacts(values: X2ValueSet | undefined): Set<X2ShapeFact> {
+  return shapeSetWithStableExpressionValueShapes(undefined, values) ?? new Set();
 }
 
 function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
