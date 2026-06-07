@@ -6394,6 +6394,55 @@ describe("ir passes on synthetic programs", () => {
     expect(structuralAfterPi?.vpEntryShapeTransient).toBe(true);
   });
 
+  it("x2 value dataflow flow/store VP splices materialize stable expr-key shapes", () => {
+    const decimalState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
+      x2: new Set<X2ValueFact>(["expr-key:22(decimal:12:normalized)"]),
+      entry: { kind: "closed" },
+    };
+    const decimalStore = transferX2ValueStateForEdge(decimalState, store("1"), "normal", {}, 0);
+    const decimalIndirectFlow = transferX2ValueStateForEdge(
+      decimalState,
+      knownTargetIndirectJump("8", 4),
+      "jump",
+      { targetStartsWithVp: true },
+      0,
+    );
+
+    expect(x2VpEntryMantissaText(decimalStore)).toContain("44");
+    expect(decimalStore?.vpEntryShapeTransient).toBeUndefined();
+    expect(x2VpEntryMantissaText(decimalIndirectFlow)).toContain("744");
+    expect(decimalIndirectFlow?.vpEntryMantissaTransient).toBe(true);
+
+    const structuralState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      x2: new Set<X2ValueFact>(["expr-key:31(shape:hex:-FACE:mantissa)"]),
+      entry: { kind: "closed" },
+    };
+    const structuralStore = transferX2ValueStateForEdge(structuralState, store("1"), "normal", {}, 0);
+    const structuralDirectFlow = transferX2ValueStateForEdge(
+      structuralState,
+      jump("vp"),
+      "jump",
+      { targetStartsWithVp: true },
+      0,
+    );
+    const structuralIndirectFlow = transferX2ValueStateForEdge(
+      structuralState,
+      knownTargetIndirectJump("8", 4),
+      "jump",
+      { targetStartsWithVp: true },
+      0,
+    );
+
+    expect(x2VpEntryShapeText(structuralStore)).toEqual(["hex:ACE:mantissa"]);
+    expect(structuralStore?.vpEntryShapeTransient).toBe(true);
+    expect(x2VpEntryShapeText(structuralDirectFlow)).toContain("hex:AACE:mantissa");
+    expect(structuralDirectFlow?.vpEntryShapeTransient).toBe(true);
+    expect(x2VpEntryShapeText(structuralIndirectFlow)).toContain("hex:7ACE:mantissa");
+    expect(structuralIndirectFlow?.vpEntryShapeTransient).toBe(true);
+  });
+
   it("x2 value dataflow drops transient VP first-digit sources across a later empty op", () => {
     const program: IrOp[] = [
       recall("1", "preload const A"),

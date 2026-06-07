@@ -1410,7 +1410,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `expr-key:*` value fact. First-digit `ВП` splices use the same materialized
     source/target shapes across X2-preserving commands, so a computed stable-key
     `X` shape can provide the leading digit and a computed stable-key hidden X2
-    shape can provide the mantissa tail. Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are kept as
+    shape can provide the mantissa tail. Store-backed, direct-flow, and proved
+    indirect-flow `ВП` splice helpers use the same effective-shape source, so
+    they do not require a separate explicit shape fact when a stable `expr-key:*`
+    already carries the decimal or structural display form. Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are kept as
     `errorProne` shape facts, not dot-safe decimal facts; shared signed-zero
     shapes can feed `ВП` source proofs after X2 sync or closed `.` restore,
     but never become ordinary decimal zero. Shared decimal exponent display

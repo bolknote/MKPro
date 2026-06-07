@@ -3301,6 +3301,7 @@ export interface X2RegisterEdgeState {
 
 export interface X2ValueDataflowOptions {
   readonly trackRegisterMemory?: boolean;
+  readonly targetStartsWithVp?: boolean;
 }
 
 export type X2DataflowEdgeKind = Edge["kind"];
@@ -5304,7 +5305,8 @@ function transferX2ValueDataflowState(
       const stable = registerWritePreservesStoredValue(closed, op.register)
         ? closed
         : invalidateRegisterDependentX2ValueState(closed, op.register, trackRegisterMemory);
-      const vpEntryShape = vpEntryShapesFromStoreSplice(stable.x2Shape);
+      const x2StoreSpliceShape = effectiveInputX2Shape(stable);
+      const vpEntryShape = vpEntryShapesFromStoreSplice(x2StoreSpliceShape);
       return {
         x: addX2Value(stable.x, registerValueFact(op.register)),
         y: cloneOptionalValueSet(stable.y),
@@ -5316,10 +5318,10 @@ function transferX2ValueDataflowState(
         vpContext: cloneX2VpContextState(stable.vpContext),
         structuralEntry: noneX2StructuralEntryState(),
         structuralVpContext: cloneX2StructuralEntryState(stable.structuralVpContext),
-        vpEntryMantissa: vpEntryMantissasFromStoreSplice(stable.x2Shape),
-        vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(stable.x2Shape),
+        vpEntryMantissa: vpEntryMantissasFromStoreSplice(x2StoreSpliceShape),
+        vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(x2StoreSpliceShape),
         vpEntryShape,
-        vpEntrySignShape: vpEntrySignShapesFromStoreSplice(stable.x2Shape),
+        vpEntrySignShape: vpEntrySignShapesFromStoreSplice(x2StoreSpliceShape),
         ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
         memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, op.register, stable.x) : undefined,
         shapeMemory: trackRegisterMemory
@@ -6145,6 +6147,7 @@ export function transferX2ValueStateForEdge(
     edge,
     options.trackRegisterMemory === true,
     producerIndex,
+    options.targetStartsWithVp === true,
   );
 }
 
@@ -6616,7 +6619,8 @@ function transferIndirectStoreX2ValueState(
     ? closed
     : invalidateRegisterDependentX2ValueState(closed, target, trackRegisterMemory);
   const value = registerValueFact(target);
-  const vpEntryShape = vpEntryShapesFromStoreSplice(stable.x2Shape);
+  const x2StoreSpliceShape = effectiveInputX2Shape(stable);
+  const vpEntryShape = vpEntryShapesFromStoreSplice(x2StoreSpliceShape);
   const output: X2ValueDataflowState = {
     x: addX2Value(stable.x, value),
     y: cloneOptionalValueSet(stable.y),
@@ -6628,10 +6632,10 @@ function transferIndirectStoreX2ValueState(
     vpContext: cloneX2VpContextState(stable.vpContext),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: cloneX2StructuralEntryState(stable.structuralVpContext),
-    vpEntryMantissa: vpEntryMantissasFromStoreSplice(stable.x2Shape),
-    vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(stable.x2Shape),
+    vpEntryMantissa: vpEntryMantissasFromStoreSplice(x2StoreSpliceShape),
+    vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(x2StoreSpliceShape),
     vpEntryShape,
-    vpEntrySignShape: vpEntrySignShapesFromStoreSplice(stable.x2Shape),
+    vpEntrySignShape: vpEntrySignShapesFromStoreSplice(x2StoreSpliceShape),
     ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
     memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, target, stable.x) : undefined,
     shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, target, stable.x, stable.xShape) : undefined,
@@ -8179,20 +8183,23 @@ function vpEntrySignMantissasFromX2Restore(
 }
 
 function withStoreVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowState {
-  const vpEntryShape = vpEntryShapesFromStoreSplice(input.x2Shape);
+  const x2Shape = effectiveInputX2Shape(input);
+  const vpEntryShape = vpEntryShapesFromStoreSplice(x2Shape);
   return {
     ...input,
-    vpEntryMantissa: vpEntryMantissasFromStoreSplice(input.x2Shape),
-    vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(input.x2Shape),
+    vpEntryMantissa: vpEntryMantissasFromStoreSplice(x2Shape),
+    vpEntrySignMantissa: vpEntrySignMantissasFromStoreSplice(x2Shape),
     vpEntryShape,
-    vpEntrySignShape: vpEntrySignShapesFromStoreSplice(input.x2Shape),
+    vpEntrySignShape: vpEntrySignShapesFromStoreSplice(x2Shape),
     ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
   };
 }
 
 function withDirectFlowVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowState {
-  const vpEntryMantissa = decimalFirstDigitVpSpliceMantissas(input.xShape, input.x2Shape);
-  const vpEntryShape = structuralFirstDigitVpSpliceShapeFacts(input.xShape, input.x2Shape);
+  const xShape = effectiveInputXShape(input);
+  const x2Shape = effectiveInputX2Shape(input);
+  const vpEntryMantissa = decimalFirstDigitVpSpliceMantissas(xShape, x2Shape);
+  const vpEntryShape = structuralFirstDigitVpSpliceShapeFacts(xShape, x2Shape);
   return {
     ...input,
     vpEntryMantissa,
@@ -8203,8 +8210,9 @@ function withDirectFlowVpSpliceSource(input: X2ValueDataflowState): X2ValueDataf
 }
 
 function withIndirectFlowVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowState {
-  const vpEntryMantissa = vpEntryMantissasFromIndirectFlowSplice(input.x2Shape);
-  const vpEntryShape = vpEntryShapesFromIndirectFlowSplice(input.x2Shape);
+  const x2Shape = effectiveInputX2Shape(input);
+  const vpEntryMantissa = vpEntryMantissasFromIndirectFlowSplice(x2Shape);
+  const vpEntryShape = vpEntryShapesFromIndirectFlowSplice(x2Shape);
   return {
     ...input,
     vpEntryMantissa,
