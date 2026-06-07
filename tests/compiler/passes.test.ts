@@ -6260,6 +6260,29 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual(["hex-exponent:AA0:3"]);
   });
 
+  it("x2 value dataflow recognizes branch-target ВП through address gaps", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x20, "F pi"),
+      cjump("target"),
+      jump("done"),
+      label("target"),
+      orphanAddress(54),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2VpEntryMantissaText(states[7])).toEqual(["3"]);
+    expect(states[7]?.vpEntryMantissaTransient).toBe(true);
+    expect(x2EntryStateText(states[8])).toBe("exponent:3:");
+    expect(x2EntryStateText(states[9])).toBe("exponent:3:3");
+  });
+
   it("x2 value dataflow models structural VP first-digit splice over decimal X2 tails", () => {
     const program: IrOp[] = [
       recall("1", "preload const A"),

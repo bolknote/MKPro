@@ -3509,7 +3509,7 @@ export function computeX2ValueStates(
 function edgeTargetStartsWithVp(ops: readonly IrOp[], target: number): boolean {
   for (let index = target; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (op.kind === "label") continue;
+    if (op.kind === "label" || op.kind === "orphan-address") continue;
     return op.kind === "plain" && op.opcode === 0x0c && !hasRewriteBarrier(op);
   }
   return false;
@@ -5392,7 +5392,7 @@ function transferX2ValueDataflowState(
         ? withDirectFlowVpSpliceSource(closeX2ValueEntry(input))
         : closeX2ValueEntry(input);
     case "orphan-address":
-      return closeX2ValueEntry(input);
+      return cloneX2ValueDataflowState(input);
     case "store": {
       const closed = closeX2ValueEntry(input);
       const stable = registerWritePreservesStoredValue(closed, op.register)

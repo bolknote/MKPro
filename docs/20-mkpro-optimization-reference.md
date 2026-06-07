@@ -737,7 +737,10 @@ Display rewrites are separated into strategy selection + body lowering.
   facts are tracked only as structural shapes until a separate proof makes them
   safe to restore. Those structural facts can still feed `ВП`-entry splice
   proofs after direct/proved recalls or the fallthrough side of a direct
-  conditional X2 sync. The same structural shape equality can prove that a
+  conditional X2 sync. Branch-target `ВП` detection skips labels and orphan
+  address-byte cells before the target opcode, so the same
+  splice source is available when layout leaves an address gap at the entry.
+  The same structural shape equality can prove that a
   redundant recall would not change hidden X2 before a later
   context-sensitive restore after an X2-preserving gap; it still does not make
   hex/super shapes dot-safe. The jump edge remains conservative and preserves
