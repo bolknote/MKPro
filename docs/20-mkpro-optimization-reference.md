@@ -1325,10 +1325,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     behave as decimal-times-ten display results while `E` gives zero. Verified
     hex-pair products `A`..`E` by `A`..`E` are also modeled with their observed
     display spelling, including non-normal `A * A -> 00` and `B * Г -> 10`.
-    Division has a separate emulator-pinned `A`..`E` by `A`..`E` table with
-    display-shape preservation, for example `A / Г -> 4E-1`,
-    `С / B -> 1.2525252`, while error cases such as `A / С -> ЕГГ0Г` stay
-    outside the proof.
+    Division has separate emulator-pinned tables for `A`..`E` divided by
+    decimal `1`..`9`/`18` and for `A`..`E` divided by `A`..`E`, with
+    display-shape preservation; for example `Г / 8 -> 1.625`,
+    `Е / 18 -> 7.7777777E-1`, `A / Г -> 4E-1`, `С / B -> 1.2525252`, while
+    error cases such as `A / С -> ЕГГ0Г` stay outside the proof.
     Hidden X2
     remains the right operand until an explicit sync, so literal/scratch restore
     rewrites consume these table facts only after a later X2-syncing command. A
@@ -1340,7 +1341,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     for `0.1`, but the visible/stored shape is `exponent:1:-1:decimal`, which
     keeps later store/recall/`ВП` context equivalent to the MK-61 display state.
     This is not a
-    general wide multiply/divide, borrow/carry, or decimalization rule. Structural `К |x|` removes the sign from canonical hex/super
+    general wide multiply/divide, reverse decimal/hex divide, borrow/carry, or decimalization rule. Structural `К |x|` removes the sign from canonical hex/super
     mantissa or closed exponent-entry restore shapes as another shape-only
     transform; the hidden X2 shape is still preserved by the opcode and is not
     decimalized. Structural `К ЗН` has a narrow emulator-pinned value model:

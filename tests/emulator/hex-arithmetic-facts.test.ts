@@ -208,6 +208,10 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(divideRegisters("Г", "С")).toBe("1,23");
     expect(divideRegisters("Е", "Г")).toBe("1,2");
     expect(divideRegisters("-", "С")).toBe("ЕГГ0Г");
+    expect(divideRegisters("B", "2")).toBe("5,5");
+    expect(divideRegisters("Г", "8")).toBe("1,625");
+    expect(divideRegisters("Е", "18")).toBe("7,7777777-01");
+    expect(divideRegisters("1", "-")).toBe("ЕГГ0Г");
   });
 
   it("K ЗН has a pinned sign result for verified structural hex mantissas", () => {
