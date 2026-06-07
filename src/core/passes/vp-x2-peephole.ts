@@ -17,7 +17,7 @@ import {
   x2StateIsClosedPlainContext,
   x2SyncCanExposeContextSensitiveRestore,
   x2ShapeSetHasExactIntegerDisplay,
-  x2ShapeSetHasExactNonNegativeIntegerDisplay,
+  x2ShapeSetHasExactNonNegativeDisplay,
   x2ShapeSetRestoredVisibleDecimals,
   x2ValueFactRestoredVisibleDecimal,
 } from "./helpers.ts";
@@ -90,7 +90,7 @@ function stateHasIntegerNoopX(state: X2ValueDataflowState | undefined): boolean 
 function stateHasAbsNoopX(state: X2ValueDataflowState | undefined): boolean {
   return state !== undefined &&
     x2StateIsClosedPlainContext(state) &&
-    x2ShapeSetHasExactNonNegativeIntegerDisplay(state.xShape);
+    x2ShapeSetHasExactNonNegativeDisplay(state.xShape);
 }
 
 function isKnownNoopUnaryOp(
@@ -109,11 +109,11 @@ function isKnownNoopUnaryOp(
   return knownNoop &&
     // К {x} preserves hidden X2. Once dataflow proves it is also a visible-X
     // no-op, and К [x] is treated the same only when the display shape is
-    // already the exact integer display. К |x| follows the same rule for
-    // exact non-negative integer displays. Removing any of them cannot change
-    // a later restore value. The exposure guard still keeps immediate restore
-    // boundaries where the opcode itself could be the observable
-    // previous-command context.
+    // already the exact integer display. К |x| follows the same rule for exact
+    // non-negative displays, including scientific decimal display shapes.
+    // Removing any of them cannot change a later restore value. The exposure
+    // guard still keeps immediate restore boundaries where the opcode itself
+    // could be the observable previous-command context.
     !x2SyncCanExposeContextSensitiveRestore(
       ops,
       index,

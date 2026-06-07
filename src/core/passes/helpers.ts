@@ -3796,6 +3796,13 @@ export function x2ShapeSetHasExactNonNegativeIntegerDisplay(input: X2ShapeSet | 
   return false;
 }
 
+export function x2ShapeSetHasExactNonNegativeDisplay(input: X2ShapeSet | undefined): boolean {
+  for (const decimal of x2ShapeSetRestoredVisibleDecimals(input)) {
+    if (!decimal.startsWith("-")) return true;
+  }
+  return false;
+}
+
 function x2ShapeFactHasExactIntegerDisplay(fact: X2ShapeFact): boolean {
   const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
   if (decimal === undefined || !/^-?[0-9]+$/u.test(decimal)) return false;
