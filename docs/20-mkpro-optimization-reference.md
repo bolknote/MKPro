@@ -946,10 +946,16 @@ Display rewrites are separated into strategy selection + body lowering.
   shape. The structural hex exponent arithmetic also recognizes the strict
   closed single-nibble forms produced by the same shape algebra (`Г`, `Г00`,
   `0.Г`, `0.0Г`) as exponent operands, but only the already pinned table cases
-  are folded. Reverse decimal/hex division also uses its own emulator-pinned
-  table for decimal `0..9`/`18` in `Y` and structural `A`..`E` in `X`, preserving
-  non-normal display shapes such as `exponent:0.4444443:-1:decimal` separately
-  from normalized decimal value facts. Signed, multi-nibble, trailing-tail, and
+  are folded. Structural hex `+`, `-`, `*`, and `/` now enumerate one
+  product fact for each proved operand pair and derive both the normalized
+  decimal value and display-shape facts from that same product, so value and
+  shape proofs cannot drift between opcode-specific local tables. Bitwise
+  operators remain on the separate mantissa-nibble model because their raw
+  hex/super display result is not necessarily decimal. Reverse decimal/hex
+  division also uses its own emulator-pinned table for decimal `0..9`/`18` in
+  `Y` and structural `A`..`E` in `X`, preserving non-normal display shapes such
+  as `exponent:0.4444443:-1:decimal` separately from normalized decimal value
+  facts. Signed, multi-nibble, trailing-tail, and
   unsupported-exponent forms remain structural. Wider products/quotients, division by zero,
   non-terminating division, irrational square roots, fractional powers of ten,
   remaining non-zero powers, hardware-rounded sexagesimal conversions, and

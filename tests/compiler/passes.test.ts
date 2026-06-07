@@ -4981,6 +4981,43 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(result?.xShape)).toEqual(["mantissa:020:decimal"]);
   });
 
+  it("x2 value dataflow keeps structural arithmetic value and display-shape products paired", () => {
+    function binaryProgram(left: string, right: string, op: Extract<IrOp, { kind: "plain" }>): IrOp[] {
+      return [
+        recall("1", `preload const ${left}`),
+        plain(0x0e, "В↑"),
+        recall("2", `preload const ${right}`),
+        op,
+        halt(),
+      ];
+    }
+
+    const cases: ReadonlyArray<{
+      readonly left: string;
+      readonly right: string;
+      readonly op: Extract<IrOp, { kind: "plain" }>;
+      readonly value: string;
+      readonly shape: X2ShapeFact;
+    }> = [
+      { left: "С", right: "16", op: plain(0x10, "+"), value: "28", shape: "mantissa:28:decimal" },
+      { left: "18", right: "B", op: plain(0x11, "-"), value: "23", shape: "mantissa:23:decimal" },
+      { left: "A", right: "18", op: plain(0x12, "×"), value: "20", shape: "mantissa:020:decimal" },
+      {
+        left: "Е",
+        right: "18",
+        op: plain(0x13, "÷"),
+        value: "0.77777777",
+        shape: "exponent:7.7777777:-1:decimal",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const states = computeX2ValueStates(binaryProgram(testCase.left, testCase.right, testCase.op));
+      expect(x2ValueStateText(states[4]?.x) ?? []).toContain(`decimal:${testCase.value}:normalized`);
+      expect(x2ShapeStateText(states[4]?.xShape)).toEqual([testCase.shape]);
+    }
+  });
+
   it("x2 value dataflow models emulator-pinned single hex digit multiply table", () => {
     const leftHex: IrOp[] = [
       recall("1", "preload const С"),
