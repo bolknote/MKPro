@@ -1343,15 +1343,20 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     display shape independently from value shape: `1 * ГE-2` is a value proof
     for `0.1`, but the visible/stored shape is `exponent:1:-1:decimal`, which
     keeps later store/recall/`ВП` context equivalent to the MK-61 display state.
+    The same strict `ГE-2` operand family has pinned division tables in both
+    operand orders: `ГE-2 / 2 -> 6.5E-2`, `ГE-2 / 16 -> 8.125E-3`,
+    `5 / ГE-2 -> 00`, and `16 / ГE-2 -> 920` seed exact value facts while
+    preserving those display spellings.
     Reverse decimal/hex division has a separate emulator-pinned table for
     selected decimal `0..9`/`18` left operands and structural `A`..`E` right
     operands; `ЕГГ0Г` pairs and unsupported display forms remain absent from the
     proof lattice.
     This is not a
     general wide multiply/divide, borrow/carry, or decimalization rule.
-    Structural `К |x|` removes the sign from canonical hex/super mantissa or closed exponent-entry restore shapes as another shape-only
-    transform; the hidden X2 shape is still preserved by the opcode and is not
-    decimalized. Structural `К ЗН` has a narrow emulator-pinned value model:
+    Structural `К |x|` removes the sign from canonical hex/super mantissa or
+    closed exponent-entry restore shapes as another shape-only transform; the
+    hidden X2 shape is still preserved by the opcode and is not decimalized.
+    Structural `К ЗН` has a narrow emulator-pinned value model:
     canonical hex mantissas or closed structural exponent mantissas whose first
     significant nibble is `1..E` seed exact decimal `1`/`-1` facts plus the
     matching decimal display shape, while `F`-leading forms and `super:*` shapes

@@ -5048,6 +5048,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(rejectedFStates[4]?.xShape)).toEqual([]);
   });
 
+  it("x2 value dataflow models emulator-pinned structural hex exponent division", () => {
+    function binaryProgram(left: string, right: string): IrOp[] {
+      return [
+        recall("1", `preload const ${left}`),
+        plain(0x0e, "В↑"),
+        recall("2", `preload const ${right}`),
+        plain(0x13, "÷"),
+        halt(),
+      ];
+    }
+
+    const leftExponentStates = computeX2ValueStates(binaryProgram("ГE-2", "2"));
+    expect(x2ValueStateText(leftExponentStates[4]?.x) ?? []).toContain("decimal:0.065:normalized");
+    expect(x2ShapeStateText(leftExponentStates[4]?.xShape)).toEqual(["exponent:6.5:-2:decimal"]);
+
+    const rightExponentStates = computeX2ValueStates(binaryProgram("5", "ГE-2"));
+    expect(x2ValueStateText(rightExponentStates[4]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(rightExponentStates[4]?.xShape)).toEqual(["mantissa:00:decimal"]);
+
+    const wideRightExponentStates = computeX2ValueStates(binaryProgram("16", "ГE-2"));
+    expect(x2ValueStateText(wideRightExponentStates[4]?.x) ?? []).toContain("decimal:920:normalized");
+    expect(x2ShapeStateText(wideRightExponentStates[4]?.xShape)).toEqual(["mantissa:920:decimal"]);
+
+    const rejectedDivisionByZeroStates = computeX2ValueStates(binaryProgram("ГE-2", "0"));
+    expect(x2ValueStateText(rejectedDivisionByZeroStates[4]?.x) ?? []).not.toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(rejectedDivisionByZeroStates[4]?.xShape)).toEqual([]);
+  });
+
   it("x2 value dataflow stores hex A times 18 display shape but recalls normalized VP source", () => {
     const program: IrOp[] = [
       recall("1", "preload const A"),

@@ -267,4 +267,13 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(multiplyRegisters("ГE-2", "5")).toBe("5,3-01");
     expect(multiplyRegisters("ГE-2", "16")).toBe("9,2");
   });
+
+  it("hex D exponent minus two division table is operand-order-sensitive", () => {
+    expect(divideRegisters("ГE-2", "0")).toBe("ЕГГ0Г");
+    expect(divideRegisters("ГE-2", "2")).toBe("6,5-02");
+    expect(divideRegisters("ГE-2", "16")).toBe("8,125-03");
+    expect(divideRegisters("0", "ГE-2")).toBe("99,099099");
+    expect(divideRegisters("5", "ГE-2")).toBe("00,");
+    expect(divideRegisters("16", "ГE-2")).toBe("920,");
+  });
 });

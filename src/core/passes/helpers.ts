@@ -1145,9 +1145,21 @@ function structuralHexBinaryDecimalValues(
         if (result !== undefined) output.add(result);
       }
     }
+    for (const leftExponent of structuralSingleHexExponentOperands(yShape)) {
+      for (const right of normalizedDecimalValues(x, xShape)) {
+        const result = structuralHexExponentDivideDecimalValue(leftExponent, right);
+        if (result !== undefined) output.add(result);
+      }
+    }
     for (const left of normalizedDecimalValues(y, yShape)) {
       for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
         const result = decimalDivideStructuralHexDigitValue(left, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const left of normalizedDecimalValues(y, yShape)) {
+      for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
+        const result = decimalDivideStructuralHexExponentValue(left, rightExponent);
         if (result !== undefined) output.add(result);
       }
     }
@@ -1252,9 +1264,21 @@ function structuralHexBinaryDecimalDisplayShapes(
       if (result !== undefined) output.add(result);
     }
   }
+  for (const leftExponent of structuralSingleHexExponentOperands(yShape)) {
+    for (const right of normalizedDecimalValues(x, xShape)) {
+      const result = structuralHexExponentDivideDecimalDisplayShape(leftExponent, right);
+      if (result !== undefined) output.add(result);
+    }
+  }
   for (const left of normalizedDecimalValues(y, yShape)) {
     for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
       const result = decimalDivideStructuralHexDigitDisplayShape(left, rightDigit);
+      if (result !== undefined) output.add(result);
+    }
+  }
+  for (const left of normalizedDecimalValues(y, yShape)) {
+    for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
+      const result = decimalDivideStructuralHexExponentDisplayShape(left, rightExponent);
       if (result !== undefined) output.add(result);
     }
   }
@@ -1747,6 +1771,34 @@ function decimalTimesStructuralHexExponentDisplayShape(
   return structuralHexDecimalProductDisplayShape(decimalTimesStructuralHexExponentProduct(left, right));
 }
 
+function structuralHexExponentDivideDecimalValue(
+  left: StructuralHexExponentOperand,
+  right: string,
+): string | undefined {
+  return structuralHexExponentDivideDecimalProduct(left, right)?.value;
+}
+
+function decimalDivideStructuralHexExponentValue(
+  left: string,
+  right: StructuralHexExponentOperand,
+): string | undefined {
+  return decimalDivideStructuralHexExponentProduct(left, right)?.value;
+}
+
+function structuralHexExponentDivideDecimalDisplayShape(
+  left: StructuralHexExponentOperand,
+  right: string,
+): X2ShapeFact | undefined {
+  return structuralHexDecimalProductDisplayShape(structuralHexExponentDivideDecimalProduct(left, right));
+}
+
+function decimalDivideStructuralHexExponentDisplayShape(
+  left: string,
+  right: StructuralHexExponentOperand,
+): X2ShapeFact | undefined {
+  return structuralHexDecimalProductDisplayShape(decimalDivideStructuralHexExponentProduct(left, right));
+}
+
 const STRUCTURAL_HEX_EXPONENT_TIMES_DECIMAL_TABLE: ReadonlyMap<string, StructuralHexDecimalProduct> = new Map([
   ["1", { value: "0.03", displayShape: decimalExponentShapeFact("3", "-2") }],
   ["2", { value: "0.1", displayShape: decimalExponentShapeFact("1", "-1") }],
@@ -1765,6 +1817,27 @@ const DECIMAL_TIMES_STRUCTURAL_HEX_EXPONENT_TABLE: ReadonlyMap<string, Structura
   ["16", { value: "1.6", display: "1.6" }],
 ]);
 
+const STRUCTURAL_HEX_EXPONENT_DIVIDE_DECIMAL_TABLE: ReadonlyMap<string, StructuralHexDecimalProduct> = new Map([
+  ["1", { value: "0.03", displayShape: decimalExponentShapeFact("3", "-2") }],
+  ["2", { value: "0.065", displayShape: decimalExponentShapeFact("6.5", "-2") }],
+  ["4", { value: "0.0325", displayShape: decimalExponentShapeFact("3.25", "-2") }],
+  ["5", { value: "0.026", displayShape: decimalExponentShapeFact("2.6", "-2") }],
+  ["8", { value: "0.01625", displayShape: decimalExponentShapeFact("1.625", "-2") }],
+  ["16", { value: "0.008125", displayShape: decimalExponentShapeFact("8.125", "-3") }],
+  ["18", { value: "0.0072222222", displayShape: decimalExponentShapeFact("7.2222222", "-3") }],
+]);
+
+const DECIMAL_DIVIDE_STRUCTURAL_HEX_EXPONENT_TABLE: ReadonlyMap<string, StructuralHexDecimalProduct> = new Map([
+  ["0", { value: "99.099099", display: "99.099099" }],
+  ["1", { value: "99.099099", display: "99.099099" }],
+  ["2", { value: "99.099099", display: "99.099099" }],
+  ["4", { value: "80", display: "80" }],
+  ["5", { value: "0", display: "00" }],
+  ["8", { value: "0", display: "0" }],
+  ["16", { value: "920", display: "920" }],
+  ["18", { value: "960", display: "960" }],
+]);
+
 function structuralHexExponentTimesDecimalProduct(
   left: StructuralHexExponentOperand,
   right: string,
@@ -1780,6 +1853,24 @@ function decimalTimesStructuralHexExponentProduct(
 ): StructuralHexDecimalProduct | undefined {
   return right.digit === 13 && right.exponent === "-2"
     ? DECIMAL_TIMES_STRUCTURAL_HEX_EXPONENT_TABLE.get(left)
+    : undefined;
+}
+
+function structuralHexExponentDivideDecimalProduct(
+  left: StructuralHexExponentOperand,
+  right: string,
+): StructuralHexDecimalProduct | undefined {
+  return left.digit === 13 && left.exponent === "-2"
+    ? STRUCTURAL_HEX_EXPONENT_DIVIDE_DECIMAL_TABLE.get(right)
+    : undefined;
+}
+
+function decimalDivideStructuralHexExponentProduct(
+  left: string,
+  right: StructuralHexExponentOperand,
+): StructuralHexDecimalProduct | undefined {
+  return right.digit === 13 && right.exponent === "-2"
+    ? DECIMAL_DIVIDE_STRUCTURAL_HEX_EXPONENT_TABLE.get(left)
     : undefined;
 }
 
