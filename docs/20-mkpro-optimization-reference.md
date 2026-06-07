@@ -957,9 +957,13 @@ Display rewrites are separated into strategy selection + body lowering.
   exact decimal display (`hex:123:mantissa`, or a closed structural exponent
   such as `hex-exponent:123:1` -> `hex:1230:mantissa`). Leading-zero,
   fractional-scientific, and other raw structural spellings stay shape-only and
-  still are not dot-safe X2 restore aliases. Reverse decimal/hex division also
-  uses its own emulator-pinned table for decimal `0..9`/`18` in `Y` and
-  structural `A`..`E` in `X`, preserving non-normal display shapes such as
+  still are not dot-safe X2 restore aliases. Stable expression keys canonicalize
+  only those exact structural decimal display sources to
+  `decimal:*:normalized`; ordinary decimal display shapes, especially exact
+  exponent displays, stay shape-keyed so VP/sign-source context is not
+  collapsed into plain value equality. Reverse decimal/hex division also uses
+  its own emulator-pinned table for decimal `0..9`/`18` in `Y` and structural
+  `A`..`E` in `X`, preserving non-normal display shapes such as
   `exponent:0.4444443:-1:decimal` separately from normalized decimal value
   facts. Signed, multi-nibble, trailing-tail, and
   unsupported-exponent forms remain structural. Wider products/quotients, division by zero,

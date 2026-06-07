@@ -3454,6 +3454,24 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(result?.x)).not.toContain("expr-key:31(expr-key:16(shape:super-exponent:FA:2))");
   });
 
+  it("x2 value dataflow canonicalizes exact structural decimal shape sources inside stable expr keys", () => {
+    const exact = "expr-key:31(shape:hex:123:mantissa)" as X2ValueFact;
+    const exactExponent = "expr-key:31(shape:hex-exponent:123:1)" as X2ValueFact;
+    const rawLeadingZero = "expr-key:31(shape:hex:0123:mantissa)" as X2ValueFact;
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([exact, exactExponent, rawLeadingZero]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(legacy, plain(0x54, "К НОП"), "normal", {}, 0);
+
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:123:normalized)");
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:1230:normalized)");
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(shape:hex:0123:mantissa)");
+    expect(x2ValueStateText(result?.x)).not.toContain(exact);
+    expect(x2ValueStateText(result?.x)).not.toContain(exactExponent);
+  });
+
   it("x2 value dataflow canonicalizes stable expr keys in set and memory operations", () => {
     const raw = "expr-key:16(shape:hex-exponent:Г:2)" as X2ValueFact;
     const canonical = "expr-key:16(shape:hex:Г00:mantissa)" as X2ValueFact;

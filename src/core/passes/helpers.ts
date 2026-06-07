@@ -8543,7 +8543,7 @@ function canonicalX2ValueFactIfValid(fact: X2ValueFact): X2ValueFact | undefined
 
 function canonicalStableShapeSourceKey(fact: X2ShapeFact): string | undefined {
   const facts = x2RestoredDisplaySourceKeyShapeFacts(new Set([fact]));
-  return facts.size === 1 ? stableStructuralExpressionSourceKey([...facts][0]!) : undefined;
+  return facts.size === 1 ? stableExpressionShapeSourceKey([...facts][0]!) : undefined;
 }
 
 function stableExpressionSourceKeys(
@@ -8568,7 +8568,7 @@ function stableExpressionDisplayShapeSourceKeys(
   for (const fact of x2RestoredDisplaySourceKeyShapeFacts(shapes)) {
     const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
     if (decimal !== undefined && valueDecimals.has(decimal)) continue;
-    keys.add(stableStructuralExpressionSourceKey(fact));
+    keys.add(stableExpressionShapeSourceKey(fact));
   }
   return keys;
 }
@@ -8597,6 +8597,13 @@ function normalizedDecimalValueSet(values: X2ValueSet | undefined): Set<string> 
 
 function stableStructuralExpressionSourceKey(fact: X2ShapeFact): string {
   return `shape:${x2CanonicalShapeFact(fact)}`;
+}
+
+function stableExpressionShapeSourceKey(fact: X2ShapeFact): string {
+  const decimal = structuralShapeFactRestoredVisibleDecimal(fact);
+  return decimal === undefined
+    ? stableStructuralExpressionSourceKey(fact)
+    : decimalValueFact(decimal, "normalized");
 }
 
 function stableExpressionKeyValueSet(key: string): X2ValueSet | undefined {
