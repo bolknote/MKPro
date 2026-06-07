@@ -1537,7 +1537,9 @@ The pipeline currently contains:
   value or display shape into hidden X2. Direct/proved-indirect stores use the
   same materialization for register value/shape memory, without treating that
   store as an X2 sync; recall-removal proofs can also derive display/structural
-  shape facts from stable value-memory when shape-memory is unavailable. Stable constant stack producers such as `F pi` use the same
+  shape facts from stable value-memory when shape-memory is unavailable. X2
+  restore-safety and same-X/X2 shape predicates use this effective stable-key
+  shape view as well. Stable constant stack producers such as `F pi` use the same
   opaque key model (`expr-key:20()`) without assigning a decimal approximation
   to the constant. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are

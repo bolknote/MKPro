@@ -3275,7 +3275,7 @@ export function x2ShapeSetSafety(input: X2ShapeSet | undefined): X2ShapeSafety {
 export function x2RestoreSafety(state: X2ValueDataflowState | undefined): X2ShapeSafety {
   if (state === undefined) return "unknown";
   if (x2ValueSetHasConcreteDecimal(state.x2)) return "dotSafeDecimal";
-  return x2ShapeSetSafety(state.x2Shape);
+  return x2ShapeSetSafety(effectiveX2StateShape(state));
 }
 
 export function x2StateHasDotSafeDecimalX2(state: X2ValueDataflowState | undefined): boolean {
@@ -3289,7 +3289,7 @@ export function x2StateHasStructuralShapeX2(state: X2ValueDataflowState | undefi
 export function x2StateHasOnlyDotSafeStructuralMantissaX2(state: X2ValueDataflowState | undefined): boolean {
   return state !== undefined &&
     !x2ValueSetHasConcreteDecimal(state.x2) &&
-    x2ShapeSetHasOnlyDotSafeStructuralMantissas(state.x2Shape);
+    x2ShapeSetHasOnlyDotSafeStructuralMantissas(effectiveX2StateShape(state));
 }
 
 export function x2CanUseVpDotRestoreAt(
@@ -3302,8 +3302,9 @@ export function x2CanUseVpDotRestoreAt(
 
 export function x2StateHasVpDotSafeStructuralContextX2(state: X2ValueDataflowState | undefined): boolean {
   if (state === undefined || state.structuralVpContext?.kind !== "exponent") return false;
-  if (state.x2Shape === undefined || state.x2Shape.size === 0) return false;
-  for (const fact of state.x2Shape) {
+  const x2Shape = effectiveX2StateShape(state);
+  if (x2Shape === undefined || x2Shape.size === 0) return false;
+  for (const fact of x2Shape) {
     const model = x2ShapeDataModelForFact(fact);
     if (model.kind !== "exponent-entry" || model.safety !== "structuralOnly") return false;
     const mantissa = model.closedStructuralMantissa ?? model.mantissa;
@@ -3481,11 +3482,17 @@ function structuralShapeSetHasIntersection(left: X2ShapeSet, right: X2ShapeSet):
 }
 
 export function x2StateHasSameDotSafeDecimalInXAndX2(state: X2ValueDataflowState | undefined): boolean {
-  return state !== undefined && x2ShapeSetsHaveSameDotSafeDecimal(state.xShape, state.x2Shape);
+  return state !== undefined && x2ShapeSetsHaveSameDotSafeDecimal(
+    effectiveVisibleXStateShape(state),
+    effectiveX2StateShape(state),
+  );
 }
 
 export function x2StateHasSameStructuralShapeInXAndX2(state: X2ValueDataflowState | undefined): boolean {
-  return state !== undefined && x2ShapeSetsHaveSameStructuralShape(state.xShape, state.x2Shape);
+  return state !== undefined && x2ShapeSetsHaveSameStructuralShape(
+    effectiveVisibleXStateShape(state),
+    effectiveX2StateShape(state),
+  );
 }
 
 export function x2StateHasSameClosedSignChangeSourceInXAndX2(
@@ -3495,7 +3502,7 @@ export function x2StateHasSameClosedSignChangeSourceInXAndX2(
     (
       x2ValueSetHasIntersection(state.x, state.x2) ||
       x2StateHasSameDotSafeDecimalInXAndX2(state) ||
-      x2ShapeSetsHaveSameRestoredDisplayShape(state.xShape, state.x2Shape) ||
+      x2ShapeSetsHaveSameRestoredDisplayShape(effectiveVisibleXStateShape(state), effectiveX2StateShape(state)) ||
       x2StateHasSameRestoredVisibleDecimalInXAndX2(state)
     );
 }
@@ -3503,7 +3510,10 @@ export function x2StateHasSameClosedSignChangeSourceInXAndX2(
 export function x2StateHasSameDotSafeStructuralMantissaInXAndX2(
   state: X2ValueDataflowState | undefined,
 ): boolean {
-  return state !== undefined && x2ShapeSetsHaveSameDotSafeStructuralMantissa(state.xShape, state.x2Shape);
+  return state !== undefined && x2ShapeSetsHaveSameDotSafeStructuralMantissa(
+    effectiveVisibleXStateShape(state),
+    effectiveX2StateShape(state),
+  );
 }
 
 export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefined): boolean {
@@ -3522,6 +3532,14 @@ export function x2StateHasSameRestoredVisibleDecimalInXAndX2(
   state: X2ValueDataflowState | undefined,
 ): boolean {
   return x2ValueShapeSetsHaveSameRestoredVisibleDecimal(state?.x, state?.xShape, state?.x2, state?.x2Shape);
+}
+
+function effectiveVisibleXStateShape(state: X2ValueDataflowState | undefined): X2ShapeSet | undefined {
+  return state === undefined ? undefined : shapeSetWithStableExpressionValueShapes(state.xShape, state.x);
+}
+
+function effectiveX2StateShape(state: X2ValueDataflowState | undefined): X2ShapeSet | undefined {
+  return state === undefined ? undefined : shapeSetWithStableExpressionValueShapes(state.x2Shape, state.x2);
 }
 
 export function x2CanUseDotRestoreAt(

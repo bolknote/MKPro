@@ -1290,7 +1290,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     same facts without waiting for an actual recall sync. If a join or older
     path still has only stable value-memory, recall-elimination shape proofs
     derive the same display/structural facts from those stable keys instead of
-    requiring a separate shape-memory fact. The proved decimal
+    requiring a separate shape-memory fact. State-level restore-safety and
+    same-X/X2 shape predicates use the same effective-shape view, so a stable
+    `expr-key:*` value can prove structural or dot-safe structural context even
+    when the explicit `xShape`/`x2Shape` set is empty. The proved decimal
     first-digit source is visible to `vp-splice`, so an empty separator and a
     cancelling exponent sign pair before that `ВП` can be removed together. It
     also carries exact emulator-pinned single-digit hex

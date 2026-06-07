@@ -65,7 +65,12 @@ import {
   x2PreviousXPreservingX2SyncIndex,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
+  x2StateHasOnlyDotSafeStructuralMantissaX2,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
+  x2StateHasSameDotRestoreValueInXAndX2,
+  x2StateHasSameDotSafeStructuralMantissaInXAndX2,
+  x2StateHasSameStructuralShapeInXAndX2,
+  x2StateHasStructuralShapeX2,
   x2StateHasVpDotSafeStructuralContextX2,
   x2StateIsClosedPlainContext,
   x2ShapeDataModelForFact,
@@ -3291,6 +3296,30 @@ describe("ir passes on synthetic programs", () => {
     };
 
     expect(recallValueProof(recall("1"), state)?.x2SyncDisplayValue).toBe(true);
+  });
+
+  it("x2 state predicates derive structural X2 shape from stable expr-key values", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      entry: { kind: "closed" },
+    };
+
+    expect(x2StateHasStructuralShapeX2(state)).toBe(true);
+    expect(x2StateHasOnlyDotSafeStructuralMantissaX2(state)).toBe(true);
+    expect(x2StateHasUnsafeDotRestoreShapeX2(state)).toBe(true);
+  });
+
+  it("x2 state predicates compare stable expr-key structural shapes without explicit shape facts", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      x2: new Set<X2ValueFact>(["expr-key:31(shape:hex:A:mantissa)"]),
+      entry: { kind: "closed" },
+    };
+
+    expect(x2StateHasSameStructuralShapeInXAndX2(state)).toBe(true);
+    expect(x2StateHasSameDotSafeStructuralMantissaInXAndX2(state)).toBe(true);
+    expect(x2StateHasSameDotRestoreValueInXAndX2(state)).toBe(true);
   });
 
   it("x2 value dataflow canonicalizes structural shape sources inside stable expr keys", () => {
