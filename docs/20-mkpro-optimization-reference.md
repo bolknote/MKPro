@@ -1635,8 +1635,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     (`active-mantissa`, decimal exponent-entry, or structural exponent-entry);
     a closed-context X2 restore `ВП` can make a following `ВП` observable and
     is not treated as redundant,
-    inert empty-op runs before `ВП`, including marker labels between the
-    empty ops and the exponent-entry command, adjacent `/-/ /-/`
+    inert empty-op runs before `ВП`, including marker labels and orphan
+    address-byte cells between the empty ops and the exponent-entry command,
+    adjacent `/-/ /-/`
     exponent-sign toggles, and shape-proved empty separators after at least
     one exponent digit before a non-digit command. It also uses the separate
     VP/exponent context to remove empty separators before `/-/` after
@@ -1684,10 +1685,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     transparent helper calls and restore-transparent empty/address cells;
     helpers that store, branch, restore X2, recurse, or expose another entry
     remain barriers. The non-zero open/closed mantissa sign-pair
-    proof before `ВП` uses the same transparent-helper crossing, so it is no
-    longer limited to an immediately adjacent `ВП`; mixed shape-only structural
-    restore runs (`/-/` plus empty cells before a structural `ВП` source) use
-    the same crossing.
+    proof before `ВП` uses the same transparent gap/helper crossing, so it is
+    no longer limited to an immediately adjacent `ВП`; mixed shape-only
+    structural restore runs (`/-/` plus empty cells before a structural `ВП`
+    source) use the same crossing.
     After an X2-preserving gap, a VP-context sign or sign pair is kept when its
     X2 restore is observable (`5 ВП 3 Fπ /-/ С/П`,
     `5 ВП 3 Fπ /-/ /-/ С/П`), but a free-standing `/-/`/empty restore run can

@@ -21586,6 +21586,28 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes an empty run before ВП across orphan address gaps", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x54, "КНОП"),
+      orphanAddress(54),
+      plain(0x55, "К1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      orphanAddress(54),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice removes an empty run before transparent return helpers and ВП", () => {
     const program: IrOp[] = [
       jump("main"),
@@ -22763,6 +22785,31 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual([
       plain(0x00, "0"),
       plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a mixed open mantissa restore run before proved ВП across orphan address gaps", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      orphanAddress(54),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      orphanAddress(54),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),

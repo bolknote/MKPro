@@ -34,6 +34,10 @@ function isDecimalDigit(op: IrOp): boolean {
     !isDisplayFocusSensitive(op);
 }
 
+function isTransparentVpGapOp(op: IrOp): boolean {
+  return op.kind === "label" || op.kind === "orphan-address";
+}
+
 function canRemoveClosedContextSignPair(
   ops: readonly IrOp[],
   secondSignIndex: number,
@@ -77,7 +81,7 @@ function mantissaRestoreRunBeforeProvedVp(
   let sawSign = false;
   for (let cursor = vpIndex - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
-    if (op.kind === "label") continue;
+    if (isTransparentVpGapOp(op)) continue;
     if (isFreeStandingX2EmptyOp(op)) {
       run.push(cursor);
       continue;
@@ -113,7 +117,7 @@ function x2ContextRestoreRunBeforeFreshDigit(
 function previousExecutableIsFreeStandingRestoreOp(ops: readonly IrOp[], index: number): boolean {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
-    if (op.kind === "label") continue;
+    if (isTransparentVpGapOp(op)) continue;
     return isFreeStandingX2EmptyOp(op) || isFreeStandingX2SignChangeOp(op);
   }
   return false;
@@ -162,7 +166,7 @@ function x2ContextRestoreRunBeforeTerminal(
       removableIndexes.push(index);
       continue;
     }
-    if (op.kind === "label" || op.kind === "orphan-address") continue;
+    if (isTransparentVpGapOp(op)) continue;
     if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
     return removableIndexes.length > 0 && isTerminal(op) ? removableIndexes : [];
   }
@@ -188,7 +192,7 @@ function freeStandingEmptyRunBeforeProvedVp(
   const indexes: number[] = [];
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
-    if (op.kind === "label") continue;
+    if (isTransparentVpGapOp(op)) continue;
     if (isFreeStandingX2EmptyOp(op)) {
       indexes.push(cursor);
       continue;
@@ -221,7 +225,7 @@ function removableExponentSeparatorRun(
   const run: number[] = [];
   for (let index = startIndex; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (op.kind === "label" || op.kind === "orphan-address") continue;
+    if (isTransparentVpGapOp(op)) continue;
     if (isFreeStandingX2EmptyOp(op)) {
       run.push(index);
       continue;
