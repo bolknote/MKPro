@@ -16,6 +16,7 @@ import {
   knownIndirectMemoryTarget,
   removableRecallValueRegister,
   removingRecallCanExposeX2Restore,
+  removingPreShiftLiftCanExposeStack,
   x2CanUseSourceDotRestoreAt,
   x2HasSignRestoreGapBeforeVp,
   x2HasOnlyRestoreGapBeforeVp,
@@ -25,6 +26,7 @@ import {
   x2StatesHaveSameVpEntrySignSource,
   x2ValueFactIsNormalizedDecimal,
   x2ValueSetHasFact,
+  x2ValueSetHasIntersection,
   x2ValueShapeSetsHaveSameDotSafeDecimal,
   x2ValueShapeSetsHaveSameDotSafeStructuralMantissa,
   x2ValueShapeSetsHaveSameRestoredDisplayShape,
@@ -169,7 +171,9 @@ const run: IrPassFn = (ops) => {
             sourceRestoresSameDotSafeStructuralShape,
         })
         : removal.exposesX2Restore;
-    if (removal.exposesStackLift || exposesX2Restore) return op;
+    const exposesStackLift = removal.exposesStackLift &&
+      !hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(ops, index, x2ValueStates[index]);
+    if (exposesStackLift || exposesX2Restore) return op;
 
     applied += 1;
     return dotRestoreOp(register, op);
@@ -290,6 +294,34 @@ function hiddenTempStoreSourceRestoresSameDotSafeStructuralShapeFromX2(
     recallState?.x2,
     recallState?.x2Shape,
   );
+}
+
+function hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(
+  ops: readonly IrOp[],
+  recallIndex: number,
+  recallState: X2ValueDataflowState | undefined,
+): boolean {
+  return x2StateHasSameVisibleXAndY(recallState) &&
+    !removingPreShiftLiftCanExposeStack(ops, recallIndex);
+}
+
+function x2StateHasSameVisibleXAndY(state: X2ValueDataflowState | undefined): boolean {
+  return state !== undefined &&
+    (
+      x2ValueSetHasIntersection(state.x, state.y) ||
+      x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
+        state.x,
+        state.xShape,
+        state.y,
+        state.yShape,
+      ) ||
+      x2ValueShapeSetsHaveSameRestoredDisplayShape(
+        state.x,
+        state.xShape,
+        state.y,
+        state.yShape,
+      )
+    );
 }
 
 function hiddenTempStoreComputedSourceAlreadySyncedInX2(

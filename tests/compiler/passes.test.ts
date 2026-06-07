@@ -15361,6 +15361,48 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-hidden-temp-restore uses a previous recall lift when X and Y already match", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      store("2"),
+      recall("1"),
+      {
+        kind: "plain",
+        opcode: 0x0a,
+        meta: { mnemonic: ".", comment: "restore 2 from hidden X2 temp" },
+      },
+      plain(0x10, "+"),
+      halt(),
+    ]);
+  });
+
+  it("x2-hidden-temp-restore keeps duplicate-Y recalls when deeper stack state is consumed", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      recall("1"),
+      recall("2"),
+      plain(0x10, "+"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("dead-store-elimination removes a store overwritten before any read", () => {
     const program: IrOp[] = [
       store("1"),
