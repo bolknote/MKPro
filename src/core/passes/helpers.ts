@@ -3465,7 +3465,7 @@ export function x2CanUseClosedSignChangeDotSourceAt(
       x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
     ) continue;
     if (hasRewriteBarrier(op)) return false;
-    return isFreeStandingX2SignChange(op) &&
+    return isFreeStandingX2SignChangeOp(op) &&
       x2StateIsClosedPlainContext(state) &&
       (
         !x2StateHasUnsafeDotRestoreShapeX2(state) ||
@@ -3476,7 +3476,7 @@ export function x2CanUseClosedSignChangeDotSourceAt(
   return false;
 }
 
-function isFreeStandingX2SignChange(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
+export function isFreeStandingX2SignChangeOp(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
   return op.kind === "plain" &&
     op.opcode === X2_SIGN_CHANGE_OPCODE &&
     !hasRewriteBarrier(op) &&
@@ -3484,7 +3484,7 @@ function isFreeStandingX2SignChange(op: IrOp): op is Extract<IrOp, { kind: "plai
     !hasIrRoles(op);
 }
 
-function isFreeStandingX2EmptyOp(op: IrOp): boolean {
+export function isFreeStandingX2EmptyOp(op: IrOp): boolean {
   return op.kind === "plain" &&
     op.opcode >= X2_EMPTY_OPCODE_START &&
     op.opcode <= X2_EMPTY_OPCODE_END &&
@@ -3545,27 +3545,20 @@ export function x2StateCanDiscardRestoreRunBeforeProvedVp(
   return x2StatesHaveSameVpEntrySource(beforeRun, beforeVp);
 }
 
+export interface X2RestoreGapBeforeVpScan {
+  readonly vpIndex: number | undefined;
+  readonly blockedIndex: number | undefined;
+  readonly sawRestoreGap: boolean;
+  readonly sawSignRestore: boolean;
+}
+
 export function x2HasOnlyRestoreGapBeforeVp(
   ops: readonly IrOp[],
   start: number,
   context?: DirectReturnAnalysisContext,
 ): boolean {
-  let sawRestoreGap = false;
-  for (let index = start; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") continue;
-    if (isFreeStandingX2RestoreGapOp(op)) {
-      sawRestoreGap = true;
-      continue;
-    }
-    if (
-      context !== undefined &&
-      isKnownReturnCallOp(op) &&
-      x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
-    ) continue;
-    return sawRestoreGap && isFreeStandingX2VpOp(op);
-  }
-  return false;
+  const scan = x2RestoreGapBeforeVp(ops, start, context);
+  return scan.sawRestoreGap && scan.vpIndex !== undefined;
 }
 
 export function x2ReplacementDotHasOnlyRestoreGapBeforeVp(
@@ -3573,18 +3566,7 @@ export function x2ReplacementDotHasOnlyRestoreGapBeforeVp(
   start: number,
   context?: DirectReturnAnalysisContext,
 ): boolean {
-  for (let index = start; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") continue;
-    if (isFreeStandingX2RestoreGapOp(op)) continue;
-    if (
-      context !== undefined &&
-      isKnownReturnCallOp(op) &&
-      x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
-    ) continue;
-    return isFreeStandingX2VpOp(op);
-  }
-  return false;
+  return x2RestoreGapBeforeVp(ops, start, context).vpIndex !== undefined;
 }
 
 export function x2HasSignRestoreGapBeforeVp(
@@ -3592,26 +3574,47 @@ export function x2HasSignRestoreGapBeforeVp(
   start: number,
   context?: DirectReturnAnalysisContext,
 ): boolean {
+  const scan = x2RestoreGapBeforeVp(ops, start, context);
+  return scan.sawSignRestore && scan.vpIndex !== undefined;
+}
+
+export function x2RestoreGapBeforeVp(
+  ops: readonly IrOp[],
+  start: number,
+  context?: DirectReturnAnalysisContext,
+): X2RestoreGapBeforeVpScan {
+  let sawRestoreGap = false;
   let sawSign = false;
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (op.kind === "label") continue;
-    if (isFreeStandingX2SignChange(op)) {
-      sawSign = true;
+    if (isFreeStandingX2RestoreGapOp(op)) {
+      sawRestoreGap = true;
+      if (isFreeStandingX2SignChangeOp(op)) sawSign = true;
       continue;
     }
-    if (isFreeStandingX2EmptyOp(op)) continue;
     if (
       context !== undefined &&
       isKnownReturnCallOp(op) &&
       x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
     ) continue;
-    return sawSign && isFreeStandingX2VpOp(op);
+    const isVp = isFreeStandingX2VpOp(op);
+    return {
+      vpIndex: isVp ? index : undefined,
+      blockedIndex: isVp ? undefined : index,
+      sawRestoreGap,
+      sawSignRestore: sawSign,
+    };
   }
-  return false;
+  return {
+    vpIndex: undefined,
+    blockedIndex: undefined,
+    sawRestoreGap,
+    sawSignRestore: sawSign,
+  };
 }
 
-function x2RestoreGapDirectReturnDoesNotObserveRestore(
+export function x2RestoreGapDirectReturnDoesNotObserveRestore(
   ops: readonly IrOp[],
   call: KnownReturnCallOp,
   context: DirectReturnAnalysisContext,
@@ -3621,17 +3624,10 @@ function x2RestoreGapDirectReturnDoesNotObserveRestore(
 
 function isLinearX2RestoreGapTransparentOp(op: IrOp): boolean {
   return op.kind === "orphan-address" ||
-    (
-      op.kind === "plain" &&
-      !hasRewriteBarrier(op) &&
-      !isDisplayFocusSensitive(op) &&
-      !hasIrRoles(op) &&
-      op.opcode >= X2_EMPTY_OPCODE_START &&
-      op.opcode <= X2_EMPTY_OPCODE_END
-    );
+    isFreeStandingX2EmptyOp(op);
 }
 
-function isFreeStandingX2RestoreGapOp(op: IrOp): boolean {
+export function isFreeStandingX2RestoreGapOp(op: IrOp): boolean {
   return op.kind === "plain" &&
     !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op) &&
@@ -3639,7 +3635,7 @@ function isFreeStandingX2RestoreGapOp(op: IrOp): boolean {
     (op.opcode === X2_SIGN_CHANGE_OPCODE || (op.opcode >= X2_EMPTY_OPCODE_START && op.opcode <= X2_EMPTY_OPCODE_END));
 }
 
-function isFreeStandingX2VpOp(op: IrOp): boolean {
+export function isFreeStandingX2VpOp(op: IrOp): boolean {
   return op.kind === "plain" &&
     op.opcode === 0x0c &&
     !hasRewriteBarrier(op) &&

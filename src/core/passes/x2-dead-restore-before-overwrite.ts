@@ -7,13 +7,14 @@ import {
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
+  isFreeStandingX2EmptyOp,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
-  knownReturnCallReturnsThroughNestedTransparentRange,
   plainPreservesXValue,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingStackLiftCanExposeStack,
+  x2RestoreGapDirectReturnDoesNotObserveRestore,
   x2CanUseDotRestoreAt,
   x2CanUseVpDotRestoreAt,
   x2StateHasDotSafeDecimalX2,
@@ -26,7 +27,6 @@ import {
   type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
-  type KnownReturnCallOp,
   type X2ValueDataflowState,
 } from "./helpers.ts";
 
@@ -188,7 +188,7 @@ function deadRestoreRunBeforeHardOverwrite(
       sameSegment = false;
       continue;
     }
-    if (isFreeStandingEmptyOp(op)) {
+    if (isFreeStandingX2EmptyOp(op)) {
       if (sameSegment) remove.push(index);
       continue;
     }
@@ -207,7 +207,7 @@ function deadRestoreRunBeforeHardOverwrite(
       remove.push(index);
       continue;
     }
-    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
     return isOverwriteEndpointThatCannotObserveRestoredX(
       ops,
       index,
@@ -226,10 +226,6 @@ function isFreeStandingPlain(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
     !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op) &&
     !hasRoles(op);
-}
-
-function isFreeStandingEmptyOp(op: IrOp): boolean {
-  return isFreeStandingPlain(op) && op.opcode >= 0x54 && op.opcode <= 0x56;
 }
 
 function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
@@ -277,18 +273,6 @@ function stackShiftCanExposeStack(
     stackProducerExposure.set(index, exposes);
   }
   return exposes;
-}
-
-function simpleDirectReturnDoesNotObserveRestore(
-  ops: readonly IrOp[],
-  call: KnownReturnCallOp,
-  context: DirectReturnAnalysisContext,
-): boolean {
-  return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, isRestoreTransparentLinearOp);
-}
-
-function isRestoreTransparentLinearOp(op: IrOp): boolean {
-  return op.kind === "orphan-address" || isFreeStandingEmptyOp(op);
 }
 
 export const x2DeadRestoreBeforeOverwrite: IrPass = {

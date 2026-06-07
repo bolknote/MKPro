@@ -1393,6 +1393,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `.`/`/-/`/`ВП` cases. The context-sensitive follow-up check uses the shared
     CFG-aware X2 exposure walker: direct and proved-indirect branches are
     followed path-sensitively, while opaque flow remains conservative. The
+    VP-follow-up checks use the shared X2 restore-gap scanner: free-standing
+    `КНОП`/`К1`/`К2` and `/-/` cells, marker labels, and transparent
+    direct/proved-indirect return helpers are interpreted the same way by
+    `x2-noop-restore`, `vp-splice`, and
+    `x2-dead-restore-before-overwrite`; role-bearing/display-sensitive cells
+    remain barriers. The
     VP-source escape keeps ordinary mantissa sources and sign mantissa sources
     as separate key sets, so a raw decimal dot restore can expose visible
     mantissa `2` for `ВП` while still proving that a following sign-gap `/-/ ВП`

@@ -6,10 +6,14 @@ import {
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
+  isFreeStandingX2EmptyOp,
+  isFreeStandingX2SignChangeOp,
+  isFreeStandingX2VpOp,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
-  knownReturnCallReturnsThroughNestedTransparentRange,
   removingRecallCanExposeX2Restore,
+  x2RestoreGapBeforeVp,
+  x2RestoreGapDirectReturnDoesNotObserveRestore,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
   x2StateHasX2RestoreContext,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
@@ -18,22 +22,8 @@ import {
   type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
-  type KnownReturnCallOp,
   type X2ValueDataflowState,
 } from "./helpers.ts";
-
-const VP = 0x0c;
-const SIGN_CHANGE = 0x0b;
-const KNOP = 0x54;
-const K1 = 0x55;
-const K2 = 0x56;
-
-function isPlainOpcode(op: IrOp, opcode: number): boolean {
-  return op.kind === "plain" &&
-    op.opcode === opcode &&
-    !hasRewriteBarrier(op) &&
-    !isDisplayFocusSensitive(op);
-}
 
 function isDecimalDigit(op: IrOp): boolean {
   return op.kind === "plain" &&
@@ -41,23 +31,6 @@ function isDecimalDigit(op: IrOp): boolean {
     op.opcode <= 9 &&
     !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op);
-}
-
-// A ВП (exponent-entry) op that carries no layout/role contract, so removing the
-// cell only shifts later addresses (which the layout fixpoint reconciles).
-function isFreeStandingVp(op: IrOp): boolean {
-  if (!isPlainOpcode(op, VP)) return false;
-  return !("meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0);
-}
-
-function isFreeStandingEmptyOp(op: IrOp): boolean {
-  if (!isPlainOpcode(op, KNOP) && !isPlainOpcode(op, K1) && !isPlainOpcode(op, K2)) return false;
-  return !("meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0);
-}
-
-function isFreeStandingSignChange(op: IrOp): boolean {
-  if (!isPlainOpcode(op, SIGN_CHANGE)) return false;
-  return !("meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0);
 }
 
 function canRemoveClosedContextSignPair(
@@ -82,8 +55,7 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
   context: DirectReturnAnalysisContext,
 ): boolean {
   if (analyzeX2VpShapeContext(state).kind !== "active-mantissa") return false;
-  const nextIndex = nextVpAfterTransparentRestoreGap(ops, secondSignIndex + 1, context);
-  if (nextIndex === undefined || !isFreeStandingVp(ops[nextIndex]!)) return false;
+  if (x2RestoreGapBeforeVp(ops, secondSignIndex + 1, context).vpIndex === undefined) return false;
   return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterPair);
 }
 
@@ -105,16 +77,16 @@ function mantissaRestoreRunBeforeProvedVp(
   for (let cursor = vpIndex - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
     if (op.kind === "label") continue;
-    if (isFreeStandingEmptyOp(op)) {
+    if (isFreeStandingX2EmptyOp(op)) {
       run.push(cursor);
       continue;
     }
-    if (isFreeStandingSignChange(op)) {
+    if (isFreeStandingX2SignChangeOp(op)) {
       run.push(cursor);
       sawSign = true;
       continue;
     }
-    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
     break;
   }
   if (!sawSign) return [];
@@ -141,7 +113,7 @@ function previousExecutableIsFreeStandingRestoreOp(ops: readonly IrOp[], index: 
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
     if (op.kind === "label") continue;
-    return isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op);
+    return isFreeStandingX2EmptyOp(op) || isFreeStandingX2SignChangeOp(op);
   }
   return false;
 }
@@ -164,12 +136,12 @@ function x2ContextRestoreRunBeforeFreshDigitEntry(
   const removableIndexes: number[] = [];
   for (let index = startIndex; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op)) {
+    if (isFreeStandingX2EmptyOp(op) || isFreeStandingX2SignChangeOp(op)) {
       removableIndexes.push(index);
       continue;
     }
     if (op.kind === "label") continue;
-    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
     return removableIndexes.length > 0 && isDecimalDigit(op) ? removableIndexes : [];
   }
   return [];
@@ -187,27 +159,15 @@ function x2ContextRestoreRunBeforeHardOverwrite(
   const removableIndexes: number[] = [];
   for (let index = startIndex; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op)) {
+    if (isFreeStandingX2EmptyOp(op) || isFreeStandingX2SignChangeOp(op)) {
       removableIndexes.push(index);
       continue;
     }
     if (op.kind === "label") continue;
-    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
     return removableIndexes.length > 0 && isHardX2OverwriteWithoutStackUse(op) ? removableIndexes : [];
   }
   return [];
-}
-
-function simpleDirectReturnDoesNotObserveRestore(
-  ops: readonly IrOp[],
-  call: KnownReturnCallOp,
-  context: DirectReturnAnalysisContext,
-): boolean {
-  return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, isRestoreTransparentLinearOp);
-}
-
-function isRestoreTransparentLinearOp(op: IrOp): boolean {
-  return op.kind === "orphan-address" || isFreeStandingEmptyOp(op);
 }
 
 function canRemoveClosedContextSignPairBeforeProvedVp(
@@ -217,23 +177,8 @@ function canRemoveClosedContextSignPairBeforeProvedVp(
   stateAfterPair: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  const nextIndex = nextVpAfterTransparentRestoreGap(ops, secondSignIndex + 1, context);
-  if (nextIndex === undefined || !isFreeStandingVp(ops[nextIndex]!)) return false;
+  if (x2RestoreGapBeforeVp(ops, secondSignIndex + 1, context).vpIndex === undefined) return false;
   return x2StatesHaveSameVpEntrySource(state, stateAfterPair);
-}
-
-function nextVpAfterTransparentRestoreGap(
-  ops: readonly IrOp[],
-  start: number,
-  context: DirectReturnAnalysisContext,
-): number | undefined {
-  for (let index = start; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") continue;
-    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
-    return isFreeStandingVp(op) ? index : undefined;
-  }
-  return undefined;
 }
 
 function freeStandingEmptyRunBeforeProvedVp(
@@ -245,11 +190,11 @@ function freeStandingEmptyRunBeforeProvedVp(
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
     if (op.kind === "label") continue;
-    if (isFreeStandingEmptyOp(op)) {
+    if (isFreeStandingX2EmptyOp(op)) {
       indexes.push(cursor);
       continue;
     }
-    if (isKnownReturnCallOp(op) && simpleDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
     break;
   }
   indexes.reverse();
@@ -260,7 +205,7 @@ function nextFreshDigitIndex(ops: readonly IrOp[], start: number): number | unde
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (op.kind === "label") continue;
-    if (isFreeStandingEmptyOp(op)) continue;
+    if (isFreeStandingX2EmptyOp(op)) continue;
     return index;
   }
   return undefined;
@@ -278,13 +223,13 @@ function removableExponentSeparatorRun(
   for (let index = startIndex; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (op.kind === "label") continue;
-    if (isFreeStandingEmptyOp(op)) {
+    if (isFreeStandingX2EmptyOp(op)) {
       run.push(index);
       continue;
     }
     if (run.length === 0) return [];
     if (isDecimalDigit(op)) return [];
-    if (isFreeStandingSignChange(op)) {
+    if (isFreeStandingX2SignChangeOp(op)) {
       return context.canDiscardSeparatorBeforeSignChange || context.canDiscardSeparatorBeforeNonDigit ? run : [];
     }
     return context.canDiscardSeparatorBeforeNonDigit ? run : [];
@@ -323,15 +268,15 @@ const run: IrPassFn = (ops) => {
     if (remove.has(i - 1)) continue;
     // ВП ВП -> ВП : drop the redundant second exponent entry.
     if (
-      isFreeStandingVp(prev) &&
-      isFreeStandingVp(cur) &&
+      isFreeStandingX2VpOp(prev) &&
+      isFreeStandingX2VpOp(cur) &&
       canRemoveSecondVpAfterPreviousVp(x2ValueStates[i - 1])
     ) {
       remove.add(i);
       continue;
     }
     // КНОП/К1/К2 ... ВП -> ВП : drop the inert empty run preceding exponent entry.
-    if (isFreeStandingVp(cur)) {
+    if (isFreeStandingX2VpOp(cur)) {
       const restoreRun = mantissaRestoreRunBeforeProvedVp(ops, i, x2ValueStates, context);
       if (restoreRun.length > 0) {
         for (const runIndex of restoreRun) remove.add(runIndex);
@@ -344,7 +289,7 @@ const run: IrPassFn = (ops) => {
         if (
           firstEmpty === i - emptyRun.length &&
           firstEmpty > 0 &&
-          isFreeStandingVp(ops[firstEmpty - 1]!) &&
+          isFreeStandingX2VpOp(ops[firstEmpty - 1]!) &&
           canRemoveSecondVpAfterPreviousVp(x2ValueStates[firstEmpty - 1])
         ) {
           remove.add(i);
@@ -357,7 +302,7 @@ const run: IrPassFn = (ops) => {
     // command to close exponent entry in the same place. Labels are not
     // commands here: the scanner decides from the next executable opcode.
     const previousContext = analyzeX2VpShapeContext(x2ValueStates[i - 1]);
-    if (isFreeStandingEmptyOp(cur)) {
+    if (isFreeStandingX2EmptyOp(cur)) {
       const separatorRun = removableExponentSeparatorRun(ops, i, x2ValueStates[i]);
       if (separatorRun.length > 0) {
         for (const separatorIndex of separatorRun) remove.add(separatorIndex);
@@ -368,8 +313,8 @@ const run: IrPassFn = (ops) => {
     // the digit entry is closed for ordinary digits, but the VP/X2 exponent
     // context is still visible to /-/.
     if (
-      isFreeStandingEmptyOp(prev) &&
-      isFreeStandingSignChange(cur) &&
+      isFreeStandingX2EmptyOp(prev) &&
+      isFreeStandingX2SignChangeOp(cur) &&
       previousContext.canDiscardSeparatorBeforeSignChange
     ) {
       remove.add(i - 1);
@@ -378,7 +323,7 @@ const run: IrPassFn = (ops) => {
     // A VP/X2-context restore/empty run is inert before the same kind of hard
     // overwrite: its only remaining role would be restored X/previous-command
     // context, and that context is destroyed together with X/X2.
-    if (isFreeStandingEmptyOp(cur) || isFreeStandingSignChange(cur)) {
+    if (isFreeStandingX2EmptyOp(cur) || isFreeStandingX2SignChangeOp(cur)) {
       const restoreRun = x2ContextRestoreRunBeforeDeadOverwrite(ops, i, x2ValueStates[i], context);
       if (restoreRun.length > 0) {
         for (const runIndex of restoreRun) remove.add(runIndex);
@@ -388,8 +333,8 @@ const run: IrPassFn = (ops) => {
     // In exponent-entry mode /-/ only toggles the exponent sign. Adjacent toggles
     // cancel; outside exponent-entry this is not safe before following digits.
     if (
-      isFreeStandingSignChange(prev) &&
-      isFreeStandingSignChange(cur) &&
+      isFreeStandingX2SignChangeOp(prev) &&
+      isFreeStandingX2SignChangeOp(cur) &&
       previousContext.canCancelExponentSignPair
     ) {
       remove.add(i - 1);
@@ -399,8 +344,8 @@ const run: IrPassFn = (ops) => {
     // shapes. Signed zero is deliberately excluded because `/-/` leaves a
     // sticky `-0` mantissa shape there.
     if (
-      isFreeStandingSignChange(prev) &&
-      isFreeStandingSignChange(cur) &&
+      isFreeStandingX2SignChangeOp(prev) &&
+      isFreeStandingX2SignChangeOp(cur) &&
       canRemoveOpenMantissaSignPairBeforeProvedVp(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1], context)
     ) {
       remove.add(i - 1);
@@ -410,7 +355,7 @@ const run: IrPassFn = (ops) => {
     // entry: every restored X/previous-command effect is overwritten by the
     // new number. Active exponent-entry is excluded because a following digit
     // is an exponent digit there, not fresh mantissa entry.
-    if (isFreeStandingEmptyOp(cur) || isFreeStandingSignChange(cur)) {
+    if (isFreeStandingX2EmptyOp(cur) || isFreeStandingX2SignChangeOp(cur)) {
       const restoreRun = x2ContextRestoreRunBeforeFreshDigit(ops, i, x2ValueStates[i], context);
       if (restoreRun.length > 0) {
         for (const runIndex of restoreRun) remove.add(runIndex);
@@ -421,8 +366,8 @@ const run: IrPassFn = (ops) => {
     // dataflow proves ordinary decimal X and X2 equality and the pair is not
     // acting as a previous-command shield for a later `.`/`/-/`/`ВП`.
     if (
-      isFreeStandingSignChange(prev) &&
-      isFreeStandingSignChange(cur) &&
+      isFreeStandingX2SignChangeOp(prev) &&
+      isFreeStandingX2SignChangeOp(cur) &&
       canRemoveClosedContextSignPair(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1], context)
     ) {
       remove.add(i - 1);

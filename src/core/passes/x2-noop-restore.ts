@@ -6,6 +6,8 @@ import {
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
+  isFreeStandingX2EmptyOp,
+  isFreeStandingX2SignChangeOp,
   isDisplayFocusSensitive,
   x2CanUseSourceDotRestoreAt,
   x2HasSignRestoreGapBeforeVp,
@@ -123,31 +125,10 @@ function dotFollowsClosedSignChangeSource(ops: readonly IrOp[], index: number): 
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
     if (op.kind === "label") continue;
-    if (isFreeStandingEmptyOp(op)) continue;
-    return isFreeStandingSignChangeOp(op);
+    if (isFreeStandingX2EmptyOp(op)) continue;
+    return isFreeStandingX2SignChangeOp(op);
   }
   return false;
-}
-
-function isFreeStandingEmptyOp(op: IrOp): boolean {
-  return op.kind === "plain" &&
-    op.opcode >= 0x54 &&
-    op.opcode <= 0x56 &&
-    !hasRewriteBarrier(op) &&
-    !isDisplayFocusSensitive(op) &&
-    !hasRoles(op);
-}
-
-function isFreeStandingSignChangeOp(op: IrOp): boolean {
-  return op.kind === "plain" &&
-    op.opcode === 0x0b &&
-    !hasRewriteBarrier(op) &&
-    !isDisplayFocusSensitive(op) &&
-    !hasRoles(op);
-}
-
-function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
-  return "meta" in op && op.meta.roles !== undefined && op.meta.roles.length > 0;
 }
 
 function isDotSafeValueContext(

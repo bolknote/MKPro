@@ -58,6 +58,7 @@ import {
   x2MantissaSignChangedShapeFact,
   x2HasOnlyRestoreGapBeforeVp,
   x2ReplacementDotHasOnlyRestoreGapBeforeVp,
+  x2RestoreGapBeforeVp,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
   x2NextXPreservingX2SyncIndex,
@@ -13416,6 +13417,49 @@ describe("ir passes on synthetic programs", () => {
       plain(0x03, "3"),
       halt(),
     ]);
+  });
+
+  it("x2 restore-gap scanner shares transparent helper and barrier semantics", () => {
+    const transparentProgram: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      plain(0x0b, "/-/"),
+      call("transparent"),
+      plain(0x55, "К 1"),
+      label("marker"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const blockedProgram: IrOp[] = [
+      plain(0x0b, "/-/"),
+      { kind: "plain", opcode: 0x55, meta: { mnemonic: "К 1", roles: ["display-byte"] } },
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+
+    expect(x2RestoreGapBeforeVp(
+      transparentProgram,
+      5,
+      directReturnAnalysisContext(transparentProgram),
+    )).toEqual({
+      vpIndex: 9,
+      blockedIndex: undefined,
+      sawRestoreGap: true,
+      sawSignRestore: true,
+    });
+    expect(x2RestoreGapBeforeVp(
+      blockedProgram,
+      0,
+      directReturnAnalysisContext(blockedProgram),
+    )).toEqual({
+      vpIndex: undefined,
+      blockedIndex: 1,
+      sawRestoreGap: true,
+      sawSignRestore: true,
+    });
   });
 
   it("x2-noop-restore removes dot before transparent return helpers and empty-op ВП", () => {
