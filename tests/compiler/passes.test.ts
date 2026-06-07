@@ -6701,6 +6701,20 @@ describe("ir passes on synthetic programs", () => {
     ).toBe(false);
   });
 
+  it("x2 closed sign-change dot source crosses address gaps", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      orphanAddress(54),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2CanUseClosedSignChangeDotSourceAt(program, 4, states[4])).toBe(true);
+  });
+
   it("x2 closed sign-change dot source crosses nested transparent return helper chains", () => {
     const transparentGap: IrOp[] = [
       jump("main"),
@@ -14082,6 +14096,29 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0b, "/-/"),
       plain(0x54, "К НОП"),
       plain(0x55, "К 1"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore removes dot after modeled closed sign-change through address gaps", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      orphanAddress(54),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      orphanAddress(54),
       halt(),
     ]);
   });
