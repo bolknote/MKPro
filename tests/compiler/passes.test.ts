@@ -2427,6 +2427,29 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex-exponent:FACE:3"]);
   });
 
+  it("x2 value dataflow carries stable expr-key shapes through dot restore", () => {
+    const structuralState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set<X2ValueFact>(["expr-key:31(shape:hex:-FACE:mantissa)"]),
+      entry: { kind: "closed" },
+    };
+    const decimalState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
+      entry: { kind: "closed" },
+    };
+
+    const structural = transferX2ValueStateForEdge(structuralState, plain(0x0a, "."), "normal", {}, 0);
+    const decimal = transferX2ValueStateForEdge(decimalState, plain(0x0a, "."), "normal", {}, 0);
+
+    expect(x2ShapeStateText(structural?.xShape)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2VpEntryShapeText(structural)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2VpEntrySignShapeText(structural)).toEqual(["hex:FACE:mantissa"]);
+    expect(x2ShapeStateText(decimal?.xShape)).toEqual(["mantissa:4:decimal"]);
+    expect(x2VpEntryMantissaText(decimal)).toEqual(["4"]);
+    expect(x2VpEntrySignShapeText(decimal)).toEqual(["mantissa:4:decimal"]);
+  });
+
   it("x2 value dataflow derives VP sources from dot-restored structural exponent shapes", () => {
     const program: IrOp[] = [
       recall("2", "preload const Г"),

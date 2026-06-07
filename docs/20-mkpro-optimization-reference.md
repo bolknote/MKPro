@@ -1461,9 +1461,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent-entry marker.
     Closed-context `.`
     restores carry structural hex/super hidden X2 shapes forward as structural
-    `ВП`-entry sources and carry signed-zero decimal shapes forward as `-0`
-    `ВП`-entry sources, while dot-restored leading-zero decimal forms are still
-    not promoted to ordinary mantissas. Preloaded `П->X r` constants
+    `ВП`-entry sources, including when that hidden shape exists only inside a
+    stable `expr-key:*` value fact, and carry signed-zero decimal shapes
+    forward as `-0` `ВП`-entry sources, while dot-restored leading-zero
+    decimal forms are still not promoted to ordinary mantissas. Preloaded `П->X r` constants
     seed the same lattice: ordinary decimal/scientific constants with a one- or
     two-digit exponent become `decimal:*` facts and display-accurate decimal
     shapes. Ordinary decimal displays seed `mantissa:*:decimal`, while wide or

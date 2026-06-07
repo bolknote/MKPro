@@ -6658,21 +6658,22 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
       ...cloneX2MemoryFields(input),
     };
   }
+  const restoredX2Shape = effectiveInputX2Shape(input);
   return {
     x: normalizeX2RestoreFactsForX(input.x2),
     y: cloneOptionalValueSet(input.y),
     x2: cloneOptionalValueSet(input.x2),
-    xShape: normalizeX2RestoreShapesForX(input.x2Shape),
+    xShape: normalizeX2RestoreShapesForX(restoredX2Shape),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
     structuralVpContext: noneX2StructuralEntryState(),
-    vpEntryMantissa: vpEntryMantissasFromX2Restore(input.x2, input.x2Shape),
-    vpEntrySignMantissa: vpEntrySignMantissasFromX2Restore(input.x2, input.x2Shape),
-    vpEntryShape: vpEntryShapesFromShapeFacts(input.x2Shape),
-    vpEntrySignShape: vpEntrySignShapesFromShapeFacts(input.x2Shape),
+    vpEntryMantissa: vpEntryMantissasFromX2Restore(input.x2, restoredX2Shape),
+    vpEntrySignMantissa: vpEntrySignMantissasFromX2Restore(input.x2, restoredX2Shape),
+    vpEntryShape: vpEntryShapesFromShapeFacts(restoredX2Shape),
+    vpEntrySignShape: vpEntrySignShapesFromShapeFacts(restoredX2Shape),
     ...cloneX2MemoryFields(input),
   };
 }
