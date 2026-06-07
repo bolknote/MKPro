@@ -1457,11 +1457,13 @@ The pipeline currently contains:
   Hidden X2 is still the previous right operand until a later X2-syncing
   command, so literal/scratch restore rewrites can use these table results only
   after that sync. The same table-backed rule covers the verified `A`..`E E-2`
-  coefficient cases from the reference material. Each operand order keeps its
-  own emulator-pinned table: decimal `1 * ГE-2` proves value `0.1` with display
+  coefficient cases from the reference material for decimal operands `0`..`18`.
+  Each operand order keeps its own emulator-pinned table: decimal
+  `1 * ГE-2` proves value `0.1` with display
   shape `exponent:1:-1:decimal`, `AE-2 * 1` proves value `0` with display shape
-  `exponent:0:-2:decimal`, `BE-2 / 18` proves `0.0061111111`, while error
-  cases such as `1 / AE-2` remain opaque. These results keep the machine
+  `exponent:0:-2:decimal`, `BE-2 / 18` proves `0.0061111111`,
+  `12 / ГE-2` keeps display shape `mantissa:000:decimal`, while error cases
+  such as `1 / AE-2` remain opaque. These results keep the machine
   display shape separate from the numeric value, so a later store/recall/`ВП`
   sequence follows the same context as the calculator instead of treating the
   result as a freshly entered normalized mantissa. Wider

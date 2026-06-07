@@ -71,9 +71,11 @@ sequence.
 The optimizer only models arithmetic pairs pinned by emulator tests. That
 includes selected `A`..`E` divided by decimal or hex digits, selected reverse
 decimal/hex cases such as `9 / B -> 0,4444443-01`, strict `A`..`E E-2`
-exponent `+`/`-` pairs, and operand-order-specific `A`..`E E-2` exponent
-`*`/`/` pairs such as `AE-2 * 1 -> 0E-2`, `BE-2 / 18 -> 6,1111111-03`,
-and `18 / BE-2 -> 943,43434`. Pairs that produce `ЕГГ0Г` remain opaque.
+exponent `+`/`-` pairs for decimal operands `0`..`18`, and
+operand-order-specific `A`..`E E-2` exponent `*`/`/` pairs such as
+`AE-2 * 1 -> 0E-2`, `AE-2 * 15 -> 9,9`,
+`BE-2 / 18 -> 6,1111111-03`, `12 / ГE-2 -> 000`, and
+`18 / BE-2 -> 943,43434`. Pairs that produce `ЕГГ0Г` remain opaque.
 
 Hex-like values in exponent digits are a separate indirect-addressing topic.
 Do not assume mantissa rules apply to exponent nibbles.

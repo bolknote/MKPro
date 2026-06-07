@@ -4028,13 +4028,29 @@ describe("ir passes on synthetic programs", () => {
       recall("3"),
       halt(),
     ];
+    const extendedProgram: IrOp[] = [
+      recall("1", "preload const AE-2"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 15"),
+      plain(0x12, "×"),
+      store("3"),
+      plain(0xf0, "F* empty F0"),
+      recall("3"),
+      halt(),
+    ];
     const restored = x2HiddenTempRestore.run(program, ctx);
+    const extendedRestored = x2HiddenTempRestore.run(extendedProgram, ctx);
     const dse = deadStoreElimination.run(restored.ops, ctx);
+    const extendedDse = deadStoreElimination.run(extendedRestored.ops, ctx);
 
     expect(restored.applied).toBe(1);
     expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
     expect(dse.ops.some((op) => op.kind === "store" && op.register === "3")).toBe(false);
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+    expect(extendedRestored.applied).toBe(1);
+    expect(extendedRestored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(extendedDse.ops.some((op) => op.kind === "store" && op.register === "3")).toBe(false);
+    expect(machineCellCount(extendedDse.ops)).toBe(machineCellCount(extendedProgram) - 1);
   });
 
   it("x2-hidden-temp-restore uses structural hex sign facts after X2 sync", () => {
@@ -5082,6 +5098,17 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(leftBWideExponentStates[4]?.x) ?? []).toContain("decimal:0.0061111111:normalized");
     expect(x2ShapeStateText(leftBWideExponentStates[4]?.xShape)).toEqual(["exponent:6.1111111:-3:decimal"]);
 
+    const leftAWideExponentStates = computeX2ValueStates(binaryProgram("AE-2", "10"));
+    expect(x2ValueStateText(leftAWideExponentStates[4]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(leftAWideExponentStates[4]?.xShape)).toEqual(["exponent:0:-3:decimal"]);
+
+    const leftGammaSeventeenExponentStates = computeX2ValueStates(binaryProgram("ГE-2", "17"));
+    expect(x2ValueStateText(leftGammaSeventeenExponentStates[4]?.x) ?? [])
+      .toContain("decimal:0.0076470588:normalized");
+    expect(x2ShapeStateText(leftGammaSeventeenExponentStates[4]?.xShape)).toEqual([
+      "exponent:7.6470588:-3:decimal",
+    ]);
+
     const rightExponentStates = computeX2ValueStates(binaryProgram("5", "ГE-2"));
     expect(x2ValueStateText(rightExponentStates[4]?.x) ?? []).toContain("decimal:0:normalized");
     expect(x2ShapeStateText(rightExponentStates[4]?.xShape)).toEqual(["mantissa:00:decimal"]);
@@ -5093,6 +5120,14 @@ describe("ir passes on synthetic programs", () => {
     const rightBDivideStates = computeX2ValueStates(binaryProgram("18", "BE-2"));
     expect(x2ValueStateText(rightBDivideStates[4]?.x) ?? []).toContain("decimal:943.43434:normalized");
     expect(x2ShapeStateText(rightBDivideStates[4]?.xShape)).toEqual(["mantissa:943.43434:decimal"]);
+
+    const rightBMidDivideStates = computeX2ValueStates(binaryProgram("15", "BE-2"));
+    expect(x2ValueStateText(rightBMidDivideStates[4]?.x) ?? []).toContain("decimal:900:normalized");
+    expect(x2ShapeStateText(rightBMidDivideStates[4]?.xShape)).toEqual(["mantissa:900:decimal"]);
+
+    const rightGammaLeadingZeroDivideStates = computeX2ValueStates(binaryProgram("12", "ГE-2"));
+    expect(x2ValueStateText(rightGammaLeadingZeroDivideStates[4]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(rightGammaLeadingZeroDivideStates[4]?.xShape)).toEqual(["mantissa:000:decimal"]);
 
     const rightCDivideRejectedStates = computeX2ValueStates(binaryProgram("3", "CE-2"));
     expect(x2ValueStateText(rightCDivideRejectedStates[4]?.x) ?? []).not.toContain("decimal:943.43434:normalized");
@@ -5153,6 +5188,10 @@ describe("ir passes on synthetic programs", () => {
     const rightBMinusStates = computeX2ValueStates(binaryProgram("0", "BE-2", 0x11, "-"));
     expect(x2ValueStateText(rightBMinusStates[4]?.x) ?? []).toContain("decimal:0.05:normalized");
     expect(x2ShapeStateText(rightBMinusStates[4]?.xShape)).toEqual(["exponent:5:-2:decimal"]);
+
+    const rightBSeventeenMinusStates = computeX2ValueStates(binaryProgram("17", "BE-2", 0x11, "-"));
+    expect(x2ValueStateText(rightBSeventeenMinusStates[4]?.x) ?? []).toContain("decimal:17.05:normalized");
+    expect(x2ShapeStateText(rightBSeventeenMinusStates[4]?.xShape)).toEqual(["mantissa:17.05:decimal"]);
 
     const unsupportedExponentStates = computeX2ValueStates(binaryProgram("ГE-1", "1", 0x10, "+"));
     expect(x2ValueStateText(unsupportedExponentStates[4]?.x) ?? []).not.toContain("decimal:1.13:normalized");
@@ -5238,6 +5277,26 @@ describe("ir passes on synthetic programs", () => {
     ]);
     expect(x2ValueStateText(hexBWideStates[4]?.x) ?? []).toContain("decimal:0.54:normalized");
     expect(x2ShapeStateText(hexBWideStates[4]?.xShape)).toEqual(["mantissa:0.54:decimal"]);
+
+    const hexAWideStates = computeX2ValueStates([
+      recall("1", "preload const AE-2"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 15"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(hexAWideStates[4]?.x) ?? []).toContain("decimal:9.9:normalized");
+    expect(x2ShapeStateText(hexAWideStates[4]?.xShape)).toEqual(["mantissa:9.9:decimal"]);
+
+    const decimalTimesCStates = computeX2ValueStates([
+      recall("2", "preload const 17"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const CE-2"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(decimalTimesCStates[4]?.x) ?? []).toContain("decimal:1.7:normalized");
+    expect(x2ShapeStateText(decimalTimesCStates[4]?.xShape)).toEqual(["mantissa:1.7:decimal"]);
 
     const decimalTimesEStates = computeX2ValueStates([
       recall("2", "preload const 18"),
@@ -11406,8 +11465,32 @@ describe("ir passes on synthetic programs", () => {
       plain(0x03, "3"),
       halt(),
     ];
+    const extendedHexLeftProgram: IrOp[] = [
+      recall("1", "preload const AE-2"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 15"),
+      plain(0x12, "×"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x09, "9"),
+      plain(0x0a, "."),
+      plain(0x09, "9"),
+      halt(),
+    ];
+    const extendedDecimalLeftProgram: IrOp[] = [
+      recall("2", "preload const 17"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const CE-2"),
+      plain(0x12, "×"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x0a, "."),
+      plain(0x07, "7"),
+      halt(),
+    ];
     const decimalLeftResult = x2LiteralRestore.run(decimalLeftProgram, ctx);
     const hexLeftResult = x2LiteralRestore.run(hexLeftProgram, ctx);
+    const extendedHexLeftResult = x2LiteralRestore.run(extendedHexLeftProgram, ctx);
+    const extendedDecimalLeftResult = x2LiteralRestore.run(extendedDecimalLeftProgram, ctx);
 
     expect(decimalLeftResult.applied).toBe(2);
     expect(decimalLeftResult.ops).toEqual([
@@ -11427,6 +11510,26 @@ describe("ir passes on synthetic programs", () => {
       plain(0x12, "×"),
       plain(0xf0, "F* empty F0"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.53 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(extendedHexLeftResult.applied).toBe(2);
+    expect(extendedHexLeftResult.ops).toEqual([
+      recall("1", "preload const AE-2"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 15"),
+      plain(0x12, "×"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 9.9 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(extendedDecimalLeftResult.applied).toBe(2);
+    expect(extendedDecimalLeftResult.ops).toEqual([
+      recall("2", "preload const 17"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const CE-2"),
+      plain(0x12, "×"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1.7 from hidden X2 temp" } },
       halt(),
     ]);
   });
