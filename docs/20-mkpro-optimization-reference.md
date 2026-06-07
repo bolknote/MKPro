@@ -1436,7 +1436,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     display-free local gap such as a proved stable indirect conditional, or a
     modeled closed-context `/-/` reached through only free-standing
     `КНОП`/`К1`/`К2` empty ops), and removing number entry cannot
-    expose a consumed stack lift. It recognizes ordinary integer or fractional
+    expose a consumed stack lift. The pass uses the shared closed plain-context
+    guard, so active decimal or structural `ВП` contexts keep their numeric
+    entry explicit instead of being treated as ordinary decimal literal input.
+    It recognizes ordinary integer or fractional
     digit-runs (`12`, `1.2`), their signed open-entry forms, and normalized
     exponent-entry literals such as
     `5 ВП 3`, `1.2 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or

@@ -9215,6 +9215,26 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-literal-restore keeps numeric entry while structural VP context is active", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x03, "3"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(x2StructuralVpContextStateText(states[4])).toBe("exponent:hex:FACE:mantissa:3");
+    expect(x2StateIsClosedPlainContext(states[4])).toBe(false);
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore replaces a repeated leading-zero digit run with dot", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),

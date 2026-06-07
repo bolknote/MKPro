@@ -17,6 +17,7 @@ import {
   x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasUnsafeDotRestoreShapeX2,
+  x2StateIsClosedPlainContext,
   x2ValueSetHasFact,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueShapeSetHasRestoredVisibleDecimal,
@@ -70,10 +71,6 @@ function isPlainVp(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }>
     op.opcode === VP &&
     !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op);
-}
-
-function isFreshClosedDecimalEntry(state: X2ValueDataflowState | undefined): boolean {
-  return state?.entry.kind === "closed" && (state.vpContext === undefined || state.vpContext.kind === "none");
 }
 
 function decimalLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiteralRun | undefined {
@@ -440,7 +437,7 @@ const run: IrPassFn = (ops) => {
       const sourceProvesFreeStandingRestore = x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) ||
         visibleDecimalX2Fact;
       if (
-        isFreshClosedDecimalEntry(state) &&
+        x2StateIsClosedPlainContext(state) &&
         x2CanUseSourceDotRestoreAt(
           ops,
           index,
