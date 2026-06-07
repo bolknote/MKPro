@@ -5862,12 +5862,18 @@ function transferPlainX2ValueState(
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        false,
+        sourceX,
+        closedExponentValues,
       ),
       vpEntryMantissaTransient: transferPlainX2VpEntryMantissaTransientState(
         op,
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        false,
+        sourceX,
+        closedExponentValues,
       ),
       vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
       vpEntrySignShape: transferPlainX2VpEntrySignShapeState(input, op, x, x2, xShape, x2Shape, effect),
@@ -5881,12 +5887,16 @@ function transferPlainX2ValueState(
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        sourceX,
+        closedExponentValues,
       ),
       vpEntryShapeTransient: transferPlainX2VpEntryShapeTransientState(
         op,
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        sourceX,
+        closedExponentValues,
       ),
       ...cloneX2MemoryFields(input),
     };
@@ -5923,12 +5933,18 @@ function transferPlainX2ValueState(
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        false,
+        sourceX,
+        undefined,
       ),
       vpEntryMantissaTransient: transferPlainX2VpEntryMantissaTransientState(
         op,
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        false,
+        sourceX,
+        undefined,
       ),
       vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
       vpEntrySignShape: transferPlainX2VpEntrySignShapeState(input, op, x, x2, xShape, x2Shape, effect),
@@ -5942,12 +5958,16 @@ function transferPlainX2ValueState(
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        sourceX,
+        undefined,
       ),
       vpEntryShapeTransient: transferPlainX2VpEntryShapeTransientState(
         op,
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        sourceX,
+        undefined,
       ),
       ...cloneX2MemoryFields(input),
     };
@@ -6003,12 +6023,18 @@ function transferPlainX2ValueState(
         effect,
         closedStructuralShapes,
         closedStructuralShapes,
+        false,
+        sourceX,
+        undefined,
       ),
       vpEntryMantissaTransient: transferPlainX2VpEntryMantissaTransientState(
         op,
         effect,
         closedStructuralShapes,
         closedStructuralShapes,
+        false,
+        sourceX,
+        undefined,
       ),
       vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
       vpEntrySignShape: transferPlainX2VpEntrySignShapeState(
@@ -6030,12 +6056,16 @@ function transferPlainX2ValueState(
         effect,
         closedStructuralShapes,
         closedStructuralShapes,
+        sourceX,
+        undefined,
       ),
       vpEntryShapeTransient: transferPlainX2VpEntryShapeTransientState(
         op,
         effect,
         closedStructuralShapes,
         closedStructuralShapes,
+        sourceX,
+        undefined,
       ),
       ...cloneX2MemoryFields(input),
     };
@@ -6062,6 +6092,8 @@ function transferPlainX2ValueState(
       input.xShape,
       input.x2Shape,
       input.vpContext?.kind === "exponent",
+      input.x,
+      input.x2,
     ),
     vpEntryMantissaTransient: transferPlainX2VpEntryMantissaTransientState(
       op,
@@ -6069,6 +6101,8 @@ function transferPlainX2ValueState(
       input.xShape,
       input.x2Shape,
       input.vpContext?.kind === "exponent",
+      input.x,
+      input.x2,
     ),
     vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
     vpEntrySignShape: transferPlainX2VpEntrySignShapeState(input, op, x, x2, xShape, x2Shape, effect),
@@ -6082,12 +6116,16 @@ function transferPlainX2ValueState(
       effect,
       input.xShape,
       input.x2Shape,
+      input.x,
+      input.x2,
     ),
     vpEntryShapeTransient: transferPlainX2VpEntryShapeTransientState(
       op,
       effect,
       input.xShape,
       input.x2Shape,
+      input.x,
+      input.x2,
     ),
     ...cloneX2MemoryFields(input),
   };
@@ -6686,12 +6724,18 @@ function transferExchangeXYX2ValueState(
       effect,
       sourceXShape,
       input.x2Shape,
+      false,
+      sourceX,
+      input.x2,
     ),
     vpEntryMantissaTransient: transferPlainX2VpEntryMantissaTransientState(
       op,
       effect,
       sourceXShape,
       input.x2Shape,
+      false,
+      sourceX,
+      input.x2,
     ),
     vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(input, op, effect),
     vpEntrySignShape: transferPlainX2VpEntrySignShapeState(input, op, x, x2, xShape, x2Shape, effect),
@@ -6705,12 +6749,16 @@ function transferExchangeXYX2ValueState(
       effect,
       sourceXShape,
       input.x2Shape,
+      sourceX,
+      input.x2,
     ),
     vpEntryShapeTransient: transferPlainX2VpEntryShapeTransientState(
       op,
       effect,
       sourceXShape,
       input.x2Shape,
+      sourceX,
+      input.x2,
     ),
     ...cloneX2MemoryFields(input),
   };
@@ -6747,12 +6795,18 @@ function transferCopyYToXX2ValueState(
       effect,
       closed.xShape,
       closed.x2Shape,
+      false,
+      closed.x,
+      closed.x2,
     ),
     vpEntryMantissaTransient: transferPlainX2VpEntryMantissaTransientState(
       op,
       effect,
       closed.xShape,
       closed.x2Shape,
+      false,
+      closed.x,
+      closed.x2,
     ),
     vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(closed, op, effect),
     vpEntrySignShape: transferPlainX2VpEntrySignShapeState(closed, op, x, x2, xShape, x2Shape, effect),
@@ -6766,12 +6820,16 @@ function transferCopyYToXX2ValueState(
       effect,
       closed.xShape,
       closed.x2Shape,
+      closed.x,
+      closed.x2,
     ),
     vpEntryShapeTransient: transferPlainX2VpEntryShapeTransientState(
       op,
       effect,
       closed.xShape,
       closed.x2Shape,
+      closed.x,
+      closed.x2,
     ),
     ...cloneX2MemoryFields(closed),
   };
@@ -6866,15 +6924,19 @@ function transferPlainX2VpEntryMantissaState(
   firstDigitSourceShape: X2ShapeSet | undefined = xShape,
   firstDigitTargetShape: X2ShapeSet | undefined = x2Shape,
   includeExponentTargets = false,
+  firstDigitSourceValues: X2ValueSet | undefined = x,
+  firstDigitTargetValues: X2ValueSet | undefined = x2,
 ): ReadonlySet<string> | undefined {
   if (effect === "affects") return sharedDecimalVpEntryMantissas({ x, x2, xShape, x2Shape });
   if (effect === "preserves") {
     const inherited = isEmptyPlainOp(op) && input.vpEntryMantissaTransient !== true
       ? input.vpEntryMantissa
       : undefined;
+    const sourceShape = shapeSetWithStableExpressionValueShapes(firstDigitSourceShape, firstDigitSourceValues);
+    const targetShape = shapeSetWithStableExpressionValueShapes(firstDigitTargetShape, firstDigitTargetValues);
     return mergeOptionalStringSources(
       inherited,
-      decimalFirstDigitVpSpliceMantissas(firstDigitSourceShape, firstDigitTargetShape, includeExponentTargets),
+      decimalFirstDigitVpSpliceMantissas(sourceShape, targetShape, includeExponentTargets),
     );
   }
   return undefined;
@@ -6886,11 +6948,15 @@ function transferPlainX2VpEntryMantissaTransientState(
   firstDigitSourceShape: X2ShapeSet | undefined,
   firstDigitTargetShape: X2ShapeSet | undefined,
   includeExponentTargets = false,
+  firstDigitSourceValues?: X2ValueSet | undefined,
+  firstDigitTargetValues?: X2ValueSet | undefined,
 ): true | undefined {
   if (effect !== "preserves" || isEmptyPlainOp(op)) return undefined;
+  const sourceShape = shapeSetWithStableExpressionValueShapes(firstDigitSourceShape, firstDigitSourceValues);
+  const targetShape = shapeSetWithStableExpressionValueShapes(firstDigitTargetShape, firstDigitTargetValues);
   const spliced = decimalFirstDigitVpSpliceMantissas(
-    firstDigitSourceShape,
-    firstDigitTargetShape,
+    sourceShape,
+    targetShape,
     includeExponentTargets,
   );
   return spliced === undefined ? undefined : true;
@@ -6929,15 +6995,19 @@ function transferPlainX2VpEntryShapeState(
   effect: ReturnType<typeof plainX2Effect>,
   firstDigitSourceShape: X2ShapeSet | undefined = xShape,
   firstDigitTargetShape: X2ShapeSet | undefined = x2Shape,
+  firstDigitSourceValues: X2ValueSet | undefined = x,
+  firstDigitTargetValues: X2ValueSet | undefined = x2,
 ): X2ShapeSet | undefined {
   if (effect === "affects") return sharedStructuralShapeFacts({ x, x2, xShape, x2Shape });
   if (effect === "preserves") {
     const inherited = isEmptyPlainOp(op) && input.vpEntryShapeTransient !== true
       ? input.vpEntryShape
       : undefined;
+    const sourceShape = shapeSetWithStableExpressionValueShapes(firstDigitSourceShape, firstDigitSourceValues);
+    const targetShape = shapeSetWithStableExpressionValueShapes(firstDigitTargetShape, firstDigitTargetValues);
     return mergeOptionalShapeSources(
       inherited,
-      structuralFirstDigitVpSpliceShapeFacts(firstDigitSourceShape, firstDigitTargetShape),
+      structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape),
     );
   }
   return undefined;
@@ -6948,9 +7018,13 @@ function transferPlainX2VpEntryShapeTransientState(
   effect: ReturnType<typeof plainX2Effect>,
   firstDigitSourceShape: X2ShapeSet | undefined,
   firstDigitTargetShape: X2ShapeSet | undefined,
+  firstDigitSourceValues?: X2ValueSet | undefined,
+  firstDigitTargetValues?: X2ValueSet | undefined,
 ): true | undefined {
   if (effect !== "preserves" || isEmptyPlainOp(op)) return undefined;
-  return structuralFirstDigitVpSpliceShapeFacts(firstDigitSourceShape, firstDigitTargetShape) === undefined
+  const sourceShape = shapeSetWithStableExpressionValueShapes(firstDigitSourceShape, firstDigitSourceValues);
+  const targetShape = shapeSetWithStableExpressionValueShapes(firstDigitTargetShape, firstDigitTargetValues);
+  return structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape) === undefined
     ? undefined
     : true;
 }

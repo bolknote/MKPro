@@ -6372,6 +6372,28 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(activeExponent.shape)).toEqual(["hex:AA0:mantissa"]);
   });
 
+  it("x2 value dataflow first-digit splice materializes stable expr-key shapes", () => {
+    const decimalState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
+      x2: new Set<X2ValueFact>(["expr-key:22(decimal:10:normalized)"]),
+      entry: { kind: "closed" },
+    };
+    const decimalAfterPi = transferX2ValueStateForEdge(decimalState, plain(0x20, "Fπ"), "normal", {}, 0);
+
+    expect(x2VpEntryMantissaText(decimalAfterPi)).toContain("400");
+    expect(decimalAfterPi?.vpEntryMantissaTransient).toBe(true);
+
+    const structuralState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      x2: new Set<X2ValueFact>(["expr-key:31(shape:hex:-8A0:mantissa)"]),
+      entry: { kind: "closed" },
+    };
+    const structuralAfterPi = transferX2ValueStateForEdge(structuralState, plain(0x20, "Fπ"), "normal", {}, 0);
+
+    expect(x2VpEntryShapeText(structuralAfterPi)).toContain("hex:AA0:mantissa");
+    expect(structuralAfterPi?.vpEntryShapeTransient).toBe(true);
+  });
+
   it("x2 value dataflow drops transient VP first-digit sources across a later empty op", () => {
     const program: IrOp[] = [
       recall("1", "preload const A"),

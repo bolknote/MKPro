@@ -1407,7 +1407,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     stable-key shapes after X2-sync boundaries: computed decimal display shapes
     can seed exact `ВП` mantissas, and computed structural shapes can seed
     structural `ВП` sources, even when the concrete form exists only inside an
-    `expr-key:*` value fact. Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are kept as
+    `expr-key:*` value fact. First-digit `ВП` splices use the same materialized
+    source/target shapes across X2-preserving commands, so a computed stable-key
+    `X` shape can provide the leading digit and a computed stable-key hidden X2
+    shape can provide the mantissa tail. Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are kept as
     `errorProne` shape facts, not dot-safe decimal facts; shared signed-zero
     shapes can feed `ВП` source proofs after X2 sync or closed `.` restore,
     but never become ordinary decimal zero. Shared decimal exponent display
