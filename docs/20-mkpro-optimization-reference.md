@@ -1454,7 +1454,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     inserted `.` preserves the same mantissa source for that exponent entry.
     Leading-zero and signed-zero forms are excluded from this
     shortcut because their restored mantissa shape is observable, and
-    leading-zero exponent mantissas stay explicit for the same reason. If the
+    leading-zero exponent mantissas stay explicit for the same reason. The VP
+    reachability guard is subroutine-aware: direct/proved-indirect calls carry a
+    return stack, so a leading-zero literal before a transparent helper and a
+    following `ВП` is still kept explicit. If the
     following code cannot observe that raw mantissa shape, normalized X2 facts
     may still replace leading-zero decimal literals by visible restored value
     (`02 -> .` after X2 holds `2`), but that restored-visible proof is accepted

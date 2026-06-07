@@ -289,12 +289,27 @@ function replacingLiteralCanExposeContextSensitiveRestore(
   ops: readonly IrOp[],
   run: NumericLiteralRun,
   context: DirectReturnAnalysisContext,
+  vpReachabilityCache: Map<number, boolean>,
   redundantSync: {
     readonly value: boolean;
     readonly displayValue: boolean;
     readonly shape: boolean;
   },
 ): boolean {
+  let replacementCanReachVpRestore: boolean | undefined;
+  const canReachVpRestore = (): boolean => {
+    const start = run.end + 1;
+    replacementCanReachVpRestore ??= vpReachabilityCache.get(start);
+    if (replacementCanReachVpRestore === undefined) {
+      replacementCanReachVpRestore = literalReplacementCanReachVpRestore(ops, start);
+      vpReachabilityCache.set(start, replacementCanReachVpRestore);
+    }
+    return replacementCanReachVpRestore;
+  };
+  if (
+    !run.dotPreservesVpEntrySource &&
+    x2ReplacementDotHasOnlyRestoreGapBeforeVp(ops, run.end + 1, context)
+  ) return true;
   if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
   if (
     run.dotPreservesVpEntrySource &&
@@ -304,7 +319,7 @@ function replacingLiteralCanExposeContextSensitiveRestore(
     )
   ) return false;
   if (
-    !literalReplacementCanReachVpRestore(ops, run.end + 1) &&
+    !canReachVpRestore() &&
     !x2SyncCanExposeContextSensitiveRestore(ops, run.end, {
       redundantSyncValue: redundantSync.value,
       redundantSyncDisplayValue: redundantSync.displayValue,
@@ -318,10 +333,11 @@ function literalReplacementCanReachVpRestore(ops: readonly IrOp[], start: number
   const labels = labelIndexes(ops);
   const addresses = addressIndexes(ops);
   const visited = new Set<string>();
-  const visit = (cursor: number): boolean => {
+  const visit = (cursor: number, returnStack: readonly number[] = []): boolean => {
     for (let index = cursor; index < ops.length; index += 1) {
-      if (visited.has(String(index))) return false;
-      visited.add(String(index));
+      const key = `${index}:${returnStack.join(",")}`;
+      if (visited.has(key)) return false;
+      visited.add(key);
       const op = ops[index]!;
       if (hasRewriteBarrier(op)) return true;
       switch (op.kind) {
@@ -340,37 +356,44 @@ function literalReplacementCanReachVpRestore(ops: readonly IrOp[], start: number
         case "jump": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
-          return target === undefined ? true : visit(target + 1);
+          return target === undefined ? true : visit(target + 1, returnStack);
         }
         case "cjump":
         case "loop": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
-          return (target === undefined ? true : visit(target + 1)) || visit(index + 1);
+          return (target === undefined ? true : visit(target + 1, returnStack)) ||
+            visit(index + 1, returnStack);
         }
         case "call": {
           if (typeof op.target !== "string") return true;
           const target = labels.get(op.target);
-          return target === undefined ? true : visit(target + 1);
+          if (target === undefined || returnStack.length >= 5) return true;
+          return visit(target + 1, [index + 1, ...returnStack]);
         }
         case "indirect-jump": {
           const target = knownIndirectFlowTarget(op);
           const targetIndex = target === undefined ? undefined : addresses.get(target);
-          return targetIndex === undefined ? true : visit(targetIndex);
+          return targetIndex === undefined ? true : visit(targetIndex, returnStack);
         }
         case "indirect-call": {
           const target = knownIndirectFlowTarget(op);
           const targetIndex = target === undefined ? undefined : addresses.get(target);
-          return targetIndex === undefined ? true : visit(targetIndex);
+          if (targetIndex === undefined || returnStack.length >= 5) return true;
+          return visit(targetIndex, [index + 1, ...returnStack]);
         }
         case "indirect-cjump": {
           const target = knownIndirectFlowTarget(op);
           const targetIndex = target === undefined ? undefined : addresses.get(target);
-          return (targetIndex === undefined ? true : visit(targetIndex)) || visit(index + 1);
+          return (targetIndex === undefined ? true : visit(targetIndex, returnStack)) ||
+            visit(index + 1, returnStack);
+        }
+        case "return": {
+          if (returnStack.length > 0) return visit(returnStack[0]!, returnStack.slice(1));
+          return true;
         }
         case "recall":
         case "indirect-recall":
-        case "return":
         case "stop":
           return false;
       }
@@ -397,6 +420,7 @@ const run: IrPassFn = (ops) => {
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const directReturnContext = directReturnAnalysisContext(ops);
+  const vpReachabilityCache = new Map<number, boolean>();
   const result: IrOp[] = [];
   let removed = 0;
 
@@ -428,7 +452,7 @@ const run: IrPassFn = (ops) => {
         ) &&
         (exactX2Fact || visibleDecimalX2Fact) &&
         !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
-        !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext, {
+        !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext, vpReachabilityCache, {
           value: exactX2Fact,
           displayValue: visibleDecimalX2DisplayValueFact,
           shape: visibleDecimalX2DotSafeShapeFact,

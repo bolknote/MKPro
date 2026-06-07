@@ -1778,7 +1778,10 @@ The pipeline currently contains:
   exception is a normalized non-zero digit run or normalized exponent-entry
   literal with a non-leading-zero mantissa followed immediately, or through
   only free-standing `КНОП`/`К1`/`К2` cells, by `ВП`: the inserted `.` is
-  emulator-proved to preserve the same mantissa source there. Leading-zero,
+  emulator-proved to preserve the same mantissa source there. The VP
+  reachability check is return-stack-aware for direct/proved-indirect helper
+  calls, so leading-zero forms before a transparent helper and a following `ВП`
+  are still recognized as observable and stay explicit. Leading-zero,
   signed-zero, and leading-zero exponent mantissa forms still stay explicit
   because their restored mantissa shape is observable. When only the restored
   visible decimal matches, the proof is accepted for a later `.` exposure only;
