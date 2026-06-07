@@ -1312,15 +1312,20 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     normalization is applied to plain X2-affecting opcodes, direct conditional
     and counted-loop fallthrough syncs, and direct `В/О` return syncs. Operand order remains part of the binary
     proof. For `+` and `-`, a single `A`/`B`/`C`/`D`/`E` hex digit paired with a
-    proved decimal digit `0..9` uses the verified operand-order-specific table,
-    including cases such as `Г + 4 -> 17`, `3 + С -> 5`, `С - 2 -> 0`, and
-    `0 - С -> -2`; the regular `F x^2` value model can then derive follow-on
+    proved decimal digit `0..9`, or with another verified single
+    `A`/`B`/`C`/`D`/`E` hex digit, uses the verified operand-order-specific table,
+    including cases such as `Г + 4 -> 17`, `3 + С -> 5`, `A + B -> 5`,
+    `Г + Е -> 11`, `С - 2 -> 0`, `0 - С -> -2`, and `A - Е -> -4`;
+    the regular `F x^2` value model can then derive follow-on
     values such as `1`/`4`/`9`. The verified
     single-hex-digit multiplication table is also operand-order-specific:
     `A`/`B`/`C`/`D`/`E` in `Y` is modeled only for the pinned decimal right operands
     (`1`, `2`, `3`, `4`, `5`, `8`, `9`, `18`), preserving display shape such as
     non-normal `A * 18 -> 020`; with a hex digit in `X`, verified `A`/`B`/`C`/`D`
-    behave as decimal-times-ten display results while `E` gives zero. Hidden X2
+    behave as decimal-times-ten display results while `E` gives zero. Verified
+    hex-pair products `A`..`E` by `A`..`E` are also modeled with their observed
+    display spelling, including non-normal `A * A -> 00` and `B * Г -> 10`.
+    Hidden X2
     remains the right operand until an explicit sync, so literal/scratch restore
     rewrites consume these table facts only after a later X2-syncing command. A
     second verified table covers structural
@@ -1331,7 +1336,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     for `0.1`, but the visible/stored shape is `exponent:1:-1:decimal`, which
     keeps later store/recall/`ВП` context equivalent to the MK-61 display state.
     This is not a
-    general multiply, borrow/carry, or decimalization rule. Structural `К |x|` removes the sign from canonical hex/super
+    general wide multiply, borrow/carry, or decimalization rule. Structural `К |x|` removes the sign from canonical hex/super
     mantissa or closed exponent-entry restore shapes as another shape-only
     transform; the hidden X2 shape is still preserved by the opcode and is not
     decimalized. Structural `К ЗН` has a narrow emulator-pinned value model:

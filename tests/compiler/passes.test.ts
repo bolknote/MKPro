@@ -4980,6 +4980,42 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(rightHexBStates[5]?.xShape)).toEqual(["mantissa:180:decimal"]);
   });
 
+  it("x2 value dataflow models emulator-pinned structural hex pair arithmetic", () => {
+    function hexPairProgram(left: string, right: string, op: Extract<IrOp, { kind: "plain" }>): IrOp[] {
+      return [
+        recall("1", `preload const ${left}`),
+        plain(0x0e, "В↑"),
+        recall("2", `preload const ${right}`),
+        op,
+        halt(),
+      ];
+    }
+
+    const plusStates = computeX2ValueStates(hexPairProgram("A", "B", plain(0x10, "+")));
+    expect(x2ValueStateText(plusStates[4]?.x) ?? []).toContain("decimal:5:normalized");
+    expect(x2ShapeStateText(plusStates[4]?.xShape)).toEqual(["mantissa:5:decimal"]);
+
+    const plusCarryStates = computeX2ValueStates(hexPairProgram("Г", "Е", plain(0x10, "+")));
+    expect(x2ValueStateText(plusCarryStates[4]?.x) ?? []).toContain("decimal:11:normalized");
+    expect(x2ShapeStateText(plusCarryStates[4]?.xShape)).toEqual(["mantissa:11:decimal"]);
+
+    const minusStates = computeX2ValueStates(hexPairProgram("A", "Е", plain(0x11, "-")));
+    expect(x2ValueStateText(minusStates[4]?.x) ?? []).toContain("decimal:-4:normalized");
+    expect(x2ShapeStateText(minusStates[4]?.xShape)).toEqual(["mantissa:-4:decimal"]);
+
+    const multiplyStates = computeX2ValueStates(hexPairProgram("B", "Г", plain(0x12, "×")));
+    expect(x2ValueStateText(multiplyStates[4]?.x) ?? []).toContain("decimal:10:normalized");
+    expect(x2ShapeStateText(multiplyStates[4]?.xShape)).toEqual(["mantissa:10:decimal"]);
+
+    const multiplyLeadingZeroStates = computeX2ValueStates(hexPairProgram("A", "С", plain(0x12, "×")));
+    expect(x2ValueStateText(multiplyLeadingZeroStates[4]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(multiplyLeadingZeroStates[4]?.xShape)).toEqual(["mantissa:00:decimal"]);
+
+    const rejectedFStates = computeX2ValueStates(hexPairProgram("F", "A", plain(0x10, "+")));
+    expect(x2ValueStateText(rejectedFStates[4]?.x) ?? []).not.toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(rejectedFStates[4]?.xShape)).toEqual([]);
+  });
+
   it("x2 value dataflow stores hex A times 18 display shape but recalls normalized VP source", () => {
     const program: IrOp[] = [
       recall("1", "preload const A"),

@@ -1435,16 +1435,21 @@ The pipeline currently contains:
   Emulator-pinned single-digit hex arithmetic
   tables are modeled as exact decimal value proofs where the operand order is
   fixed by MK-61 stack behavior. For `+` and `-`, a single `A`/`B`/`C`/`D`/`E` hex
-  digit paired with a proved decimal digit `0..9` uses the verified
+  digit paired with a proved decimal digit `0..9`, or with another verified
+  single `A`/`B`/`C`/`D`/`E` hex digit, uses the verified
   operand-order-specific table, including cases such as `Г + 4 -> 17`,
-  `3 + С -> 5`, `С - 2 -> 0`, and `0 - С -> -2`. The following ordinary
+  `3 + С -> 5`, `A + B -> 5`, `Г + Е -> 11`, `С - 2 -> 0`,
+  `0 - С -> -2`, and `A - Е -> -4`. The following ordinary
   `F x^2` proof can then derive values such as `1`/`4`/`9` from those decimal
   facts. The
   emulator-pinned single-hex-digit multiplication table is also
   operand-order-specific: with `A`/`B`/`C`/`D`/`E` in `Y`, only the verified decimal
   right operands (`1`, `2`, `3`, `4`, `5`, `8`, `9`, `18`) are modeled, including
   the non-normal `A * 18` display shape `020`; with a hex digit in `X`, verified
-  `A`/`B`/`C`/`D` act as a decimal-times-ten display result while `E` gives zero.
+  `A`/`B`/`C`/`D` act as a decimal-times-ten display result while `E` gives zero;
+  verified hex-pair products `A`..`E` by `A`..`E` are also modeled with their
+  observed display spelling, including non-normal `A * A -> 00` and
+  `B * Г -> 10`.
   Hidden X2 is still the previous right operand until a later X2-syncing
   command, so literal/scratch restore rewrites can use these table results only
   after that sync. The same table-backed rule covers the verified `ГE-2` coefficient
@@ -1455,7 +1460,7 @@ The pipeline currently contains:
   for example `1 * ГE-2` proves value `0.1` but stores display shape
   `exponent:1:-1:decimal`, so a later store/recall/`ВП` sequence follows the
   same context as the calculator instead of treating the result as a freshly
-  entered `0.1` mantissa. Other
+  entered `0.1` mantissa. Wider
   hex/super multiplication, subtraction, and carry/borrow cases remain opaque. The degree/minute conversion opcodes `К °->′`,
   `К °->′"`, `К °<-′"`, and `К °<-′` also seed exact decimal facts only for
   domain-safe conversions whose rational result has a finite decimal expansion

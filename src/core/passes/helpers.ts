@@ -1076,6 +1076,12 @@ function structuralHexBinaryDecimalValues(
         if (result !== undefined) output.add(result);
       }
     }
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = structuralHexDigitPlusStructuralHexDigitValue(leftDigit, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
     return output;
   }
   if (op.opcode === 0x11) {
@@ -1088,6 +1094,12 @@ function structuralHexBinaryDecimalValues(
     for (const left of normalizedDecimalValues(y, yShape)) {
       for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
         const result = decimalMinusStructuralHexDigitValue(left, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = structuralHexDigitMinusStructuralHexDigitValue(leftDigit, rightDigit);
         if (result !== undefined) output.add(result);
       }
     }
@@ -1118,6 +1130,12 @@ function structuralHexBinaryDecimalValues(
         if (result !== undefined) output.add(result);
       }
     }
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = structuralHexDigitTimesStructuralHexDigitValue(leftDigit, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
     return output;
   }
   return output;
@@ -1144,6 +1162,12 @@ function structuralHexBinaryDecimalDisplayShapes(
         if (result !== undefined) output.add(decimalMantissaShapeFact(result));
       }
     }
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = structuralHexDigitPlusStructuralHexDigitValue(leftDigit, rightDigit);
+        if (result !== undefined) output.add(decimalMantissaShapeFact(result));
+      }
+    }
     return output;
   }
   if (op.opcode === 0x11) {
@@ -1156,6 +1180,12 @@ function structuralHexBinaryDecimalDisplayShapes(
     for (const left of normalizedDecimalValues(y, yShape)) {
       for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
         const result = decimalMinusStructuralHexDigitValue(left, rightDigit);
+        if (result !== undefined) output.add(decimalMantissaShapeFact(result));
+      }
+    }
+    for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = structuralHexDigitMinusStructuralHexDigitValue(leftDigit, rightDigit);
         if (result !== undefined) output.add(decimalMantissaShapeFact(result));
       }
     }
@@ -1183,6 +1213,12 @@ function structuralHexBinaryDecimalDisplayShapes(
   for (const left of normalizedDecimalValues(y, yShape)) {
     for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
       const result = decimalTimesStructuralHexExponentDisplayShape(left, rightExponent);
+      if (result !== undefined) output.add(result);
+    }
+  }
+  for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+    for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+      const result = structuralHexDigitTimesStructuralHexDigitDisplayShape(leftDigit, rightDigit);
       if (result !== undefined) output.add(result);
     }
   }
@@ -1308,6 +1344,17 @@ function decimalMinusStructuralHexDigitValue(left: string, rightDigit: number): 
   return String(value <= -11 ? value + 10 : value);
 }
 
+function structuralHexDigitPlusStructuralHexDigitValue(leftDigit: number, rightDigit: number): string | undefined {
+  if (!isVerifiedArithmeticHexDigit(leftDigit) || !isVerifiedArithmeticHexDigit(rightDigit)) return undefined;
+  const value = (leftDigit + rightDigit) % 16;
+  return String(value);
+}
+
+function structuralHexDigitMinusStructuralHexDigitValue(leftDigit: number, rightDigit: number): string | undefined {
+  if (!isVerifiedArithmeticHexDigit(leftDigit) || !isVerifiedArithmeticHexDigit(rightDigit)) return undefined;
+  return String(leftDigit - rightDigit);
+}
+
 function isVerifiedArithmeticHexDigit(digit: number): boolean {
   return digit === 10 || digit === 11 || digit === 12 || digit === 13 || digit === 14;
 }
@@ -1332,6 +1379,19 @@ function structuralHexDigitTimesDecimalDisplayShape(leftDigit: number, right: st
 function decimalTimesStructuralHexDigitDisplayShape(left: string, rightDigit: number): X2ShapeFact | undefined {
   const product = decimalTimesStructuralHexDigitProduct(left, rightDigit);
   return structuralHexDecimalProductDisplayShape(product);
+}
+
+function structuralHexDigitTimesStructuralHexDigitValue(leftDigit: number, rightDigit: number): string | undefined {
+  return structuralHexDigitTimesStructuralHexDigitProduct(leftDigit, rightDigit)?.value;
+}
+
+function structuralHexDigitTimesStructuralHexDigitDisplayShape(
+  leftDigit: number,
+  rightDigit: number,
+): X2ShapeFact | undefined {
+  return structuralHexDecimalProductDisplayShape(
+    structuralHexDigitTimesStructuralHexDigitProduct(leftDigit, rightDigit),
+  );
 }
 
 interface StructuralHexDecimalProduct {
@@ -1423,6 +1483,17 @@ function decimalTimesStructuralHexDigitProduct(
   }
   if (rightDigit === 14) return { value: "0", display: "0" };
   return undefined;
+}
+
+function structuralHexDigitTimesStructuralHexDigitProduct(
+  leftDigit: number,
+  rightDigit: number,
+): StructuralHexDecimalProduct | undefined {
+  if (!isVerifiedArithmeticHexDigit(leftDigit) || !isVerifiedArithmeticHexDigit(rightDigit)) return undefined;
+  if (rightDigit === 14) return { value: "0", display: "0" };
+  const value = exactDecimalToNormalized(BigInt((leftDigit - 10) * 10), 0);
+  if (value === undefined) return undefined;
+  return { value, display: leftDigit === 10 ? "00" : value };
 }
 
 const DECIMAL_TIMES_STRUCTURAL_HEX_INPUTS = new Set(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "18"]);

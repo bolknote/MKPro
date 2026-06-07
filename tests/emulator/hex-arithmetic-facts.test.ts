@@ -86,6 +86,8 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(addRegisters("0", "B")).toBe("1,");
     expect(addRegisters("Г", "4")).toBe("17,");
     expect(addRegisters("3", "С")).toBe("5,");
+    expect(addRegisters("-", "B")).toBe("5,");
+    expect(addRegisters("Г", "Е")).toBe("11,");
 
     const subtractRegisters = (r1: string, r2: string): string => {
       const calc = new MK61();
@@ -105,6 +107,8 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(subtractRegisters("0", "С")).toBe("-2,");
     expect(subtractRegisters("2", "С")).toBe("-10,");
     expect(subtractRegisters("4", "Е")).toBe("-10,");
+    expect(subtractRegisters("-", "Е")).toBe("-4,");
+    expect(subtractRegisters("Е", "-")).toBe("4,");
   });
 
   it("hex C/D/E subtract one as decimal 1/2/3 before ordinary square", () => {
@@ -159,11 +163,14 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
   it("single hex digit multiplication table is operand-order-sensitive", () => {
     const leftHexCases: ReadonlyArray<readonly [string, string, string]> = [
       ["-", "1", "0,"],
+      ["-", "-", "00,"],
+      ["B", "Г", "10,"],
       ["-", "18", "020,"],
       ["B", "18", "054,"],
       ["С", "5", "32,"],
       ["Г", "3", "23,"],
       ["Е", "18", "948,"],
+      ["Е", "С", "40,"],
     ];
     for (const [left, right, display] of leftHexCases) {
       expect(multiplyRegisters(left, right)).toBe(display.replace(/\s/gu, ""));
