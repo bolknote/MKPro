@@ -39,6 +39,7 @@ import {
   computeX2RegisterStates,
   computeX2ValueStates,
   directReturnAnalysisContext,
+  effectiveVisibleXStateShape,
   joinX2ValueDataflowStates,
   parseX2ShapeFact,
   recallValueProof,
@@ -3469,6 +3470,23 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StateHasSameStructuralShapeInXAndX2(state)).toBe(true);
     expect(x2StateHasSameDotSafeStructuralMantissaInXAndX2(state)).toBe(true);
     expect(x2StateHasSameDotRestoreValueInXAndX2(state)).toBe(true);
+  });
+
+  it("x2 state predicates expose stable expr-key visible display shapes", () => {
+    const integer: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const fractional: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:35(decimal:0.5:normalized)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+
+    expect(x2ShapeSetHasExactIntegerDisplay(integer.xShape)).toBe(false);
+    expect(x2ShapeSetHasExactIntegerDisplay(effectiveVisibleXStateShape(integer))).toBe(true);
+    expect([...x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(fractional))]).toEqual(["0.5"]);
   });
 
   it("x2 value dataflow joins materialized stable decimal facts across mixed paths", () => {

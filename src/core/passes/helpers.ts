@@ -4653,7 +4653,7 @@ export function x2StateHasSameVisibleXAndY(state: X2ValueDataflowState | undefin
     );
 }
 
-function effectiveVisibleXStateShape(state: X2ValueDataflowState | undefined): X2ShapeSet | undefined {
+export function effectiveVisibleXStateShape(state: X2ValueDataflowState | undefined): X2ShapeSet | undefined {
   return state === undefined ? undefined : shapeSetWithStableExpressionValueShapes(state.xShape, state.x);
 }
 

@@ -3,6 +3,7 @@ import {
   computeX2ValueStates,
   computeLabelEntryIndexes,
   directReturnAnalysisContext,
+  effectiveVisibleXStateShape,
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
@@ -75,7 +76,7 @@ function stateHasFractionalNoopX(state: X2ValueDataflowState | undefined): boole
     const visible = x2ValueFactRestoredVisibleDecimal(fact);
     if (visible !== undefined && isFractionalNoopValue(visible)) return true;
   }
-  for (const visible of x2ShapeSetRestoredVisibleDecimals(state.xShape)) {
+  for (const visible of x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(state))) {
     if (isFractionalNoopValue(visible)) return true;
   }
   return false;
@@ -84,13 +85,13 @@ function stateHasFractionalNoopX(state: X2ValueDataflowState | undefined): boole
 function stateHasIntegerNoopX(state: X2ValueDataflowState | undefined): boolean {
   return state !== undefined &&
     x2StateIsClosedPlainContext(state) &&
-    x2ShapeSetHasExactIntegerDisplay(state.xShape);
+    x2ShapeSetHasExactIntegerDisplay(effectiveVisibleXStateShape(state));
 }
 
 function stateHasAbsNoopX(state: X2ValueDataflowState | undefined): boolean {
   return state !== undefined &&
     x2StateIsClosedPlainContext(state) &&
-    x2ShapeSetHasExactNonNegativeDisplay(state.xShape);
+    x2ShapeSetHasExactNonNegativeDisplay(effectiveVisibleXStateShape(state));
 }
 
 function isKnownNoopUnaryOp(
