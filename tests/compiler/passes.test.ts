@@ -4297,9 +4297,11 @@ describe("ir passes on synthetic programs", () => {
       "hex:8.0000000:mantissa",
       "mantissa:8.0000000:decimal",
     ]);
-    expect(x2ValueStateText(computeX2ValueStates(structuralNotProgram)[2]?.x)).toContain(
+    const structuralNotValues = x2ValueStateText(computeX2ValueStates(structuralNotProgram)[2]?.x);
+    expect(structuralNotValues).toContain(
       "decimal:8.0666666:normalized",
     );
+    expect(structuralNotValues).not.toContain("expr-key:3A(shape:hex:8F999999:mantissa)");
     expect(x2ShapeStateText(computeX2ValueStates(structuralNotProgram)[2]?.xShape)).toEqual([
       "hex:8.0666666:mantissa",
       "mantissa:8.0666666:decimal",

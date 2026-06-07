@@ -743,7 +743,10 @@ function stableExpressionKeyHasConcreteDecimalResult(
   if (op.opcode === 0x2a) return decimalToMinutesSecondsFromFactKey(key) !== undefined;
   if (op.opcode === 0x30) return decimalFromMinutesSecondsFromFactKey(key) !== undefined;
   if (op.opcode === 0x33) return decimalFromMinutesFromFactKey(key) !== undefined;
-  if (op.opcode === 0x3a) return decimalBitwiseNotFromFactKey(key) !== undefined;
+  if (op.opcode === 0x3a) {
+    return decimalBitwiseNotFromFactKey(key) !== undefined ||
+      structuralBitwiseNotFromFactKey(key) !== undefined;
+  }
   if (op.opcode === 0x35) return decimalFractionPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x34) return decimalIntegerPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x31) return decimalAbsFromFactKey(key) !== undefined;
@@ -1872,6 +1875,16 @@ function structuralHexSquareFromFactKey(key: string): string | undefined {
   for (const fact of structuralShapeFactsFromStableExpressionKey(key) ?? []) {
     for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
       const value = structuralHexSquareDecimalValue(restored);
+      if (value !== undefined) return value;
+    }
+  }
+  return undefined;
+}
+
+function structuralBitwiseNotFromFactKey(key: string): string | undefined {
+  for (const fact of structuralShapeFactsFromStableExpressionKey(key) ?? []) {
+    for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
+      const value = structuralBitwiseNotDecimalValueFromFact(restored);
       if (value !== undefined) return value;
     }
   }
