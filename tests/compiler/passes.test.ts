@@ -15401,6 +15401,22 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-hidden-temp-restore keeps duplicate-Y recalls without a previous stack/X2 producer", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      store("2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("2"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-hidden-temp-restore uses a previous recall lift when X and Y already match", () => {
     const program: IrOp[] = [
       recall("1"),

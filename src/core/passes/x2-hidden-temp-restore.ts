@@ -26,6 +26,7 @@ import {
   x2StatesHaveSameVpEntrySignSource,
   x2StateHasSameVisibleXAndY,
   x2ValueFactIsNormalizedDecimal,
+  x2PreviousStackLiftAndX2SyncProducerIndex,
   x2ValueSetHasFact,
   x2ValueShapeSetsHaveSameDotSafeDecimal,
   x2ValueShapeSetsHaveSameDotSafeStructuralMantissa,
@@ -172,7 +173,7 @@ const run: IrPassFn = (ops) => {
         })
         : removal.exposesX2Restore;
     const exposesStackLift = removal.exposesStackLift &&
-      !hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(ops, index, x2ValueStates[index]);
+      !hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(ops, index, x2ValueStates[index], directReturnContext);
     if (exposesStackLift || exposesX2Restore) return op;
 
     applied += 1;
@@ -300,8 +301,10 @@ function hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(
   ops: readonly IrOp[],
   recallIndex: number,
   recallState: X2ValueDataflowState | undefined,
+  directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
   return x2StateHasSameVisibleXAndY(recallState) &&
+    x2PreviousStackLiftAndX2SyncProducerIndex(ops, recallIndex, directReturnContext) !== undefined &&
     !removingPreShiftLiftCanExposeStack(ops, recallIndex);
 }
 
