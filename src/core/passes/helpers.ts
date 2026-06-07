@@ -1145,6 +1145,12 @@ function structuralHexBinaryDecimalValues(
         if (result !== undefined) output.add(result);
       }
     }
+    for (const left of normalizedDecimalValues(y, yShape)) {
+      for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+        const result = decimalDivideStructuralHexDigitValue(left, rightDigit);
+        if (result !== undefined) output.add(result);
+      }
+    }
     for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
       for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
         const result = structuralHexDigitDivideStructuralHexDigitValue(leftDigit, rightDigit);
@@ -1243,6 +1249,12 @@ function structuralHexBinaryDecimalDisplayShapes(
   for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
     for (const right of normalizedDecimalValues(x, xShape)) {
       const result = structuralHexDigitDivideDecimalDisplayShape(leftDigit, right);
+      if (result !== undefined) output.add(result);
+    }
+  }
+  for (const left of normalizedDecimalValues(y, yShape)) {
+    for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+      const result = decimalDivideStructuralHexDigitDisplayShape(left, rightDigit);
       if (result !== undefined) output.add(result);
     }
   }
@@ -1445,6 +1457,14 @@ function structuralHexDigitDivideDecimalDisplayShape(leftDigit: number, right: s
   return structuralHexDecimalProductDisplayShape(structuralHexDigitDivideDecimalProduct(leftDigit, right));
 }
 
+function decimalDivideStructuralHexDigitValue(left: string, rightDigit: number): string | undefined {
+  return decimalDivideStructuralHexDigitProduct(left, rightDigit)?.value;
+}
+
+function decimalDivideStructuralHexDigitDisplayShape(left: string, rightDigit: number): X2ShapeFact | undefined {
+  return structuralHexDecimalProductDisplayShape(decimalDivideStructuralHexDigitProduct(left, rightDigit));
+}
+
 interface StructuralHexDecimalProduct {
   readonly value: string;
   readonly display?: string;
@@ -1611,6 +1631,55 @@ function structuralHexDigitDivideDecimalProduct(
   if (value === undefined) return undefined;
   const displayShape = exactDecimalDisplayShapeFact(value);
   return displayShape === undefined ? undefined : { value, displayShape };
+}
+
+const DECIMAL_DIVIDE_STRUCTURAL_HEX_DIGIT_TABLE: ReadonlyMap<string, StructuralHexDecimalProduct> = new Map([
+  ["0:10", { value: "0.9090909", displayShape: decimalExponentShapeFact("9.090909", "-1") }],
+  ["0:11", { value: "0.99099099", displayShape: decimalExponentShapeFact("9.9099099", "-1") }],
+  ["0:12", { value: "0.99099099", displayShape: decimalExponentShapeFact("9.9099099", "-1") }],
+  ["0:13", { value: "0.99099099", displayShape: decimalExponentShapeFact("9.9099099", "-1") }],
+  ["0:14", { value: "0.99099099", displayShape: decimalExponentShapeFact("9.9099099", "-1") }],
+  ["1:11", { value: "0.9099099", displayShape: decimalExponentShapeFact("9.099099", "-1") }],
+  ["1:12", { value: "0.99099099", displayShape: decimalExponentShapeFact("9.9099099", "-1") }],
+  ["1:13", { value: "0.99099099", displayShape: decimalExponentShapeFact("9.9099099", "-1") }],
+  ["1:14", { value: "0.99099099", displayShape: decimalExponentShapeFact("9.9099099", "-1") }],
+  ["2:11", { value: "0.84444443", displayShape: decimalExponentShapeFact("8.4444443", "-1") }],
+  ["2:12", { value: "0.9099099", displayShape: decimalExponentShapeFact("9.099099", "-1") }],
+  ["2:13", { value: "0.99099099", displayShape: decimalExponentShapeFact("9.9099099", "-1") }],
+  ["2:14", { value: "0.99099099", displayShape: decimalExponentShapeFact("9.9099099", "-1") }],
+  ["3:11", { value: "0.64444443", displayShape: decimalExponentShapeFact("6.4444443", "-1") }],
+  ["3:13", { value: "0.9099099", displayShape: decimalExponentShapeFact("9.099099", "-1") }],
+  ["3:14", { value: "0.99099099", displayShape: decimalExponentShapeFact("9.9099099", "-1") }],
+  ["4:11", { value: "0.44444443", displayShape: decimalExponentShapeFact("4.4444443", "-1") }],
+  ["4:13", { value: "0.8", displayShape: decimalExponentShapeFact("8", "-1") }],
+  ["4:14", { value: "0.9099099", displayShape: decimalExponentShapeFact("9.099099", "-1") }],
+  ["5:11", { value: "0.24444443", displayShape: decimalExponentShapeFact("2.4444443", "-1") }],
+  ["5:13", { value: "0", displayShape: decimalExponentShapeFact("0", "-1") }],
+  ["5:14", { value: "0.02929292", displayShape: decimalExponentShapeFact("2.929292", "-2") }],
+  ["6:11", { value: "0.64444443", displayShape: decimalExponentShapeFact("6.4444443", "-1") }],
+  ["6:13", { value: "0.2", displayShape: decimalExponentShapeFact("2", "-1") }],
+  ["6:14", { value: "0.32929292", displayShape: decimalExponentShapeFact("3.2929292", "-1") }],
+  ["7:11", { value: "0.44444443", displayShape: decimalExponentShapeFact("4.4444443", "-1") }],
+  ["7:13", { value: "0.4", displayShape: decimalExponentShapeFact("4", "-1") }],
+  ["7:14", { value: "0.62929292", displayShape: decimalExponentShapeFact("6.2929292", "-1") }],
+  ["8:11", { value: "0.24444443", displayShape: decimalExponentShapeFact("2.4444443", "-1") }],
+  ["8:13", { value: "0", display: "0" }],
+  ["8:14", { value: "0.92929292", displayShape: decimalExponentShapeFact("9.2929292", "-1") }],
+  ["9:10", { value: "0.8990909", displayShape: decimalExponentShapeFact("8.990909", "-1") }],
+  ["9:11", { value: "0.04444443", displayShape: decimalExponentShapeFact("0.4444443", "-1") }],
+  ["9:13", { value: "0.2", displayShape: decimalExponentShapeFact("2", "-1") }],
+  ["9:14", { value: "0.22929292", displayShape: decimalExponentShapeFact("2.2929292", "-1") }],
+  ["18:11", { value: "9.4343434", display: "9.4343434" }],
+  ["18:13", { value: "9.6", display: "9.6" }],
+  ["18:14", { value: "9.5292929", display: "9.5292929" }],
+]);
+
+function decimalDivideStructuralHexDigitProduct(
+  left: string,
+  rightDigit: number,
+): StructuralHexDecimalProduct | undefined {
+  if (!isVerifiedArithmeticHexDigit(rightDigit)) return undefined;
+  return DECIMAL_DIVIDE_STRUCTURAL_HEX_DIGIT_TABLE.get(`${left}:${rightDigit}`);
 }
 
 const STRUCTURAL_HEX_DIGIT_DIVIDE_STRUCTURAL_HEX_DIGIT_TABLE: ReadonlyMap<string, string> = new Map([

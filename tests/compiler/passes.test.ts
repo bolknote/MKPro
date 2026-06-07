@@ -5031,6 +5031,18 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(divideDecimalScientificStates[4]?.x) ?? []).toContain("decimal:0.77777777:normalized");
     expect(x2ShapeStateText(divideDecimalScientificStates[4]?.xShape)).toEqual(["exponent:7.7777777:-1:decimal"]);
 
+    const reverseDivideStates = computeX2ValueStates(hexPairProgram("9", "B", plain(0x13, "÷")));
+    expect(x2ValueStateText(reverseDivideStates[4]?.x) ?? []).toContain("decimal:0.04444443:normalized");
+    expect(x2ShapeStateText(reverseDivideStates[4]?.xShape)).toEqual(["exponent:0.4444443:-1:decimal"]);
+
+    const reverseDivideZeroExponentStates = computeX2ValueStates(hexPairProgram("5", "Г", plain(0x13, "÷")));
+    expect(x2ValueStateText(reverseDivideZeroExponentStates[4]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(reverseDivideZeroExponentStates[4]?.xShape)).toEqual(["exponent:0:-1:decimal"]);
+
+    const reverseRejectedStates = computeX2ValueStates(hexPairProgram("3", "С", plain(0x13, "÷")));
+    expect(x2ValueStateText(reverseRejectedStates[4]?.x) ?? []).not.toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(reverseRejectedStates[4]?.xShape)).toEqual([]);
+
     const rejectedFStates = computeX2ValueStates(hexPairProgram("F", "A", plain(0x10, "+")));
     expect(x2ValueStateText(rejectedFStates[4]?.x) ?? []).not.toContain("decimal:0:normalized");
     expect(x2ShapeStateText(rejectedFStates[4]?.xShape)).toEqual([]);

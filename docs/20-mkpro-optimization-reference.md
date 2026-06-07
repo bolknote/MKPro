@@ -946,8 +946,11 @@ Display rewrites are separated into strategy selection + body lowering.
   shape. The structural hex exponent arithmetic also recognizes the strict
   closed single-nibble forms produced by the same shape algebra (`Г`, `Г00`,
   `0.Г`, `0.0Г`) as exponent operands, but only the already pinned table cases
-  are folded; signed, multi-nibble, trailing-tail, and unsupported-exponent
-  forms remain structural. Wider products/quotients, division by zero,
+  are folded. Reverse decimal/hex division also uses its own emulator-pinned
+  table for decimal `0..9`/`18` in `Y` and structural `A`..`E` in `X`, preserving
+  non-normal display shapes such as `exponent:0.4444443:-1:decimal` separately
+  from normalized decimal value facts. Signed, multi-nibble, trailing-tail, and
+  unsupported-exponent forms remain structural. Wider products/quotients, division by zero,
   non-terminating division, irrational square roots, fractional powers of ten,
   remaining non-zero powers, hardware-rounded sexagesimal conversions, and
   non-decimal cases remain structural/opaque rather than pretending to be an
@@ -1340,9 +1343,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     display shape independently from value shape: `1 * ГE-2` is a value proof
     for `0.1`, but the visible/stored shape is `exponent:1:-1:decimal`, which
     keeps later store/recall/`ВП` context equivalent to the MK-61 display state.
+    Reverse decimal/hex division has a separate emulator-pinned table for
+    selected decimal `0..9`/`18` left operands and structural `A`..`E` right
+    operands; `ЕГГ0Г` pairs and unsupported display forms remain absent from the
+    proof lattice.
     This is not a
-    general wide multiply/divide, reverse decimal/hex divide, borrow/carry, or decimalization rule. Structural `К |x|` removes the sign from canonical hex/super
-    mantissa or closed exponent-entry restore shapes as another shape-only
+    general wide multiply/divide, borrow/carry, or decimalization rule.
+    Structural `К |x|` removes the sign from canonical hex/super mantissa or closed exponent-entry restore shapes as another shape-only
     transform; the hidden X2 shape is still preserved by the opcode and is not
     decimalized. Structural `К ЗН` has a narrow emulator-pinned value model:
     canonical hex mantissas or closed structural exponent mantissas whose first
