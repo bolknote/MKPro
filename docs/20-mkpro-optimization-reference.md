@@ -1086,11 +1086,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     context is used for closed-context `/-/` dot sources, so a transparent
     helper between the modeled sign-change and the candidate `.` does not reset
     the proof, while a helper that performs its own X2 restore still blocks it.
-    A separate normalized/visible-decimal escape hatch handles proved X2-preserving
-    gaps such as stable indirect conditionals: if `X` and `X2` carry the same
-    normalized decimal fact, or restore to the same visible decimal after raw
-    X2 normalization, and the local gap back to the X2 sync contains no
-    display-focused cell, `.` can still be removed. This escape hatch uses the
+    A separate normalized/visible-decimal/dot-safe-structural escape hatch
+    handles proved X2-preserving gaps such as stable indirect conditionals: if
+    `X` and `X2` carry the same normalized decimal fact, restore to the same
+    visible decimal after raw X2 normalization, or carry the same
+    emulator-pinned single-hex `A`/`B`/`C` restore key, and the local gap back
+    to the X2 sync contains no display-focused cell, `.` can still be removed.
+    This escape hatch uses the
     same direct-return context as the `ВП` restore-gap and closed-context
     `/-/` source proof: transparent direct or proved-indirect helper chains may
     be crossed, while helpers that store, branch, restore X2, recurse, or expose

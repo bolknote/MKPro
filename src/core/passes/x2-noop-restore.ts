@@ -16,6 +16,7 @@ import {
   x2StateHasSameNormalizedDecimalInXAndX2,
   x2StateHasSameRestoredVisibleDecimalInXAndX2,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
+  x2StateHasSameDotSafeStructuralMantissaInXAndX2,
   x2StateHasOnlyDotSafeStructuralMantissaX2,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateIsClosedPlainContext,
@@ -44,7 +45,8 @@ const run: IrPassFn = (ops) => {
     const state = valueStates[index];
     const sourceProvesFreeStandingRestore =
       x2StateHasSameNormalizedDecimalInXAndX2(state) ||
-      x2StateHasSameRestoredVisibleDecimalInXAndX2(state);
+      x2StateHasSameRestoredVisibleDecimalInXAndX2(state) ||
+      x2StateHasSameDotSafeStructuralMantissaInXAndX2(state);
     if (!x2CanUseSourceDotRestoreAt(
       ops,
       index,

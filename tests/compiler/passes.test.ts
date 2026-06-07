@@ -13532,6 +13532,36 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-noop-restore removes dot-safe structural dots after a free-standing gap", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const C"),
+      store("2"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const C"),
+      store("2"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore keeps unsafe structural dots after a free-standing gap", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("2"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-hidden-temp-restore replaces a safe recall with dot so DSE can remove the scratch store", () => {
     const program: IrOp[] = [
       recall("1"),
