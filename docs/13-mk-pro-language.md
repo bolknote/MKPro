@@ -1456,15 +1456,15 @@ The pipeline currently contains:
   `A / С -> ЕГГ0Г` remains unmodeled.
   Hidden X2 is still the previous right operand until a later X2-syncing
   command, so literal/scratch restore rewrites can use these table results only
-  after that sync. The same table-backed rule covers the verified `ГE-2` coefficient
-  cases from the reference material: with that structural hex exponent in `X`,
-  decimal `1`/`2`/`4`/`5`/`8`/`16` prove `0.1`/`0.2`/`0.4`/`0.5`/`0.8`/`1.6`;
-  with `ГE-2` in `Y`, only the emulator-pinned reverse table is used. These
-  results also keep the machine display shape separate from the numeric value:
-  for example `1 * ГE-2` proves value `0.1` but stores display shape
-  `exponent:1:-1:decimal`, so a later store/recall/`ВП` sequence follows the
-  same context as the calculator instead of treating the result as a freshly
-  entered `0.1` mantissa. Wider
+  after that sync. The same table-backed rule covers the verified `A`..`E E-2`
+  coefficient cases from the reference material. Each operand order keeps its
+  own emulator-pinned table: decimal `1 * ГE-2` proves value `0.1` with display
+  shape `exponent:1:-1:decimal`, `AE-2 * 1` proves value `0` with display shape
+  `exponent:0:-2:decimal`, `BE-2 / 18` proves `0.0061111111`, while error
+  cases such as `1 / AE-2` remain opaque. These results keep the machine
+  display shape separate from the numeric value, so a later store/recall/`ВП`
+  sequence follows the same context as the calculator instead of treating the
+  result as a freshly entered normalized mantissa. Wider
   hex/super multiplication, division, subtraction, reverse decimal/hex division,
   and carry/borrow cases remain opaque. The degree/minute conversion opcodes `К °->′`,
   `К °->′"`, `К °<-′"`, and `К °<-′` also seed exact decimal facts only for

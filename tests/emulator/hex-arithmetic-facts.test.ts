@@ -256,16 +256,23 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(restoreAfterSignPair("F")).not.toBe(restoreWithRecall("F"));
   });
 
-  it("hex D exponent minus two multiplication table is operand-order-sensitive", () => {
+  it("single hex exponent minus two multiplication table is operand-order-sensitive", () => {
+    expect(multiplyRegisters("AE-2", "1")).toBe("0,-02");
+    expect(multiplyRegisters("AE-2", "18")).toBe("0,2");
+    expect(multiplyRegisters("BE-2", "18")).toBe("0,54");
+    expect(multiplyRegisters("CE-2", "16")).toBe("9,04");
     expect(multiplyRegisters("1", "ГE-2")).toBe("1,-01");
     expect(multiplyRegisters("2", "ГE-2")).toBe("2,-01");
     expect(multiplyRegisters("4", "ГE-2")).toBe("4,-01");
     expect(multiplyRegisters("5", "ГE-2")).toBe("5,-01");
     expect(multiplyRegisters("8", "ГE-2")).toBe("8,-01");
     expect(multiplyRegisters("16", "ГE-2")).toBe("1,6");
+    expect(multiplyRegisters("18", "BE-2")).toBe("1,8");
+    expect(multiplyRegisters("18", "ЕE-2")).toBe("0,");
     expect(multiplyRegisters("ГE-2", "1")).toBe("3,-02");
     expect(multiplyRegisters("ГE-2", "5")).toBe("5,3-01");
     expect(multiplyRegisters("ГE-2", "16")).toBe("9,2");
+    expect(multiplyRegisters("ЕE-2", "18")).toBe("9,48");
   });
 
   it("hex D exponent minus two addition and subtraction tables are operand-order-sensitive", () => {
@@ -292,12 +299,22 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(subtractRegisters("18", "ГE-2")).toBe("18,03");
   });
 
-  it("hex D exponent minus two division table is operand-order-sensitive", () => {
+  it("single hex exponent minus two division table is operand-order-sensitive", () => {
+    expect(divideRegisters("AE-2", "1")).toBe("0,-02");
+    expect(divideRegisters("BE-2", "18")).toBe("6,1111111-03");
+    expect(divideRegisters("CE-2", "16")).toBe("7,5-03");
     expect(divideRegisters("ГE-2", "0")).toBe("ЕГГ0Г");
     expect(divideRegisters("ГE-2", "2")).toBe("6,5-02");
     expect(divideRegisters("ГE-2", "16")).toBe("8,125-03");
+    expect(divideRegisters("ЕE-2", "18")).toBe("7,7777777-03");
+    expect(divideRegisters("0", "AE-2")).toBe("90,90909");
+    expect(divideRegisters("1", "AE-2")).toBe("ЕГГ0Г");
+    expect(divideRegisters("9", "AE-2")).toBe("89,90909");
+    expect(divideRegisters("18", "BE-2")).toBe("943,43434");
+    expect(divideRegisters("3", "CE-2")).toBe("ЕГГ0Г");
     expect(divideRegisters("0", "ГE-2")).toBe("99,099099");
     expect(divideRegisters("5", "ГE-2")).toBe("00,");
     expect(divideRegisters("16", "ГE-2")).toBe("920,");
+    expect(divideRegisters("16", "ЕE-2")).toBe("052,92929");
   });
 });

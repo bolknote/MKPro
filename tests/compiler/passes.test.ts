@@ -5074,13 +5074,37 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(leftExponentStates[4]?.x) ?? []).toContain("decimal:0.065:normalized");
     expect(x2ShapeStateText(leftExponentStates[4]?.xShape)).toEqual(["exponent:6.5:-2:decimal"]);
 
+    const leftAExponentStates = computeX2ValueStates(binaryProgram("AE-2", "1"));
+    expect(x2ValueStateText(leftAExponentStates[4]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(leftAExponentStates[4]?.xShape)).toEqual(["exponent:0:-2:decimal"]);
+
+    const leftBWideExponentStates = computeX2ValueStates(binaryProgram("BE-2", "18"));
+    expect(x2ValueStateText(leftBWideExponentStates[4]?.x) ?? []).toContain("decimal:0.0061111111:normalized");
+    expect(x2ShapeStateText(leftBWideExponentStates[4]?.xShape)).toEqual(["exponent:6.1111111:-3:decimal"]);
+
     const rightExponentStates = computeX2ValueStates(binaryProgram("5", "ГE-2"));
     expect(x2ValueStateText(rightExponentStates[4]?.x) ?? []).toContain("decimal:0:normalized");
     expect(x2ShapeStateText(rightExponentStates[4]?.xShape)).toEqual(["mantissa:00:decimal"]);
 
+    const rightARejectedStates = computeX2ValueStates(binaryProgram("1", "AE-2"));
+    expect(x2ValueStateText(rightARejectedStates[4]?.x) ?? []).not.toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(rightARejectedStates[4]?.xShape)).toEqual([]);
+
+    const rightBDivideStates = computeX2ValueStates(binaryProgram("18", "BE-2"));
+    expect(x2ValueStateText(rightBDivideStates[4]?.x) ?? []).toContain("decimal:943.43434:normalized");
+    expect(x2ShapeStateText(rightBDivideStates[4]?.xShape)).toEqual(["mantissa:943.43434:decimal"]);
+
+    const rightCDivideRejectedStates = computeX2ValueStates(binaryProgram("3", "CE-2"));
+    expect(x2ValueStateText(rightCDivideRejectedStates[4]?.x) ?? []).not.toContain("decimal:943.43434:normalized");
+    expect(x2ShapeStateText(rightCDivideRejectedStates[4]?.xShape)).toEqual([]);
+
     const wideRightExponentStates = computeX2ValueStates(binaryProgram("16", "ГE-2"));
     expect(x2ValueStateText(wideRightExponentStates[4]?.x) ?? []).toContain("decimal:920:normalized");
     expect(x2ShapeStateText(wideRightExponentStates[4]?.xShape)).toEqual(["mantissa:920:decimal"]);
+
+    const rightELeadingZeroStates = computeX2ValueStates(binaryProgram("16", "ЕE-2"));
+    expect(x2ValueStateText(rightELeadingZeroStates[4]?.x) ?? []).toContain("decimal:52.92929:normalized");
+    expect(x2ShapeStateText(rightELeadingZeroStates[4]?.xShape)).toEqual(["mantissa:052.92929:decimal"]);
 
     const rejectedDivisionByZeroStates = computeX2ValueStates(binaryProgram("ГE-2", "0"));
     expect(x2ValueStateText(rejectedDivisionByZeroStates[4]?.x) ?? []).not.toContain("decimal:0:normalized");
@@ -5194,6 +5218,36 @@ describe("ir passes on synthetic programs", () => {
       .toContain("decimal:0.53:normalized");
     expect(x2ValueStateText(computeX2ValueStates(hexLeftProgram)[4]?.x) ?? [])
       .not.toContain("decimal:0.5:normalized");
+
+    const hexAZeroExponentStates = computeX2ValueStates([
+      recall("1", "preload const AE-2"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 1"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(hexAZeroExponentStates[4]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(hexAZeroExponentStates[4]?.xShape)).toEqual(["exponent:0:-2:decimal"]);
+
+    const hexBWideStates = computeX2ValueStates([
+      recall("1", "preload const BE-2"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 18"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(hexBWideStates[4]?.x) ?? []).toContain("decimal:0.54:normalized");
+    expect(x2ShapeStateText(hexBWideStates[4]?.xShape)).toEqual(["mantissa:0.54:decimal"]);
+
+    const decimalTimesEStates = computeX2ValueStates([
+      recall("2", "preload const 18"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const ЕE-2"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(decimalTimesEStates[4]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(decimalTimesEStates[4]?.xShape)).toEqual(["mantissa:0:decimal"]);
   });
 
   it("x2 value dataflow treats closed single-hex exponent mantissas as exponent operands", () => {

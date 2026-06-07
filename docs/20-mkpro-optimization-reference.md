@@ -1342,11 +1342,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Addition/subtraction is formulaic only for emulator-pinned decimal operands
     (`0`..`9`, `16`, `18`) and proves cases such as `BE-2 + 0 -> 1.1E-1`,
     `ЕE-2 + 6 -> 6.14`, `BE-2 - 1 -> -8.9E-1`, and
-    `0 - ЕE-2 -> 2E-2`. Multiplication remains a selected strict `ГE-2`
-    table with cases such as `1 * ГE-2 -> 1E-1` and
-    `ГE-2 * 1 -> 3E-2`; division proves cases such as
-    `ГE-2 / 2 -> 6.5E-2`, `ГE-2 / 16 -> 8.125E-3`, `5 / ГE-2 -> 00`, and
-    `16 / ГE-2 -> 920`. Each operand order uses only its own emulator-pinned
+    `0 - ЕE-2 -> 2E-2`. Multiplication/division now use the same pinned
+    `A`..`E E-2` family, with cases such as `1 * ГE-2 -> 1E-1`,
+    `AE-2 * 1 -> 0E-2`, `BE-2 * 18 -> 0.54`,
+    `ГE-2 / 2 -> 6.5E-2`, `BE-2 / 18 -> 6.1111111E-3`,
+    `18 / BE-2 -> 943.43434`, and `16 / ЕE-2 -> 052.92929`; error pairs such
+    as `1 / AE-2` and `3 / CE-2` stay opaque. Each operand order uses only its own emulator-pinned
     results and records display shape independently from normalized value shape,
     so later store/recall/`ВП` context stays equivalent to the MK-61 display
     state.
