@@ -1570,6 +1570,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     proved-indirect `ПП` helper-chain shape when every nested helper reaches
     `В/О` through only restore-transparent empty/address cells, because the helper cannot
     observe the restored `X` and the following digit starts fresh entry. The
+    same fresh-digit proof also applies in proved closed plain context: a
+    role-free `КНОП`/`К1`/`К2`/`/-/` run after a closing X2 sync is discarded
+    before a following digit, but a following `ВП` remains observable and keeps
+    the run.
+    The
     same kind of restore run is likewise removed before a proved hard X/X2
     overwrite such as `Cx`, including across that transparent return-helper
     shape.

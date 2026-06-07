@@ -130,8 +130,20 @@ function x2ContextRestoreRunBeforeFreshDigit(
   state: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): readonly number[] {
-  if (!analyzeX2VpShapeContext(state).canDiscardRestoreBeforeFreshDigit) return [];
+  const vpContext = analyzeX2VpShapeContext(state);
+  if (!vpContext.canDiscardRestoreBeforeFreshDigit) {
+    if (!x2StateIsClosedPlainContext(state) || previousExecutableIsFreeStandingRestoreOp(ops, startIndex)) return [];
+  }
   return x2ContextRestoreRunBeforeFreshDigitEntry(ops, startIndex, context);
+}
+
+function previousExecutableIsFreeStandingRestoreOp(ops: readonly IrOp[], index: number): boolean {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const op = ops[cursor]!;
+    if (op.kind === "label") continue;
+    return isFreeStandingEmptyOp(op) || isFreeStandingSignChange(op);
+  }
+  return false;
 }
 
 function x2ContextRestoreRunBeforeDeadOverwrite(

@@ -1523,7 +1523,10 @@ The pipeline currently contains:
   splice passes a real model for structural `ВП ... /-/` sequences without
   promoting hex/super forms into ordinary decimal values. Such structural
   `ВП` context is not treated as a plain closed context by `.`/`/-/` rewrite
-  guards. Pure documented X computations can still use restored-display shapes
+  guards. In proved closed plain context, a role-free
+  `КНОП`/`К1`/`К2`/`/-/` restore run before a fresh digit can be discarded
+  because the digit starts new number entry; the same run before `ВП` remains
+  observable. Pure documented X computations can still use restored-display shapes
   as stable expression operands: the key is built from the canonical restored
   shape (`hex:Г ВП 2` and `hex:Г00` share the same operand key), exact decimal
   display shapes can seed the same opaque key model, and shape-only ordinary

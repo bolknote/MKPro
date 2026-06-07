@@ -317,6 +317,32 @@ describe("ВП exponent-entry splice collapse (vp-splice)", () => {
     expect(keptCodes).toEqual([CLEAR_X, SIGN_CHANGE, SIGN_CHANGE, VP, STOP]);
   });
 
+  it("closed-context restore runs collapse before fresh digit entry", () => {
+    expect(display([0x02, F0, SIGN_CHANGE, 0x03, STOP])).toBe(display([0x02, F0, 0x03, STOP]));
+    expect(display([0x02, F0, KNOP, SIGN_CHANGE, K1, 0x03, STOP])).toBe(
+      display([0x02, F0, 0x03, STOP]),
+    );
+    expect(display([0x02, F0, SIGN_CHANGE, VP, 0x03, STOP])).not.toBe(
+      display([0x02, F0, VP, 0x03, STOP]),
+    );
+
+    const program: MachineItem[] = [
+      { kind: "op", opcode: 0x02, mnemonic: "2" },
+      { kind: "op", opcode: F0, mnemonic: "F* empty F0" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: KNOP, mnemonic: "КНОП" },
+      { kind: "op", opcode: SIGN_CHANGE, mnemonic: "/-/" },
+      { kind: "op", opcode: 0x03, mnemonic: "3" },
+      { kind: "op", opcode: STOP, mnemonic: "С/П" },
+    ];
+    const result = runIrPasses(program, { delivery: "hex", budget: 105, analysis: false });
+    const codes = result.items
+      .filter((item): item is Extract<MachineItem, { opcode: number }> => "opcode" in item)
+      .map((item) => item.opcode);
+    expect(codes).toEqual([0x02, F0, 0x03, STOP]);
+    expect(display(codes)).toBe(display([0x02, F0, SIGN_CHANGE, KNOP, SIGN_CHANGE, 0x03, STOP]));
+  });
+
   it("closed decimal X2-sync before ВП exposes exponent-entry sign toggles", () => {
     expect(display([0x02, F0, VP, SIGN_CHANGE, SIGN_CHANGE, 0x03, STOP])).toBe(
       display([0x02, F0, VP, 0x03, STOP]),

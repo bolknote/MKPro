@@ -20672,6 +20672,42 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes closed-context restore runs before fresh digit entry", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps a closed-context sign before a following ВП", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-splice removes a closed-context decimal sign pair", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),
