@@ -14259,6 +14259,24 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-noop-restore keeps dot after address-gap closed sign-change when it shapes a following ВП", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      orphanAddress(54),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-noop-restore removes dot after a visible-equivalent signed leading-zero X2 literal", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),

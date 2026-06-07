@@ -124,7 +124,7 @@ function dotPreservesVpEntrySourceThroughRestoreGap(
 function dotFollowsClosedSignChangeSource(ops: readonly IrOp[], index: number): boolean {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
-    if (op.kind === "label") continue;
+    if (op.kind === "label" || op.kind === "orphan-address") continue;
     if (isFreeStandingX2EmptyOp(op)) continue;
     return isFreeStandingX2SignChangeOp(op);
   }

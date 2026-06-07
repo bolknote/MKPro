@@ -1126,8 +1126,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     restore X2, recurse, or expose another entry remain barriers. This
     transparent-helper proof is memoized per IR body and shared by the X2
     restore-gap scanners. The same direct-return context is used for closed-context `/-/` dot sources, so a transparent
-    helper between the modeled sign-change and the candidate `.` does not reset
-    the proof, while a helper that performs its own X2 restore still blocks it.
+    helper or orphan address-byte gap between the modeled sign-change and the
+    candidate `.` does not reset the proof, while a helper that performs its own
+    X2 restore still blocks it.
     A separate normalized/visible-decimal/dot-safe-structural escape hatch
     handles proved X2-preserving gaps such as stable indirect conditionals: if
     `X` and `X2` carry the same normalized decimal fact, restore to the same
