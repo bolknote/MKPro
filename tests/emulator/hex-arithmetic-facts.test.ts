@@ -156,6 +156,13 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(runUnaryRegisterProgram("B0", [IP1, SQUARE])).toBe("1000,");
   });
 
+  it("super-number square result is pinned as decimal zero", () => {
+    expect(runUnaryRegisterProgram("FA", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("-FA", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("FB", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("FF", [IP1, SQUARE])).toBe("0,");
+  });
+
   it("X2-affecting sync normalizes non-normal decimal display shapes", () => {
     expect(runUnaryRegisterProgram("-", [IP1, SQUARE, F0, F_PI, DOT])).toBe("0,");
     expect(runUnaryRegisterProgram("-", [IP1, STACK_LIFT, 0x01, 0x08, MULTIPLY])).toBe("020,");

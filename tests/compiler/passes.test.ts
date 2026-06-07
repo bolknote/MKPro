@@ -4199,6 +4199,26 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
 
+  it("x2-hidden-temp-restore uses emulator-pinned super square facts after X2 sync", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FA"),
+      plain(0x22, "F x^2"),
+      store("3"),
+      plain(0x0d, "Cx"),
+      plain(0x00, "0"),
+      plain(0xf0, "F* empty F0"),
+      recall("3"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "3")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2-hidden-temp-restore uses emulator-pinned hex addition facts after X2 sync", () => {
     const program: IrOp[] = [
       recall("1", "preload const Г"),
@@ -11980,6 +12000,28 @@ describe("ir passes on synthetic programs", () => {
       plain(0x22, "F x^2"),
       plain(0xf0, "F* empty F0"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 00 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore uses super square zero facts after X2 sync", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FA"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("1", "preload const FA"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.0 from hidden X2 temp" } },
       halt(),
     ]);
   });

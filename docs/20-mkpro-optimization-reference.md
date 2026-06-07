@@ -937,7 +937,9 @@ Display rewrites are separated into strategy selection + body lowering.
   Stable expression keys use the same structural-unary concrete proof for
   `x^2`, `К ЗН`, and `К ИНВ`, so a decimal-only structural result is
   represented by the concrete decimal fact instead of also keeping a redundant
-  opaque `expr-key:...(shape:...)`.
+  opaque `expr-key:...(shape:...)`. The `x^2` proof includes only the
+  emulator-pinned `super` case `FA..FF -> 0`; general `super` normalization is
+  still deferred and remains shape-only.
   A-F/hex-cell results seed shape-only structural `hex:*` mantissas
   when both operands can be parsed as Latin hex nibbles or known
   MK-61 display glyphs `С`/`Г`/`Е`, while unknown glyph cells remain

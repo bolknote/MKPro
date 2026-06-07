@@ -1038,7 +1038,10 @@ function structuralHexSquareDecimalProduct(
   fact: X2ShapeFact,
 ): StructuralHexDecimalProduct | undefined {
   const model = x2ShapeDataModelForFact(fact);
-  if (model.kind !== "mantissa" || model.radix !== "hex" || model.hasDecimalPoint) return undefined;
+  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super") || model.hasDecimalPoint) {
+    return undefined;
+  }
+  if (model.radix === "super") return { value: "0", display: "0" };
   const raw = model.sign === "" ? model.canonical : model.canonical.slice(1);
   const significant = /^0*([A-FСГЕ])$/u.exec(raw)?.[1];
   if (significant === undefined) return undefined;
