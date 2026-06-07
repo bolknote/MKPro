@@ -19,6 +19,7 @@ import {
   type KnownReturnCallOp,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
+  x2NextXPreservingX2SyncIndex,
 } from "./helpers.ts";
 
 function isStackLift(op: IrOp): boolean {
@@ -55,25 +56,7 @@ const run: IrPassFn = (ops) => {
       remove.add(index);
       continue;
     }
-    if (x2NextFallthroughSyncConditionalIndex(ops, index + 1, context) !== undefined) {
-      if (removingStackLiftCanExposeStack(ops, index)) continue;
-      if (removingRecallCanExposeX2Restore(ops, index)) continue;
-      remove.add(index);
-      continue;
-    }
-    if (x2NextDirectReturnSyncIndex(ops, index + 1, context) !== undefined) {
-      if (removingStackLiftCanExposeStack(ops, index)) continue;
-      if (removingRecallCanExposeX2Restore(ops, index)) continue;
-      remove.add(index);
-      continue;
-    }
-    if (x2NextLinearReturnSyncIndex(ops, index + 1, context) !== undefined) {
-      if (removingStackLiftCanExposeStack(ops, index)) continue;
-      if (removingRecallCanExposeX2Restore(ops, index)) continue;
-      remove.add(index);
-      continue;
-    }
-    if (x2NextPlainX2SyncIndex(ops, index + 1, context) !== undefined) {
+    if (x2NextXPreservingX2SyncIndex(ops, index + 1, context) !== undefined) {
       if (removingStackLiftCanExposeStack(ops, index)) continue;
       if (removingRecallCanExposeX2Restore(ops, index)) continue;
       remove.add(index);
@@ -126,76 +109,6 @@ function producerSuppliesLiftX2Sync(op: IrOp): boolean {
   return !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op) &&
     analyzeX2StackEffect(op).stackLiftAndX2Sync;
-}
-
-function x2NextFallthroughSyncConditionalIndex(
-  ops: readonly IrOp[],
-  start: number,
-  context: DirectReturnAnalysisContext,
-): number | undefined {
-  for (let index = start; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (isFallthroughX2SyncConditional(op)) return index;
-    if (!isBackwardStackLiftX2SyncGap(ops, op, index, context)) return undefined;
-  }
-  return undefined;
-}
-
-function x2NextDirectReturnSyncIndex(
-  ops: readonly IrOp[],
-  start: number,
-  context: DirectReturnAnalysisContext,
-): number | undefined {
-  for (let index = start; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (
-      isKnownReturnCallOp(op) &&
-      !hasRewriteBarrier(op) &&
-      !isDisplayFocusSensitive(op) &&
-      directReturnPreservesStackXAndX2(ops, op, context)
-    ) {
-      return index;
-    }
-    if (!isBackwardStackLiftX2SyncGap(ops, op, index, context)) return undefined;
-  }
-  return undefined;
-}
-
-function x2NextLinearReturnSyncIndex(
-  ops: readonly IrOp[],
-  start: number,
-  context: DirectReturnAnalysisContext,
-): number | undefined {
-  for (let index = start; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "return" && !hasRewriteBarrier(op) && !isDisplayFocusSensitive(op)) {
-      return index;
-    }
-    if (!isBackwardStackLiftX2SyncGap(ops, op, index, context)) return undefined;
-  }
-  return undefined;
-}
-
-function isFallthroughX2SyncConditional(op: IrOp): boolean {
-  if (op.kind !== "cjump" && op.kind !== "loop") return false;
-  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
-  const effect = analyzeX2StackEffect(op);
-  if (!effect.stackPreserves) return false;
-  const conditional = getOpcode(op.opcode).conditionalX2Effect;
-  return conditional?.fallthrough === "affects" && conditional.jump === "preserves";
-}
-
-function x2NextPlainX2SyncIndex(
-  ops: readonly IrOp[],
-  start: number,
-  context: DirectReturnAnalysisContext,
-): number | undefined {
-  for (let index = start; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (isPlainXPreservingX2Sync(op)) return index;
-    if (!isBackwardStackLiftX2SyncGap(ops, op, index, context)) return undefined;
-  }
-  return undefined;
 }
 
 function isPlainXPreservingX2Sync(op: IrOp): boolean {

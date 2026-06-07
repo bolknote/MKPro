@@ -2276,6 +2276,105 @@ export function x2NextHardX2OverwriteIndex(
   return undefined;
 }
 
+export function x2NextXPreservingX2SyncIndex(
+  ops: readonly IrOp[],
+  start: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (x2IsXPreservingSyncOp(ops, op, context)) return index;
+    if (!x2IsStackXAndX2PreservingGapOp(ops, op, index, context)) return undefined;
+  }
+  return undefined;
+}
+
+function x2IsXPreservingSyncOp(
+  ops: readonly IrOp[],
+  op: IrOp,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  if (x2IsFallthroughSyncConditionalOp(op)) return true;
+  if (isKnownReturnCallOp(op) && x2KnownReturnCallPreservesStackXAndX2(ops, op, context)) return true;
+  if (op.kind === "return" && !hasRewriteBarrier(op) && !isDisplayFocusSensitive(op)) return true;
+  return x2IsPlainXPreservingX2Sync(op);
+}
+
+function x2IsFallthroughSyncConditionalOp(op: IrOp): boolean {
+  if (op.kind !== "cjump" && op.kind !== "loop" && op.kind !== "indirect-cjump") return false;
+  if (op.kind === "indirect-cjump" && knownIndirectFlowTarget(op) === undefined) return false;
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  const effect = analyzeX2StackEffect(op);
+  if (!effect.stackPreserves) return false;
+  const conditional = getOpcode(op.opcode).conditionalX2Effect;
+  return conditional?.fallthrough === "affects" && conditional.jump === "preserves";
+}
+
+function x2IsPlainXPreservingX2Sync(op: IrOp): boolean {
+  if (op.kind !== "plain" || hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  const effect = analyzeX2StackEffect(op);
+  return effect.stackPreserves && effect.x2Affects && plainPreservesXValue(op);
+}
+
+function x2IsStackXAndX2PreservingGapOp(
+  ops: readonly IrOp[],
+  op: IrOp,
+  index: number,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  if (op.kind === "label") return !context.labelEntries.has(index);
+  if (isKnownReturnCallOp(op)) return x2KnownReturnCallPreservesStackXAndX2(ops, op, context);
+  if (x2IsFallthroughX2PreservingGapOp(op)) return true;
+  switch (op.kind) {
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain": {
+      const effect = analyzeX2StackEffect(op);
+      return effect.stackPreserves && effect.x2Preserves && plainPreservesXValue(op);
+    }
+    default:
+      return false;
+  }
+}
+
+function x2KnownReturnCallPreservesStackXAndX2(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, x2IsStackXAndX2PreservingLinearOp);
+}
+
+function x2IsFallthroughX2PreservingGapOp(op: IrOp): boolean {
+  if (op.kind !== "cjump" && op.kind !== "loop" && op.kind !== "indirect-cjump") return false;
+  if (op.kind === "indirect-cjump" && knownIndirectFlowTarget(op) === undefined) return false;
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  const effect = analyzeX2StackEffect(op);
+  if (!effect.stackPreserves) return false;
+  const conditional = getOpcode(op.opcode).conditionalX2Effect;
+  return conditional?.fallthrough === "preserves";
+}
+
+function x2IsStackXAndX2PreservingLinearOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  switch (op.kind) {
+    case "label":
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain": {
+      const effect = analyzeX2StackEffect(op);
+      return effect.stackPreserves && effect.x2Preserves && plainPreservesXValue(op);
+    }
+    default:
+      return false;
+  }
+}
+
 function x2IsFallthroughStackPreservingGapOp(op: IrOp): boolean {
   return x2IsStackPreservingGapOp(op) ||
     op.kind === "cjump" ||

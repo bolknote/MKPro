@@ -60,6 +60,7 @@ import {
   x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
+  x2NextXPreservingX2SyncIndex,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
@@ -16227,6 +16228,50 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift removes В↑ through a proved indirect gap before a fallthrough X2 sync", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      knownTargetIndirectCjump("7", 8),
+      cjump("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      knownTargetIndirectCjump("7", 8),
+      cjump("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ before a proved indirect gap when the jump edge observes X2", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      knownTargetIndirectCjump("7", 5),
+      halt(),
+      label("restore"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift removes В↑ before a plain X-preserving X2 sync", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -16457,6 +16502,41 @@ describe("ir passes on synthetic programs", () => {
       6,
       directReturnAnalysisContext(overwriteProgram),
     )).toBe(7);
+  });
+
+  it("stack/X2 scheduler helpers find X-preserving syncs through shared path proofs", () => {
+    const indirectSyncProgram: IrOp[] = [
+      plain(0x0e, "В↑"),
+      plain(0x54, "К НОП"),
+      knownTargetIndirectCjump("7", 7),
+      cjump("done"),
+      plain(0x0a, "."),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const returnSyncProgram: IrOp[] = [
+      jump("main"),
+      label("noop"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("noop"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+
+    expect(x2NextXPreservingX2SyncIndex(
+      indirectSyncProgram,
+      1,
+      directReturnAnalysisContext(indirectSyncProgram),
+    )).toBe(3);
+    expect(x2NextXPreservingX2SyncIndex(
+      returnSyncProgram,
+      6,
+      directReturnAnalysisContext(returnSyncProgram),
+    )).toBe(6);
   });
 
   it("stack/X2 scheduler helpers refuse context-sensitive X2 restore gaps", () => {
