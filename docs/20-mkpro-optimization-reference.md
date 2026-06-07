@@ -1336,11 +1336,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Hidden X2
     remains the right operand until an explicit sync, so literal/scratch restore
     rewrites consume these table facts only after a later X2-syncing command. A
-    second verified table family covers structural `ГE-2` exponent arithmetic.
-    Multiplication proves cases such as `1 * ГE-2 -> 1E-1` and
-    `ГE-2 * 1 -> 3E-2`; addition/subtraction proves cases such as
-    `ГE-2 + 0 -> 1.3E-1`, `ГE-2 - 1 -> -8.7E-1`, and
-    `0 - ГE-2 -> 3E-2`; division proves cases such as
+    second verified family covers structural `A`..`E E-2` exponent arithmetic
+    without promoting unsupported hex/super shapes into ordinary decimal values.
+    Addition/subtraction is formulaic only for emulator-pinned decimal operands
+    (`0`..`9`, `16`, `18`) and proves cases such as `BE-2 + 0 -> 1.1E-1`,
+    `ЕE-2 + 6 -> 6.14`, `BE-2 - 1 -> -8.9E-1`, and
+    `0 - ЕE-2 -> 2E-2`. Multiplication remains a selected strict `ГE-2`
+    table with cases such as `1 * ГE-2 -> 1E-1` and
+    `ГE-2 * 1 -> 3E-2`; division proves cases such as
     `ГE-2 / 2 -> 6.5E-2`, `ГE-2 / 16 -> 8.125E-3`, `5 / ГE-2 -> 00`, and
     `16 / ГE-2 -> 920`. Each operand order uses only its own emulator-pinned
     results and records display shape independently from normalized value shape,

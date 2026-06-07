@@ -5091,17 +5091,33 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(leftPlusStates[4]?.x) ?? []).toContain("decimal:0.13:normalized");
     expect(x2ShapeStateText(leftPlusStates[4]?.xShape)).toEqual(["exponent:1.3:-1:decimal"]);
 
+    const leftBPlusStates = computeX2ValueStates(binaryProgram("BE-2", "0", 0x10, "+"));
+    expect(x2ValueStateText(leftBPlusStates[4]?.x) ?? []).toContain("decimal:0.11:normalized");
+    expect(x2ShapeStateText(leftBPlusStates[4]?.xShape)).toEqual(["exponent:1.1:-1:decimal"]);
+
     const rightPlusStates = computeX2ValueStates(binaryProgram("9", "ГE-2", 0x10, "+"));
     expect(x2ValueStateText(rightPlusStates[4]?.x) ?? []).toContain("decimal:9.13:normalized");
     expect(x2ShapeStateText(rightPlusStates[4]?.xShape)).toEqual(["mantissa:9.13:decimal"]);
+
+    const rightEPlusStates = computeX2ValueStates(binaryProgram("6", "ЕE-2", 0x10, "+"));
+    expect(x2ValueStateText(rightEPlusStates[4]?.x) ?? []).toContain("decimal:6.14:normalized");
+    expect(x2ShapeStateText(rightEPlusStates[4]?.xShape)).toEqual(["mantissa:6.14:decimal"]);
 
     const leftMinusStates = computeX2ValueStates(binaryProgram("ГE-2", "1", 0x11, "-"));
     expect(x2ValueStateText(leftMinusStates[4]?.x) ?? []).toContain("decimal:-0.87:normalized");
     expect(x2ShapeStateText(leftMinusStates[4]?.xShape)).toEqual(["exponent:-8.7:-1:decimal"]);
 
+    const leftBMinusStates = computeX2ValueStates(binaryProgram("BE-2", "1", 0x11, "-"));
+    expect(x2ValueStateText(leftBMinusStates[4]?.x) ?? []).toContain("decimal:-0.89:normalized");
+    expect(x2ShapeStateText(leftBMinusStates[4]?.xShape)).toEqual(["exponent:-8.9:-1:decimal"]);
+
     const rightMinusStates = computeX2ValueStates(binaryProgram("0", "ГE-2", 0x11, "-"));
     expect(x2ValueStateText(rightMinusStates[4]?.x) ?? []).toContain("decimal:0.03:normalized");
     expect(x2ShapeStateText(rightMinusStates[4]?.xShape)).toEqual(["exponent:3:-2:decimal"]);
+
+    const rightBMinusStates = computeX2ValueStates(binaryProgram("0", "BE-2", 0x11, "-"));
+    expect(x2ValueStateText(rightBMinusStates[4]?.x) ?? []).toContain("decimal:0.05:normalized");
+    expect(x2ShapeStateText(rightBMinusStates[4]?.xShape)).toEqual(["exponent:5:-2:decimal"]);
 
     const unsupportedExponentStates = computeX2ValueStates(binaryProgram("ГE-1", "1", 0x10, "+"));
     expect(x2ValueStateText(unsupportedExponentStates[4]?.x) ?? []).not.toContain("decimal:1.13:normalized");
