@@ -741,6 +741,7 @@ function plainProducesConcreteDecimalValues(
   xShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
+  const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
   if (
     op.opcode !== 0x15 &&
     op.opcode !== 0x16 &&
@@ -772,11 +773,11 @@ function plainProducesConcreteDecimalValues(
       : concreteDecimalUnaryValue(op.opcode, value);
     if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
   }
-  for (const value of x2ShapeSetRestoredVisibleDecimals(xShape)) {
+  for (const value of x2ShapeSetRestoredVisibleDecimals(effectiveXShape)) {
     const concrete = concreteDecimalUnaryValue(op.opcode, value);
     if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
   }
-  for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op, xShape)) {
+  for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op, effectiveXShape)) {
     output.add(decimalValueFact(value, "normalized"));
   }
   return output;
@@ -788,16 +789,17 @@ function plainProducesConcreteDecimalShapeFacts(
   xShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = plainProducesStableConstantShapeFacts(op);
+  const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
   for (const fact of x ?? []) {
     const value = computationDecimalValueFromFact(fact);
     const concrete = value === undefined ? undefined : concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
     if (concrete !== undefined) output.add(concrete);
   }
-  for (const value of x2ShapeSetRestoredVisibleDecimals(xShape)) {
+  for (const value of x2ShapeSetRestoredVisibleDecimals(effectiveXShape)) {
     const concrete = concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
     if (concrete !== undefined) output.add(concrete);
   }
-  for (const fact of plainProducesConcreteStructuralUnaryDecimalShapeFacts(op, xShape)) {
+  for (const fact of plainProducesConcreteStructuralUnaryDecimalShapeFacts(op, effectiveXShape)) {
     if (fact !== undefined) output.add(fact);
   }
   return output;
@@ -825,6 +827,8 @@ function plainProducesConcreteBinaryDecimalValues(
   xShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
+  const effectiveYShape = shapeSetWithStableExpressionValueShapes(yShape, y);
+  const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
   if (
     (op.opcode < 0x10 || op.opcode > 0x13) &&
     op.opcode !== 0x24 &&
@@ -833,13 +837,15 @@ function plainProducesConcreteBinaryDecimalValues(
     op.opcode !== 0x38 &&
     op.opcode !== 0x39
   ) return output;
-  for (const yValue of normalizedDecimalValues(y, yShape)) {
-    for (const xValue of normalizedDecimalValues(x, xShape)) {
+  for (const yValue of normalizedDecimalValues(y, effectiveYShape)) {
+    for (const xValue of normalizedDecimalValues(x, effectiveXShape)) {
       const concrete = concreteDecimalBinaryValue(op.opcode, yValue, xValue);
       if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
     }
   }
-  for (const fact of plainProducesStructuralBinaryDecimalValues(op, y, x, yShape, xShape)) output.add(fact);
+  for (const fact of plainProducesStructuralBinaryDecimalValues(op, y, x, effectiveYShape, effectiveXShape)) {
+    output.add(fact);
+  }
   return output;
 }
 
@@ -854,12 +860,13 @@ function plainProducesConcreteUnaryShapeFacts(
   xShape: X2ShapeSet | undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
+  const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
   if (op.opcode === 0x31) {
-    for (const fact of structuralAbsMantissaShapeFacts(xShape)) output.add(fact);
+    for (const fact of structuralAbsMantissaShapeFacts(effectiveXShape)) output.add(fact);
     return output;
   }
   if (op.opcode !== 0x3a) return output;
-  for (const operand of bitwiseOperandsFromValuesAndShapes(x, xShape)) {
+  for (const operand of bitwiseOperandsFromValuesAndShapes(x, effectiveXShape)) {
     const result = structuralBitwiseNotMantissaShapeFact(operand);
     if (result !== undefined) output.add(result);
   }
@@ -973,11 +980,17 @@ function plainProducesConcreteBinaryShapeFacts(
   xShape: X2ShapeSet | undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  for (const fact of plainProducesConcreteDecimalBinaryShapeFacts(op, y, x, yShape, xShape)) output.add(fact);
-  for (const fact of plainProducesStructuralBinaryDecimalShapes(op, y, x, yShape, xShape)) output.add(fact);
+  const effectiveYShape = shapeSetWithStableExpressionValueShapes(yShape, y);
+  const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
+  for (const fact of plainProducesConcreteDecimalBinaryShapeFacts(op, y, x, effectiveYShape, effectiveXShape)) {
+    output.add(fact);
+  }
+  for (const fact of plainProducesStructuralBinaryDecimalShapes(op, y, x, effectiveYShape, effectiveXShape)) {
+    output.add(fact);
+  }
   if (op.opcode < 0x37 || op.opcode > 0x39) return output;
-  const left = bitwiseOperandsFromValuesAndShapes(y, yShape);
-  const right = bitwiseOperandsFromValuesAndShapes(x, xShape);
+  const left = bitwiseOperandsFromValuesAndShapes(y, effectiveYShape);
+  const right = bitwiseOperandsFromValuesAndShapes(x, effectiveXShape);
   for (const leftOperand of left) {
     for (const rightOperand of right) {
       const result = structuralBitwiseMantissaShapeFact(op.opcode, leftOperand, rightOperand);
@@ -1184,6 +1197,18 @@ function normalizedDecimalValues(values: X2ValueSet | undefined, shapes: X2Shape
   }
   for (const value of x2ShapeSetRestoredVisibleDecimals(shapes)) output.add(value);
   return output;
+}
+
+function shapeSetWithStableExpressionValueShapes(
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+): X2ShapeSet | undefined {
+  const output = cloneOptionalShapeSet(shapes);
+  for (const value of values ?? []) {
+    if (!value.startsWith("expr-key:")) continue;
+    for (const shape of stableExpressionKeyShapeSet(value) ?? []) output.add(shape);
+  }
+  return output.size === 0 ? undefined : output;
 }
 
 function structuralSingleHexDigitValues(shapes: X2ShapeSet | undefined): Set<number> {
@@ -2733,7 +2758,14 @@ export function x2ValueFactIsNormalizedDecimal(fact: X2ValueFact): boolean {
 
 export function x2ValueFactRestoredVisibleDecimal(fact: X2ValueFact): string | undefined {
   const decimal = /^decimal:(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)):(normalized|unnormalized)$/u.exec(fact);
-  return decimal === null ? undefined : normalizePlainDecimal(decimal[1]!);
+  if (decimal !== null) return normalizePlainDecimal(decimal[1]!);
+  if (!fact.startsWith("expr-key:")) return undefined;
+  const values = new Set<string>();
+  for (const value of stableExpressionKeyValueSet(fact) ?? []) {
+    const normalized = normalizedDecimalValueFromFact(value);
+    if (normalized !== undefined) values.add(normalized);
+  }
+  return values.size === 1 ? [...values][0] : undefined;
 }
 
 export function x2ShapeFactRestoredVisibleDecimal(fact: X2ShapeFact): string | undefined {
@@ -7726,13 +7758,162 @@ function stableStructuralExpressionSourceKey(fact: X2ShapeFact): string {
 }
 
 function stableExpressionKeyValueSet(key: string): X2ValueSet | undefined {
-  return decimalFromFactKey(key) === undefined
-    ? undefined
-    : new Set<X2ValueFact>([key as X2ValueFact]);
+  const values = stableExpressionKeyValueSetForEvaluation(key, new Set());
+  return values.size === 0 ? undefined : values;
 }
 
 function stableExpressionKeyShapeSet(key: string): X2ShapeSet | undefined {
-  return x2RestoredDisplayShapeFactsFromSourceKey(key);
+  const shapes = stableExpressionKeyShapeSetForEvaluation(key, new Set());
+  return shapes.size === 0 ? undefined : shapes;
+}
+
+function stableExpressionKeyValueSetForEvaluation(
+  key: string,
+  seen: Set<string>,
+): Set<X2ValueFact> {
+  const values = new Set<X2ValueFact>();
+  const decimal = decimalFromFactKey(key);
+  if (decimal !== undefined) {
+    values.add(decimalValueFact(decimal, "normalized"));
+    return values;
+  }
+
+  for (const visible of x2ShapeSetRestoredVisibleDecimals(x2RestoredDisplayShapeFactsFromSourceKey(key))) {
+    values.add(decimalValueFact(visible, "normalized"));
+  }
+  for (const result of stableExpressionKeyConcreteDecimalValues(key, seen)) {
+    values.add(decimalValueFact(result, "normalized"));
+  }
+  return values;
+}
+
+function stableExpressionKeyShapeSetForEvaluation(
+  key: string,
+  seen: Set<string>,
+): Set<X2ShapeFact> {
+  const shapes = new Set<X2ShapeFact>();
+  for (const fact of x2RestoredDisplayShapeFactsFromSourceKey(key) ?? []) shapes.add(fact);
+  for (const fact of stableExpressionKeyConcreteShapeFacts(key, seen)) shapes.add(fact);
+  return shapes;
+}
+
+function stableExpressionKeyConcreteDecimalValues(key: string, seen: Set<string>): Set<string> {
+  const output = new Set<string>();
+  const parsed = parseStableExpressionKey(key);
+  if (parsed === undefined || seen.has(key)) return output;
+  if (stableExpressionOpcodeArity(parsed.opcode) !== parsed.operands.length) return output;
+  seen.add(key);
+  const op = stableExpressionPlainOp(parsed.opcode);
+  if (parsed.operands.length === 0) {
+    const constant = plainProducesStableConstantDecimalValue(op);
+    const value = constant === undefined ? undefined : normalizedDecimalValueFromFact(constant);
+    if (value !== undefined) output.add(value);
+  } else if (parsed.operands.length === 1) {
+    const xKey = parsed.operands[0]!;
+    for (const fact of plainProducesConcreteDecimalValues(
+      op,
+      stableExpressionKeyValueSetForEvaluation(xKey, seen),
+      stableExpressionKeyShapeSetForEvaluation(xKey, seen),
+    )) {
+      const value = normalizedDecimalValueFromFact(fact);
+      if (value !== undefined) output.add(value);
+    }
+  } else if (parsed.operands.length === 2) {
+    const [yKey, xKey] = parsed.operands;
+    for (const fact of plainProducesConcreteBinaryDecimalValues(
+      op,
+      stableExpressionKeyValueSetForEvaluation(yKey!, seen),
+      stableExpressionKeyValueSetForEvaluation(xKey!, seen),
+      stableExpressionKeyShapeSetForEvaluation(yKey!, seen),
+      stableExpressionKeyShapeSetForEvaluation(xKey!, seen),
+    )) {
+      const value = normalizedDecimalValueFromFact(fact);
+      if (value !== undefined) output.add(value);
+    }
+  }
+  seen.delete(key);
+  return output;
+}
+
+function stableExpressionKeyConcreteShapeFacts(key: string, seen: Set<string>): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  const parsed = parseStableExpressionKey(key);
+  if (parsed === undefined || seen.has(key)) return output;
+  if (stableExpressionOpcodeArity(parsed.opcode) !== parsed.operands.length) return output;
+  seen.add(key);
+  const op = stableExpressionPlainOp(parsed.opcode);
+  if (parsed.operands.length === 0) {
+    for (const fact of plainProducesStableConstantShapeFacts(op)) output.add(fact);
+  } else if (parsed.operands.length === 1) {
+    const xKey = parsed.operands[0]!;
+    for (const fact of plainXShapeAfterNonPreservingOp(
+      op,
+      stableExpressionKeyValueSetForEvaluation(xKey, seen),
+      undefined,
+      stableExpressionKeyShapeSetForEvaluation(xKey, seen),
+      undefined,
+    )) output.add(fact);
+  } else if (parsed.operands.length === 2) {
+    const [yKey, xKey] = parsed.operands;
+    for (const fact of plainXShapeAfterNonPreservingOp(
+      op,
+      stableExpressionKeyValueSetForEvaluation(xKey!, seen),
+      stableExpressionKeyValueSetForEvaluation(yKey!, seen),
+      stableExpressionKeyShapeSetForEvaluation(xKey!, seen),
+      stableExpressionKeyShapeSetForEvaluation(yKey!, seen),
+    )) output.add(fact);
+  }
+  seen.delete(key);
+  return output;
+}
+
+function parseStableExpressionKey(
+  key: string,
+): { readonly opcode: number; readonly operands: readonly string[] } | undefined {
+  const match = /^expr-key:([0-9A-F]{2})\((.*)\)$/u.exec(key);
+  if (match === null) return undefined;
+  const operands = splitStableExpressionOperands(match[2]!);
+  if (operands === undefined) return undefined;
+  return { opcode: Number.parseInt(match[1]!, 16), operands };
+}
+
+function splitStableExpressionOperands(source: string): readonly string[] | undefined {
+  if (source.length === 0) return [];
+  const operands: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index]!;
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")") {
+      depth -= 1;
+      if (depth < 0) return undefined;
+      continue;
+    }
+    if (char !== "," || depth !== 0) continue;
+    operands.push(source.slice(start, index));
+    start = index + 1;
+  }
+  if (depth !== 0) return undefined;
+  operands.push(source.slice(start));
+  return operands.every((operand) => operand.length > 0) ? operands : undefined;
+}
+
+function stableExpressionPlainOp(opcode: number): Extract<IrOp, { kind: "plain" }> {
+  return { kind: "plain", opcode, meta: { mnemonic: `expr-key ${opcode.toString(16).toUpperCase()}` } };
+}
+
+function stableExpressionOpcodeArity(opcode: number): number | undefined {
+  if (STABLE_CONSTANT_EXPR_OPCODES.has(opcode)) return 0;
+  if (!PURE_OPAQUE_EXPR_OPCODES.has(opcode)) return undefined;
+  const info = getOpcode(opcode);
+  if (info.risk !== "documented" || info.x2Effect !== "preserves") return undefined;
+  if (info.stackEffect === "preserves") return 1;
+  if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") return 2;
+  return undefined;
 }
 
 function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {

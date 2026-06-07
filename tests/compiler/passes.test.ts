@@ -3593,9 +3593,32 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[2]?.x)).toEqual([
       "decimal:3:normalized",
-      "expr-key:34(expr-key:20())",
       "expr:1",
     ]);
+  });
+
+  it("x2 value dataflow evaluates stable expr keys recursively as concrete sources", () => {
+    const constantState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:20()"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const structuralState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-8F:mantissa)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+
+    const constant = transferX2ValueStateForEdge(constantState, plain(0x34, "К [x]"), "normal", {}, 0);
+    const structural = transferX2ValueStateForEdge(structuralState, plain(0x32, "К ЗН"), "normal", {}, 0);
+
+    expect(x2ValueStateText(constant?.x)).toContain("decimal:3:normalized");
+    expect(x2ValueStateText(constant?.x)).not.toContain("expr-key:34(expr-key:20())");
+    expect(x2ValueStateText(structural?.x)).toContain("decimal:1:normalized");
+    expect(x2ShapeStateText(structural?.xShape)).toContain("mantissa:1:decimal");
+    expect(x2ValueStateText(structural?.x)).not.toContain(
+      "expr-key:32(expr-key:31(shape:hex:-8F:mantissa))",
+    );
   });
 
   it("x2-hidden-temp-restore uses stable expr keys across repeated constant stack producers", () => {
