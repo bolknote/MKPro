@@ -80,6 +80,7 @@ import {
   x2RestoredDisplayShapeFacts,
   x2RestoredDisplayShapeFactsFromSourceKey,
   x2RestoredDisplaySourceKeyShapeFacts,
+  x2ShapeSetHasExactIntegerDisplay,
   x2ShapeSetHasOnlyDotSafeStructuralMantissas,
   x2ShapeSetRestoredVisibleDecimals,
   x2ShapeSetsHaveSameDecimalDisplayShape,
@@ -1838,6 +1839,18 @@ describe("ir passes on synthetic programs", () => {
       "hex:123:mantissa",
       "hex:0123:mantissa",
     ]))]).toEqual(["0.5", "123"]);
+  });
+
+  it("x2 shape algebra identifies exact integer displays for integer-part no-op rewrites", () => {
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["mantissa:123:decimal"]))).toBe(true);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["mantissa:-123:decimal"]))).toBe(true);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex:123:mantissa"]))).toBe(true);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex:-123:mantissa"]))).toBe(true);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["mantissa:0123:decimal"]))).toBe(false);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex:0123:mantissa"]))).toBe(false);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex-exponent:123:1"]))).toBe(false);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["exponent:1:3:decimal"]))).toBe(false);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["mantissa:-0:decimal"]))).toBe(false);
   });
 
   it("x2 shape algebra closes non-negative structural exponent shifts as mantissa shapes", () => {
@@ -22508,6 +22521,41 @@ describe("ir passes on synthetic programs", () => {
       plain(0xf0, "F* empty F0"),
       halt(),
     ]);
+  });
+
+  it("vp-x2-peephole removes a no-op К [x] for an exact integer display shape", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x34, "К [x]"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole keeps К [x] when integer-part would normalize the display shape", () => {
+    const leadingZero: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x34, "К [x]"),
+      halt(),
+    ];
+    const rawIntegerPart: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x34, meta: { mnemonic: "К [x]", raw: true } },
+      halt(),
+    ];
+
+    expect(vpX2Peephole.run(leadingZero, ctx).applied).toBe(0);
+    expect(vpX2Peephole.run(rawIntegerPart, ctx).applied).toBe(0);
   });
 
   it("vp-x2-peephole keeps no-op-looking К {x} during active fractional entry", () => {

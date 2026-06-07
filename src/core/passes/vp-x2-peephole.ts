@@ -16,10 +16,12 @@ import {
   type X2ValueDataflowState,
   x2StateIsClosedPlainContext,
   x2SyncCanExposeContextSensitiveRestore,
+  x2ShapeSetHasExactIntegerDisplay,
   x2ShapeSetRestoredVisibleDecimals,
   x2ValueFactRestoredVisibleDecimal,
 } from "./helpers.ts";
 
+const INTEGER = 0x34;
 const FRACTION = 0x35;
 
 function x2BoundaryText(op: IrOp): string {
@@ -47,6 +49,15 @@ function isFreeStandingFractionOp(op: IrOp): boolean {
   return op.kind === "plain" && op.opcode === FRACTION && !hasRoles(op);
 }
 
+function isFreeStandingIntegerOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  return op.kind === "plain" && op.opcode === INTEGER && !hasRoles(op);
+}
+
+function isFreeStandingNoopUnaryOp(op: IrOp): boolean {
+  return isFreeStandingFractionOp(op) || isFreeStandingIntegerOp(op);
+}
+
 function isFractionalNoopValue(value: string): boolean {
   return value === "0" || /^-?0\.[0-9]+$/u.test(value);
 }
@@ -63,19 +74,30 @@ function stateHasFractionalNoopX(state: X2ValueDataflowState | undefined): boole
   return false;
 }
 
-function isKnownFractionalNoopFraction(
+function stateHasIntegerNoopX(state: X2ValueDataflowState | undefined): boolean {
+  return state !== undefined &&
+    x2StateIsClosedPlainContext(state) &&
+    x2ShapeSetHasExactIntegerDisplay(state.xShape);
+}
+
+function isKnownNoopUnaryOp(
   ops: readonly IrOp[],
   index: number,
   states: readonly (X2ValueDataflowState | undefined)[],
 ): boolean {
   const op = ops[index]!;
   const state = states[index];
-  return isFreeStandingFractionOp(op) &&
-    stateHasFractionalNoopX(state) &&
+  if (!isFreeStandingNoopUnaryOp(op)) return false;
+  const knownNoop = op.kind === "plain" && op.opcode === FRACTION
+    ? stateHasFractionalNoopX(state)
+    : stateHasIntegerNoopX(state);
+  return knownNoop &&
     // К {x} preserves hidden X2. Once dataflow proves it is also a visible-X
-    // no-op, removing it cannot change a later restore value. The exposure
-    // guard still keeps immediate restore boundaries where the opcode itself
-    // could be the observable previous-command context.
+    // no-op, and К [x] is treated the same only when the display shape is
+    // already the exact integer display. Removing either cannot change a later
+    // restore value. The exposure guard still keeps immediate restore
+    // boundaries where the opcode itself could be the observable
+    // previous-command context.
     !x2SyncCanExposeContextSensitiveRestore(
       ops,
       index,
@@ -137,7 +159,7 @@ function simpleDirectReturnPreservesX(
 }
 
 const run: IrPassFn = (ops) => {
-  if (!ops.some(isFractionAfterX2Boundary)) return emptyResult(ops);
+  if (!ops.some(isFractionAfterX2Boundary) && !ops.some(isFreeStandingNoopUnaryOp)) return emptyResult(ops);
   const remove = new Set<number>();
   const labelEntries = computeLabelEntryIndexes(ops);
   const context = directReturnAnalysisContext(ops);
@@ -148,7 +170,7 @@ const run: IrPassFn = (ops) => {
     if (fractionIndex !== undefined) remove.add(fractionIndex);
   }
   for (let i = 0; i < ops.length; i += 1) {
-    if (!remove.has(i) && isKnownFractionalNoopFraction(ops, i, states)) remove.add(i);
+    if (!remove.has(i) && isKnownNoopUnaryOp(ops, i, states)) remove.add(i);
   }
   if (remove.size === 0) return emptyResult(ops);
   return {
@@ -157,7 +179,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-fraction-restore",
-        detail: `Removed ${remove.size} redundant К {x} op(s) already supplied by a ВП/X2 boundary or proved fractional X value.`,
+        detail: `Removed ${remove.size} redundant К {x}/К [x] op(s) already supplied by a ВП/X2 boundary or proved no-op X value.`,
       },
     ],
   };

@@ -3500,6 +3500,29 @@ export function x2ShapeSetRestoredVisibleDecimals(input: X2ShapeSet | undefined)
   return output;
 }
 
+export function x2ShapeSetHasExactIntegerDisplay(input: X2ShapeSet | undefined): boolean {
+  for (const fact of input ?? []) {
+    if (x2ShapeFactHasExactIntegerDisplay(fact)) return true;
+  }
+  return false;
+}
+
+function x2ShapeFactHasExactIntegerDisplay(fact: X2ShapeFact): boolean {
+  const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
+  if (decimal === undefined || !/^-?[0-9]+$/u.test(decimal)) return false;
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "mantissa") return false;
+  if (model.radix === "decimal") {
+    return model.safety === "dotSafeDecimal" &&
+      model.normalizedDecimal === decimal &&
+      exactDecimalDisplayShapeFact(decimal) === x2ShapeFactFromDataModel(model);
+  }
+  if (model.radix === "hex" || model.radix === "super") {
+    return structuralShapeFactRestoredVisibleDecimal(fact) === decimal && !model.hasDecimalPoint;
+  }
+  return false;
+}
+
 function x2ValueSetRestoredVisibleDecimals(input: X2ValueSet | undefined): Set<string> {
   const output = new Set<string>();
   for (const fact of input ?? []) {
