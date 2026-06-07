@@ -1391,6 +1391,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     source is still shape-only, but it also emits a stable
     `expr-key:0B(shape:...)` fact keyed by the canonical restored structural
     source. Decimal display-shape-only sign sources use the same key model.
+    The proof first materializes stable `expr-key:*` display shapes into the
+    same shape algebra, so a computed value whose only concrete form is inside
+    a stable key can still seed the signed decimal/structural X2 state without
+    requiring a separate explicit `xShape`/`x2Shape` fact.
     That lets repeated structural or display-shaped sign toggles meet in hidden-temp
     dataflow after an explicit X2 sync without promoting either side to a
     decimal value. These are structural display proofs only: they still refuse

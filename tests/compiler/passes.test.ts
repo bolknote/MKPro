@@ -3831,6 +3831,39 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(signed?.x2)).toEqual(x2ValueStateText(signed?.x));
   });
 
+  it("x2 value dataflow sign-changes materialized stable expr-key shapes", () => {
+    const structuralSource = "expr-key:31(shape:hex:-A:mantissa)" as X2ValueFact;
+    const structuralState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([structuralSource]),
+      x2: new Set<X2ValueFact>([structuralSource]),
+      entry: { kind: "closed" },
+    };
+    const signedStructural = transferX2ValueStateForEdge(
+      structuralState,
+      plain(0x0b, "/-/"),
+      "normal",
+      {},
+      0,
+    );
+
+    expect(x2ValueStateText(signedStructural?.x)).toContain("expr-key:0B(shape:hex:A:mantissa)");
+    expect(x2ShapeStateText(signedStructural?.xShape)).toEqual(["hex:-A:mantissa"]);
+    expect(x2ShapeStateText(signedStructural?.x2Shape)).toEqual(["hex:-A:mantissa"]);
+
+    const decimalSource = "expr-key:22(decimal:2:normalized)" as X2ValueFact;
+    const decimalState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([decimalSource]),
+      x2: new Set<X2ValueFact>([decimalSource]),
+      entry: { kind: "closed" },
+    };
+    const signedDecimal = transferX2ValueStateForEdge(decimalState, plain(0x0b, "/-/"), "normal", {}, 0);
+
+    expect(x2ValueStateText(signedDecimal?.x)).toEqual(["decimal:-4:normalized"]);
+    expect(x2ValueStateText(signedDecimal?.x2)).toEqual(["decimal:-4:normalized"]);
+    expect(x2ShapeStateText(signedDecimal?.xShape)).toEqual(["mantissa:-4:decimal"]);
+    expect(x2ShapeStateText(signedDecimal?.x2Shape)).toEqual(["mantissa:-4:decimal"]);
+  });
+
   it("x2 value dataflow derives unary decimal facts from shape-only decimal mantissas", () => {
     const shapeOnly: X2ValueDataflowState = {
       x: new Set(),
