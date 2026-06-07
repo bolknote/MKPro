@@ -17729,6 +17729,29 @@ describe("ir passes on synthetic programs", () => {
       call("restore"),
       halt(),
     ];
+    const nextReturnSyncThroughXChangingGapProgram: IrOp[] = [
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      plain(0x22, "F x^2"),
+      call("square"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const restoreGapProgram: IrOp[] = [
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      call("square"),
+      halt(),
+    ];
 
     expect(x2NextStackPreservingReturnX2SyncIndex(
       nextReturnSyncProgram,
@@ -17744,6 +17767,16 @@ describe("ir passes on synthetic programs", () => {
       restoringHelperProgram,
       6,
       directReturnAnalysisContext(restoringHelperProgram),
+    )).toBeUndefined();
+    expect(x2NextStackPreservingReturnX2SyncIndex(
+      nextReturnSyncThroughXChangingGapProgram,
+      6,
+      directReturnAnalysisContext(nextReturnSyncThroughXChangingGapProgram),
+    )).toBe(7);
+    expect(x2NextStackPreservingReturnX2SyncIndex(
+      restoreGapProgram,
+      6,
+      directReturnAnalysisContext(restoreGapProgram),
     )).toBeUndefined();
   });
 
@@ -18178,6 +18211,37 @@ describe("ir passes on synthetic programs", () => {
       ret(),
       label("main"),
       plain(0x02, "2"),
+      call("square"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift removes В↑ before a return X2 sync through an X-changing gap", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x22, "F x^2"),
+      call("square"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x22, "F x^2"),
       call("square"),
       plain(0x0a, "."),
       halt(),

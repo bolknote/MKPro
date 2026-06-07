@@ -3064,7 +3064,7 @@ export function x2NextStackPreservingReturnX2SyncIndex(
     if (isKnownReturnCallOp(op) && x2KnownReturnCallReachesStackPreservingX2Sync(ops, op, context)) {
       return index;
     }
-    if (!x2IsStackXAndX2PreservingGapOp(ops, op, index, context)) return undefined;
+    if (!x2IsForwardReturnX2SyncGapOp(ops, op, index, context)) return undefined;
   }
   return undefined;
 }
@@ -3171,6 +3171,30 @@ function x2IsStackXAndX2PreservingGapOp(
     case "plain": {
       const effect = analyzeX2StackEffect(op);
       return effect.stackPreserves && effect.x2Preserves && plainPreservesXValue(op);
+    }
+    default:
+      return false;
+  }
+}
+
+function x2IsForwardReturnX2SyncGapOp(
+  ops: readonly IrOp[],
+  op: IrOp,
+  index: number,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  if (op.kind === "label") return !context.labelEntries.has(index);
+  if (isKnownReturnCallOp(op)) return x2KnownReturnCallPreservesStackXAndX2(ops, op, context);
+  if (x2IsFallthroughStackPreservingGapOp(op)) return true;
+  switch (op.kind) {
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain": {
+      const effect = analyzeX2StackEffect(op);
+      return effect.stackPreserves && !effect.x2Restores;
     }
     default:
       return false;
