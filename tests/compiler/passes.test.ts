@@ -1599,6 +1599,14 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0a, "."),
       halt(),
     ];
+    const addressGapProgram: IrOp[] = [
+      recall("1", "preload const Е"),
+      plain(0x0c, "ВП"),
+      orphanAddress(54),
+      plain(0x20, "F pi"),
+      plain(0x0a, "."),
+      halt(),
+    ];
     const twoGapProgram: IrOp[] = [
       recall("1", "preload const Е"),
       plain(0x0c, "ВП"),
@@ -1615,6 +1623,7 @@ describe("ir passes on synthetic programs", () => {
     ];
     const dStates = computeX2ValueStates(dProgram);
     const eGapStates = computeX2ValueStates(eGapProgram);
+    const addressGapStates = computeX2ValueStates(addressGapProgram);
     const twoGapStates = computeX2ValueStates(twoGapProgram);
     const cStates = computeX2ValueStates(cProgram);
 
@@ -1622,6 +1631,8 @@ describe("ir passes on synthetic programs", () => {
     expect(x2CanUseVpDotRestoreAt(dProgram, 2, dStates[2])).toBe(true);
     expect(x2StateHasVpDotSafeStructuralContextX2(eGapStates[3])).toBe(true);
     expect(x2CanUseVpDotRestoreAt(eGapProgram, 3, eGapStates[3])).toBe(true);
+    expect(x2StateHasVpDotSafeStructuralContextX2(addressGapStates[4])).toBe(true);
+    expect(x2CanUseVpDotRestoreAt(addressGapProgram, 4, addressGapStates[4])).toBe(true);
     expect(x2StateHasVpDotSafeStructuralContextX2(twoGapStates[4])).toBe(true);
     expect(x2CanUseVpDotRestoreAt(twoGapProgram, 4, twoGapStates[4])).toBe(false);
     expect(x2StateHasVpDotSafeStructuralContextX2(cStates[2])).toBe(false);
@@ -13029,6 +13040,25 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(3);
     expect(result.ops).toEqual([
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("x2-dead-restore-before-overwrite removes safe structural VP-dot across address gaps", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const D"),
+      plain(0x0c, "ВП"),
+      orphanAddress(54),
+      plain(0x0a, "."),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      orphanAddress(54),
       plain(0x0d, "Cx"),
       halt(),
     ]);
