@@ -331,6 +331,7 @@ export function emptyResult(ops: readonly IrOp[]): PassResult {
 const directReturnAnalysisContextCache = new WeakMap<readonly IrOp[], DirectReturnAnalysisContext>();
 const x2StackXAndX2ReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
 const x2StrictStackReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
+const x2RestoreGapReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
 
 export function cellsPerOp(op: IrOp): number {
   switch (op.kind) {
@@ -3688,7 +3689,14 @@ export function x2RestoreGapDirectReturnDoesNotObserveRestore(
   call: KnownReturnCallOp,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, isLinearX2RestoreGapTransparentOp);
+  return nestedReturnCallRangeIsTransparent(
+    ops,
+    call,
+    context,
+    isLinearX2RestoreGapTransparentOp,
+    x2ReturnMemo(ops, x2RestoreGapReturnMemo),
+    new Set(),
+  );
 }
 
 function isLinearX2RestoreGapTransparentOp(op: IrOp): boolean {

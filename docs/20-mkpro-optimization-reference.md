@@ -1096,8 +1096,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     That restore-gap proof may cross a direct or proved-indirect `ПП` helper
     chain that reaches `В/О` through only nested transparent helper calls and
     restore-transparent empty/address cells; helpers that store, branch,
-    restore X2, recurse, or expose another entry remain barriers. The same direct-return
-    context is used for closed-context `/-/` dot sources, so a transparent
+    restore X2, recurse, or expose another entry remain barriers. This
+    transparent-helper proof is memoized per IR body and shared by the X2
+    restore-gap scanners. The same direct-return context is used for closed-context `/-/` dot sources, so a transparent
     helper between the modeled sign-change and the candidate `.` does not reset
     the proof, while a helper that performs its own X2 restore still blocks it.
     A separate normalized/visible-decimal/dot-safe-structural escape hatch
