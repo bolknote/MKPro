@@ -1353,7 +1353,20 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `*`/`/`, so future hex/super arithmetic extensions cannot split numeric and
     display evidence by accident.
     The regular `F x^2` value model can then derive follow-on
-    values such as `1`/`4`/`9`. The verified
+    values such as `1`/`4`/`9`. Stable `expr-key:*` proofs keep
+    operand order whenever either operand is structural, even for otherwise
+    commutative opcodes, because MK-61 structural arithmetic can distinguish
+    `A * 16` from `16 * A`; structural operands are also withheld from the
+    ordinary decimal evaluation branch while the structural table is being
+    evaluated, so shape evidence such as `hex:A` cannot leak a false decimal
+    `10` into the same proof. Exact structural decimal displays such as
+    `hex:123` may still enter the decimal branch, while non-normal spellings
+    such as `hex:0123` stay shape-only. When stable expression keys are joined
+    back into hidden `X2` shape facts, only the materialized `expr-key` shapes
+    are normalized as an X2 sync; an explicitly tracked raw hidden shape such as
+    `02` or `01.2` remains raw. Signed-zero display evidence is carried by the
+    shape lattice itself and does not force a separate stable `expr-key` when
+    the value is already proved as normalized zero. The verified
     single-hex-digit multiplication table is also operand-order-specific:
     `A`/`B`/`C`/`D`/`E` in `Y` is modeled for pinned decimal right operands
     `0`..`18`, preserving display shape such as non-normal

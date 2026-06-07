@@ -3285,6 +3285,38 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x)).not.toContain("expr-key:16(shape:hex-exponent:Г:2)");
   });
 
+  it("x2 value dataflow keeps structural stable expr operands ordered", () => {
+    const leftStructural: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x06, "6"),
+      plain(0x12, "×"),
+      halt(),
+    ];
+    const rightStructural: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x06, "6"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const A"),
+      plain(0x12, "×"),
+      halt(),
+    ];
+    const leftStates = computeX2ValueStates(leftStructural, { trackRegisterMemory: true });
+    const rightStates = computeX2ValueStates(rightStructural, { trackRegisterMemory: true });
+
+    expect(x2ValueStateText(leftStates[5]?.x)).toContain(
+      "expr-key:12(shape:hex:A:mantissa,decimal:16:normalized)",
+    );
+    expect(x2ValueStateText(leftStates[5]?.x)).not.toContain("decimal:160:normalized");
+    expect(x2ShapeStateText(leftStates[5]?.xShape)).toEqual(["mantissa:000:decimal"]);
+    expect(x2ValueStateText(rightStates[5]?.x)).toContain("decimal:160:normalized");
+    expect(x2ValueStateText(rightStates[5]?.x)).not.toContain(
+      "expr-key:12(shape:hex:A:mantissa,decimal:16:normalized)",
+    );
+    expect(x2ShapeStateText(rightStates[5]?.xShape)).toEqual(["mantissa:160:decimal"]);
+  });
+
   it("x2 value dataflow materializes decimal stable expr-key shapes on explicit X2 sync", () => {
     const legacy: X2ValueDataflowState = {
       x: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
