@@ -247,6 +247,7 @@ export interface X2RestoreExposureOptions {
   readonly redundantSyncValue?: boolean | undefined;
   readonly redundantSyncDisplayValue?: boolean | undefined;
   readonly redundantSyncShape?: boolean | undefined;
+  readonly redundantSyncVpShape?: boolean | undefined;
 }
 
 export interface X2VpShapeContextAnalysis {
@@ -4173,6 +4174,7 @@ export function analyzeRecallRemoval(
   const redundantSyncValue = valueProof?.x2SyncValue === true;
   const redundantSyncDisplayValue = valueProof?.x2SyncDisplayValue === true;
   const redundantSyncShape = valueProof?.x2SyncShape === true;
+  const redundantSyncVpShape = valueProof?.x2SyncVpShape === true;
   const exposesStackLift = removingRecallCanExposeStackLift(ops, recallIndex);
   const exposesX2Restore =
     removingRecallCanExposeX2Restore(ops, recallIndex, {
@@ -4180,6 +4182,7 @@ export function analyzeRecallRemoval(
       redundantSyncValue,
       redundantSyncDisplayValue,
       redundantSyncShape,
+      redundantSyncVpShape,
     }) &&
     !recallRemovalPreservesImmediateVpRestoreContext(ops, recallIndex, x2ValueState, valueProof, context);
   const result: RecallRemovalAnalysis = {
@@ -9476,7 +9479,8 @@ export function x2SyncCanExposeContextSensitiveRestore(
               options.redundantSyncRegister !== undefined ||
               options.redundantSyncValue === true ||
               options.redundantSyncShape === true ||
-              (options.redundantSyncDisplayValue === true && op.opcode === 0x0a);
+              (options.redundantSyncDisplayValue === true && op.opcode === 0x0a) ||
+              (options.redundantSyncVpShape === true && op.opcode === 0x0c);
             return redundantSync && sawExecutableAfterSync ? false : true;
           }
           if (effect === "restores") return false;

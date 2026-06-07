@@ -1828,11 +1828,12 @@ The pipeline currently contains:
   the recall can be removed. The exact-display normalized-value proof is used
   for `.` restore exposure only; it is not treated as a general replacement for
   `/-/` or `ВП` previous-command context. A direct or proved stable-indirect decimal or
-  structural recall immediately before `ВП` can also be removed when the active
-  decimal mantissa, exact decimal display-shape source, or structural `ВП`
-  source already matches the recalled source. This `ВП`-only shape sync is not
-  reported as a general redundant shape sync for `.`/`/-/`; it only preserves the
-  immediate exponent-entry context. A recall before a free-standing
+  structural recall immediately before `ВП`, or before an X2-preserving gap and
+  then `ВП`, can also be removed when the active decimal mantissa, exact decimal
+  display-shape source, or structural `ВП` source already matches the recalled
+  source. This `ВП`-only shape sync is not reported as a general redundant shape
+  sync for `.`/`/-/`; it only preserves the `ВП` exponent-entry context. A recall
+  before a free-standing
   `/-/ ... ВП` gap can likewise be removed when the store-backed decimal sign
   source, proved closed `X == X2` normalized-decimal sign source, exact decimal
   display-shape source, or proved shared structural hex/super source shape

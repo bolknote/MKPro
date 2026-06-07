@@ -8450,6 +8450,73 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("recall removal preserves delayed VP context through VP-only decimal shape sync", () => {
+    const program: IrOp[] = [
+      recall("2"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      entry: { kind: "closed" },
+      memory: {},
+      shapeMemory: {
+        "2": new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      },
+    };
+
+    expect(analyzeRecallRemoval(program, 0, undefined, state)).toMatchObject({
+      redundantSyncValue: false,
+      redundantSyncShape: false,
+      x2SyncRedundant: false,
+      exposesStackLift: false,
+      exposesX2Restore: false,
+      removable: true,
+      valueProof: {
+        register: "2",
+        inX: true,
+        x2SyncValue: false,
+        x2SyncVpShape: true,
+      },
+    });
+  });
+
+  it("recall removal keeps delayed dot and sign restores after VP-only decimal shape sync", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      entry: { kind: "closed" },
+      memory: {},
+      shapeMemory: {
+        "2": new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      },
+    };
+
+    for (const restore of [plain(0x0a, "."), plain(0x0b, "/-/")]) {
+      expect(analyzeRecallRemoval([recall("2"), plain(0x54, "КНОП"), restore, halt()], 0, undefined, state))
+        .toMatchObject({
+          redundantSyncValue: false,
+          redundantSyncShape: false,
+          x2SyncRedundant: false,
+          exposesStackLift: false,
+          exposesX2Restore: true,
+          removable: false,
+          valueProof: {
+            register: "2",
+            inX: true,
+            x2SyncValue: false,
+            x2SyncVpShape: true,
+          },
+        });
+    }
+  });
+
   it("recall removal preserves active mantissa VP context through display source keys", () => {
     const program: IrOp[] = [
       recall("2"),
