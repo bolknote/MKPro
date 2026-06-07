@@ -21830,6 +21830,45 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes an empty separator before an orphan address gap and non-digit command", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      orphanAddress(54),
+      plain(0x20, "Fπ"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      orphanAddress(54),
+      plain(0x20, "Fπ"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice keeps an empty separator before an orphan address gap and exponent digit", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      orphanAddress(54),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-splice removes an empty separator before VP-context sign-change after preserving gaps", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),

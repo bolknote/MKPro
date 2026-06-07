@@ -221,7 +221,7 @@ function removableExponentSeparatorRun(
   const run: number[] = [];
   for (let index = startIndex; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (op.kind === "label") continue;
+    if (op.kind === "label" || op.kind === "orphan-address") continue;
     if (isFreeStandingX2EmptyOp(op)) {
       run.push(index);
       continue;
