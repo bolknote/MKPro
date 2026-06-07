@@ -5244,7 +5244,7 @@ function recallRemovalPreservesImmediateVpRestoreContext(
 function nextImmediateX2RestoreOp(ops: readonly IrOp[], start: number): IrOp | undefined {
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (op.kind === "label") continue;
+    if (op.kind === "label" || op.kind === "orphan-address") continue;
     return op;
   }
   return undefined;

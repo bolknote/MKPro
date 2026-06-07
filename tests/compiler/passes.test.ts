@@ -20053,6 +20053,27 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("store-recall-peephole drops structural recall before immediate ВП across address gaps", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const FACE"),
+      store("6"),
+      recall("2", "preload const FACE"),
+      orphanAddress(54),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1", "preload const FACE"),
+      store("6"),
+      orphanAddress(54),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
   it("store-recall-peephole drops structural exponent preload recall when shape proof shows X is unchanged", () => {
     const program: IrOp[] = [
       recall("1", "preload const Г"),
