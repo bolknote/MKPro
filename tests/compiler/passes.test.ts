@@ -4779,6 +4779,24 @@ describe("ir passes on synthetic programs", () => {
         halt(),
       ];
     }
+    function hexLeftPlusDecimalLiteralProgram(literal: string, decimal: string): IrOp[] {
+      return [
+        recall("1", `preload const ${literal}`),
+        plain(0x0e, "В↑"),
+        recall("2", `preload const ${decimal}`),
+        plain(0x10, "+"),
+        halt(),
+      ];
+    }
+    function decimalLeftPlusHexLiteralProgram(decimal: string, literal: string): IrOp[] {
+      return [
+        recall("2", `preload const ${decimal}`),
+        plain(0x0e, "В↑"),
+        recall("1", `preload const ${literal}`),
+        plain(0x10, "+"),
+        halt(),
+      ];
+    }
 
     expect(x2ValueStateText(computeX2ValueStates(hexLeftPlusDecimalProgram("С", plain(0x04, "4")))[4]?.x) ?? [])
       .toContain("decimal:16:normalized");
@@ -4801,6 +4819,14 @@ describe("ir passes on synthetic programs", () => {
       .toContain("decimal:17:normalized");
     expect(x2ValueStateText(computeX2ValueStates(decimalLeftPlusHexProgram(plain(0x03, "3"), "С"))[4]?.x) ?? [])
       .toContain("decimal:5:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(hexLeftPlusDecimalLiteralProgram("A", "18"))[4]?.x) ?? [])
+      .toContain("decimal:28:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(hexLeftPlusDecimalLiteralProgram("С", "16"))[4]?.x) ?? [])
+      .toContain("decimal:28:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(decimalLeftPlusHexLiteralProgram("18", "Е"))[4]?.x) ?? [])
+      .toContain("decimal:32:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(hexLeftPlusDecimalLiteralProgram("F", "18"))[4]?.x) ?? [])
+      .not.toContain("decimal:33:normalized");
   });
 
   it("x2 value dataflow models emulator-pinned single hex digit subtract table", () => {
@@ -4816,6 +4842,24 @@ describe("ir passes on synthetic programs", () => {
     function decimalLeftMinusHexProgram(digit: Extract<IrOp, { kind: "plain" }>, literal: string): IrOp[] {
       return [
         digit,
+        plain(0x0e, "В↑"),
+        recall("1", `preload const ${literal}`),
+        plain(0x11, "-"),
+        halt(),
+      ];
+    }
+    function hexLeftMinusDecimalLiteralProgram(literal: string, decimal: string): IrOp[] {
+      return [
+        recall("1", `preload const ${literal}`),
+        plain(0x0e, "В↑"),
+        recall("2", `preload const ${decimal}`),
+        plain(0x11, "-"),
+        halt(),
+      ];
+    }
+    function decimalLeftMinusHexLiteralProgram(decimal: string, literal: string): IrOp[] {
+      return [
+        recall("2", `preload const ${decimal}`),
         plain(0x0e, "В↑"),
         recall("1", `preload const ${literal}`),
         plain(0x11, "-"),
@@ -4843,6 +4887,16 @@ describe("ir passes on synthetic programs", () => {
       .toContain("decimal:-10:normalized");
     expect(x2ShapeStateText(computeX2ValueStates(decimalLeftMinusHexProgram(plain(0x00, "0"), "С"))[4]?.xShape))
       .toEqual(["mantissa:-2:decimal"]);
+    expect(x2ValueStateText(computeX2ValueStates(hexLeftMinusDecimalLiteralProgram("A", "18"))[4]?.x) ?? [])
+      .toContain("decimal:-8:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(hexLeftMinusDecimalLiteralProgram("Е", "16"))[4]?.x) ?? [])
+      .toContain("decimal:-2:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(decimalLeftMinusHexLiteralProgram("18", "B"))[4]?.x) ?? [])
+      .toContain("decimal:23:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(decimalLeftMinusHexLiteralProgram("10", "Е"))[4]?.x) ?? [])
+      .toContain("decimal:12:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(hexLeftMinusDecimalLiteralProgram("F", "18"))[4]?.x) ?? [])
+      .not.toContain("decimal:-3:normalized");
   });
 
   it("x2 value dataflow models emulator-pinned hex A times 18 leading-zero result", () => {

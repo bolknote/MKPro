@@ -1430,31 +1430,33 @@ function structuralSingleHexExponentOperandFromShapeModel(
 
 function structuralHexDigitPlusDecimalValue(leftDigit: number, right: string): string | undefined {
   if (!isVerifiedArithmeticHexDigit(leftDigit)) return undefined;
-  const rightDigit = singleDecimalDigitValue(right);
-  return rightDigit === undefined ? undefined : String(leftDigit + rightDigit);
+  const rightValue = verifiedDecimalOperandValue(right);
+  return rightValue === undefined ? undefined : String(leftDigit + rightValue);
 }
 
 function decimalPlusStructuralHexDigitValue(left: string, rightDigit: number): string | undefined {
   if (!isVerifiedArithmeticHexDigit(rightDigit)) return undefined;
-  const leftDigit = singleDecimalDigitValue(left);
-  if (leftDigit === undefined) return undefined;
-  const value = (leftDigit + rightDigit) % 16;
+  const leftValue = verifiedDecimalOperandValue(left);
+  if (leftValue === undefined) return undefined;
+  if (leftValue >= 10) return String(leftValue + rightDigit);
+  const value = (leftValue + rightDigit) % 16;
   return String(value >= 10 ? value - 10 : value);
 }
 
 function structuralHexDigitMinusDecimalValue(leftDigit: number, right: string): string | undefined {
   if (!isVerifiedArithmeticHexDigit(leftDigit)) return undefined;
-  const rightDigit = singleDecimalDigitValue(right);
-  if (rightDigit === undefined) return undefined;
-  const value = leftDigit - rightDigit;
-  return String(rightDigit === 0 || value < 10 ? value : value - 10);
+  const rightValue = verifiedDecimalOperandValue(right);
+  if (rightValue === undefined) return undefined;
+  const value = leftDigit - rightValue;
+  return String(rightValue === 0 || value < 10 ? value : value - 10);
 }
 
 function decimalMinusStructuralHexDigitValue(left: string, rightDigit: number): string | undefined {
   if (!isVerifiedArithmeticHexDigit(rightDigit)) return undefined;
-  const leftDigit = singleDecimalDigitValue(left);
-  if (leftDigit === undefined) return undefined;
-  const value = leftDigit - rightDigit;
+  const leftValue = verifiedDecimalOperandValue(left);
+  if (leftValue === undefined) return undefined;
+  if (leftValue >= 10 && rightDigit > 10) return String(leftValue - rightDigit + 16);
+  const value = leftValue - rightDigit;
   return String(value <= -11 ? value + 10 : value);
 }
 
@@ -1473,9 +1475,13 @@ function isVerifiedArithmeticHexDigit(digit: number): boolean {
   return digit === 10 || digit === 11 || digit === 12 || digit === 13 || digit === 14;
 }
 
-function singleDecimalDigitValue(value: string): number | undefined {
-  return /^[0-9]$/u.test(value) ? Number(value) : undefined;
+function verifiedDecimalOperandValue(value: string): number | undefined {
+  return STRUCTURAL_HEX_DECIMAL_OPERANDS.has(value) ? Number(value) : undefined;
 }
+
+const STRUCTURAL_HEX_DECIMAL_OPERANDS = new Set(
+  Array.from({ length: 19 }, (_, value) => String(value)),
+);
 
 function structuralHexDigitTimesDecimalValue(leftDigit: number, right: string): string | undefined {
   return structuralHexDigitTimesDecimalProduct(leftDigit, right)?.value;
@@ -1679,9 +1685,7 @@ function structuralHexDigitTimesStructuralHexDigitProduct(
   return { value, display: leftDigit === 10 ? "00" : value };
 }
 
-const DECIMAL_TIMES_STRUCTURAL_HEX_INPUTS = new Set(
-  Array.from({ length: 19 }, (_, value) => String(value)),
-);
+const DECIMAL_TIMES_STRUCTURAL_HEX_INPUTS = STRUCTURAL_HEX_DECIMAL_OPERANDS;
 
 const STRUCTURAL_HEX_DIGIT_DIVIDE_DECIMAL_TABLE: ReadonlyMap<string, StructuralHexDecimalProduct> =
   structuralHexDecimalProductTable([
@@ -2310,9 +2314,7 @@ function decimalMinusStructuralHexExponentProduct(
   return decimalMinusStructuralHexExponentProductFromPinnedOperand(left, right);
 }
 
-const STRUCTURAL_HEX_EXPONENT_ADD_SUB_DECIMAL_INPUTS = new Set(
-  Array.from({ length: 19 }, (_, value) => String(value)),
-);
+const STRUCTURAL_HEX_EXPONENT_ADD_SUB_DECIMAL_INPUTS = STRUCTURAL_HEX_DECIMAL_OPERANDS;
 
 function structuralHexExponentAddSubDecimalProduct(
   left: StructuralHexExponentOperand,

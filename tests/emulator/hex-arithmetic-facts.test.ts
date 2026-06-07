@@ -97,6 +97,12 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(addRegisters("0", "B")).toBe("1,");
     expect(addRegisters("Г", "4")).toBe("17,");
     expect(addRegisters("3", "С")).toBe("5,");
+    expect(addRegisters("-", "18")).toBe("28,");
+    expect(addRegisters("18", "-")).toBe("28,");
+    expect(addRegisters("С", "16")).toBe("28,");
+    expect(addRegisters("16", "С")).toBe("28,");
+    expect(addRegisters("Е", "18")).toBe("32,");
+    expect(addRegisters("18", "Е")).toBe("32,");
     expect(addRegisters("-", "B")).toBe("5,");
     expect(addRegisters("Г", "Е")).toBe("11,");
 
@@ -115,6 +121,13 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(subtractRegisters("0", "B")).toBe("-1,");
     expect(subtractRegisters("С", "2")).toBe("0,");
     expect(subtractRegisters("Е", "5")).toBe("9,");
+    expect(subtractRegisters("-", "18")).toBe("-8,");
+    expect(subtractRegisters("18", "-")).toBe("8,");
+    expect(subtractRegisters("B", "18")).toBe("-7,");
+    expect(subtractRegisters("18", "B")).toBe("23,");
+    expect(subtractRegisters("С", "16")).toBe("-4,");
+    expect(subtractRegisters("16", "С")).toBe("20,");
+    expect(subtractRegisters("10", "Е")).toBe("12,");
     expect(subtractRegisters("0", "С")).toBe("-2,");
     expect(subtractRegisters("2", "С")).toBe("-10,");
     expect(subtractRegisters("4", "Е")).toBe("-10,");

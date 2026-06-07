@@ -1316,10 +1316,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     normalization is applied to plain X2-affecting opcodes, direct conditional
     and counted-loop fallthrough syncs, and direct `В/О` return syncs. Operand order remains part of the binary
     proof. For `+` and `-`, a single `A`/`B`/`C`/`D`/`E` hex digit paired with a
-    proved decimal digit `0..9`, or with another verified single
+    proved decimal operand `0`..`18`, or with another verified single
     `A`/`B`/`C`/`D`/`E` hex digit, uses the verified operand-order-specific table,
     including cases such as `Г + 4 -> 17`, `3 + С -> 5`, `A + B -> 5`,
-    `Г + Е -> 11`, `С - 2 -> 0`, `0 - С -> -2`, and `A - Е -> -4`;
+    `A + 18 -> 28`, `18 - B -> 23`, `Г + Е -> 11`, `С - 2 -> 0`,
+    `0 - С -> -2`, and `A - Е -> -4`;
     the regular `F x^2` value model can then derive follow-on
     values such as `1`/`4`/`9`. The verified
     single-hex-digit multiplication table is also operand-order-specific:

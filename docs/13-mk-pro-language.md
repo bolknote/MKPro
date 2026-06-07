@@ -1435,11 +1435,12 @@ The pipeline currently contains:
   Emulator-pinned single-digit hex arithmetic
   tables are modeled as exact decimal value proofs where the operand order is
   fixed by MK-61 stack behavior. For `+` and `-`, a single `A`/`B`/`C`/`D`/`E` hex
-  digit paired with a proved decimal digit `0..9`, or with another verified
+  digit paired with a proved decimal operand `0..18`, or with another verified
   single `A`/`B`/`C`/`D`/`E` hex digit, uses the verified
   operand-order-specific table, including cases such as `Г + 4 -> 17`,
-  `3 + С -> 5`, `A + B -> 5`, `Г + Е -> 11`, `С - 2 -> 0`,
-  `0 - С -> -2`, and `A - Е -> -4`. The following ordinary
+  `3 + С -> 5`, `A + 18 -> 28`, `18 - B -> 23`, `A + B -> 5`,
+  `Г + Е -> 11`, `С - 2 -> 0`, `0 - С -> -2`, and `A - Е -> -4`.
+  The following ordinary
   `F x^2` proof can then derive values such as `1`/`4`/`9` from those decimal
   facts. The
   emulator-pinned single-hex-digit multiplication table is also
