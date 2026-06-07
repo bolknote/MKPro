@@ -711,38 +711,11 @@ function stableExpressionKeyHasConcreteDecimalResult(
   op: Extract<IrOp, { kind: "plain" }>,
   key: string,
 ): boolean {
-  if (
-    plainProducesConcreteDecimalValues(
-      op,
-      stableExpressionKeyValueSet(key),
-      stableExpressionKeyShapeSet(key),
-    ).size > 0
-  ) {
-    return true;
-  }
-  if (op.opcode === 0x15) return decimalPowerOfTenFromFactKey(key) !== undefined;
-  if (op.opcode === 0x16) return decimalExpFromFactKey(key) !== undefined;
-  if (op.opcode === 0x17) return decimalCommonLogFromFactKey(key) !== undefined;
-  if (op.opcode === 0x18) return decimalNaturalLogFromFactKey(key) !== undefined;
-  if (op.opcode === 0x19) return decimalArcSinFromFactKey(key) !== undefined;
-  if (op.opcode === 0x1a) return decimalArcCosFromFactKey(key) !== undefined;
-  if (op.opcode === 0x1b) return decimalArcTanFromFactKey(key) !== undefined;
-  if (op.opcode === 0x1c) return decimalSinFromFactKey(key) !== undefined;
-  if (op.opcode === 0x1d) return decimalCosFromFactKey(key) !== undefined;
-  if (op.opcode === 0x1e) return decimalTanFromFactKey(key) !== undefined;
-  if (op.opcode === 0x21) return decimalSquareRootFromFactKey(key) !== undefined;
-  if (op.opcode === 0x22) return decimalSquareFromFactKey(key) !== undefined;
-  if (op.opcode === 0x23) return decimalReciprocalFromFactKey(key) !== undefined;
-  if (op.opcode === 0x26) return decimalToMinutesFromFactKey(key) !== undefined;
-  if (op.opcode === 0x2a) return decimalToMinutesSecondsFromFactKey(key) !== undefined;
-  if (op.opcode === 0x30) return decimalFromMinutesSecondsFromFactKey(key) !== undefined;
-  if (op.opcode === 0x33) return decimalFromMinutesFromFactKey(key) !== undefined;
-  if (op.opcode === 0x3a) return decimalBitwiseNotFromFactKey(key) !== undefined;
-  if (op.opcode === 0x35) return decimalFractionPartFromFactKey(key) !== undefined;
-  if (op.opcode === 0x34) return decimalIntegerPartFromFactKey(key) !== undefined;
-  if (op.opcode === 0x31) return decimalAbsFromFactKey(key) !== undefined;
-  if (op.opcode === 0x32) return decimalSignFromFactKey(key) !== undefined;
-  return false;
+  return plainProducesConcreteDecimalValues(
+    op,
+    stableExpressionKeyValueSet(key),
+    stableExpressionKeyShapeSet(key),
+  ).size > 0;
 }
 
 function stableBinaryExpressionKeyHasConcreteDecimalResult(
@@ -1736,116 +1709,6 @@ function concreteDecimalUnaryValue(opcode: number, value: string): string | unde
     default:
       return undefined;
   }
-}
-
-function decimalPowerOfTenFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalPowerOfTen(decimal);
-}
-
-function decimalExpFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalExp(decimal);
-}
-
-function decimalCommonLogFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalCommonLog(decimal);
-}
-
-function decimalNaturalLogFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalNaturalLog(decimal);
-}
-
-function decimalArcSinFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalArcSin(decimal);
-}
-
-function decimalArcCosFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalArcCos(decimal);
-}
-
-function decimalArcTanFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalArcTan(decimal);
-}
-
-function decimalSinFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalSin(decimal);
-}
-
-function decimalCosFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalCos(decimal);
-}
-
-function decimalTanFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalTan(decimal);
-}
-
-function decimalSquareRootFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalSquareRoot(decimal);
-}
-
-function decimalSquareFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalSquare(decimal);
-}
-
-function decimalReciprocalFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalReciprocal(decimal);
-}
-
-function decimalToMinutesFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalToMinutes(decimal);
-}
-
-function decimalToMinutesSecondsFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalToMinutesSeconds(decimal);
-}
-
-function decimalFromMinutesSecondsFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalFromMinutesSeconds(decimal);
-}
-
-function decimalFromMinutesFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalFromMinutes(decimal);
-}
-
-function decimalBitwiseNotFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalBitwiseNot(decimal);
-}
-
-function decimalFractionPartFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalFractionPart(decimal);
-}
-
-function decimalIntegerPartFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalIntegerPart(decimal);
-}
-
-function decimalAbsFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalAbs(decimal);
-}
-
-function decimalSignFromFactKey(key: string): string | undefined {
-  const decimal = decimalFromFactKey(key);
-  return decimal === undefined ? undefined : decimalSign(decimal);
 }
 
 function decimalFromFactKey(key: string): string | undefined {

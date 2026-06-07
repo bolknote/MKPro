@@ -4349,6 +4349,18 @@ describe("ir passes on synthetic programs", () => {
     }
   });
 
+  it("x2 value dataflow suppresses decimal unary expr keys through the shared concrete evaluator", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x22, "F x^2"),
+      halt(),
+    ];
+    const values = x2ValueStateText(computeX2ValueStates(program)[2]?.x);
+
+    expect(values).toContain("decimal:4:normalized");
+    expect(values).not.toContain("expr-key:22(decimal:2:normalized)");
+  });
+
   it("x2 value dataflow models documented single-digit hex subtract-one decimal facts", () => {
     function subtractOneProgram(literal: string, right: Extract<IrOp, { kind: "plain" }> = plain(0x01, "1")): IrOp[] {
       return [

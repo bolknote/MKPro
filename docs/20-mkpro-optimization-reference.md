@@ -826,8 +826,11 @@ Display rewrites are separated into strategy selection + body lowering.
   is a proved register, normalized decimal, raw decimal value fact normalized by
   restored-visible value, or earlier stable expression key. The same
   restored-visible normalization feeds concrete pure unary/binary decimal
-  results, but it does not make the raw mantissa shape dot-safe and does not
-  promote it to a `ВП` display-shape proof.
+  results. The stable-key concrete gate delegates to that shared evaluator, so
+  decimal, exact display-shape, and structural-unary concrete proofs cannot
+  drift into separate opcode-specific suppression rules; it still does not make
+  the raw mantissa shape dot-safe and does not promote it to a `ВП`
+  display-shape proof.
   Closed-context `/-/` states that produce a decimal mantissa also record that
   mantissa as an explicit `ВП` sign source. Exact decimal display-shapes and
   structural hex/super sources have a separate explicit sign-shape channel,
