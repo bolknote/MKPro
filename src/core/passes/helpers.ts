@@ -3846,6 +3846,7 @@ export function recallAlreadySyncedInX2RestoredVisibleDecimal(
   const register = removableRecallValueRegister(op);
   if (register === undefined || state === undefined) return undefined;
   const hiddenDecimals = x2ValueSetRestoredVisibleDecimals(state.x2);
+  for (const decimal of dotSafeDecimalShapeValues(state.x2Shape)) hiddenDecimals.add(decimal);
   if (hiddenDecimals.size === 0) return undefined;
 
   for (const visible of x2ShapeSetRestoredVisibleDecimals(recallDecimalDisplayShapeFacts(op, state, register))) {
@@ -4004,6 +4005,9 @@ export function analyzeRecallRemoval(
   const redundantSyncRegister = recallAlreadySyncedInX2(op, x2RegisterState) ?? valueProof?.x2SyncRegister;
   const redundantSyncValue = valueProof?.x2SyncValue === true;
   const redundantSyncDisplayValue = valueProof?.x2SyncDisplayValue === true;
+  const redundantSyncDisplayValueForContext =
+    redundantSyncDisplayValue &&
+    !removingRecallCanExposeX2Restore(ops, recallIndex, { redundantSyncDisplayValue: true });
   const redundantSyncShape = valueProof?.x2SyncShape === true;
   const redundantSyncVpShape = valueProof?.x2SyncVpShape === true;
   const exposesStackLift = removingRecallCanExposeStackLift(ops, recallIndex);
@@ -4025,7 +4029,7 @@ export function analyzeRecallRemoval(
     redundantSyncShape,
     x2SyncRedundant: redundantSyncRegister !== undefined ||
       redundantSyncValue ||
-      redundantSyncDisplayValue ||
+      redundantSyncDisplayValueForContext ||
       redundantSyncShape,
     exposesStackLift,
     exposesX2Restore,
