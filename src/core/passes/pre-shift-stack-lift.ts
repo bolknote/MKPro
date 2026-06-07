@@ -18,8 +18,10 @@ import {
   x2KnownReturnCallPreservesStackXAndX2,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
+  x2NextStackPreservingReturnX2SyncIndex,
   x2NextXPreservingX2SyncIndex,
   x2PreviousHardX2OverwriteIndex,
+  x2PreviousStackPreservingReturnX2SyncIndex,
   x2PreviousXPreservingX2SyncIndex,
 } from "./helpers.ts";
 
@@ -48,6 +50,11 @@ const run: IrPassFn = (ops) => {
       remove.add(index);
       continue;
     }
+    if (x2PreviousStackPreservingReturnX2SyncIndex(ops, index, context) !== undefined) {
+      if (removingStackLiftCanExposeStack(ops, index)) continue;
+      remove.add(index);
+      continue;
+    }
     const producerIndex = x2NextStackShiftingProducerIndex(ops, index + 1, context);
     if (producerIndex !== undefined) {
       if (
@@ -63,6 +70,12 @@ const run: IrPassFn = (ops) => {
       continue;
     }
     if (x2NextXPreservingX2SyncIndex(ops, index + 1, context) !== undefined) {
+      if (removingStackLiftCanExposeStack(ops, index)) continue;
+      if (removingRecallCanExposeX2Restore(ops, index)) continue;
+      remove.add(index);
+      continue;
+    }
+    if (x2NextStackPreservingReturnX2SyncIndex(ops, index + 1, context) !== undefined) {
       if (removingStackLiftCanExposeStack(ops, index)) continue;
       if (removingRecallCanExposeX2Restore(ops, index)) continue;
       remove.add(index);

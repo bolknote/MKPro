@@ -62,8 +62,10 @@ import {
   x2RestoreGapBeforeVp,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
+  x2NextStackPreservingReturnX2SyncIndex,
   x2NextXPreservingX2SyncIndex,
   x2PreviousHardX2OverwriteIndex,
+  x2PreviousStackPreservingReturnX2SyncIndex,
   x2PreviousXPreservingX2SyncIndex,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
@@ -17469,6 +17471,37 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift removes В↑ after a stack-preserving return helper that changes X", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      recall("1"),
+      call("square"),
+      plain(0x54, "К НОП"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      recall("1"),
+      call("square"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
   it("pre-shift-stack-lift stops post-plain-sync scanning at X-changing gaps", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -17552,7 +17585,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("pre-shift-stack-lift keeps post-producer В↑ before helpers that change X", () => {
+  it("pre-shift-stack-lift keeps В↑ after helpers that change X when the lift is consumed", () => {
     const program: IrOp[] = [
       jump("main"),
       label("square"),
@@ -17562,7 +17595,7 @@ describe("ir passes on synthetic programs", () => {
       recall("1"),
       call("square"),
       plain(0x0e, "В↑"),
-      plain(0x0a, "."),
+      plain(0x10, "+"),
       halt(),
     ];
     const result = preShiftStackLift.run(program, ctx);
@@ -17661,6 +17694,57 @@ describe("ir passes on synthetic programs", () => {
       6,
       directReturnAnalysisContext(returnSyncProgram),
     )).toBe(6);
+  });
+
+  it("stack/X2 scheduler helpers find return X2 syncs through X-changing stack-preserving helpers", () => {
+    const nextReturnSyncProgram: IrOp[] = [
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("square"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const previousReturnSyncProgram: IrOp[] = [
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      call("square"),
+      plain(0x54, "К НОП"),
+      plain(0x0e, "В↑"),
+      halt(),
+    ];
+    const restoringHelperProgram: IrOp[] = [
+      jump("main"),
+      label("restore"),
+      plain(0x0a, "."),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("restore"),
+      halt(),
+    ];
+
+    expect(x2NextStackPreservingReturnX2SyncIndex(
+      nextReturnSyncProgram,
+      6,
+      directReturnAnalysisContext(nextReturnSyncProgram),
+    )).toBe(6);
+    expect(x2PreviousStackPreservingReturnX2SyncIndex(
+      previousReturnSyncProgram,
+      7,
+      directReturnAnalysisContext(previousReturnSyncProgram),
+    )).toBe(5);
+    expect(x2NextStackPreservingReturnX2SyncIndex(
+      restoringHelperProgram,
+      6,
+      directReturnAnalysisContext(restoringHelperProgram),
+    )).toBeUndefined();
   });
 
   it("stack/X2 scheduler helpers find previous X-preserving syncs conservatively", () => {
@@ -18066,6 +18150,35 @@ describe("ir passes on synthetic programs", () => {
       ret(),
       label("main"),
       call("noop"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift removes В↑ before a stack-preserving return helper that changes X", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      call("square"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("square"),
+      plain(0x22, "F x^2"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      call("square"),
       plain(0x0a, "."),
       halt(),
     ]);

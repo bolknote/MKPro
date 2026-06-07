@@ -331,6 +331,7 @@ export function emptyResult(ops: readonly IrOp[]): PassResult {
 const directReturnAnalysisContextCache = new WeakMap<readonly IrOp[], DirectReturnAnalysisContext>();
 const x2StackXAndX2ReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
 const x2StrictStackReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
+const x2StackReturnSyncMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
 const x2RestoreGapReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
 
 export function cellsPerOp(op: IrOp): number {
@@ -3051,6 +3052,55 @@ function x2IsPreviousHardX2OverwriteOp(op: IrOp): boolean {
   return !hasRewriteBarrier(op) &&
     !isDisplayFocusSensitive(op) &&
     analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse;
+}
+
+export function x2NextStackPreservingReturnX2SyncIndex(
+  ops: readonly IrOp[],
+  start: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (isKnownReturnCallOp(op) && x2KnownReturnCallReachesStackPreservingX2Sync(ops, op, context)) {
+      return index;
+    }
+    if (!x2IsStackXAndX2PreservingGapOp(ops, op, index, context)) return undefined;
+  }
+  return undefined;
+}
+
+export function x2PreviousStackPreservingReturnX2SyncIndex(
+  ops: readonly IrOp[],
+  end: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = end - 1; index >= 0; index -= 1) {
+    const op = ops[index]!;
+    if (isKnownReturnCallOp(op) && x2KnownReturnCallReachesStackPreservingX2Sync(ops, op, context)) {
+      return index;
+    }
+    if (!x2IsStackXAndX2PreservingGapOp(ops, op, index, context)) return undefined;
+  }
+  return undefined;
+}
+
+export function x2KnownReturnCallReachesStackPreservingX2Sync(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return nestedReturnCallRangeIsTransparent(
+    ops,
+    call,
+    context,
+    x2IsStackPreservingReturnSyncLinearOp,
+    x2ReturnMemo(ops, x2StackReturnSyncMemo),
+    new Set(),
+  );
+}
+
+function x2IsStackPreservingReturnSyncLinearOp(op: IrOp): boolean {
+  return x2IsStrictStackPreservingLinearOp(op);
 }
 
 function x2IsXPreservingSyncOp(
