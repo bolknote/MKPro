@@ -1511,7 +1511,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     separators, when a following hard X/X2 overwrite such as `Cx` destroys the
     restored `X` before it can be observed. Consecutive same-segment dead
     restores and free-standing separators are removed as one run, while labels
-    split the run. `.` requires a closed, non-`ВП`
+    split the run and orphan address-byte cells are transparent but preserved. `.` requires a closed, non-`ВП`
     context with a proved decimal X2 value, an emulator-pinned single-hex
     A/B/C structural mantissa, or the same shared dot-restore safety proof used
     by `x2-noop-restore` (for example an immediate sync or closed sign-change
@@ -1521,7 +1521,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     can make `.` signal `ЕГГ0Г`. `/-/` may also be removed from open mantissa, active
     exponent-entry, or VP/X2 restore contexts because the following hard
     overwrite destroys both the restored X and the toggled X2. The following
-    hard overwrite may sit after a direct/proved-indirect return-helper chain
+    hard overwrite may sit after orphan address-byte cells or a direct/proved-indirect return-helper chain
     only when every nested helper is restore-transparent; display-sensitive separator cells are not
     transparent and are not removed from a same-segment dead restore run. A direct `П->X r` or proved stable-indirect
     `К П->X R7..Re` is treated as a terminal overwrite for an earlier dead

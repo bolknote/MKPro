@@ -13134,6 +13134,30 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite removes dead restore runs across orphan address gaps", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      orphanAddress(54),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      orphanAddress(54),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
   it("x2-dead-restore-before-overwrite removes dead restore runs before unused recall stack lifts", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),

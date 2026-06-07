@@ -188,6 +188,7 @@ function deadRestoreRunBeforeHardOverwrite(
       sameSegment = false;
       continue;
     }
+    if (op.kind === "orphan-address") continue;
     if (isFreeStandingX2EmptyOp(op)) {
       if (sameSegment) remove.push(index);
       continue;
