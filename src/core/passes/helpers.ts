@@ -2594,6 +2594,15 @@ function x2ValueSetRestoredVisibleDecimals(input: X2ValueSet | undefined): Set<s
   return output;
 }
 
+export function x2ValueShapeSetRestoredVisibleDecimals(
+  values: X2ValueSet | undefined,
+  shapes: X2ShapeSet | undefined,
+): Set<string> {
+  const output = x2ValueSetRestoredVisibleDecimals(values);
+  for (const decimal of x2ShapeSetRestoredVisibleDecimals(shapes)) output.add(decimal);
+  return output;
+}
+
 export function x2ValueShapeSetHasRestoredVisibleDecimal(
   values: X2ValueSet | undefined,
   shapes: X2ShapeSet | undefined,
@@ -2601,8 +2610,7 @@ export function x2ValueShapeSetHasRestoredVisibleDecimal(
 ): boolean {
   const visible = x2ValueFactRestoredVisibleDecimal(fact);
   if (visible === undefined) return false;
-  if (x2ValueSetRestoredVisibleDecimals(values).has(visible)) return true;
-  return x2ShapeSetRestoredVisibleDecimals(shapes).has(visible);
+  return x2ValueShapeSetRestoredVisibleDecimals(values, shapes).has(visible);
 }
 
 export function x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
@@ -2611,14 +2619,10 @@ export function x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
   rightValues: X2ValueSet | undefined,
   rightShapes: X2ShapeSet | undefined,
 ): boolean {
-  const left = x2ValueSetRestoredVisibleDecimals(leftValues);
-  for (const decimal of x2ShapeSetRestoredVisibleDecimals(leftShapes)) left.add(decimal);
+  const left = x2ValueShapeSetRestoredVisibleDecimals(leftValues, leftShapes);
   if (left.size === 0) return false;
 
-  for (const decimal of x2ValueSetRestoredVisibleDecimals(rightValues)) {
-    if (left.has(decimal)) return true;
-  }
-  for (const decimal of x2ShapeSetRestoredVisibleDecimals(rightShapes)) {
+  for (const decimal of x2ValueShapeSetRestoredVisibleDecimals(rightValues, rightShapes)) {
     if (left.has(decimal)) return true;
   }
   return false;

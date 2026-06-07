@@ -92,6 +92,7 @@ import {
   x2ValueSetHasFact,
   x2ValueSetHasIntersection,
   x2ValueSetHasRestoredVisibleDecimal,
+  x2ValueShapeSetRestoredVisibleDecimals,
   x2ValueShapeSetHasRestoredVisibleDecimal,
   x2ValueShapeSetsHaveSameRestoredVisibleDecimal,
   x2ValueSetsHaveSameRestoredVisibleDecimal,
@@ -1638,6 +1639,10 @@ describe("ir passes on synthetic programs", () => {
   });
 
   it("x2 value/shape algebra compares exact restored visible decimals across mixed facts", () => {
+    expect([...x2ValueShapeSetRestoredVisibleDecimals(
+      new Set(["decimal:02:unnormalized"]),
+      new Set(["exponent:5:-1:decimal"]),
+    )].sort()).toEqual(["0.5", "2"]);
     expect(
       x2ValueShapeSetHasRestoredVisibleDecimal(
         new Set(["reg:1"]),
