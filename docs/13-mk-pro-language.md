@@ -1532,7 +1532,9 @@ The pipeline currently contains:
   display shapes can seed the same opaque key model, and shape-only ordinary
   decimal mantissas do so only when an equivalent `decimal:*:normalized` value
   fact is not already present. The result stays an opaque `expr-key:*` value and
-  does not make the source shape decimal or dot-safe. Stable constant stack producers such as `F pi` use the same
+  does not make the source shape decimal or dot-safe until a real X2 sync,
+  including direct/proved-indirect recalls, materializes any proved stable-key
+  value or display shape into hidden X2. Stable constant stack producers such as `F pi` use the same
   opaque key model (`expr-key:20()`) without assigning a decimal approximation
   to the constant. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are

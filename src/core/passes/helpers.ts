@@ -6756,6 +6756,11 @@ function recallX2ValueFacts(
   const output = new Set<X2ValueFact>(trackRegisterMemory ? input.memory?.[register] ?? [] : []);
   for (const fact of preloadedConstantValueFacts(op)) output.add(fact);
   output.add(value);
+  for (const fact of [...output]) {
+    if (!fact.startsWith("expr-key:")) continue;
+    const visible = x2ValueFactRestoredVisibleDecimal(fact);
+    if (visible !== undefined) output.add(decimalValueFact(visible, "normalized"));
+  }
   return canonicalX2ValueSet(output);
 }
 
@@ -6819,7 +6824,7 @@ function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
     const shape = exactDecimalDisplayShapeFact(decimal[1]!);
     if (shape !== undefined) output.add(shape);
   }
-  return output;
+  return shapeSetWithStableExpressionValueShapes(output, values) ?? new Set();
 }
 
 function dotSafeDecimalShapeValues(input: X2ShapeSet | undefined): Set<string> {

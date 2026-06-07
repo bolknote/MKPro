@@ -1268,10 +1268,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     covered by the concrete evaluator; for example an `F pi` key can feed
     integer-part proofs, and a structural `К |x|` key can feed a following
     `К ЗН` proof through its canonical shape. Unproved hex/super expressions
-    remain opaque. A real X2 sync boundary materializes the stable-key decimals
-    and display shapes that this evaluator can prove into hidden-X2 facts, so
-    computed stable values stay structural before the sync but become ordinary
-    restore evidence after the calculator would have copied visible X into X2.
+    remain opaque. A real X2 sync boundary (`В↑`, X-preserving `F0`..`FF`,
+    direct/loop/proved-indirect fallthrough, `В/О`, direct `П->X`, or proved
+    indirect `К П->X`) materializes the stable-key decimals and display shapes
+    that this evaluator can prove into hidden-X2 facts, so computed stable
+    values stay structural before the sync but become ordinary restore evidence
+    after the calculator would have copied visible X into X2.
     The same
     canonicalization is applied after register-dependency and address-local
     opaque-expression cleanup, when sync/preserve transfer functions carry
