@@ -39,6 +39,7 @@ import {
   computeX2RegisterStates,
   computeX2ValueStates,
   directReturnAnalysisContext,
+  joinX2ValueDataflowStates,
   parseX2ShapeFact,
   recallValueProof,
   transferX2RegisterStateForEdge,
@@ -3320,6 +3321,85 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StateHasSameStructuralShapeInXAndX2(state)).toBe(true);
     expect(x2StateHasSameDotSafeStructuralMantissaInXAndX2(state)).toBe(true);
     expect(x2StateHasSameDotRestoreValueInXAndX2(state)).toBe(true);
+  });
+
+  it("x2 value dataflow joins materialized stable decimal facts across mixed paths", () => {
+    const left: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
+      x2: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
+      memory: {
+        "1": new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
+      },
+      entry: { kind: "closed" },
+    };
+    const right: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)", "decimal:4:normalized"]),
+      x2: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)", "decimal:4:normalized"]),
+      xShape: new Set<X2ShapeFact>(["mantissa:4:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:4:decimal"]),
+      memory: {
+        "1": new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)", "decimal:4:normalized"]),
+      },
+      shapeMemory: {
+        "1": new Set<X2ShapeFact>(["mantissa:4:decimal"]),
+      },
+      entry: { kind: "closed" },
+    };
+    const joined = joinX2ValueDataflowStates(left, right, true);
+
+    expect(x2ValueStateText(joined.x)).toContain("expr-key:22(decimal:2:normalized)");
+    expect(x2ValueStateText(joined.x)).toContain("decimal:4:normalized");
+    expect(x2ShapeStateText(joined.xShape)).toContain("mantissa:4:decimal");
+    expect(x2ValueStateText(joined.x2)).toContain("decimal:4:normalized");
+    expect(x2ShapeStateText(joined.x2Shape)).toContain("mantissa:4:decimal");
+    expect(x2ValueStateText(joined.memory?.["1"])).toContain("decimal:4:normalized");
+    expect(x2ShapeStateText(joined.shapeMemory?.["1"])).toContain("mantissa:4:decimal");
+  });
+
+  it("x2 value dataflow joins stable structural shape facts across mixed paths", () => {
+    const left: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      x2: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      memory: {
+        "1": new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      },
+      entry: { kind: "closed" },
+    };
+    const right: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      x2: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      xShape: new Set<X2ShapeFact>(["hex:A:mantissa"]),
+      x2Shape: new Set<X2ShapeFact>(["hex:A:mantissa"]),
+      memory: {
+        "1": new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),
+      },
+      shapeMemory: {
+        "1": new Set<X2ShapeFact>(["hex:A:mantissa"]),
+      },
+      entry: { kind: "closed" },
+    };
+    const joined = joinX2ValueDataflowStates(left, right, true);
+
+    expect(x2ShapeStateText(joined.xShape)).toContain("hex:A:mantissa");
+    expect(x2ShapeStateText(joined.x2Shape)).toContain("hex:A:mantissa");
+    expect(x2ShapeStateText(joined.shapeMemory?.["1"])).toContain("hex:A:mantissa");
+  });
+
+  it("x2 value dataflow join keeps raw decimals distinct from normalized decimals", () => {
+    const left: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:02:unnormalized"]),
+      x2: new Set<X2ValueFact>(["decimal:02:unnormalized"]),
+      entry: { kind: "closed" },
+    };
+    const right: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      entry: { kind: "closed" },
+    };
+    const joined = joinX2ValueDataflowStates(left, right);
+
+    expect(x2ValueStateText(joined.x)).toEqual([]);
+    expect(x2ValueStateText(joined.x2)).toEqual([]);
   });
 
   it("x2 value dataflow canonicalizes structural shape sources inside stable expr keys", () => {

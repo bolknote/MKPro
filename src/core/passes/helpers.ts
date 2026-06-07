@@ -6241,7 +6241,7 @@ function joinRegisterDataflowStates(
   };
 }
 
-function joinX2ValueDataflowStates(
+export function joinX2ValueDataflowStates(
   current: X2ValueDataflowState | undefined,
   incoming: X2ValueDataflowState,
   trackRegisterMemory = false,
@@ -6270,9 +6270,9 @@ function joinX2ValueDataflowStates(
     x: joinX2ValueSets(current.x, incoming.x),
     y: joinX2ValueSets(current.y ?? new Set(), incoming.y ?? new Set()),
     x2: joinX2ValueSets(current.x2, incoming.x2),
-    xShape: joinOptionalShapeSets(current.xShape, incoming.xShape),
-    yShape: joinOptionalShapeSets(current.yShape, incoming.yShape),
-    x2Shape: joinOptionalShapeSets(current.x2Shape, incoming.x2Shape),
+    xShape: joinX2ShapeSetsWithValues(current.xShape, current.x, incoming.xShape, incoming.x),
+    yShape: joinX2ShapeSetsWithValues(current.yShape, current.y, incoming.yShape, incoming.y),
+    x2Shape: joinX2ShapeSetsWithValues(current.x2Shape, current.x2, incoming.x2Shape, incoming.x2),
     entry: joinX2EntryStates(current.entry, incoming.entry),
     vpContext: joinX2VpContextStates(current.vpContext, incoming.vpContext),
     structuralEntry: joinX2StructuralEntryStates(current.structuralEntry, incoming.structuralEntry),
@@ -6314,7 +6314,9 @@ function joinX2ValueDataflowStates(
         : {}
     ),
     memory: trackRegisterMemory ? joinX2ValueMemories(current.memory, incoming.memory) : undefined,
-    shapeMemory: trackRegisterMemory ? joinX2ShapeMemories(current.shapeMemory, incoming.shapeMemory) : undefined,
+    shapeMemory: trackRegisterMemory
+      ? joinX2ShapeMemories(current.shapeMemory, incoming.shapeMemory, current.memory, incoming.memory)
+      : undefined,
   };
 }
 
@@ -6370,8 +6372,8 @@ function joinX2ValueSets(
   incoming: X2ValueSet,
 ): Set<X2ValueFact> {
   if (current === undefined) return canonicalX2ValueSet(incoming);
-  const currentSet = canonicalX2ValueSet(current);
-  const incomingSet = canonicalX2ValueSet(incoming);
+  const currentSet = valueSetWithStableExpressionDecimalFacts(current);
+  const incomingSet = valueSetWithStableExpressionDecimalFacts(incoming);
   const joined = new Set<X2ValueFact>();
   for (const value of currentSet) {
     if (incomingSet.has(value)) joined.add(value);
@@ -6439,11 +6441,23 @@ function joinX2ValueMemories(
 function joinX2ShapeMemories(
   current: X2ShapeMemory | undefined,
   incoming: X2ShapeMemory | undefined,
+  currentValues: X2ValueMemory | undefined,
+  incomingValues: X2ValueMemory | undefined,
 ): X2ShapeMemory {
   const output: X2ShapeMemory = {};
-  if (current === undefined || incoming === undefined) return output;
-  for (const register of x2ShapeMemoryRegisters(current)) {
-    const shapes = intersectKnownX2ShapeSets(current?.[register], incoming?.[register]);
+  if (
+    current === undefined &&
+    incoming === undefined &&
+    currentValues === undefined &&
+    incomingValues === undefined
+  ) return output;
+  for (const register of REGISTER_NAMES) {
+    const shapes = intersectKnownX2ShapeSetsWithValues(
+      current?.[register],
+      currentValues?.[register],
+      incoming?.[register],
+      incomingValues?.[register],
+    );
     if (shapes.size > 0) output[register] = shapes;
   }
   return output;
@@ -6454,8 +6468,8 @@ function intersectKnownX2ValueSets(
   incoming: X2ValueSet | undefined,
 ): Set<X2ValueFact> {
   if (current === undefined || incoming === undefined) return new Set();
-  const currentSet = canonicalX2ValueSet(current);
-  const incomingSet = canonicalX2ValueSet(incoming);
+  const currentSet = valueSetWithStableExpressionDecimalFacts(current);
+  const incomingSet = valueSetWithStableExpressionDecimalFacts(incoming);
   const joined = new Set<X2ValueFact>();
   for (const value of currentSet) {
     if (incomingSet.has(value)) joined.add(value);
@@ -6463,11 +6477,42 @@ function intersectKnownX2ValueSets(
   return joined;
 }
 
+function valueSetWithStableExpressionDecimalFacts(input: X2ValueSet | undefined): Set<X2ValueFact> {
+  const output = canonicalX2ValueSet(input);
+  for (const fact of [...output]) {
+    if (!fact.startsWith("expr-key:")) continue;
+    const visible = x2ValueFactRestoredVisibleDecimal(fact);
+    if (visible !== undefined) output.add(decimalValueFact(visible, "normalized"));
+  }
+  return output;
+}
+
 function intersectKnownX2ShapeSets(
   current: X2ShapeSet | undefined,
   incoming: X2ShapeSet | undefined,
 ): Set<X2ShapeFact> {
   return intersectX2ShapeSets(current, incoming);
+}
+
+function intersectKnownX2ShapeSetsWithValues(
+  current: X2ShapeSet | undefined,
+  currentValues: X2ValueSet | undefined,
+  incoming: X2ShapeSet | undefined,
+  incomingValues: X2ValueSet | undefined,
+): Set<X2ShapeFact> {
+  return intersectX2ShapeSets(
+    shapeSetWithStableExpressionValueShapes(current, currentValues),
+    shapeSetWithStableExpressionValueShapes(incoming, incomingValues),
+  );
+}
+
+function joinX2ShapeSetsWithValues(
+  current: X2ShapeSet | undefined,
+  currentValues: X2ValueSet | undefined,
+  incoming: X2ShapeSet | undefined,
+  incomingValues: X2ValueSet | undefined,
+): Set<X2ShapeFact> {
+  return intersectKnownX2ShapeSetsWithValues(current, currentValues, incoming, incomingValues);
 }
 
 function intersectX2ShapeSets(

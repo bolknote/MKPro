@@ -1293,7 +1293,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     requiring a separate shape-memory fact. State-level restore-safety and
     same-X/X2 shape predicates use the same effective-shape view, so a stable
     `expr-key:*` value can prove structural or dot-safe structural context even
-    when the explicit `xShape`/`x2Shape` set is empty. The proved decimal
+    when the explicit `xShape`/`x2Shape` set is empty. CFG and register-memory
+    joins use the same effective value/shape sets, preserving proved stable-key
+    decimals and display/structural shapes when one path has already
+    materialized them and another still carries only the stable key. Raw decimal
+    spellings remain exact facts, so leading-zero X2 values such as `02` still
+    do not merge with normalized `2`. The proved decimal
     first-digit source is visible to `vp-splice`, so an empty separator and a
     cancelling exponent sign pair before that `ВП` can be removed together. It
     also carries exact emulator-pinned single-digit hex
