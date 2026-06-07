@@ -17,10 +17,12 @@ import {
   x2StateIsClosedPlainContext,
   x2SyncCanExposeContextSensitiveRestore,
   x2ShapeSetHasExactIntegerDisplay,
+  x2ShapeSetHasExactNonNegativeIntegerDisplay,
   x2ShapeSetRestoredVisibleDecimals,
   x2ValueFactRestoredVisibleDecimal,
 } from "./helpers.ts";
 
+const ABS = 0x31;
 const INTEGER = 0x34;
 const FRACTION = 0x35;
 
@@ -54,8 +56,13 @@ function isFreeStandingIntegerOp(op: IrOp): boolean {
   return op.kind === "plain" && op.opcode === INTEGER && !hasRoles(op);
 }
 
+function isFreeStandingAbsOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  return op.kind === "plain" && op.opcode === ABS && !hasRoles(op);
+}
+
 function isFreeStandingNoopUnaryOp(op: IrOp): boolean {
-  return isFreeStandingFractionOp(op) || isFreeStandingIntegerOp(op);
+  return isFreeStandingFractionOp(op) || isFreeStandingIntegerOp(op) || isFreeStandingAbsOp(op);
 }
 
 function isFractionalNoopValue(value: string): boolean {
@@ -80,6 +87,12 @@ function stateHasIntegerNoopX(state: X2ValueDataflowState | undefined): boolean 
     x2ShapeSetHasExactIntegerDisplay(state.xShape);
 }
 
+function stateHasAbsNoopX(state: X2ValueDataflowState | undefined): boolean {
+  return state !== undefined &&
+    x2StateIsClosedPlainContext(state) &&
+    x2ShapeSetHasExactNonNegativeIntegerDisplay(state.xShape);
+}
+
 function isKnownNoopUnaryOp(
   ops: readonly IrOp[],
   index: number,
@@ -90,12 +103,15 @@ function isKnownNoopUnaryOp(
   if (!isFreeStandingNoopUnaryOp(op)) return false;
   const knownNoop = op.kind === "plain" && op.opcode === FRACTION
     ? stateHasFractionalNoopX(state)
-    : stateHasIntegerNoopX(state);
+    : op.kind === "plain" && op.opcode === INTEGER
+      ? stateHasIntegerNoopX(state)
+      : stateHasAbsNoopX(state);
   return knownNoop &&
     // К {x} preserves hidden X2. Once dataflow proves it is also a visible-X
     // no-op, and К [x] is treated the same only when the display shape is
-    // already the exact integer display. Removing either cannot change a later
-    // restore value. The exposure guard still keeps immediate restore
+    // already the exact integer display. К |x| follows the same rule for
+    // exact non-negative integer displays. Removing any of them cannot change
+    // a later restore value. The exposure guard still keeps immediate restore
     // boundaries where the opcode itself could be the observable
     // previous-command context.
     !x2SyncCanExposeContextSensitiveRestore(
@@ -179,7 +195,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-fraction-restore",
-        detail: `Removed ${remove.size} redundant К {x}/К [x] op(s) already supplied by a ВП/X2 boundary or proved no-op X value.`,
+        detail: `Removed ${remove.size} redundant К {x}/К [x]/К |x| op(s) already supplied by a ВП/X2 boundary or proved no-op X value.`,
       },
     ],
   };
