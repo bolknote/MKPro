@@ -1443,17 +1443,19 @@ The pipeline currently contains:
   `F x^2` proof can then derive values such as `1`/`4`/`9` from those decimal
   facts. The
   emulator-pinned single-hex-digit multiplication table is also
-  operand-order-specific: with `A`/`B`/`C`/`D`/`E` in `Y`, only the verified decimal
-  right operands (`1`, `2`, `3`, `4`, `5`, `8`, `9`, `18`) are modeled, including
-  the non-normal `A * 18` display shape `020`; with a hex digit in `X`, verified
-  `A`/`B`/`C`/`D` act as a decimal-times-ten display result while `E` gives zero;
+  operand-order-specific: with `A`/`B`/`C`/`D`/`E` in `Y`, verified decimal
+  right operands `0`..`18` are modeled, including non-normal display shapes such
+  as `A * 16 -> 000` and `B * 17 -> 043`; with a hex digit in `X`, verified
+  `A`/`B`/`C`/`D` act as a decimal-times-ten display result for `0`..`18` while `E` gives zero;
   verified hex-pair products `A`..`E` by `A`..`E` are also modeled with their
   observed display spelling, including non-normal `A * A -> 00` and
   `B * Г -> 10`. Division has separate emulator-pinned tables for
-  `A`..`E` divided by decimal `1`..`9`/`18` and for `A`..`E` divided by
+  `A`..`E` divided by decimal `1`..`18` and for decimal `0`..`18` divided by
+  `A`..`E` where the emulator does not signal `ЕГГ0Г`, and for `A`..`E` divided by
   `A`..`E`, each with its own display shapes; for example `Г / 8 -> 1.625`,
-  `Е / 18 -> 7.7777777E-1`, `A / Г -> 4E-1`, `С / B -> 1.2525252`, and
-  `A / С -> ЕГГ0Г` remains unmodeled.
+  `A / 10 -> 0E-1`, `Е / 17 -> 8.2352941E-1`, `16 / B -> 9.2525252`,
+  `15 / E -> 0.2292929`, `A / Г -> 4E-1`, `С / B -> 1.2525252`, and
+  `10 / A -> ЕГГ0Г` remains unmodeled.
   Hidden X2 is still the previous right operand until a later X2-syncing
   command, so literal/scratch restore rewrites can use these table results only
   after that sync. The same table-backed rule covers the verified `A`..`E E-2`
@@ -1467,8 +1469,8 @@ The pipeline currently contains:
   display shape separate from the numeric value, so a later store/recall/`ВП`
   sequence follows the same context as the calculator instead of treating the
   result as a freshly entered normalized mantissa. Wider
-  hex/super multiplication, division, subtraction, reverse decimal/hex division,
-  and carry/borrow cases remain opaque. The degree/minute conversion opcodes `К °->′`,
+  wider hex/super multiplication, division, subtraction, and carry/borrow cases
+  remain opaque. The degree/minute conversion opcodes `К °->′`,
   `К °->′"`, `К °<-′"`, and `К °<-′` also seed exact decimal facts only for
   domain-safe conversions whose rational result has a finite decimal expansion
   and still fits the eight-significant-digit machine-mantissa proof bound;

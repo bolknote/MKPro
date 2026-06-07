@@ -1323,17 +1323,19 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     the regular `F x^2` value model can then derive follow-on
     values such as `1`/`4`/`9`. The verified
     single-hex-digit multiplication table is also operand-order-specific:
-    `A`/`B`/`C`/`D`/`E` in `Y` is modeled only for the pinned decimal right operands
-    (`1`, `2`, `3`, `4`, `5`, `8`, `9`, `18`), preserving display shape such as
-    non-normal `A * 18 -> 020`; with a hex digit in `X`, verified `A`/`B`/`C`/`D`
-    behave as decimal-times-ten display results while `E` gives zero. Verified
+    `A`/`B`/`C`/`D`/`E` in `Y` is modeled for pinned decimal right operands
+    `0`..`18`, preserving display shape such as non-normal
+    `A * 16 -> 000` and `B * 17 -> 043`; with a hex digit in `X`, verified `A`/`B`/`C`/`D`
+    behave as decimal-times-ten display results for `0`..`18` while `E` gives zero. Verified
     hex-pair products `A`..`E` by `A`..`E` are also modeled with their observed
     display spelling, including non-normal `A * A -> 00` and `B * Г -> 10`.
     Division has separate emulator-pinned tables for `A`..`E` divided by
-    decimal `1`..`9`/`18` and for `A`..`E` divided by `A`..`E`, with
+    decimal `1`..`18`, decimal `0`..`18` divided by `A`..`E` where the emulator
+    does not signal `ЕГГ0Г`, and `A`..`E` divided by `A`..`E`, with
     display-shape preservation; for example `Г / 8 -> 1.625`,
-    `Е / 18 -> 7.7777777E-1`, `A / Г -> 4E-1`, `С / B -> 1.2525252`, while
-    error cases such as `A / С -> ЕГГ0Г` stay outside the proof.
+    `A / 10 -> 0E-1`, `Е / 17 -> 8.2352941E-1`, `16 / B -> 9.2525252`,
+    `15 / E -> 0.2292929`, `A / Г -> 4E-1`, `С / B -> 1.2525252`, while
+    error cases such as `10 / A -> ЕГГ0Г` and `A / С -> ЕГГ0Г` stay outside the proof.
     Hidden X2
     remains the right operand until an explicit sync, so literal/scratch restore
     rewrites consume these table facts only after a later X2-syncing command. A

@@ -177,10 +177,15 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
       ["-", "-", "00,"],
       ["B", "Г", "10,"],
       ["-", "18", "020,"],
+      ["-", "16", "000,"],
       ["B", "18", "054,"],
+      ["B", "17", "043,"],
       ["С", "5", "32,"],
+      ["С", "16", "904,"],
       ["Г", "3", "23,"],
+      ["Г", "15", "923,"],
       ["Е", "18", "948,"],
+      ["Е", "17", "934,"],
       ["Е", "С", "40,"],
     ];
     for (const [left, right, display] of leftHexCases) {
@@ -189,11 +194,16 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
 
     const rightHexCases: ReadonlyArray<readonly [string, string, string]> = [
       ["1", "-", "10,"],
+      ["16", "-", "160,"],
       ["18", "-", "180,"],
       ["18", "B", "180,"],
+      ["17", "B", "170,"],
       ["9", "С", "90,"],
+      ["16", "С", "160,"],
       ["5", "Г", "50,"],
+      ["15", "Г", "150,"],
       ["18", "Е", "0,"],
+      ["17", "Е", "0,"],
     ];
     for (const [left, right, display] of rightHexCases) {
       expect(multiplyRegisters(left, right)).toBe(display.replace(/\s/gu, ""));
@@ -210,10 +220,18 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(divideRegisters("-", "С")).toBe("ЕГГ0Г");
     expect(divideRegisters("B", "2")).toBe("5,5");
     expect(divideRegisters("Г", "8")).toBe("1,625");
+    expect(divideRegisters("Г", "16")).toBe("8,125-01");
+    expect(divideRegisters("Е", "17")).toBe("8,2352941-01");
     expect(divideRegisters("Е", "18")).toBe("7,7777777-01");
+    expect(divideRegisters("-", "10")).toBe("0,-01");
     expect(divideRegisters("1", "-")).toBe("ЕГГ0Г");
+    expect(divideRegisters("10", "-")).toBe("ЕГГ0Г");
     expect(divideRegisters("0", "-")).toBe("9,090909-01");
     expect(divideRegisters("9", "B")).toBe("0,4444443-01");
+    expect(divideRegisters("16", "B")).toBe("9,2525252");
+    expect(divideRegisters("10", "С")).toBe("9,9099099");
+    expect(divideRegisters("12", "Г")).toBe("0,");
+    expect(divideRegisters("15", "Е")).toBe("0,2292929");
     expect(divideRegisters("5", "Г")).toBe("0,-01");
     expect(divideRegisters("3", "С")).toBe("ЕГГ0Г");
   });
