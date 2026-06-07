@@ -3575,6 +3575,42 @@ export function x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
   return false;
 }
 
+export function x2ValueShapeSetsHaveSameRestoredDisplayShape(
+  leftValues: X2ValueSet | undefined,
+  leftShapes: X2ShapeSet | undefined,
+  rightValues: X2ValueSet | undefined,
+  rightShapes: X2ShapeSet | undefined,
+): boolean {
+  return x2ShapeSetsHaveSameRestoredDisplayShape(
+    shapeSetWithStableExpressionValueShapes(leftShapes, leftValues),
+    shapeSetWithStableExpressionValueShapes(rightShapes, rightValues),
+  );
+}
+
+export function x2ValueShapeSetsHaveSameDotSafeDecimal(
+  leftValues: X2ValueSet | undefined,
+  leftShapes: X2ShapeSet | undefined,
+  rightValues: X2ValueSet | undefined,
+  rightShapes: X2ShapeSet | undefined,
+): boolean {
+  return x2ShapeSetsHaveSameDotSafeDecimal(
+    shapeSetWithStableExpressionValueShapes(leftShapes, leftValues),
+    shapeSetWithStableExpressionValueShapes(rightShapes, rightValues),
+  );
+}
+
+export function x2ValueShapeSetsHaveSameDotSafeStructuralMantissa(
+  leftValues: X2ValueSet | undefined,
+  leftShapes: X2ShapeSet | undefined,
+  rightValues: X2ValueSet | undefined,
+  rightShapes: X2ShapeSet | undefined,
+): boolean {
+  return x2ShapeSetsHaveSameDotSafeStructuralMantissa(
+    shapeSetWithStableExpressionValueShapes(leftShapes, leftValues),
+    shapeSetWithStableExpressionValueShapes(rightShapes, rightValues),
+  );
+}
+
 export function x2ValueSetHasRestoredVisibleDecimal(
   input: X2ValueSet | undefined,
   fact: X2ValueFact,

@@ -20,14 +20,14 @@ import {
   x2HasSignRestoreGapBeforeVp,
   x2HasOnlyRestoreGapBeforeVp,
   x2ReplacementDotHasOnlyRestoreGapBeforeVp,
-  x2ShapeSetsHaveSameDotSafeDecimal,
-  x2ShapeSetsHaveSameDotSafeStructuralMantissa,
-  x2ShapeSetsHaveSameRestoredDisplayShape,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StatesHaveSameVpEntrySignSource,
   x2ValueFactIsNormalizedDecimal,
   x2ValueSetHasFact,
+  x2ValueShapeSetsHaveSameDotSafeDecimal,
+  x2ValueShapeSetsHaveSameDotSafeStructuralMantissa,
+  x2ValueShapeSetsHaveSameRestoredDisplayShape,
   x2ValueShapeSetsHaveSameRestoredVisibleDecimal,
   type DirectReturnAnalysisContext,
   type IrPass,
@@ -260,21 +260,36 @@ function hiddenTempStoreSourceRestoresSameVisibleShapeFromX2(
     recallState,
     directReturnContext,
   ) &&
-    x2ShapeSetsHaveSameRestoredDisplayShape(storeState?.xShape, recallState?.x2Shape);
+    x2ValueShapeSetsHaveSameRestoredDisplayShape(
+      storeState?.x,
+      storeState?.xShape,
+      recallState?.x2,
+      recallState?.x2Shape,
+    );
 }
 
 function hiddenTempStoreSourceRestoresSameDotSafeDecimalShapeFromX2(
   storeState: X2ValueDataflowState | undefined,
   recallState: X2ValueDataflowState | undefined,
 ): boolean {
-  return x2ShapeSetsHaveSameDotSafeDecimal(storeState?.xShape, recallState?.x2Shape);
+  return x2ValueShapeSetsHaveSameDotSafeDecimal(
+    storeState?.x,
+    storeState?.xShape,
+    recallState?.x2,
+    recallState?.x2Shape,
+  );
 }
 
 function hiddenTempStoreSourceRestoresSameDotSafeStructuralShapeFromX2(
   storeState: X2ValueDataflowState | undefined,
   recallState: X2ValueDataflowState | undefined,
 ): boolean {
-  return x2ShapeSetsHaveSameDotSafeStructuralMantissa(storeState?.xShape, recallState?.x2Shape);
+  return x2ValueShapeSetsHaveSameDotSafeStructuralMantissa(
+    storeState?.x,
+    storeState?.xShape,
+    recallState?.x2,
+    recallState?.x2Shape,
+  );
 }
 
 function hiddenTempStoreComputedSourceAlreadySyncedInX2(

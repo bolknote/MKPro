@@ -103,6 +103,9 @@ import {
   x2ValueSetHasFact,
   x2ValueSetHasIntersection,
   x2ValueSetHasRestoredVisibleDecimal,
+  x2ValueShapeSetsHaveSameDotSafeDecimal,
+  x2ValueShapeSetsHaveSameDotSafeStructuralMantissa,
+  x2ValueShapeSetsHaveSameRestoredDisplayShape,
   x2ValueShapeSetRestoredVisibleDecimals,
   x2ValueShapeSetHasRestoredVisibleDecimal,
   x2ValueShapeSetsHaveSameRestoredVisibleDecimal,
@@ -1685,6 +1688,41 @@ describe("ir passes on synthetic programs", () => {
         new Set(["mantissa:2:decimal"]),
       ),
     ).toBe(true);
+  });
+
+  it("x2 value/shape algebra compares stable expr-key shapes for hidden-temp proofs", () => {
+    expect(
+      x2ValueShapeSetsHaveSameRestoredDisplayShape(
+        new Set(["expr-key:31(shape:hex:-A:mantissa)"]),
+        undefined,
+        undefined,
+        new Set(["hex:A:mantissa"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ValueShapeSetsHaveSameDotSafeStructuralMantissa(
+        new Set(["expr-key:31(shape:hex:-A:mantissa)"]),
+        undefined,
+        undefined,
+        new Set(["hex:A:mantissa"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ValueShapeSetsHaveSameDotSafeDecimal(
+        new Set(["expr-key:22(decimal:2:normalized)"]),
+        undefined,
+        undefined,
+        new Set(["mantissa:4:decimal"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ValueShapeSetsHaveSameDotSafeStructuralMantissa(
+        new Set(["expr-key:31(shape:hex:-D:mantissa)"]),
+        undefined,
+        undefined,
+        new Set(["hex:D:mantissa"]),
+      ),
+    ).toBe(false);
   });
 
   it("x2 restore safety flags structural and error-prone shape-only contexts", () => {
