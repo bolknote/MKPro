@@ -1336,17 +1336,16 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Hidden X2
     remains the right operand until an explicit sync, so literal/scratch restore
     rewrites consume these table facts only after a later X2-syncing command. A
-    second verified table covers structural
-    `ГE-2` exponent multiplication: decimal `1`/`2`/`4`/`5`/`8`/`16` with
-    `ГE-2` in `X` prove `0.1`/`0.2`/`0.4`/`0.5`/`0.8`/`1.6`, and the reverse
-    operand order uses only its own emulator-pinned results. The table records
-    display shape independently from value shape: `1 * ГE-2` is a value proof
-    for `0.1`, but the visible/stored shape is `exponent:1:-1:decimal`, which
-    keeps later store/recall/`ВП` context equivalent to the MK-61 display state.
-    The same strict `ГE-2` operand family has pinned division tables in both
-    operand orders: `ГE-2 / 2 -> 6.5E-2`, `ГE-2 / 16 -> 8.125E-3`,
-    `5 / ГE-2 -> 00`, and `16 / ГE-2 -> 920` seed exact value facts while
-    preserving those display spellings.
+    second verified table family covers structural `ГE-2` exponent arithmetic.
+    Multiplication proves cases such as `1 * ГE-2 -> 1E-1` and
+    `ГE-2 * 1 -> 3E-2`; addition/subtraction proves cases such as
+    `ГE-2 + 0 -> 1.3E-1`, `ГE-2 - 1 -> -8.7E-1`, and
+    `0 - ГE-2 -> 3E-2`; division proves cases such as
+    `ГE-2 / 2 -> 6.5E-2`, `ГE-2 / 16 -> 8.125E-3`, `5 / ГE-2 -> 00`, and
+    `16 / ГE-2 -> 920`. Each operand order uses only its own emulator-pinned
+    results and records display shape independently from normalized value shape,
+    so later store/recall/`ВП` context stays equivalent to the MK-61 display
+    state.
     Reverse decimal/hex division has a separate emulator-pinned table for
     selected decimal `0..9`/`18` left operands and structural `A`..`E` right
     operands; `ЕГГ0Г` pairs and unsupported display forms remain absent from the

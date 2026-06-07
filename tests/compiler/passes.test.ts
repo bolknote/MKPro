@@ -5076,6 +5076,38 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(rejectedDivisionByZeroStates[4]?.xShape)).toEqual([]);
   });
 
+  it("x2 value dataflow models emulator-pinned structural hex exponent add/sub", () => {
+    function binaryProgram(left: string, right: string, opcode: number, mnemonic: string): IrOp[] {
+      return [
+        recall("1", `preload const ${left}`),
+        plain(0x0e, "В↑"),
+        recall("2", `preload const ${right}`),
+        plain(opcode, mnemonic),
+        halt(),
+      ];
+    }
+
+    const leftPlusStates = computeX2ValueStates(binaryProgram("ГE-2", "0", 0x10, "+"));
+    expect(x2ValueStateText(leftPlusStates[4]?.x) ?? []).toContain("decimal:0.13:normalized");
+    expect(x2ShapeStateText(leftPlusStates[4]?.xShape)).toEqual(["exponent:1.3:-1:decimal"]);
+
+    const rightPlusStates = computeX2ValueStates(binaryProgram("9", "ГE-2", 0x10, "+"));
+    expect(x2ValueStateText(rightPlusStates[4]?.x) ?? []).toContain("decimal:9.13:normalized");
+    expect(x2ShapeStateText(rightPlusStates[4]?.xShape)).toEqual(["mantissa:9.13:decimal"]);
+
+    const leftMinusStates = computeX2ValueStates(binaryProgram("ГE-2", "1", 0x11, "-"));
+    expect(x2ValueStateText(leftMinusStates[4]?.x) ?? []).toContain("decimal:-0.87:normalized");
+    expect(x2ShapeStateText(leftMinusStates[4]?.xShape)).toEqual(["exponent:-8.7:-1:decimal"]);
+
+    const rightMinusStates = computeX2ValueStates(binaryProgram("0", "ГE-2", 0x11, "-"));
+    expect(x2ValueStateText(rightMinusStates[4]?.x) ?? []).toContain("decimal:0.03:normalized");
+    expect(x2ShapeStateText(rightMinusStates[4]?.xShape)).toEqual(["exponent:3:-2:decimal"]);
+
+    const unsupportedExponentStates = computeX2ValueStates(binaryProgram("ГE-1", "1", 0x10, "+"));
+    expect(x2ValueStateText(unsupportedExponentStates[4]?.x) ?? []).not.toContain("decimal:1.13:normalized");
+    expect(x2ShapeStateText(unsupportedExponentStates[4]?.xShape)).toEqual([]);
+  });
+
   it("x2 value dataflow stores hex A times 18 display shape but recalls normalized VP source", () => {
     const program: IrOp[] = [
       recall("1", "preload const A"),

@@ -268,6 +268,25 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(multiplyRegisters("ГE-2", "16")).toBe("9,2");
   });
 
+  it("hex D exponent minus two addition and subtraction tables are operand-order-sensitive", () => {
+    const subtractRegisters = (r1: string, r2: string): string => {
+      const calc = new MK61();
+      calc.setRegister("1", r1);
+      calc.setRegister("2", r2);
+      calc.loadProgram([IP1, IP2, SUBTRACT, STOP]);
+      calc.pressSequence(["В/О", "С/П"]);
+      calc.runUntilStable({ maxFrames: 300, stableFrames: 4 });
+      return calc.displayText().replace(/\s/gu, "");
+    };
+
+    expect(addRegisters("ГE-2", "0")).toBe("1,3-01");
+    expect(addRegisters("9", "ГE-2")).toBe("9,13");
+    expect(subtractRegisters("ГE-2", "1")).toBe("-8,7-01");
+    expect(subtractRegisters("ГE-2", "16")).toBe("-15,87");
+    expect(subtractRegisters("0", "ГE-2")).toBe("3,-02");
+    expect(subtractRegisters("18", "ГE-2")).toBe("18,03");
+  });
+
   it("hex D exponent minus two division table is operand-order-sensitive", () => {
     expect(divideRegisters("ГE-2", "0")).toBe("ЕГГ0Г");
     expect(divideRegisters("ГE-2", "2")).toBe("6,5-02");

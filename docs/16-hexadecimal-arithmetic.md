@@ -68,10 +68,10 @@ machine is reset or carefully cleaned. Blue functions may still work. Avoid
 using division tables as a code-golf primitive unless you have tested the exact
 sequence.
 
-The optimizer only models division pairs pinned by emulator tests. That includes
-selected `A`..`E` divided by decimal or hex digits, and selected reverse
-decimal/hex cases such as `9 / B -> 0,4444443-01`, plus selected strict
-`ГE-2` exponent division pairs. Pairs that produce `ЕГГ0Г` remain opaque.
+The optimizer only models arithmetic pairs pinned by emulator tests. That
+includes selected `A`..`E` divided by decimal or hex digits, selected reverse
+decimal/hex cases such as `9 / B -> 0,4444443-01`, and selected strict `ГE-2`
+exponent `+`/`-`/`*`/`/` pairs. Pairs that produce `ЕГГ0Г` remain opaque.
 
 Hex-like values in exponent digits are a separate indirect-addressing topic.
 Do not assume mantissa rules apply to exponent nibbles.
