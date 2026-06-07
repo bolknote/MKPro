@@ -4611,7 +4611,7 @@ export function x2RestoreGapBeforeVp(
   let sawSign = false;
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (op.kind === "label") continue;
+    if (op.kind === "label" || op.kind === "orphan-address") continue;
     if (isFreeStandingX2RestoreGapOp(op)) {
       sawRestoreGap = true;
       if (isFreeStandingX2SignChangeOp(op)) sawSign = true;

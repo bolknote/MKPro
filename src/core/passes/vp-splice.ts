@@ -11,6 +11,7 @@ import {
   isFreeStandingX2VpOp,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
+  isFreeStandingX2RestoreGapOp,
   removingRecallCanExposeX2Restore,
   x2RestoreGapBeforeVp,
   x2RestoreGapDirectReturnDoesNotObserveRestore,
@@ -133,18 +134,7 @@ function x2ContextRestoreRunBeforeFreshDigitEntry(
   startIndex: number,
   context: DirectReturnAnalysisContext,
 ): readonly number[] {
-  const removableIndexes: number[] = [];
-  for (let index = startIndex; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (isFreeStandingX2EmptyOp(op) || isFreeStandingX2SignChangeOp(op)) {
-      removableIndexes.push(index);
-      continue;
-    }
-    if (op.kind === "label") continue;
-    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
-    return removableIndexes.length > 0 && isDecimalDigit(op) ? removableIndexes : [];
-  }
-  return [];
+  return x2ContextRestoreRunBeforeTerminal(ops, startIndex, context, isDecimalDigit);
 }
 
 function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
@@ -156,16 +146,25 @@ function x2ContextRestoreRunBeforeHardOverwrite(
   startIndex: number,
   context: DirectReturnAnalysisContext,
 ): readonly number[] {
+  return x2ContextRestoreRunBeforeTerminal(ops, startIndex, context, isHardX2OverwriteWithoutStackUse);
+}
+
+function x2ContextRestoreRunBeforeTerminal(
+  ops: readonly IrOp[],
+  startIndex: number,
+  context: DirectReturnAnalysisContext,
+  isTerminal: (op: IrOp) => boolean,
+): readonly number[] {
   const removableIndexes: number[] = [];
   for (let index = startIndex; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (isFreeStandingX2EmptyOp(op) || isFreeStandingX2SignChangeOp(op)) {
+    if (isFreeStandingX2RestoreGapOp(op)) {
       removableIndexes.push(index);
       continue;
     }
-    if (op.kind === "label") continue;
+    if (op.kind === "label" || op.kind === "orphan-address") continue;
     if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
-    return removableIndexes.length > 0 && isHardX2OverwriteWithoutStackUse(op) ? removableIndexes : [];
+    return removableIndexes.length > 0 && isTerminal(op) ? removableIndexes : [];
   }
   return [];
 }

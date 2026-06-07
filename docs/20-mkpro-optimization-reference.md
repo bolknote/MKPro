@@ -1674,7 +1674,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `x2-literal-restore`, so all three passes use the same
     marker-label/display-sensitive/role safety rules before deciding that a
     `КНОП`/`К1`/`К2`/`/-/` run, including an empty-only run, can be ignored
-    before `ВП` or before a proved source restore. The shared admission only
+    before `ВП` or before a proved source restore; orphan address-byte cells
+    are treated as the same transparent gap elements here as they are inside
+    transparent return helpers. The shared admission only
     proves that `.` is available as a restore mechanism; each pass still proves
     the concrete value, visible decimal, or structural source separately. With a
     direct-return context, the same scanner can cross
@@ -1691,8 +1693,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `5 ВП 3 Fπ /-/ /-/ С/П`), but a free-standing `/-/`/empty restore run can
     be dropped before a fresh digit (`5 ВП 3 Fπ /-/ 4`,
     `5 ВП 3 Fπ /-/ КНОП 4`, `5 ВП 3 Fπ /-/ /-/ КНОП 4`), because that digit
-    starts new number entry and discards the restored `X`; labels inside the
-    run are preserved. The fresh-digit proof can cross the same direct or
+    starts new number entry and discards the restored `X`; labels and orphan
+    address-byte cells inside the gap are preserved. The fresh-digit proof can cross the same direct or
     proved-indirect `ПП` helper-chain shape when every nested helper reaches
     `В/О` through only restore-transparent empty/address cells, because the helper cannot
     observe the restored `X` and the following digit starts fresh entry. The
@@ -1702,8 +1704,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     the run.
     The
     same kind of restore run is likewise removed before a proved hard X/X2
-    overwrite such as `Cx`, including across that transparent return-helper
-    shape.
+    overwrite such as `Cx`, including across labels, orphan address-byte cells,
+    and that transparent return-helper shape.
     The after-digit separator
     rewrite is deliberately shape-sensitive: the same empty op before the
     first exponent digit, or before another exponent digit, changes number

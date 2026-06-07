@@ -6491,10 +6491,19 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0c, "ВП"),
       halt(),
     ];
+    const orphanAddressGap: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x54, "КНОП"),
+      orphanAddress(54),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
 
     expect(x2HasOnlyRestoreGapBeforeVp(safeGap, 1)).toBe(true);
     expect(x2HasOnlyRestoreGapBeforeVp(roleBearingGap, 1)).toBe(false);
     expect(x2HasOnlyRestoreGapBeforeVp(displayCommentGap, 1)).toBe(false);
+    expect(x2HasOnlyRestoreGapBeforeVp(orphanAddressGap, 1)).toBe(true);
   });
 
   it("x2 replacement-dot VP restore-gap scanner treats the inserted dot as the first restore", () => {
@@ -21993,6 +22002,32 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice removes VP-context restore runs before orphan address gaps and fresh digit entry", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      orphanAddress(54),
+      plain(0x55, "К1"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      orphanAddress(54),
+      plain(0x04, "4"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice removes VP-context restore runs before transparent direct-return helpers and fresh digit entry", () => {
     const program: IrOp[] = [
       jump("main"),
@@ -22275,6 +22310,32 @@ describe("ir passes on synthetic programs", () => {
       plain(0x03, "3"),
       plain(0x20, "Fπ"),
       call("transparent"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes VP-context restore runs before orphan address gaps and dead overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      orphanAddress(54),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      orphanAddress(54),
       plain(0x0d, "Cx"),
       halt(),
     ]);
