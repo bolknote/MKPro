@@ -689,9 +689,6 @@ function plainProducesStableExpressionValues(
     return new Set();
   }
   const output = plainProducesConcreteDecimalValues(op, x, xShape);
-  for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op, xShape)) {
-    output.add(decimalValueFact(value, "normalized"));
-  }
   const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
   if (info.stackEffect === "preserves") {
     for (const key of stableExpressionSourceKeys(x, xShape)) {
@@ -734,26 +731,17 @@ function stableExpressionKeyHasConcreteDecimalResult(
   if (op.opcode === 0x1d) return decimalCosFromFactKey(key) !== undefined;
   if (op.opcode === 0x1e) return decimalTanFromFactKey(key) !== undefined;
   if (op.opcode === 0x21) return decimalSquareRootFromFactKey(key) !== undefined;
-  if (op.opcode === 0x22) {
-    return decimalSquareFromFactKey(key) !== undefined ||
-      structuralHexSquareFromFactKey(key) !== undefined;
-  }
+  if (op.opcode === 0x22) return decimalSquareFromFactKey(key) !== undefined;
   if (op.opcode === 0x23) return decimalReciprocalFromFactKey(key) !== undefined;
   if (op.opcode === 0x26) return decimalToMinutesFromFactKey(key) !== undefined;
   if (op.opcode === 0x2a) return decimalToMinutesSecondsFromFactKey(key) !== undefined;
   if (op.opcode === 0x30) return decimalFromMinutesSecondsFromFactKey(key) !== undefined;
   if (op.opcode === 0x33) return decimalFromMinutesFromFactKey(key) !== undefined;
-  if (op.opcode === 0x3a) {
-    return decimalBitwiseNotFromFactKey(key) !== undefined ||
-      structuralBitwiseNotFromFactKey(key) !== undefined;
-  }
+  if (op.opcode === 0x3a) return decimalBitwiseNotFromFactKey(key) !== undefined;
   if (op.opcode === 0x35) return decimalFractionPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x34) return decimalIntegerPartFromFactKey(key) !== undefined;
   if (op.opcode === 0x31) return decimalAbsFromFactKey(key) !== undefined;
-  if (op.opcode === 0x32) {
-    return decimalSignFromFactKey(key) !== undefined ||
-      structuralHexSignFromFactKey(key) !== undefined;
-  }
+  if (op.opcode === 0x32) return decimalSignFromFactKey(key) !== undefined;
   return false;
 }
 
@@ -811,6 +799,9 @@ function plainProducesConcreteDecimalValues(
   for (const value of x2ShapeSetRestoredVisibleDecimals(xShape)) {
     const concrete = concreteDecimalUnaryValue(op.opcode, value);
     if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
+  }
+  for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op, xShape)) {
+    output.add(decimalValueFact(value, "normalized"));
   }
   return output;
 }
@@ -1859,46 +1850,6 @@ function decimalSignFromFactKey(key: string): string | undefined {
 
 function decimalFromFactKey(key: string): string | undefined {
   return /^decimal:([^:]+):normalized$/u.exec(key)?.[1];
-}
-
-function structuralHexSignFromFactKey(key: string): string | undefined {
-  for (const fact of structuralShapeFactsFromStableExpressionKey(key) ?? []) {
-    for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
-      const value = structuralHexSignDecimalValue(restored);
-      if (value !== undefined) return value;
-    }
-  }
-  return undefined;
-}
-
-function structuralHexSquareFromFactKey(key: string): string | undefined {
-  for (const fact of structuralShapeFactsFromStableExpressionKey(key) ?? []) {
-    for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
-      const value = structuralHexSquareDecimalValue(restored);
-      if (value !== undefined) return value;
-    }
-  }
-  return undefined;
-}
-
-function structuralBitwiseNotFromFactKey(key: string): string | undefined {
-  for (const fact of structuralShapeFactsFromStableExpressionKey(key) ?? []) {
-    for (const restored of structuralRestoreShapeFacts(new Set([fact]))) {
-      const value = structuralBitwiseNotDecimalValueFromFact(restored);
-      if (value !== undefined) return value;
-    }
-  }
-  return undefined;
-}
-
-function structuralShapeFactsFromStableExpressionKey(key: string): X2ShapeSet | undefined {
-  const facts = x2RestoredDisplayShapeFactsFromSourceKey(key);
-  if (facts === undefined) return undefined;
-  const structural = new Set<X2ShapeFact>();
-  for (const fact of facts) {
-    if (x2ShapeFactSafety(fact) === "structuralOnly") structural.add(fact);
-  }
-  return structural.size === 0 ? undefined : structural;
 }
 
 function decimalAbs(value: string): string | undefined {

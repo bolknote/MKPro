@@ -915,9 +915,10 @@ Display rewrites are separated into strategy selection + body lowering.
   non-normal hex-shaped displays are not treated as freshly entered decimal
   mantissas; when the structural bitwise result is decimal-only, the proof also
   records the exact decimal display shape alongside the structural spelling.
-  Stable expression keys use that same proof for structural `К ИНВ`, so a
-  decimal-only inverted structural display is represented by the concrete
-  decimal result instead of also keeping a redundant opaque `expr-key:3A(shape:...)`.
+  Stable expression keys use the same structural-unary concrete proof for
+  `x^2`, `К ЗН`, and `К ИНВ`, so a decimal-only structural result is
+  represented by the concrete decimal fact instead of also keeping a redundant
+  opaque `expr-key:...(shape:...)`.
   A-F/hex-cell results seed shape-only structural `hex:*` mantissas
   when both operands can be parsed as Latin hex nibbles or known
   MK-61 display glyphs `С`/`Г`/`Е`, while unknown glyph cells remain
