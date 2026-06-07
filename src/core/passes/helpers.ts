@@ -4555,7 +4555,7 @@ function transferX2ValueDataflowState(
       const effect = conditionalX2EffectForGraphEdge(op, edge);
       const x = syncUnknownSameValue(canonicalX2ValueSet(closed.x), effect, producerIndex);
       const xShape = cloneOptionalShapeSet(closed.xShape);
-      const x2Shape = transferConditionalX2ShapeSet(closed, xShape, effect);
+      const x2Shape = transferConditionalX2ShapeSet(closed, x, xShape, effect);
       const output: X2ValueDataflowState = {
         x,
         y: cloneOptionalValueSet(closed.y),
@@ -4590,7 +4590,7 @@ function transferX2ValueDataflowState(
         : effect === "affects"
           ? x2SyncValueSetFromVisibleX(x, xShape)
           : new Set<X2ValueFact>();
-      const x2Shape = transferConditionalX2ShapeSet(stable, xShape, effect);
+      const x2Shape = transferConditionalX2ShapeSet(stable, x, xShape, effect);
       const output: X2ValueDataflowState = {
         x,
         y: cloneOptionalValueSet(stable.y),
@@ -4624,7 +4624,7 @@ function transferX2ValueDataflowState(
       const closed = closeX2ValueEntry(input);
       const x = syncUnknownSameValue(canonicalX2ValueSet(closed.x), "affects", producerIndex);
       const xShape = cloneOptionalShapeSet(closed.xShape);
-      const x2Shape = x2SyncShapeSetFromVisibleX(xShape);
+      const x2Shape = x2SyncShapeSetFromVisibleX(xShape, x);
       return {
         x,
         y: cloneOptionalValueSet(closed.y),
@@ -5010,7 +5010,7 @@ function transferPlainX2ValueState(
       : effect === "affects"
         ? new Set(x)
         : new Set<X2ValueFact>();
-    const x2Shape = transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes);
+    const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect, closedExponentShapes);
     return {
       x,
       y: transferPlainYValueSet(input, sourceX, op),
@@ -5068,7 +5068,7 @@ function transferPlainX2ValueState(
     const xShape = plainPreservesXValue(op)
       ? new Set(closedExponentShapes)
       : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedExponentShapes, input.yShape);
-    const x2Shape = transferPlainX2ShapeSet(input, xShape, effect, closedExponentShapes);
+    const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect, closedExponentShapes);
     const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
     return {
       x,
@@ -5129,7 +5129,7 @@ function transferPlainX2ValueState(
     ? cloneOptionalShapeSet(input.xShape)
     : plainXShapeAfterNonPreservingOp(op, input.x, input.y, input.xShape, input.yShape);
   const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
-  const x2Shape = transferPlainX2ShapeSet(input, xShape, effect);
+  const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect);
   const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
   if (structuralEntry.kind === "exponent") {
     const closedStructuralShapes = structuralExponentEntryShapeFacts(structuralEntry);
@@ -5140,7 +5140,13 @@ function transferPlainX2ValueState(
     const structuralXShape = plainPreservesXValue(op)
       ? new Set(closedStructuralShapes)
       : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedStructuralShapes, input.yShape);
-    const structuralX2Shape = transferPlainX2ShapeSet(input, structuralXShape, effect, closedStructuralShapes);
+    const structuralX2Shape = transferPlainX2ShapeSet(
+      input,
+      structuralXValue,
+      structuralXShape,
+      effect,
+      closedStructuralShapes,
+    );
     return {
       x: structuralXValue,
       y: transferPlainYValueSet(input, sourceX, op),
@@ -5690,7 +5696,7 @@ function transferIndirectConditionalX2ValueState(
   const closed = closeX2ValueEntry(input);
   const x = syncUnknownSameValue(canonicalX2ValueSet(closed.x), effect);
   const xShape = cloneOptionalShapeSet(closed.xShape);
-  const x2Shape = transferConditionalX2ShapeSet(closed, xShape, effect);
+  const x2Shape = transferConditionalX2ShapeSet(closed, x, xShape, effect);
   const output: X2ValueDataflowState = {
     x,
     y: cloneOptionalValueSet(closed.y),
@@ -5803,7 +5809,7 @@ function x2SyncValueSetFromVisibleX(
   shapes: X2ShapeSet | undefined,
 ): Set<X2ValueFact> {
   const output = canonicalX2ValueSet(values);
-  for (const decimal of x2ShapeSetRestoredVisibleDecimals(shapes)) {
+  for (const decimal of x2ValueShapeSetRestoredVisibleDecimals(values, shapes)) {
     output.add(decimalValueFact(decimal, "normalized"));
   }
   return canonicalX2ValueSet(output);
@@ -5819,7 +5825,7 @@ function transferExchangeXYX2ValueState(
   const x = cloneOptionalValueSet(input.y);
   const xShape = cloneOptionalShapeSet(input.yShape);
   const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
-  const x2Shape = transferPlainX2ShapeSet(input, xShape, effect);
+  const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect);
   return {
     x,
     y: cloneOptionalValueSet(sourceX),
@@ -5878,7 +5884,7 @@ function transferCopyYToXX2ValueState(
   const x = cloneOptionalValueSet(closed.y);
   const xShape = cloneOptionalShapeSet(closed.yShape);
   const x2 = transferPlainX2ValueSet(closed, x, xShape, effect);
-  const x2Shape = transferPlainX2ShapeSet(closed, xShape, effect);
+  const x2Shape = transferPlainX2ShapeSet(closed, x, xShape, effect);
   return {
     x,
     y: cloneOptionalValueSet(closed.y),
@@ -5969,12 +5975,13 @@ function transferPlainYShapeSet(
 
 function transferPlainX2ShapeSet(
   input: X2ValueDataflowState,
+  x: X2ValueSet | undefined,
   xShape: X2ShapeSet,
   effect: ReturnType<typeof plainX2Effect>,
   closedEntryShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   if (effect === "preserves") return cloneOptionalShapeSet(closedEntryShape ?? input.x2Shape);
-  if (effect === "affects") return x2SyncShapeSetFromVisibleX(xShape);
+  if (effect === "affects") return x2SyncShapeSetFromVisibleX(xShape, x);
   return new Set();
 }
 
@@ -6130,11 +6137,12 @@ function transferConditionalX2ValueSet(
 
 function transferConditionalX2ShapeSet(
   input: X2ValueDataflowState,
+  x: X2ValueSet | undefined,
   xShape: X2ShapeSet,
   effect: ReturnType<typeof conditionalX2Effect>,
 ): Set<X2ShapeFact> {
   if (effect === "preserves") return cloneOptionalShapeSet(input.x2Shape);
-  if (effect === "affects") return x2SyncShapeSetFromVisibleX(xShape);
+  if (effect === "affects") return x2SyncShapeSetFromVisibleX(xShape, x);
   return new Set();
 }
 
@@ -8179,8 +8187,11 @@ function normalizeX2RestoreShapesForX(input: X2ShapeSet | undefined): Set<X2Shap
   return output;
 }
 
-function x2SyncShapeSetFromVisibleX(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
-  return normalizeX2SyncShapesFromX(input);
+function x2SyncShapeSetFromVisibleX(
+  input: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined = undefined,
+): Set<X2ShapeFact> {
+  return normalizeX2SyncShapesFromX(shapeSetWithStableExpressionValueShapes(input, values));
 }
 
 function normalizeX2SyncShapesFromX(input: X2ShapeSet | undefined): Set<X2ShapeFact> {

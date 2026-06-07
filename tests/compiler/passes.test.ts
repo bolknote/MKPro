@@ -3173,6 +3173,30 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x)).not.toContain("expr-key:16(shape:hex-exponent:Г:2)");
   });
 
+  it("x2 value dataflow materializes decimal stable expr-key shapes on explicit X2 sync", () => {
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(legacy, plain(0x0e, "В↑"), "normal", {}, 0);
+
+    expect(x2ValueStateText(result?.x2)).toContain("decimal:4:normalized");
+    expect(x2ShapeStateText(result?.x2Shape)).toContain("mantissa:4:decimal");
+  });
+
+  it("x2 value dataflow materializes structural stable expr-key shapes on explicit X2 sync", () => {
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-8F:mantissa)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(legacy, plain(0x0e, "В↑"), "normal", {}, 0);
+
+    expect(x2ValueStateText(result?.x2)).toContain("expr-key:31(shape:hex:-8F:mantissa)");
+    expect(x2ShapeStateText(result?.x2Shape)).toContain("hex:8F:mantissa");
+  });
+
   it("x2 value dataflow canonicalizes structural shape sources inside stable expr keys", () => {
     const legacy: X2ValueDataflowState = {
       x: new Set<X2ValueFact>([
