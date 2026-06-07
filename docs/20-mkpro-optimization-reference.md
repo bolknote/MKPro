@@ -1559,7 +1559,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     display-free local gap such as a proved stable indirect conditional, or a
     modeled closed-context `/-/` reached through only free-standing
     `КНОП`/`К1`/`К2` empty ops), and removing number entry cannot
-    expose a consumed stack lift. The pass uses the shared closed plain-context
+    expose a consumed stack lift unless the shared stack/X2 proof shows the
+    pre-literal `X` and `Y` already hold the same value/display shape and the
+    deeper stack shift is unobservable. The pass uses the shared closed plain-context
     guard, so active decimal or structural `ВП` contexts keep their numeric
     entry explicit instead of being treated as ordinary decimal literal input.
     It recognizes ordinary integer or fractional

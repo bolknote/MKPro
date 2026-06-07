@@ -11,13 +11,16 @@ import {
   knownIndirectFlowTarget,
   labelIndexes,
   analyzeX2StackEffect,
+  removingPreShiftLiftCanExposeStack,
   replacingNumberEntryCanExposeStackLift,
   x2CanUseSourceDotRestoreAt,
   x2HasOnlyRestoreGapBeforeVp,
   x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasUnsafeDotRestoreShapeX2,
+  x2StateHasSameVisibleXAndY,
   x2StateIsClosedPlainContext,
+  x2PreviousStackLiftAndX2SyncProducerIndex,
   x2ValueSetHasFact,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueShapeSetHasRestoredVisibleDecimal,
@@ -412,6 +415,29 @@ function dotRestoreOp(value: string, source: IrOp): IrOp {
   };
 }
 
+function replacingLiteralStackLiftCanExpose(
+  ops: readonly IrOp[],
+  runStart: number,
+  run: NumericLiteralRun,
+  state: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return replacingNumberEntryCanExposeStackLift(ops, run.end) &&
+    !literalStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run, state, context);
+}
+
+function literalStackLiftAlreadySuppliedByDuplicateY(
+  ops: readonly IrOp[],
+  runStart: number,
+  run: NumericLiteralRun,
+  state: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return x2StateHasSameVisibleXAndY(state) &&
+    x2PreviousStackLiftAndX2SyncProducerIndex(ops, runStart, context) !== undefined &&
+    !removingPreShiftLiftCanExposeStack(ops, run.end);
+}
+
 const run: IrPassFn = (ops) => {
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
@@ -448,7 +474,7 @@ const run: IrPassFn = (ops) => {
           directReturnContext,
         ) &&
         (exactX2Fact || visibleDecimalX2Fact) &&
-        !replacingNumberEntryCanExposeStackLift(ops, runAtIndex.end) &&
+        !replacingLiteralStackLiftCanExpose(ops, index, runAtIndex, state, directReturnContext) &&
         !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext, vpReachabilityCache, {
           value: exactX2Fact,
           displayValue: visibleDecimalX2DisplayValueFact,

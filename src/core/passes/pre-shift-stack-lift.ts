@@ -1,26 +1,20 @@
 import type { IrOp } from "../types.ts";
-import { getOpcode } from "../opcodes.ts";
 import {
-  analyzeX2StackEffect,
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
-  isDisplayFocusSensitive,
-  isKnownReturnCallOp,
-  knownIndirectFlowTarget,
-  plainPreservesXValue,
   removingRecallCanExposeX2Restore,
   removingPreShiftLiftCanExposeStack,
   removingStackLiftCanExposeStack,
   type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
-  x2KnownReturnCallPreservesStackXAndX2,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
   x2NextStackPreservingReturnX2SyncIndex,
   x2NextXPreservingX2SyncIndex,
   x2PreviousHardX2OverwriteIndex,
+  x2PreviousStackLiftAndX2SyncProducerIndex,
   x2PreviousStackPreservingReturnX2SyncIndex,
   x2PreviousXPreservingX2SyncIndex,
 } from "./helpers.ts";
@@ -103,51 +97,7 @@ function previousProducerAlreadySuppliesLiftX2Sync(
   liftIndex: number,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  for (let index = liftIndex - 1; index >= 0; index -= 1) {
-    const previous = ops[index]!;
-    if (producerSuppliesLiftX2Sync(previous)) return true;
-    if (!isBackwardStackLiftX2SyncGap(ops, previous, index, context)) return false;
-  }
-  return false;
-}
-
-function producerSuppliesLiftX2Sync(op: IrOp): boolean {
-  return !hasRewriteBarrier(op) &&
-    !isDisplayFocusSensitive(op) &&
-    analyzeX2StackEffect(op).stackLiftAndX2Sync;
-}
-
-function isBackwardStackLiftX2SyncGap(
-  ops: readonly IrOp[],
-  op: IrOp,
-  index: number,
-  context: DirectReturnAnalysisContext,
-): boolean {
-  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
-  if (op.kind === "label") return !context.labelEntries.has(index);
-  if (isKnownReturnCallOp(op)) return x2KnownReturnCallPreservesStackXAndX2(ops, op, context);
-  if (isKnownFallthroughStackX2Gap(op)) return true;
-  switch (op.kind) {
-    case "store":
-    case "indirect-store":
-    case "orphan-address":
-      return true;
-    case "plain": {
-      const effect = analyzeX2StackEffect(op);
-      return effect.stackPreserves && effect.x2Preserves && plainPreservesXValue(op);
-    }
-    default:
-      return false;
-  }
-}
-
-function isKnownFallthroughStackX2Gap(op: IrOp): boolean {
-  if (op.kind !== "cjump" && op.kind !== "loop" && op.kind !== "indirect-cjump") return false;
-  if (op.kind === "indirect-cjump" && knownIndirectFlowTarget(op) === undefined) return false;
-  const effect = analyzeX2StackEffect(op);
-  if (!effect.stackPreserves) return false;
-  const fallthroughX2 = getOpcode(op.opcode).conditionalX2Effect?.fallthrough;
-  return fallthroughX2 === "affects" || fallthroughX2 === "preserves";
+  return x2PreviousStackLiftAndX2SyncProducerIndex(ops, liftIndex, context) !== undefined;
 }
 
 export const preShiftStackLift: IrPass = {

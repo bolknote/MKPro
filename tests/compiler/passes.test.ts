@@ -11094,6 +11094,46 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-literal-restore uses a previous stack lift when X and Y already match", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      plain(0x10, "+"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps duplicate-Y literals when deeper stack state is consumed", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore replaces visible leading-zero digit runs through preserving gaps", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),

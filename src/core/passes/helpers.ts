@@ -3084,6 +3084,19 @@ export function x2PreviousStackPreservingReturnX2SyncIndex(
   return undefined;
 }
 
+export function x2PreviousStackLiftAndX2SyncProducerIndex(
+  ops: readonly IrOp[],
+  end: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = end - 1; index >= 0; index -= 1) {
+    const op = ops[index]!;
+    if (x2IsStackLiftAndX2SyncProducer(op)) return index;
+    if (!x2IsBackwardStackLiftX2SyncGapOp(ops, op, index, context)) return undefined;
+  }
+  return undefined;
+}
+
 export function x2KnownReturnCallReachesStackPreservingX2Sync(
   ops: readonly IrOp[],
   call: KnownReturnCallOp,
@@ -3151,6 +3164,36 @@ function x2IsPlainXPreservingX2Sync(op: IrOp): boolean {
   if (op.kind !== "plain" || hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
   const effect = analyzeX2StackEffect(op);
   return effect.stackPreserves && effect.x2Affects && plainPreservesXValue(op);
+}
+
+function x2IsStackLiftAndX2SyncProducer(op: IrOp): boolean {
+  return !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    analyzeX2StackEffect(op).stackLiftAndX2Sync;
+}
+
+function x2IsBackwardStackLiftX2SyncGapOp(
+  ops: readonly IrOp[],
+  op: IrOp,
+  index: number,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  if (op.kind === "label") return !context.labelEntries.has(index);
+  if (isKnownReturnCallOp(op)) return x2KnownReturnCallPreservesStackXAndX2(ops, op, context);
+  if (x2IsKnownFallthroughStackX2GapOp(op)) return true;
+  switch (op.kind) {
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain": {
+      const effect = analyzeX2StackEffect(op);
+      return effect.stackPreserves && effect.x2Preserves && plainPreservesXValue(op);
+    }
+    default:
+      return false;
+  }
 }
 
 function x2IsStackXAndX2PreservingGapOp(
@@ -3224,6 +3267,16 @@ function x2IsFallthroughX2PreservingGapOp(op: IrOp): boolean {
   if (!effect.stackPreserves) return false;
   const conditional = getOpcode(op.opcode).conditionalX2Effect;
   return conditional?.fallthrough === "preserves";
+}
+
+function x2IsKnownFallthroughStackX2GapOp(op: IrOp): boolean {
+  if (op.kind !== "cjump" && op.kind !== "loop" && op.kind !== "indirect-cjump") return false;
+  if (op.kind === "indirect-cjump" && knownIndirectFlowTarget(op) === undefined) return false;
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  const effect = analyzeX2StackEffect(op);
+  if (!effect.stackPreserves) return false;
+  const fallthroughX2 = getOpcode(op.opcode).conditionalX2Effect?.fallthrough;
+  return fallthroughX2 === "affects" || fallthroughX2 === "preserves";
 }
 
 function x2IsStackXAndX2PreservingLinearOp(op: IrOp): boolean {
@@ -4436,6 +4489,25 @@ export function x2StateHasSameRestoredVisibleDecimalInXAndX2(
   state: X2ValueDataflowState | undefined,
 ): boolean {
   return x2ValueShapeSetsHaveSameRestoredVisibleDecimal(state?.x, state?.xShape, state?.x2, state?.x2Shape);
+}
+
+export function x2StateHasSameVisibleXAndY(state: X2ValueDataflowState | undefined): boolean {
+  return state !== undefined &&
+    (
+      x2ValueSetHasIntersection(state.x, state.y) ||
+      x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
+        state.x,
+        state.xShape,
+        state.y,
+        state.yShape,
+      ) ||
+      x2ValueShapeSetsHaveSameRestoredDisplayShape(
+        state.x,
+        state.xShape,
+        state.y,
+        state.yShape,
+      )
+    );
 }
 
 function effectiveVisibleXStateShape(state: X2ValueDataflowState | undefined): X2ShapeSet | undefined {

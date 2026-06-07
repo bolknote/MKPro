@@ -24,9 +24,9 @@ import {
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StatesHaveSameVpEntrySignSource,
+  x2StateHasSameVisibleXAndY,
   x2ValueFactIsNormalizedDecimal,
   x2ValueSetHasFact,
-  x2ValueSetHasIntersection,
   x2ValueShapeSetsHaveSameDotSafeDecimal,
   x2ValueShapeSetsHaveSameDotSafeStructuralMantissa,
   x2ValueShapeSetsHaveSameRestoredDisplayShape,
@@ -303,25 +303,6 @@ function hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(
 ): boolean {
   return x2StateHasSameVisibleXAndY(recallState) &&
     !removingPreShiftLiftCanExposeStack(ops, recallIndex);
-}
-
-function x2StateHasSameVisibleXAndY(state: X2ValueDataflowState | undefined): boolean {
-  return state !== undefined &&
-    (
-      x2ValueSetHasIntersection(state.x, state.y) ||
-      x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
-        state.x,
-        state.xShape,
-        state.y,
-        state.yShape,
-      ) ||
-      x2ValueShapeSetsHaveSameRestoredDisplayShape(
-        state.x,
-        state.xShape,
-        state.y,
-        state.yShape,
-      )
-    );
 }
 
 function hiddenTempStoreComputedSourceAlreadySyncedInX2(
