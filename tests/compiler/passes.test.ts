@@ -1729,6 +1729,22 @@ describe("ir passes on synthetic programs", () => {
       significantDigits: 7,
       safety: "structuralOnly",
     });
+    expect(x2ShapeDataModelForFact("hex:123:mantissa")).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      raw: "123",
+      normalizedDecimal: "123",
+      normalizedSameAsRaw: true,
+      safety: "structuralOnly",
+    });
+    expect(x2ShapeDataModelForFact("hex:0123:mantissa")).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      raw: "0123",
+      normalizedDecimal: "123",
+      normalizedSameAsRaw: false,
+      safety: "structuralOnly",
+    });
     expect(x2ShapeDataModelForFact("super:FA")).toMatchObject({
       kind: "mantissa",
       radix: "super",
@@ -1809,11 +1825,19 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeFactRestoredVisibleDecimal("mantissa:0.5:decimal")).toBeUndefined();
     expect(x2ShapeFactRestoredVisibleDecimal("mantissa:05:decimal")).toBeUndefined();
     expect(x2ShapeFactRestoredVisibleDecimal("mantissa:-0:decimal")).toBeUndefined();
+    expect(x2ShapeFactRestoredVisibleDecimal("hex:123:mantissa")).toBe("123");
+    expect(x2ShapeFactRestoredVisibleDecimal("hex:0123:mantissa")).toBeUndefined();
+    expect(x2ShapeFactRestoredVisibleDecimal("hex:0.5:mantissa")).toBeUndefined();
+    expect(x2ShapeFactRestoredVisibleDecimal("hex-exponent:123:1")).toBe("1230");
+    expect(x2ShapeFactRestoredVisibleDecimal("hex-exponent:1.23:2")).toBe("123");
+    expect(x2ShapeFactRestoredVisibleDecimal("hex-exponent:1.23:-1")).toBeUndefined();
     expect([...x2ShapeSetRestoredVisibleDecimals(new Set([
       "exponent:5:-1:decimal",
       "mantissa:0.5:decimal",
       "mantissa:05:decimal",
-    ]))]).toEqual(["0.5"]);
+      "hex:123:mantissa",
+      "hex:0123:mantissa",
+    ]))]).toEqual(["0.5", "123"]);
   });
 
   it("x2 shape algebra closes non-negative structural exponent shifts as mantissa shapes", () => {
@@ -4962,6 +4986,29 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(result?.x) ?? []).toContain("decimal:10000002:normalized");
     expect(x2ShapeStateText(result?.xShape)).toEqual(["mantissa:10000002:decimal"]);
+  });
+
+  it("x2 value dataflow uses exact decimal structural shapes as visible decimal operands", () => {
+    const exactStructural: X2ValueDataflowState = {
+      y: new Set(),
+      x: new Set<X2ValueFact>(["decimal:4:normalized"]),
+      x2: new Set(),
+      yShape: new Set<X2ShapeFact>(["hex:123:mantissa"]),
+      xShape: new Set(),
+      entry: { kind: "closed" },
+    };
+    const rawStructural: X2ValueDataflowState = {
+      ...exactStructural,
+      yShape: new Set<X2ShapeFact>(["hex:0123:mantissa"]),
+    };
+
+    const exactResult = transferX2ValueStateForEdge(exactStructural, plain(0x10, "+"), "normal", {}, 0);
+    const rawResult = transferX2ValueStateForEdge(rawStructural, plain(0x10, "+"), "normal", {}, 0);
+
+    expect(x2ValueStateText(exactResult?.x) ?? []).toContain("decimal:127:normalized");
+    expect(x2ShapeStateText(exactResult?.xShape)).toEqual(["mantissa:127:decimal"]);
+    expect(x2ValueStateText(rawResult?.x) ?? []).not.toContain("decimal:127:normalized");
+    expect(x2ShapeStateText(rawResult?.xShape)).toEqual([]);
   });
 
   it("x2 value dataflow feeds exact decimal display shapes to structural hex arithmetic", () => {

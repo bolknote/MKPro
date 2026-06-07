@@ -3473,7 +3473,22 @@ export function x2ShapeFactRestoredVisibleDecimal(fact: X2ShapeFact): string | u
     if (model.kind === "mantissa" && model.radix === "decimal") return model.normalizedDecimal;
     if (model.kind === "exponent-entry" && model.mantissa.radix === "decimal") return model.normalizedDecimal;
   }
-  return undefined;
+  return structuralShapeFactRestoredVisibleDecimal(fact);
+}
+
+function structuralShapeFactRestoredVisibleDecimal(fact: X2ShapeFact): string | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  const mantissa = model.kind === "mantissa"
+    ? model
+    : model.kind === "exponent-entry"
+      ? model.closedStructuralMantissa
+      : undefined;
+  if (mantissa === undefined || (mantissa.radix !== "hex" && mantissa.radix !== "super")) return undefined;
+  if (mantissa.normalizedDecimal === undefined || !mantissa.normalizedSameAsRaw) return undefined;
+  const display = exactDecimalDisplayShapeFact(mantissa.normalizedDecimal);
+  return display === decimalMantissaShapeFact(mantissa.canonical)
+    ? mantissa.normalizedDecimal
+    : undefined;
 }
 
 export function x2ShapeSetRestoredVisibleDecimals(input: X2ShapeSet | undefined): Set<string> {
@@ -7740,6 +7755,7 @@ function structuralMantissaDataModel(
 ): X2MantissaDataModel {
   const canonical = canonicalShapeRaw(raw);
   const digits = shapeDigits(canonical);
+  const normalized = structuralMantissaNormalizedDecimal(canonical);
   return {
     kind: "mantissa",
     radix,
@@ -7750,9 +7766,16 @@ function structuralMantissaDataModel(
     hasLeadingZero: shapeHasLeadingZero(canonical),
     digits,
     significantDigits: significantShapeDigits(digits),
-    normalizedSameAsRaw: true,
+    normalizedDecimal: normalized,
+    normalizedSameAsRaw: normalized !== undefined && canonical === normalized,
     safety,
   };
+}
+
+function structuralMantissaNormalizedDecimal(raw: string): string | undefined {
+  if (hasStructuralNonDecimalDigit(raw) || !decimalMantissaShapeRawIsValid(raw)) return undefined;
+  const normalized = normalizeDecimalMantissaEntry(raw);
+  return normalized === undefined || significantDecimalDigits(normalized) > 8 ? undefined : normalized;
 }
 
 function closedStructuralExponentMantissaModel(
