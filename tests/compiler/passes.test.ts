@@ -3864,6 +3864,35 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(signedDecimal?.x2Shape)).toEqual(["mantissa:-4:decimal"]);
   });
 
+  it("x2 value dataflow creates VP sources from materialized stable expr-key shapes", () => {
+    const structuralSource = "expr-key:31(shape:hex:-A:mantissa)" as X2ValueFact;
+    const structuralState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([structuralSource]),
+      x2: new Set<X2ValueFact>([structuralSource]),
+      entry: { kind: "closed" },
+    };
+    const structuralSync = transferX2ValueStateForEdge(
+      structuralState,
+      plain(0xf0, "F0"),
+      "normal",
+      {},
+      0,
+    );
+
+    expect(x2VpEntryShapeText(structuralSync)).toEqual(["hex:A:mantissa"]);
+
+    const decimalSource = "expr-key:22(decimal:2:normalized)" as X2ValueFact;
+    const decimalState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([decimalSource]),
+      x2: new Set<X2ValueFact>([decimalSource]),
+      entry: { kind: "closed" },
+    };
+    const decimalSync = transferX2ValueStateForEdge(decimalState, plain(0xf0, "F0"), "normal", {}, 0);
+
+    expect(x2VpEntryMantissaText(decimalSync)).toEqual(["4"]);
+    expect(x2VpEntrySignShapeText(decimalSync)).toEqual(["mantissa:4:decimal"]);
+  });
+
   it("x2 value dataflow derives unary decimal facts from shape-only decimal mantissas", () => {
     const shapeOnly: X2ValueDataflowState = {
       x: new Set(),
