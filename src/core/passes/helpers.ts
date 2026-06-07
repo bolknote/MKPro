@@ -3807,6 +3807,9 @@ function x2ShapeFactHasExactIntegerDisplay(fact: X2ShapeFact): boolean {
   const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
   if (decimal === undefined || !/^-?[0-9]+$/u.test(decimal)) return false;
   const model = x2ShapeDataModelForFact(fact);
+  if (model.kind === "exponent-entry" && model.mantissa.radix === "decimal") {
+    return model.normalizedDecimal === decimal && model.closedDecimalDisplay !== undefined;
+  }
   if (model.kind !== "mantissa") return false;
   if (model.radix === "decimal") {
     return model.safety === "dotSafeDecimal" &&

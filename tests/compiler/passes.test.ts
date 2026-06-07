@@ -1900,15 +1900,20 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["mantissa:-123:decimal"]))).toBe(true);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex:123:mantissa"]))).toBe(true);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex:-123:mantissa"]))).toBe(true);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["exponent:1:3:decimal"]))).toBe(true);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["exponent:-1:8:decimal"]))).toBe(true);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["mantissa:0123:decimal"]))).toBe(false);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex:0123:mantissa"]))).toBe(false);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex-exponent:123:1"]))).toBe(false);
-    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["exponent:1:3:decimal"]))).toBe(false);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["exponent:1:-8:decimal"]))).toBe(false);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["exponent:5:-1:decimal"]))).toBe(false);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["mantissa:-0:decimal"]))).toBe(false);
     expect(x2ShapeSetHasExactNonNegativeIntegerDisplay(new Set(["mantissa:123:decimal"]))).toBe(true);
+    expect(x2ShapeSetHasExactNonNegativeIntegerDisplay(new Set(["exponent:1:8:decimal"]))).toBe(true);
     expect(x2ShapeSetHasExactNonNegativeIntegerDisplay(new Set(["hex:123:mantissa"]))).toBe(true);
     expect(x2ShapeSetHasExactNonNegativeIntegerDisplay(new Set(["mantissa:0:decimal"]))).toBe(true);
     expect(x2ShapeSetHasExactNonNegativeIntegerDisplay(new Set(["mantissa:-123:decimal"]))).toBe(false);
+    expect(x2ShapeSetHasExactNonNegativeIntegerDisplay(new Set(["exponent:-1:8:decimal"]))).toBe(false);
     expect(x2ShapeSetHasExactNonNegativeIntegerDisplay(new Set(["hex:-123:mantissa"]))).toBe(false);
     expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["exponent:5:-1:decimal"]))).toBe(true);
     expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["exponent:1:3:decimal"]))).toBe(true);
@@ -23447,6 +23452,42 @@ describe("ir passes on synthetic programs", () => {
 
     expect(vpX2Peephole.run(leadingZero, ctx).applied).toBe(0);
     expect(vpX2Peephole.run(rawIntegerPart, ctx).applied).toBe(0);
+  });
+
+  it("vp-x2-peephole removes a no-op К [x] for exact closed exponent integer displays", () => {
+    const positive: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x34, "К [x]"),
+      halt(),
+    ];
+    const negative: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x34, "К [x]"),
+      halt(),
+    ];
+
+    expect(vpX2Peephole.run(positive, ctx).ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+    expect(vpX2Peephole.run(negative, ctx).ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
   });
 
   it("vp-x2-peephole removes a no-op К |x| for an exact non-negative integer display shape", () => {
