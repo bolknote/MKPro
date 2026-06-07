@@ -19,6 +19,7 @@ import {
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
   x2NextXPreservingX2SyncIndex,
+  x2PreviousHardX2OverwriteIndex,
   x2PreviousXPreservingX2SyncIndex,
 } from "./helpers.ts";
 
@@ -38,6 +39,11 @@ const run: IrPassFn = (ops) => {
       continue;
     }
     if (x2PreviousXPreservingX2SyncIndex(ops, index, context) !== undefined) {
+      if (removingStackLiftCanExposeStack(ops, index)) continue;
+      remove.add(index);
+      continue;
+    }
+    if (x2PreviousHardX2OverwriteIndex(ops, index, context) !== undefined) {
       if (removingStackLiftCanExposeStack(ops, index)) continue;
       remove.add(index);
       continue;

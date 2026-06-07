@@ -63,6 +63,7 @@ import {
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
   x2NextXPreservingX2SyncIndex,
+  x2PreviousHardX2OverwriteIndex,
   x2PreviousXPreservingX2SyncIndex,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
@@ -17351,6 +17352,38 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift removes В↑ after a hard X/X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x54, "К НОП"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x0d, "Cx"),
+      plain(0x54, "К НОП"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ after a hard X/X2 overwrite when the lift is consumed", () => {
+    const program: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x0e, "В↑"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift keeps В↑ after a plain X2 sync when the lift is consumed", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -17673,6 +17706,33 @@ describe("ir passes on synthetic programs", () => {
       numericTargetProgram,
       2,
       directReturnAnalysisContext(numericTargetProgram),
+    )).toBeUndefined();
+  });
+
+  it("stack/X2 scheduler helpers find previous hard overwrites through transparent gaps", () => {
+    const hardOverwriteProgram: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x54, "К НОП"),
+      store("2"),
+      plain(0x0e, "В↑"),
+      halt(),
+    ];
+    const blockingProgram: IrOp[] = [
+      plain(0x0d, "Cx"),
+      plain(0x22, "F x^2"),
+      plain(0x0e, "В↑"),
+      halt(),
+    ];
+
+    expect(x2PreviousHardX2OverwriteIndex(
+      hardOverwriteProgram,
+      3,
+      directReturnAnalysisContext(hardOverwriteProgram),
+    )).toBe(0);
+    expect(x2PreviousHardX2OverwriteIndex(
+      blockingProgram,
+      2,
+      directReturnAnalysisContext(blockingProgram),
     )).toBeUndefined();
   });
 

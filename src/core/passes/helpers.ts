@@ -3034,6 +3034,25 @@ export function x2PreviousXPreservingX2SyncIndex(
   return undefined;
 }
 
+export function x2PreviousHardX2OverwriteIndex(
+  ops: readonly IrOp[],
+  end: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = end - 1; index >= 0; index -= 1) {
+    const op = ops[index]!;
+    if (x2IsPreviousHardX2OverwriteOp(op)) return index;
+    if (!x2IsStackXAndX2PreservingGapOp(ops, op, index, context)) return undefined;
+  }
+  return undefined;
+}
+
+function x2IsPreviousHardX2OverwriteOp(op: IrOp): boolean {
+  return !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse;
+}
+
 function x2IsXPreservingSyncOp(
   ops: readonly IrOp[],
   op: IrOp,
