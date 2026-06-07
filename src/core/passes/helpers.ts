@@ -4494,7 +4494,9 @@ function transferX2ValueDataflowState(
         vpEntrySignShape: vpEntrySignShapesFromStoreSplice(stable.x2Shape),
         ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
         memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, op.register, stable.x) : undefined,
-        shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, op.register, stable.xShape) : undefined,
+        shapeMemory: trackRegisterMemory
+          ? storeX2ShapeMemory(stable.shapeMemory, op.register, stable.x, stable.xShape)
+          : undefined,
       };
     }
     case "indirect-store":
@@ -5757,7 +5759,7 @@ function transferIndirectStoreX2ValueState(
     vpEntrySignShape: vpEntrySignShapesFromStoreSplice(stable.x2Shape),
     ...(vpEntryShape === undefined ? {} : { vpEntryShapeTransient: true as const }),
     memory: trackRegisterMemory ? storeX2ValueMemory(stable.memory, target, stable.x) : undefined,
-    shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, target, stable.xShape) : undefined,
+    shapeMemory: trackRegisterMemory ? storeX2ShapeMemory(stable.shapeMemory, target, stable.x, stable.xShape) : undefined,
   };
   return isStableIndirectSelector(op.register)
     ? output
@@ -6544,10 +6546,12 @@ function storeX2ValueMemory(
 function storeX2ShapeMemory(
   input: X2ShapeMemory | undefined,
   register: RegisterName,
+  values: X2ValueSet,
   shapes: X2ShapeSet | undefined,
 ): X2ShapeMemory {
   const output = cloneX2ShapeMemory(input);
-  const stored = storableX2ShapeMemoryFacts(shapes);
+  const merged = shapeSetWithStableExpressionValueShapes(shapes, values);
+  const stored = storableX2ShapeMemoryFacts(merged);
   if (stored.size === 0) delete output[register];
   else output[register] = stored;
   return output;
@@ -6724,6 +6728,8 @@ function storableX2MemoryValueFacts(values: X2ValueSet): Set<X2ValueFact> {
   const canonicalValues = canonicalX2ValueSet(values);
   const output = concreteStoredX2ValueFacts(canonicalValues);
   for (const value of canonicalValues) {
+    const visible = value.startsWith("expr-key:") ? x2ValueFactRestoredVisibleDecimal(value) : undefined;
+    if (visible !== undefined) output.add(decimalValueFact(visible, "normalized"));
     if (isExpressionX2ValueFact(value)) output.add(value);
   }
   return output;

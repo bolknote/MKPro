@@ -3234,6 +3234,37 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(result?.x2Shape)).toContain("hex:8F:mantissa");
   });
 
+  it("x2 value dataflow stores materialized decimal stable expr-key facts in register memory", () => {
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(legacy, store("1"), "normal", { trackRegisterMemory: true }, 0);
+
+    expect(x2ValueStateText(result?.memory?.["1"])).toContain("expr-key:22(decimal:2:normalized)");
+    expect(x2ValueStateText(result?.memory?.["1"])).toContain("decimal:4:normalized");
+    expect(x2ShapeStateText(result?.shapeMemory?.["1"])).toContain("mantissa:4:decimal");
+  });
+
+  it("x2 value dataflow stores materialized structural stable expr-key shapes in indirect register memory", () => {
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-8F:mantissa)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(
+      legacy,
+      knownTargetIndirectStore("7", "2"),
+      "normal",
+      { trackRegisterMemory: true },
+      0,
+    );
+
+    expect(x2ValueStateText(result?.memory?.["2"])).toContain("expr-key:31(shape:hex:-8F:mantissa)");
+    expect(x2ShapeStateText(result?.shapeMemory?.["2"])).toContain("hex:8F:mantissa");
+  });
+
   it("x2 value dataflow canonicalizes structural shape sources inside stable expr keys", () => {
     const legacy: X2ValueDataflowState = {
       x: new Set<X2ValueFact>([

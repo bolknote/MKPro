@@ -1284,7 +1284,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     carry register value/shape memory clone it through this canonical layer
     instead of sharing raw memory objects, including labels, empty/plain
     opcodes, dot/sign/VP entry transitions, stack moves, and conditional/return
-    close paths. The proved decimal
+    close paths. Direct and proved-indirect stores also materialize proved
+    stable-key decimal values and display/structural shapes into register
+    value/shape memory, so later recall and recall-elimination proofs see the
+    same facts without waiting for an actual recall sync. The proved decimal
     first-digit source is visible to `vp-splice`, so an empty separator and a
     cancelling exponent sign pair before that `ВП` can be removed together. It
     also carries exact emulator-pinned single-digit hex

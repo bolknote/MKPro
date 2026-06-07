@@ -1534,7 +1534,9 @@ The pipeline currently contains:
   fact is not already present. The result stays an opaque `expr-key:*` value and
   does not make the source shape decimal or dot-safe until a real X2 sync,
   including direct/proved-indirect recalls, materializes any proved stable-key
-  value or display shape into hidden X2. Stable constant stack producers such as `F pi` use the same
+  value or display shape into hidden X2. Direct/proved-indirect stores use the
+  same materialization for register value/shape memory, without treating that
+  store as an X2 sync. Stable constant stack producers such as `F pi` use the same
   opaque key model (`expr-key:20()`) without assigning a decimal approximation
   to the constant. A closed-context `.` now
   transfers the hidden X2 facts back into visible `X`; decimal facts are
