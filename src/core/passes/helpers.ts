@@ -4424,12 +4424,18 @@ export function x2StateHasVpDotSafeStructuralContextX2(state: X2ValueDataflowSta
   const x2Shape = effectiveX2StateShape(state);
   if (x2Shape === undefined || x2Shape.size === 0) return false;
   for (const fact of x2Shape) {
-    const model = x2ShapeDataModelForFact(fact);
-    if (model.kind !== "exponent-entry" || model.safety !== "structuralOnly") return false;
-    const mantissa = model.closedStructuralMantissa ?? model.mantissa;
+    const mantissa = structuralVpDotMantissaModelFromShapeFact(fact);
+    if (mantissa === undefined) return false;
     if (!structuralMantissaHasVpDotSafeLead(mantissa)) return false;
   }
   return true;
+}
+
+function structuralVpDotMantissaModelFromShapeFact(fact: X2ShapeFact): X2MantissaDataModel | undefined {
+  const closed = x2ClosedExponentDisplayShapeFact(fact);
+  const model = x2ShapeDataModelForFact(closed ?? fact);
+  if (model.kind !== "mantissa") return undefined;
+  return model.radix === "hex" || model.radix === "super" ? model : undefined;
 }
 
 function structuralMantissaHasVpDotSafeLead(model: X2MantissaDataModel): boolean {

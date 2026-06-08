@@ -1629,6 +1629,25 @@ describe("ir passes on synthetic programs", () => {
     const addressGapStates = computeX2ValueStates(addressGapProgram);
     const twoGapStates = computeX2ValueStates(twoGapProgram);
     const cStates = computeX2ValueStates(cProgram);
+    const closedMantissaState: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      x2Shape: new Set<X2ShapeFact>(["hex:Г00:mantissa"]),
+      entry: { kind: "closed" },
+      structuralVpContext: {
+        kind: "exponent",
+        mantissa: new Set<X2ShapeFact>(["hex:Г:mantissa"]),
+        exponent: new Set(["2"]),
+      },
+    };
+    const unsafeClosedMantissaState: X2ValueDataflowState = {
+      ...closedMantissaState,
+      x2Shape: new Set<X2ShapeFact>(["hex:C00:mantissa"]),
+    };
+    const decimalClosedMantissaState: X2ValueDataflowState = {
+      ...closedMantissaState,
+      x2Shape: new Set<X2ShapeFact>(["mantissa:1300:decimal"]),
+    };
 
     expect(x2StateHasVpDotSafeStructuralContextX2(dStates[2])).toBe(true);
     expect(x2CanUseVpDotRestoreAt(dProgram, 2, dStates[2])).toBe(true);
@@ -1640,6 +1659,9 @@ describe("ir passes on synthetic programs", () => {
     expect(x2CanUseVpDotRestoreAt(twoGapProgram, 4, twoGapStates[4])).toBe(false);
     expect(x2StateHasVpDotSafeStructuralContextX2(cStates[2])).toBe(false);
     expect(x2CanUseVpDotRestoreAt(cProgram, 2, cStates[2])).toBe(false);
+    expect(x2StateHasVpDotSafeStructuralContextX2(closedMantissaState)).toBe(true);
+    expect(x2StateHasVpDotSafeStructuralContextX2(unsafeClosedMantissaState)).toBe(false);
+    expect(x2StateHasVpDotSafeStructuralContextX2(decimalClosedMantissaState)).toBe(false);
   });
 
   it("x2 value algebra compares decimal facts by restored visible value", () => {

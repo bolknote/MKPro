@@ -1498,7 +1498,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     closes to a mantissa whose first significant nibble is `D`/`Е`, a following
     `.` reached through address-byte gaps and at most one role-free
     X2-preserving non-empty command can be removed when its result is
-    immediately overwritten; this does not turn the shape into a general
+    immediately overwritten. The proof checks the resolved structural mantissa,
+    so an already-closed/joined `hex:*:mantissa` fact and its
+    `hex-exponent:*:*` spelling are treated equivalently; decimal shapes remain
+    outside this exception. This does not turn the shape into a general
     dot-safe value. `ВП /-/` is modeled as a
     signed exponent restore that materializes decimal value/display facts or
     structural exponent shapes in `X` and hidden X2 while preserving the active
