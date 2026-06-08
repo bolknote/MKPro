@@ -6291,8 +6291,9 @@ function transferPlainX2ValueState(
     effect,
     producerIndex,
   );
+  const inputXShape = effectiveInputXShape(input);
   const xShape = plainPreservesXValue(op)
-    ? cloneOptionalShapeSet(input.xShape)
+    ? cloneOptionalShapeSet(inputXShape)
     : plainXShapeAfterNonPreservingOp(op, input.x, input.y, input.xShape, input.yShape);
   const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
   const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect);
@@ -6387,7 +6388,7 @@ function transferPlainX2ValueState(
     y: transferPlainYValueSet(input, input.x, op),
     x2,
     xShape,
-    yShape: transferPlainYShapeSet(input, input.xShape, op),
+    yShape: transferPlainYShapeSet(input, inputXShape, op),
     x2Shape,
     entry: nextX2EntryStateForPlainEffect(effect),
     vpContext: transferPlainX2VpContextState(input, effect),
@@ -6401,7 +6402,7 @@ function transferPlainX2ValueState(
       xShape,
       x2Shape,
       effect,
-      input.xShape,
+      inputXShape,
       input.x2Shape,
       input.vpContext?.kind === "exponent",
       input.x,
@@ -6410,7 +6411,7 @@ function transferPlainX2ValueState(
     vpEntryMantissaTransient: transferPlainX2VpEntryMantissaTransientState(
       op,
       effect,
-      input.xShape,
+      inputXShape,
       input.x2Shape,
       input.vpContext?.kind === "exponent",
       input.x,
@@ -6426,7 +6427,7 @@ function transferPlainX2ValueState(
       xShape,
       x2Shape,
       effect,
-      input.xShape,
+      inputXShape,
       input.x2Shape,
       input.x,
       input.x2,
@@ -6434,7 +6435,7 @@ function transferPlainX2ValueState(
     vpEntryShapeTransient: transferPlainX2VpEntryShapeTransientState(
       op,
       effect,
-      input.xShape,
+      inputXShape,
       input.x2Shape,
       input.x,
       input.x2,
@@ -7160,7 +7161,7 @@ function visibleX2ShapeFactsForStack(input: X2ValueDataflowState): X2ShapeSet {
   if (closedExponentShapes.size > 0) return closedExponentShapes;
   const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
   if (structuralEntry.kind === "exponent") return structuralExponentEntryShapeFacts(structuralEntry);
-  return cloneOptionalShapeSet(input.xShape);
+  return cloneOptionalShapeSet(effectiveInputXShape(input));
 }
 
 function transferPlainYValueSet(

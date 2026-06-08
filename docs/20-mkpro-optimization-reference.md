@@ -1005,7 +1005,9 @@ Display rewrites are separated into strategy selection + body lowering.
   facts. The same stack transfer model carries structural `Y` shape facts for
   hex/super values through `В↑`, `X↔Y`, and documented Y-keeping operations, so
   a later store/recall can still use shape-memory proofs without decimalizing
-  those values.
+  those values. X-preserving stack transfers use the effective visible-X shape
+  view, so stable `expr-key:*` display/structural shapes are materialized into
+  the explicit `X`/`Y`/synced-X2 shape sets when `В↑` copies and syncs them.
 - `stack-resident-temps` — keeps up to four consecutive single-use temps on the stack, using `В↑` lifts and restore sequences (`X↔Y` / `F reverse`) before direct stack-based consumers.
 - `stack-resident-indexed-temp` — keeps a single-use temp in X across one indexed compound store `cells[i] op= temp` when the temp is consumed exactly once and selector/index setup is not temp-dependent.
 - `stack-resident-control-flow` — marks stack-temp fusion that crosses stack-preserving `if` / `while` / `dispatch` regions; these regions cannot clobber live temps and the lowering rebuilds stack state if the region requires it.

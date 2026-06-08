@@ -3375,6 +3375,19 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(result?.x2Shape)).toContain("hex:8F:mantissa");
   });
 
+  it("x2 value dataflow materializes structural stable expr-key shapes through stack lift", () => {
+    const legacy: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-FACE:mantissa)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(legacy, plain(0x0e, "В↑"), "normal", {}, 0);
+
+    expect(x2ShapeStateText(result?.xShape)).toContain("hex:FACE:mantissa");
+    expect(x2ShapeStateText(result?.yShape)).toContain("hex:FACE:mantissa");
+    expect(x2ShapeStateText(result?.x2Shape)).toContain("hex:FACE:mantissa");
+  });
+
   it("x2 value dataflow materializes decimal stable expr-key facts on direct recall X2 sync", () => {
     const legacy: X2ValueDataflowState = {
       x: new Set(),
