@@ -10089,6 +10089,20 @@ function decimalFirstDigitVpSpliceMantissa(
 function vpFirstDigitSpliceTargetShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
   const output = structuralMantissaShapeFacts(x2StructuralRestoreShapeFacts(shapes));
   for (const fact of decimalMantissaShapeFacts(shapes)) output.add(fact);
+  for (const fact of closedExponentMantissaDisplayShapeFacts(shapes)) output.add(fact);
+  return output;
+}
+
+function closedExponentMantissaDisplayShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of shapes ?? []) {
+    const closed = x2ClosedExponentDisplayShapeFact(fact);
+    if (closed === undefined) continue;
+    const model = x2ShapeDataModelForFact(closed);
+    if (model.kind !== "mantissa") continue;
+    const canonical = x2ShapeFactFromDataModel(model);
+    if (canonical !== undefined) output.add(canonical);
+  }
   return output;
 }
 

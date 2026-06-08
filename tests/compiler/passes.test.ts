@@ -6443,6 +6443,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual(["hex-exponent:A00:3"]);
   });
 
+  it("x2 value dataflow models structural VP first-digit splice over closed decimal exponent displays", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:A:mantissa"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:1:2:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(state, plain(0x54, "КНОП"), "normal", {}, 0);
+
+    expect(x2VpEntryShapeText(result)).toEqual(["hex:A00:mantissa"]);
+    expect(result?.vpEntryShapeTransient).toBeUndefined();
+
+    const unsafeFractional: X2ValueDataflowState = {
+      ...state,
+      x2Shape: new Set<X2ShapeFact>(["exponent:1:-1:decimal"]),
+    };
+    const fractionalResult = transferX2ValueStateForEdge(unsafeFractional, plain(0x54, "КНОП"), "normal", {}, 0);
+    expect(fractionalResult?.vpEntryShape).toBeUndefined();
+
+    const wideScientific: X2ValueDataflowState = {
+      ...state,
+      x2Shape: new Set<X2ShapeFact>(["exponent:100000000:2:decimal"]),
+    };
+    const wideResult = transferX2ValueStateForEdge(wideScientific, plain(0x54, "КНОП"), "normal", {}, 0);
+    expect(wideResult?.vpEntryShape).toBeUndefined();
+  });
+
   it("x2 value dataflow models decimal VP first-digit splice over decimal X2 tails", () => {
     const immediate: IrOp[] = [
       recall("1", "preload const 3"),

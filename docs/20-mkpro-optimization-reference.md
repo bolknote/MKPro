@@ -1286,7 +1286,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     a proved visible first digit and a proved hidden decimal/structural mantissa
     tail can form a new shape-only source (`hex:A` with hidden `hex:8A0` gives
     `hex:AA0`; hidden decimal `800` gives `hex:A00`) for the following exponent
-    entry. Decimal first-digit plus decimal tail uses the same context rule for
+    entry. Hidden decimal exponent-entry tails can participate through the
+    common closed-display helper only when they close to an ordinary mantissa
+    digit run (`exponent:1:2:decimal` behaves like hidden `100`); fractional
+    and wide scientific displays remain rejected.
+    Decimal first-digit plus decimal tail uses the same context rule for
     ordinary decimal exponent-entry facts: immediate `←→; ВП` inherits the old
     decimal tail (`800`), while an empty preserving gap can prove the current
     visible first digit plus the hidden tail (`3` with `800` gives `300`).
