@@ -8257,9 +8257,9 @@ function recallDecimalDisplayShapeFacts(
   register: RegisterName,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  for (const fact of decimalDisplayShapeFacts(
-    stableExpressionShapeFactsFromValueFacts(recallX2ValueFacts(state, register, true, op)),
-  )) output.add(fact);
+  for (const fact of decimalDisplayShapeFacts(x2ShapesFromValueFacts(recallX2ValueFacts(state, register, true, op)))) {
+    output.add(fact);
+  }
   for (const fact of decimalDisplayShapeFacts(state.shapeMemory?.[register])) output.add(fact);
   for (const fact of decimalDisplayShapeFacts(preloadedConstantShapeFacts(op))) output.add(fact);
   return output;

@@ -1587,8 +1587,10 @@ The pipeline currently contains:
   same materialization for ordinary decimal value facts when no more exact
   visible shape is already known, and for stable-key facts in register
   value/shape memory, without treating that store as an X2 sync;
-  recall-removal proofs can also derive display/structural shape facts from
-  stable value-memory when shape-memory is unavailable. X2
+  recall-removal proofs can also derive exact decimal display facts from
+  normalized decimal value-memory and display/structural shape facts from stable
+  value-memory when shape-memory is unavailable; raw leading-zero decimal values
+  remain non-exact display sources. X2
   restore-safety and same-X/X2 shape predicates use this effective stable-key
   shape view as well. CFG/register-memory joins preserve those derived stable-key
   decimal and shape facts across mixed materialized/unmaterialized paths while

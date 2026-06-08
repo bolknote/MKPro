@@ -1364,9 +1364,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     stable-key decimal values, and display/structural shapes into register
     value/shape memory, so later recall and recall-elimination proofs see the
     same facts without waiting for an actual recall sync. If a join or older
-    path still has only stable value-memory, recall-elimination shape proofs
-    derive the same display/structural facts from those stable keys instead of
-    requiring a separate shape-memory fact. State-level restore-safety and
+    path still has only value-memory, recall-elimination shape proofs derive
+    exact decimal display facts from normalized decimal values and
+    display/structural facts from stable keys instead of requiring a separate
+    shape-memory fact; raw leading-zero decimal values remain non-exact display
+    sources. State-level restore-safety and
     same-X/X2 shape predicates use the same effective-shape view, so a stable
     `expr-key:*` value can prove structural or dot-safe structural context even
     when the explicit `xShape`/`x2Shape` set is empty. CFG and register-memory

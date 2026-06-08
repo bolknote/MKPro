@@ -3686,6 +3686,30 @@ describe("ir passes on synthetic programs", () => {
     expect(recallValueProof(recall("1"), state)?.x2SyncDisplayValue).toBe(true);
   });
 
+  it("x2 recall proof derives decimal display sync shapes from plain decimal value memory", () => {
+    const normalized: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:2:decimal"]),
+      entry: { kind: "closed" },
+      memory: {
+        "1": new Set<X2ValueFact>(["decimal:2:normalized"]),
+      },
+    };
+    const raw: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:2:decimal"]),
+      entry: { kind: "closed" },
+      memory: {
+        "1": new Set<X2ValueFact>(["decimal:02:unnormalized"]),
+      },
+    };
+
+    expect(recallValueProof(recall("1"), normalized)?.x2SyncDisplayValue).toBe(true);
+    expect(recallValueProof(recall("1"), raw)?.x2SyncDisplayValue).toBeUndefined();
+  });
+
   it("x2 state predicates derive structural X2 shape from stable expr-key values", () => {
     const state: X2ValueDataflowState = {
       x: new Set(),
