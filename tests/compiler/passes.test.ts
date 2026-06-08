@@ -1765,6 +1765,41 @@ describe("ir passes on synthetic programs", () => {
     ).toBe(false);
   });
 
+  it("x2 value/shape algebra compares plain decimal value fallback display shapes", () => {
+    expect(
+      x2ValueShapeSetsHaveSameRestoredDisplayShape(
+        new Set(["decimal:2:normalized"]),
+        undefined,
+        undefined,
+        new Set(["mantissa:2:decimal"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ValueShapeSetsHaveSameDotSafeDecimal(
+        new Set(["decimal:2:normalized"]),
+        undefined,
+        undefined,
+        new Set(["mantissa:2:decimal"]),
+      ),
+    ).toBe(true);
+    expect(
+      x2ValueShapeSetsHaveSameRestoredDisplayShape(
+        new Set(["decimal:2:normalized"]),
+        new Set(["mantissa:02:decimal"]),
+        undefined,
+        new Set(["mantissa:2:decimal"]),
+      ),
+    ).toBe(false);
+    expect(
+      x2ValueShapeSetsHaveSameDotSafeDecimal(
+        new Set(["decimal:2:normalized"]),
+        new Set(["mantissa:02:decimal"]),
+        undefined,
+        new Set(["mantissa:2:decimal"]),
+      ),
+    ).toBe(false);
+  });
+
   it("x2 restore safety flags structural and error-prone shape-only contexts", () => {
     const leadingZeroExponent: IrOp[] = [
       plain(0x00, "0"),
@@ -3806,6 +3841,36 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(joined.x2Shape)).toContain("mantissa:4:decimal");
     expect(x2ValueStateText(joined.memory?.["1"])).toContain("decimal:4:normalized");
     expect(x2ShapeStateText(joined.shapeMemory?.["1"])).toContain("mantissa:4:decimal");
+  });
+
+  it("x2 value dataflow joins plain decimal fallback display shapes across mixed paths", () => {
+    const valueBacked: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      entry: { kind: "closed" },
+    };
+    const shapeBacked: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:2:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:2:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const rawShapeBacked: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      xShape: new Set<X2ShapeFact>(["mantissa:02:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:02:decimal"]),
+      entry: { kind: "closed" },
+    };
+
+    const joined = joinX2ValueDataflowStates(valueBacked, shapeBacked);
+    const rawJoined = joinX2ValueDataflowStates(rawShapeBacked, shapeBacked);
+
+    expect(x2ShapeStateText(joined.xShape)).toContain("mantissa:2:decimal");
+    expect(x2ShapeStateText(joined.x2Shape)).toContain("mantissa:2:decimal");
+    expect(x2ShapeStateText(rawJoined.xShape)).toEqual([]);
+    expect(x2ShapeStateText(rawJoined.x2Shape)).toEqual([]);
   });
 
   it("x2 value dataflow joins stable structural shape facts across mixed paths", () => {

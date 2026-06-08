@@ -1444,6 +1444,18 @@ function shapeSetWithFallbackValueDerivedDisplayShapes(
     : stable;
 }
 
+function shapeSetWithFallbackValueDerivedDisplayShapesForX2Sync(
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+): X2ShapeSet | undefined {
+  const stable = shapeSetWithStableExpressionValueShapesForX2Sync(shapes, values);
+  if (stable !== undefined && stable.size > 0) return stable;
+  const fallback = shapeSetWithValueDerivedDisplayShapes(undefined, values);
+  if (fallback === undefined || fallback.size === 0) return undefined;
+  const synced = normalizeX2SyncShapesFromX(fallback);
+  return synced.size === 0 ? undefined : synced;
+}
+
 function vpSpliceShapeSetWithValueShapes(
   shapes: X2ShapeSet | undefined,
   values: X2ValueSet | undefined,
@@ -3979,8 +3991,8 @@ export function x2ValueShapeSetsHaveSameRestoredDisplayShape(
   rightShapes: X2ShapeSet | undefined,
 ): boolean {
   return x2ShapeSetsHaveSameRestoredDisplayShape(
-    shapeSetWithStableExpressionValueShapes(leftShapes, leftValues),
-    shapeSetWithStableExpressionValueShapes(rightShapes, rightValues),
+    shapeSetWithFallbackValueDerivedDisplayShapes(leftShapes, leftValues),
+    shapeSetWithFallbackValueDerivedDisplayShapes(rightShapes, rightValues),
   );
 }
 
@@ -3991,8 +4003,8 @@ export function x2ValueShapeSetsHaveSameDotSafeDecimal(
   rightShapes: X2ShapeSet | undefined,
 ): boolean {
   return x2ShapeSetsHaveSameDotSafeDecimal(
-    shapeSetWithStableExpressionValueShapes(leftShapes, leftValues),
-    shapeSetWithStableExpressionValueShapes(rightShapes, rightValues),
+    shapeSetWithFallbackValueDerivedDisplayShapes(leftShapes, leftValues),
+    shapeSetWithFallbackValueDerivedDisplayShapes(rightShapes, rightValues),
   );
 }
 
@@ -4003,8 +4015,8 @@ export function x2ValueShapeSetsHaveSameDotSafeStructuralMantissa(
   rightShapes: X2ShapeSet | undefined,
 ): boolean {
   return x2ShapeSetsHaveSameDotSafeStructuralMantissa(
-    shapeSetWithStableExpressionValueShapes(leftShapes, leftValues),
-    shapeSetWithStableExpressionValueShapes(rightShapes, rightValues),
+    shapeSetWithFallbackValueDerivedDisplayShapes(leftShapes, leftValues),
+    shapeSetWithFallbackValueDerivedDisplayShapes(rightShapes, rightValues),
   );
 }
 
@@ -7866,8 +7878,8 @@ function intersectKnownX2ShapeSetsWithValues(
   incomingValues: X2ValueSet | undefined,
 ): Set<X2ShapeFact> {
   return intersectX2ShapeSets(
-    shapeSetWithStableExpressionValueShapes(current, currentValues),
-    shapeSetWithStableExpressionValueShapes(incoming, incomingValues),
+    shapeSetWithFallbackValueDerivedDisplayShapes(current, currentValues),
+    shapeSetWithFallbackValueDerivedDisplayShapes(incoming, incomingValues),
   );
 }
 
@@ -7878,8 +7890,8 @@ function intersectKnownX2SyncedShapeSetsWithValues(
   incomingValues: X2ValueSet | undefined,
 ): Set<X2ShapeFact> {
   return intersectX2ShapeSets(
-    shapeSetWithStableExpressionValueShapesForX2Sync(current, currentValues),
-    shapeSetWithStableExpressionValueShapesForX2Sync(incoming, incomingValues),
+    shapeSetWithFallbackValueDerivedDisplayShapesForX2Sync(current, currentValues),
+    shapeSetWithFallbackValueDerivedDisplayShapesForX2Sync(incoming, incomingValues),
   );
 }
 

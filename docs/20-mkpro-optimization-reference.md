@@ -1374,10 +1374,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exposed as fallback display shapes only when no more exact visible shape is
     known. This lets a stable
     `expr-key:*` value prove structural or dot-safe structural context even
-    when the explicit `xShape`/`x2Shape` set is empty. CFG and register-memory
-    joins use the same effective value/shape sets, preserving proved stable-key
-    decimals and display/structural shapes when one path has already
-    materialized them and another still carries only the stable key. Raw decimal
+    when the explicit `xShape`/`x2Shape` set is empty. Shared value/shape
+    comparison helpers and CFG/register-memory joins use the same effective
+    value/shape sets; hidden-X2 synced joins additionally apply the same
+    leading-zero normalization as a real X2 sync. This preserves proved
+    plain-decimal fallback shapes, stable-key decimals, and display/structural
+    shapes when one path has already materialized them and another still carries only the value or stable key. Raw decimal
     spellings remain exact facts, so leading-zero X2 values such as `02` still
     do not merge with normalized `2`. The proved decimal
     first-digit source is visible to `vp-splice`, so an empty separator and a
