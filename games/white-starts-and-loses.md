@@ -39,3 +39,10 @@ the black move as:
 The calculator does not remove captured checkers. The player must manually clear
 captured pieces from the corresponding registers, replacing them with reserve
 checkers if available, or with zero if the reserve is empty.
+
+## Author Note
+
+In [Sergey Tarasov's later essay on KLIP](https://blog.arbinada.com/ru/category/00052.html),
+Stanislav Chegodaev is listed as a 1971-born member of the Leningrad territorial
+branch and as the author of several checkers-related programs, including
+publications in KEI.
