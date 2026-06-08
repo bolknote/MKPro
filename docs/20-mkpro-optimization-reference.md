@@ -1443,8 +1443,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     This is not a
     general wide multiply/divide, borrow/carry, or decimalization rule.
     Structural `К |x|` removes the sign from canonical hex/super mantissa or
-    closed exponent-entry restore shapes as another shape-only transform; the
-    hidden X2 shape is still preserved by the opcode and is not decimalized.
+    closed exponent-entry restore shapes while preserving hidden X2; when the
+    resulting visible shape is a decimal-only exact display, it also seeds the
+    matching normalized decimal value and exact display shape. Non-exact raw
+    spellings and non-decimal hex/super forms remain structural-only.
     Structural `К ЗН` has a narrow emulator-pinned value model:
     canonical hex mantissas or closed structural exponent mantissas whose first
     significant nibble is `1..E` seed exact decimal `1`/`-1` facts plus the

@@ -1421,10 +1421,12 @@ The pipeline currently contains:
   display-shape equality and later X2 sync proofs. A-F results seed
   shape-only structural `hex:*` mantissas when operands can be parsed as
   Latin hex nibbles or known MK-61 display glyphs `С`/`Г`/`Е`; unknown glyph
-  cells remain conservative. Structural `К |x|` also stays shape-only: it removes
+  cells remain conservative. Structural `К |x|` removes
   the visible sign from canonical hex/super mantissa or closed exponent-entry
-  restore shapes without turning them into decimal values and without changing
-  the preserved hidden X2 shape. Structural `К ЗН` has a narrower value model:
+  restore shapes without changing the preserved hidden X2 shape; when the
+  resulting visible shape is a decimal-only exact display, the dataflow also
+  records the matching normalized decimal value and display shape. Non-exact
+  raw spellings and non-decimal hex/super forms stay structural-only. Structural `К ЗН` has a narrower value model:
   canonical hex mantissas or closed structural exponent mantissas whose first
   significant nibble is `1..E` seed exact decimal `1`/`-1` sign facts and the
   matching decimal display shape, while `F`-leading forms and `super:*` shapes

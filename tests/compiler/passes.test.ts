@@ -4111,6 +4111,44 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(valueBackedResult?.x)).not.toContain("expr-key:31(shape:mantissa:100:decimal)");
   });
 
+  it("x2 value dataflow derives ABS decimal facts from exact structural display shapes", () => {
+    const structuralMantissa: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:-0.123:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const structuralExponent: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex-exponent:-1.23:-1"]),
+      entry: { kind: "closed" },
+    };
+    const rawStructural: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:-1.230:mantissa"]),
+      entry: { kind: "closed" },
+    };
+
+    const mantissaResult = transferX2ValueStateForEdge(structuralMantissa, plain(0x31, "К |x|"), "normal", {}, 0);
+    const exponentResult = transferX2ValueStateForEdge(structuralExponent, plain(0x31, "К |x|"), "normal", {}, 0);
+    const rawResult = transferX2ValueStateForEdge(rawStructural, plain(0x31, "К |x|"), "normal", {}, 0);
+
+    expect(x2ValueStateText(mantissaResult?.x)).toContain("decimal:0.123:normalized");
+    expect(x2ShapeStateText(mantissaResult?.xShape)).toEqual([
+      "exponent:1.23:-1:decimal",
+      "hex:0.123:mantissa",
+    ]);
+    expect(x2ValueStateText(exponentResult?.x)).toContain("decimal:0.123:normalized");
+    expect(x2ShapeStateText(exponentResult?.xShape)).toEqual([
+      "exponent:1.23:-1:decimal",
+      "hex:0.123:mantissa",
+    ]);
+    expect(x2ValueStateText(rawResult?.x)).not.toContain("decimal:1.23:normalized");
+    expect(x2ShapeStateText(rawResult?.xShape)).toEqual(["hex:1.230:mantissa"]);
+  });
+
   it("x2 value dataflow treats raw decimal value facts as numeric sources for pure computations", () => {
     const rawValueState: X2ValueDataflowState = {
       x: new Set<X2ValueFact>(["decimal:02:unnormalized"]),

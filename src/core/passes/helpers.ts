@@ -982,13 +982,15 @@ function plainProducesConcreteStructuralUnaryDecimalValues(
   xShape: X2ShapeSet | undefined,
 ): Set<string> {
   const output = new Set<string>();
-  if (op.opcode !== 0x22 && op.opcode !== 0x32 && op.opcode !== 0x3a) return output;
+  if (op.opcode !== 0x22 && op.opcode !== 0x31 && op.opcode !== 0x32 && op.opcode !== 0x3a) return output;
   for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShape))) {
     const value = op.opcode === 0x22
       ? structuralHexSquareDecimalValue(fact)
-      : op.opcode === 0x32
-        ? structuralHexSignDecimalValue(fact)
-        : structuralBitwiseNotDecimalValueFromFact(fact);
+      : op.opcode === 0x31
+        ? structuralAbsDecimalValue(fact)
+        : op.opcode === 0x32
+          ? structuralHexSignDecimalValue(fact)
+          : structuralBitwiseNotDecimalValueFromFact(fact);
     if (value !== undefined) output.add(value);
   }
   return output;
@@ -999,16 +1001,28 @@ function plainProducesConcreteStructuralUnaryDecimalShapeFacts(
   xShape: X2ShapeSet | undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  if (op.opcode !== 0x22 && op.opcode !== 0x32 && op.opcode !== 0x3a) return output;
+  if (op.opcode !== 0x22 && op.opcode !== 0x31 && op.opcode !== 0x32 && op.opcode !== 0x3a) return output;
   for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShape))) {
     const result = op.opcode === 0x22
       ? structuralHexSquareDecimalDisplayShapeFact(fact)
-      : op.opcode === 0x32
-        ? exactPlainIntegerDecimalMantissaShapeFact(structuralHexSignDecimalValue(fact) ?? "")
-        : structuralBitwiseNotDecimalDisplayShapeFact(fact);
+      : op.opcode === 0x31
+        ? structuralAbsDecimalDisplayShapeFact(fact)
+        : op.opcode === 0x32
+          ? exactPlainIntegerDecimalMantissaShapeFact(structuralHexSignDecimalValue(fact) ?? "")
+          : structuralBitwiseNotDecimalDisplayShapeFact(fact);
     if (result !== undefined) output.add(result);
   }
   return output;
+}
+
+function structuralAbsDecimalValue(fact: X2ShapeFact): string | undefined {
+  const abs = structuralAbsMantissaShapeFact(fact);
+  return abs === undefined ? undefined : x2ShapeFactExactNonNegativeDisplayDecimal(abs);
+}
+
+function structuralAbsDecimalDisplayShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const value = structuralAbsDecimalValue(fact);
+  return value === undefined ? undefined : exactDecimalDisplayShapeFact(value);
 }
 
 function structuralHexSignDecimalValue(fact: X2ShapeFact): string | undefined {
@@ -3780,12 +3794,16 @@ export function x2ShapeSetHasExactNonNegativeDisplay(input: X2ShapeSet | undefin
 }
 
 function x2ShapeFactHasExactNonNegativeDisplay(fact: X2ShapeFact): boolean {
-  const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
-  if (decimal !== undefined) return !decimal.startsWith("-");
-  return x2ShapeFactHasShapeOnlyExactNonNegativeDecimalDisplay(fact);
+  return x2ShapeFactExactNonNegativeDisplayDecimal(fact) !== undefined;
 }
 
-function x2ShapeFactHasShapeOnlyExactNonNegativeDecimalDisplay(fact: X2ShapeFact): boolean {
+function x2ShapeFactExactNonNegativeDisplayDecimal(fact: X2ShapeFact): string | undefined {
+  const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
+  if (decimal !== undefined) return decimal.startsWith("-") ? undefined : decimal;
+  return x2ShapeFactShapeOnlyExactNonNegativeDecimalDisplay(fact);
+}
+
+function x2ShapeFactShapeOnlyExactNonNegativeDecimalDisplay(fact: X2ShapeFact): string | undefined {
   const model = x2ShapeDataModelForFact(fact);
   const mantissa = model.kind === "mantissa"
     ? model
@@ -3799,10 +3817,12 @@ function x2ShapeFactHasShapeOnlyExactNonNegativeDecimalDisplay(fact: X2ShapeFact
     mantissa.normalizedDecimal === undefined ||
     !mantissa.normalizedSameAsRaw
   ) {
-    return false;
+    return undefined;
   }
   return !mantissa.normalizedDecimal.startsWith("-") &&
-    exactDecimalDisplayShapeFact(mantissa.normalizedDecimal) !== undefined;
+    exactDecimalDisplayShapeFact(mantissa.normalizedDecimal) !== undefined
+    ? mantissa.normalizedDecimal
+    : undefined;
 }
 
 function x2ShapeFactHasExactIntegerDisplay(fact: X2ShapeFact): boolean {
