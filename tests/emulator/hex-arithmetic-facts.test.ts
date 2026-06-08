@@ -316,6 +316,15 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(multiplyRegisters("ЕE-2", "18")).toBe("9,48");
   });
 
+  it("left hex exponent multiplication scales the single-hex display product", () => {
+    expect(multiplyRegisters("ГE-1", "5")).toBe("5,3");
+    expect(multiplyRegisters("BE-1", "18")).toBe("05,4");
+    expect(multiplyRegisters("AE-3", "1")).toBe("0,-03");
+    expect(multiplyRegisters("BE-3", "18")).toBe("0,54-01");
+    expect(multiplyRegisters("ГE1", "8")).toBe("600,");
+    expect(multiplyRegisters("CE1", "16")).toBe("9040,");
+  });
+
   it("hex D exponent minus two addition and subtraction tables are operand-order-sensitive", () => {
     const subtractRegisters = (r1: string, r2: string): string => {
       const calc = new MK61();
@@ -361,5 +370,14 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(divideRegisters("5", "ГE-2")).toBe("00,");
     expect(divideRegisters("16", "ГE-2")).toBe("920,");
     expect(divideRegisters("16", "ЕE-2")).toBe("052,92929");
+  });
+
+  it("left hex exponent division scales the single-hex display quotient", () => {
+    expect(divideRegisters("ГE-1", "5")).toBe("2,6-01");
+    expect(divideRegisters("BE-1", "18")).toBe("6,1111111-02");
+    expect(divideRegisters("AE-3", "1")).toBe("0,-03");
+    expect(divideRegisters("BE-3", "18")).toBe("6,1111111-04");
+    expect(divideRegisters("ГE1", "8")).toBe("16,25");
+    expect(divideRegisters("CE1", "16")).toBe("7,5");
   });
 });

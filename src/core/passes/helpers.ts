@@ -1527,6 +1527,109 @@ function structuralHexDecimalProductDisplayShape(
   return product.displayShape ?? (product.display === undefined ? undefined : decimalMantissaShapeFact(product.display));
 }
 
+function shiftStructuralHexDecimalProduct(
+  product: StructuralHexDecimalProduct | undefined,
+  exponentRaw: string,
+  mode: "exact-display" | "raw-display",
+): StructuralHexDecimalProduct | undefined {
+  if (product === undefined) return undefined;
+  const exponent = canonicalExponentShapeRaw(exponentRaw);
+  if (exponent === undefined) return undefined;
+  const shift = exponent === "" ? 0 : Number(exponent);
+  if (!Number.isInteger(shift)) return undefined;
+  if (shift === 0) return product;
+  const value = shiftExactDecimalValue(product.value, shift);
+  if (value === undefined) return undefined;
+  const displayShape = mode === "raw-display"
+    ? shiftStructuralHexRawDisplayShape(product, shift)
+    : shiftStructuralHexExactDisplayShape(product, shift);
+  return displayShape === undefined ? undefined : { value, displayShape };
+}
+
+function shiftExactDecimalValue(value: string, shift: number): string | undefined {
+  const parts = parseExactDecimal(value);
+  if (parts === undefined) return undefined;
+  const scale = parts.scale - shift;
+  if (scale < 0) return exactDecimalToNormalized(parts.num * pow10BigInt(-scale), 0);
+  return exactDecimalToNormalized(parts.num, scale);
+}
+
+function shiftStructuralHexExactDisplayShape(
+  product: StructuralHexDecimalProduct,
+  shift: number,
+): X2ShapeFact | undefined {
+  const sourceShape = product.displayShape ??
+    (product.display === undefined ? exactDecimalDisplayShapeFact(product.value) : decimalMantissaShapeFact(product.display));
+  const shiftedShape = sourceShape === undefined
+    ? undefined
+    : shiftDecimalProductDisplayShape(sourceShape, product.value, shift);
+  if (shiftedShape !== undefined) return shiftedShape;
+  const value = shiftExactDecimalValue(product.value, shift);
+  return value === undefined ? undefined : exactDecimalDisplayShapeFact(value);
+}
+
+function shiftDecimalProductDisplayShape(
+  shape: X2ShapeFact,
+  value: string,
+  shift: number,
+): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(shape);
+  if (model.kind === "exponent-entry" && model.mantissa.radix === "decimal") {
+    const current = model.exponentRaw === "" ? 0 : Number(model.exponentRaw);
+    if (!Number.isInteger(current)) return undefined;
+    const exponent = canonicalExponentShapeRaw(String(current + shift));
+    return exponent === undefined ? undefined : decimalExponentShapeFact(model.mantissa.canonical, exponent);
+  }
+  if (
+    model.kind === "mantissa" &&
+    model.radix === "decimal" &&
+    model.canonical === "0" &&
+    model.normalizedDecimal === "0"
+  ) {
+    const exponent = canonicalExponentShapeRaw(String(shift));
+    return exponent === undefined ? undefined : decimalExponentShapeFact("0", exponent);
+  }
+  const shiftedValue = shiftExactDecimalValue(value, shift);
+  return shiftedValue === undefined ? undefined : exactDecimalDisplayShapeFact(shiftedValue);
+}
+
+function shiftStructuralHexRawDisplayShape(
+  product: StructuralHexDecimalProduct,
+  shift: number,
+): X2ShapeFact | undefined {
+  if (product.display !== undefined) return shiftRawDecimalDisplayShape(product.display, shift);
+  return shiftStructuralHexExactDisplayShape(product, shift);
+}
+
+function shiftRawDecimalDisplayShape(raw: string, shift: number): X2ShapeFact | undefined {
+  const match = /^(-?)([0-9]+)(?:\.([0-9]+))?$/u.exec(raw);
+  if (match === null) return undefined;
+  const sign = match[1]!;
+  const integer = match[2]!;
+  const fraction = match[3] ?? "";
+  if (integer.length === 1 && fraction.length === 0 && integer === "0" && shift < 0) {
+    const exponent = canonicalExponentShapeRaw(String(shift));
+    return exponent === undefined ? undefined : decimalExponentShapeFact(`${sign}0`, exponent);
+  }
+  const digits = `${integer}${fraction}`;
+  const point = integer.length + shift;
+  if (point <= 0) {
+    const value = normalizePlainDecimal(raw);
+    const shiftedValue = value === undefined ? undefined : shiftExactDecimalValue(value, shift);
+    return shiftedValue === undefined ? undefined : exactDecimalDisplayShapeFact(shiftedValue);
+  }
+  const unsigned = point >= digits.length
+    ? `${digits}${"0".repeat(point - digits.length)}`
+    : trimShiftedRawFraction(`${digits.slice(0, point)}.${digits.slice(point)}`);
+  return decimalMantissaShapeFact(`${sign}${unsigned}`);
+}
+
+function trimShiftedRawFraction(raw: string): string {
+  if (!raw.includes(".")) return raw;
+  const trimmed = raw.replace(/0+$/u, "").replace(/\.$/u, "");
+  return trimmed === "0" || /^0+$/u.test(trimmed) ? "0" : trimmed;
+}
+
 const STRUCTURAL_HEX_DIGIT_TIMES_DECIMAL_TABLE: ReadonlyMap<string, StructuralHexDecimalProduct> = new Map([
   ["10:0", { value: "0", display: "0" }],
   ["10:1", { value: "0", display: "0" }],
@@ -1871,197 +1974,6 @@ function structuralHexDigitDivideStructuralHexDigitProduct(
   return displayShape === undefined ? undefined : { value, displayShape };
 }
 
-const STRUCTURAL_HEX_EXPONENT_TIMES_DECIMAL_TABLE = structuralHexDecimalProductTable([
-  ["10:0", "0,"],
-  ["10:1", "0,-02"],
-  ["10:2", "4,-02"],
-  ["10:3", "4,-02"],
-  ["10:4", "8,-02"],
-  ["10:5", "5,-01"],
-  ["10:6", "0,"],
-  ["10:7", "1,-01"],
-  ["10:8", "2,-01"],
-  ["10:9", "3,-01"],
-  ["10:10", "0,-01"],
-  ["10:11", "1,-01"],
-  ["10:12", "0,4-01"],
-  ["10:13", "1,4-01"],
-  ["10:14", "0,8-01"],
-  ["10:15", "9,9"],
-  ["10:16", "0,"],
-  ["10:17", "0,1"],
-  ["10:18", "0,2"],
-  ["11:0", "0,"],
-  ["11:1", "1,-02"],
-  ["11:2", "6,-02"],
-  ["11:3", "1,-02"],
-  ["11:4", "2,-02"],
-  ["11:5", "1,1-01"],
-  ["11:6", "2,2-01"],
-  ["11:7", "3,3-01"],
-  ["11:8", "4,4-01"],
-  ["11:9", "5,5-01"],
-  ["11:10", "1,-01"],
-  ["11:11", "2,1-01"],
-  ["11:12", "1,6-01"],
-  ["11:13", "1,1-01"],
-  ["11:14", "2,2-01"],
-  ["11:15", "0,21"],
-  ["11:16", "0,32"],
-  ["11:17", "0,43"],
-  ["11:18", "0,54"],
-  ["12:0", "0,"],
-  ["12:1", "2,-02"],
-  ["12:2", "8,-02"],
-  ["12:3", "4,-02"],
-  ["12:4", "0,"],
-  ["12:5", "3,2-01"],
-  ["12:6", "4,4-01"],
-  ["12:7", "4,-01"],
-  ["12:8", "5,2-01"],
-  ["12:9", "6,4-01"],
-  ["12:10", "2,-01"],
-  ["12:11", "3,2-01"],
-  ["12:12", "2,8-01"],
-  ["12:13", "2,4-01"],
-  ["12:14", "2,-01"],
-  ["12:15", "0,52"],
-  ["12:16", "9,04"],
-  ["12:17", "9,"],
-  ["12:18", "9,12"],
-  ["13:0", "0,"],
-  ["13:1", "3,-02"],
-  ["13:2", "1,-01"],
-  ["13:3", "2,3-01"],
-  ["13:4", "2,-01"],
-  ["13:5", "5,3-01"],
-  ["13:6", "5,-01"],
-  ["13:7", "6,3-01"],
-  ["13:8", "6,-01"],
-  ["13:9", "7,3-01"],
-  ["13:10", "3,-01"],
-  ["13:11", "4,3-01"],
-  ["13:12", "4,-01"],
-  ["13:13", "5,3-01"],
-  ["13:14", "5,-01"],
-  ["13:15", "9,23"],
-  ["13:16", "9,2"],
-  ["13:17", "9,33"],
-  ["13:18", "9,3"],
-  ["14:0", "0,"],
-  ["14:1", "4,-02"],
-  ["14:2", "1,2-01"],
-  ["14:3", "1,-01"],
-  ["14:4", "2,4-01"],
-  ["14:5", "4,2-01"],
-  ["14:6", "4,-01"],
-  ["14:7", "5,4-01"],
-  ["14:8", "6,8-01"],
-  ["14:9", "8,2-01"],
-  ["14:10", "4,-01"],
-  ["14:11", "5,4-01"],
-  ["14:12", "5,2-01"],
-  ["14:13", "5,-01"],
-  ["14:14", "4,-02"],
-  ["14:15", "9,22"],
-  ["14:16", "9,2"],
-  ["14:17", "9,34"],
-  ["14:18", "9,48"],
-]);
-
-const STRUCTURAL_HEX_EXPONENT_DIVIDE_DECIMAL_TABLE = structuralHexDecimalProductTable([
-  ["10:1", "0,-02"],
-  ["10:2", "5,-02"],
-  ["10:3", "3,3333333-02"],
-  ["10:4", "2,5-02"],
-  ["10:5", "2,-02"],
-  ["10:6", "1,6666666-02"],
-  ["10:7", "1,4285714-02"],
-  ["10:8", "1,25-02"],
-  ["10:9", "1,1111111-02"],
-  ["10:10", "0,-03"],
-  ["10:11", "9,090909-03"],
-  ["10:12", "8,3333333-03"],
-  ["10:13", "7,6923076-03"],
-  ["10:14", "7,1428571-03"],
-  ["10:15", "6,6666666-03"],
-  ["10:16", "6,25-03"],
-  ["10:17", "5,8823529-03"],
-  ["10:18", "5,5555555-03"],
-  ["11:1", "1,-02"],
-  ["11:2", "5,5-02"],
-  ["11:3", "3,6666666-02"],
-  ["11:4", "2,75-02"],
-  ["11:5", "2,2-02"],
-  ["11:6", "1,8333333-02"],
-  ["11:7", "1,5714285-02"],
-  ["11:8", "1,375-02"],
-  ["11:9", "1,2222222-02"],
-  ["11:10", "1,-03"],
-  ["11:11", "0,-03"],
-  ["11:12", "9,1666666-03"],
-  ["11:13", "8,4615384-03"],
-  ["11:14", "7,8571428-03"],
-  ["11:15", "7,3333333-03"],
-  ["11:16", "6,875-03"],
-  ["11:17", "6,4705882-03"],
-  ["11:18", "6,1111111-03"],
-  ["12:1", "2,-02"],
-  ["12:2", "6,-02"],
-  ["12:3", "4,-02"],
-  ["12:4", "3,-02"],
-  ["12:5", "2,4-02"],
-  ["12:6", "2,-02"],
-  ["12:7", "1,7142857-02"],
-  ["12:8", "1,5-02"],
-  ["12:9", "1,3333333-02"],
-  ["12:10", "2,-03"],
-  ["12:11", "0,9090909-03"],
-  ["12:12", "0,-03"],
-  ["12:13", "9,2307692-03"],
-  ["12:14", "8,5714285-03"],
-  ["12:15", "8,-03"],
-  ["12:16", "7,5-03"],
-  ["12:17", "7,0588235-03"],
-  ["12:18", "6,6666666-03"],
-  ["13:1", "3,-02"],
-  ["13:2", "6,5-02"],
-  ["13:3", "4,3333333-02"],
-  ["13:4", "3,25-02"],
-  ["13:5", "2,6-02"],
-  ["13:6", "2,1666666-02"],
-  ["13:7", "1,8571428-02"],
-  ["13:8", "1,625-02"],
-  ["13:9", "1,4444444-02"],
-  ["13:10", "3,-03"],
-  ["13:11", "1,8181818-03"],
-  ["13:12", "0,8333333-03"],
-  ["13:13", "0,-03"],
-  ["13:14", "9,2857142-03"],
-  ["13:15", "8,6666666-03"],
-  ["13:16", "8,125-03"],
-  ["13:17", "7,6470588-03"],
-  ["13:18", "7,2222222-03"],
-  ["14:1", "4,-02"],
-  ["14:2", "7,-02"],
-  ["14:3", "4,6666666-02"],
-  ["14:4", "3,5-02"],
-  ["14:5", "2,8-02"],
-  ["14:6", "2,3333333-02"],
-  ["14:7", "2,-02"],
-  ["14:8", "1,75-02"],
-  ["14:9", "1,5555555-02"],
-  ["14:10", "4,-03"],
-  ["14:11", "2,7272727-03"],
-  ["14:12", "1,6666666-03"],
-  ["14:13", "0,7692307-03"],
-  ["14:14", "0,-03"],
-  ["14:15", "9,3333333-03"],
-  ["14:16", "8,75-03"],
-  ["14:17", "8,2352941-03"],
-  ["14:18", "7,7777777-03"],
-]);
-
 const DECIMAL_DIVIDE_STRUCTURAL_HEX_EXPONENT_TABLE = structuralHexDecimalProductTable([
   ["0:10", "90,90909"],
   ["9:10", "89,90909"],
@@ -2132,8 +2044,14 @@ function structuralHexExponentTimesDecimalProduct(
   left: StructuralHexExponentOperand,
   right: string,
 ): StructuralHexDecimalProduct | undefined {
-  if (left.exponent !== "-2" || !isVerifiedArithmeticHexDigit(left.digit)) return undefined;
-  return STRUCTURAL_HEX_EXPONENT_TIMES_DECIMAL_TABLE.get(`${left.digit}:${right}`);
+  if (!isVerifiedArithmeticHexDigit(left.digit) || !isVerifiedScaledStructuralHexExponent(left.exponent)) {
+    return undefined;
+  }
+  return shiftStructuralHexDecimalProduct(
+    structuralHexDigitTimesDecimalProduct(left.digit, right),
+    left.exponent,
+    "raw-display",
+  );
 }
 
 function decimalTimesStructuralHexExponentProduct(
@@ -2228,8 +2146,21 @@ function structuralHexExponentDivideDecimalProduct(
   left: StructuralHexExponentOperand,
   right: string,
 ): StructuralHexDecimalProduct | undefined {
-  if (left.exponent !== "-2" || !isVerifiedArithmeticHexDigit(left.digit)) return undefined;
-  return STRUCTURAL_HEX_EXPONENT_DIVIDE_DECIMAL_TABLE.get(`${left.digit}:${right}`);
+  if (!isVerifiedArithmeticHexDigit(left.digit) || !isVerifiedScaledStructuralHexExponent(left.exponent)) {
+    return undefined;
+  }
+  return shiftStructuralHexDecimalProduct(
+    structuralHexDigitDivideDecimalProduct(left.digit, right),
+    left.exponent,
+    "exact-display",
+  );
+}
+
+function isVerifiedScaledStructuralHexExponent(exponentRaw: string): boolean {
+  const exponent = canonicalExponentShapeRaw(exponentRaw);
+  if (exponent === undefined) return false;
+  const value = exponent === "" ? 0 : Number(exponent);
+  return Number.isInteger(value) && value >= -3 && value <= 1;
 }
 
 function decimalDivideStructuralHexExponentProduct(

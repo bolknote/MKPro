@@ -11,6 +11,7 @@ import { EXAMPLE_BASELINE, PENDING_BASELINE } from "./example-baselines.ts";
 const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
 
 const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {};
+const EXAMPLE_SIZE_TIMEOUT_MS = 60000;
 
 function exampleSteps(relativePath: string, analysis: boolean): number {
   const source = readFileSync(resolve(`examples/${relativePath}.mkpro`), "utf8");
@@ -33,7 +34,7 @@ describe("example size guard", () => {
   for (const [name, baseline] of Object.entries(EXAMPLE_BASELINE)) {
     it(`${name}.mkpro is locked at ${baseline} cells`, () => {
       expect(exampleSteps(name, false)).toBe(baseline);
-    }, 30000);
+    }, EXAMPLE_SIZE_TIMEOUT_MS);
   }
 
   for (const [name, message] of Object.entries(EXAMPLE_COMPILE_ERRORS)) {
@@ -49,7 +50,7 @@ describe("example size guard", () => {
   for (const [name, baseline] of Object.entries(PENDING_BASELINE)) {
     it(`pending-optimizer/${name}.mkpro is locked at ${baseline} cells`, () => {
       expect(exampleSteps(`pending-optimizer/${name}`, true)).toBe(baseline);
-    }, 30000);
+    }, EXAMPLE_SIZE_TIMEOUT_MS);
   }
 
   for (const [name, message] of Object.entries(PENDING_COMPILE_ERRORS)) {

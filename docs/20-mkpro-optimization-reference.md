@@ -1397,17 +1397,23 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Hidden X2
     remains the right operand until an explicit sync, so literal/scratch restore
     rewrites consume these table facts only after a later X2-syncing command. A
-    second verified family covers structural `A`..`E E-2` exponent arithmetic
+    second verified family covers structural `A`..`E E-n` exponent arithmetic
     without promoting unsupported hex/super shapes into ordinary decimal values.
     Addition/subtraction is formulaic only for emulator-pinned decimal operands
     (`0`..`18`) and proves cases such as `BE-2 + 0 -> 1.1E-1`,
     `ЕE-2 + 6 -> 6.14`, `BE-2 - 17 -> -16.89`, and
-    `17 - BE-2 -> 17.05`. Multiplication/division now use the same pinned
-    `A`..`E E-2` family, with cases such as `1 * ГE-2 -> 1E-1`,
-    `AE-2 * 1 -> 0E-2`, `BE-2 * 18 -> 0.54`,
-    `AE-2 * 15 -> 9.9`, `ГE-2 / 2 -> 6.5E-2`,
-    `BE-2 / 18 -> 6.1111111E-3`, `12 / ГE-2 -> 000`,
-    `18 / BE-2 -> 943.43434`, and `16 / ЕE-2 -> 052.92929`; error pairs such
+    `17 - BE-2 -> 17.05`. Left-operand multiplication/division now scale the
+    already pinned single-hex product/quotient by the verified structural
+    exponent range `-3..1` while preserving the MK-61 display shape, so cases
+    such as `ГE-1 * 5 -> 5.3`,
+    `BE-1 * 18 -> 05.4`, `AE-3 * 1 -> 0E-3`,
+    `CE1 * 16 -> 9040`, `ГE-2 / 2 -> 6.5E-2`,
+    `BE-3 / 18 -> 6.1111111E-4`, and `ГE1 / 8 -> 16.25`
+    share one product-shift model rather than per-exponent tables.
+    Reverse/right-operand exponent multiplication and division still use their
+    own emulator-pinned families, with cases such as `1 * ГE-2 -> 1E-1`,
+    `12 / ГE-2 -> 000`, `18 / BE-2 -> 943.43434`, and
+    `16 / ЕE-2 -> 052.92929`; error pairs such
     as `1 / AE-2` and `3 / CE-2` stay opaque. Each operand order uses only its own emulator-pinned
     results and records display shape independently from normalized value shape,
     so later store/recall/`ВП` context stays equivalent to the MK-61 display
