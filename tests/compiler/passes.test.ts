@@ -2088,8 +2088,28 @@ describe("ir passes on synthetic programs", () => {
       "mantissa:000:decimal",
     )).toBe("hex:A00:mantissa");
     expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:A:mantissa",
+      "hex-exponent:8.70:2",
+    )).toBe("hex:A70:mantissa");
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:1:mantissa",
+      "super-exponent:FA:1",
+    )).toBe("hex:1A0:mantissa");
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:A:mantissa",
+      "exponent:8:2:decimal",
+    )).toBe("hex:A00:mantissa");
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
       "mantissa:3:decimal",
       "mantissa:800:decimal",
+    )).toBeUndefined();
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:A:mantissa",
+      "exponent:1:-1:decimal",
+    )).toBeUndefined();
+    expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
+      "hex:A:mantissa",
+      "exponent:100000000:2:decimal",
     )).toBeUndefined();
     expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
       "hex:-A:mantissa",

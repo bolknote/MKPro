@@ -4342,9 +4342,9 @@ export function x2StructuralMantissaFirstDigitSpliceShapeFact(
 ): X2ShapeFact | undefined {
   const sourceDigit = x2FirstMantissaDigitFromShapeFact(source);
   if (sourceDigit === undefined) return undefined;
-  const targetModel = x2ShapeDataModelForFact(target);
+  const targetModel = firstDigitSpliceTargetMantissaModel(target);
   if (
-    targetModel.kind !== "mantissa" ||
+    targetModel === undefined ||
     (targetModel.radix !== "decimal" && targetModel.radix !== "hex" && targetModel.radix !== "super") ||
     targetModel.sign !== "" ||
     targetModel.digits.length === 0
@@ -4356,6 +4356,15 @@ export function x2StructuralMantissaFirstDigitSpliceShapeFact(
   const radix = structuralFirstDigitSpliceRadix(targetModel, sourceDigit, spliced);
   if (radix === undefined) return undefined;
   return x2MantissaShapeFactFromModel(structuralMantissaDataModel(radix, spliced, "structuralOnly"));
+}
+
+function firstDigitSpliceTargetMantissaModel(fact: X2ShapeFact): X2MantissaDataModel | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind === "mantissa") return model;
+  const closed = x2ClosedExponentDisplayShapeFact(fact);
+  if (closed === undefined) return undefined;
+  const closedModel = x2ShapeDataModelForFact(closed);
+  return closedModel.kind === "mantissa" ? closedModel : undefined;
 }
 
 export function x2ShapeFactSafety(fact: X2ShapeFact): X2ShapeSafety {

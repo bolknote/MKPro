@@ -1287,7 +1287,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     a proved visible first digit and a proved hidden decimal/structural mantissa
     tail can form a new shape-only source (`hex:A` with hidden `hex:8A0` gives
     `hex:AA0`; hidden decimal `800` gives `hex:A00`) for the following exponent
-    entry. Hidden decimal exponent-entry tails can participate through the
+    entry. Hidden structural exponent-entry tails use the same closed-display
+    target helper (`hex:A` with hidden `hex-exponent:8.70:2` gives `hex:A70`;
+    hidden `super-exponent:FA:1` gives `hex:AA0` or `hex:1A0` depending on the
+    visible first digit). Hidden decimal exponent-entry tails can participate through the
     common closed-display helper only when they close to an ordinary mantissa
     digit run (`exponent:1:2:decimal` behaves like hidden `100`); fractional
     and wide scientific displays remain rejected.
