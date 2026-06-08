@@ -2174,6 +2174,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2VpEntryShapeText(structuralSource)).toEqual(["hex:3A0:mantissa"]);
   });
 
+  it("x2 value dataflow derives store-splice sources from decimal value facts", () => {
+    const valueOnly: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      entry: { kind: "closed" },
+    };
+
+    const direct = transferX2ValueStateForEdge(valueOnly, store("1"), "normal", {}, 0);
+    const knownIndirect = transferX2ValueStateForEdge(
+      valueOnly,
+      knownTargetIndirectStore("7", "1"),
+      "normal",
+      { trackRegisterMemory: true },
+      0,
+    );
+    const unknownIndirect = transferX2ValueStateForEdge(
+      valueOnly,
+      indirectStore("7"),
+      "normal",
+      { trackRegisterMemory: true },
+      0,
+    );
+
+    expect(x2VpEntryMantissaText(direct)).toEqual(["0."]);
+    expect(x2VpEntryMantissaText(knownIndirect)).toEqual(["0."]);
+    expect(x2VpEntryMantissaText(unknownIndirect)).toEqual(["0."]);
+  });
+
   it("x2 VP source proof uses structural shape algebra equality", () => {
     const base = computeX2ValueStates([halt()])[0]!;
     const shiftedSource = {

@@ -5747,7 +5747,7 @@ function transferX2ValueDataflowState(
       const stable = registerWritePreservesStoredValue(closed, op.register)
         ? closed
         : invalidateRegisterDependentX2ValueState(closed, op.register, trackRegisterMemory);
-      const x2StoreSpliceShape = effectiveInputX2Shape(stable);
+      const x2StoreSpliceShape = vpSpliceShapeSetWithValueShapes(stable.x2Shape, stable.x2);
       const vpEntryShape = vpEntryShapesFromStoreSplice(x2StoreSpliceShape);
       return {
         x: addX2Value(stable.x, registerValueFact(op.register)),
@@ -7063,7 +7063,7 @@ function transferIndirectStoreX2ValueState(
     ? closed
     : invalidateRegisterDependentX2ValueState(closed, target, trackRegisterMemory);
   const value = registerValueFact(target);
-  const x2StoreSpliceShape = effectiveInputX2Shape(stable);
+  const x2StoreSpliceShape = vpSpliceShapeSetWithValueShapes(stable.x2Shape, stable.x2);
   const vpEntryShape = vpEntryShapesFromStoreSplice(x2StoreSpliceShape);
   const output: X2ValueDataflowState = {
     x: addX2Value(stable.x, value),

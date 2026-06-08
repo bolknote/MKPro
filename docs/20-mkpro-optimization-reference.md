@@ -1190,8 +1190,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     immediate store splice). No decimal value or dot-safe restore fact is
     created. This proof is deliberately derived from the effective hidden X2
     VP-shape view, including exact decimal value facts materialized as display
-    shapes, not from visible `X`, and it is not generalized to arbitrary
-    X-preserving commands because the MK-61
+    shapes for direct, known-indirect, and unknown-indirect stores, not from
+    visible `X`, and it is not generalized to arbitrary X-preserving commands
+    because the MK-61
     previous-command context changes what `ВП` restores. A proved `/-/` carries the same fact with the mantissa sign
     toggled; after a closed, value-proved decimal exponent-entry sync it also
     keeps the signed exponent shape (`5 ВП 3 F0 /-/` carries
