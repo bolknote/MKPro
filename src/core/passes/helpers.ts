@@ -10058,12 +10058,25 @@ function decimalVpFirstDigitSpliceTargetShapeFacts(
   includeExponentTargets: boolean,
 ): Set<X2ShapeFact> {
   const output = decimalMantissaShapeFacts(shapes);
+  for (const fact of closedDecimalExponentPureMantissaDigitShapeFacts(shapes)) output.add(fact);
   if (!includeExponentTargets) return output;
   for (const fact of shapes ?? []) {
     const model = x2ShapeDataModelForFact(fact);
     if (model.kind !== "exponent-entry" || model.mantissa.radix !== "decimal") continue;
     const mantissa = x2MantissaShapeFactFromModel(model.mantissa);
     if (mantissa !== undefined) output.add(mantissa);
+  }
+  return output;
+}
+
+function closedDecimalExponentPureMantissaDigitShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of shapes ?? []) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "exponent-entry" || model.mantissa.radix !== "decimal") continue;
+    const closed = x2ClosedExponentDisplayShapeFact(fact);
+    if (closed === undefined || pureMantissaDigitRunFromShapeFact(closed) === undefined) continue;
+    output.add(closed);
   }
   return output;
 }

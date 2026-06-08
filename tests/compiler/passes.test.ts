@@ -6549,6 +6549,41 @@ describe("ir passes on synthetic programs", () => {
     expect(x2EntryStateText(laterEmptyStates[6])).toBe("exponent:300:");
   });
 
+  it("x2 value dataflow models decimal VP first-digit splice over safe closed decimal exponent displays", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:3:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:1:2:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(state, plain(0x54, "КНОП"), "normal", {}, 0);
+
+    expect(x2VpEntryMantissaText(result)).toEqual(["300"]);
+    expect(result?.vpEntryMantissaTransient).toBeUndefined();
+
+    const negativeDisplay: X2ValueDataflowState = {
+      ...state,
+      x2Shape: new Set<X2ShapeFact>(["exponent:-1:2:decimal"]),
+    };
+    const negativeResult = transferX2ValueStateForEdge(negativeDisplay, plain(0x54, "КНОП"), "normal", {}, 0);
+    expect(negativeResult?.vpEntryMantissa).toBeUndefined();
+
+    const fractionalDisplay: X2ValueDataflowState = {
+      ...state,
+      x2Shape: new Set<X2ShapeFact>(["exponent:1:-1:decimal"]),
+    };
+    const fractionalResult = transferX2ValueStateForEdge(fractionalDisplay, plain(0x54, "КНОП"), "normal", {}, 0);
+    expect(fractionalResult?.vpEntryMantissa).toBeUndefined();
+
+    const wideScientific: X2ValueDataflowState = {
+      ...state,
+      x2Shape: new Set<X2ShapeFact>(["exponent:100000000:2:decimal"]),
+    };
+    const wideResult = transferX2ValueStateForEdge(wideScientific, plain(0x54, "КНОП"), "normal", {}, 0);
+    expect(wideResult?.vpEntryMantissa).toBeUndefined();
+  });
+
   it("x2 value dataflow models transient VP first-digit splice after non-empty X2-preserving ops", () => {
     const program: IrOp[] = [
       recall("1", "preload const A"),

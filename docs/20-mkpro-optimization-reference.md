@@ -1294,6 +1294,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     ordinary decimal exponent-entry facts: immediate `←→; ВП` inherits the old
     decimal tail (`800`), while an empty preserving gap can prove the current
     visible first digit plus the hidden tail (`3` with `800` gives `300`).
+    Safe closed decimal exponent displays join that same decimal path when the
+    closed display is a positive pure mantissa digit run (`3` with
+    `exponent:1:2:decimal` also gives `300`); negative, fractional, and wide
+    scientific closed displays are not used as decimal first-digit splice
+    targets.
     Non-empty X2-preserving commands create a transient proof for the immediate
     `ВП`; a later empty command drops that transient source and proves a fresh
     source from the current visible `X`. Structural forms remain shape-only and
