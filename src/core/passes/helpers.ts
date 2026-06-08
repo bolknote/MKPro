@@ -9293,8 +9293,18 @@ function stableExpressionKeyConcreteDecimalValues(key: string, seen: Set<string>
   const output = new Set<string>();
   const parsed = parseStableExpressionKey(key);
   if (parsed === undefined || seen.has(key)) return output;
-  if (stableExpressionOpcodeArity(parsed.opcode) !== parsed.operands.length) return output;
   seen.add(key);
+  if (parsed.opcode === X2_SIGN_CHANGE_OPCODE) {
+    if (parsed.operands.length === 1) {
+      for (const value of stableSignChangeExpressionDecimalValues(parsed.operands[0]!, seen)) output.add(value);
+    }
+    seen.delete(key);
+    return output;
+  }
+  if (stableExpressionOpcodeArity(parsed.opcode) !== parsed.operands.length) {
+    seen.delete(key);
+    return output;
+  }
   const op = stableExpressionPlainOp(parsed.opcode);
   const options = concreteEvaluationOptionsForStableExpressionOpcode(parsed.opcode);
   if (parsed.operands.length === 0) {
@@ -9330,12 +9340,41 @@ function stableExpressionKeyConcreteDecimalValues(key: string, seen: Set<string>
   return output;
 }
 
+function stableSignChangeExpressionDecimalValues(operand: string, seen: Set<string>): Set<string> {
+  const output = new Set<string>();
+  if (operand.startsWith("shape:")) return output;
+  const direct = decimalFromFactKey(operand);
+  if (direct !== undefined) {
+    output.add(signChangedNormalizedDecimalValue(direct));
+    return output;
+  }
+  if (!operand.startsWith("expr-key:")) return output;
+  for (const fact of stableExpressionKeyValueSetForEvaluation(operand, seen)) {
+    const value = normalizedDecimalValueFromFact(fact);
+    if (value !== undefined) output.add(signChangedNormalizedDecimalValue(value));
+  }
+  return output;
+}
+
 function stableExpressionKeyConcreteShapeFacts(key: string, seen: Set<string>): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   const parsed = parseStableExpressionKey(key);
   if (parsed === undefined || seen.has(key)) return output;
-  if (stableExpressionOpcodeArity(parsed.opcode) !== parsed.operands.length) return output;
   seen.add(key);
+  if (parsed.opcode === X2_SIGN_CHANGE_OPCODE) {
+    if (parsed.operands.length === 1) {
+      for (const value of stableSignChangeExpressionDecimalValues(parsed.operands[0]!, seen)) {
+        const shape = exactDecimalDisplayShapeFact(value);
+        if (shape !== undefined) output.add(shape);
+      }
+    }
+    seen.delete(key);
+    return output;
+  }
+  if (stableExpressionOpcodeArity(parsed.opcode) !== parsed.operands.length) {
+    seen.delete(key);
+    return output;
+  }
   const op = stableExpressionPlainOp(parsed.opcode);
   const options = concreteEvaluationOptionsForStableExpressionOpcode(parsed.opcode);
   if (parsed.operands.length === 0) {

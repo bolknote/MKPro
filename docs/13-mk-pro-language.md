@@ -1326,6 +1326,10 @@ The pipeline currently contains:
   only the display shape, this still produces signed display-shape metadata plus
   the stable expression key, not a dot-safe hidden decimal value; when hidden
   X2 is already a normalized decimal value, the signed value stays dot-safe.
+  Stable sign-change keys whose operand is a proved decimal source
+  (`expr-key:0B(decimal:...:normalized)`, including nested decimal-producing
+  `expr-key:*` sources) are decoded back to the signed decimal value after a
+  real X2 sync; shape-source sign keys remain shape-only.
   An actual X2-syncing command is the boundary that can promote an exact
   decimal display shape into a normalized hidden value: after `1 ВП 8 F0`,
   hidden X2 carries `decimal:100000000:normalized` as well as the scientific
@@ -1448,9 +1452,11 @@ The pipeline currently contains:
   significant nibble is `1..E` seed exact decimal `1`/`-1` sign facts and the
   matching decimal display shape, while `F`-leading forms and `super:*` shapes
   remain opaque. Closed-context `/-/` over a proved shared structural X/X2
-  source stays structural-only but also seeds a stable `expr-key:0B(shape:...)`
+  source stays structural-only but also seeds a stable `expr-key:0B(...)`
   source key, so repeated sign toggles can be matched by X2 hidden-temp
-  rewrites after an explicit sync without decimalizing the hex/super value.
+  rewrites after an explicit sync. Exact decimal-only structural displays use a
+  decimal source key and can materialize the signed decimal result after that
+  sync; raw and non-decimal hex/super shapes remain structural keys.
   Emulator-pinned single-digit hex arithmetic
   tables are modeled as exact decimal value proofs where the operand order is
   fixed by MK-61 stack behavior. For `+` and `-`, a single `A`/`B`/`C`/`D`/`E` hex

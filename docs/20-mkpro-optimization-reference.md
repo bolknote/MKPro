@@ -1200,6 +1200,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     display shape it still emits only signed display-shape metadata plus
     `expr-key:0B(shape:...)`, not a hidden dot-safe decimal value; when hidden
     X2 is already a normalized decimal value, the signed value remains dot-safe.
+    Stable sign-change keys whose operand is a proved decimal source
+    (`expr-key:0B(decimal:...:normalized)`, including nested decimal-producing
+    `expr-key:*` operands) are decoded back to the signed decimal value and
+    display shape after a real X2 sync. Shape-source sign keys remain
+    shape-only.
     Shape-only decimal display sign changes also seed stable
     `expr-key:0B(shape:...)` facts for hidden-temp equality after an explicit
     X2 sync. The raw-X2 leading-zero path remains separate, so visible `2` with
@@ -1469,9 +1474,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     significant nibble is `1..E` seed exact decimal `1`/`-1` facts plus the
     matching decimal display shape, while `F`-leading forms and `super:*` shapes
     remain opaque. Closed-context `/-/` on a proved shared structural X/X2
-    source is still shape-only, but it also emits a stable
-    `expr-key:0B(shape:...)` fact keyed by the canonical restored structural
-    source. Decimal display-shape-only sign sources use the same key model.
+    source is still shape-only, but it also emits a stable `expr-key:0B(...)`
+    fact keyed by the canonical restored structural source. Exact decimal-only
+    structural displays use a decimal source key and can materialize the signed
+    decimal result after a later real X2 sync; raw and non-decimal hex/super
+    shapes remain structural keys. Decimal display-shape-only sign sources use the same key model.
     The proof first materializes stable `expr-key:*` display shapes into the
     same shape algebra, so a computed value whose only concrete form is inside
     a stable key can still seed the signed decimal/structural X2 state without

@@ -106,6 +106,7 @@ import {
   x2StatesHaveSameVpEntrySource,
   x2StatesHaveSameVpEntrySignSource,
   x2StateHasUnsafeDotRestoreShapeX2,
+  x2ValueFactRestoredVisibleDecimal,
   x2ValueSetHasFact,
   x2ValueSetHasIntersection,
   x2ValueSetHasRestoredVisibleDecimal,
@@ -6549,6 +6550,25 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:-2:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:-2:normalized"]);
+  });
+
+  it("x2 value dataflow materializes stable closed sign-change decimal keys", () => {
+    const signedKey = "expr-key:0B(decimal:0.123:normalized)" as X2ValueFact;
+    const nestedSignedKey = "expr-key:0B(expr-key:22(decimal:2:normalized))" as X2ValueFact;
+    const shapeOnlySignKey = "expr-key:0B(shape:exponent:1:8:decimal)" as X2ValueFact;
+    const signedState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>([signedKey]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+
+    const synced = transferX2ValueStateForEdge(signedState, plain(0xf0, "F0"), "normal", {}, 0);
+
+    expect(x2ValueFactRestoredVisibleDecimal(signedKey)).toBe("-0.123");
+    expect(x2ValueFactRestoredVisibleDecimal(nestedSignedKey)).toBe("-4");
+    expect(x2ValueFactRestoredVisibleDecimal(shapeOnlySignKey)).toBeUndefined();
+    expect(x2ValueStateText(synced?.x2)).toContain("decimal:-0.123:normalized");
+    expect(x2ShapeStateText(synced?.x2Shape)).toEqual(["exponent:-1.23:-1:decimal"]);
   });
 
   it("x2 value dataflow keeps closed scientific decimal sign-change display-shaped", () => {
