@@ -9220,7 +9220,8 @@ function stableStructuralExpressionSourceKey(fact: X2ShapeFact): string {
 }
 
 function stableExpressionShapeSourceKey(fact: X2ShapeFact): string {
-  const decimal = structuralShapeFactRestoredVisibleDecimal(fact);
+  const decimal = structuralShapeFactRestoredVisibleDecimal(fact) ??
+    x2ShapeFactShapeOnlyExactDecimalDisplay(fact);
   return decimal === undefined
     ? stableStructuralExpressionSourceKey(fact)
     : decimalValueFact(decimal, "normalized");

@@ -3362,6 +3362,27 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[2]?.x)).toContain("expr-key:31(reg:1)");
   });
 
+  it("x2 value dataflow uses exact structural decimal displays as decimal stable sources", () => {
+    const structural: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:-0.123:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const rawStructural: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:012:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const structuralResult = transferX2ValueStateForEdge(structural, plain(0x1c, "F sin"), "normal", {}, 0);
+    const rawResult = transferX2ValueStateForEdge(rawStructural, plain(0x1c, "F sin"), "normal", {}, 0);
+
+    expect(x2ValueStateText(structuralResult?.x)).toContain("expr-key:1C(decimal:-0.123:normalized)");
+    expect(x2ValueStateText(structuralResult?.x)).not.toContain("expr-key:1C(shape:hex:-0.123:mantissa)");
+    expect(x2ValueStateText(rawResult?.x)).toContain("expr-key:1C(shape:hex:012:mantissa)");
+  });
+
   it("x2 value dataflow derives unary decimal facts from exact decimal display-shape operands", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -3711,9 +3732,19 @@ describe("ir passes on synthetic programs", () => {
   it("x2 value dataflow canonicalizes exact structural decimal shape sources inside stable expr keys", () => {
     const exact = "expr-key:31(shape:hex:123:mantissa)" as X2ValueFact;
     const exactExponent = "expr-key:31(shape:hex-exponent:123:1)" as X2ValueFact;
+    const exactFraction = "expr-key:31(shape:hex:-0.123:mantissa)" as X2ValueFact;
+    const exactPositiveFraction = "expr-key:31(shape:hex:0.123:mantissa)" as X2ValueFact;
     const rawLeadingZero = "expr-key:31(shape:hex:0123:mantissa)" as X2ValueFact;
+    const structuralLetter = "expr-key:31(shape:hex:A:mantissa)" as X2ValueFact;
     const legacy: X2ValueDataflowState = {
-      x: new Set<X2ValueFact>([exact, exactExponent, rawLeadingZero]),
+      x: new Set<X2ValueFact>([
+        exact,
+        exactExponent,
+        exactFraction,
+        exactPositiveFraction,
+        rawLeadingZero,
+        structuralLetter,
+      ]),
       x2: new Set(),
       entry: { kind: "closed" },
     };
@@ -3721,9 +3752,14 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:123:normalized)");
     expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:1230:normalized)");
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:-0.123:normalized)");
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:0.123:normalized)");
     expect(x2ValueStateText(result?.x)).toContain("expr-key:31(shape:hex:0123:mantissa)");
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(shape:hex:A:mantissa)");
     expect(x2ValueStateText(result?.x)).not.toContain(exact);
     expect(x2ValueStateText(result?.x)).not.toContain(exactExponent);
+    expect(x2ValueStateText(result?.x)).not.toContain(exactFraction);
+    expect(x2ValueStateText(result?.x)).not.toContain(exactPositiveFraction);
   });
 
   it("x2 value dataflow canonicalizes stable expr keys in set and memory operations", () => {

@@ -1564,9 +1564,12 @@ The pipeline currently contains:
   observable. Pure documented X computations can still use restored-display shapes
   as stable expression operands: the key is built from the canonical restored
   shape (`hex:Г ВП 2` and `hex:Г00` share the same operand key), exact decimal
-  display shapes can seed the same opaque key model, and shape-only ordinary
-  decimal mantissas do so only when an equivalent `decimal:*:normalized` value
-  fact is not already present. The result stays an opaque `expr-key:*` value and
+  display shapes can seed the same opaque key model, and exact decimal-only
+  structural displays such as `hex:-0.123:mantissa` canonicalize to
+  `decimal:-0.123:normalized` source keys. Raw leading-zero and non-decimal
+  hex/super shapes remain structural keys. Shape-only ordinary decimal
+  mantissas seed keys only when an equivalent `decimal:*:normalized` value fact
+  is not already present. The result stays an opaque `expr-key:*` value and
   does not make the source shape decimal or dot-safe until a real X2 sync,
   including direct/proved-indirect recalls, materializes any proved stable-key
   value or display shape into hidden X2. Direct/proved-indirect stores use the
