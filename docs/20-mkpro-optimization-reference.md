@@ -892,7 +892,11 @@ Display rewrites are separated into strategy selection + body lowering.
   Stable `expr-key:*` facts canonicalize structural `shape:*` operands
   recursively as well, so a hidden-temp proof that already contains
   `shape:hex-exponent:Г:2` is reused as `shape:hex:Г00:mantissa` instead of
-  becoming a separate computed value. If an `expr-key:*` contains a `shape:*`
+  becoming a separate computed value. Exact decimal display-shape operands,
+  including decimal scientific `exponent:*:*:decimal` forms and exact ordinary
+  mantissas, canonicalize to `decimal:*:normalized` source keys; this avoids
+  splitting stable keys by display spelling without making the original shape
+  dot-safe. If an `expr-key:*` contains a `shape:*`
   operand that the shape algebra cannot prove, the key is discarded instead of
   being kept as an opaque stable proof. The reverse `shape:*` source-key decode
   uses the same restored-display algebra, so exact decimal exponent displays
@@ -1197,17 +1201,18 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     sign-source proof, not a new dot-safe restore proof. The same sign-source
     proof accepts mixed ordinary decimal value versus exact exponent
     display-shape equality in either direction. When hidden X2 is only the
-    display shape it still emits only signed display-shape metadata plus
-    `expr-key:0B(shape:...)`, not a hidden dot-safe decimal value; when hidden
-    X2 is already a normalized decimal value, the signed value remains dot-safe.
+    display shape it still emits only signed display-shape metadata plus a
+    canonical stable expression key, not a hidden dot-safe decimal value; when
+    hidden X2 is already a normalized decimal value, the signed value remains
+    dot-safe.
     Stable sign-change keys whose operand is a proved decimal source
     (`expr-key:0B(decimal:...:normalized)`, including nested decimal-producing
     `expr-key:*` operands) are decoded back to the signed decimal value and
-    display shape after a real X2 sync. Exact decimal display-shape source
-    keys, including scientific `exponent:*:*:decimal` forms, use the same
-    evaluator at that sync boundary; raw leading-zero and non-decimal
-    structural shape-source sign keys remain shape-only.
-    Shape-only decimal display sign changes also seed stable
+    display shape after a real X2 sync. Exact decimal display-shape sources,
+    including scientific `exponent:*:*:decimal` forms, canonicalize to the same
+    decimal source-key spelling before that sync boundary; raw leading-zero and
+    non-decimal structural shape-source sign keys remain shape-only.
+    Non-decimal structural sign changes still seed stable
     `expr-key:0B(shape:...)` facts for hidden-temp equality after an explicit
     X2 sync. The raw-X2 leading-zero path remains separate, so visible `2` with
     hidden `02` still produces hidden `-02`; a visible normalized decimal value

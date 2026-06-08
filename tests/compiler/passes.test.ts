@@ -3735,6 +3735,8 @@ describe("ir passes on synthetic programs", () => {
     const exactExponent = "expr-key:31(shape:hex-exponent:123:1)" as X2ValueFact;
     const exactFraction = "expr-key:31(shape:hex:-0.123:mantissa)" as X2ValueFact;
     const exactPositiveFraction = "expr-key:31(shape:hex:0.123:mantissa)" as X2ValueFact;
+    const exactDecimalExponent = "expr-key:31(shape:exponent:1:8:decimal)" as X2ValueFact;
+    const exactDecimalMantissa = "expr-key:31(shape:mantissa:100:decimal)" as X2ValueFact;
     const rawLeadingZero = "expr-key:31(shape:hex:0123:mantissa)" as X2ValueFact;
     const structuralLetter = "expr-key:31(shape:hex:A:mantissa)" as X2ValueFact;
     const legacy: X2ValueDataflowState = {
@@ -3743,6 +3745,8 @@ describe("ir passes on synthetic programs", () => {
         exactExponent,
         exactFraction,
         exactPositiveFraction,
+        exactDecimalExponent,
+        exactDecimalMantissa,
         rawLeadingZero,
         structuralLetter,
       ]),
@@ -3755,12 +3759,16 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:1230:normalized)");
     expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:-0.123:normalized)");
     expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:0.123:normalized)");
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:100000000:normalized)");
+    expect(x2ValueStateText(result?.x)).toContain("expr-key:31(decimal:100:normalized)");
     expect(x2ValueStateText(result?.x)).toContain("expr-key:31(shape:hex:0123:mantissa)");
     expect(x2ValueStateText(result?.x)).toContain("expr-key:31(shape:hex:A:mantissa)");
     expect(x2ValueStateText(result?.x)).not.toContain(exact);
     expect(x2ValueStateText(result?.x)).not.toContain(exactExponent);
     expect(x2ValueStateText(result?.x)).not.toContain(exactFraction);
     expect(x2ValueStateText(result?.x)).not.toContain(exactPositiveFraction);
+    expect(x2ValueStateText(result?.x)).not.toContain(exactDecimalExponent);
+    expect(x2ValueStateText(result?.x)).not.toContain(exactDecimalMantissa);
   });
 
   it("x2 value dataflow canonicalizes stable expr keys in set and memory operations", () => {
@@ -6600,7 +6608,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
-  it("x2 value dataflow sign-changes shape-only decimal exponent displays without value promotion", () => {
+  it("x2 value dataflow sign-changes exact decimal display sources through canonical decimal keys", () => {
     const sameExponentState: X2ValueDataflowState = {
       x: new Set(),
       x2: new Set(),
@@ -6619,15 +6627,17 @@ describe("ir passes on synthetic programs", () => {
     const sameExponent = transferX2ValueStateForEdge(sameExponentState, plain(0x0b, "/-/"), "normal");
     const equivalentDisplay = transferX2ValueStateForEdge(equivalentDisplayState, plain(0x0b, "/-/"), "normal");
 
-    expect(x2ValueStateText(sameExponent?.x)).toEqual(["expr-key:0B(shape:exponent:1:8:decimal)"]);
-    expect(x2ValueStateText(sameExponent?.x2)).toEqual(["expr-key:0B(shape:exponent:1:8:decimal)"]);
+    expect(x2ValueStateText(sameExponent?.x)).toEqual(["expr-key:0B(decimal:100000000:normalized)"]);
+    expect(x2ValueStateText(sameExponent?.x2)).toEqual(["expr-key:0B(decimal:100000000:normalized)"]);
+    expect(x2ValueStateText(sameExponent?.x)).not.toContain("decimal:-100000000:normalized");
     expect(x2ShapeStateText(sameExponent?.xShape)).toEqual(["exponent:-1:8:decimal"]);
     expect(x2ShapeStateText(sameExponent?.x2Shape)).toEqual(["exponent:-1:8:decimal"]);
     expect(x2ShapeSetSafety(sameExponent?.x2Shape)).toBe("errorProne");
     expect(x2StateHasUnsafeDotRestoreShapeX2(sameExponent)).toBe(true);
 
-    expect(x2ValueStateText(equivalentDisplay?.x)).toEqual(["expr-key:0B(shape:mantissa:100:decimal)"]);
-    expect(x2ValueStateText(equivalentDisplay?.x2)).toEqual(["expr-key:0B(shape:mantissa:100:decimal)"]);
+    expect(x2ValueStateText(equivalentDisplay?.x)).toEqual(["expr-key:0B(decimal:100:normalized)"]);
+    expect(x2ValueStateText(equivalentDisplay?.x2)).toEqual(["expr-key:0B(decimal:100:normalized)"]);
+    expect(x2ValueStateText(equivalentDisplay?.x)).not.toContain("decimal:-100:normalized");
     expect(x2ShapeStateText(equivalentDisplay?.xShape)).toEqual([
       "exponent:-100:0:decimal",
       "mantissa:-100:decimal",
@@ -6678,8 +6688,9 @@ describe("ir passes on synthetic programs", () => {
       "normal",
     );
 
-    expect(x2ValueStateText(mixed?.x)).toEqual(["expr-key:0B(shape:exponent:5:-1:decimal)"]);
-    expect(x2ValueStateText(mixed?.x2)).toEqual(["expr-key:0B(shape:exponent:5:-1:decimal)"]);
+    expect(x2ValueStateText(mixed?.x)).toEqual(["expr-key:0B(decimal:0.5:normalized)"]);
+    expect(x2ValueStateText(mixed?.x2)).toEqual(["expr-key:0B(decimal:0.5:normalized)"]);
+    expect(x2ValueStateText(mixed?.x)).not.toContain("decimal:-0.5:normalized");
     expect(x2ShapeStateText(mixed?.xShape)).toEqual(["exponent:-5:-1:decimal"]);
     expect(x2ShapeStateText(mixed?.x2Shape)).toEqual(["exponent:-5:-1:decimal"]);
     expect(x2ShapeSetSafety(mixed?.x2Shape)).toBe("errorProne");
@@ -8892,7 +8903,8 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2VpEntryShapeText(afterJump)).toBeUndefined();
     expect(x2VpEntrySignShapeText(afterJump)).toEqual(["exponent:5:-1:decimal"]);
-    expect(x2ValueStateText(afterSign?.x)).toEqual(["expr-key:0B(shape:exponent:5:-1:decimal)"]);
+    expect(x2ValueStateText(afterSign?.x)).toEqual(["expr-key:0B(decimal:0.5:normalized)"]);
+    expect(x2ValueStateText(afterSign?.x)).not.toContain("decimal:-0.5:normalized");
     expect(x2ShapeStateText(afterSign?.xShape)).toContain("exponent:-5:-1:decimal");
     expect(x2VpEntryShapeText(afterSign)).toBeUndefined();
     expect(x2VpEntrySignShapeText(afterSign)).toContain("exponent:-5:-1:decimal");

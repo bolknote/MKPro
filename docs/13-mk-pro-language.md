@@ -1324,15 +1324,16 @@ The pipeline currently contains:
   `exponent:100:0:decimal`). It also accepts mixed ordinary decimal value versus
   exact exponent display-shape proofs in either direction. When hidden X2 is
   only the display shape, this still produces signed display-shape metadata plus
-  the stable expression key, not a dot-safe hidden decimal value; when hidden
-  X2 is already a normalized decimal value, the signed value stays dot-safe.
+  a canonical stable expression key, not a dot-safe hidden decimal value; when
+  hidden X2 is already a normalized decimal value, the signed value stays
+  dot-safe.
   Stable sign-change keys whose operand is a proved decimal source
   (`expr-key:0B(decimal:...:normalized)`, including nested decimal-producing
   `expr-key:*` sources) are decoded back to the signed decimal value after a
-  real X2 sync. Exact decimal display-shape source keys, including scientific
-  `exponent:*:*:decimal` forms, use the same evaluator at that sync boundary;
-  raw leading-zero and non-decimal structural shape-source sign keys remain
-  shape-only.
+  real X2 sync. Exact decimal display-shape sources, including scientific
+  `exponent:*:*:decimal` forms, canonicalize to the same decimal source-key
+  spelling before that sync boundary; raw leading-zero and non-decimal
+  structural shape-source sign keys remain shape-only.
   An actual X2-syncing command is the boundary that can promote an exact
   decimal display shape into a normalized hidden value: after `1 ВП 8 F0`,
   hidden X2 carries `decimal:100000000:normalized` as well as the scientific
