@@ -2460,6 +2460,21 @@ describe("ir passes on synthetic programs", () => {
     ))).toEqual([]);
   });
 
+  it("x2 shape algebra toggles structural X2 shapes through exact decimal display equality", () => {
+    expect(x2ShapeStateText(x2SignChangedSharedStructuralShapeFacts(
+      new Set(["exponent:1.23:-1:decimal"]),
+      new Set(["hex:0.123:mantissa"]),
+    ))).toEqual(["hex:-0.123:mantissa"]);
+    expect(x2ShapeStateText(x2SignChangedSharedStructuralShapeFacts(
+      new Set(["exponent:1.23:2:decimal"]),
+      new Set(["hex-exponent:1.23:2"]),
+    ))).toEqual(["hex-exponent:-1.23:2"]);
+    expect(x2ShapeStateText(x2SignChangedSharedStructuralShapeFacts(
+      new Set(["mantissa:123:decimal"]),
+      new Set(["hex:0123:mantissa"]),
+    ))).toEqual([]);
+  });
+
   it("x2 shape algebra rebuilds canonical mantissa facts from data models", () => {
     const decimalModel = x2ShapeDataModelForFact("mantissa: 02 :decimal");
     const hexModel = x2ShapeDataModelForFact("hex: fa.ce :mantissa");
@@ -6929,6 +6944,49 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(hiddenValue?.x2Shape)).toEqual(["exponent:-5:-1:decimal"]);
     expect(x2ValueStateText(hiddenValueRaw?.x)).toEqual([]);
     expect(x2ShapeStateText(hiddenValueRaw?.xShape)).toEqual([]);
+  });
+
+  it("x2 value dataflow sign-changes mixed decimal and structural exact-display shapes", () => {
+    const visibleStructuralHiddenDecimal: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:0.123:mantissa"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:1.23:-1:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const visibleDecimalHiddenStructural: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:1.23:-1:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["hex:0.123:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const rawStructural: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:123:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["hex:0123:mantissa"]),
+      entry: { kind: "closed" },
+    };
+
+    const hiddenDecimal = transferX2ValueStateForEdge(
+      visibleStructuralHiddenDecimal,
+      plain(0x0b, "/-/"),
+      "normal",
+    );
+    const hiddenStructural = transferX2ValueStateForEdge(
+      visibleDecimalHiddenStructural,
+      plain(0x0b, "/-/"),
+      "normal",
+    );
+    const raw = transferX2ValueStateForEdge(rawStructural, plain(0x0b, "/-/"), "normal");
+
+    expect(x2ValueStateText(hiddenDecimal?.x)).toEqual(["expr-key:0B(decimal:0.123:normalized)"]);
+    expect(x2ShapeStateText(hiddenDecimal?.xShape)).toEqual(["exponent:-1.23:-1:decimal"]);
+    expect(x2ValueStateText(hiddenStructural?.x)).toEqual(["expr-key:0B(decimal:0.123:normalized)"]);
+    expect(x2ShapeStateText(hiddenStructural?.xShape)).toEqual(["hex:-0.123:mantissa"]);
+    expect(x2ValueStateText(raw?.x)).toEqual([]);
+    expect(x2ShapeStateText(raw?.xShape)).toEqual([]);
   });
 
   it("x2 value dataflow creates decimal value facts from display shapes on return X2 sync", () => {

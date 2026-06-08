@@ -1460,7 +1460,10 @@ The pipeline currently contains:
   source key, so repeated sign toggles can be matched by X2 hidden-temp
   rewrites after an explicit sync. Exact decimal-only structural displays use a
   decimal source key and can materialize the signed decimal result after that
-  sync; raw and non-decimal hex/super shapes remain structural keys.
+  sync; the same exact-display proof also lets a decimal exponent-display
+  source and a structural exact-display source share the closed `/-/` context
+  without promoting the structural side to a dot-safe value. Raw decimal
+  mantissas and non-decimal hex/super shapes remain structural keys.
   Emulator-pinned single-digit hex arithmetic
   tables are modeled as exact decimal value proofs where the operand order is
   fixed by MK-61 stack behavior. For `+` and `-`, a single `A`/`B`/`C`/`D`/`E` hex

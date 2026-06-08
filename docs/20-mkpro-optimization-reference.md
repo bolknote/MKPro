@@ -1498,8 +1498,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     source is still shape-only, but it also emits a stable `expr-key:0B(...)`
     fact keyed by the canonical restored structural source. Exact decimal-only
     structural displays use a decimal source key and can materialize the signed
-    decimal result after a later real X2 sync; raw and non-decimal hex/super
-    shapes remain structural keys. Decimal display-shape-only sign sources use the same key model.
+    decimal result after a later real X2 sync; decimal exponent-display sources
+    and structural exact-display sources can also share that closed `/-/`
+    source without making the structural source dot-safe. Raw decimal mantissas
+    and non-decimal hex/super shapes remain structural keys. Decimal display-shape-only sign sources use the same key model.
     The proof first materializes stable `expr-key:*` display shapes into the
     same shape algebra, so a computed value whose only concrete form is inside
     a stable key can still seed the signed decimal/structural X2 state without

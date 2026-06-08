@@ -3957,10 +3957,13 @@ function x2ShapeFactHasExactNonNegativeDisplay(fact: X2ShapeFact): boolean {
 }
 
 function x2ShapeFactExactNonNegativeDisplayDecimal(fact: X2ShapeFact): string | undefined {
-  const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
-  if (decimal !== undefined) return decimal.startsWith("-") ? undefined : decimal;
-  const structural = x2ShapeFactShapeOnlyExactDecimalDisplay(fact);
-  return structural === undefined || structural.startsWith("-") ? undefined : structural;
+  const decimal = x2ShapeFactExactDecimalDisplay(fact);
+  return decimal === undefined || decimal.startsWith("-") ? undefined : decimal;
+}
+
+function x2ShapeFactExactDecimalDisplay(fact: X2ShapeFact): string | undefined {
+  return x2ShapeFactRestoredVisibleDecimal(fact) ??
+    x2ShapeFactShapeOnlyExactDecimalDisplay(fact);
 }
 
 function x2ShapeFactShapeOnlyExactDecimalDisplay(fact: X2ShapeFact): string | undefined {
@@ -4044,6 +4047,36 @@ export function x2ValueShapeSetHasRestoredVisibleDecimal(
   const visible = x2ValueFactRestoredVisibleDecimal(fact);
   if (visible === undefined) return false;
   return x2ValueShapeSetRestoredVisibleDecimals(values, shapes).has(visible);
+}
+
+function x2ShapeSetExactDecimalDisplays(input: X2ShapeSet | undefined): Set<string> {
+  const output = new Set<string>();
+  for (const fact of shapeSetWithStableExpressionValueShapes(input, undefined) ?? []) {
+    const decimal = x2ShapeFactExactDecimalDisplay(fact);
+    if (decimal !== undefined) output.add(decimal);
+  }
+  return output;
+}
+
+function x2ValueShapeSetExactDecimalDisplays(
+  values: X2ValueSet | undefined,
+  shapes: X2ShapeSet | undefined,
+): Set<string> {
+  const output = x2ValueSetRestoredVisibleDecimals(values);
+  for (const decimal of x2ShapeSetExactDecimalDisplays(shapeSetWithStableExpressionValueShapes(shapes, values))) {
+    output.add(decimal);
+  }
+  return output;
+}
+
+function x2ValueShapeSetHasExactDecimalDisplay(
+  values: X2ValueSet | undefined,
+  shapes: X2ShapeSet | undefined,
+  fact: X2ValueFact,
+): boolean {
+  const visible = x2ValueFactRestoredVisibleDecimal(fact);
+  if (visible === undefined) return false;
+  return x2ValueShapeSetExactDecimalDisplays(values, shapes).has(visible);
 }
 
 export function x2ValueShapeSetsHaveSameRestoredVisibleDecimal(
@@ -4468,7 +4501,11 @@ export function x2StructuralMantissaAppendDigitsShapeFact(
   const unsigned = sign === "" ? model.canonical : model.canonical.slice(1);
   const appended = `${sign}${unsigned}${suffix}`;
   if (shapeDigits(appended).length > 8) return undefined;
-  const radix = model.radix === "super" && suffix.length > 0 ? "hex" : model.radix;
+  const radix: "hex" | "super" = model.radix === "super" && suffix.length > 0
+    ? "hex"
+    : model.radix === "hex"
+      ? "hex"
+      : "super";
   return x2MantissaShapeFactFromModel(structuralMantissaDataModel(radix, appended, "structuralOnly"));
 }
 
@@ -4793,9 +4830,14 @@ export function x2SignChangedSharedStructuralShapeFacts(
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   const visibleRestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShapes));
+  const visibleExactDisplays = x2ShapeSetExactDecimalDisplays(xShapes);
   for (const fact of canonicalStructuralShapeFacts(x2Shapes)) {
     const model = x2ShapeDataModelForFact(fact);
-    if (!structuralShapeSetHasIntersection(visibleRestoreShapes, structuralRestoreShapeFacts(new Set([fact])))) {
+    const restoreShapes = structuralRestoreShapeFacts(new Set([fact]));
+    if (
+      !structuralShapeSetHasIntersection(visibleRestoreShapes, restoreShapes) &&
+      !structuralShapeSetHasExactDecimalDisplayIntersection(visibleExactDisplays, restoreShapes)
+    ) {
       continue;
     }
     if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) {
@@ -4817,6 +4859,18 @@ export function x2SignChangedSharedStructuralShapeFacts(
 function structuralShapeSetHasIntersection(left: X2ShapeSet, right: X2ShapeSet): boolean {
   for (const shape of left) {
     if (right.has(shape)) return true;
+  }
+  return false;
+}
+
+function structuralShapeSetHasExactDecimalDisplayIntersection(
+  leftDisplays: ReadonlySet<string>,
+  right: X2ShapeSet,
+): boolean {
+  if (leftDisplays.size === 0) return false;
+  for (const shape of right) {
+    const display = x2ShapeFactExactDecimalDisplay(shape);
+    if (display !== undefined && leftDisplays.has(display)) return true;
   }
   return false;
 }
@@ -8365,7 +8419,7 @@ function recallDecimalDisplayShapeFacts(
 }
 
 function stableExpressionShapeFactsFromValueFacts(values: X2ValueSet | undefined): Set<X2ShapeFact> {
-  return shapeSetWithStableExpressionValueShapes(undefined, values) ?? new Set();
+  return new Set(shapeSetWithStableExpressionValueShapes(undefined, values) ?? []);
 }
 
 function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
@@ -8380,7 +8434,7 @@ function x2ShapesFromValueFacts(values: X2ValueSet): Set<X2ShapeFact> {
     const shape = exactDecimalDisplayShapeFact(decimal[1]!);
     if (shape !== undefined) output.add(shape);
   }
-  return shapeSetWithStableExpressionValueShapes(output, values) ?? new Set();
+  return new Set(shapeSetWithStableExpressionValueShapes(output, values) ?? []);
 }
 
 function dotSafeDecimalShapeValues(input: X2ShapeSet | undefined): Set<string> {
@@ -9977,7 +10031,7 @@ function xValueOrShapeCanFeedClosedDecimalSignChange(
 ): boolean {
   if (xShape?.has(decimalMantissaShapeFact(normalized)) === true) return true;
   if (
-    x2ValueShapeSetHasRestoredVisibleDecimal(
+    x2ValueShapeSetHasExactDecimalDisplay(
       x,
       xShape,
       decimalValueFact(normalized, "normalized"),
@@ -10004,7 +10058,7 @@ function signChangedClosedDecimalExponentShapeState(
     const sourceValue = decimalValueFact(normalized, "normalized");
     const hasSharedValue = xValues.has(sourceValue) && x2Values.has(sourceValue);
     const hasSharedDisplayShape = x2ShapeSetsHaveSameDecimalDisplayShape(xShape, new Set([fact]));
-    const hasSharedRestoredVisibleDecimal = x2ValueShapeSetHasRestoredVisibleDecimal(
+    const hasSharedRestoredVisibleDecimal = x2ValueShapeSetHasExactDecimalDisplay(
       input.x,
       xShape,
       sourceValue,
@@ -10139,10 +10193,17 @@ function sharedStructuralRestoreSourceKeys(
   x2Shapes: X2ShapeSet | undefined,
 ): Set<string> {
   const xRestoreShapes = canonicalStructuralRestoreSourceKeyFacts(xShapes);
+  const xExactDisplays = x2ShapeSetExactDecimalDisplays(xShapes);
   const keys = new Set<string>();
   for (const fact of canonicalStructuralRestoreSourceKeyFacts(x2Shapes)) {
-    if (!xRestoreShapes.has(fact)) continue;
-    keys.add(stableStructuralExpressionSourceKey(fact));
+    if (xRestoreShapes.has(fact)) {
+      keys.add(stableStructuralExpressionSourceKey(fact));
+      continue;
+    }
+    const display = x2ShapeFactExactDecimalDisplay(fact);
+    if (display !== undefined && xExactDisplays.has(display)) {
+      keys.add(stableExpressionShapeSourceKey(fact));
+    }
   }
   return keys;
 }
@@ -10183,7 +10244,7 @@ function sharedExactDecimalDisplayShapeFacts(
     const visible = x2ShapeFactRestoredVisibleDecimal(fact);
     if (visible === undefined) continue;
     const sourceValue = decimalValueFact(visible, "normalized");
-    if (x2ValueShapeSetHasRestoredVisibleDecimal(input.x, xShape, sourceValue)) {
+    if (x2ValueShapeSetHasExactDecimalDisplay(input.x, xShape, sourceValue)) {
       shapes.add(fact);
     }
   }
@@ -10191,7 +10252,7 @@ function sharedExactDecimalDisplayShapeFacts(
     const visible = x2ShapeFactRestoredVisibleDecimal(fact);
     if (visible === undefined) continue;
     const sourceValue = decimalValueFact(visible, "normalized");
-    if (x2ValueShapeSetHasRestoredVisibleDecimal(input.x2, x2Shape, sourceValue)) {
+    if (x2ValueShapeSetHasExactDecimalDisplay(input.x2, x2Shape, sourceValue)) {
       shapes.add(fact);
     }
   }
