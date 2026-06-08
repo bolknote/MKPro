@@ -4235,10 +4235,18 @@ export function x2ClosedStructuralExponentMantissaShapeFact(fact: X2ShapeFact): 
   return mantissa === undefined ? undefined : x2StructuralMantissaShiftShapeFact(mantissa, model.exponentRaw);
 }
 
+export function x2ClosedExponentDisplayShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (model.kind !== "exponent-entry") return undefined;
+  if (model.mantissa.radix === "decimal") return model.closedDecimalDisplay;
+  if (model.closedStructuralMantissa === undefined) return undefined;
+  return x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+}
+
 export function x2ClosedDecimalExponentDisplayShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
   const model = x2ShapeDataModelForFact(fact);
   return model.kind === "exponent-entry" && model.mantissa.radix === "decimal"
-    ? model.closedDecimalDisplay
+    ? x2ClosedExponentDisplayShapeFact(fact)
     : undefined;
 }
 
@@ -4290,7 +4298,7 @@ export function x2StructuralMantissaConcatShapeFacts(
 }
 
 function structuralConcatRightDigitRun(right: X2ShapeFact): string | undefined {
-  const rawDigits = pureMantissaDigitRunFromShapeFact(right);
+  const rawDigits = pureRestoredDisplayDigitRunFromShapeFact(right);
   if (rawDigits !== undefined) return rawDigits;
 
   const restoredDigits = new Set<string>();
@@ -4311,11 +4319,20 @@ function structuralConcatRightStructuralDigitRun(right: X2ShapeFact): string | u
 }
 
 function decimalConcatLeftDigitRun(left: X2ShapeFact): string | undefined {
+  const restored = x2ClosedExponentDisplayShapeFact(left);
+  if (restored !== undefined && restored !== x2CanonicalShapeFact(left)) return decimalConcatLeftDigitRun(restored);
   const model = x2ShapeDataModelForFact(left);
   if (model.kind !== "mantissa" || model.radix !== "decimal" || model.sign !== "" || model.hasDecimalPoint) {
     return undefined;
   }
   return model.digits.join("");
+}
+
+function pureRestoredDisplayDigitRunFromShapeFact(fact: X2ShapeFact): string | undefined {
+  const rawDigits = pureMantissaDigitRunFromShapeFact(fact);
+  if (rawDigits !== undefined) return rawDigits;
+  const restored = x2ClosedExponentDisplayShapeFact(fact);
+  return restored === undefined ? undefined : pureMantissaDigitRunFromShapeFact(restored);
 }
 
 function pureMantissaDigitRunFromShapeFact(fact: X2ShapeFact): string | undefined {
@@ -8198,7 +8215,7 @@ function structuralRestoreShapeFacts(input: X2ShapeSet): Set<X2ShapeFact> {
     if (model.kind === "exponent-entry" && model.safety === "structuralOnly") {
       const canonical = x2ShapeFactFromDataModel(model);
       if (canonical !== undefined) output.add(canonical);
-      const closed = x2ClosedStructuralExponentMantissaShapeFact(fact);
+      const closed = x2ClosedExponentDisplayShapeFact(fact);
       if (closed !== undefined) output.add(closed);
     }
   }

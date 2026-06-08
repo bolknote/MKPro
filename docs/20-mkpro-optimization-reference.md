@@ -1477,8 +1477,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     preloads with a Latin `E` exponent marker (`ГE-2`, `FAE2`) seed
     shape-only `hex-exponent:*:*` / `super-exponent:*:*` facts; Cyrillic `Е`
     remains a display digit. Until those shapes are separately proved dot-safe,
-    hex/super/display shapes remain
-    structural only. The `ВП .` exception is modeled as a separate
+    hex/super/display shapes remain structural only. Decimal and structural
+    exponent-entry forms now close through one display-shape primitive:
+    decimal entries produce exact decimal display shapes, while `hex`/`super`
+    entries produce restored structural mantissas without decimal value
+    promotion. Structural concatenation can consume those closed decimal
+    exponent displays only when the closed display is a pure digit run; wide
+    scientific and fractional displays remain rejected.
+    The `ВП .` exception is modeled as a separate
     context-sensitive structural proof: if the active structural `ВП` context
     closes to a mantissa whose first significant nibble is `D`/`Е`, a following
     `.` reached through address-byte gaps and at most one role-free

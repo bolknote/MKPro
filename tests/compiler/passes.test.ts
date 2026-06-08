@@ -50,6 +50,7 @@ import {
   x2CanUseVpDotRestoreAt,
   x2CanonicalShapeFact,
   x2ClosedDecimalExponentDisplayShapeFact,
+  x2ClosedExponentDisplayShapeFact,
   x2ClosedStructuralExponentMantissaShapeFact,
   x2ExponentMantissaSignChangedShapeFact,
   x2ExponentShapeFactFromMantissaFact,
@@ -1942,6 +1943,17 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("x2 shape algebra closes exponent display shapes through one helper", () => {
+    expect(x2ClosedExponentDisplayShapeFact("exponent:5:3:decimal")).toBe("mantissa:5000:decimal");
+    expect(x2ClosedExponentDisplayShapeFact("exponent:100000000:2:decimal")).toBe(
+      "exponent:1:10:decimal",
+    );
+    expect(x2ClosedExponentDisplayShapeFact("hex-exponent:Г:2")).toBe("hex:Г00:mantissa");
+    expect(x2ClosedExponentDisplayShapeFact("super-exponent:FA:-2")).toBe("hex:0.FA:mantissa");
+    expect(x2ClosedExponentDisplayShapeFact("hex:Г00:mantissa")).toBeUndefined();
+    expect(x2ClosedExponentDisplayShapeFact("hex-exponent:8Ж:1")).toBeUndefined();
+  });
+
   it("x2 shape algebra exposes closed decimal exponent display shapes without dot-safety promotion", () => {
     expect(x2ClosedDecimalExponentDisplayShapeFact("exponent:5:3:decimal")).toBe("mantissa:5000:decimal");
     expect(x2ClosedDecimalExponentDisplayShapeFact("exponent:100000000:2:decimal")).toBe(
@@ -1992,6 +2004,12 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StructuralMantissaConcatShapeFacts("hex:A:mantissa", "super-exponent:FA:1")).toBe(
       "hex:AFA0:mantissa",
     );
+    expect(x2StructuralMantissaConcatShapeFacts("hex:A:mantissa", "exponent:1:2:decimal")).toBe(
+      "hex:A100:mantissa",
+    );
+    expect(x2StructuralMantissaConcatShapeFacts("exponent:1:2:decimal", "hex:A:mantissa")).toBe(
+      "hex:100A:mantissa",
+    );
     expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "hex:1:mantissa")).toBe(
       "hex:81:mantissa",
     );
@@ -2004,6 +2022,8 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StructuralMantissaConcatShapeFacts("hex:1234567:mantissa", "mantissa:89:decimal")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:0.1:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex-exponent:A:-1")).toBeUndefined();
+    expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "exponent:1:-1:decimal")).toBeUndefined();
+    expect(x2StructuralMantissaConcatShapeFacts("exponent:100000000:2:decimal", "hex:A:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:-1:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("mantissa:1234567:decimal", "hex:89:mantissa")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("mantissa:8.1:decimal", "hex:1:mantissa")).toBeUndefined();
