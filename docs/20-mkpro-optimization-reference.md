@@ -1369,8 +1369,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     display/structural facts from stable keys instead of requiring a separate
     shape-memory fact; raw leading-zero decimal values remain non-exact display
     sources. State-level restore-safety and
-    same-X/X2 shape predicates use the same effective-shape view, so a stable
-    `expr-key:*` value can prove structural or dot-safe structural context even
+    same-X/X2 shape predicates use the same effective-shape view: explicit shape
+    facts and stable-key shapes win, while ordinary decimal value facts are
+    exposed as fallback display shapes only when no more exact visible shape is
+    known. This lets a stable
+    `expr-key:*` value prove structural or dot-safe structural context even
     when the explicit `xShape`/`x2Shape` set is empty. CFG and register-memory
     joins use the same effective value/shape sets, preserving proved stable-key
     decimals and display/structural shapes when one path has already

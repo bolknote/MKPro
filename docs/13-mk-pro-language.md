@@ -1591,8 +1591,10 @@ The pipeline currently contains:
   normalized decimal value-memory and display/structural shape facts from stable
   value-memory when shape-memory is unavailable; raw leading-zero decimal values
   remain non-exact display sources. X2
-  restore-safety and same-X/X2 shape predicates use this effective stable-key
-  shape view as well. CFG/register-memory joins preserve those derived stable-key
+  restore-safety and same-X/X2 shape predicates use this effective shape view as
+  well: explicit shape facts and stable-key shapes win, while ordinary decimal
+  value facts are exposed as fallback display shapes only when no more exact
+  visible shape is known. CFG/register-memory joins preserve those derived stable-key
   decimal and shape facts across mixed materialized/unmaterialized paths while
   keeping raw decimal spellings exact. Stable constant stack producers such as `F pi` use the same
   opaque key model (`expr-key:20()`) without assigning a decimal approximation

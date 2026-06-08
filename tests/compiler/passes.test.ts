@@ -3751,6 +3751,30 @@ describe("ir passes on synthetic programs", () => {
     expect([...x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(fractional))]).toEqual(["0.5"]);
   });
 
+  it("x2 state predicates expose plain decimal value fallback display shapes", () => {
+    const normalized: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const rawValue: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:02:unnormalized"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const rawShapeDominates: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:02:decimal"]),
+      entry: { kind: "closed" },
+    };
+
+    expect(x2ShapeStateText(effectiveVisibleXStateShape(normalized))).toEqual(["mantissa:2:decimal"]);
+    expect(x2ShapeSetHasExactIntegerDisplay(effectiveVisibleXStateShape(normalized))).toBe(true);
+    expect(x2ShapeStateText(effectiveVisibleXStateShape(rawValue))).toEqual(["mantissa:02:decimal"]);
+    expect(x2ShapeStateText(effectiveVisibleXStateShape(rawShapeDominates))).toEqual(["mantissa:02:decimal"]);
+  });
+
   it("x2 value dataflow joins materialized stable decimal facts across mixed paths", () => {
     const left: X2ValueDataflowState = {
       x: new Set<X2ValueFact>(["expr-key:22(decimal:2:normalized)"]),

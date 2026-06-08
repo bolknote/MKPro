@@ -1434,6 +1434,16 @@ function shapeSetWithValueDerivedDisplayShapes(
   return output.size === 0 ? undefined : output;
 }
 
+function shapeSetWithFallbackValueDerivedDisplayShapes(
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+): X2ShapeSet | undefined {
+  const stable = shapeSetWithStableExpressionValueShapes(shapes, values);
+  return stable === undefined || stable.size === 0
+    ? shapeSetWithValueDerivedDisplayShapes(undefined, values)
+    : stable;
+}
+
 function vpSpliceShapeSetWithValueShapes(
   shapes: X2ShapeSet | undefined,
   values: X2ValueSet | undefined,
@@ -4795,11 +4805,11 @@ export function x2StateHasSameVisibleXAndY(state: X2ValueDataflowState | undefin
 }
 
 export function effectiveVisibleXStateShape(state: X2ValueDataflowState | undefined): X2ShapeSet | undefined {
-  return state === undefined ? undefined : shapeSetWithStableExpressionValueShapes(state.xShape, state.x);
+  return state === undefined ? undefined : shapeSetWithFallbackValueDerivedDisplayShapes(state.xShape, state.x);
 }
 
 function effectiveX2StateShape(state: X2ValueDataflowState | undefined): X2ShapeSet | undefined {
-  return state === undefined ? undefined : shapeSetWithStableExpressionValueShapes(state.x2Shape, state.x2);
+  return state === undefined ? undefined : shapeSetWithFallbackValueDerivedDisplayShapes(state.x2Shape, state.x2);
 }
 
 export function x2CanUseDotRestoreAt(
@@ -10171,13 +10181,13 @@ function sharedVpEntrySignShapeFacts(
 function effectiveInputXShape(
   input: Pick<X2ValueDataflowState, "xShape"> & Partial<Pick<X2ValueDataflowState, "x">>,
 ): X2ShapeSet | undefined {
-  return shapeSetWithStableExpressionValueShapes(input.xShape, input.x);
+  return shapeSetWithFallbackValueDerivedDisplayShapes(input.xShape, input.x);
 }
 
 function effectiveInputX2Shape(
   input: Pick<X2ValueDataflowState, "x2Shape"> & Partial<Pick<X2ValueDataflowState, "x2">>,
 ): X2ShapeSet | undefined {
-  return shapeSetWithStableExpressionValueShapes(input.x2Shape, input.x2);
+  return shapeSetWithFallbackValueDerivedDisplayShapes(input.x2Shape, input.x2);
 }
 
 function structuralFirstDigitVpSpliceShapeFacts(
