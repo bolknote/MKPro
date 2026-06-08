@@ -1188,9 +1188,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     and closed structural exponent-entry shapes first pass through the shared
     restored-shape algebra (`hex-exponent:Г:2 -> hex:Г00 -> hex:00` for the
     immediate store splice). No decimal value or dot-safe restore fact is
-    created. This proof is deliberately derived from hidden X2 shape, not
-    visible `X`, and it is not generalized to arbitrary X-preserving commands
-    because the MK-61
+    created. This proof is deliberately derived from the effective hidden X2
+    VP-shape view, including exact decimal value facts materialized as display
+    shapes, not from visible `X`, and it is not generalized to arbitrary
+    X-preserving commands because the MK-61
     previous-command context changes what `ВП` restores. A proved `/-/` carries the same fact with the mantissa sign
     toggled; after a closed, value-proved decimal exponent-entry sync it also
     keeps the signed exponent shape (`5 ВП 3 F0 /-/` carries
@@ -1307,8 +1308,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     values. It
     also models the
     X2-preserving first-command `ВП` first-digit splice as a structural source:
-    a proved visible first digit and a proved hidden decimal/structural mantissa
-    tail can form a new shape-only source (`hex:A` with hidden `hex:8A0` gives
+    a proved visible first digit, including one carried only as a normalized
+    decimal value fact, and a proved hidden decimal/structural mantissa tail can
+    form a new shape-only source (`hex:A` with hidden `hex:8A0` gives
     `hex:AA0`; hidden decimal `800` gives `hex:A00`) for the following exponent
     entry. Hidden structural exponent-entry tails use the same closed-display
     target helper (`hex:A` with hidden `hex-exponent:8.70:2` gives `hex:A70`;

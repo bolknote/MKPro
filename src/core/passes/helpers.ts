@@ -1423,6 +1423,17 @@ function shapeSetWithStableExpressionValueShapesForX2Sync(
   return output.size === 0 ? undefined : output;
 }
 
+function vpSpliceShapeSetWithValueShapes(
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+): X2ShapeSet | undefined {
+  const output = cloneOptionalShapeSet(shapeSetWithStableExpressionValueShapes(shapes, values));
+  if (values !== undefined) {
+    for (const fact of x2ShapesFromValueFacts(values)) output.add(fact);
+  }
+  return output.size === 0 ? undefined : output;
+}
+
 function structuralSingleHexDigitValues(shapes: X2ShapeSet | undefined): Set<number> {
   const output = new Set<number>();
   for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
@@ -7369,8 +7380,8 @@ function transferPlainX2VpEntryMantissaState(
     const inherited = isEmptyPlainOp(op) && input.vpEntryMantissaTransient !== true
       ? input.vpEntryMantissa
       : undefined;
-    const sourceShape = shapeSetWithStableExpressionValueShapes(firstDigitSourceShape, firstDigitSourceValues);
-    const targetShape = shapeSetWithStableExpressionValueShapes(firstDigitTargetShape, firstDigitTargetValues);
+    const sourceShape = vpSpliceShapeSetWithValueShapes(firstDigitSourceShape, firstDigitSourceValues);
+    const targetShape = vpSpliceShapeSetWithValueShapes(firstDigitTargetShape, firstDigitTargetValues);
     return mergeOptionalStringSources(
       inherited,
       decimalFirstDigitVpSpliceMantissas(sourceShape, targetShape, includeExponentTargets),
@@ -7389,8 +7400,8 @@ function transferPlainX2VpEntryMantissaTransientState(
   firstDigitTargetValues?: X2ValueSet | undefined,
 ): true | undefined {
   if (effect !== "preserves" || isEmptyPlainOp(op)) return undefined;
-  const sourceShape = shapeSetWithStableExpressionValueShapes(firstDigitSourceShape, firstDigitSourceValues);
-  const targetShape = shapeSetWithStableExpressionValueShapes(firstDigitTargetShape, firstDigitTargetValues);
+  const sourceShape = vpSpliceShapeSetWithValueShapes(firstDigitSourceShape, firstDigitSourceValues);
+  const targetShape = vpSpliceShapeSetWithValueShapes(firstDigitTargetShape, firstDigitTargetValues);
   const spliced = decimalFirstDigitVpSpliceMantissas(
     sourceShape,
     targetShape,
@@ -7440,8 +7451,8 @@ function transferPlainX2VpEntryShapeState(
     const inherited = isEmptyPlainOp(op) && input.vpEntryShapeTransient !== true
       ? input.vpEntryShape
       : undefined;
-    const sourceShape = shapeSetWithStableExpressionValueShapes(firstDigitSourceShape, firstDigitSourceValues);
-    const targetShape = shapeSetWithStableExpressionValueShapes(firstDigitTargetShape, firstDigitTargetValues);
+    const sourceShape = vpSpliceShapeSetWithValueShapes(firstDigitSourceShape, firstDigitSourceValues);
+    const targetShape = vpSpliceShapeSetWithValueShapes(firstDigitTargetShape, firstDigitTargetValues);
     return mergeOptionalShapeSources(
       inherited,
       structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape),
@@ -7459,8 +7470,8 @@ function transferPlainX2VpEntryShapeTransientState(
   firstDigitTargetValues?: X2ValueSet | undefined,
 ): true | undefined {
   if (effect !== "preserves" || isEmptyPlainOp(op)) return undefined;
-  const sourceShape = shapeSetWithStableExpressionValueShapes(firstDigitSourceShape, firstDigitSourceValues);
-  const targetShape = shapeSetWithStableExpressionValueShapes(firstDigitTargetShape, firstDigitTargetValues);
+  const sourceShape = vpSpliceShapeSetWithValueShapes(firstDigitSourceShape, firstDigitSourceValues);
+  const targetShape = vpSpliceShapeSetWithValueShapes(firstDigitTargetShape, firstDigitTargetValues);
   return structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape) === undefined
     ? undefined
     : true;
@@ -8637,7 +8648,7 @@ function vpEntrySignMantissasFromX2Restore(
 }
 
 function withStoreVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowState {
-  const x2Shape = effectiveInputX2Shape(input);
+  const x2Shape = vpSpliceShapeSetWithValueShapes(input.x2Shape, input.x2);
   const vpEntryShape = vpEntryShapesFromStoreSplice(x2Shape);
   return {
     ...input,
@@ -8650,8 +8661,8 @@ function withStoreVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowSt
 }
 
 function withDirectFlowVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowState {
-  const xShape = effectiveInputXShape(input);
-  const x2Shape = effectiveInputX2Shape(input);
+  const xShape = vpSpliceShapeSetWithValueShapes(input.xShape, input.x);
+  const x2Shape = vpSpliceShapeSetWithValueShapes(input.x2Shape, input.x2);
   const vpEntryMantissa = decimalFirstDigitVpSpliceMantissas(xShape, x2Shape);
   const vpEntryShape = structuralFirstDigitVpSpliceShapeFacts(xShape, x2Shape);
   return {
@@ -8664,7 +8675,7 @@ function withDirectFlowVpSpliceSource(input: X2ValueDataflowState): X2ValueDataf
 }
 
 function withIndirectFlowVpSpliceSource(input: X2ValueDataflowState): X2ValueDataflowState {
-  const x2Shape = effectiveInputX2Shape(input);
+  const x2Shape = vpSpliceShapeSetWithValueShapes(input.x2Shape, input.x2);
   const vpEntryMantissa = vpEntryMantissasFromIndirectFlowSplice(x2Shape);
   const vpEntryShape = vpEntryShapesFromIndirectFlowSplice(x2Shape);
   return {

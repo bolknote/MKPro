@@ -2134,6 +2134,46 @@ describe("ir passes on synthetic programs", () => {
     )).toBeUndefined();
   });
 
+  it("x2 value dataflow derives VP first-digit splice from decimal value facts", () => {
+    const decimalValueOnly: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:3:normalized"]),
+      x2: new Set<X2ValueFact>(["decimal:800:normalized"]),
+      entry: { kind: "closed" },
+    };
+    const structuralSourceValueTarget: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set<X2ValueFact>(["decimal:800:normalized"]),
+      xShape: new Set<X2ShapeFact>(["hex:A:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const decimalValueSourceStructuralTarget: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:3:normalized"]),
+      x2: new Set(),
+      x2Shape: new Set<X2ShapeFact>(["hex:8A0:mantissa"]),
+      entry: { kind: "closed" },
+    };
+
+    const decimal = transferX2ValueStateForEdge(decimalValueOnly, plain(0x54, "КНОП"), "normal", {}, 0);
+    const structuralTarget = transferX2ValueStateForEdge(
+      structuralSourceValueTarget,
+      plain(0x54, "КНОП"),
+      "normal",
+      {},
+      0,
+    );
+    const structuralSource = transferX2ValueStateForEdge(
+      decimalValueSourceStructuralTarget,
+      plain(0x54, "КНОП"),
+      "normal",
+      {},
+      0,
+    );
+
+    expect(x2VpEntryMantissaText(decimal)).toEqual(["300"]);
+    expect(x2VpEntryShapeText(structuralTarget)).toEqual(["hex:A00:mantissa"]);
+    expect(x2VpEntryShapeText(structuralSource)).toEqual(["hex:3A0:mantissa"]);
+  });
+
   it("x2 VP source proof uses structural shape algebra equality", () => {
     const base = computeX2ValueStates([halt()])[0]!;
     const shiftedSource = {

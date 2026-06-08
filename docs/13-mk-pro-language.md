@@ -1541,8 +1541,9 @@ The pipeline currently contains:
   algebra can close them back into structural mantissas for VP-source proofs
   (`hex:Г ВП 2` can feed a later `ВП` as `hex:Г00`). The same structural
   source layer is aware of the X2-preserving first-command splice: when a
-  visible decimal/structural display supplies a proved first mantissa digit and
-  hidden X2 supplies a decimal/structural mantissa tail, an immediate
+  visible decimal/structural display or normalized decimal value supplies a
+  proved first mantissa digit and hidden X2 supplies a decimal/structural
+  mantissa tail from either display-shape or value facts, an immediate
   X2-preserving command before `ВП` can create a shape-only structural source
   such as `hex:A` with hidden `hex:8A0` becoming `hex:AA0`, or `hex:A` with
   hidden decimal `800` becoming `hex:A00`, for the following exponent entry.
