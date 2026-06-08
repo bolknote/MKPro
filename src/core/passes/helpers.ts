@@ -2112,7 +2112,7 @@ function structuralHexExponentAddSubDecimalProduct(
   right: string,
   operation: "plus" | "minus",
 ): StructuralHexDecimalProduct | undefined {
-  const operand = structuralHexExponentMinusTwoDecimalOperand(left);
+  const operand = structuralHexExponentAddSubDecimalOperand(left);
   if (operand === undefined || !STRUCTURAL_HEX_EXPONENT_ADD_SUB_DECIMAL_INPUTS.has(right)) return undefined;
   const rightNum = BigInt(right) * pow10BigInt(operand.scale);
   const result = operation === "plus" ? operand.num + rightNum : operand.num - rightNum;
@@ -2124,7 +2124,7 @@ function decimalMinusStructuralHexExponentProductFromPinnedOperand(
   right: StructuralHexExponentOperand,
 ): StructuralHexDecimalProduct | undefined {
   if (!STRUCTURAL_HEX_EXPONENT_ADD_SUB_DECIMAL_INPUTS.has(left)) return undefined;
-  const operand = structuralHexExponentMinusTwoDecimalOperand(right);
+  const operand = structuralHexExponentAddSubDecimalOperand(right);
   if (operand === undefined) return undefined;
 
   let result: bigint;
@@ -2133,17 +2133,21 @@ function decimalMinusStructuralHexExponentProductFromPinnedOperand(
     return structuralHexDecimalProductFromExact(result, operand.scale);
   }
 
-  const scale = 2;
+  const scale = operand.scale;
   result = BigInt(left) * pow10BigInt(scale) + BigInt(16 - right.digit);
   return structuralHexDecimalProductFromExact(result, scale);
 }
 
-function structuralHexExponentMinusTwoDecimalOperand(
+function structuralHexExponentAddSubDecimalOperand(
   operand: StructuralHexExponentOperand,
 ): { readonly num: bigint; readonly scale: number } | undefined {
-  if (operand.exponent !== "-2" || !isVerifiedArithmeticHexDigit(operand.digit)) return undefined;
+  if (!isVerifiedArithmeticHexDigit(operand.digit)) return undefined;
+  const exponent = canonicalExponentShapeRaw(operand.exponent);
+  if (exponent === undefined) return undefined;
+  const exponentValue = Number(exponent);
+  if (!Number.isInteger(exponentValue) || exponentValue < -3 || exponentValue > -1) return undefined;
   const tail = operand.digit === 10 ? "1" : String(operand.digit);
-  return { num: BigInt(tail), scale: tail.length };
+  return { num: BigInt(tail), scale: -exponentValue + tail.length - 2 };
 }
 
 function structuralHexDecimalProductFromExact(

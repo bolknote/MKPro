@@ -1400,9 +1400,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     second verified family covers structural `A`..`E E-n` exponent arithmetic
     without promoting unsupported hex/super shapes into ordinary decimal values.
     Addition/subtraction is formulaic only for emulator-pinned decimal operands
-    (`0`..`18`) and proves cases such as `BE-2 + 0 -> 1.1E-1`,
-    `ЕE-2 + 6 -> 6.14`, `BE-2 - 17 -> -16.89`, and
-    `17 - BE-2 -> 17.05`. Left-operand multiplication/division now scale the
+    (`0`..`18`) and the exact negative structural exponent range `-3..-1`,
+    proving cases such as `BE-2 + 0 -> 1.1E-1`,
+    `ЕE-2 + 6 -> 6.14`, `BE-2 - 17 -> -16.89`,
+    `17 - BE-2 -> 17.05`, `ГE-3 + 9 -> 9.013`,
+    `9 + BE-1 -> 10.1`, and `9 - BE-3 -> 9.005`.
+    `E0`/`E1` addition and subtraction remain outside this exact add/sub
+    model unless another single-hex or structural-shape proof covers them.
+    Left-operand multiplication/division now scale the
     already pinned single-hex product/quotient by the verified structural
     exponent range `-3..1` while preserving the MK-61 display shape, so cases
     such as `ГE-1 * 5 -> 5.3`,

@@ -357,6 +357,24 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(subtractRegisters("18", "ГE-2")).toBe("18,03");
   });
 
+  it("hex exponent add/sub scales exact negative exponent facts", () => {
+    const subtractRegisters = (r1: string, r2: string): string => {
+      const calc = new MK61();
+      calc.setRegister("1", r1);
+      calc.setRegister("2", r2);
+      calc.loadProgram([IP1, IP2, SUBTRACT, STOP]);
+      calc.pressSequence(["В/О", "С/П"]);
+      calc.runUntilStable({ maxFrames: 300, stableFrames: 4 });
+      return calc.displayText().replace(/\s/gu, "");
+    };
+
+    expect(addRegisters("ГE-3", "9")).toBe("9,013");
+    expect(addRegisters("9", "BE-1")).toBe("10,1");
+    expect(subtractRegisters("ГE-1", "9")).toBe("-7,7");
+    expect(subtractRegisters("9", "BE-3")).toBe("9,005");
+    expect(subtractRegisters("9", "ЕE-1")).toBe("9,2");
+  });
+
   it("single hex exponent minus two division table is operand-order-sensitive", () => {
     expect(divideRegisters("AE-2", "1")).toBe("0,-02");
     expect(divideRegisters("BE-2", "18")).toBe("6,1111111-03");
