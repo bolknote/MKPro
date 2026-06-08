@@ -2,7 +2,7 @@
 
 - Автор: Владимир Лазарев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk229.html)
-- Программа: [pmk229.txt](pmk229.txt)
+- Программа: [vratar.txt](vratar.txt)
 
 ## Описание
 

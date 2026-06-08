@@ -1,7 +1,7 @@
 # Sportloto Model (5 out of 36)
 
 - Source: Финк Л.М., Папа, мама, я и микрокалькулятор (1988)
-- Program: [sportloto-model.txt](sportloto-model.txt)
+- Program: [sportloto-model-5-of-36.txt](sportloto-model-5-of-36.txt)
 
 ## Description
 

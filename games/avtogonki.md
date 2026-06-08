@@ -2,7 +2,7 @@
 
 - Автор: Михаил Храмов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk95.html)
-- Программа: [pmk95.txt](pmk95.txt)
+- Программа: [avtogonki.txt](avtogonki.txt)
 
 ## Описание
 

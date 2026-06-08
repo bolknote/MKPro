@@ -2,7 +2,7 @@
 
 - Автор: Дмитрий Родионов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk36.html)
-- Программа: [pmk36.txt](pmk36.txt)
+- Программа: [rising-from-hell.txt](rising-from-hell.txt)
 
 ## Описание
 

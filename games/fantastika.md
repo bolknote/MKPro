@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk102.html)
-- Программа: [pmk102.txt](pmk102.txt)
+- Программа: [fantastika.txt](fantastika.txt)
 
 ## Описание
 

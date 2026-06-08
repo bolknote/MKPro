@@ -2,7 +2,7 @@
 
 - Автор: Игорь Вершинин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk217.html)
-- Программа: [pmk217.txt](pmk217.txt)
+- Программа: [poedinok-na-orbite.txt](poedinok-na-orbite.txt)
 
 ## Описание
 

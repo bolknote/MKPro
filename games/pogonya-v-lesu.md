@@ -2,7 +2,7 @@
 
 - Автор: Александр Михолап
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk187.html)
-- Программа: [pmk187.txt](pmk187.txt)
+- Программа: [pogonya-v-lesu.txt](pogonya-v-lesu.txt)
 
 ## Описание
 

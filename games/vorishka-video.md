@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk162.html)
-- Программа: [pmk162.txt](pmk162.txt)
+- Программа: [vorishka-video.txt](vorishka-video.txt)
 
 ## Описание
 

@@ -1,6 +1,6 @@
 reference anvarov_raja_yoga
 
-// Source: games/anvarov/raja-yoga.txt
+// Source: games/raja-yoga.txt
 // The original life line is a compact seven-cell display maintained with KINV
 // and K XOR. In MK-Pro it is a small board with explicit obstacle masks.
 

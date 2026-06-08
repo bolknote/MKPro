@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk188.html)
-- Программа: [pmk188.txt](pmk188.txt)
+- Программа: [sadist.txt](sadist.txt)
 
 ## Описание
 

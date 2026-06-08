@@ -2,7 +2,7 @@
 
 - Автор: Сергей Шинкевич
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk203.html)
-- Программа: [pmk203.txt](pmk203.txt)
+- Программа: [bort-69.txt](bort-69.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Сергей Кузнецов, Виктор Распопов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk235.html)
-- Программа: [pmk235.txt](pmk235.txt)
+- Программа: [morskoy-boy-lordbss.txt](morskoy-boy-lordbss.txt)
 
 ## Описание
 

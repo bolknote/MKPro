@@ -2,7 +2,7 @@
 
 - Автор: Олег Хажинский
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk175.html)
-- Программа: [pmk175.txt](pmk175.txt)
+- Программа: [birzha-lordbss.txt](birzha-lordbss.txt)
 
 ## Описание
 

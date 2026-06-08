@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk16.html)
-- Программа: [pmk16.txt](pmk16.txt)
+- Программа: [kiber-ubiytsa.txt](kiber-ubiytsa.txt)
 
 ## Описание
 

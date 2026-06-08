@@ -2,7 +2,7 @@
 
 - Автор: А. Лотохов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk115.html)
-- Программа: [pmk115.txt](pmk115.txt)
+- Программа: [pobeg-iz-sistemy-x.txt](pobeg-iz-sistemy-x.txt)
 
 ## Описание
 

@@ -1,7 +1,7 @@
 # Игра 100 (свинья) вдвоём с ПМК
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/100/100.html)
-- Program: [game-100-pig.txt](game-100-pig.txt)
+- Program: [igra-100-svinya-vdvoyom-s-pmk.txt](igra-100-svinya-vdvoyom-s-pmk.txt)
 
 ## Description
 

@@ -2,7 +2,7 @@
 
 - Автор: Игорь Данилов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk240.html)
-- Программа: [pmk240.txt](pmk240.txt)
+- Программа: [gonki-na-zimnem-ozere.txt](gonki-na-zimnem-ozere.txt)
 
 ## Описание
 

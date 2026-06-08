@@ -2,7 +2,7 @@
 
 - Автор: Сергей Устюгов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk46.html)
-- Программа: [pmk46.txt](pmk46.txt)
+- Программа: [oborotni.txt](oborotni.txt)
 
 ## Описание
 

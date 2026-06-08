@@ -2,7 +2,7 @@
 
 - Автор: А. Астафьев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk26.html)
-- Программа: [pmk26.txt](pmk26.txt)
+- Программа: [poligon.txt](poligon.txt)
 
 ## Описание
 

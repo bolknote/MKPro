@@ -2,7 +2,7 @@
 
 - Автор: Сергей Шинкевич
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk47.html)
-- Программа: [pmk47.txt](pmk47.txt)
+- Программа: [pogonya.txt](pogonya.txt)
 
 ## Описание
 

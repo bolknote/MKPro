@@ -2,7 +2,7 @@
 
 - Автор: Сергей Тарасов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk215.html)
-- Программа: [pmk215.txt](pmk215.txt)
+- Программа: [strategicheskaya-bombardirovka.txt](strategicheskaya-bombardirovka.txt)
 
 ## Описание
 

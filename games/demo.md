@@ -3,7 +3,7 @@
 - Author: Serge Anvarov
 - Original game: "Treasure Cave", *Tekhnika Molodezhi* No. 7, 1987
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/uf/demo.html)
-- Program: [demo.txt](./demo.txt)
+- Program: [demo.txt](demo.txt)
 
 ## Description
 

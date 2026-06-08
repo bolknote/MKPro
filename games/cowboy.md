@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk37.html)
-- Программа: [pmk37.txt](pmk37.txt)
+- Программа: [cowboy.txt](cowboy.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Александр Михолап
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk230.html)
-- Программа: [pmk230.txt](pmk230.txt)
+- Программа: [i-c-p.txt](i-c-p.txt)
 
 ## Описание
 

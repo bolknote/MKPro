@@ -2,7 +2,7 @@
 
 - Автор: Константин Сергеев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk153.html)
-- Программа: [pmk153.txt](pmk153.txt)
+- Программа: [the-dice.txt](the-dice.txt)
 
 ## Описание
 

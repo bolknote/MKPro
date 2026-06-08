@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk177.html)
-- Программа: [pmk177.txt](pmk177.txt)
+- Программа: [playboy.txt](playboy.txt)
 
 ## Описание
 

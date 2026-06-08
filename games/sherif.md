@@ -2,7 +2,7 @@
 
 - Автор: автор неизвестен
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk24.html)
-- Программа: [pmk24.txt](pmk24.txt)
+- Программа: [sherif.txt](sherif.txt)
 
 ## Описание
 

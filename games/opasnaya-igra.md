@@ -2,7 +2,7 @@
 
 - Автор: Сергей Тарасов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk163.html)
-- Программа: [pmk163.txt](pmk163.txt)
+- Программа: [opasnaya-igra.txt](opasnaya-igra.txt)
 
 ## Описание
 

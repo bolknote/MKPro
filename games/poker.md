@@ -2,7 +2,7 @@
 
 - Автор: А. Нилин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk157.html)
-- Программа: [pmk157.txt](pmk157.txt)
+- Программа: [poker.txt](poker.txt)
 
 ## Описание
 

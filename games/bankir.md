@@ -2,7 +2,7 @@
 
 - Автор: А. Камоедов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk76.html)
-- Программа: [pmk76.txt](pmk76.txt)
+- Программа: [bankir.txt](bankir.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Сергей Устюгов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk98.html)
-- Программа: [pmk98.txt](pmk98.txt)
+- Программа: [moto.txt](moto.txt)
 
 ## Описание
 

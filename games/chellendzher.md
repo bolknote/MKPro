@@ -2,7 +2,7 @@
 
 - Автор: Андрей Ивушкин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk253.html)
-- Программа: [pmk253.txt](pmk253.txt)
+- Программа: [chellendzher.txt](chellendzher.txt)
 
 ## Описание
 

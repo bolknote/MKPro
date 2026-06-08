@@ -2,7 +2,7 @@
 
 - Автор: Б. Воронкевич
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk245.html)
-- Программа: [pmk245.txt](pmk245.txt)
+- Программа: [korolevstvo.txt](korolevstvo.txt)
 
 ## Описание
 

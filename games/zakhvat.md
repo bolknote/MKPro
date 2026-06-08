@@ -2,7 +2,7 @@
 
 - Автор: А. Пирожков
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk101.html)
-- Программа: [pmk101.txt](pmk101.txt)
+- Программа: [zakhvat.txt](zakhvat.txt)
 
 ## Описание
 

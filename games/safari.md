@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk180.html)
-- Программа: [pmk180.txt](pmk180.txt)
+- Программа: [safari.txt](safari.txt)
 
 ## Описание
 

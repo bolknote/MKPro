@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk149.html)
-- Программа: [pmk149.txt](pmk149.txt)
+- Программа: [zona.txt](zona.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk123.html)
-- Программа: [pmk123.txt](pmk123.txt)
+- Программа: [zhokey.txt](zhokey.txt)
 
 ## Описание
 

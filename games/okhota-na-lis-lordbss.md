@@ -2,7 +2,7 @@
 
 - Автор: Юрий Иванов, Павел Иртюга
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk49.html)
-- Программа: [pmk49.txt](pmk49.txt)
+- Программа: [okhota-na-lis-lordbss.txt](okhota-na-lis-lordbss.txt)
 
 ## Описание
 

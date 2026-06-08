@@ -1,7 +1,7 @@
 # Охота на лис (вариант для МК-61)
 
 - Source: [MonatkoDenis blog](https://monatkodenis.blogspot.com/2014/01/blog-post.html)
-- Program: [fox-hunt-mk61.txt](fox-hunt-mk61.txt)
+- Program: [okhota-na-lis-variant-dlya-mk-61.txt](okhota-na-lis-variant-dlya-mk-61.txt)
 - Listing restored from the image `fh.jpg` in the source post
 
 ## Description

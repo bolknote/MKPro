@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk195.html)
-- Программа: [pmk195.txt](pmk195.txt)
+- Программа: [rytsar.txt](rytsar.txt)
 
 ## Описание
 

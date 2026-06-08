@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk77.html)
-- Программа: [pmk77.txt](pmk77.txt)
+- Программа: [sex-mission.txt](sex-mission.txt)
 
 ## Описание
 

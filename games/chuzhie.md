@@ -2,7 +2,7 @@
 
 - Автор: Сергей Устюгов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk18.html)
-- Программа: [pmk18.txt](pmk18.txt)
+- Программа: [chuzhie.txt](chuzhie.txt)
 
 ## Описание
 

@@ -3,7 +3,7 @@
 - Author/source credit: Дмитрий Кайков, Борис Греков, KEI; Android conversion by А. Лаврик
 - Source: [xvadim/pmk61-programms](https://github.com/xvadim/pmk61-programms/blob/master/wolves_and_goat_9x9.zip)
 - Source description: `wolves_and_goat_9x9/wolves_and_goat_9x9.hrml`
-- Program: [wolves-and-goat-9x9.txt](wolves-and-goat-9x9.txt)
+- Program: [volki-i-kozlik-9x9.txt](volki-i-kozlik-9x9.txt)
 
 ## Description
 

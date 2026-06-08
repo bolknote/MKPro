@@ -2,7 +2,7 @@
 
 - Автор: С. Андрианов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk45.html)
-- Программа: [pmk45.txt](pmk45.txt)
+- Программа: [robin-hood.txt](robin-hood.txt)
 
 ## Описание
 

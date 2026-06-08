@@ -2,7 +2,7 @@
 
 - Автор: Андрей Ивушкин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk252.html)
-- Программа: [pmk252.txt](pmk252.txt)
+- Программа: [yadernyy-reaktor.txt](yadernyy-reaktor.txt)
 
 ## Описание
 

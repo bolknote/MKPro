@@ -2,7 +2,7 @@
 
 - Автор: автор неизвестен
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk246.html)
-- Программа: [pmk246.txt](pmk246.txt)
+- Программа: [super-pushka.txt](super-pushka.txt)
 
 ## Описание
 

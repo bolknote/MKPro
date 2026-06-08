@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk209.html)
-- Программа: [pmk209.txt](pmk209.txt)
+- Программа: [stinger.txt](stinger.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Виктор Распопов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk233.html)
-- Программа: [pmk233.txt](pmk233.txt)
+- Программа: [elektronnyy-ring.txt](elektronnyy-ring.txt)
 
 ## Описание
 

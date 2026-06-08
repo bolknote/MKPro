@@ -2,7 +2,7 @@
 
 - Автор: Сергей Шинкевич
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk237.html)
-- Программа: [pmk237.txt](pmk237.txt)
+- Программа: [vodnaya-zmeya.txt](vodnaya-zmeya.txt)
 
 ## Описание
 

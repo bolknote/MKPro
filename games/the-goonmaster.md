@@ -2,7 +2,7 @@
 
 - Автор: К. Бокач, А. Грубин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk58.html)
-- Программа: [pmk58.txt](pmk58.txt)
+- Программа: [the-goonmaster.txt](the-goonmaster.txt)
 
 ## Описание
 

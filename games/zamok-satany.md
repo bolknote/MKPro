@@ -2,7 +2,7 @@
 
 - Автор: Сергей Устюгов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk66.html)
-- Программа: [pmk66.txt](pmk66.txt)
+- Программа: [zamok-satany.txt](zamok-satany.txt)
 
 ## Описание
 

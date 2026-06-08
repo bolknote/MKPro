@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk86.html)
-- Программа: [pmk86.txt](pmk86.txt)
+- Программа: [obgon.txt](obgon.txt)
 
 ## Описание
 

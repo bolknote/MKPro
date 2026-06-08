@@ -1,7 +1,7 @@
 # Matchsticks (Bash) Game
 
 - Source: Финк Л.М., Папа, мама, я и микрокалькулятор (1988)
-- Program: [matchsticks-bashe.txt](matchsticks-bashe.txt)
+- Program: [bash-game.txt](bash-game.txt)
 
 ## Description
 

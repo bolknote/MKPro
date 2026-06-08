@@ -2,7 +2,7 @@
 
 - Автор: А. Н. Гришин, Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk223.html)
-- Программа: [pmk223.txt](pmk223.txt)
+- Программа: [dolina.txt](dolina.txt)
 
 ## Описание
 

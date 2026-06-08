@@ -2,7 +2,7 @@
 
 - Автор: А. Тимошкин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk206.html)
-- Программа: [pmk206.txt](pmk206.txt)
+- Программа: [kapitan.txt](kapitan.txt)
 
 ## Описание
 

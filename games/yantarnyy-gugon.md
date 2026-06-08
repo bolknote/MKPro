@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk73.html)
-- Программа: [pmk73.txt](pmk73.txt)
+- Программа: [yantarnyy-gugon.txt](yantarnyy-gugon.txt)
 
 ## Описание
 

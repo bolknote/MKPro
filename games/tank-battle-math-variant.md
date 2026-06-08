@@ -2,7 +2,7 @@
 
 - Author: illi4
 - Source: [Habr article](https://habr.com/ru/articles/125484/)
-- Program: [tank-battle-math.txt](tank-battle-math.txt)
+- Program: [tank-battle-math-variant.txt](tank-battle-math-variant.txt)
 
 ## Description
 

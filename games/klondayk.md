@@ -2,7 +2,7 @@
 
 - Автор: А. Щекалев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk143.html)
-- Программа: [pmk143.txt](pmk143.txt)
+- Программа: [klondayk.txt](klondayk.txt)
 
 ## Описание
 

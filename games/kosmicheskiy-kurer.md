@@ -2,7 +2,7 @@
 
 - Автор: В. Масенков, Михаил Лялин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk114.html)
-- Программа: [pmk114.txt](pmk114.txt)
+- Программа: [kosmicheskiy-kurer.txt](kosmicheskiy-kurer.txt)
 
 ## Описание
 

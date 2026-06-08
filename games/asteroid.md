@@ -2,7 +2,7 @@
 
 - Автор: С. И. Пономарёв
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk239.html)
-- Программа: [pmk239.txt](pmk239.txt)
+- Программа: [asteroid.txt](asteroid.txt)
 
 ## Описание
 

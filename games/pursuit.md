@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk130.html)
-- Программа: [pmk130.txt](pmk130.txt)
+- Программа: [pursuit.txt](pursuit.txt)
 
 ## Описание
 

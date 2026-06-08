@@ -2,7 +2,7 @@
 
 - Автор: Константин Сергеев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk06.html)
-- Программа: [pmk06.txt](pmk06.txt)
+- Программа: [western.txt](western.txt)
 
 ## Описание
 

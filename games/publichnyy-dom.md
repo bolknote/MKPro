@@ -2,7 +2,7 @@
 
 - Автор: С. Андрианов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk227.html)
-- Программа: [pmk227.txt](pmk227.txt)
+- Программа: [publichnyy-dom.txt](publichnyy-dom.txt)
 
 ## Описание
 

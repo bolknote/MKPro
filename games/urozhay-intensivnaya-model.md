@@ -3,7 +3,7 @@
 - Author/source credit: В. Алексеев; Android conversion by А. Лаврик
 - Source: [xvadim/pmk61-programms](https://github.com/xvadim/pmk61-programms/blob/master/harvest-i.pmk)
 - Source description: `harvest-i.html`
-- Program: [harvest-i.txt](harvest-i.txt)
+- Program: [urozhay-intensivnaya-model.txt](urozhay-intensivnaya-model.txt)
 
 ## Description
 

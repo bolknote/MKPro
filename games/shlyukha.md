@@ -2,7 +2,7 @@
 
 - Автор: А. Беликов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk179.html)
-- Программа: [pmk179.txt](pmk179.txt)
+- Программа: [shlyukha.txt](shlyukha.txt)
 
 ## Описание
 

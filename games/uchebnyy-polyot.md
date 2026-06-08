@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чуприн
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk29.html)
-- Программа: [pmk29.txt](pmk29.txt)
+- Программа: [uchebnyy-polyot.txt](uchebnyy-polyot.txt)
 
 ## Описание
 

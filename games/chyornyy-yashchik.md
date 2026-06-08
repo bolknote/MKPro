@@ -2,7 +2,7 @@
 
 - Автор: Михаил Лялин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk152.html)
-- Программа: [pmk152.txt](pmk152.txt)
+- Программа: [chyornyy-yashchik.txt](chyornyy-yashchik.txt)
 
 ## Описание
 

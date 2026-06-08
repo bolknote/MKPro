@@ -2,7 +2,7 @@
 
 - Author: illi4
 - Source: [Habr article](https://habr.com/ru/articles/125484/)
-- Program: [lunolot-1.txt](lunolot-1.txt)
+- Program: [lunolet-1.txt](lunolet-1.txt)
 
 ## Description
 

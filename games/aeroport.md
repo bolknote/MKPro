@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk200.html)
-- Программа: [pmk200.txt](pmk200.txt)
+- Программа: [aeroport.txt](aeroport.txt)
 
 ## Описание
 

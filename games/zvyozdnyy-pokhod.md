@@ -2,7 +2,7 @@
 
 - Автор: А. Лотохов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk119.html)
-- Программа: [pmk119.txt](pmk119.txt)
+- Программа: [zvyozdnyy-pokhod.txt](zvyozdnyy-pokhod.txt)
 
 ## Описание
 

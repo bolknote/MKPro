@@ -2,7 +2,7 @@
 
 - Автор: Вадим Куняев, Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk146.html)
-- Программа: [pmk146.txt](pmk146.txt)
+- Программа: [spartak.txt](spartak.txt)
 
 ## Описание
 

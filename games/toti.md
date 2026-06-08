@@ -2,7 +2,7 @@
 
 - Автор: Александр Михолап
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk155.html)
-- Программа: [pmk155.txt](pmk155.txt)
+- Программа: [toti.txt](toti.txt)
 
 ## Описание
 

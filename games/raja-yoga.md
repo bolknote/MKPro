@@ -1,7 +1,7 @@
 # Раджа-йога
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D1%80%D0%B0%D0%B4%D0%B6%D0%B0-%D0%B9%D0%BE%D0%B3%D0%B0/%D1%80%D0%B0%D0%B4%D0%B6%D0%B0-%D0%B9%D0%BE%D0%B3%D0%B0.html)
-- Program: [raja-yoga.txt](./raja-yoga.txt)
+- Program: [raja-yoga.txt](raja-yoga.txt)
 
 ## Description
 

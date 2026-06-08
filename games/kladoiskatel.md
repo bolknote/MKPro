@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk190.html)
-- Программа: [pmk190.txt](pmk190.txt)
+- Программа: [kladoiskatel.txt](kladoiskatel.txt)
 
 ## Описание
 

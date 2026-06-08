@@ -2,7 +2,7 @@
 
 - Автор: Анатолий Кондратьев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk54.html)
-- Программа: [pmk54.txt](pmk54.txt)
+- Программа: [monte-karlo.txt](monte-karlo.txt)
 
 ## Описание
 

@@ -1,7 +1,7 @@
 # Опасная погрузка
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D0%BE%D0%BF%D0%B0%D1%81%D0%BD%D0%B0%D1%8F%20%D0%BF%D0%BE%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B0/%D0%BE%D0%BF%D0%B0%D1%81%D0%BD%D0%B0%D1%8F%20%D0%BF%D0%BE%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B0.html)
-- Program: [dangerous-loading.txt](dangerous-loading.txt)
+- Program: [opasnaya-pogruzka.txt](opasnaya-pogruzka.txt)
 
 ## Description
 

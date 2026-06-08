@@ -2,7 +2,7 @@
 
 - Автор: Анатолий Кондратьев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk19.html)
-- Программа: [pmk19.txt](pmk19.txt)
+- Программа: [poker-m-c.txt](poker-m-c.txt)
 
 ## Описание
 

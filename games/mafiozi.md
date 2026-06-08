@@ -2,7 +2,7 @@
 
 - Автор: А. Камоедов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk04.html)
-- Программа: [pmk04.txt](pmk04.txt)
+- Программа: [mafiozi.txt](mafiozi.txt)
 
 ## Описание
 

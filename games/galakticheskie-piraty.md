@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk112.html)
-- Программа: [pmk112.txt](pmk112.txt)
+- Программа: [galakticheskie-piraty.txt](galakticheskie-piraty.txt)
 
 ## Описание
 
@@ -50,8 +50,8 @@
 
 - Была опубликована в "БЛИЦе" N2(14) за 1994-ый год.
 
-- Другие игровые прг серии "Galaxy": [Галактический патруль](pmk113.md) и
-[The Last Sapper Of The Galaxy](pmk111.md).
+- Другие игровые прг серии "Galaxy": [Галактический патруль](galakticheskiy-patrul.md) и
+[The Last Sapper Of The Galaxy](the-last-sapper-of-the-galaxy.md).
 
 - Евгений Век - это мой старый ПМК-ашный псевдоним.
 

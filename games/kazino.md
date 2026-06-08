@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk01.html)
-- Программа: [pmk01.txt](pmk01.txt)
+- Программа: [kazino.txt](kazino.txt)
 
 ## Описание
 

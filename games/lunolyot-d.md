@@ -2,7 +2,7 @@
 
 - Author: Dariy Akselrod
 - Source: *Tekhnika Molodezhi*, No. 6, 1987, «Клуб электронных игр» (KEI column), mirrored in [MonatkoDenis blog](https://monatkodenis.blogspot.com/2014/01/blog-post.html)
-- Program: [lunolot-d.txt](lunolot-d.txt)
+- Program: [lunolyot-d.txt](lunolyot-d.txt)
 - Listing restored from the text and notes in the blog post
 
 ## Description

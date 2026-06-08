@@ -2,7 +2,7 @@
 
 - Автор: В. Масенков, Михаил Лялин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk118.html)
-- Программа: [pmk118.txt](pmk118.txt)
+- Программа: [perekhvat.txt](perekhvat.txt)
 
 ## Описание
 

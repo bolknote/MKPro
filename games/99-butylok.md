@@ -2,7 +2,7 @@
 
 - Author: [Евгений Степанищев](https://bolknote.ru/)
 - Source: [bolknote.ru](https://bolknote.ru/all/4418/)
-- Program: [99-bottles.txt](99-bottles.txt)
+- Program: [99-butylok.txt](99-butylok.txt)
 - MK-Pro port: [examples/99-bottles.mkpro](../../examples/99-bottles.mkpro)
 
 ## Description

@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk204.html)
-- Программа: [pmk204.txt](pmk204.txt)
+- Программа: [shturmovik.txt](shturmovik.txt)
 
 ## Описание
 

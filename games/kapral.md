@@ -2,7 +2,7 @@
 
 - Автор: Сергей Устюгов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk78.html)
-- Программа: [pmk78.txt](pmk78.txt)
+- Программа: [kapral.txt](kapral.txt)
 
 ## Описание
 

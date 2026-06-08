@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk205.html)
-- Программа: [pmk205.txt](pmk205.txt)
+- Программа: [perekhvatchik.txt](perekhvatchik.txt)
 
 ## Описание
 

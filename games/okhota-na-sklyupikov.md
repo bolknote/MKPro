@@ -2,7 +2,7 @@
 
 - Автор: Александр Клишин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk183.html)
-- Программа: [pmk183.txt](pmk183.txt)
+- Программа: [okhota-na-sklyupikov.txt](okhota-na-sklyupikov.txt)
 
 ## Описание
 

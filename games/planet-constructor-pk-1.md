@@ -1,7 +1,7 @@
 # Planet Constructor (PK-1)
 
 - Source: [Tekhnika Molodyzhi, 1985 №7, «Мягкой посадки!»](https://epizodsspace.airbase.ru/bibl/tehnika_-_molodyoji/1985/7/put.html)
-- Program: [planet-constructor.txt](planet-constructor.txt)
+- Program: [planet-constructor-pk-1.txt](planet-constructor-pk-1.txt)
 
 ## Description
 

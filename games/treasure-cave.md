@@ -87,4 +87,4 @@ Set the `Р-ГРД-Г` switch to `Р`.
 
 This folder holds the **original** 1987 listing from the KEI article. Serge
 Anvarov’s modified demonstration (different listing, auto-generated maze) is
-in [`../anvarov/demo.txt`](../anvarov/demo.txt).
+in [`demo.txt`](demo.txt).

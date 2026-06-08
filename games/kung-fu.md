@@ -2,7 +2,7 @@
 
 - Автор: Константин Сергеев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk120.html)
-- Программа: [pmk120.txt](pmk120.txt)
+- Программа: [kung-fu.txt](kung-fu.txt)
 
 ## Описание
 

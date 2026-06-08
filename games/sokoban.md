@@ -2,7 +2,7 @@
 
 - Автор: А. Н. Гришин, Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk222.html)
-- Программа: [pmk222.txt](pmk222.txt)
+- Программа: [sokoban.txt](sokoban.txt)
 
 ## Описание
 

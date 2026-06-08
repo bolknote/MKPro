@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk25.html)
-- Программа: [pmk25.txt](pmk25.txt)
+- Программа: [kosmicheskaya-odisseya.txt](kosmicheskaya-odisseya.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk94.html)
-- Программа: [pmk94.txt](pmk94.txt)
+- Программа: [new-rally.txt](new-rally.txt)
 
 ## Описание
 

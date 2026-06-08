@@ -2,7 +2,7 @@
 
 - Автор: Вадим Мазур
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk79.html)
-- Программа: [pmk79.txt](pmk79.txt)
+- Программа: [ostrov.txt](ostrov.txt)
 
 ## Описание
 

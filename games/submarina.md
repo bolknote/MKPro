@@ -2,7 +2,7 @@
 
 - Автор: Сергей Шинкевич
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk208.html)
-- Программа: [pmk208.txt](pmk208.txt)
+- Программа: [submarina.txt](submarina.txt)
 
 ## Описание
 

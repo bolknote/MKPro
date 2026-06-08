@@ -2,7 +2,7 @@
 
 - Автор: С. И. Пономарёв
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk189.html)
-- Программа: [pmk189.txt](pmk189.txt)
+- Программа: [skala.txt](skala.txt)
 
 ## Описание
 

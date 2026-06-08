@@ -1,7 +1,7 @@
 # Охота на лис 38
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D0%BE%D1%85%D0%BE%D1%82%D0%B0%20%D0%BD%D0%B0%20%D0%BB%D0%B8%D1%81%2038/%D0%BE%D1%85%D0%BE%D1%82%D0%B0%20%D0%BD%D0%B0%20%D0%BB%D0%B8%D1%81%2038.html)
-- Program: [fox-hunt-38.txt](fox-hunt-38.txt)
+- Program: [okhota-na-lis-38.txt](okhota-na-lis-38.txt)
 
 ## Description
 

@@ -2,7 +2,7 @@
 
 - Автор: автор неизвестен
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk156.html)
-- Программа: [pmk156.txt](pmk156.txt)
+- Программа: [igralnyy-avtomat.txt](igralnyy-avtomat.txt)
 
 ## Описание
 

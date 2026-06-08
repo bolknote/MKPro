@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk218.html)
-- Программа: [pmk218.txt](pmk218.txt)
+- Программа: [bomber-video.txt](bomber-video.txt)
 
 ## Описание
 

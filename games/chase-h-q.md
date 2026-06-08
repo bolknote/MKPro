@@ -2,7 +2,7 @@
 
 - Автор: Константин Сергеев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk83.html)
-- Программа: [pmk83.txt](pmk83.txt)
+- Программа: [chase-h-q.txt](chase-h-q.txt)
 
 ## Описание
 

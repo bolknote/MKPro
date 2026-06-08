@@ -2,7 +2,7 @@
 
 - Автор: Сергей Устюгов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk02.html)
-- Программа: [pmk02.txt](pmk02.txt)
+- Программа: [encircled-with-fantoms.txt](encircled-with-fantoms.txt)
 
 ## Описание
 

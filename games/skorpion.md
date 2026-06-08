@@ -2,7 +2,7 @@
 
 - Автор: Олег Хажинский
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk241.html)
-- Программа: [pmk241.txt](pmk241.txt)
+- Программа: [skorpion.txt](skorpion.txt)
 
 ## Описание
 

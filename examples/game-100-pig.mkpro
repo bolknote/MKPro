@@ -1,6 +1,6 @@
 reference anvarov_game_100_pig
 
-// Source: games/anvarov/game-100-pig.txt
+// Source: games/game-100-pig.txt
 // Pig is mostly a score-and-display game. The dice face is modeled as a tiny
 // board so the compiler can keep the random roll visible at intent level
 // instead of spelling out the original display packing.

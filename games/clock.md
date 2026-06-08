@@ -2,7 +2,7 @@
 
 - Authors: С. Конин, А. Шарапов
 - Source: [MonatkoDenis blog](https://monatkodenis.blogspot.com/2014/01/blog-post.html)
-- Program: [clock.txt](./clock.txt)
+- Program: [clock.txt](clock.txt)
 - Listing restored from the image `01.jpg` in the source post
 
 ## Description

@@ -2,7 +2,7 @@
 
 - Автор: Владимир Алексеев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk243.html)
-- Программа: [pmk243.txt](pmk243.txt)
+- Программа: [ostrov-kolkhoz.txt](ostrov-kolkhoz.txt)
 
 ## Описание
 

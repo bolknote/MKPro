@@ -1,7 +1,7 @@
 # Том и Джерри 3
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D1%82%D0%BE%D0%BC%20%D0%B8%20%D0%B4%D0%B6%D0%B5%D1%80%D1%80%D0%B8%203/%D1%82%D0%BE%D0%BC%20%D0%B8%20%D0%B4%D0%B6%D0%B5%D1%80%D1%80%D0%B8%203.html)
-- Program: [tom-and-jerry-3.txt](tom-and-jerry-3.txt)
+- Program: [tom-i-dzherri-3.txt](tom-i-dzherri-3.txt)
 
 ## Description
 

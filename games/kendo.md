@@ -2,7 +2,7 @@
 
 - Автор: С. Ефремов, Михаил Лялин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk17.html)
-- Программа: [pmk17.txt](pmk17.txt)
+- Программа: [kendo.txt](kendo.txt)
 
 ## Описание
 

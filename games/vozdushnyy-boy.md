@@ -2,7 +2,7 @@
 
 - Автор: М. Семёнов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk214.html)
-- Программа: [pmk214.txt](pmk214.txt)
+- Программа: [vozdushnyy-boy.txt](vozdushnyy-boy.txt)
 
 ## Описание
 

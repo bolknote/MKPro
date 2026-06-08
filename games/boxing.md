@@ -2,7 +2,7 @@
 
 - Author: Mikhail Karasev
 - Source: [Lord_BSS](https://lordbss.narod.ru/pmk00.html)
-- Program: [pmk00.txt](pmk00.txt)
+- Program: [boxing.txt](boxing.txt)
 
 ## Description
 
@@ -57,7 +57,7 @@ At the end of the game, the display shows the total score: RX="player's points".
 ### About the Program and Its Author
 - The program was first published in issue 10 of the Kyiv magazine Odnoklassnik in 1990.
 
-- The program has a remake: [Boxing 2](pmk10.md).
+- The program has a remake: [Boxing 2](boks-2.md).
 
 - I know nothing about the program's author, M. Karasev.
 

@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk64.html)
-- Программа: [pmk64.txt](pmk64.txt)
+- Программа: [elfy.txt](elfy.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Павел Меркулов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk87.html)
-- Программа: [pmk87.txt](pmk87.txt)
+- Программа: [camel-trophy.txt](camel-trophy.txt)
 
 ## Описание
 

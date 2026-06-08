@@ -2,7 +2,7 @@
 
 - Автор: Андрей Ивушкин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk251.html)
-- Программа: [pmk251.txt](pmk251.txt)
+- Программа: [turtles.txt](turtles.txt)
 
 ## Описание
 

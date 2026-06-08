@@ -1,7 +1,7 @@
 # Лабиринт777
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D0%BB%D0%B0%D0%B1%D0%B8%D1%80%D0%B8%D0%BD%D1%82777/%D0%BB%D0%B0%D0%B1%D0%B8%D1%80%D0%B8%D0%BD%D1%82777.html)
-- Program: [labyrinth777.txt](./labyrinth777.txt)
+- Program: [labyrinth777.txt](labyrinth777.txt)
 
 ## Description
 

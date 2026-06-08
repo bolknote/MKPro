@@ -2,7 +2,7 @@
 
 - Автор: Юрий Волков
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk144.html)
-- Программа: [pmk144.txt](pmk144.txt)
+- Программа: [tropa.txt](tropa.txt)
 
 ## Описание
 

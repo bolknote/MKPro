@@ -2,7 +2,7 @@
 
 - Автор: Владимир Сивицкий
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk104.html)
-- Программа: [pmk104.txt](pmk104.txt)
+- Программа: [zvezdolyot.txt](zvezdolyot.txt)
 
 ## Описание
 

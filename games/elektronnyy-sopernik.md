@@ -2,7 +2,7 @@
 
 - Автор: Сергей Кузнецов, Виктор Распопов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk234.html)
-- Программа: [pmk234.txt](pmk234.txt)
+- Программа: [elektronnyy-sopernik.txt](elektronnyy-sopernik.txt)
 
 ## Описание
 

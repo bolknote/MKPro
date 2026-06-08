@@ -2,7 +2,7 @@
 
 - Автор: Ю. Байков, Михаил Лялин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk128.html)
-- Программа: [pmk128.txt](pmk128.txt)
+- Программа: [badminton.txt](badminton.txt)
 
 ## Описание
 

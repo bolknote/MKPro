@@ -2,7 +2,7 @@
 
 - Автор: Сергей Устюгов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk103.html)
-- Программа: [pmk103.txt](pmk103.txt)
+- Программа: [planet-z.txt](planet-z.txt)
 
 ## Описание
 

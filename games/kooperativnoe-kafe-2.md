@@ -1,7 +1,7 @@
 # Кооперативное кафе 2
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D0%BA%D0%BE%D0%BE%D0%BF%D0%B5%D1%80%D0%B0%D1%82%D0%B8%D0%B2%D0%BD%D0%BE%D0%B5%20%D0%BA%D0%B0%D1%84%D0%B5%202/%D0%BA%D0%BE%D0%BE%D0%BF%D0%B5%D1%80%D0%B0%D1%82%D0%B8%D0%B2%D0%BD%D0%BE%D0%B5%20%D0%BA%D0%B0%D1%84%D0%B5%202.html)
-- Program: [coop-cafe-2.txt](coop-cafe-2.txt)
+- Program: [kooperativnoe-kafe-2.txt](kooperativnoe-kafe-2.txt)
 
 ## Description
 

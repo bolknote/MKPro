@@ -3,7 +3,7 @@
 - Author/source credit: Г. Горовой; Android conversion by А. Лаврик
 - Source: [xvadim/pmk61-programms](https://github.com/xvadim/pmk61-programms/blob/master/naval_battle.pmk)
 - Source description: `naval_battle.html`
-- Program: [naval-battle.txt](naval-battle.txt)
+- Program: [morskoy-boy-xvadim.txt](morskoy-boy-xvadim.txt)
 
 ## Description
 

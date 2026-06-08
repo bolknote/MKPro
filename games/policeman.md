@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk99.html)
-- Программа: [pmk99.txt](pmk99.txt)
+- Программа: [policeman.txt](policeman.txt)
 
 ## Описание
 

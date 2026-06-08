@@ -2,7 +2,7 @@
 
 - Автор: С. И. Пономарёв
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk96.html)
-- Программа: [pmk96.txt](pmk96.txt)
+- Программа: [gangstery.txt](gangstery.txt)
 
 ## Описание
 

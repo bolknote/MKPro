@@ -2,7 +2,7 @@
 
 - Автор: автор неизвестен
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk20.html)
-- Программа: [pmk20.txt](pmk20.txt)
+- Программа: [professional-box.txt](professional-box.txt)
 
 ## Описание
 

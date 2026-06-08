@@ -2,7 +2,7 @@
 
 - Автор: Сергей Шкуратов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk97.html)
-- Программа: [pmk97.txt](pmk97.txt)
+- Программа: [kubok-klarensa.txt](kubok-klarensa.txt)
 
 ## Описание
 

@@ -1,7 +1,7 @@
 # 94 цифры числа e
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/other/94%20%D1%86%D0%B8%D1%84%D1%80%D1%8B%20%D1%87%D0%B8%D1%81%D0%BB%D0%B0%20e/94%20%D1%86%D0%B8%D1%84%D1%80%D1%8B%20%D1%87%D0%B8%D1%81%D0%BB%D0%B0%20e.html)
-- Program: [e-94-digits.txt](./e-94-digits.txt)
+- Program: [e-94-digits.txt](e-94-digits.txt)
 
 ## Description
 

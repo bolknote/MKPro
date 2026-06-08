@@ -2,7 +2,7 @@
 
 - Автор: Сергей Шинкевич
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk207.html)
-- Программа: [pmk207.txt](pmk207.txt)
+- Программа: [vozdushnyy-desant.txt](vozdushnyy-desant.txt)
 
 ## Описание
 

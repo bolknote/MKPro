@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk27.html)
-- Программа: [pmk27.txt](pmk27.txt)
+- Программа: [freddi-kryuger.txt](freddi-kryuger.txt)
 
 ## Описание
 

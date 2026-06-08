@@ -2,7 +2,7 @@
 
 - Автор: А. Пирожков
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk106.html)
-- Программа: [pmk106.txt](pmk106.txt)
+- Программа: [v-oblake-asteroidov.txt](v-oblake-asteroidov.txt)
 
 ## Описание
 

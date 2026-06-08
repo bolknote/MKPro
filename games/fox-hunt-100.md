@@ -1,7 +1,7 @@
 # Охота на лис 100
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D0%BE%D1%85%D0%BE%D1%82%D0%B0%20%D0%BD%D0%B0%20%D0%BB%D0%B8%D1%81%20100/%D0%BE%D1%85%D0%BE%D1%82%D0%B0%20%D0%BD%D0%B0%20%D0%BB%D0%B8%D1%81%20100.html)
-- Program: [fox-hunt-100.txt](./fox-hunt-100.txt)
+- Program: [fox-hunt-100.txt](fox-hunt-100.txt)
 
 ## Description
 

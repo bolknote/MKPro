@@ -2,7 +2,7 @@
 
 - Автор: В. Ю. Солдатов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk159.html)
-- Программа: [pmk159.txt](pmk159.txt)
+- Программа: [ataka.txt](ataka.txt)
 
 ## Описание
 

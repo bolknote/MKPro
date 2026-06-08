@@ -2,7 +2,7 @@
 
 - Автор: Анатолий Кондратьев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk05.html)
-- Программа: [pmk05.txt](pmk05.txt)
+- Программа: [korotkoe-zamykanie.txt](korotkoe-zamykanie.txt)
 
 ## Описание
 

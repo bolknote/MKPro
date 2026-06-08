@@ -1,7 +1,7 @@
 # Rally
 
 - Source: [xvadim/pmk61-programms](https://github.com/xvadim/pmk61-programms/blob/master/rally.pmk)
-- Program: [rally.txt](rally.txt)
+- Program: [rally-xvadim.txt](rally-xvadim.txt)
 
 ## Description
 

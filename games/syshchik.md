@@ -2,7 +2,7 @@
 
 - Автор: П. Гурин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk236.html)
-- Программа: [pmk236.txt](pmk236.txt)
+- Программа: [syshchik.txt](syshchik.txt)
 
 ## Описание
 

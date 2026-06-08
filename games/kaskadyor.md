@@ -2,7 +2,7 @@
 
 - Автор: Владимир Лазарев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk89.html)
-- Программа: [pmk89.txt](pmk89.txt)
+- Программа: [kaskadyor.txt](kaskadyor.txt)
 
 ## Описание
 

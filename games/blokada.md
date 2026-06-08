@@ -2,7 +2,7 @@
 
 - Автор: Александер Крючков
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk135.html)
-- Программа: [pmk135.txt](pmk135.txt)
+- Программа: [blokada.txt](blokada.txt)
 
 ## Описание
 

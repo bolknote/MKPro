@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk68.html)
-- Программа: [pmk68.txt](pmk68.txt)
+- Программа: [m-skiy-treugolnik.txt](m-skiy-treugolnik.txt)
 
 ## Описание
 

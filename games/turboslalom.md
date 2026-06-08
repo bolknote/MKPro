@@ -2,7 +2,7 @@
 
 - Автор: Константин Сергеев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk124.html)
-- Программа: [pmk124.txt](pmk124.txt)
+- Программа: [turboslalom.txt](turboslalom.txt)
 
 ## Описание
 

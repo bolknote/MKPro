@@ -2,7 +2,7 @@
 
 - Автор: С. Бекетов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk170.html)
-- Программа: [pmk170.txt](pmk170.txt)
+- Программа: [videosalon.txt](videosalon.txt)
 
 ## Описание
 

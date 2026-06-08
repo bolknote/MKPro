@@ -2,7 +2,7 @@
 
 - Автор: Станислав Чегодаев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk247.html)
-- Программа: [pmk247.txt](pmk247.txt)
+- Программа: [shakhmaty.txt](shakhmaty.txt)
 
 ## Описание
 

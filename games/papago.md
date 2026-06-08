@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk158.html)
-- Программа: [pmk158.txt](pmk158.txt)
+- Программа: [papago.txt](papago.txt)
 
 ## Описание
 

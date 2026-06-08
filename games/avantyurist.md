@@ -2,7 +2,7 @@
 
 - Автор: автор неизвестен
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk145.html)
-- Программа: [pmk145.txt](pmk145.txt)
+- Программа: [avantyurist.txt](avantyurist.txt)
 
 ## Описание
 

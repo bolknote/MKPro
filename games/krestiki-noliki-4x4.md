@@ -1,7 +1,7 @@
 # Крестики-нолики 4x4
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D0%BA%D1%80%D0%B5%D1%81%D1%82%D0%B8%D0%BA%D0%B8-%D0%BD%D0%BE%D0%BB%D0%B8%D0%BA%D0%B8%204x4/%D0%BA%D1%80%D0%B5%D1%81%D1%82%D0%B8%D0%BA%D0%B8-%D0%BD%D0%BE%D0%BB%D0%B8%D0%BA%D0%B8%204x4.html)
-- Program: [tic-tac-toe-4x4.txt](tic-tac-toe-4x4.txt)
+- Program: [krestiki-noliki-4x4.txt](krestiki-noliki-4x4.txt)
 
 ## Description
 

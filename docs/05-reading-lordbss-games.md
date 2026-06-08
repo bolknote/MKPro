@@ -1,7 +1,7 @@
 # Reading Lord_BSS MK-61 Games
 
 This note answers a practical question: are the MK-61 references in this
-directory enough to understand the cleaned game listings in `games/lordbss`?
+directory enough to understand the cleaned Lord_BSS game listings in `games/`?
 
 Short answer: they are enough to read the calculator commands, but not enough
 to comfortably understand the games as published. Lord_BSS pages use compact
@@ -24,10 +24,10 @@ The existing documents are good for the calculator itself:
 - [04-programming-cookbook.md](./04-programming-cookbook.md) gives enough
   workflow to write ordinary MK-61 programs.
 
-That is sufficient for programs like `games/lordbss/pmk38.txt` ("Lunar
+That is sufficient for programs like `games/lunar-landing.txt` ("Lunar
 Landing"). The code uses direct register stores/recalls, basic arithmetic, a
 few direct conditionals, and stop points. The companion
-`games/lordbss/pmk38.md` describes the game variables, so the listing can be
+`games/lunar-landing.md` describes the game variables, so the listing can be
 followed almost directly.
 
 ## Lord_BSS Listing Notation
@@ -88,19 +88,19 @@ calculator produces values, but the page text defines the user interface.
 
 Examples:
 
-- `pmk38.txt` / `pmk38.md` ("Lunar Landing") is mostly transparent. `R1` is height, `R2`
+- `lunar-landing.txt` / `lunar-landing.md` ("Lunar Landing") is mostly transparent. `R1` is height, `R2`
   fuel, `R3` speed, and the program stops to show height, speed, fuel, then
   accepts fuel burn. `777` means success, `666` means crash.
-- `pmk235.txt` / `pmk235.md` ("Sea Battle") is still readable from the references, but the
+- `morskoy-boy-lordbss.txt` / `morskoy-boy-lordbss.md` ("Sea Battle") is still readable from the references, but the
   output `1`/`-1` only makes sense with the rules on the page: it encodes which
   half of the compass directions the hidden submarine lies in.
-- `pmk39.txt` / `pmk39.md` ("Minesweeper") needs the command reference plus the page's
+- `minesweeper.txt` / `minesweeper.md` ("Minesweeper") needs the command reference plus the page's
   board model. It uses `К СЧ` for mine placement, indirect register operations
   for board cells, and logical operations for packed state.
-- `pmk121.txt` / `pmk121.md` ("Tetris") is command-readable but not obvious as a game until
+- `tetris.txt` / `tetris.md` ("Tetris") is command-readable but not obvious as a game until
   you know its display packing. It uses logical XOR/AND/OR, indirect calls,
   random generation, and the `Р-ГРД-Г` switch as a control input.
-- `pmk200.txt` / `pmk200.md` ("Airport") and `pmk210.txt` / `pmk210.md`
+- `aeroport.txt` / `aeroport.md` ("Airport") and `alaram.txt` / `alaram.md`
   ("Alaram") are good stress tests.
   Their commands are covered by the references, but their meaning depends on
   constants, packed display glyphs, and the text explaining outputs such as

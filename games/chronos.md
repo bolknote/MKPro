@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk137.html)
-- Программа: [pmk137.txt](pmk137.txt)
+- Программа: [chronos.txt](chronos.txt)
 
 ## Описание
 

@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk74.html)
-- Программа: [pmk74.txt](pmk74.txt)
+- Программа: [monti.txt](monti.txt)
 
 ## Описание
 

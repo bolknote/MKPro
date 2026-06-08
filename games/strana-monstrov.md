@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk197.html)
-- Программа: [pmk197.txt](pmk197.txt)
+- Программа: [strana-monstrov.txt](strana-monstrov.txt)
 
 ## Описание
 

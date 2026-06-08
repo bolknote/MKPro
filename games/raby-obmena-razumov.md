@@ -2,7 +2,7 @@
 
 - Автор: Анатолий Кондратьев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk35.html)
-- Программа: [pmk35.txt](pmk35.txt)
+- Программа: [raby-obmena-razumov.txt](raby-obmena-razumov.txt)
 
 ## Описание
 

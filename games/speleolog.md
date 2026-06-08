@@ -2,7 +2,7 @@
 
 - Автор: Владимир Лазарев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk228.html)
-- Программа: [pmk228.txt](pmk228.txt)
+- Программа: [speleolog.txt](speleolog.txt)
 
 ## Описание
 

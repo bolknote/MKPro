@@ -2,7 +2,7 @@
 
 - Автор: Евгений Бредня
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk167.html)
-- Программа: [pmk167.txt](pmk167.txt)
+- Программа: [sokrovishche.txt](sokrovishche.txt)
 
 ## Описание
 

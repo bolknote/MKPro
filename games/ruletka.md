@@ -2,7 +2,7 @@
 
 - Автор: Михаил Лялин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk148.html)
-- Программа: [pmk148.txt](pmk148.txt)
+- Программа: [ruletka.txt](ruletka.txt)
 
 ## Описание
 

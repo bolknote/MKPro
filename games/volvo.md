@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk88.html)
-- Программа: [pmk88.txt](pmk88.txt)
+- Программа: [volvo.txt](volvo.txt)
 
 ## Описание
 

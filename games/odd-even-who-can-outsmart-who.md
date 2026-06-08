@@ -1,7 +1,7 @@
 # Odd-Even (Who Can Outsmart Who)
 
 - Source: Финк Л.М., Папа, мама, я и микрокалькулятор (1988)
-- Program: [odd-even-trick.txt](odd-even-trick.txt)
+- Program: [odd-even-who-can-outsmart-who.txt](odd-even-who-can-outsmart-who.txt)
 
 ## Description
 

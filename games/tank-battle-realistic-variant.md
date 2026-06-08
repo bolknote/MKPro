@@ -2,7 +2,7 @@
 
 - Author: illi4
 - Source: [Habr article](https://habr.com/ru/articles/125484/)
-- Program: [tank-battle-real.txt](tank-battle-real.txt)
+- Program: [tank-battle-realistic-variant.txt](tank-battle-realistic-variant.txt)
 
 ## Description
 

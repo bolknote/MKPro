@@ -2,7 +2,7 @@
 
 - Автор: Игорь Вершинин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk196.html)
-- Программа: [pmk196.txt](pmk196.txt)
+- Программа: [peshchera-syurprizov.txt](peshchera-syurprizov.txt)
 
 ## Описание
 

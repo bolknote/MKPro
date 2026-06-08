@@ -2,7 +2,7 @@
 
 - Автор: А. Н. Гришин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk221.html)
-- Программа: [pmk221.txt](pmk221.txt)
+- Программа: [labirint-8-13.txt](labirint-8-13.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Владимир Хмелюк
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk109.html)
-- Программа: [pmk109.txt](pmk109.txt)
+- Программа: [magiya-tsifr.txt](magiya-tsifr.txt)
 
 ## Описание
 

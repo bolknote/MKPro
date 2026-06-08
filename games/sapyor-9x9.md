@@ -1,7 +1,7 @@
 # Сапёр 9x9
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D1%81%D0%B0%D0%BF%D1%91%D1%80%209x9/%D1%81%D0%B0%D0%BF%D1%91%D1%80%209x9.html)
-- Program: [minesweeper-9x9.txt](minesweeper-9x9.txt)
+- Program: [sapyor-9x9.txt](sapyor-9x9.txt)
 
 ## Description
 

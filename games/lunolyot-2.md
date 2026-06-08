@@ -1,7 +1,7 @@
 # Лунолёт 2
 
 - Source: [Semico MK games](http://mk.semico.ru/mkpr_r9.htm)
-- Program: [lunolet-2.txt](lunolet-2.txt)
+- Program: [lunolyot-2.txt](lunolyot-2.txt)
 - Original files: [`lun2.mkp`](http://mk.semico.ru/prog/mk/lunolet/lun2.mkp), [`lun2.mkd`](http://mk.semico.ru/prog/mk/lunolet/lun2.mkd)
 
 ## Description

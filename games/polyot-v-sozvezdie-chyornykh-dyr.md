@@ -2,7 +2,7 @@
 
 - Автор: А. Н. Гришин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk139.html)
-- Программа: [pmk139.txt](pmk139.txt)
+- Программа: [polyot-v-sozvezdie-chyornykh-dyr.txt](polyot-v-sozvezdie-chyornykh-dyr.txt)
 
 ## Описание
 

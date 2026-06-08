@@ -2,7 +2,7 @@
 
 - Автор: Игорь Вершинин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk172.html)
-- Программа: [pmk172.txt](pmk172.txt)
+- Программа: [birzha.txt](birzha.txt)
 
 ## Описание
 

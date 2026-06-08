@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk15.html)
-- Программа: [pmk15.txt](pmk15.txt)
+- Программа: [nindzya-terminator.txt](nindzya-terminator.txt)
 
 ## Описание
 

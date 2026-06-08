@@ -2,7 +2,7 @@
 
 - Автор: автор неизвестен
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk154.html)
-- Программа: [pmk154.txt](pmk154.txt)
+- Программа: [totalizator.txt](totalizator.txt)
 
 ## Описание
 

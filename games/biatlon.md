@@ -2,7 +2,7 @@
 
 - Автор: Владимир Сивицкий
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk122.html)
-- Программа: [pmk122.txt](pmk122.txt)
+- Программа: [biatlon.txt](biatlon.txt)
 
 ## Описание
 

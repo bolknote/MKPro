@@ -2,7 +2,7 @@
 
 - Автор: М. Пухов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk185.html)
-- Программа: [pmk185.txt](pmk185.txt)
+- Программа: [okhota-na-skaloeda.txt](okhota-na-skaloeda.txt)
 
 ## Описание
 

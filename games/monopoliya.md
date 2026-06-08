@@ -2,7 +2,7 @@
 
 - Автор: Олег Хажинский
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk174.html)
-- Программа: [pmk174.txt](pmk174.txt)
+- Программа: [monopoliya.txt](monopoliya.txt)
 
 ## Описание
 

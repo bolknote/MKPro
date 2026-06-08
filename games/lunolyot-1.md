@@ -1,7 +1,7 @@
 # Лунолёт-1
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D0%BB%D1%83%D0%BD%D0%BE%D0%BB%D1%91%D1%82-1/%D0%BB%D1%83%D0%BD%D0%BE%D0%BB%D1%91%D1%82-1.html)
-- Program: [lunolot-1.txt](lunolot-1.txt)
+- Program: [lunolyot-1.txt](lunolyot-1.txt)
 
 ## Description
 

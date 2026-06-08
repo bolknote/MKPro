@@ -2,7 +2,7 @@
 
 - Автор: А. Зайцев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk129.html)
-- Программа: [pmk129.txt](pmk129.txt)
+- Программа: [elektronnye-gorodki.txt](elektronnye-gorodki.txt)
 
 ## Описание
 

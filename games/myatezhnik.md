@@ -2,7 +2,7 @@
 
 - Автор: Сергей Шинкевич
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk238.html)
-- Программа: [pmk238.txt](pmk238.txt)
+- Программа: [myatezhnik.txt](myatezhnik.txt)
 
 ## Описание
 

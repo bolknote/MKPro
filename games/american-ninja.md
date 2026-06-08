@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk100.html)
-- Программа: [pmk100.txt](pmk100.txt)
+- Программа: [american-ninja.txt](american-ninja.txt)
 
 ## Описание
 

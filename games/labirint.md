@@ -2,7 +2,7 @@
 
 - Автор: С. Гета
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk220.html)
-- Программа: [pmk220.txt](pmk220.txt)
+- Программа: [labirint.txt](labirint.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: С. Андрианов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk178.html)
-- Программа: [pmk178.txt](pmk178.txt)
+- Программа: [prostitutka.txt](prostitutka.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: С. Беляев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk249.html)
-- Программа: [pmk249.txt](pmk249.txt)
+- Программа: [domino-vunderkind.txt](domino-vunderkind.txt)
 
 ## Описание
 

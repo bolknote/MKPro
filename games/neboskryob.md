@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk224.html)
-- Программа: [pmk224.txt](pmk224.txt)
+- Программа: [neboskryob.txt](neboskryob.txt)
 
 ## Описание
 

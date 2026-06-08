@@ -2,7 +2,7 @@
 
 - Автор: Владимир Молоканов, Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk75.html)
-- Программа: [pmk75.txt](pmk75.txt)
+- Программа: [dzhoy.txt](dzhoy.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Андрей Ивушкин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk250.html)
-- Программа: [pmk250.txt](pmk250.txt)
+- Программа: [kazanova.txt](kazanova.txt)
 
 ## Описание
 

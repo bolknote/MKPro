@@ -2,7 +2,7 @@
 
 - Автор: Дмитрий Родионов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk136.html)
-- Программа: [pmk136.txt](pmk136.txt)
+- Программа: [soldat-udachi-2.txt](soldat-udachi-2.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk199.html)
-- Программа: [pmk199.txt](pmk199.txt)
+- Программа: [puteshestvie.txt](puteshestvie.txt)
 
 ## Описание
 

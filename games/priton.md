@@ -3,7 +3,7 @@
 - Автор: Евгений Кузниченко
 - Настоящее имя: Евгений Кузниченко
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk147.html)
-- Программа: [pmk147.txt](pmk147.txt)
+- Программа: [priton.txt](priton.txt)
 
 ## Описание
 

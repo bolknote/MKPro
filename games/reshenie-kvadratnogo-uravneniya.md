@@ -2,7 +2,7 @@
 
 - Source: [xvadim/pmk61-programms](https://github.com/xvadim/pmk61-programms/blob/master/square-equation.pmk)
 - Source description: `square-equation.html`
-- Program: [square-equation.txt](square-equation.txt)
+- Program: [reshenie-kvadratnogo-uravneniya.txt](reshenie-kvadratnogo-uravneniya.txt)
 
 ## Description
 

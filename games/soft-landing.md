@@ -2,7 +2,7 @@
 
 - Source: [Tekhnika Molodyzhi, 1985 №7, «Мягкой посадки!»](https://epizodsspace.airbase.ru/bibl/tehnika_-_molodyoji/1985/7/put.html)
 - Program: [soft-landing.txt](soft-landing.txt)
-- Also related to: [lunolet-1.txt](../semico/lunolet-1.txt)
+- Also related to: [lunolet-1.txt](lunolet-1.txt)
 
 ## Description
 
@@ -20,4 +20,3 @@ included as a full program listing in this repository.
 ## Setup
 
 Start with `В/О С/П`.
-

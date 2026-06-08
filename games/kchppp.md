@@ -2,7 +2,7 @@
 
 - Автор: С. Андрианов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk226.html)
-- Программа: [pmk226.txt](pmk226.txt)
+- Программа: [kchppp.txt](kchppp.txt)
 
 ## Описание
 

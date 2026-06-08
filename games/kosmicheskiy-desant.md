@@ -2,7 +2,7 @@
 
 - Автор: М. Голиков
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk216.html)
-- Программа: [pmk216.txt](pmk216.txt)
+- Программа: [kosmicheskiy-desant.txt](kosmicheskiy-desant.txt)
 
 ## Описание
 

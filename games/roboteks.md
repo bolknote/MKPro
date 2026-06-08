@@ -2,7 +2,7 @@
 
 - Автор: Владимир Трофимчук
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk225.html)
-- Программа: [pmk225.txt](pmk225.txt)
+- Программа: [roboteks.txt](roboteks.txt)
 
 ## Описание
 

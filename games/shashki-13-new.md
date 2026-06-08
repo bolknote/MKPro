@@ -2,7 +2,7 @@
 
 - Автор: А. Н. Гришин
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk248.html)
-- Программа: [pmk248.txt](pmk248.txt)
+- Программа: [shashki-13-new.txt](shashki-13-new.txt)
 
 ## Описание
 

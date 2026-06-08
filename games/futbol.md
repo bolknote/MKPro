@@ -2,7 +2,7 @@
 
 - Автор: Александр Михолап
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk126.html)
-- Программа: [pmk126.txt](pmk126.txt)
+- Программа: [futbol.txt](futbol.txt)
 
 ## Описание
 

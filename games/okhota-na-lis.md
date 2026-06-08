@@ -1,7 +1,7 @@
 # Охота на лис
 
 - Source: [Serge Anvarov](https://sergeanvarov.github.io/russian/mk61/games/%D0%BE%D1%85%D0%BE%D1%82%D0%B0%20%D0%BD%D0%B0%20%D0%BB%D0%B8%D1%81/%D0%BE%D1%85%D0%BE%D1%82%D0%B0%20%D0%BD%D0%B0%20%D0%BB%D0%B8%D1%81.html)
-- Program: [fox-hunt.txt](fox-hunt.txt)
+- Program: [okhota-na-lis.txt](okhota-na-lis.txt)
 
 ## Description
 

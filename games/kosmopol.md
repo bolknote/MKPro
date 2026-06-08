@@ -2,7 +2,7 @@
 
 - Автор: Александр Михолап
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk07.html)
-- Программа: [pmk07.txt](pmk07.txt)
+- Программа: [kosmopol.txt](kosmopol.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk193.html)
-- Программа: [pmk193.txt](pmk193.txt)
+- Программа: [faraon.txt](faraon.txt)
 
 ## Описание
 

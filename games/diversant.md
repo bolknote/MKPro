@@ -2,7 +2,7 @@
 
 - Автор: Сергей Устюгов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk55.html)
-- Программа: [pmk55.txt](pmk55.txt)
+- Программа: [diversant.txt](diversant.txt)
 
 ## Описание
 

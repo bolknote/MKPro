@@ -2,7 +2,7 @@
 
 - Автор: А. Лотохов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk186.html)
-- Программа: [pmk186.txt](pmk186.txt)
+- Программа: [rybalka.txt](rybalka.txt)
 
 ## Описание
 

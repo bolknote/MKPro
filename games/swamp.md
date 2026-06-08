@@ -2,7 +2,7 @@
 
 - Автор: Александр Михолап
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk138.html)
-- Программа: [pmk138.txt](pmk138.txt)
+- Программа: [swamp.txt](swamp.txt)
 
 ## Описание
 

@@ -2,7 +2,7 @@
 
 - Автор: Вадим Куняев
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk57.html)
-- Программа: [pmk57.txt](pmk57.txt)
+- Программа: [agressiya.txt](agressiya.txt)
 
 ## Описание
 

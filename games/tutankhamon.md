@@ -2,7 +2,7 @@
 
 - Автор: Сергей Чурсанов
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk194.html)
-- Программа: [pmk194.txt](pmk194.txt)
+- Программа: [tutankhamon.txt](tutankhamon.txt)
 
 ## Описание
 
