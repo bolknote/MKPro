@@ -1426,7 +1426,14 @@ The pipeline currently contains:
   restore shapes without changing the preserved hidden X2 shape; when the
   resulting visible shape is a decimal-only exact display, the dataflow also
   records the matching normalized decimal value and display shape. Non-exact
-  raw spellings and non-decimal hex/super forms stay structural-only. Structural `К ЗН` has a narrower value model:
+  raw spellings and non-decimal hex/super forms stay structural-only.
+  Structural `К [x]` and `К {x}` use the same exact-display proof for
+  canonical decimal-only hex/super mantissas and closed structural exponents:
+  the visible result seeds a normalized decimal fact plus its calculator
+  display shape, including negative fractional exponent displays such as
+  `hex-exponent:-1.23:-1` through `К {x}`. These are computation/display
+  proofs only; they still do not make the structural source dot-safe or infer
+  general hex/super arithmetic. Structural `К ЗН` has a narrower value model:
   canonical hex mantissas or closed structural exponent mantissas whose first
   significant nibble is `1..E` seed exact decimal `1`/`-1` sign facts and the
   matching decimal display shape, while `F`-leading forms and `super:*` shapes
@@ -2038,7 +2045,10 @@ The pipeline currently contains:
   algebra proves a non-negative exact display, including decimal-only
   structural hex/super mantissas or closed structural exponents; this is an
   ABS-only shape proof and does not make those structural facts dot-safe or
-  promote them to ordinary decimal values. Because these unary ops preserve hidden X2, the
+  promote them to ordinary decimal values. Structural exact-display operands
+  for `К [x]`/`К {x}` can nevertheless seed the visible decimal result and
+  result display shape for later value dataflow, under the same no-dot-safety
+  restriction. Because these unary ops preserve hidden X2, the
   rewrite does not require hidden X2 to already match visible `X`; it only
   requires a preserving executable gap before any later context-sensitive `.`,
   `/-/`, or `ВП` restore so removing the opcode cannot change the restore's

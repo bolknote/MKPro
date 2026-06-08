@@ -1447,6 +1447,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     resulting visible shape is a decimal-only exact display, it also seeds the
     matching normalized decimal value and exact display shape. Non-exact raw
     spellings and non-decimal hex/super forms remain structural-only.
+    Structural `К [x]` and `К {x}` use the same exact-display operand proof for
+    canonical decimal-only hex/super mantissas and closed structural exponents:
+    their visible result is recorded as a normalized decimal plus the resulting
+    calculator display shape, including signed fractional exponent displays.
+    This is still a visible-computation proof, not a dot-restore proof or a
+    general hex/super decimalization rule.
     Structural `К ЗН` has a narrow emulator-pinned value model:
     canonical hex mantissas or closed structural exponent mantissas whose first
     significant nibble is `1..E` seed exact decimal `1`/`-1` facts plus the
@@ -1845,6 +1851,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     such as `hex:0.123:mantissa` or `hex-exponent:1.23:-1`; this ABS-only proof
     does not make structural shapes dot-safe or promote them to ordinary
     decimal values. Negative values and raw display spellings remain observable.
+    Separate value dataflow can still derive the visible results of `К [x]` and
+    `К {x}` from exact decimal-only structural displays, but those facts are
+    treated as the operation's result, not as proof that the original
+    structural X2 value can be restored through `.`.
     These no-op display-shape proofs use the effective visible-X shape view, so
     stable `expr-key:*` computed values that already carry a proved decimal or
     structural display shape participate without requiring a separate explicit

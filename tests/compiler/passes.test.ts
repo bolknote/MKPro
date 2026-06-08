@@ -4149,6 +4149,47 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(rawResult?.xShape)).toEqual(["hex:1.230:mantissa"]);
   });
 
+  it("x2 value dataflow derives integer and fraction facts from exact structural display shapes", () => {
+    const structural: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:-1.23:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const structuralExponent: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex-exponent:-1.23:-1"]),
+      entry: { kind: "closed" },
+    };
+    const rawStructural: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:-1.230:mantissa"]),
+      entry: { kind: "closed" },
+    };
+
+    const integerResult = transferX2ValueStateForEdge(structural, plain(0x34, "К [x]"), "normal", {}, 0);
+    const fractionResult = transferX2ValueStateForEdge(structural, plain(0x35, "К {x}"), "normal", {}, 0);
+    const exponentFractionResult = transferX2ValueStateForEdge(
+      structuralExponent,
+      plain(0x35, "К {x}"),
+      "normal",
+      {},
+      0,
+    );
+    const rawIntegerResult = transferX2ValueStateForEdge(rawStructural, plain(0x34, "К [x]"), "normal", {}, 0);
+
+    expect(x2ValueStateText(integerResult?.x)).toContain("decimal:-1:normalized");
+    expect(x2ShapeStateText(integerResult?.xShape)).toEqual(["mantissa:-1:decimal"]);
+    expect(x2ValueStateText(fractionResult?.x)).toContain("decimal:-0.23:normalized");
+    expect(x2ShapeStateText(fractionResult?.xShape)).toEqual(["exponent:-2.3:-1:decimal"]);
+    expect(x2ValueStateText(exponentFractionResult?.x)).toContain("decimal:-0.123:normalized");
+    expect(x2ShapeStateText(exponentFractionResult?.xShape)).toEqual(["exponent:-1.23:-1:decimal"]);
+    expect(x2ValueStateText(rawIntegerResult?.x)).not.toContain("decimal:-1:normalized");
+    expect(x2ShapeStateText(rawIntegerResult?.xShape)).toEqual([]);
+  });
+
   it("x2 value dataflow treats raw decimal value facts as numeric sources for pure computations", () => {
     const rawValueState: X2ValueDataflowState = {
       x: new Set<X2ValueFact>(["decimal:02:unnormalized"]),

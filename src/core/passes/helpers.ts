@@ -982,7 +982,14 @@ function plainProducesConcreteStructuralUnaryDecimalValues(
   xShape: X2ShapeSet | undefined,
 ): Set<string> {
   const output = new Set<string>();
-  if (op.opcode !== 0x22 && op.opcode !== 0x31 && op.opcode !== 0x32 && op.opcode !== 0x3a) return output;
+  if (
+    op.opcode !== 0x22 &&
+    op.opcode !== 0x31 &&
+    op.opcode !== 0x32 &&
+    op.opcode !== 0x34 &&
+    op.opcode !== 0x35 &&
+    op.opcode !== 0x3a
+  ) return output;
   for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShape))) {
     const value = op.opcode === 0x22
       ? structuralHexSquareDecimalValue(fact)
@@ -990,7 +997,9 @@ function plainProducesConcreteStructuralUnaryDecimalValues(
         ? structuralAbsDecimalValue(fact)
         : op.opcode === 0x32
           ? structuralHexSignDecimalValue(fact)
-          : structuralBitwiseNotDecimalValueFromFact(fact);
+          : op.opcode === 0x34 || op.opcode === 0x35
+            ? structuralExactDisplayUnaryDecimalValue(op.opcode, fact)
+            : structuralBitwiseNotDecimalValueFromFact(fact);
     if (value !== undefined) output.add(value);
   }
   return output;
@@ -1001,7 +1010,14 @@ function plainProducesConcreteStructuralUnaryDecimalShapeFacts(
   xShape: X2ShapeSet | undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  if (op.opcode !== 0x22 && op.opcode !== 0x31 && op.opcode !== 0x32 && op.opcode !== 0x3a) return output;
+  if (
+    op.opcode !== 0x22 &&
+    op.opcode !== 0x31 &&
+    op.opcode !== 0x32 &&
+    op.opcode !== 0x34 &&
+    op.opcode !== 0x35 &&
+    op.opcode !== 0x3a
+  ) return output;
   for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(xShape))) {
     const result = op.opcode === 0x22
       ? structuralHexSquareDecimalDisplayShapeFact(fact)
@@ -1009,7 +1025,9 @@ function plainProducesConcreteStructuralUnaryDecimalShapeFacts(
         ? structuralAbsDecimalDisplayShapeFact(fact)
         : op.opcode === 0x32
           ? exactPlainIntegerDecimalMantissaShapeFact(structuralHexSignDecimalValue(fact) ?? "")
-          : structuralBitwiseNotDecimalDisplayShapeFact(fact);
+          : op.opcode === 0x34 || op.opcode === 0x35
+            ? structuralExactDisplayUnaryDecimalShapeFact(op.opcode, fact)
+            : structuralBitwiseNotDecimalDisplayShapeFact(fact);
     if (result !== undefined) output.add(result);
   }
   return output;
@@ -1023,6 +1041,16 @@ function structuralAbsDecimalValue(fact: X2ShapeFact): string | undefined {
 function structuralAbsDecimalDisplayShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
   const value = structuralAbsDecimalValue(fact);
   return value === undefined ? undefined : exactDecimalDisplayShapeFact(value);
+}
+
+function structuralExactDisplayUnaryDecimalValue(opcode: number, fact: X2ShapeFact): string | undefined {
+  const value = x2ShapeFactShapeOnlyExactDecimalDisplay(fact);
+  return value === undefined ? undefined : concreteDecimalUnaryValue(opcode, value);
+}
+
+function structuralExactDisplayUnaryDecimalShapeFact(opcode: number, fact: X2ShapeFact): X2ShapeFact | undefined {
+  const value = x2ShapeFactShapeOnlyExactDecimalDisplay(fact);
+  return value === undefined ? undefined : concreteDecimalUnaryDisplayShapeFact(opcode, value);
 }
 
 function structuralHexSignDecimalValue(fact: X2ShapeFact): string | undefined {
@@ -3800,10 +3828,11 @@ function x2ShapeFactHasExactNonNegativeDisplay(fact: X2ShapeFact): boolean {
 function x2ShapeFactExactNonNegativeDisplayDecimal(fact: X2ShapeFact): string | undefined {
   const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
   if (decimal !== undefined) return decimal.startsWith("-") ? undefined : decimal;
-  return x2ShapeFactShapeOnlyExactNonNegativeDecimalDisplay(fact);
+  const structural = x2ShapeFactShapeOnlyExactDecimalDisplay(fact);
+  return structural === undefined || structural.startsWith("-") ? undefined : structural;
 }
 
-function x2ShapeFactShapeOnlyExactNonNegativeDecimalDisplay(fact: X2ShapeFact): string | undefined {
+function x2ShapeFactShapeOnlyExactDecimalDisplay(fact: X2ShapeFact): string | undefined {
   const model = x2ShapeDataModelForFact(fact);
   const mantissa = model.kind === "mantissa"
     ? model
@@ -3813,16 +3842,21 @@ function x2ShapeFactShapeOnlyExactNonNegativeDecimalDisplay(fact: X2ShapeFact): 
   if (
     mantissa === undefined ||
     (mantissa.radix !== "hex" && mantissa.radix !== "super") ||
-    mantissa.sign !== "" ||
     mantissa.normalizedDecimal === undefined ||
     !mantissa.normalizedSameAsRaw
   ) {
     return undefined;
   }
-  return !mantissa.normalizedDecimal.startsWith("-") &&
-    exactDecimalDisplayShapeFact(mantissa.normalizedDecimal) !== undefined
+  return structuralExactDecimalDisplayShapeIsComputable(mantissa.normalizedDecimal)
     ? mantissa.normalizedDecimal
     : undefined;
+}
+
+function structuralExactDecimalDisplayShapeIsComputable(value: string): boolean {
+  if (exactDecimalDisplayShapeFact(value) !== undefined) return true;
+  // Exact negative fractional structural displays (`-0.xxx`) are valid visible
+  // operands for unary math, even though they are not dot-safe X2 aliases.
+  return /^-0\.[0-9]+$/u.test(value) && decimalFractionPartShapeFact(value) !== undefined;
 }
 
 function x2ShapeFactHasExactIntegerDisplay(fact: X2ShapeFact): boolean {
