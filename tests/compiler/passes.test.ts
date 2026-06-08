@@ -2674,8 +2674,10 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:02:unnormalized"]);
     expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2ShapeStateText(states[3]?.x2Shape)).toEqual(["mantissa:2:decimal"]);
     expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["mantissa:2:decimal"]);
   });
 
   it("x2 value dataflow syncs normalized X into X2 through stack lift", () => {
@@ -2692,8 +2694,10 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["decimal:02:unnormalized"]);
     expect(x2ValueStateText(states[3]?.x)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2ShapeStateText(states[3]?.x2Shape)).toEqual(["mantissa:2:decimal"]);
     expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:2:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
+    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["mantissa:2:decimal"]);
   });
 
   it("x2 value dataflow tracks an opaque X/X2 equality through stack lift", () => {
@@ -3598,6 +3602,20 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(result?.xShape)).toContain("hex:FACE:mantissa");
     expect(x2ShapeStateText(result?.yShape)).toContain("hex:FACE:mantissa");
     expect(x2ShapeStateText(result?.x2Shape)).toContain("hex:FACE:mantissa");
+  });
+
+  it("x2 value dataflow materializes plain decimal value-derived shapes on explicit X2 sync", () => {
+    const valueOnly: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+
+    const emptySync = transferX2ValueStateForEdge(valueOnly, plain(0xf0, "F0"), "normal", {}, 0);
+    const stackLift = transferX2ValueStateForEdge(valueOnly, plain(0x0e, "В↑"), "normal", {}, 0);
+
+    expect(x2ShapeStateText(emptySync?.x2Shape)).toEqual(["mantissa:2:decimal"]);
+    expect(x2ShapeStateText(stackLift?.x2Shape)).toEqual(["mantissa:2:decimal"]);
   });
 
   it("x2 value dataflow materializes decimal stable expr-key facts on direct recall X2 sync", () => {

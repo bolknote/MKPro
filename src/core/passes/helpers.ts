@@ -9760,7 +9760,11 @@ function x2SyncShapeSetFromVisibleX(
   input: X2ShapeSet | undefined,
   values: X2ValueSet | undefined = undefined,
 ): Set<X2ShapeFact> {
-  return normalizeX2SyncShapesFromX(shapeSetWithStableExpressionValueShapes(input, values));
+  const stable = shapeSetWithStableExpressionValueShapes(input, values);
+  const source = stable === undefined || stable.size === 0
+    ? shapeSetWithValueDerivedDisplayShapes(undefined, values)
+    : stable;
+  return normalizeX2SyncShapesFromX(source);
 }
 
 function normalizeX2SyncShapesFromX(input: X2ShapeSet | undefined): Set<X2ShapeFact> {

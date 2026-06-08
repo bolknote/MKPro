@@ -1596,8 +1596,11 @@ The pipeline currently contains:
   value facts are exposed as fallback display shapes only when no more exact
   visible shape is known. Shared value/shape comparison helpers and
   CFG/register-memory joins use the same fallback, with hidden-X2 synced joins
-  applying the same leading-zero normalization as a real X2 sync. This preserves
-  derived plain decimal, stable-key decimal, and shape facts across mixed materialized/unmaterialized paths while
+  applying the same leading-zero normalization as a real X2 sync. Real X2-syncing
+  commands use that fallback too, so a value-only `X=decimal:*:normalized`
+  materializes the corresponding hidden X2 display shape when no more exact
+  visible shape is known. This preserves derived plain decimal, stable-key
+  decimal, and shape facts across mixed materialized/unmaterialized paths while
   keeping raw decimal spellings exact. Stable constant stack producers such as `F pi` use the same
   opaque key model (`expr-key:20()`) without assigning a decimal approximation
   to the constant. A closed-context `.` now
