@@ -4190,6 +4190,37 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(rawIntegerResult?.xShape)).toEqual([]);
   });
 
+  it("x2 value dataflow derives unary facts from exact structural display operands", () => {
+    const structural: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:-0.123:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const rawStructural: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:012:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const stableExpr: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:22(shape:hex:-0.123:mantissa)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+
+    const squareResult = transferX2ValueStateForEdge(structural, plain(0x22, "F x^2"), "normal", {}, 0);
+    const rawSquareResult = transferX2ValueStateForEdge(rawStructural, plain(0x22, "F x^2"), "normal", {}, 0);
+    const syncedStable = transferX2ValueStateForEdge(stableExpr, plain(0xf0, "F0"), "normal", {}, 0);
+
+    expect(x2ValueStateText(squareResult?.x)).toContain("decimal:0.015129:normalized");
+    expect(x2ShapeStateText(squareResult?.xShape)).toEqual(["exponent:1.5129:-2:decimal"]);
+    expect(x2ValueStateText(rawSquareResult?.x)).not.toContain("decimal:144:normalized");
+    expect(x2ShapeStateText(rawSquareResult?.xShape)).toEqual([]);
+    expect(x2ValueStateText(syncedStable?.x2)).toContain("decimal:0.015129:normalized");
+    expect(x2ShapeStateText(syncedStable?.x2Shape)).toEqual(["exponent:1.5129:-2:decimal"]);
+  });
+
   it("x2 value dataflow derives binary decimal facts from exact structural display operands", () => {
     const rightStructuralExponent: X2ValueDataflowState = {
       x: new Set(),

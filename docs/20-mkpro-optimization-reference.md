@@ -866,7 +866,12 @@ Display rewrites are separated into strategy selection + body lowering.
   width, the shape layer records it as either dot-safe `mantissa:*:decimal`
   or structural scientific `exponent:*:*:decimal`; fractional and wide/small
   exact decimals therefore keep their calculator display shape without being
-  flattened into ordinary mantissas. Exact decimal display-shape equality is a
+  flattened into ordinary mantissas. Exact decimal-only structural displays use
+  this same unary computation path: a source such as `hex:-0.123:mantissa`
+  through `F x^2` can produce a normalized decimal value and scientific display
+  shape, and a later real X2 sync can materialize that value from a stable
+  `expr-key:*`. Raw leading-zero structural spellings remain shape-only, and
+  the original structural source is not promoted to dot-safety. Exact decimal display-shape equality is a
   visible-`X` proof only: closed forms such as `exponent:1:8:decimal` can match
   the same stored display shape, but they are not made dot-safe for `.` restore
   rewrites. These canonical decimal display shapes can also seed opaque

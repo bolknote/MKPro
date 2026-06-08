@@ -859,7 +859,7 @@ function plainProducesConcreteDecimalValues(
       : concreteDecimalUnaryValue(op.opcode, value);
     if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
   }
-  for (const value of normalizedDecimalShapeValues(effectiveXShape, options)) {
+  for (const value of computationDecimalShapeValues(effectiveXShape, options)) {
     const concrete = concreteDecimalUnaryValue(op.opcode, value);
     if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
   }
@@ -882,7 +882,7 @@ function plainProducesConcreteDecimalShapeFacts(
     const concrete = value === undefined ? undefined : concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
     if (concrete !== undefined) output.add(concrete);
   }
-  for (const value of normalizedDecimalShapeValues(effectiveXShape, options)) {
+  for (const value of computationDecimalShapeValues(effectiveXShape, options)) {
     const concrete = concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
     if (concrete !== undefined) output.add(concrete);
   }

@@ -1388,7 +1388,12 @@ The pipeline currently contains:
   structural `exponent:*:*:decimal` shape; fractional and wide/small scientific
   results keep that display shape without being flattened into ordinary
   mantissas. Hex and super displays remain structural-only until a separate
-  display proof exists. For non-negative concrete
+  display proof exists. Exact decimal-only structural displays use the same
+  visible-computation path for unary operations, so `hex:-0.123:mantissa`
+  through `F x^2` can seed `decimal:0.015129:normalized` plus the matching
+  scientific display shape, while raw leading-zero structural spellings stay
+  shape-only. Materialized stable expression keys use the same proof after a
+  real X2 sync; the original structural source still is not made dot-safe. For non-negative concrete
   decimal values, `К {x}` is also modeled as an exact normalized fractional
   decimal in visible `X` while preserving the previous hidden X2 fact. Its
   display shape is tracked separately from that normalized value: a non-zero
