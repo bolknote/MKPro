@@ -1474,7 +1474,10 @@ The pipeline currently contains:
   `Г + Е -> 11`, `С - 2 -> 0`, `0 - С -> -2`, and `A - Е -> -4`.
   The following ordinary
   `F x^2` proof can then derive values such as `1`/`4`/`9` from those decimal
-  facts. The
+  facts. Unary `F x^2` also has a structural scaled single-hex-digit proof for
+  verified `B`/`C`/`D` mantissas and exponent entries: the base square is shifted
+  by twice the decimal scale, so `B0^2 -> 1000` and `BE-2^2 -> 1E-3` without
+  treating scaled `A`/`E`/`F` zero spellings as a general rule. The
   emulator-pinned single-hex-digit multiplication table is also
   operand-order-specific: with `A`/`B`/`C`/`D`/`E` in `Y`, verified decimal
   right operands `0`..`18` are modeled, including non-normal display shapes such
@@ -1502,7 +1505,7 @@ The pipeline currently contains:
   display shape separate from the numeric value, so a later store/recall/`ВП`
   sequence follows the same context as the calculator instead of treating the
   result as a freshly entered normalized mantissa. Wider
-  wider hex/super multiplication, division, subtraction, and carry/borrow cases
+  hex/super multiplication, division, subtraction, and carry/borrow cases
   remain opaque. The degree/minute conversion opcodes `К °->′`,
   `К °->′"`, `К °<-′"`, and `К °<-′` also seed exact decimal facts only for
   domain-safe conversions whose rational result has a finite decimal expansion

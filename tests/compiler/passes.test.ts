@@ -5577,8 +5577,16 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(bStates[2]?.x) ?? [])
       .not.toContain("expr-key:22(shape:hex:B:mantissa)");
     expect(x2ShapeStateText(bStates[2]?.xShape)).toEqual(["mantissa:10:decimal"]);
-    expect(x2ValueStateText(computeX2ValueStates(squareProgram("B0"))[2]?.x) ?? [])
-      .not.toContain("decimal:10:normalized");
+    const scaledBStates = computeX2ValueStates(squareProgram("B0"));
+    expect(x2ValueStateText(scaledBStates[2]?.x) ?? []).toContain("decimal:1000:normalized");
+    expect(x2ValueStateText(scaledBStates[2]?.x) ?? []).not.toContain("decimal:10:normalized");
+    expect(x2ShapeStateText(scaledBStates[2]?.xShape)).toEqual(["mantissa:1000:decimal"]);
+    const scaledExponentStates = computeX2ValueStates(squareProgram("BE-2"));
+    expect(x2ValueStateText(scaledExponentStates[2]?.x) ?? []).toContain("decimal:0.001:normalized");
+    expect(x2ShapeStateText(scaledExponentStates[2]?.xShape)).toEqual(["exponent:1:-3:decimal"]);
+    const scaledLeadingZeroStates = computeX2ValueStates(squareProgram("0B0"));
+    expect(x2ValueStateText(scaledLeadingZeroStates[2]?.x) ?? []).toContain("decimal:1000:normalized");
+    expect(x2ShapeStateText(scaledLeadingZeroStates[2]?.xShape)).toEqual(["mantissa:1000:decimal"]);
     expect(x2ValueStateText(computeX2ValueStates(squareProgram("C.0"))[2]?.x) ?? [])
       .not.toContain("decimal:20:normalized");
   });
@@ -12932,8 +12940,31 @@ describe("ir passes on synthetic programs", () => {
       plain(0x00, "0"),
       halt(),
     ];
+    const scaledBSquareProgram: IrOp[] = [
+      recall("1", "preload const B0"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x01, "1"),
+      plain(0x00, "0"),
+      plain(0x00, "0"),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const scaledBExponentSquareProgram: IrOp[] = [
+      recall("1", "preload const BE-2"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x00, "0"),
+      plain(0x00, "0"),
+      plain(0x01, "1"),
+      halt(),
+    ];
     const bSquareResult = x2LiteralRestore.run(bSquareProgram, ctx);
     const aSquareResult = x2LiteralRestore.run(aSquareProgram, ctx);
+    const scaledBSquareResult = x2LiteralRestore.run(scaledBSquareProgram, ctx);
+    const scaledBExponentSquareResult = x2LiteralRestore.run(scaledBExponentSquareProgram, ctx);
 
     expect(bSquareResult.applied).toBe(1);
     expect(bSquareResult.ops).toEqual([
@@ -12949,6 +12980,22 @@ describe("ir passes on synthetic programs", () => {
       plain(0x22, "F x^2"),
       plain(0xf0, "F* empty F0"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 00 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(scaledBSquareResult.applied).toBe(3);
+    expect(scaledBSquareResult.ops).toEqual([
+      recall("1", "preload const B0"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 1000 from hidden X2 temp" } },
+      halt(),
+    ]);
+    expect(scaledBExponentSquareResult.applied).toBe(4);
+    expect(scaledBExponentSquareResult.ops).toEqual([
+      recall("1", "preload const BE-2"),
+      plain(0x22, "F x^2"),
+      plain(0xf0, "F* empty F0"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 0.001 from hidden X2 temp" } },
       halt(),
     ]);
   });
