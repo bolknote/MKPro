@@ -1,6 +1,6 @@
 # Учебный полёт
 
-- Автор: Сергей Чуприн
+- Автор: Сергей Чуприн (Новороссийск)
 - Источник: [Lord_BSS](https://lordbss.narod.ru/pmk29.html)
 - Программа: [uchebnyy-polyot.txt](uchebnyy-polyot.txt)
 
