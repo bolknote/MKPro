@@ -375,6 +375,23 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(subtractRegisters("9", "ЕE-1")).toBe("9,2");
   });
 
+  it("hex exponent zero add/sub uses closed single-hex digit arithmetic", () => {
+    const subtractRegisters = (r1: string, r2: string): string => {
+      const calc = new MK61();
+      calc.setRegister("1", r1);
+      calc.setRegister("2", r2);
+      calc.loadProgram([IP1, IP2, SUBTRACT, STOP]);
+      calc.pressSequence(["В/О", "С/П"]);
+      calc.runUntilStable({ maxFrames: 300, stableFrames: 4 });
+      return calc.displayText().replace(/\s/gu, "");
+    };
+
+    expect(addRegisters("AE0", "9")).toBe("19,");
+    expect(addRegisters("9", "AE0")).toBe("3,");
+    expect(subtractRegisters("ГE0", "9")).toBe("4,");
+    expect(subtractRegisters("9", "ГE0")).toBe("-4,");
+  });
+
   it("single hex exponent minus two division table is operand-order-sensitive", () => {
     expect(divideRegisters("AE-2", "1")).toBe("0,-02");
     expect(divideRegisters("BE-2", "18")).toBe("6,1111111-03");

@@ -2081,6 +2081,8 @@ function structuralHexExponentPlusDecimalProduct(
   left: StructuralHexExponentOperand,
   right: string,
 ): StructuralHexDecimalProduct | undefined {
+  const digit = structuralHexExponentZeroDigit(left);
+  if (digit !== undefined) return structuralHexDigitPlusDecimalProduct(digit, right);
   return structuralHexExponentAddSubDecimalProduct(left, right, "plus");
 }
 
@@ -2088,6 +2090,8 @@ function decimalPlusStructuralHexExponentProduct(
   left: string,
   right: StructuralHexExponentOperand,
 ): StructuralHexDecimalProduct | undefined {
+  const digit = structuralHexExponentZeroDigit(right);
+  if (digit !== undefined) return decimalPlusStructuralHexDigitProduct(left, digit);
   return structuralHexExponentAddSubDecimalProduct(right, left, "plus");
 }
 
@@ -2095,6 +2099,8 @@ function structuralHexExponentMinusDecimalProduct(
   left: StructuralHexExponentOperand,
   right: string,
 ): StructuralHexDecimalProduct | undefined {
+  const digit = structuralHexExponentZeroDigit(left);
+  if (digit !== undefined) return structuralHexDigitMinusDecimalProduct(digit, right);
   return structuralHexExponentAddSubDecimalProduct(left, right, "minus");
 }
 
@@ -2102,6 +2108,8 @@ function decimalMinusStructuralHexExponentProduct(
   left: string,
   right: StructuralHexExponentOperand,
 ): StructuralHexDecimalProduct | undefined {
+  const digit = structuralHexExponentZeroDigit(right);
+  if (digit !== undefined) return decimalMinusStructuralHexDigitProduct(left, digit);
   return decimalMinusStructuralHexExponentProductFromPinnedOperand(left, right);
 }
 
@@ -2148,6 +2156,12 @@ function structuralHexExponentAddSubDecimalOperand(
   if (!Number.isInteger(exponentValue) || exponentValue < -3 || exponentValue > -1) return undefined;
   const tail = operand.digit === 10 ? "1" : String(operand.digit);
   return { num: BigInt(tail), scale: -exponentValue + tail.length - 2 };
+}
+
+function structuralHexExponentZeroDigit(operand: StructuralHexExponentOperand): number | undefined {
+  if (!isVerifiedArithmeticHexDigit(operand.digit)) return undefined;
+  const exponent = canonicalExponentShapeRaw(operand.exponent);
+  return exponent === "0" ? operand.digit : undefined;
 }
 
 function structuralHexDecimalProductFromExact(
