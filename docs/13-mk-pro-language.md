@@ -2051,6 +2051,8 @@ The pipeline currently contains:
   contains exactly one stack-lift + X2-sync producer (`П->X`, stable indirect
   recall, or `В↑`) is treated as the same producer when all commands before it
   preserve stack and all commands after it preserve stack/X/X2 through `В/О`;
+  that single producer may be reached through a nested direct or proved-indirect
+  return-helper chain, still with one producer total;
   a second producer, stack consumer, X2 restore, display-sensitive cell, or
   recursive helper cycle keeps the helper opaque. It can also remove `В↑`
   before a direct conditional or

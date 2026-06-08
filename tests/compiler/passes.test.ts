@@ -18967,6 +18967,89 @@ describe("ir passes on synthetic programs", () => {
     )).toBe(false);
   });
 
+  it("stack/X2 scheduler helpers find nested and proved-indirect return stack-lift X2 producers", () => {
+    const nestedProducerProgram: IrOp[] = [
+      jump("main"),
+      label("inner"),
+      recall("1"),
+      ret(),
+      label("outer"),
+      call("inner"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("outer"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const provedIndirectProducerProgram: IrOp[] = [
+      jump("main"),
+      label("inner"),
+      recall("1"),
+      ret(),
+      label("outer"),
+      knownTargetIndirectCall("7", 2),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      knownTargetIndirectCall("8", 4),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const secondProducerProgram: IrOp[] = [
+      jump("main"),
+      label("inner"),
+      recall("1"),
+      ret(),
+      label("outer"),
+      call("inner"),
+      recall("2"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("outer"),
+      halt(),
+    ];
+
+    expect(x2KnownReturnCallReachesStackLiftAndX2Sync(
+      nestedProducerProgram,
+      nestedProducerProgram[9] as Extract<IrOp, { kind: "call" }>,
+      directReturnAnalysisContext(nestedProducerProgram),
+    )).toBe(true);
+    expect(x2NextStackShiftingProducerIndex(
+      nestedProducerProgram,
+      9,
+      directReturnAnalysisContext(nestedProducerProgram),
+    )).toBe(9);
+    expect(x2PreviousStackLiftAndX2SyncProducerIndex(
+      nestedProducerProgram,
+      10,
+      directReturnAnalysisContext(nestedProducerProgram),
+    )).toBe(9);
+
+    expect(x2KnownReturnCallReachesStackLiftAndX2Sync(
+      provedIndirectProducerProgram,
+      provedIndirectProducerProgram[9] as Extract<IrOp, { kind: "indirect-call" }>,
+      directReturnAnalysisContext(provedIndirectProducerProgram),
+    )).toBe(true);
+    expect(x2NextStackShiftingProducerIndex(
+      provedIndirectProducerProgram,
+      9,
+      directReturnAnalysisContext(provedIndirectProducerProgram),
+    )).toBe(9);
+    expect(x2PreviousStackLiftAndX2SyncProducerIndex(
+      provedIndirectProducerProgram,
+      10,
+      directReturnAnalysisContext(provedIndirectProducerProgram),
+    )).toBe(9);
+
+    expect(x2KnownReturnCallReachesStackLiftAndX2Sync(
+      secondProducerProgram,
+      secondProducerProgram[10] as Extract<IrOp, { kind: "call" }>,
+      directReturnAnalysisContext(secondProducerProgram),
+    )).toBe(false);
+  });
+
   it("stack/X2 scheduler helpers find X-preserving syncs through shared path proofs", () => {
     const indirectSyncProgram: IrOp[] = [
       plain(0x0e, "В↑"),
