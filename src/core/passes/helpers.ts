@@ -3773,10 +3773,36 @@ export function x2ShapeSetHasExactNonNegativeIntegerDisplay(input: X2ShapeSet | 
 }
 
 export function x2ShapeSetHasExactNonNegativeDisplay(input: X2ShapeSet | undefined): boolean {
-  for (const decimal of x2ShapeSetRestoredVisibleDecimals(input)) {
-    if (!decimal.startsWith("-")) return true;
+  for (const fact of input ?? []) {
+    if (x2ShapeFactHasExactNonNegativeDisplay(fact)) return true;
   }
   return false;
+}
+
+function x2ShapeFactHasExactNonNegativeDisplay(fact: X2ShapeFact): boolean {
+  const decimal = x2ShapeFactRestoredVisibleDecimal(fact);
+  if (decimal !== undefined) return !decimal.startsWith("-");
+  return x2ShapeFactHasShapeOnlyExactNonNegativeDecimalDisplay(fact);
+}
+
+function x2ShapeFactHasShapeOnlyExactNonNegativeDecimalDisplay(fact: X2ShapeFact): boolean {
+  const model = x2ShapeDataModelForFact(fact);
+  const mantissa = model.kind === "mantissa"
+    ? model
+    : model.kind === "exponent-entry"
+      ? model.closedStructuralMantissa
+      : undefined;
+  if (
+    mantissa === undefined ||
+    (mantissa.radix !== "hex" && mantissa.radix !== "super") ||
+    mantissa.sign !== "" ||
+    mantissa.normalizedDecimal === undefined ||
+    !mantissa.normalizedSameAsRaw
+  ) {
+    return false;
+  }
+  return !mantissa.normalizedDecimal.startsWith("-") &&
+    exactDecimalDisplayShapeFact(mantissa.normalizedDecimal) !== undefined;
 }
 
 function x2ShapeFactHasExactIntegerDisplay(fact: X2ShapeFact): boolean {

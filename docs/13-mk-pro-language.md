@@ -2032,7 +2032,11 @@ The pipeline currently contains:
   boundary markers. The pass can also drop a role-free, non-display `К {x}` when
   X2 value/shape dataflow proves a closed plain-context `X` is already
   fractional (`0`, `0.x`, or `-0.x`), including exact decimal display-shape
-  facts that remain shape-only. Because `К {x}` preserves hidden X2, the
+  facts that remain shape-only. It can also drop role-free `К |x|` when shape
+  algebra proves a non-negative exact display, including decimal-only
+  structural hex/super mantissas or closed structural exponents; this is an
+  ABS-only shape proof and does not make those structural facts dot-safe or
+  promote them to ordinary decimal values. Because these unary ops preserve hidden X2, the
   rewrite does not require hidden X2 to already match visible `X`; it only
   requires a preserving executable gap before any later context-sensitive `.`,
   `/-/`, or `ВП` restore so removing the opcode cannot change the restore's

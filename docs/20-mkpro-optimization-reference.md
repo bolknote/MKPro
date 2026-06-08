@@ -1818,7 +1818,43 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     display-shapes and structural shapes, and never promotes a transient
     store-splice tail into an ordinary `ВП` source.
 28. `vp-exponent-splice` — optimization marker emitted to `report.optimizations` when at least one `ВП`/empty-op/sign redundancy optimization pass removes cells.
-29. `vp-x2-peephole` — removes redundant `К {x}` that follows a compiler-owned `ВП`/X2 marker, display or ordinary, possibly through free-standing `КНОП`/`К1`/`К2` empty ops, other role-free X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and direct/proved-indirect return-helper chains whose bodies also preserve X, and reports `vp-fraction-restore` when one or more restores are removed. The removed `К {x}` is recognized by opcode rather than by a display/frac comment; the preceding `ВП` must carry a boundary marker because a plain opcode pattern such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}` redundant. The same pass also uses X2 value/shape dataflow to remove a role-free, non-display `К {x}` when closed-context `X` is proved to be an already-fractional decimal (`0`, `0.x`, or `-0.x`), including exact decimal display-shape facts that remain shape-only. It also removes role-free, non-display `К [x]` when closed-context `X` already has an exact integer display shape, including exact decimal exponent displays whose restored value is an integer, exact decimal structural mantissas such as `hex:123:mantissa`, and closed structural exponent displays such as `hex-exponent:123:1` or `hex-exponent:1.23:2`; value-only integer facts are not enough because `К [x]` could otherwise normalize a leading-zero or fractional exponent display. Role-free `К |x|` is removed under the same display-shape proof for exact non-negative displays, including scientific decimal display shapes, so negative values and raw display spellings remain observable. These no-op display-shape proofs use the effective visible-X shape view, so stable `expr-key:*` computed values that already carry a proved decimal or structural display shape participate without requiring a separate explicit `xShape` fact. Since `К {x}`, `К [x]`, and `К |x|` preserve hidden X2, these no-op proofs do not require hidden X2 to match visible `X`; a later context-sensitive `.`, `/-/`, or `ВП` is allowed after a preserving executable gap because the restore's previous-command context is unchanged. Negative-integer `К {x}` is handled through the same visible-zero proof, but the first signed-zero-producing `К {x}` is kept if a later X2 sync can feed a context-sensitive restore; only repeated no-op fractional operations after visible zero is already proved may be removed. Immediate restore boundaries remain conservative unless a separate VP/source proof covers them.
+29. `vp-x2-peephole` — removes redundant `К {x}` that follows a compiler-owned
+    `ВП`/X2 marker, display or ordinary, possibly through free-standing
+    `КНОП`/`К1`/`К2` empty ops, other role-free X-preserving gaps such as
+    `X->П`/`В↑`, unreferenced marker labels, and direct/proved-indirect
+    return-helper chains whose bodies also preserve X, and reports
+    `vp-fraction-restore` when one or more restores are removed. The removed
+    `К {x}` is recognized by opcode rather than by a display/frac comment; the
+    preceding `ВП` must carry a boundary marker because a plain opcode pattern
+    such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}`
+    redundant. The same pass also uses X2 value/shape dataflow to remove a
+    role-free, non-display `К {x}` when closed-context `X` is proved to be an
+    already-fractional decimal (`0`, `0.x`, or `-0.x`), including exact decimal
+    display-shape facts that remain shape-only. It also removes role-free,
+    non-display `К [x]` when closed-context `X` already has an exact integer
+    display shape, including exact decimal exponent displays whose restored
+    value is an integer, exact decimal structural mantissas such as
+    `hex:123:mantissa`, and closed structural exponent displays such as
+    `hex-exponent:123:1` or `hex-exponent:1.23:2`; value-only integer facts
+    are not enough because `К [x]` could otherwise normalize a leading-zero or
+    fractional exponent display. Role-free `К |x|` is removed under an exact
+    non-negative display proof, including scientific decimal display shapes and
+    decimal-only structural hex/super mantissas or closed structural exponents
+    such as `hex:0.123:mantissa` or `hex-exponent:1.23:-1`; this ABS-only proof
+    does not make structural shapes dot-safe or promote them to ordinary
+    decimal values. Negative values and raw display spellings remain observable.
+    These no-op display-shape proofs use the effective visible-X shape view, so
+    stable `expr-key:*` computed values that already carry a proved decimal or
+    structural display shape participate without requiring a separate explicit
+    `xShape` fact. Since `К {x}`, `К [x]`, and `К |x|` preserve hidden X2, these
+    no-op proofs do not require hidden X2 to match visible `X`; a later
+    context-sensitive `.`, `/-/`, or `ВП` is allowed after a preserving
+    executable gap because the restore's previous-command context is unchanged.
+    Negative-integer `К {x}` is handled through the same visible-zero proof, but
+    the first signed-zero-producing `К {x}` is kept if a later X2 sync can feed
+    a context-sensitive restore; only repeated no-op fractional operations after
+    visible zero is already proved may be removed. Immediate restore boundaries
+    remain conservative unless a separate VP/source proof covers them.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
 31. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
 32. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.

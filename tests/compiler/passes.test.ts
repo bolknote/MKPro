@@ -1907,6 +1907,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeFactRestoredVisibleDecimal("hex:123:mantissa")).toBe("123");
     expect(x2ShapeFactRestoredVisibleDecimal("hex:0123:mantissa")).toBeUndefined();
     expect(x2ShapeFactRestoredVisibleDecimal("hex:0.5:mantissa")).toBeUndefined();
+    expect(x2ShapeFactRestoredVisibleDecimal("hex:0.123:mantissa")).toBeUndefined();
     expect(x2ShapeFactRestoredVisibleDecimal("hex-exponent:123:1")).toBe("1230");
     expect(x2ShapeFactRestoredVisibleDecimal("hex-exponent:1.23:2")).toBe("123");
     expect(x2ShapeFactRestoredVisibleDecimal("hex-exponent:1.23:-1")).toBeUndefined();
@@ -1945,8 +1946,15 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetHasExactNonNegativeIntegerDisplay(new Set(["hex:-123:mantissa"]))).toBe(false);
     expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["exponent:5:-1:decimal"]))).toBe(true);
     expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["exponent:1:3:decimal"]))).toBe(true);
+    expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["hex:0.123:mantissa"]))).toBe(true);
+    expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["hex-exponent:1.23:-1"]))).toBe(true);
+    expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["hex-exponent:1.23:2"]))).toBe(true);
     expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["mantissa:0.5:decimal"]))).toBe(false);
     expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["exponent:-5:-1:decimal"]))).toBe(false);
+    expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["hex:-0.123:mantissa"]))).toBe(false);
+    expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["hex-exponent:-1.23:-1"]))).toBe(false);
+    expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["hex-exponent:1.230:-1"]))).toBe(false);
+    expect(x2ShapeSetHasExactNonNegativeDisplay(new Set(["hex-exponent:A23:1"]))).toBe(false);
   });
 
   it("x2 shape algebra closes non-negative structural exponent shifts as mantissa shapes", () => {
