@@ -2470,6 +2470,10 @@ describe("ir passes on synthetic programs", () => {
       new Set(["hex-exponent:1.23:2"]),
     ))).toEqual(["hex-exponent:-1.23:2"]);
     expect(x2ShapeStateText(x2SignChangedSharedStructuralShapeFacts(
+      new Set(["exponent:1.23:-1:decimal"]),
+      new Set(["hex-exponent:123:-3"]),
+    ))).toEqual(["hex-exponent:-123:-3"]);
+    expect(x2ShapeStateText(x2SignChangedSharedStructuralShapeFacts(
       new Set(["mantissa:123:decimal"]),
       new Set(["hex:0123:mantissa"]),
     ))).toEqual([]);
@@ -6969,6 +6973,13 @@ describe("ir passes on synthetic programs", () => {
       x2Shape: new Set<X2ShapeFact>(["hex:0.123:mantissa"]),
       entry: { kind: "closed" },
     };
+    const visibleDecimalHiddenStructuralExponent: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:1.23:-1:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["hex-exponent:123:-3"]),
+      entry: { kind: "closed" },
+    };
     const rawStructural: X2ValueDataflowState = {
       x: new Set(),
       x2: new Set(),
@@ -6987,12 +6998,19 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0b, "/-/"),
       "normal",
     );
+    const hiddenStructuralExponent = transferX2ValueStateForEdge(
+      visibleDecimalHiddenStructuralExponent,
+      plain(0x0b, "/-/"),
+      "normal",
+    );
     const raw = transferX2ValueStateForEdge(rawStructural, plain(0x0b, "/-/"), "normal");
 
     expect(x2ValueStateText(hiddenDecimal?.x)).toEqual(["expr-key:0B(decimal:0.123:normalized)"]);
     expect(x2ShapeStateText(hiddenDecimal?.xShape)).toEqual(["exponent:-1.23:-1:decimal"]);
     expect(x2ValueStateText(hiddenStructural?.x)).toEqual(["expr-key:0B(decimal:0.123:normalized)"]);
     expect(x2ShapeStateText(hiddenStructural?.xShape)).toEqual(["hex:-0.123:mantissa"]);
+    expect(x2ValueStateText(hiddenStructuralExponent?.x)).toEqual(["expr-key:0B(decimal:0.123:normalized)"]);
+    expect(x2ShapeStateText(hiddenStructuralExponent?.xShape)).toEqual(["hex-exponent:-123:-3"]);
     expect(x2ValueStateText(raw?.x)).toEqual([]);
     expect(x2ShapeStateText(raw?.xShape)).toEqual([]);
   });
