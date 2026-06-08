@@ -3786,6 +3786,13 @@ function x2ShapeFactHasExactIntegerDisplay(fact: X2ShapeFact): boolean {
   if (model.kind === "exponent-entry" && model.mantissa.radix === "decimal") {
     return model.normalizedDecimal === decimal && model.closedDecimalDisplay !== undefined;
   }
+  if (
+    model.kind === "exponent-entry" &&
+    (model.mantissa.radix === "hex" || model.mantissa.radix === "super")
+  ) {
+    const closed = x2ClosedExponentDisplayShapeFact(fact);
+    return closed !== undefined && x2ShapeFactHasExactIntegerDisplay(closed);
+  }
   if (model.kind !== "mantissa") return false;
   if (model.radix === "decimal") {
     return model.safety === "dotSafeDecimal" &&

@@ -1926,9 +1926,13 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex:-123:mantissa"]))).toBe(true);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["exponent:1:3:decimal"]))).toBe(true);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["exponent:-1:8:decimal"]))).toBe(true);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex-exponent:123:1"]))).toBe(true);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex-exponent:1.23:2"]))).toBe(true);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["mantissa:0123:decimal"]))).toBe(false);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex:0123:mantissa"]))).toBe(false);
-    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex-exponent:123:1"]))).toBe(false);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex-exponent:0123:1"]))).toBe(false);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex-exponent:A23:1"]))).toBe(false);
+    expect(x2ShapeSetHasExactIntegerDisplay(new Set(["hex-exponent:1.23:-1"]))).toBe(false);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["exponent:1:-8:decimal"]))).toBe(false);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["exponent:5:-1:decimal"]))).toBe(false);
     expect(x2ShapeSetHasExactIntegerDisplay(new Set(["mantissa:-0:decimal"]))).toBe(false);
@@ -23897,6 +23901,39 @@ describe("ir passes on synthetic programs", () => {
       plain(0xf0, "F* empty F0"),
       halt(),
     ]);
+  });
+
+  it("vp-x2-peephole removes a no-op К [x] for exact closed structural exponent integer displays", () => {
+    const integerExponent: IrOp[] = [
+      recall("1", "preload const 123E1"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x34, "К [x]"),
+      halt(),
+    ];
+    const shiftedFraction: IrOp[] = [
+      recall("1", "preload const 1.23E2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x34, "К [x]"),
+      halt(),
+    ];
+    const fractionalExponent: IrOp[] = [
+      recall("1", "preload const 1.23E-1"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x34, "К [x]"),
+      halt(),
+    ];
+
+    expect(vpX2Peephole.run(integerExponent, ctx).ops).toEqual([
+      recall("1", "preload const 123E1"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+    expect(vpX2Peephole.run(shiftedFraction, ctx).ops).toEqual([
+      recall("1", "preload const 1.23E2"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+    expect(vpX2Peephole.run(fractionalExponent, ctx).applied).toBe(0);
   });
 
   it("vp-x2-peephole removes a no-op К |x| for an exact non-negative integer display shape", () => {
