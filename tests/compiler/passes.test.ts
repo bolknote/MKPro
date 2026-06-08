@@ -3615,6 +3615,31 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(result?.shapeMemory?.["1"])).toContain("mantissa:4:decimal");
   });
 
+  it("x2 value dataflow stores plain decimal value-derived display shapes in register memory", () => {
+    const normalized: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const raw: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:02:unnormalized"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+
+    const normalizedStored = transferX2ValueStateForEdge(
+      normalized,
+      store("1"),
+      "normal",
+      { trackRegisterMemory: true },
+      0,
+    );
+    const rawStored = transferX2ValueStateForEdge(raw, store("2"), "normal", { trackRegisterMemory: true }, 0);
+
+    expect(x2ShapeStateText(normalizedStored?.shapeMemory?.["1"])).toContain("mantissa:2:decimal");
+    expect(x2ShapeStateText(rawStored?.shapeMemory?.["2"])).toContain("mantissa:02:decimal");
+  });
+
   it("x2 value dataflow stores materialized structural stable expr-key shapes in indirect register memory", () => {
     const legacy: X2ValueDataflowState = {
       x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-8F:mantissa)"]),

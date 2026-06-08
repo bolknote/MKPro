@@ -1359,8 +1359,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     carry register value/shape memory clone it through this canonical layer
     instead of sharing raw memory objects, including labels, empty/plain
     opcodes, dot/sign/VP entry transitions, stack moves, and conditional/return
-    close paths. Direct and proved-indirect stores also materialize proved
-    stable-key decimal values and display/structural shapes into register
+    close paths. Direct and proved-indirect stores also materialize ordinary
+    decimal value facts when no more exact visible shape is already known, proved
+    stable-key decimal values, and display/structural shapes into register
     value/shape memory, so later recall and recall-elimination proofs see the
     same facts without waiting for an actual recall sync. If a join or older
     path still has only stable value-memory, recall-elimination shape proofs

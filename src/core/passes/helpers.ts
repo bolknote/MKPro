@@ -1423,15 +1423,22 @@ function shapeSetWithStableExpressionValueShapesForX2Sync(
   return output.size === 0 ? undefined : output;
 }
 
-function vpSpliceShapeSetWithValueShapes(
+function shapeSetWithValueDerivedDisplayShapes(
   shapes: X2ShapeSet | undefined,
   values: X2ValueSet | undefined,
 ): X2ShapeSet | undefined {
-  const output = cloneOptionalShapeSet(shapeSetWithStableExpressionValueShapes(shapes, values));
+  const output = cloneOptionalShapeSet(shapes);
   if (values !== undefined) {
     for (const fact of x2ShapesFromValueFacts(values)) output.add(fact);
   }
   return output.size === 0 ? undefined : output;
+}
+
+function vpSpliceShapeSetWithValueShapes(
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+): X2ShapeSet | undefined {
+  return shapeSetWithValueDerivedDisplayShapes(shapes, values);
 }
 
 function structuralSingleHexDigitValues(shapes: X2ShapeSet | undefined): Set<number> {
@@ -7982,7 +7989,9 @@ function storeX2ShapeMemory(
   shapes: X2ShapeSet | undefined,
 ): X2ShapeMemory {
   const output = cloneX2ShapeMemory(input);
-  const merged = shapeSetWithStableExpressionValueShapes(shapes, values);
+  const merged = shapes === undefined || shapes.size === 0
+    ? shapeSetWithValueDerivedDisplayShapes(shapes, values)
+    : shapeSetWithStableExpressionValueShapes(shapes, values);
   const stored = storableX2ShapeMemoryFacts(merged);
   if (stored.size === 0) delete output[register];
   else output[register] = stored;

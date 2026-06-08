@@ -1584,9 +1584,11 @@ The pipeline currently contains:
   does not make the source shape decimal or dot-safe until a real X2 sync,
   including direct/proved-indirect recalls, materializes any proved stable-key
   value or display shape into hidden X2. Direct/proved-indirect stores use the
-  same materialization for register value/shape memory, without treating that
-  store as an X2 sync; recall-removal proofs can also derive display/structural
-  shape facts from stable value-memory when shape-memory is unavailable. X2
+  same materialization for ordinary decimal value facts when no more exact
+  visible shape is already known, and for stable-key facts in register
+  value/shape memory, without treating that store as an X2 sync;
+  recall-removal proofs can also derive display/structural shape facts from
+  stable value-memory when shape-memory is unavailable. X2
   restore-safety and same-X/X2 shape predicates use this effective stable-key
   shape view as well. CFG/register-memory joins preserve those derived stable-key
   decimal and shape facts across mixed materialized/unmaterialized paths while
