@@ -325,6 +325,14 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(multiplyRegisters("CE1", "16")).toBe("9040,");
   });
 
+  it("right hex exponent multiplication scales the collapsed single-hex product", () => {
+    expect(multiplyRegisters("16", "AE-3")).toBe("1,6-01");
+    expect(multiplyRegisters("18", "BE-1")).toBe("18,");
+    expect(multiplyRegisters("1", "AE0")).toBe("10,");
+    expect(multiplyRegisters("18", "ГE1")).toBe("1800,");
+    expect(multiplyRegisters("18", "ЕE1")).toBe("0,");
+  });
+
   it("hex D exponent minus two addition and subtraction tables are operand-order-sensitive", () => {
     const subtractRegisters = (r1: string, r2: string): string => {
       const calc = new MK61();

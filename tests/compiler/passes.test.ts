@@ -5892,6 +5892,52 @@ describe("ir passes on synthetic programs", () => {
     ]);
     expect(x2ValueStateText(decimalTimesEStates[4]?.x) ?? []).toContain("decimal:0:normalized");
     expect(x2ShapeStateText(decimalTimesEStates[4]?.xShape)).toEqual(["mantissa:0:decimal"]);
+
+    const decimalTimesAMinusThreeStates = computeX2ValueStates([
+      recall("2", "preload const 16"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const AE-3"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(decimalTimesAMinusThreeStates[4]?.x) ?? [])
+      .toContain("decimal:0.16:normalized");
+    expect(x2ShapeStateText(decimalTimesAMinusThreeStates[4]?.xShape)).toEqual([
+      "exponent:1.6:-1:decimal",
+    ]);
+
+    const decimalTimesBMinusOneStates = computeX2ValueStates([
+      recall("2", "preload const 18"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const BE-1"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(decimalTimesBMinusOneStates[4]?.x) ?? [])
+      .toContain("decimal:18:normalized");
+    expect(x2ShapeStateText(decimalTimesBMinusOneStates[4]?.xShape)).toEqual(["mantissa:18:decimal"]);
+
+    const decimalTimesGammaPlusOneStates = computeX2ValueStates([
+      recall("2", "preload const 18"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const ГE1"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(decimalTimesGammaPlusOneStates[4]?.x) ?? [])
+      .toContain("decimal:1800:normalized");
+    expect(x2ShapeStateText(decimalTimesGammaPlusOneStates[4]?.xShape)).toEqual(["mantissa:1800:decimal"]);
+
+    const decimalTimesEPlusOneStates = computeX2ValueStates([
+      recall("2", "preload const 18"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const ЕE1"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(decimalTimesEPlusOneStates[4]?.x) ?? [])
+      .toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(decimalTimesEPlusOneStates[4]?.xShape)).toEqual(["mantissa:0:decimal"]);
   });
 
   it("x2 value dataflow treats closed single-hex exponent mantissas as exponent operands", () => {

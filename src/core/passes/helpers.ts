@@ -1421,6 +1421,7 @@ function structuralSingleHexExponentOperandFromShapeModel(
   if (model.kind !== "mantissa" || model.radix !== "hex" || model.sign !== "") return undefined;
   const integer = /^([A-FСГЕ])(0*)$/u.exec(model.canonical);
   if (integer !== null) {
+    if (integer[2]!.length === 0) return undefined;
     const digit = structuralHexNibbleValue(integer[1]!);
     if (digit === undefined) return undefined;
     return { digit, exponent: String(integer[2]!.length) };
@@ -2058,9 +2059,22 @@ function decimalTimesStructuralHexExponentProduct(
   left: string,
   right: StructuralHexExponentOperand,
 ): StructuralHexDecimalProduct | undefined {
-  if (right.exponent !== "-2" || !STRUCTURAL_HEX_EXPONENT_ADD_SUB_DECIMAL_INPUTS.has(left)) return undefined;
-  if (right.digit >= 10 && right.digit <= 13) return structuralHexDecimalProductFromExact(BigInt(left), 1);
-  return right.digit === 14 ? structuralHexDecimalProductFromMk61Display("0,") : undefined;
+  if (
+    !isVerifiedScaledStructuralHexExponent(right.exponent) ||
+    !STRUCTURAL_HEX_EXPONENT_ADD_SUB_DECIMAL_INPUTS.has(left)
+  ) return undefined;
+  if (right.digit >= 10 && right.digit <= 13) {
+    const scaleShift = structuralHexExponentShiftFromMinusTwo(right.exponent);
+    return scaleShift === undefined
+      ? undefined
+      : shiftStructuralHexDecimalProduct(
+        structuralHexDecimalProductFromExact(BigInt(left), 1),
+        String(scaleShift),
+        "exact-display",
+      );
+  }
+  if (right.digit === 14) return structuralHexDecimalProductFromMk61Display("0,");
+  return undefined;
 }
 
 function structuralHexExponentPlusDecimalProduct(
@@ -2157,10 +2171,14 @@ function structuralHexExponentDivideDecimalProduct(
 }
 
 function isVerifiedScaledStructuralHexExponent(exponentRaw: string): boolean {
+  return structuralHexExponentShiftFromMinusTwo(exponentRaw) !== undefined;
+}
+
+function structuralHexExponentShiftFromMinusTwo(exponentRaw: string): number | undefined {
   const exponent = canonicalExponentShapeRaw(exponentRaw);
-  if (exponent === undefined) return false;
+  if (exponent === undefined) return undefined;
   const value = exponent === "" ? 0 : Number(exponent);
-  return Number.isInteger(value) && value >= -3 && value <= 1;
+  return Number.isInteger(value) && value >= -3 && value <= 1 ? value + 2 : undefined;
 }
 
 function decimalDivideStructuralHexExponentProduct(

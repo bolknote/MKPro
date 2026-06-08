@@ -1410,10 +1410,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `CE1 * 16 -> 9040`, `ГE-2 / 2 -> 6.5E-2`,
     `BE-3 / 18 -> 6.1111111E-4`, and `ГE1 / 8 -> 16.25`
     share one product-shift model rather than per-exponent tables.
-    Reverse/right-operand exponent multiplication and division still use their
-    own emulator-pinned families, with cases such as `1 * ГE-2 -> 1E-1`,
-    `12 / ГE-2 -> 000`, `18 / BE-2 -> 943.43434`, and
-    `16 / ЕE-2 -> 052.92929`; error pairs such
+    Right-operand exponent multiplication has its own scaled model because the
+    MK-61 collapses `A`..`D` to the same decimal-times-power-of-ten factor and
+    `E` to zero, so `16 * AE-3 -> 1.6E-1`,
+    `18 * BE-1 -> 18`, `1 * AE0 -> 10`, and `18 * ГE1 -> 1800`
+    are proved without an `E-2`-only table. Right-operand exponent division
+    still uses an emulator-pinned family, with cases such as `12 / ГE-2 -> 000`,
+    `18 / BE-2 -> 943.43434`, and `16 / ЕE-2 -> 052.92929`; error pairs such
     as `1 / AE-2` and `3 / CE-2` stay opaque. Each operand order uses only its own emulator-pinned
     results and records display shape independently from normalized value shape,
     so later store/recall/`ВП` context stays equivalent to the MK-61 display
