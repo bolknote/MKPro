@@ -406,4 +406,12 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(divideRegisters("ГE1", "8")).toBe("16,25");
     expect(divideRegisters("CE1", "16")).toBe("7,5");
   });
+
+  it("right hex exponent division scales the E-2 display quotient", () => {
+    expect(divideRegisters("18", "BE-3")).toBe("9434,3434");
+    expect(divideRegisters("18", "BE-1")).toBe("94,343434");
+    expect(divideRegisters("18", "BE1")).toBe("9,4343434-01");
+    expect(divideRegisters("12", "ГE-3")).toBe("0000,");
+    expect(divideRegisters("16", "ЕE-1")).toBe("05,292929");
+  });
 });

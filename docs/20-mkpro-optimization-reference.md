@@ -1420,9 +1420,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `E` to zero, so `16 * AE-3 -> 1.6E-1`,
     `18 * BE-1 -> 18`, `1 * AE0 -> 10`, and `18 * ГE1 -> 1800`
     are proved without an `E-2`-only table. Right-operand exponent division
-    still uses an emulator-pinned family, with cases such as `12 / ГE-2 -> 000`,
-    `18 / BE-2 -> 943.43434`, and `16 / ЕE-2 -> 052.92929`; error pairs such
-    as `1 / AE-2` and `3 / CE-2` stay opaque. Each operand order uses only its own emulator-pinned
+    now scales the emulator-pinned `E-2` display quotient by the inverse
+    structural exponent shift, preserving raw display spellings, with cases such
+    as `12 / ГE-3 -> 0000`, `18 / BE-3 -> 9434.3434`,
+    `18 / BE1 -> 9.4343434E-1`, and `16 / ЕE-1 -> 05.292929`;
+    error pairs such as `1 / AE-2` and `3 / CE-2` stay opaque.
+    Each operand order uses only its own emulator-pinned
     results and records display shape independently from normalized value shape,
     so later store/recall/`ВП` context stays equivalent to the MK-61 display
     state.

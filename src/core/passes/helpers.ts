@@ -2189,8 +2189,17 @@ function decimalDivideStructuralHexExponentProduct(
   left: string,
   right: StructuralHexExponentOperand,
 ): StructuralHexDecimalProduct | undefined {
-  if (right.exponent !== "-2" || !isVerifiedArithmeticHexDigit(right.digit)) return undefined;
-  return DECIMAL_DIVIDE_STRUCTURAL_HEX_EXPONENT_TABLE.get(`${left}:${right.digit}`);
+  if (!isVerifiedScaledStructuralHexExponent(right.exponent) || !isVerifiedArithmeticHexDigit(right.digit)) {
+    return undefined;
+  }
+  const scaleShift = structuralHexExponentShiftFromMinusTwo(right.exponent);
+  return scaleShift === undefined
+    ? undefined
+    : shiftStructuralHexDecimalProduct(
+      DECIMAL_DIVIDE_STRUCTURAL_HEX_EXPONENT_TABLE.get(`${left}:${right.digit}`),
+      String(-scaleShift),
+      "raw-display",
+    );
 }
 
 function structuralHexDecimalProductTable(

@@ -5674,6 +5674,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(rightELeadingZeroStates[4]?.x) ?? []).toContain("decimal:52.92929:normalized");
     expect(x2ShapeStateText(rightELeadingZeroStates[4]?.xShape)).toEqual(["mantissa:052.92929:decimal"]);
 
+    const rightBExponentMinusThreeDivideStates = computeX2ValueStates(binaryProgram("18", "BE-3"));
+    expect(x2ValueStateText(rightBExponentMinusThreeDivideStates[4]?.x) ?? [])
+      .toContain("decimal:9434.3434:normalized");
+    expect(x2ShapeStateText(rightBExponentMinusThreeDivideStates[4]?.xShape)).toEqual([
+      "mantissa:9434.3434:decimal",
+    ]);
+
+    const rightBExponentPlusOneDivideStates = computeX2ValueStates(binaryProgram("18", "BE1"));
+    expect(x2ValueStateText(rightBExponentPlusOneDivideStates[4]?.x) ?? [])
+      .toContain("decimal:0.94343434:normalized");
+    expect(x2ShapeStateText(rightBExponentPlusOneDivideStates[4]?.xShape)).toEqual([
+      "exponent:9.4343434:-1:decimal",
+    ]);
+
+    const rightGammaLeadingZeroExponentMinusThreeDivideStates = computeX2ValueStates(binaryProgram("12", "ГE-3"));
+    expect(x2ValueStateText(rightGammaLeadingZeroExponentMinusThreeDivideStates[4]?.x) ?? [])
+      .toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(rightGammaLeadingZeroExponentMinusThreeDivideStates[4]?.xShape)).toEqual([
+      "mantissa:0000:decimal",
+    ]);
+
+    const rightELeadingZeroExponentMinusOneStates = computeX2ValueStates(binaryProgram("16", "ЕE-1"));
+    expect(x2ValueStateText(rightELeadingZeroExponentMinusOneStates[4]?.x) ?? [])
+      .toContain("decimal:5.292929:normalized");
+    expect(x2ShapeStateText(rightELeadingZeroExponentMinusOneStates[4]?.xShape)).toEqual([
+      "mantissa:05.292929:decimal",
+    ]);
+
     const rejectedDivisionByZeroStates = computeX2ValueStates(binaryProgram("ГE-2", "0"));
     expect(x2ValueStateText(rejectedDivisionByZeroStates[4]?.x) ?? []).not.toContain("decimal:0:normalized");
     expect(x2ShapeStateText(rejectedDivisionByZeroStates[4]?.xShape)).toEqual([]);
