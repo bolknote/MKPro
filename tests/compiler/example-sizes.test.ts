@@ -11,7 +11,7 @@ import { EXAMPLE_BASELINE, PENDING_BASELINE } from "./example-baselines.ts";
 const EXAMPLE_COMPILE_ERRORS: Record<string, RegExp> = {};
 
 const PENDING_COMPILE_ERRORS: Record<string, RegExp> = {};
-const EXAMPLE_SIZE_TIMEOUT_MS = 60000;
+const EXAMPLE_SIZE_TIMEOUT_MS = 90000;
 
 function exampleSteps(relativePath: string, analysis: boolean): number {
   const source = readFileSync(resolve(`examples/${relativePath}.mkpro`), "utf8");

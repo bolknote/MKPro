@@ -2007,7 +2007,11 @@ describe("ir passes on synthetic programs", () => {
       "hex:8.70Е2:mantissa",
     );
     expect(x2StructuralMantissaAppendDigitsShapeFact("super:FA", "1")).toBe("hex:FA1:mantissa");
+    expect(x2StructuralMantissaAppendDigitsShapeFact("hex-exponent:Г:2", "5")).toBe("hex:Г005:mantissa");
+    expect(x2StructuralMantissaAppendDigitsShapeFact("hex-exponent:Г:-2", "5")).toBe("hex:0.0Г5:mantissa");
+    expect(x2StructuralMantissaAppendDigitsShapeFact("super-exponent:FA:1", "2")).toBe("hex:FA02:mantissa");
     expect(x2StructuralMantissaAppendDigitsShapeFact("hex:12345678:mantissa", "9")).toBeUndefined();
+    expect(x2StructuralMantissaAppendDigitsShapeFact("hex-exponent:12345678:1", "9")).toBeUndefined();
     expect(x2StructuralMantissaAppendDigitsShapeFact("hex:8:mantissa", "E-2")).toBeUndefined();
   });
 
@@ -2040,6 +2044,15 @@ describe("ir passes on synthetic programs", () => {
     );
     expect(x2StructuralMantissaConcatShapeFacts("mantissa:8:decimal", "hex-exponent:B:2")).toBe(
       "hex:8B00:mantissa",
+    );
+    expect(x2StructuralMantissaConcatShapeFacts("hex-exponent:Г:2", "mantissa:05:decimal")).toBe(
+      "hex:Г0005:mantissa",
+    );
+    expect(x2StructuralMantissaConcatShapeFacts("hex-exponent:Г:-2", "hex:5:mantissa")).toBe(
+      "hex:0.0Г5:mantissa",
+    );
+    expect(x2StructuralMantissaConcatShapeFacts("super-exponent:FA:1", "hex:2:mantissa")).toBe(
+      "hex:FA02:mantissa",
     );
     expect(x2StructuralMantissaConcatShapeFacts("hex:1234567:mantissa", "mantissa:89:decimal")).toBeUndefined();
     expect(x2StructuralMantissaConcatShapeFacts("hex:8:mantissa", "hex:0.1:mantissa")).toBeUndefined();

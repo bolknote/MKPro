@@ -4242,8 +4242,8 @@ export function x2StructuralMantissaAppendDigitsShapeFact(
   fact: X2ShapeFact,
   suffixRaw: string,
 ): X2ShapeFact | undefined {
-  const model = x2ShapeDataModelForFact(fact);
-  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) return undefined;
+  const model = structuralAppendMantissaModel(fact);
+  if (model === undefined) return undefined;
   const suffix = canonicalStructuralDigitRun(suffixRaw);
   if (suffix === undefined) return undefined;
   const sign = model.sign;
@@ -4252,6 +4252,18 @@ export function x2StructuralMantissaAppendDigitsShapeFact(
   if (shapeDigits(appended).length > 8) return undefined;
   const radix = model.radix === "super" && suffix.length > 0 ? "hex" : model.radix;
   return x2MantissaShapeFactFromModel(structuralMantissaDataModel(radix, appended, "structuralOnly"));
+}
+
+function structuralAppendMantissaModel(fact: X2ShapeFact): X2MantissaDataModel | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  const mantissa = model.kind === "mantissa"
+    ? model
+    : model.kind === "exponent-entry"
+      ? model.closedStructuralMantissa
+      : undefined;
+  return mantissa !== undefined && (mantissa.radix === "hex" || mantissa.radix === "super")
+    ? mantissa
+    : undefined;
 }
 
 export function x2StructuralMantissaConcatShapeFacts(

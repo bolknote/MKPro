@@ -1251,7 +1251,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     (`hex:8` + decimal `02` proves shape-only `hex:802`, decimal `8` +
     `hex:1` proves shape-only `hex:81`) or a restored structural
     exponent-entry with a pure mantissa (`hex:A` + `hex-exponent:B:2` proves
-    shape-only `hex:AB00`) without becoming a decimal value. Exact decimal
+    shape-only `hex:AB00`; `hex-exponent:Г:2` + decimal `05` proves
+    `hex:Г0005`) without becoming a decimal value. Exact decimal
     display-shape facts feed unary display-shape
     results and, when the unary result itself is proved exact, concrete decimal
     result facts: `exponent:5:-1:decimal` through `К {x}` yields both the
