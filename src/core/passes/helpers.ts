@@ -335,7 +335,9 @@ const directReturnAnalysisContextCache = new WeakMap<readonly IrOp[], DirectRetu
 const x2StackXAndX2ReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
 const x2StrictStackReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
 const x2StackReturnSyncMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
+const x2StackLiftReturnSyncMemo = new WeakMap<readonly IrOp[], Map<number, X2ReturnStackLiftSyncState>>();
 const x2RestoreGapReturnMemo = new WeakMap<readonly IrOp[], Map<number, boolean>>();
+type X2ReturnStackLiftSyncState = "transparent" | "producer" | "invalid";
 
 export function cellsPerOp(op: IrOp): number {
   switch (op.kind) {
@@ -3189,6 +3191,7 @@ export function x2NextStackShiftingProducerIndex(
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (analyzeX2StackEffect(op).stackShifts) return index;
+    if (isKnownReturnCallOp(op) && x2KnownReturnCallReachesStackLiftAndX2Sync(ops, op, context)) return index;
     if (isKnownReturnCallOp(op) && x2SimpleDirectReturnPreservesStack(ops, op, context)) continue;
     if (!x2IsFallthroughStackPreservingGapOp(op)) return undefined;
   }
@@ -3297,9 +3300,83 @@ export function x2PreviousStackLiftAndX2SyncProducerIndex(
   for (let index = end - 1; index >= 0; index -= 1) {
     const op = ops[index]!;
     if (x2IsStackLiftAndX2SyncProducer(op)) return index;
+    if (isKnownReturnCallOp(op) && x2KnownReturnCallReachesStackLiftAndX2Sync(ops, op, context)) return index;
     if (!x2IsBackwardStackLiftX2SyncGapOp(ops, op, index, context)) return undefined;
   }
   return undefined;
+}
+
+export function x2KnownReturnCallReachesStackLiftAndX2Sync(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return x2KnownReturnCallStackLiftAndX2SyncState(
+    ops,
+    call,
+    context,
+    x2ReturnMemo(ops, x2StackLiftReturnSyncMemo),
+    new Set(),
+  ) === "producer";
+}
+
+function x2KnownReturnCallStackLiftAndX2SyncState(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  context: DirectReturnAnalysisContext,
+  memo: Map<number, X2ReturnStackLiftSyncState>,
+  active: Set<number>,
+): X2ReturnStackLiftSyncState {
+  const targetIndex = knownReturnCallTargetIndex(call, context);
+  if (targetIndex === undefined) return "invalid";
+  const cached = memo.get(targetIndex);
+  if (cached !== undefined) return cached;
+  if (active.has(targetIndex)) return "invalid";
+
+  active.add(targetIndex);
+  const state = x2LinearReturnRangeStackLiftAndX2SyncState(ops, targetIndex, context, memo, active);
+  active.delete(targetIndex);
+  memo.set(targetIndex, state);
+  return state;
+}
+
+function x2LinearReturnRangeStackLiftAndX2SyncState(
+  ops: readonly IrOp[],
+  targetIndex: number,
+  context: DirectReturnAnalysisContext,
+  memo: Map<number, X2ReturnStackLiftSyncState>,
+  active: Set<number>,
+): X2ReturnStackLiftSyncState {
+  let sawProducer = false;
+  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
+  for (let index = startIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      if (context.labelEntries.has(index)) return "invalid";
+      continue;
+    }
+    if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return "invalid";
+    if (op.kind === "return") return sawProducer ? "producer" : "transparent";
+    if (isKnownReturnCallOp(op)) {
+      const nested = x2KnownReturnCallStackLiftAndX2SyncState(ops, op, context, memo, active);
+      if (nested === "invalid") return "invalid";
+      if (nested === "producer") {
+        if (sawProducer) return "invalid";
+        sawProducer = true;
+      }
+      continue;
+    }
+    if (x2IsStackLiftAndX2SyncProducer(op)) {
+      if (sawProducer) return "invalid";
+      sawProducer = true;
+      continue;
+    }
+    const transparent = sawProducer
+      ? x2IsStackXAndX2PreservingLinearOp(op)
+      : x2IsStrictStackPreservingLinearOp(op);
+    if (!transparent) return "invalid";
+  }
+  return "invalid";
 }
 
 export function x2KnownReturnCallReachesStackPreservingX2Sync(
@@ -3547,10 +3624,10 @@ function x2SimpleDirectReturnPreservesStack(
   );
 }
 
-function x2ReturnMemo(
+function x2ReturnMemo<T>(
   ops: readonly IrOp[],
-  cache: WeakMap<readonly IrOp[], Map<number, boolean>>,
-): Map<number, boolean> {
+  cache: WeakMap<readonly IrOp[], Map<number, T>>,
+): Map<number, T> {
   let memo = cache.get(ops);
   if (memo === undefined) {
     memo = new Map();

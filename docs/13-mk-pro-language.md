@@ -2047,7 +2047,13 @@ The pipeline currently contains:
   producer such as direct/indirect `П->X`, `F pi`, or another `В↑`, even through
   stack-preserving labels, stores, address bytes, and plain stack-neutral
   commands, when that producer already keeps the current X in Y for the
-  following consumer. It can also remove `В↑` before a direct conditional or
+  following consumer. A direct/proved-indirect `ПП` helper whose linear body
+  contains exactly one stack-lift + X2-sync producer (`П->X`, stable indirect
+  recall, or `В↑`) is treated as the same producer when all commands before it
+  preserve stack and all commands after it preserve stack/X/X2 through `В/О`;
+  a second producer, stack consumer, X2 restore, display-sensitive cell, or
+  recursive helper cycle keeps the helper opaque. It can also remove `В↑`
+  before a direct conditional or
   counted-loop fallthrough sync, a plain X-preserving X2 sync such as `F0`..`FF`,
   a linear `В/О` return, or simple direct/proved-indirect `ПП` helper whose
   `В/О` return syncs the same X into X2, when that sync makes
@@ -2058,7 +2064,9 @@ The pipeline currently contains:
   stack consumers, X2 restores, nested flow, and other entry labels keep the
   call as a barrier. A later `В↑` after a plain X-preserving X2 sync is also
   removed across the same stack/X2-preserving local gaps when its stack lift is
-  dead, because the earlier plain sync already supplied the hidden X2 value.
+  dead, because the earlier plain sync already supplied the hidden X2 value; the
+  same previous-producer proof now includes direct/proved-indirect helpers whose
+  body contains the single safe stack-lift + X2-sync producer described above.
   The same stack-difference proof starts with the possible difference
   in Z and follows direct calls/returns, so the rewrite is refused if a later
   opcode could expose or consume that deeper stack value. The same pass also

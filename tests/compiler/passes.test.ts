@@ -67,6 +67,8 @@ import {
   x2NextStackPreservingReturnX2SyncIndex,
   x2NextXPreservingX2SyncIndex,
   x2PreviousHardX2OverwriteIndex,
+  x2KnownReturnCallReachesStackLiftAndX2Sync,
+  x2PreviousStackLiftAndX2SyncProducerIndex,
   x2PreviousStackPreservingReturnX2SyncIndex,
   x2PreviousXPreservingX2SyncIndex,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
@@ -18189,6 +18191,51 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift removes post-helper В↑ after a direct-return stack/X2 producer", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("load"),
+      recall("1"),
+      ret(),
+      label("main"),
+      call("load"),
+      plain(0x0e, "В↑"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("load"),
+      recall("1"),
+      ret(),
+      label("main"),
+      call("load"),
+      plain(0x0a, "."),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps post-helper В↑ after a direct-return producer when its lift is consumed", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("load"),
+      recall("1"),
+      ret(),
+      label("main"),
+      call("load"),
+      plain(0x0e, "В↑"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift keeps post-producer В↑ through gaps when its stack lift is consumed", () => {
     const program: IrOp[] = [
       recall("1"),
@@ -18863,6 +18910,63 @@ describe("ir passes on synthetic programs", () => {
     )).toBe(7);
   });
 
+  it("stack/X2 scheduler helpers find direct-return stack-lift X2 producers", () => {
+    const forwardProducerProgram: IrOp[] = [
+      jump("main"),
+      label("load"),
+      recall("1"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("load"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const backwardProducerProgram: IrOp[] = [
+      jump("main"),
+      label("load"),
+      recall("1"),
+      ret(),
+      label("main"),
+      call("load"),
+      plain(0x54, "К НОП"),
+      plain(0x0e, "В↑"),
+      halt(),
+    ];
+    const stackConsumingHelperProgram: IrOp[] = [
+      jump("main"),
+      label("consume"),
+      plain(0x10, "+"),
+      recall("1"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("consume"),
+      halt(),
+    ];
+
+    expect(x2KnownReturnCallReachesStackLiftAndX2Sync(
+      forwardProducerProgram,
+      forwardProducerProgram[6] as Extract<IrOp, { kind: "call" }>,
+      directReturnAnalysisContext(forwardProducerProgram),
+    )).toBe(true);
+    expect(x2NextStackShiftingProducerIndex(
+      forwardProducerProgram,
+      6,
+      directReturnAnalysisContext(forwardProducerProgram),
+    )).toBe(6);
+    expect(x2PreviousStackLiftAndX2SyncProducerIndex(
+      backwardProducerProgram,
+      7,
+      directReturnAnalysisContext(backwardProducerProgram),
+    )).toBe(5);
+    expect(x2KnownReturnCallReachesStackLiftAndX2Sync(
+      stackConsumingHelperProgram,
+      stackConsumingHelperProgram[7] as Extract<IrOp, { kind: "call" }>,
+      directReturnAnalysisContext(stackConsumingHelperProgram),
+    )).toBe(false);
+  });
+
   it("stack/X2 scheduler helpers find X-preserving syncs through shared path proofs", () => {
     const indirectSyncProgram: IrOp[] = [
       plain(0x0e, "В↑"),
@@ -19230,6 +19334,51 @@ describe("ir passes on synthetic programs", () => {
       plain(0x12, "*"),
       halt(),
     ]);
+  });
+
+  it("pre-shift-stack-lift removes В↑ before a direct-return stack/X2 producer", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("load"),
+      recall("1"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("load"),
+      plain(0x12, "*"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("load"),
+      recall("1"),
+      ret(),
+      label("main"),
+      call("load"),
+      plain(0x12, "*"),
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ before direct-return producers with earlier stack consumers", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("consume"),
+      plain(0x10, "+"),
+      recall("1"),
+      ret(),
+      label("main"),
+      plain(0x0e, "В↑"),
+      call("consume"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("pre-shift-stack-lift crosses nested direct-return callees before a following recall", () => {
