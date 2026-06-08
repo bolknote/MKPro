@@ -9342,13 +9342,11 @@ function stableExpressionKeyConcreteDecimalValues(key: string, seen: Set<string>
 
 function stableSignChangeExpressionDecimalValues(operand: string, seen: Set<string>): Set<string> {
   const output = new Set<string>();
-  if (operand.startsWith("shape:")) return output;
   const direct = decimalFromFactKey(operand);
   if (direct !== undefined) {
     output.add(signChangedNormalizedDecimalValue(direct));
     return output;
   }
-  if (!operand.startsWith("expr-key:")) return output;
   for (const fact of stableExpressionKeyValueSetForEvaluation(operand, seen)) {
     const value = normalizedDecimalValueFromFact(fact);
     if (value !== undefined) output.add(signChangedNormalizedDecimalValue(value));

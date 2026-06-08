@@ -1203,8 +1203,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Stable sign-change keys whose operand is a proved decimal source
     (`expr-key:0B(decimal:...:normalized)`, including nested decimal-producing
     `expr-key:*` operands) are decoded back to the signed decimal value and
-    display shape after a real X2 sync. Shape-source sign keys remain
-    shape-only.
+    display shape after a real X2 sync. Exact decimal display-shape source
+    keys, including scientific `exponent:*:*:decimal` forms, use the same
+    evaluator at that sync boundary; raw leading-zero and non-decimal
+    structural shape-source sign keys remain shape-only.
     Shape-only decimal display sign changes also seed stable
     `expr-key:0B(shape:...)` facts for hidden-temp equality after an explicit
     X2 sync. The raw-X2 leading-zero path remains separate, so visible `2` with

@@ -1329,7 +1329,10 @@ The pipeline currently contains:
   Stable sign-change keys whose operand is a proved decimal source
   (`expr-key:0B(decimal:...:normalized)`, including nested decimal-producing
   `expr-key:*` sources) are decoded back to the signed decimal value after a
-  real X2 sync; shape-source sign keys remain shape-only.
+  real X2 sync. Exact decimal display-shape source keys, including scientific
+  `exponent:*:*:decimal` forms, use the same evaluator at that sync boundary;
+  raw leading-zero and non-decimal structural shape-source sign keys remain
+  shape-only.
   An actual X2-syncing command is the boundary that can promote an exact
   decimal display shape into a normalized hidden value: after `1 ВП 8 F0`,
   hidden X2 carries `decimal:100000000:normalized` as well as the scientific
