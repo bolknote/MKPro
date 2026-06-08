@@ -924,7 +924,12 @@ Display rewrites are separated into strategy selection + body lowering.
   quotient has a finite decimal expansion. Short ordinary integer results from
   exact decimal binary operations also seed the same display-shape proof:
   ordinary results use dot-safe `mantissa:*:decimal`, while fractional and
-  wide/small scientific results use `exponent:*:*:decimal`. `К max`
+  wide/small scientific results use `exponent:*:*:decimal`. The binary
+  computation path also accepts exact decimal-only structural display operands:
+  closed structural exponents such as `hex-exponent:-1.23:-1` can be used as
+  visible `-0.123` for `+`, `-`, `*`, and finite `/` proofs, without promoting
+  raw leading-zero structural mantissas or making the structural source
+  dot-safe. `К max`
   is modeled for concrete normalized decimal operands with the MK-61 zero quirk
   preserved: if either operand is exactly zero, the proved result is zero.
   `К ∧`, `К ∨`, `К ⊕`, and `К ИНВ` share the MK-61 mantissa-nibble model used

@@ -1404,7 +1404,12 @@ The pipeline currently contains:
   results from exact decimal binary operations also seed the same display-shape
   proof: ordinary results use dot-safe `mantissa:*:decimal`, while fractional
   and wide/small scientific results use structural
-  `exponent:*:*:decimal`. `К max` is modeled exactly
+  `exponent:*:*:decimal`. Exact decimal-only structural display operands can
+  feed the same binary computation path, so a closed structural exponent such
+  as `hex-exponent:-1.23:-1` is usable as visible `-0.123` for `+`, `-`, `*`,
+  and finite `/` result proofs. Raw spellings such as leading-zero structural
+  mantissas remain shape-only, and this still does not make the structural
+  source dot-safe. `К max` is modeled exactly
   for concrete normalized decimal operands while preserving the hardware zero
   quirk: if either operand is exactly zero, the result fact is zero. Stack
   transfers keep the same value and shape lattice: `X↔Y` swaps visible `X`/`Y`

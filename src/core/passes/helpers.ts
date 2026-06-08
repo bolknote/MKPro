@@ -1364,7 +1364,21 @@ function normalizedDecimalValues(
     const value = computationDecimalValueFromFact(fact);
     if (value !== undefined) output.add(value);
   }
-  for (const value of normalizedDecimalShapeValues(shapes, options)) output.add(value);
+  for (const value of computationDecimalShapeValues(shapes, options)) output.add(value);
+  return output;
+}
+
+function computationDecimalShapeValues(
+  shapes: X2ShapeSet | undefined,
+  options: ConcreteEvaluationOptions = {},
+): Set<string> {
+  const output = normalizedDecimalShapeValues(shapes, options);
+  // This is narrower than general structural decimalization: only structural
+  // spellings whose visible calculator display is exactly decimal participate.
+  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+    const value = x2ShapeFactShapeOnlyExactDecimalDisplay(fact);
+    if (value !== undefined) output.add(value);
+  }
   return output;
 }
 

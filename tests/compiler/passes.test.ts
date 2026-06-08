@@ -4190,6 +4190,55 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(rawIntegerResult?.xShape)).toEqual([]);
   });
 
+  it("x2 value dataflow derives binary decimal facts from exact structural display operands", () => {
+    const rightStructuralExponent: X2ValueDataflowState = {
+      x: new Set(),
+      y: new Set<X2ValueFact>(["decimal:3:normalized"]),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex-exponent:-1.23:-1"]),
+      yShape: new Set(),
+      entry: { kind: "closed" },
+    };
+    const leftStructuralExponent: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:3:normalized"]),
+      y: new Set(),
+      x2: new Set(),
+      xShape: new Set(),
+      yShape: new Set<X2ShapeFact>(["hex-exponent:-1.23:-1"]),
+      entry: { kind: "closed" },
+    };
+    const structuralMantissa: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      y: new Set(),
+      x2: new Set(),
+      xShape: new Set(),
+      yShape: new Set<X2ShapeFact>(["hex:-0.123:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const rawStructural: X2ValueDataflowState = {
+      x: new Set(),
+      y: new Set<X2ValueFact>(["decimal:3:normalized"]),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:012:mantissa"]),
+      yShape: new Set(),
+      entry: { kind: "closed" },
+    };
+
+    const rightResult = transferX2ValueStateForEdge(rightStructuralExponent, plain(0x10, "+"), "normal", {}, 0);
+    const leftResult = transferX2ValueStateForEdge(leftStructuralExponent, plain(0x10, "+"), "normal", {}, 0);
+    const multiplyResult = transferX2ValueStateForEdge(structuralMantissa, plain(0x12, "×"), "normal", {}, 0);
+    const rawResult = transferX2ValueStateForEdge(rawStructural, plain(0x10, "+"), "normal", {}, 0);
+
+    expect(x2ValueStateText(rightResult?.x)).toContain("decimal:2.877:normalized");
+    expect(x2ShapeStateText(rightResult?.xShape)).toEqual(["mantissa:2.877:decimal"]);
+    expect(x2ValueStateText(leftResult?.x)).toContain("decimal:2.877:normalized");
+    expect(x2ShapeStateText(leftResult?.xShape)).toEqual(["mantissa:2.877:decimal"]);
+    expect(x2ValueStateText(multiplyResult?.x)).toContain("decimal:-0.246:normalized");
+    expect(x2ShapeStateText(multiplyResult?.xShape)).toEqual(["exponent:-2.46:-1:decimal"]);
+    expect(x2ValueStateText(rawResult?.x)).not.toContain("decimal:15:normalized");
+    expect(x2ShapeStateText(rawResult?.xShape)).toEqual([]);
+  });
+
   it("x2 value dataflow treats raw decimal value facts as numeric sources for pure computations", () => {
     const rawValueState: X2ValueDataflowState = {
       x: new Set<X2ValueFact>(["decimal:02:unnormalized"]),
