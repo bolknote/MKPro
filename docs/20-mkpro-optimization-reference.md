@@ -970,7 +970,7 @@ Display rewrites are separated into strategy selection + body lowering.
   exact scientific exponent shift without creating an ordinary mantissa display
   shape. The structural hex exponent arithmetic also recognizes the strict
   closed single-nibble forms produced by the same shape algebra (`Г`, `Г00`,
-  `0.Г`, `0.0Г`) as exponent operands, but only the already pinned table cases
+  `.Г`, `0.Г`, `0.0Г`) as exponent operands, but only the already pinned table cases
   are folded. Structural hex `+`, `-`, `*`, and `/` now enumerate one
   product fact for each proved operand pair and derive both the normalized
   decimal value and display-shape facts from that same product, so value and

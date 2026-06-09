@@ -1648,7 +1648,7 @@ function structuralSingleHexExponentOperandFromShapeModel(
     if (digit === undefined) return undefined;
     return { digit, exponent: String(integer[2]!.length) };
   }
-  const fraction = /^0\.(0*)([A-FСГЕ])$/u.exec(model.canonical);
+  const fraction = /^(?:0)?\.(0*)([A-FСГЕ])$/u.exec(model.canonical);
   if (fraction !== null) {
     const digit = structuralHexNibbleValue(fraction[2]!);
     if (digit === undefined) return undefined;

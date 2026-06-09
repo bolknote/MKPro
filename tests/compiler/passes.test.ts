@@ -6717,10 +6717,15 @@ describe("ir passes on synthetic programs", () => {
       ...closedExponentOperand,
       yShape: new Set<X2ShapeFact>(["hex:Г00:mantissa"]),
     };
+    const implicitZeroFraction: X2ValueDataflowState = {
+      ...closedExponentOperand,
+      yShape: new Set<X2ShapeFact>(["hex:.Г:mantissa"]),
+    };
 
     const result = transferX2ValueStateForEdge(closedExponentOperand, plain(0x12, "×"), "normal", {}, 0);
     const rejected = transferX2ValueStateForEdge(ambiguousTail, plain(0x12, "×"), "normal", {}, 0);
     const positiveResult = transferX2ValueStateForEdge(positiveShift, plain(0x12, "×"), "normal", {}, 0);
+    const implicitZeroResult = transferX2ValueStateForEdge(implicitZeroFraction, plain(0x12, "×"), "normal", {}, 0);
 
     expect(x2ValueStateText(result?.x) ?? []).toContain("decimal:0.53:normalized");
     expect(x2ValueStateText(result?.x) ?? [])
@@ -6729,6 +6734,8 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(rejected?.x) ?? []).not.toContain("decimal:0.53:normalized");
     expect(x2ValueStateText(positiveResult?.x) ?? []).toContain("decimal:5300:normalized");
     expect(x2ShapeStateText(positiveResult?.xShape)).toEqual(["mantissa:5300:decimal"]);
+    expect(x2ValueStateText(implicitZeroResult?.x) ?? []).toContain("decimal:5.3:normalized");
+    expect(x2ShapeStateText(implicitZeroResult?.xShape)).toEqual(["mantissa:5.3:decimal"]);
   });
 
   it("x2 value dataflow preserves hex exponent multiply display shape for VP source", () => {
