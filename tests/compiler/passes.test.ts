@@ -6176,6 +6176,13 @@ describe("ir passes on synthetic programs", () => {
       "mantissa:61111.111:decimal",
     ]);
 
+    const leftBExponentPlusNineStates = computeX2ValueStates(binaryProgram("BE9", "18"));
+    expect(x2ValueStateText(leftBExponentPlusNineStates[4]?.x) ?? [])
+      .toContain("decimal:611111110:normalized");
+    expect(x2ShapeStateText(leftBExponentPlusNineStates[4]?.xShape)).toEqual([
+      "exponent:6.1111111:8:decimal",
+    ]);
+
     const rightExponentStates = computeX2ValueStates(binaryProgram("5", "ГE-2"));
     expect(x2ValueStateText(rightExponentStates[4]?.x) ?? []).toContain("decimal:0:normalized");
     expect(x2ShapeStateText(rightExponentStates[4]?.xShape)).toEqual(["mantissa:00:decimal"]);
@@ -6234,6 +6241,13 @@ describe("ir passes on synthetic programs", () => {
       .toContain("decimal:0.000096:normalized");
     expect(x2ShapeStateText(rightGammaExponentPlusFiveDivideStates[4]?.xShape)).toEqual([
       "exponent:9.6:-5:decimal",
+    ]);
+
+    const rightBExponentPlusNineDivideStates = computeX2ValueStates(binaryProgram("18", "BE9"));
+    expect(x2ValueStateText(rightBExponentPlusNineDivideStates[4]?.x) ?? [])
+      .toContain("decimal:0.0000000094343434:normalized");
+    expect(x2ShapeStateText(rightBExponentPlusNineDivideStates[4]?.xShape)).toEqual([
+      "exponent:9.4343434:-9:decimal",
     ]);
 
     const rightGammaLeadingZeroExponentMinusThreeDivideStates = computeX2ValueStates(binaryProgram("12", "ГE-3"));
@@ -6613,6 +6627,19 @@ describe("ir passes on synthetic programs", () => {
       "mantissa:05400000:decimal",
     ]);
 
+    const hexLeftScientificExponentStates = computeX2ValueStates([
+      recall("1", "preload const BE6"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 18"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(hexLeftScientificExponentStates[4]?.x) ?? [])
+      .toContain("decimal:54000000:normalized");
+    expect(x2ShapeStateText(hexLeftScientificExponentStates[4]?.xShape)).toEqual([
+      "exponent:0.54:8:decimal",
+    ]);
+
     const decimalTimesPositiveExponentStates = computeX2ValueStates([
       recall("2", "preload const 18"),
       plain(0x0e, "В↑"),
@@ -6624,6 +6651,19 @@ describe("ir passes on synthetic programs", () => {
       .toContain("decimal:18000000:normalized");
     expect(x2ShapeStateText(decimalTimesPositiveExponentStates[4]?.xShape)).toEqual([
       "mantissa:18000000:decimal",
+    ]);
+
+    const decimalTimesScientificExponentStates = computeX2ValueStates([
+      recall("2", "preload const 18"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const ГE8"),
+      plain(0x12, "×"),
+      halt(),
+    ]);
+    expect(x2ValueStateText(decimalTimesScientificExponentStates[4]?.x) ?? [])
+      .toContain("decimal:18000000000:normalized");
+    expect(x2ShapeStateText(decimalTimesScientificExponentStates[4]?.xShape)).toEqual([
+      "exponent:1.8:10:decimal",
     ]);
   });
 

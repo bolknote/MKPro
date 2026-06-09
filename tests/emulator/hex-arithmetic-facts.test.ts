@@ -361,6 +361,9 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(multiplyRegisters("ЕE5", "18")).toBe("94800000,");
     expect(multiplyRegisters("18", "BE2")).toBe("18000,");
     expect(multiplyRegisters("18", "ГE5")).toBe("18000000,");
+    expect(multiplyRegisters("BE6", "18")).toBe("0,5408");
+    expect(multiplyRegisters("ГE8", "16")).toBe("9,210");
+    expect(multiplyRegisters("18", "ГE8")).toBe("1,810");
   });
 
   it("hex D exponent minus two addition and subtraction tables are operand-order-sensitive", () => {
@@ -494,5 +497,7 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(divideRegisters("ЕE5", "18")).toBe("77777,777");
     expect(divideRegisters("18", "BE2")).toBe("9,4343434-02");
     expect(divideRegisters("18", "ГE5")).toBe("9,6-05");
+    expect(divideRegisters("BE9", "18")).toBe("6,111111108");
+    expect(divideRegisters("18", "BE9")).toBe("9,4343434-09");
   });
 });

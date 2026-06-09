@@ -1847,7 +1847,20 @@ function shiftRawDecimalDisplayShape(raw: string, shift: number): X2ShapeFact | 
   const unsigned = point >= digits.length
     ? `${digits}${"0".repeat(point - digits.length)}`
     : trimShiftedRawFraction(`${digits.slice(0, point)}.${digits.slice(point)}`);
+  const exponentShape = rawShiftedDecimalExponentDisplayShape(sign, unsigned);
+  if (exponentShape !== undefined) return exponentShape;
   return decimalMantissaShapeFact(`${sign}${unsigned}`);
+}
+
+function rawShiftedDecimalExponentDisplayShape(sign: string, raw: string): X2ShapeFact | undefined {
+  const digits = raw.replace(".", "");
+  if (digits.length <= 8 || !/^[0-9]+$/u.test(digits)) return undefined;
+  const exponent = canonicalExponentShapeRaw(String(digits.length - 1));
+  if (exponent === undefined) return undefined;
+  const kept = digits.slice(0, 8);
+  const fraction = kept.slice(1).replace(/0+$/u, "");
+  const mantissa = fraction.length === 0 ? `${sign}${kept[0]!}` : `${sign}${kept[0]!}.${fraction}`;
+  return decimalExponentShapeFact(mantissa, exponent);
 }
 
 function trimShiftedRawFraction(raw: string): string {
@@ -2492,7 +2505,7 @@ function structuralHexExponentShiftFromMinusTwo(exponentRaw: string): number | u
   const exponent = canonicalExponentShapeRaw(exponentRaw);
   if (exponent === undefined) return undefined;
   const value = exponent === "" ? 0 : Number(exponent);
-  return Number.isInteger(value) && value >= -3 && value <= 5 ? value + 2 : undefined;
+  return Number.isInteger(value) && value >= -3 && value <= 9 ? value + 2 : undefined;
 }
 
 function decimalDivideStructuralHexExponentProduct(
