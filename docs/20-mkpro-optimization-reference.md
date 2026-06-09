@@ -1415,7 +1415,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent values;
     `+`/`-` now use the same product-backed value/display-shape proof path as
     `*`/`/`, so future hex/super arithmetic extensions cannot split numeric and
-    display evidence by accident.
+    display evidence by accident. Negative structural exponents are accepted
+    through `E-9` only when that shared exact-display gate can prove the MK-61
+    result shape: `ГE-7 + 9 -> 9.0000013`, `ГE-8 + 0 -> 1.3E-7`, and
+    `0 - ГE-9 -> 3E-9` are modeled, while over-wide rounded displays such as
+    `ГE-8 + 1 -> 1.0000001` stay out of value rewriting.
     The regular `F x^2` value model can then derive follow-on
     values such as `1`/`4`/`9`. Stable `expr-key:*` proofs keep
     operand order whenever either operand is structural, even for otherwise

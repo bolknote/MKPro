@@ -402,9 +402,16 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     };
 
     expect(addRegisters("ГE-3", "9")).toBe("9,013");
+    expect(addRegisters("ГE-7", "9")).toBe("9,0000013");
+    expect(addRegisters("ГE-8", "0")).toBe("1,3-07");
+    expect(addRegisters("ГE-8", "1")).toBe("1,0000001");
+    expect(addRegisters("ГE-9", "0")).toBe("1,3-08");
     expect(addRegisters("9", "BE-1")).toBe("10,1");
     expect(subtractRegisters("ГE-1", "9")).toBe("-7,7");
     expect(subtractRegisters("9", "BE-3")).toBe("9,005");
+    expect(subtractRegisters("0", "ГE-8")).toBe("3,-08");
+    expect(subtractRegisters("0", "ГE-9")).toBe("3,-09");
+    expect(subtractRegisters("9", "ГE-8")).toBe("9,");
     expect(subtractRegisters("9", "ЕE-1")).toBe("9,2");
   });
 

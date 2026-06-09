@@ -2462,7 +2462,7 @@ function structuralHexExponentAddSubDecimalOperand(
   const exponent = canonicalExponentShapeRaw(operand.exponent);
   if (exponent === undefined) return undefined;
   const exponentValue = Number(exponent);
-  if (!Number.isInteger(exponentValue) || exponentValue < -3 || exponentValue > -1) return undefined;
+  if (!Number.isInteger(exponentValue) || exponentValue < -9 || exponentValue > -1) return undefined;
   const tail = operand.digit === 10 ? "1" : String(operand.digit);
   return { num: BigInt(tail), scale: -exponentValue + tail.length - 2 };
 }

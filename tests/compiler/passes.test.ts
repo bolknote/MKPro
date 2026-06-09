@@ -6322,6 +6322,25 @@ describe("ir passes on synthetic programs", () => {
       "mantissa:9.013:decimal",
     ]);
 
+    const leftGammaExponentMinusSevenPlusStates = computeX2ValueStates(binaryProgram("ГE-7", "9", 0x10, "+"));
+    expect(x2ValueStateText(leftGammaExponentMinusSevenPlusStates[4]?.x) ?? [])
+      .toContain("decimal:9.0000013:normalized");
+    expect(x2ShapeStateText(leftGammaExponentMinusSevenPlusStates[4]?.xShape)).toEqual([
+      "mantissa:9.0000013:decimal",
+    ]);
+
+    const leftGammaExponentMinusEightPlusZeroStates = computeX2ValueStates(binaryProgram("ГE-8", "0", 0x10, "+"));
+    expect(x2ValueStateText(leftGammaExponentMinusEightPlusZeroStates[4]?.x) ?? [])
+      .toContain("decimal:0.00000013:normalized");
+    expect(x2ShapeStateText(leftGammaExponentMinusEightPlusZeroStates[4]?.xShape)).toEqual([
+      "exponent:1.3:-7:decimal",
+    ]);
+
+    const leftGammaExponentMinusEightPlusOneStates = computeX2ValueStates(binaryProgram("ГE-8", "1", 0x10, "+"));
+    expect(x2ValueStateText(leftGammaExponentMinusEightPlusOneStates[4]?.x) ?? [])
+      .not.toContain("decimal:1.00000013:normalized");
+    expect(x2ShapeStateText(leftGammaExponentMinusEightPlusOneStates[4]?.xShape)).toEqual([]);
+
     const rightBExponentMinusOnePlusStates = computeX2ValueStates(binaryProgram("9", "BE-1", 0x10, "+"));
     expect(x2ValueStateText(rightBExponentMinusOnePlusStates[4]?.x) ?? []).toContain("decimal:10.1:normalized");
     expect(x2ShapeStateText(rightBExponentMinusOnePlusStates[4]?.xShape)).toEqual([
@@ -6338,6 +6357,20 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(rightBExponentMinusThreeMinusStates[4]?.x) ?? []).toContain("decimal:9.005:normalized");
     expect(x2ShapeStateText(rightBExponentMinusThreeMinusStates[4]?.xShape)).toEqual([
       "mantissa:9.005:decimal",
+    ]);
+
+    const rightGammaExponentMinusEightMinusStates = computeX2ValueStates(binaryProgram("0", "ГE-8", 0x11, "-"));
+    expect(x2ValueStateText(rightGammaExponentMinusEightMinusStates[4]?.x) ?? [])
+      .toContain("decimal:0.00000003:normalized");
+    expect(x2ShapeStateText(rightGammaExponentMinusEightMinusStates[4]?.xShape)).toEqual([
+      "exponent:3:-8:decimal",
+    ]);
+
+    const rightGammaExponentMinusNineMinusStates = computeX2ValueStates(binaryProgram("0", "ГE-9", 0x11, "-"));
+    expect(x2ValueStateText(rightGammaExponentMinusNineMinusStates[4]?.x) ?? [])
+      .toContain("decimal:0.000000003:normalized");
+    expect(x2ShapeStateText(rightGammaExponentMinusNineMinusStates[4]?.xShape)).toEqual([
+      "exponent:3:-9:decimal",
     ]);
 
     const rightEExponentMinusOneMinusStates = computeX2ValueStates(binaryProgram("9", "ЕE-1", 0x11, "-"));
