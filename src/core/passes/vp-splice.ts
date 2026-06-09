@@ -61,14 +61,18 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
 ): boolean {
   if (analyzeX2VpShapeContext(state).kind !== "active-mantissa") return false;
   if (x2RestoreGapBeforeVp(ops, secondSignIndex + 1, context).vpIndex === undefined) return false;
-  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterPair);
+  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterPair, { hasSignRestore: true });
 }
 
 function canRemoveMantissaRestoreRunBeforeProvedVp(
   state: X2ValueDataflowState | undefined,
   stateAfterRun: X2ValueDataflowState | undefined,
 ): boolean {
-  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterRun);
+  return x2StateCanDiscardRestoreRunBeforeProvedVp(
+    state,
+    stateAfterRun,
+    { hasSignRestore: !x2StateIsClosedPlainContext(state) },
+  );
 }
 
 function mantissaRestoreRunBeforeProvedVp(

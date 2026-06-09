@@ -7360,6 +7360,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StateCanDiscardRestoreRunBeforeProvedVp(states[1], states[4])).toBe(true);
   });
 
+  it("x2 VP restore-run proof uses explicit sign-source shape keys only for sign restores", () => {
+    const base = computeX2ValueStates([halt()], { trackRegisterMemory: true })[0]!;
+    const signOnlySource: X2ValueDataflowState = {
+      ...base,
+      vpEntrySignShape: new Set<X2ShapeFact>(["hex:8.70Е2-6С:mantissa"]),
+    };
+    const matchingVpSource: X2ValueDataflowState = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["hex:8.70Е2-6С:mantissa"]),
+    };
+    const differentVpSource: X2ValueDataflowState = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["hex:FACE:mantissa"]),
+    };
+
+    expect(x2StateCanDiscardRestoreRunBeforeProvedVp(signOnlySource, matchingVpSource)).toBe(false);
+    expect(x2StateCanDiscardRestoreRunBeforeProvedVp(
+      signOnlySource,
+      matchingVpSource,
+      { hasSignRestore: true },
+    )).toBe(true);
+    expect(x2StateCanDiscardRestoreRunBeforeProvedVp(
+      signOnlySource,
+      differentVpSource,
+      { hasSignRestore: true },
+    )).toBe(false);
+  });
+
   it("x2 value dataflow models VP first-digit structural splice after empty X2-preserving gap", () => {
     const program: IrOp[] = [
       recall("1", "preload const A"),

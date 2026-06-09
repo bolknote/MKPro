@@ -5278,15 +5278,29 @@ export function x2StatesHaveSameExplicitVpEntrySignSource(
   );
 }
 
-export function x2StateCanDiscardRestoreRunBeforeProvedVp(
+function x2StateHasExplicitVpEntrySignSourceForProvedVp(
   beforeRun: X2ValueDataflowState | undefined,
   beforeVp: X2ValueDataflowState | undefined,
 ): boolean {
+  if (beforeRun === undefined || beforeVp === undefined) return false;
+  return stringSetsHaveIntersection(
+    explicitVpEntrySignSourceKeys(beforeRun),
+    mergeStringSets(vpEntrySourceKeys(beforeVp), explicitVpEntrySignSourceKeys(beforeVp)),
+  );
+}
+
+export function x2StateCanDiscardRestoreRunBeforeProvedVp(
+  beforeRun: X2ValueDataflowState | undefined,
+  beforeVp: X2ValueDataflowState | undefined,
+  options: { readonly hasSignRestore?: boolean | undefined } = {},
+): boolean {
   const context = analyzeX2VpShapeContext(beforeRun);
   if (context.kind === "active-mantissa") {
-    return stringSetsHaveIntersection(activeMantissaVpSourceKeys(context), vpEntrySourceKeys(beforeVp));
+    if (stringSetsHaveIntersection(activeMantissaVpSourceKeys(context), vpEntrySourceKeys(beforeVp))) return true;
+  } else if (x2StatesHaveSameVpEntrySource(beforeRun, beforeVp)) {
+    return true;
   }
-  return x2StatesHaveSameVpEntrySource(beforeRun, beforeVp);
+  return options.hasSignRestore === true && x2StateHasExplicitVpEntrySignSourceForProvedVp(beforeRun, beforeVp);
 }
 
 export interface X2RestoreGapBeforeVpScan {
