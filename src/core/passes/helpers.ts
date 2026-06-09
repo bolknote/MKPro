@@ -2261,7 +2261,7 @@ function decimalPlusStructuralHexExponentProduct(
 ): StructuralHexDecimalProduct | undefined {
   const digit = structuralHexExponentZeroDigit(right);
   if (digit !== undefined) return decimalPlusStructuralHexDigitProduct(left, digit);
-  return structuralHexExponentAddSubDecimalProduct(right, left, "plus");
+  return decimalPlusStructuralHexExponentProductFromPinnedOperand(left, right);
 }
 
 function structuralHexExponentMinusDecimalProduct(
@@ -2289,6 +2289,9 @@ function structuralHexExponentAddSubDecimalProduct(
   right: string,
   operation: "plus" | "minus",
 ): StructuralHexDecimalProduct | undefined {
+  const plusOne = structuralHexExponentPlusOneAddSubDecimalProduct(left, right, operation);
+  if (plusOne !== undefined) return plusOne;
+
   const operand = structuralHexExponentAddSubDecimalOperand(left);
   if (operand === undefined || !STRUCTURAL_HEX_EXPONENT_ADD_SUB_DECIMAL_INPUTS.has(right)) return undefined;
   const rightNum = BigInt(right) * pow10BigInt(operand.scale);
@@ -2296,10 +2299,22 @@ function structuralHexExponentAddSubDecimalProduct(
   return structuralHexDecimalProductFromExact(result, operand.scale);
 }
 
+function decimalPlusStructuralHexExponentProductFromPinnedOperand(
+  left: string,
+  right: StructuralHexExponentOperand,
+): StructuralHexDecimalProduct | undefined {
+  const plusOne = decimalPlusStructuralHexExponentPlusOneProduct(left, right);
+  if (plusOne !== undefined) return plusOne;
+  return structuralHexExponentAddSubDecimalProduct(right, left, "plus");
+}
+
 function decimalMinusStructuralHexExponentProductFromPinnedOperand(
   left: string,
   right: StructuralHexExponentOperand,
 ): StructuralHexDecimalProduct | undefined {
+  const plusOne = decimalMinusStructuralHexExponentPlusOneProduct(left, right);
+  if (plusOne !== undefined) return plusOne;
+
   if (!STRUCTURAL_HEX_EXPONENT_ADD_SUB_DECIMAL_INPUTS.has(left)) return undefined;
   const operand = structuralHexExponentAddSubDecimalOperand(right);
   if (operand === undefined) return undefined;
@@ -2313,6 +2328,62 @@ function decimalMinusStructuralHexExponentProductFromPinnedOperand(
   const scale = operand.scale;
   result = BigInt(left) * pow10BigInt(scale) + BigInt(16 - right.digit);
   return structuralHexDecimalProductFromExact(result, scale);
+}
+
+function structuralHexExponentPlusOneAddSubDecimalProduct(
+  left: StructuralHexExponentOperand,
+  right: string,
+  operation: "plus" | "minus",
+): StructuralHexDecimalProduct | undefined {
+  const rightValue = verifiedDecimalOperandValue(right);
+  if (!isVerifiedArithmeticHexDigit(left.digit) || left.exponent !== "1" || rightValue === undefined) {
+    return undefined;
+  }
+  const base = (left.digit - 10) * 10;
+  if (operation === "plus") {
+    const raw = rightValue < 10 ? base + rightValue : 100 + base + rightValue;
+    return structuralHexDecimalProductFromMk61Display(padPositiveHexExponentDisplay(raw, rightValue < 10));
+  }
+  if (rightValue === 0) {
+    return structuralHexDecimalProductFromMk61Display(padPositiveHexExponentDisplay(base, true));
+  }
+  if (rightValue < 10) {
+    return structuralHexDecimalProductFromMk61Display(String(-((16 - left.digit) * 10 + rightValue)));
+  }
+  return structuralHexDecimalProductFromMk61Display(padPositiveHexExponentDisplay((100 + base - rightValue) % 100, true));
+}
+
+function decimalPlusStructuralHexExponentPlusOneProduct(
+  left: string,
+  right: StructuralHexExponentOperand,
+): StructuralHexDecimalProduct | undefined {
+  const leftValue = verifiedDecimalOperandValue(left);
+  if (!isVerifiedArithmeticHexDigit(right.digit) || right.exponent !== "1" || leftValue === undefined) {
+    return undefined;
+  }
+  return structuralHexDecimalProductFromMk61Display(
+    padPositiveHexExponentDisplay((right.digit - 10) * 10 + leftValue, true),
+  );
+}
+
+function decimalMinusStructuralHexExponentPlusOneProduct(
+  left: string,
+  right: StructuralHexExponentOperand,
+): StructuralHexDecimalProduct | undefined {
+  const leftValue = verifiedDecimalOperandValue(left);
+  if (!isVerifiedArithmeticHexDigit(right.digit) || right.exponent !== "1" || leftValue === undefined) {
+    return undefined;
+  }
+  if (right.digit === 10) return structuralHexDecimalProductFromMk61Display(String(leftValue - 100));
+  if (right.digit === 11 && leftValue >= 10) {
+    return structuralHexDecimalProductFromMk61Display(String(leftValue - 110));
+  }
+  return structuralHexDecimalProductFromMk61Display(String(leftValue - (right.digit - 10) * 10));
+}
+
+function padPositiveHexExponentDisplay(value: number, minTwoDigits: boolean): string {
+  const display = String(value);
+  return minTwoDigits && value >= 0 && value < 10 ? `0${display}` : display;
 }
 
 function structuralHexExponentAddSubDecimalOperand(

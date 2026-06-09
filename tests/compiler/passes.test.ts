@@ -6310,9 +6310,40 @@ describe("ir passes on synthetic programs", () => {
       "mantissa:-4:decimal",
     ]);
 
-    const unsupportedExponentStates = computeX2ValueStates(binaryProgram("ГE1", "1", 0x10, "+"));
-    expect(x2ValueStateText(unsupportedExponentStates[4]?.x) ?? []).not.toContain("decimal:31:normalized");
-    expect(x2ShapeStateText(unsupportedExponentStates[4]?.xShape)).toEqual([]);
+    const leftGammaExponentPlusOnePlusStates = computeX2ValueStates(binaryProgram("ГE1", "1", 0x10, "+"));
+    expect(x2ValueStateText(leftGammaExponentPlusOnePlusStates[4]?.x) ?? [])
+      .toContain("decimal:31:normalized");
+    expect(x2ShapeStateText(leftGammaExponentPlusOnePlusStates[4]?.xShape)).toEqual([
+      "mantissa:31:decimal",
+    ]);
+
+    const leftAExponentPlusOnePlusStates = computeX2ValueStates(binaryProgram("AE1", "1", 0x10, "+"));
+    expect(x2ValueStateText(leftAExponentPlusOnePlusStates[4]?.x) ?? [])
+      .toContain("decimal:1:normalized");
+    expect(x2ShapeStateText(leftAExponentPlusOnePlusStates[4]?.xShape)).toEqual([
+      "mantissa:01:decimal",
+    ]);
+
+    const leftBExponentPlusOneMinusStates = computeX2ValueStates(binaryProgram("BE1", "10", 0x11, "-"));
+    expect(x2ValueStateText(leftBExponentPlusOneMinusStates[4]?.x) ?? [])
+      .toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(leftBExponentPlusOneMinusStates[4]?.xShape)).toEqual([
+      "mantissa:00:decimal",
+    ]);
+
+    const rightAExponentPlusOnePlusStates = computeX2ValueStates(binaryProgram("10", "AE1", 0x10, "+"));
+    expect(x2ValueStateText(rightAExponentPlusOnePlusStates[4]?.x) ?? [])
+      .toContain("decimal:10:normalized");
+    expect(x2ShapeStateText(rightAExponentPlusOnePlusStates[4]?.xShape)).toEqual([
+      "mantissa:10:decimal",
+    ]);
+
+    const rightBExponentPlusOneMinusStates = computeX2ValueStates(binaryProgram("10", "BE1", 0x11, "-"));
+    expect(x2ValueStateText(rightBExponentPlusOneMinusStates[4]?.x) ?? [])
+      .toContain("decimal:-100:normalized");
+    expect(x2ShapeStateText(rightBExponentPlusOneMinusStates[4]?.xShape)).toEqual([
+      "mantissa:-100:decimal",
+    ]);
   });
 
   it("x2 value dataflow stores hex A times 18 display shape but recalls normalized VP source", () => {

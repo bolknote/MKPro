@@ -407,6 +407,31 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(subtractRegisters("9", "ГE0")).toBe("-4,");
   });
 
+  it("hex exponent plus one add/sub table is operand-order-sensitive", () => {
+    const subtractRegisters = (r1: string, r2: string): string => {
+      const calc = new MK61();
+      calc.setRegister("1", r1);
+      calc.setRegister("2", r2);
+      calc.loadProgram([IP1, IP2, SUBTRACT, STOP]);
+      calc.pressSequence(["В/О", "С/П"]);
+      calc.runUntilStable({ maxFrames: 300, stableFrames: 4 });
+      return calc.displayText().replace(/\s/gu, "");
+    };
+
+    expect(addRegisters("AE1", "1")).toBe("01,");
+    expect(addRegisters("BE1", "10")).toBe("120,");
+    expect(addRegisters("ГE1", "18")).toBe("148,");
+    expect(addRegisters("1", "AE1")).toBe("01,");
+    expect(addRegisters("10", "AE1")).toBe("10,");
+    expect(addRegisters("18", "ГE1")).toBe("48,");
+    expect(subtractRegisters("AE1", "1")).toBe("-61,");
+    expect(subtractRegisters("BE1", "10")).toBe("00,");
+    expect(subtractRegisters("ЕE1", "18")).toBe("22,");
+    expect(subtractRegisters("1", "AE1")).toBe("-99,");
+    expect(subtractRegisters("10", "BE1")).toBe("-100,");
+    expect(subtractRegisters("18", "ЕE1")).toBe("-22,");
+  });
+
   it("single hex exponent minus two division table is operand-order-sensitive", () => {
     expect(divideRegisters("AE-2", "1")).toBe("0,-02");
     expect(divideRegisters("BE-2", "18")).toBe("6,1111111-03");

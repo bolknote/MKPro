@@ -1405,6 +1405,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     including cases such as `Г + 4 -> 17`, `3 + С -> 5`, `A + B -> 5`,
     `A + 18 -> 28`, `18 - B -> 23`, `Г + Е -> 11`, `С - 2 -> 0`,
     `0 - С -> -2`, and `A - Е -> -4`;
+    single-nibble structural hex exponents with `E1` have their own pinned
+    operand-order-specific `+`/`-` display model as well (`ГE1 + 1 -> 31`,
+    `AE1 + 1 -> 01`, `BE1 - 10 -> 00`, `10 + AE1 -> 10`,
+    `10 - BE1 -> -100`) instead of being treated as ordinary decimal
+    exponent values;
     `+`/`-` now use the same product-backed value/display-shape proof path as
     `*`/`/`, so future hex/super arithmetic extensions cannot split numeric and
     display evidence by accident.
