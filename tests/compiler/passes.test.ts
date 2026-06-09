@@ -5591,6 +5591,24 @@ describe("ir passes on synthetic programs", () => {
     const scaledLeadingZeroStates = computeX2ValueStates(squareProgram("0B0"));
     expect(x2ValueStateText(scaledLeadingZeroStates[2]?.x) ?? []).toContain("decimal:1000:normalized");
     expect(x2ShapeStateText(scaledLeadingZeroStates[2]?.xShape)).toEqual(["mantissa:1000:decimal"]);
+    const scaledAExponentStates = computeX2ValueStates(squareProgram("AE2"));
+    expect(x2ValueStateText(scaledAExponentStates[2]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(scaledAExponentStates[2]?.xShape)).toEqual(["mantissa:000000:decimal"]);
+    const scaledANegativeExponentStates = computeX2ValueStates(squareProgram("AE-2"));
+    expect(x2ValueStateText(scaledANegativeExponentStates[2]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(scaledANegativeExponentStates[2]?.xShape)).toEqual(["exponent:0:-3:decimal"]);
+    const scaledEExponentStates = computeX2ValueStates(squareProgram("ЕE2"));
+    expect(x2ValueStateText(scaledEExponentStates[2]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(scaledEExponentStates[2]?.xShape)).toEqual(["mantissa:0:decimal"]);
+    const scaledFExponentStates = computeX2ValueStates(squareProgram("FE2"));
+    expect(x2ValueStateText(scaledFExponentStates[2]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(scaledFExponentStates[2]?.xShape)).toEqual(["mantissa:0:decimal"]);
+    const scaledETrailingStates = computeX2ValueStates(squareProgram("Е0"));
+    expect(x2ValueStateText(scaledETrailingStates[2]?.x) ?? []).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(scaledETrailingStates[2]?.xShape)).toEqual(["mantissa:0:decimal"]);
+    const aTrailingStates = computeX2ValueStates(squareProgram("A0"));
+    expect(x2ValueStateText(aTrailingStates[2]?.x) ?? []).not.toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(aTrailingStates[2]?.xShape)).toEqual([]);
     expect(x2ValueStateText(computeX2ValueStates(squareProgram("C.0"))[2]?.x) ?? [])
       .not.toContain("decimal:20:normalized");
   });

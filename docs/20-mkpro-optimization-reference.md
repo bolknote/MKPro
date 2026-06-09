@@ -1393,8 +1393,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     accepted, the display shape keeps the ROM spelling (`A^2` has normalized
     value `0` but display shape `00`), and verified scaled `B`/`C`/`D` forms
     are modeled as the base square shifted by twice the decimal exponent or
-    trailing-zero scale (`B0^2 -> 1000`, `BE-2^2 -> 1E-3`) without generalizing
-    scaled `A`/`E`/`F` zero spellings. A later explicit X2 sync records the normalized
+    trailing-zero scale (`B0^2 -> 1000`, `BE-2^2 -> 1E-3`). Scaled zero-square
+    spellings use separate emulator-pinned display rules: exponent-entry
+    `A` preserves the raw zero width/significant exponent (`AE2^2 -> 000000`,
+    `AE-2^2 -> 0E-3`), while scaled `E`/`F` forms normalize to ordinary
+    display zero. A later explicit X2 sync records the normalized
     hidden restore shape for non-normal decimal displays (`00 -> 0`,
     `020 -> 20`), while signed zero remains sticky as `-0`; this same
     normalization is applied to plain X2-affecting opcodes, direct conditional

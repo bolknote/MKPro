@@ -156,7 +156,7 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(runUnaryRegisterProgram("B0", [IP1, SQUARE])).toBe("1000,");
   });
 
-  it("scaled B/C/D hex digit square table is pinned", () => {
+  it("scaled hex digit square table is pinned", () => {
     expect(runUnaryRegisterProgram("B0", [IP1, SQUARE])).toBe("1000,");
     expect(runUnaryRegisterProgram("С0", [IP1, SQUARE])).toBe("2000,");
     expect(runUnaryRegisterProgram("Г0", [IP1, SQUARE])).toBe("3000,");
@@ -169,6 +169,12 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(runUnaryRegisterProgram("BE4", [IP1, SQUARE])).toBe("1,09");
     expect(runUnaryRegisterProgram("СE-2", [IP1, SQUARE])).toBe("2,-03");
     expect(runUnaryRegisterProgram("ГE3", [IP1, SQUARE])).toBe("30000000,");
+    expect(runUnaryRegisterProgram("AE-2", [IP1, SQUARE])).toBe("0,-03");
+    expect(runUnaryRegisterProgram("AE2", [IP1, SQUARE])).toBe("000000,");
+    expect(runUnaryRegisterProgram("ЕE-2", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("Е0", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("_E2", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("_0", [IP1, SQUARE])).toBe("0,");
   });
 
   it("super-number square result is pinned as decimal zero", () => {

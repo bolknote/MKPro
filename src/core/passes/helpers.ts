@@ -1081,6 +1081,8 @@ function structuralHexSquareDecimalProduct(
   fact: X2ShapeFact,
 ): StructuralHexDecimalProduct | undefined {
   const model = x2ShapeDataModelForFact(fact);
+  const scaledZero = structuralScaledHexZeroSquareDecimalProduct(model);
+  if (scaledZero !== undefined) return scaledZero;
   const scaled = structuralScaledHexSquareDecimalProduct(model);
   if (scaled !== undefined) return scaled;
   if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super") || model.hasDecimalPoint) {
@@ -1109,6 +1111,53 @@ function structuralScaledHexSquareDecimalProduct(
     String(operand.exponent * 2),
     "exact-display",
   );
+}
+
+function structuralScaledHexZeroSquareDecimalProduct(
+  model: X2ShapeDataModel,
+): StructuralHexDecimalProduct | undefined {
+  const operand = structuralScaledHexZeroSquareOperandFromShapeModel(model);
+  if (operand === undefined) return undefined;
+  if (operand.digit === 10) return structuralScaledAHexSquareDecimalProduct(operand.exponent);
+  return { value: "0", display: "0" };
+}
+
+function structuralScaledAHexSquareDecimalProduct(exponent: number): StructuralHexDecimalProduct | undefined {
+  if (!Number.isInteger(exponent)) return undefined;
+  if (exponent >= 0) return { value: "0", display: "0".repeat(exponent * 2 + 2) };
+  const displayExponent = canonicalExponentShapeRaw(String(exponent * 2 + 1));
+  return displayExponent === undefined
+    ? undefined
+    : { value: "0", displayShape: decimalExponentShapeFact("0", displayExponent) };
+}
+
+function structuralScaledHexZeroSquareOperandFromShapeModel(
+  model: X2ShapeDataModel,
+): StructuralScaledHexSquareOperand | undefined {
+  if (model.kind === "exponent-entry") {
+    if (
+      model.mantissa.radix !== "hex" ||
+      model.mantissa.hasDecimalPoint ||
+      model.mantissa.digits.length !== 1
+    ) {
+      return undefined;
+    }
+    const digit = structuralHexNibbleValue(model.mantissa.digits[0]!);
+    const exponent = structuralHexSquareExponentNumber(model.exponentRaw);
+    return digit === undefined || exponent === undefined || !isVerifiedScaledHexZeroSquareDigit(digit)
+      ? undefined
+      : { digit, exponent };
+  }
+  if (model.kind !== "mantissa" || model.radix !== "hex") return undefined;
+  const raw = model.sign === "" ? model.canonical : model.canonical.slice(1);
+  const integer = /^0*([ЕEF])(0+)$/u.exec(raw);
+  if (integer !== null) {
+    const digit = structuralHexNibbleValue(integer[1]!);
+    return digit === undefined || !isVerifiedScaledHexZeroSquareDigit(digit)
+      ? undefined
+      : { digit, exponent: integer[2]!.length };
+  }
+  return undefined;
 }
 
 function structuralScaledHexSquareOperandFromShapeModel(
@@ -1156,6 +1205,10 @@ function structuralHexSquareExponentNumber(exponentRaw: string): number | undefi
 
 function isVerifiedScaledHexSquareDigit(digit: number): boolean {
   return digit === 11 || digit === 12 || digit === 13;
+}
+
+function isVerifiedScaledHexZeroSquareDigit(digit: number): boolean {
+  return digit === 10 || digit === 14 || digit === 15;
 }
 
 function structuralSingleHexDigitSquareDecimalProduct(
