@@ -1747,6 +1747,9 @@ function shiftDecimalProductDisplayShape(
   if (model.kind === "exponent-entry" && model.mantissa.radix === "decimal") {
     const current = model.exponentRaw === "" ? 0 : Number(model.exponentRaw);
     if (!Number.isInteger(current)) return undefined;
+    const shiftedValue = shiftExactDecimalValue(value, shift);
+    const ordinary = shiftedValue === undefined ? undefined : exactOrdinaryDecimalMantissaDisplayShapeFact(shiftedValue);
+    if (ordinary !== undefined) return ordinary;
     const exponent = canonicalExponentShapeRaw(String(current + shift));
     return exponent === undefined ? undefined : decimalExponentShapeFact(model.mantissa.canonical, exponent);
   }
@@ -2436,7 +2439,7 @@ function structuralHexExponentShiftFromMinusTwo(exponentRaw: string): number | u
   const exponent = canonicalExponentShapeRaw(exponentRaw);
   if (exponent === undefined) return undefined;
   const value = exponent === "" ? 0 : Number(exponent);
-  return Number.isInteger(value) && value >= -3 && value <= 1 ? value + 2 : undefined;
+  return Number.isInteger(value) && value >= -3 && value <= 5 ? value + 2 : undefined;
 }
 
 function decimalDivideStructuralHexExponentProduct(

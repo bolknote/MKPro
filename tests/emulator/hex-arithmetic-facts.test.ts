@@ -348,6 +348,15 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(multiplyRegisters("18", "ЕE1")).toBe("0,");
   });
 
+  it("positive hex exponent multiplication scales through ordinary display bound", () => {
+    expect(multiplyRegisters("ГE2", "16")).toBe("92000,");
+    expect(multiplyRegisters("Г00", "16")).toBe("92000,");
+    expect(multiplyRegisters("BE5", "18")).toBe("05400000,");
+    expect(multiplyRegisters("ЕE5", "18")).toBe("94800000,");
+    expect(multiplyRegisters("18", "BE2")).toBe("18000,");
+    expect(multiplyRegisters("18", "ГE5")).toBe("18000000,");
+  });
+
   it("hex D exponent minus two addition and subtraction tables are operand-order-sensitive", () => {
     const subtractRegisters = (r1: string, r2: string): string => {
       const calc = new MK61();
@@ -470,5 +479,14 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(divideRegisters("18", "BE1")).toBe("9,4343434-01");
     expect(divideRegisters("12", "ГE-3")).toBe("0000,");
     expect(divideRegisters("16", "ЕE-1")).toBe("05,292929");
+  });
+
+  it("positive hex exponent division scales through ordinary display bound", () => {
+    expect(divideRegisters("ГE2", "16")).toBe("81,25");
+    expect(divideRegisters("Г00", "16")).toBe("81,25");
+    expect(divideRegisters("BE5", "18")).toBe("61111,111");
+    expect(divideRegisters("ЕE5", "18")).toBe("77777,777");
+    expect(divideRegisters("18", "BE2")).toBe("9,4343434-02");
+    expect(divideRegisters("18", "ГE5")).toBe("9,6-05");
   });
 });

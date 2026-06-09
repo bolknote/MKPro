@@ -1455,26 +1455,30 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `9 + BE-1 -> 10.1`, and `9 - BE-3 -> 9.005`. Explicit `E0`
     addition/subtraction is routed through the closed single-hex-digit
     operand-order model (`AE0 + 9 -> 19`, `9 + AE0 -> 3`,
-    `ГE0 - 9 -> 4`, `9 - ГE0 -> -4`). `E1` addition and subtraction remain
-    outside this exact add/sub model unless another structural-shape proof
-    covers them.
+    `ГE0 - 9 -> 4`, `9 - ГE0 -> -4`), and `E1` uses a separate pinned
+    operand-order display model.
     Left-operand multiplication/division now scale the
     already pinned single-hex product/quotient by the verified structural
-    exponent range `-3..1` while preserving the MK-61 display shape, so cases
+    exponent range `-3..5` while preserving the MK-61 display shape, so cases
     such as `ГE-1 * 5 -> 5.3`,
     `BE-1 * 18 -> 05.4`, `AE-3 * 1 -> 0E-3`,
     `CE1 * 16 -> 9040`, `ГE-2 / 2 -> 6.5E-2`,
-    `BE-3 / 18 -> 6.1111111E-4`, and `ГE1 / 8 -> 16.25`
-    share one product-shift model rather than per-exponent tables.
+    `BE-3 / 18 -> 6.1111111E-4`, `ГE1 / 8 -> 16.25`,
+    `ГE2 / 16 -> 81.25`, and `BE5 * 18 -> 05400000`
+    share one product-shift model rather than per-exponent tables. `E6+` is
+    still left outside this verified range because MK-61 starts showing
+    scientific/rounded display forms there.
     Right-operand exponent multiplication has its own scaled model because the
     MK-61 collapses `A`..`D` to the same decimal-times-power-of-ten factor and
     `E` to zero, so `16 * AE-3 -> 1.6E-1`,
-    `18 * BE-1 -> 18`, `1 * AE0 -> 10`, and `18 * ГE1 -> 1800`
+    `18 * BE-1 -> 18`, `1 * AE0 -> 10`, `18 * ГE1 -> 1800`,
+    and `18 * ГE5 -> 18000000`
     are proved without an `E-2`-only table. Right-operand exponent division
     now scales the emulator-pinned `E-2` display quotient by the inverse
     structural exponent shift, preserving raw display spellings, with cases such
     as `12 / ГE-3 -> 0000`, `18 / BE-3 -> 9434.3434`,
-    `18 / BE1 -> 9.4343434E-1`, and `16 / ЕE-1 -> 05.292929`;
+    `18 / BE1 -> 9.4343434E-1`, `16 / ЕE-1 -> 05.292929`,
+    and `18 / ГE5 -> 9.6E-5`;
     error pairs such as `1 / AE-2` and `3 / CE-2` stay opaque.
     Each operand order uses only its own emulator-pinned
     results and records display shape independently from normalized value shape,
