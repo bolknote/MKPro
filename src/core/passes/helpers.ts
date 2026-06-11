@@ -99,6 +99,7 @@ type X2ValueMemory = Partial<Record<RegisterName, X2ValueSet>>;
 type X2ShapeMemory = Partial<Record<RegisterName, X2ShapeSet>>;
 interface ConcreteEvaluationOptions {
   readonly includeStructuralShapeDecimals?: boolean;
+  readonly includeStructuralExponentClosureDecimals?: boolean;
 }
 
 const NORMALIZED_DECIMAL_ZERO: X2ValueFact = "decimal:0:normalized";
@@ -208,6 +209,8 @@ export interface X2ValueDataflowState {
   readonly xShape?: X2ShapeSet;
   readonly yShape?: X2ShapeSet | undefined;
   readonly x2Shape?: X2ShapeSet;
+  readonly xDirectShape?: X2ShapeSet | undefined;
+  readonly yDirectShape?: X2ShapeSet | undefined;
   readonly entry: X2EntryState;
   readonly vpContext?: X2VpContextState;
   readonly structuralEntry?: X2StructuralEntryState;
@@ -740,6 +743,7 @@ function plainProducesStableExpressionValues(
   y: X2ValueSet | undefined,
   xShape: X2ShapeSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
+  directYShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const constants = plainProducesStableConstantExpressionValues(op);
   if (constants.size > 0) return constants;
@@ -766,8 +770,10 @@ function plainProducesStableExpressionValues(
       output.add(stableExpressionValueFact(opcode, key));
     }
   } else if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") {
-    for (const fact of plainProducesConcreteBinaryDecimalValues(op, y, x, yShape, xShape, options)) output.add(fact);
-    const [yKeys, xKeys] = stableBinaryExpressionSourceKeySets(y, yShape, x, xShape);
+    for (const fact of plainProducesConcreteBinaryDecimalValues(op, y, x, yShape, xShape, options, directYShape)) {
+      output.add(fact);
+    }
+    const [yKeys, xKeys] = stableBinaryExpressionSourceKeySets(op.opcode, y, yShape, x, xShape);
     for (const yKey of yKeys) {
       for (const xKey of xKeys) {
         if (stableBinaryExpressionKeyHasConcreteDecimalResult(op, yKey, xKey)) continue;
@@ -779,15 +785,16 @@ function plainProducesStableExpressionValues(
 }
 
 function stableBinaryExpressionSourceKeySets(
+  opcode: number,
   y: X2ValueSet | undefined,
   yShape: X2ShapeSet | undefined,
   x: X2ValueSet | undefined,
   xShape: X2ShapeSet | undefined,
 ): readonly [Set<string>, Set<string>] {
-  const yKeys = stableExpressionSourceKeys(y, yShape);
-  const xKeys = stableExpressionSourceKeys(x, xShape);
-  const yStableKeys = stableExpressionSourceKeys(y, yShape, { includeOpaqueExpr: false });
-  const xStableKeys = stableExpressionSourceKeys(x, xShape, { includeOpaqueExpr: false });
+  const yKeys = stableExpressionSourceKeysForOperand(opcode, y, yShape);
+  const xKeys = stableExpressionSourceKeysForOperand(opcode, x, xShape);
+  const yStableKeys = stableExpressionSourceKeysForOperand(opcode, y, yShape, { includeOpaqueExpr: false });
+  const xStableKeys = stableExpressionSourceKeysForOperand(opcode, x, xShape, { includeOpaqueExpr: false });
   const boundedYKeys = yStableKeys.size === 0 ? yKeys : yStableKeys;
   const boundedXKeys = xStableKeys.size === 0 ? xKeys : xStableKeys;
   if (boundedYKeys.size * boundedXKeys.size <= MAX_STABLE_BINARY_SOURCE_KEY_PAIRS) {
@@ -804,7 +811,7 @@ function stableExpressionKeyHasConcreteDecimalResult(
   const values = plainProducesConcreteDecimalValues(
     op,
     stableExpressionKeyValueSetForOperand(op.opcode, key, new Set()),
-    stableExpressionKeyShapeSet(key),
+    stableExpressionKeyShapeSetForOperand(op.opcode, key, new Set()),
     options,
   );
   return values.size > 0 &&
@@ -821,9 +828,10 @@ function stableBinaryExpressionKeyHasConcreteDecimalResult(
     op,
     stableExpressionKeyValueSetForOperand(op.opcode, yKey, new Set()),
     stableExpressionKeyValueSetForOperand(op.opcode, xKey, new Set()),
-    stableExpressionKeyShapeSet(yKey),
-    stableExpressionKeyShapeSet(xKey),
+    stableExpressionKeyShapeSetForOperand(op.opcode, yKey, new Set()),
+    stableExpressionKeyShapeSetForOperand(op.opcode, xKey, new Set()),
     options,
+    stableExpressionKeyDirectShapeSet(yKey),
   );
   return values.size > 0 &&
     !stableBinaryExpressionKeyHasAdditionalShapeResult(op, yKey, xKey, values, options);
@@ -840,7 +848,7 @@ function stableUnaryExpressionKeyHasAdditionalShapeResult(
       op,
       stableExpressionKeyValueSetForOperand(op.opcode, key, new Set()),
       undefined,
-      stableExpressionKeyShapeSet(key),
+      stableExpressionKeyShapeSetForOperand(op.opcode, key, new Set()),
       undefined,
       options,
     ),
@@ -860,9 +868,10 @@ function stableBinaryExpressionKeyHasAdditionalShapeResult(
       op,
       stableExpressionKeyValueSetForOperand(op.opcode, xKey, new Set()),
       stableExpressionKeyValueSetForOperand(op.opcode, yKey, new Set()),
-      stableExpressionKeyShapeSet(xKey),
-      stableExpressionKeyShapeSet(yKey),
+      stableExpressionKeyShapeSetForOperand(op.opcode, xKey, new Set()),
+      stableExpressionKeyShapeSetForOperand(op.opcode, yKey, new Set()),
       options,
+      stableExpressionKeyDirectShapeSet(yKey),
     ),
     values,
   );
@@ -883,9 +892,19 @@ function isSignedZeroDecimalMantissaShapeFact(fact: X2ShapeFact): boolean {
 }
 
 function concreteEvaluationOptionsForStableExpressionOpcode(opcode: number): ConcreteEvaluationOptions {
-  return opcodeHasStructuralOperandSemantics(opcode)
-    ? { includeStructuralShapeDecimals: false }
-    : {};
+  return concreteEvaluationOptionsForOpcode(opcode);
+}
+
+function concreteEvaluationOptionsForOpcode(
+  opcode: number,
+  options: ConcreteEvaluationOptions = {},
+): ConcreteEvaluationOptions {
+  if (!opcodeHasStructuralOperandSemantics(opcode)) return options;
+  return {
+    ...options,
+    includeStructuralShapeDecimals: options.includeStructuralShapeDecimals ?? false,
+    includeStructuralExponentClosureDecimals: options.includeStructuralExponentClosureDecimals ?? false,
+  };
 }
 
 function opcodeHasStructuralOperandSemantics(opcode: number): boolean {
@@ -908,6 +927,7 @@ function plainProducesConcreteDecimalValues(
   options: ConcreteEvaluationOptions = {},
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
+  const effectiveOptions = concreteEvaluationOptionsForOpcode(op.opcode, options);
   const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
   if (
     op.opcode !== 0x15 &&
@@ -940,7 +960,7 @@ function plainProducesConcreteDecimalValues(
       : concreteDecimalUnaryValue(op.opcode, value);
     if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
   }
-  for (const value of computationDecimalShapeValues(effectiveXShape, options)) {
+  for (const value of computationDecimalShapeValues(effectiveXShape, effectiveOptions)) {
     const concrete = concreteDecimalUnaryValue(op.opcode, value);
     if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
   }
@@ -957,13 +977,14 @@ function plainProducesConcreteDecimalShapeFacts(
   options: ConcreteEvaluationOptions = {},
 ): Set<X2ShapeFact> {
   const output = plainProducesStableConstantShapeFacts(op);
+  const effectiveOptions = concreteEvaluationOptionsForOpcode(op.opcode, options);
   const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
   for (const fact of x ?? []) {
     const value = computationDecimalValueFromFact(fact);
     const concrete = value === undefined ? undefined : concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
     if (concrete !== undefined) output.add(concrete);
   }
-  for (const value of computationDecimalShapeValues(effectiveXShape, options)) {
+  for (const value of computationDecimalShapeValues(effectiveXShape, effectiveOptions)) {
     const concrete = concreteDecimalUnaryDisplayShapeFact(op.opcode, value);
     if (concrete !== undefined) output.add(concrete);
   }
@@ -994,8 +1015,10 @@ function plainProducesConcreteBinaryDecimalValues(
   yShape: X2ShapeSet | undefined = undefined,
   xShape: X2ShapeSet | undefined = undefined,
   options: ConcreteEvaluationOptions = {},
+  directYShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
+  const effectiveOptions = concreteEvaluationOptionsForOpcode(op.opcode, options);
   const effectiveYShape = shapeSetWithStableExpressionValueShapes(yShape, y);
   const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
   if (
@@ -1006,13 +1029,13 @@ function plainProducesConcreteBinaryDecimalValues(
     op.opcode !== 0x38 &&
     op.opcode !== 0x39
   ) return output;
-  for (const yValue of normalizedDecimalValues(y, effectiveYShape, options)) {
-    for (const xValue of normalizedDecimalValues(x, effectiveXShape, options)) {
+  for (const yValue of normalizedDecimalValues(y, effectiveYShape, effectiveOptions)) {
+    for (const xValue of normalizedDecimalValues(x, effectiveXShape, effectiveOptions)) {
       const concrete = concreteDecimalBinaryValue(op.opcode, yValue, xValue);
       if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
     }
   }
-  for (const fact of plainProducesStructuralBinaryDecimalValues(op, y, x, effectiveYShape, effectiveXShape)) {
+  for (const fact of plainProducesStructuralBinaryDecimalValues(op, y, x, effectiveYShape, effectiveXShape, directYShape)) {
     output.add(fact);
   }
   return output;
@@ -1322,14 +1345,23 @@ function plainProducesConcreteBinaryShapeFacts(
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
   options: ConcreteEvaluationOptions = {},
+  directYShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
+  const effectiveOptions = concreteEvaluationOptionsForOpcode(op.opcode, options);
   const effectiveYShape = shapeSetWithStableExpressionValueShapes(yShape, y);
   const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
-  for (const fact of plainProducesConcreteDecimalBinaryShapeFacts(op, y, x, effectiveYShape, effectiveXShape, options)) {
+  for (const fact of plainProducesConcreteDecimalBinaryShapeFacts(
+    op,
+    y,
+    x,
+    effectiveYShape,
+    effectiveXShape,
+    effectiveOptions,
+  )) {
     output.add(fact);
   }
-  for (const fact of plainProducesStructuralBinaryDecimalShapes(op, y, x, effectiveYShape, effectiveXShape)) {
+  for (const fact of plainProducesStructuralBinaryDecimalShapes(op, y, x, effectiveYShape, effectiveXShape, directYShape)) {
     output.add(fact);
   }
   if (op.opcode < 0x37 || op.opcode > 0x39) return output;
@@ -1370,9 +1402,10 @@ function plainProducesStructuralBinaryDecimalShapes(
   x: X2ValueSet | undefined,
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
+  directYShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  for (const fact of structuralHexBinaryDecimalDisplayShapes(op, y, x, yShape, xShape)) output.add(fact);
+  for (const fact of structuralHexBinaryDecimalDisplayShapes(op, y, x, yShape, xShape, directYShape)) output.add(fact);
   for (const fact of structuralBitwiseDecimalDisplayShapes(op, y, x, yShape, xShape)) output.add(fact);
   return output;
 }
@@ -1383,9 +1416,10 @@ function plainProducesStructuralBinaryDecimalValues(
   x: X2ValueSet | undefined,
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
+  directYShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
-  for (const value of structuralHexBinaryDecimalValues(op, y, x, yShape, xShape)) {
+  for (const value of structuralHexBinaryDecimalValues(op, y, x, yShape, xShape, directYShape)) {
     output.add(decimalValueFact(value, "normalized"));
   }
   return output;
@@ -1397,9 +1431,12 @@ function structuralHexBinaryDecimalValues(
   x: X2ValueSet | undefined,
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
+  directYShape: X2ShapeSet | undefined = undefined,
 ): Set<string> {
   const output = new Set<string>();
-  for (const product of structuralHexBinaryDecimalProducts(op, y, x, yShape, xShape)) output.add(product.value);
+  for (const product of structuralHexBinaryDecimalProducts(op, y, x, yShape, xShape, directYShape)) {
+    output.add(product.value);
+  }
   for (const value of structuralBitwiseDecimalValues(op, y, x, yShape, xShape)) output.add(value);
   return output;
 }
@@ -1410,13 +1447,14 @@ function structuralHexBinaryDecimalProducts(
   x: X2ValueSet | undefined,
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
+  directYShape: X2ShapeSet | undefined = undefined,
 ): StructuralHexDecimalProduct[] {
   const output: StructuralHexDecimalProduct[] = [];
   if (op.opcode >= 0x37 && op.opcode <= 0x39) {
     return output;
   }
   if (op.opcode === 0x10) {
-    for (const leftNormalized of structuralHexCarryNormalizedIntegerProducts(yShape)) {
+    for (const leftNormalized of structuralHexCarryNormalizedIntegerProducts(directYShape)) {
       for (const right of normalizedDecimalValues(x, xShape)) {
         addStructuralHexDecimalProduct(output, structuralHexCarryNormalizedPlusDecimalProduct(leftNormalized, right));
       }
@@ -1553,9 +1591,10 @@ function structuralHexBinaryDecimalDisplayShapes(
   x: X2ValueSet | undefined,
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
+  directYShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  for (const product of structuralHexBinaryDecimalProducts(op, y, x, yShape, xShape)) {
+  for (const product of structuralHexBinaryDecimalProducts(op, y, x, yShape, xShape, directYShape)) {
     const shape = structuralHexDecimalProductDisplayShape(product);
     if (shape !== undefined) output.add(shape);
   }
@@ -1590,7 +1629,7 @@ function computationDecimalShapeValues(
   const output = normalizedDecimalShapeValues(shapes, options);
   // This is narrower than general structural decimalization: only structural
   // spellings whose visible calculator display is exactly decimal participate.
-  for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+  for (const fact of computationStructuralRestoreShapeFacts(shapes, options)) {
     const value = x2ShapeFactShapeOnlyExactDecimalDisplay(fact);
     if (value !== undefined) output.add(value);
   }
@@ -1603,13 +1642,61 @@ function normalizedDecimalShapeValues(
 ): Set<string> {
   if (options.includeStructuralShapeDecimals === false) {
     const output = x2ShapeSetRestoredVisibleDecimals(decimalDisplayShapeFacts(shapes));
-    for (const fact of canonicalStructuralRestoreSourceKeyFacts(shapes)) {
+    for (const fact of canonicalStructuralRestoreSourceKeyFactsForDecimalization(shapes, options)) {
       const decimal = structuralShapeFactRestoredVisibleDecimal(fact);
       if (decimal !== undefined) output.add(decimal);
     }
     return output;
   }
   return x2ShapeSetRestoredVisibleDecimals(shapes);
+}
+
+function computationStructuralRestoreShapeFacts(
+  shapes: X2ShapeSet | undefined,
+  options: ConcreteEvaluationOptions = {},
+): Set<X2ShapeFact> {
+  const canonical = canonicalStructuralShapeFacts(shapes);
+  return options.includeStructuralExponentClosureDecimals === false
+    ? structuralRestoreShapeFactsWithoutExponentClosureDecimals(canonical)
+    : structuralRestoreShapeFacts(canonical);
+}
+
+function canonicalStructuralRestoreSourceKeyFactsForDecimalization(
+  shapes: X2ShapeSet | undefined,
+  options: ConcreteEvaluationOptions = {},
+): Set<X2ShapeFact> {
+  const restored = options.includeStructuralExponentClosureDecimals === false
+    ? structuralRestoreShapeFactsWithoutExponentClosureDecimals(canonicalStructuralShapeFacts(shapes))
+    : x2StructuralRestoreShapeFacts(shapes);
+  const output = new Set<X2ShapeFact>();
+  for (const fact of restored) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind === "exponent-entry" && model.closedStructuralMantissa !== undefined) {
+      const closed = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+      if (closed !== undefined && restored.has(closed)) continue;
+    }
+    output.add(fact);
+  }
+  return output;
+}
+
+function structuralRestoreShapeFactsWithoutExponentClosureDecimals(input: X2ShapeSet): Set<X2ShapeFact> {
+  const restored = structuralRestoreShapeFacts(input);
+  const blocked = new Set<X2ShapeFact>();
+  for (const fact of input) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "exponent-entry" || model.closedStructuralMantissa === undefined) continue;
+    if (!hasStructuralNonDecimalDigit(model.mantissa.canonical)) continue;
+    const canonical = x2ShapeFactFromDataModel(model);
+    if (canonical !== undefined) blocked.add(canonical);
+    const closed = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+    if (closed !== undefined && !input.has(closed)) blocked.add(closed);
+  }
+  const output = new Set<X2ShapeFact>();
+  for (const fact of restored) {
+    if (!blocked.has(fact)) output.add(fact);
+  }
+  return output;
 }
 
 function shapeSetWithStableExpressionValueShapes(
@@ -1748,12 +1835,28 @@ function structuralSingleHexExponentOperandFromShapeModel(
 
 function structuralHexCarryNormalizedIntegerProducts(shapes: X2ShapeSet | undefined): StructuralHexDecimalProduct[] {
   const output = new Map<string, StructuralHexDecimalProduct>();
-  for (const fact of canonicalStructuralShapeFacts(shapes)) {
+  for (const fact of structuralHexCarrySourceShapeFacts(shapes)) {
     const product = structuralHexCarryNormalizedIntegerProduct(fact);
     if (product === undefined) continue;
     output.set(`${product.value}:${product.display ?? ""}:${product.displayShape ?? ""}`, product);
   }
   return [...output.values()];
+}
+
+function structuralHexCarrySourceShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const canonical = canonicalStructuralShapeFacts(shapes);
+  const restoredFromExponent = new Set<X2ShapeFact>();
+  for (const fact of canonical) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "exponent-entry" || model.closedStructuralMantissa === undefined) continue;
+    const restored = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+    if (restored !== undefined) restoredFromExponent.add(restored);
+  }
+  const output = new Set<X2ShapeFact>();
+  for (const fact of canonical) {
+    if (!restoredFromExponent.has(fact)) output.add(fact);
+  }
+  return output;
 }
 
 function structuralHexCarryNormalizedIntegerProduct(fact: X2ShapeFact): StructuralHexDecimalProduct | undefined {
@@ -1763,7 +1866,7 @@ function structuralHexCarryNormalizedIntegerProduct(fact: X2ShapeFact): Structur
     model.radix !== "hex" ||
     model.sign !== "" ||
     model.hasDecimalPoint ||
-    structuralNonDecimalDigitCount(model.canonical) < 2
+    !hasStructuralNonDecimalDigit(model.canonical)
   ) {
     return undefined;
   }
@@ -1774,7 +1877,6 @@ function structuralHexCarryNormalizedIntegerProduct(fact: X2ShapeFact): Structur
 }
 
 function structuralHexCarryNormalizedIntegerDisplay(raw: string): string | undefined {
-  if (raw.includes("E")) return undefined;
   const digits = shapeDigits(raw);
   if (digits.length === 0 || digits.length > 8 || digits.length !== raw.length) return undefined;
   let carry = 0;
@@ -1788,15 +1890,6 @@ function structuralHexCarryNormalizedIntegerDisplay(raw: string): string | undef
   }
   if (carry > 0) display = `${carry}${display}`;
   return display.length <= 8 ? display : undefined;
-}
-
-function structuralNonDecimalDigitCount(raw: string): number {
-  let count = 0;
-  for (const char of raw) {
-    const digit = structuralHexNibbleValue(char);
-    if (digit !== undefined && digit >= 10) count += 1;
-  }
-  return count;
 }
 
 function structuralHexCarryNormalizedPlusDecimalProduct(
@@ -3490,8 +3583,9 @@ function plainXValueAfterNonPreservingOp(
   y: X2ValueSet | undefined = undefined,
   xShape: X2ShapeSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
+  directYShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
-  const output = plainProducesStableExpressionValues(op, x, y, xShape, yShape);
+  const output = plainProducesStableExpressionValues(op, x, y, xShape, yShape, directYShape);
   const opaque = plainProducesOpaqueExpressionValue(op, producerIndex);
   if (opaque !== undefined) output.add(opaque);
   return output;
@@ -3504,10 +3598,13 @@ function plainXShapeAfterNonPreservingOp(
   xShape: X2ShapeSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
   options: ConcreteEvaluationOptions = {},
+  directYShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = plainProducesConcreteDecimalShapeFacts(op, x, xShape, options);
   for (const fact of plainProducesConcreteUnaryShapeFacts(op, x, xShape)) output.add(fact);
-  for (const fact of plainProducesConcreteBinaryShapeFacts(op, y, x, yShape, xShape, options)) output.add(fact);
+  for (const fact of plainProducesConcreteBinaryShapeFacts(op, y, x, yShape, xShape, options, directYShape)) {
+    output.add(fact);
+  }
   return output;
 }
 
@@ -7245,6 +7342,8 @@ function emptyX2ValueDataflowState(trackRegisterMemory = false): X2ValueDataflow
     xShape: new Set(),
     yShape: new Set(),
     x2Shape: new Set(),
+    xDirectShape: new Set(),
+    yDirectShape: new Set(),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
@@ -7266,6 +7365,8 @@ function cloneX2ValueDataflowState(input: X2ValueDataflowState): X2ValueDataflow
     xShape: cloneOptionalShapeSet(input.xShape),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
+    xDirectShape: cloneOptionalShapeSet(input.xDirectShape),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: cloneX2EntryState(input.entry),
     vpContext: cloneX2VpContextState(input.vpContext),
     structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
@@ -7390,6 +7491,8 @@ function transferX2ValueDataflowState(
         xShape: cloneOptionalShapeSet(stable.xShape),
         yShape: cloneOptionalShapeSet(stable.yShape),
         x2Shape: cloneOptionalShapeSet(stable.x2Shape),
+        xDirectShape: cloneOptionalShapeSet(stable.xDirectShape),
+        yDirectShape: cloneOptionalShapeSet(stable.yDirectShape),
         entry: closedX2EntryState(),
         vpContext: cloneX2VpContextState(stable.vpContext),
         structuralEntry: noneX2StructuralEntryState(),
@@ -7411,6 +7514,7 @@ function transferX2ValueDataflowState(
       const closed = closeX2ValueEntry(input);
       const value = recallX2ValueFacts(input, op.register, trackRegisterMemory, op);
       const shape = recallX2ShapeFacts(value, op, trackRegisterMemory ? input.shapeMemory?.[op.register] : undefined);
+      const directShape = preloadedConstantShapeFacts(op);
       return {
         x: canonicalX2ValueSet(value),
         y: cloneOptionalValueSet(closed.x),
@@ -7418,6 +7522,8 @@ function transferX2ValueDataflowState(
         xShape: new Set(shape),
         yShape: cloneOptionalShapeSet(closed.xShape),
         x2Shape: new Set(shape),
+        xDirectShape: new Set(directShape),
+        yDirectShape: cloneOptionalShapeSet(closed.xDirectShape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         structuralEntry: noneX2StructuralEntryState(),
@@ -7446,6 +7552,8 @@ function transferX2ValueDataflowState(
         xShape: new Set(shape),
         yShape: cloneOptionalShapeSet(closed.xShape),
         x2Shape: new Set(shape),
+        xDirectShape: new Set(),
+        yDirectShape: cloneOptionalShapeSet(closed.xDirectShape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         structuralEntry: noneX2StructuralEntryState(),
@@ -7471,6 +7579,8 @@ function transferX2ValueDataflowState(
         xShape,
         yShape: cloneOptionalShapeSet(closed.yShape),
         x2Shape,
+        xDirectShape: cloneOptionalShapeSet(closed.xDirectShape),
+        yDirectShape: cloneOptionalShapeSet(closed.yDirectShape),
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(closed, effect),
         structuralEntry: noneX2StructuralEntryState(),
@@ -7506,6 +7616,8 @@ function transferX2ValueDataflowState(
         xShape,
         yShape: cloneOptionalShapeSet(stable.yShape),
         x2Shape,
+        xDirectShape: cloneOptionalShapeSet(stable.xDirectShape),
+        yDirectShape: cloneOptionalShapeSet(stable.yDirectShape),
         entry: closedX2EntryState(),
         vpContext: transferConditionalX2VpContextState(stable, effect),
         structuralEntry: noneX2StructuralEntryState(),
@@ -7540,6 +7652,8 @@ function transferX2ValueDataflowState(
         xShape,
         yShape: cloneOptionalShapeSet(closed.yShape),
         x2Shape,
+        xDirectShape: cloneOptionalShapeSet(closed.xDirectShape),
+        yDirectShape: cloneOptionalShapeSet(closed.yDirectShape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         structuralEntry: noneX2StructuralEntryState(),
@@ -7888,6 +8002,8 @@ function transferPlainX2ValueState(
       xShape: new Set([decimalMantissaShapeFact("0")]),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set([decimalMantissaShapeFact("0")]),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -7903,22 +8019,24 @@ function transferPlainX2ValueState(
     return transferCopyYToXX2ValueState(input, op);
   }
   const effect = plainX2Effect(op);
+  const directYShape = input.yDirectShape;
   const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
   if (closedExponentValues.size > 0) {
     const sourceX = new Set(closedExponentValues);
     const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
     const x = plainPreservesXValue(op)
       ? new Set(sourceX)
-      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape);
+      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape, directYShape);
     const xShape = plainPreservesXValue(op)
       ? new Set(closedExponentShapes)
-      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedExponentShapes, input.yShape);
+      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedExponentShapes, input.yShape, {}, directYShape);
     const x2 = effect === "preserves"
       ? new Set(closedExponentValues)
       : effect === "affects"
         ? new Set(x)
         : new Set<X2ValueFact>();
     const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect, closedExponentShapes);
+    const xDirectShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
     return {
       x,
       y: transferPlainYValueSet(input, sourceX, op),
@@ -7926,6 +8044,8 @@ function transferPlainX2ValueState(
       xShape,
       yShape: transferPlainYShapeSet(input, closedExponentShapes, op),
       x2Shape,
+      xDirectShape,
+      yDirectShape: transferPlainYDirectShapeSet(input, closedExponentShapes, op),
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(input, effect),
       structuralEntry: noneX2StructuralEntryState(),
@@ -7984,12 +8104,13 @@ function transferPlainX2ValueState(
     const sourceX = new Set<X2ValueFact>();
     const x = plainPreservesXValue(op)
       ? new Set<X2ValueFact>()
-      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape);
+      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape, directYShape);
     const xShape = plainPreservesXValue(op)
       ? new Set(closedExponentShapes)
-      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedExponentShapes, input.yShape);
+      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedExponentShapes, input.yShape, {}, directYShape);
     const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect, closedExponentShapes);
     const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
+    const xDirectShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
     return {
       x,
       y: transferPlainYValueSet(input, sourceX, op),
@@ -7997,6 +8118,8 @@ function transferPlainX2ValueState(
       xShape,
       yShape: transferPlainYShapeSet(input, closedExponentShapes, op),
       x2Shape,
+      xDirectShape,
+      yDirectShape: transferPlainYDirectShapeSet(input, closedExponentShapes, op),
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(input, effect),
       structuralEntry: noneX2StructuralEntryState(),
@@ -8053,26 +8176,28 @@ function transferPlainX2ValueState(
   const x = syncUnknownSameValue(
     plainPreservesXValue(op)
       ? new Set(input.x)
-      : plainXValueAfterNonPreservingOp(op, producerIndex, input.x, input.y, input.xShape, input.yShape),
+      : plainXValueAfterNonPreservingOp(op, producerIndex, input.x, input.y, input.xShape, input.yShape, directYShape),
     effect,
     producerIndex,
   );
   const inputXShape = effectiveInputXShape(input);
   const xShape = plainPreservesXValue(op)
     ? cloneOptionalShapeSet(inputXShape)
-    : plainXShapeAfterNonPreservingOp(op, input.x, input.y, input.xShape, input.yShape);
+    : plainXShapeAfterNonPreservingOp(op, input.x, input.y, input.xShape, input.yShape, {}, directYShape);
   const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
   const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect);
+  const sourceXDirectShape = cloneOptionalShapeSet(input.xDirectShape);
+  const xDirectShape = plainPreservesXValue(op) ? sourceXDirectShape : new Set<X2ShapeFact>();
   const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
   if (structuralEntry.kind === "exponent") {
     const closedStructuralShapes = structuralExponentEntryShapeFacts(structuralEntry);
     const sourceX = new Set<X2ValueFact>();
     const structuralXValue = plainPreservesXValue(op)
       ? new Set<X2ValueFact>()
-      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedStructuralShapes, input.yShape);
+      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedStructuralShapes, input.yShape, directYShape);
     const structuralXShape = plainPreservesXValue(op)
       ? new Set(closedStructuralShapes)
-      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedStructuralShapes, input.yShape);
+      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedStructuralShapes, input.yShape, {}, directYShape);
     const structuralX2Shape = transferPlainX2ShapeSet(
       input,
       structuralXValue,
@@ -8081,6 +8206,9 @@ function transferPlainX2ValueState(
       closedStructuralShapes,
     );
     const structuralX2Value = transferPlainX2ValueSet(input, structuralXValue, structuralXShape, effect);
+    const structuralXDirectShape = plainPreservesXValue(op)
+      ? new Set(closedStructuralShapes)
+      : new Set<X2ShapeFact>();
     return {
       x: structuralXValue,
       y: transferPlainYValueSet(input, sourceX, op),
@@ -8088,6 +8216,8 @@ function transferPlainX2ValueState(
       xShape: structuralXShape,
       yShape: transferPlainYShapeSet(input, closedStructuralShapes, op),
       x2Shape: structuralX2Shape,
+      xDirectShape: structuralXDirectShape,
+      yDirectShape: transferPlainYDirectShapeSet(input, closedStructuralShapes, op),
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(input, effect),
       structuralEntry: noneX2StructuralEntryState(),
@@ -8156,6 +8286,8 @@ function transferPlainX2ValueState(
     xShape,
     yShape: transferPlainYShapeSet(input, inputXShape, op),
     x2Shape,
+    xDirectShape,
+    yDirectShape: transferPlainYDirectShapeSet(input, sourceXDirectShape, op),
     entry: nextX2EntryStateForPlainEffect(effect),
     vpContext: transferPlainX2VpContextState(input, effect),
     structuralEntry: noneX2StructuralEntryState(),
@@ -8331,11 +8463,18 @@ function transferConditionalX2RegisterSetForKnownEdge(
 function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: string): X2ValueDataflowState {
   if (input.structuralEntry?.kind === "exponent") {
     const entry = advanceStructuralExponentDigitEntry(input.structuralEntry, digit);
-    return x2ValueStateFromStructuralExponentEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
+    return x2ValueStateFromStructuralExponentEntry(
+      entry,
+      input.memory,
+      input.shapeMemory,
+      input.y,
+      input.yShape,
+      input.yDirectShape,
+    );
   }
   if (input.entry.kind === "exponent") {
     const entry = advanceExponentDigitEntry(input.entry, digit);
-    return x2ValueStateFromExponentEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
+    return x2ValueStateFromExponentEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape, input.yDirectShape);
   }
   const entry = advanceDecimalDigitEntry(input.entry, digit);
   if (entry.kind !== "open") {
@@ -8346,6 +8485,8 @@ function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: st
       xShape: new Set(),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry,
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -8353,7 +8494,14 @@ function transferDecimalDigitX2ValueState(input: X2ValueDataflowState, digit: st
       ...cloneX2MemoryFields(input),
     };
   }
-  return x2ValueStateFromOpenDecimalEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
+  return x2ValueStateFromOpenDecimalEntry(
+    entry,
+    input.memory,
+    input.shapeMemory,
+    input.y,
+    input.yShape,
+    input.yDirectShape,
+  );
 }
 
 function x2ValueStateFromOpenDecimalEntry(
@@ -8362,6 +8510,7 @@ function x2ValueStateFromOpenDecimalEntry(
   shapeMemory: X2ShapeMemory | undefined,
   y: X2ValueSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
+  yDirectShape: X2ShapeSet | undefined = undefined,
 ): X2ValueDataflowState {
   const x = new Set<X2ValueFact>();
   const x2 = new Set<X2ValueFact>();
@@ -8384,6 +8533,8 @@ function x2ValueStateFromOpenDecimalEntry(
     xShape,
     yShape: cloneOptionalShapeSet(yShape),
     x2Shape,
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(yDirectShape),
     entry,
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
@@ -8396,7 +8547,14 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
   if (input.entry.kind === "open") {
     const entry = advanceDecimalPointEntry(input.entry);
     if (entry.kind === "open") {
-      return x2ValueStateFromOpenDecimalEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
+      return x2ValueStateFromOpenDecimalEntry(
+        entry,
+        input.memory,
+        input.shapeMemory,
+        input.y,
+        input.yShape,
+        input.yDirectShape,
+      );
     }
     return {
       x: new Set(),
@@ -8405,6 +8563,8 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
       xShape: new Set(),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry,
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -8418,6 +8578,8 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
       y: cloneOptionalValueSet(input.y),
       x2: new Set(),
       yShape: cloneOptionalShapeSet(input.yShape),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: { kind: "unknown" },
       vpContext: { kind: "unknown" },
       structuralEntry: { kind: "unknown" },
@@ -8433,6 +8595,8 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
     xShape: normalizeX2RestoreShapesForX(restoredX2Shape),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
@@ -8451,11 +8615,18 @@ function transferSignChangeX2ValueState(
 ): X2ValueDataflowState {
   if (input.structuralEntry?.kind === "exponent") {
     const entry = signChangeStructuralExponentEntry(input.structuralEntry);
-    return x2ValueStateFromStructuralExponentEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
+    return x2ValueStateFromStructuralExponentEntry(
+      entry,
+      input.memory,
+      input.shapeMemory,
+      input.y,
+      input.yShape,
+      input.yDirectShape,
+    );
   }
   if (input.entry.kind === "exponent") {
     const entry = signChangeExponentEntry(input.entry) as Extract<X2EntryState, { kind: "exponent" }>;
-    return x2ValueStateFromExponentEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
+    return x2ValueStateFromExponentEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape, input.yDirectShape);
   }
   if (input.entry.kind === "closed" && input.structuralVpContext?.kind === "exponent") {
     const context = signChangeStructuralExponentEntry(input.structuralVpContext);
@@ -8477,6 +8648,8 @@ function transferSignChangeX2ValueState(
       xShape: new Set(),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: { kind: "unknown" },
       vpContext: { kind: "unknown" },
       structuralEntry: { kind: "unknown" },
@@ -8506,6 +8679,8 @@ function transferSignChangeX2ValueState(
     xShape,
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape,
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
@@ -8530,6 +8705,8 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
         mantissa: input.entry.raw,
         exponent: new Set([""]),
       }),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: {
         kind: "exponent",
         mantissa: new Set(input.entry.raw),
@@ -8546,7 +8723,14 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
     };
   }
   if (input.entry.kind === "exponent") {
-    return x2ValueStateFromExponentEntry(input.entry, input.memory, input.shapeMemory, input.y, input.yShape);
+    return x2ValueStateFromExponentEntry(
+      input.entry,
+      input.memory,
+      input.shapeMemory,
+      input.y,
+      input.yShape,
+      input.yDirectShape,
+    );
   }
   if (input.structuralEntry?.kind === "exponent") {
     return x2ValueStateFromStructuralExponentEntry(
@@ -8555,6 +8739,7 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
       input.shapeMemory,
       input.y,
       input.yShape,
+      input.yDirectShape,
     );
   }
   if (
@@ -8569,6 +8754,7 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
       input.shapeMemory,
       input.y,
       input.yShape,
+      input.yDirectShape,
     );
   }
   if (input.entry.kind === "closed" && input.vpEntryMantissa !== undefined) {
@@ -8586,6 +8772,8 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
         mantissa: input.vpEntryMantissa,
         exponent: new Set([""]),
       }),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: {
         kind: "exponent",
         mantissa: new Set(input.vpEntryMantissa),
@@ -8781,6 +8969,7 @@ function transferExchangeXYX2ValueState(
   const effect = plainX2Effect(op);
   const sourceX = visibleX2ValueFactsForStack(input);
   const sourceXShape = visibleX2ShapeFactsForStack(input);
+  const sourceXDirectShape = visibleX2DirectShapeFactsForStack(input);
   const x = cloneOptionalValueSet(input.y);
   const xShape = cloneOptionalShapeSet(input.yShape);
   const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
@@ -8792,6 +8981,8 @@ function transferExchangeXYX2ValueState(
     xShape,
     yShape: new Set(sourceXShape),
     x2Shape,
+    xDirectShape: cloneOptionalShapeSet(input.yDirectShape),
+    yDirectShape: new Set(sourceXDirectShape),
     entry: nextX2EntryStateForPlainEffect(effect),
     vpContext: transferPlainX2VpContextState(input, effect),
     structuralEntry: noneX2StructuralEntryState(),
@@ -8856,6 +9047,7 @@ function transferCopyYToXX2ValueState(
   const xShape = cloneOptionalShapeSet(closed.yShape);
   const x2 = transferPlainX2ValueSet(closed, x, xShape, effect);
   const x2Shape = transferPlainX2ShapeSet(closed, x, xShape, effect);
+  const yDirectShape = cloneOptionalShapeSet(closed.yDirectShape);
   return {
     x,
     y: cloneOptionalValueSet(closed.y),
@@ -8863,6 +9055,8 @@ function transferCopyYToXX2ValueState(
     xShape,
     yShape: cloneOptionalShapeSet(closed.yShape),
     x2Shape,
+    xDirectShape: new Set(yDirectShape),
+    yDirectShape,
     entry: nextX2EntryStateForPlainEffect(effect),
     vpContext: transferPlainX2VpContextState(closed, effect),
     structuralEntry: noneX2StructuralEntryState(),
@@ -8930,6 +9124,14 @@ function visibleX2ShapeFactsForStack(input: X2ValueDataflowState): X2ShapeSet {
   return cloneOptionalShapeSet(effectiveInputXShape(input));
 }
 
+function visibleX2DirectShapeFactsForStack(input: X2ValueDataflowState): X2ShapeSet {
+  const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
+  if (closedExponentShapes.size > 0) return closedExponentShapes;
+  const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
+  if (structuralEntry.kind === "exponent") return structuralExponentEntryShapeFacts(structuralEntry);
+  return cloneOptionalShapeSet(input.xDirectShape);
+}
+
 function transferPlainYValueSet(
   input: X2ValueDataflowState,
   sourceX: X2ValueSet,
@@ -8952,6 +9154,20 @@ function transferPlainYShapeSet(
   if (info.stackEffect === "preserves") return cloneOptionalShapeSet(input.yShape);
   if (info.stackEffect === "consume-y-keep" && info.risk === "documented") {
     return cloneOptionalShapeSet(input.yShape);
+  }
+  return new Set();
+}
+
+function transferPlainYDirectShapeSet(
+  input: X2ValueDataflowState,
+  sourceXDirectShape: X2ShapeSet | undefined,
+  op: Extract<IrOp, { kind: "plain" }>,
+): Set<X2ShapeFact> {
+  const info = getOpcode(op.opcode);
+  if (info.stackEffect === "shifts") return cloneOptionalShapeSet(sourceXDirectShape);
+  if (info.stackEffect === "preserves") return cloneOptionalShapeSet(input.yDirectShape);
+  if (info.stackEffect === "consume-y-keep" && info.risk === "documented") {
+    return cloneOptionalShapeSet(input.yDirectShape);
   }
   return new Set();
 }
@@ -9235,6 +9451,8 @@ export function joinX2ValueDataflowStates(
     xShape: cloneOptionalShapeSet(incoming.xShape),
     yShape: cloneOptionalShapeSet(incoming.yShape),
     x2Shape: cloneOptionalShapeSet(incoming.x2Shape),
+    xDirectShape: cloneOptionalShapeSet(incoming.xDirectShape),
+    yDirectShape: cloneOptionalShapeSet(incoming.yDirectShape),
     entry: cloneX2EntryState(incoming.entry),
     vpContext: cloneX2VpContextState(incoming.vpContext),
     structuralEntry: cloneX2StructuralEntryState(incoming.structuralEntry),
@@ -9255,6 +9473,8 @@ export function joinX2ValueDataflowStates(
     xShape: joinVisibleX2ShapeSetsWithValues(current.xShape, current.x, incoming.xShape, incoming.x),
     yShape: joinVisibleX2ShapeSetsWithValues(current.yShape, current.y, incoming.yShape, incoming.y),
     x2Shape: joinX2SyncedShapeSetsWithValues(current.x2Shape, current.x2, incoming.x2Shape, incoming.x2),
+    xDirectShape: joinDirectShapeSets(current.xDirectShape, incoming.xDirectShape),
+    yDirectShape: joinDirectShapeSets(current.yDirectShape, incoming.yDirectShape),
     entry: joinX2EntryStates(current.entry, incoming.entry),
     vpContext: joinX2VpContextStates(current.vpContext, incoming.vpContext),
     structuralEntry: joinX2StructuralEntryStates(current.structuralEntry, incoming.structuralEntry),
@@ -9323,6 +9543,8 @@ function sameX2ValueDataflowState(
     sameOptionalShapeSet(left.xShape, right.xShape) &&
     sameOptionalShapeSet(left.yShape, right.yShape) &&
     sameOptionalShapeSet(left.x2Shape, right.x2Shape) &&
+    sameOptionalShapeSet(left.xDirectShape, right.xDirectShape) &&
+    sameOptionalShapeSet(left.yDirectShape, right.yDirectShape) &&
     sameX2EntryState(left.entry, right.entry) &&
     sameX2VpContextState(left.vpContext, right.vpContext) &&
     sameX2StructuralEntryState(left.structuralEntry, right.structuralEntry) &&
@@ -9655,6 +9877,8 @@ function invalidateRegisterDependentX2ValueState(
     xShape: cloneOptionalShapeSet(input.xShape),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
+    xDirectShape: cloneOptionalShapeSet(input.xDirectShape),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: cloneX2EntryState(input.entry),
     vpContext: cloneX2VpContextState(input.vpContext),
     structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
@@ -9685,6 +9909,8 @@ function dropUnstableOpaqueExpressionX2ValueFacts(
     xShape: cloneOptionalShapeSet(input.xShape),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
+    xDirectShape: cloneOptionalShapeSet(input.xDirectShape),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: cloneX2EntryState(input.entry),
     vpContext: cloneX2VpContextState(input.vpContext),
     structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
@@ -10512,6 +10738,13 @@ function joinOptionalShapeSets(
   return intersectX2ShapeSets(current, incoming);
 }
 
+function joinDirectShapeSets(
+  current: X2ShapeSet | undefined,
+  incoming: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  return intersectX2ShapeSets(current, incoming);
+}
+
 function sameOptionalShapeSet(
   left: X2ShapeSet | undefined,
   right: X2ShapeSet | undefined,
@@ -10835,8 +11068,10 @@ function canonicalStableExpressionValueFact(fact: X2ValueFact): X2ValueFact {
 function canonicalStableExpressionValueFactIfValid(fact: X2ValueFact): X2ValueFact | undefined {
   if (!fact.startsWith("expr-key:")) return fact;
   if (stableExpressionValueFactHasInvalidShapeSource(fact)) return undefined;
+  const opcode = stableExpressionValueFactOpcode(fact);
+  const preservePinnedExponent = opcode !== undefined && opcodePreservesPinnedStructuralExponentSource(opcode);
   return fact.replace(/shape:([^,()]+)/gu, (source, raw: string) => {
-    const canonical = canonicalStableShapeSourceKey(raw as X2ShapeFact);
+    const canonical = canonicalStableShapeSourceKey(raw as X2ShapeFact, preservePinnedExponent);
     return canonical ?? source;
   }) as X2ValueFact;
 }
@@ -10865,9 +11100,39 @@ function canonicalX2ValueFactIfValid(fact: X2ValueFact): X2ValueFact | undefined
   return fact.startsWith("expr-key:") ? canonicalStableExpressionValueFactIfValid(fact) : fact;
 }
 
-function canonicalStableShapeSourceKey(fact: X2ShapeFact): string | undefined {
+function stableExpressionValueFactOpcode(fact: X2ValueFact): number | undefined {
+  const opcode = /^expr-key:([0-9A-F]{2})\(/u.exec(fact)?.[1];
+  return opcode === undefined ? undefined : Number.parseInt(opcode, 16);
+}
+
+function opcodePreservesPinnedStructuralExponentSource(opcode: number): boolean {
+  return opcode === 0x10 || opcode === 0x11 || opcode === 0x12 || opcode === 0x13;
+}
+
+function canonicalStableShapeSourceKey(
+  fact: X2ShapeFact,
+  preservePinnedStructuralExponentSource = false,
+): string | undefined {
+  if (preservePinnedStructuralExponentSource) {
+    const direct = pinnedStructuralExponentStableShapeSourceKey(fact);
+    if (direct !== undefined) return direct;
+  }
   const facts = x2RestoredDisplaySourceKeyShapeFacts(new Set([fact]));
   return facts.size === 1 ? stableExpressionShapeSourceKey([...facts][0]!) : undefined;
+}
+
+function pinnedStructuralExponentStableShapeSourceKey(fact: X2ShapeFact): string | undefined {
+  const canonical = x2CanonicalShapeFactIfValid(fact);
+  if (canonical === undefined) return undefined;
+  const model = x2ShapeDataModelForFact(canonical);
+  if (
+    model.kind !== "exponent-entry" ||
+    (model.mantissa.radix !== "hex" && model.mantissa.radix !== "super") ||
+    !hasStructuralNonDecimalDigit(model.mantissa.canonical)
+  ) {
+    return undefined;
+  }
+  return stableStructuralExpressionSourceKey(canonical);
 }
 
 function stableExpressionSourceKeys(
@@ -10882,6 +11147,42 @@ function stableExpressionSourceKeys(
   }
   for (const key of stableExpressionDisplayShapeSourceKeys(values, shapes)) keys.add(key);
   return keys;
+}
+
+function stableExpressionSourceKeysForOperand(
+  opcode: number,
+  values: X2ValueSet | undefined,
+  shapes: X2ShapeSet | undefined,
+  options: StableExpressionSourceKeyOptions = {},
+): Set<string> {
+  const keys = stableExpressionSourceKeys(values, shapes, options);
+  if (!opcodePreservesPinnedStructuralExponentSource(opcode)) return keys;
+  const direct = pinnedStructuralExponentStableShapeSourceKeys(shapes);
+  if (direct.keys.size === 0) return keys;
+  const output = new Set<string>();
+  for (const key of stableExpressionSourceKeys(values, undefined, options)) output.add(key);
+  for (const key of stableExpressionDisplayShapeSourceKeys(values, shapes)) {
+    if (!direct.blockedRestoreKeys.has(key)) output.add(key);
+  }
+  for (const key of direct.keys) output.add(key);
+  return output;
+}
+
+function pinnedStructuralExponentStableShapeSourceKeys(
+  shapes: X2ShapeSet | undefined,
+): { readonly keys: Set<string>; readonly blockedRestoreKeys: Set<string> } {
+  const keys = new Set<string>();
+  const blockedRestoreKeys = new Set<string>();
+  for (const fact of canonicalStructuralShapeFacts(shapes)) {
+    const key = pinnedStructuralExponentStableShapeSourceKey(fact);
+    if (key === undefined) continue;
+    keys.add(key);
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "exponent-entry" || model.closedStructuralMantissa === undefined) continue;
+    const closed = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+    if (closed !== undefined) blockedRestoreKeys.add(stableExpressionShapeSourceKey(closed));
+  }
+  return { keys, blockedRestoreKeys };
 }
 
 function stableExpressionDisplayShapeSourceKeys(
@@ -10909,6 +11210,13 @@ export function x2RestoredDisplayShapeFactsFromSourceKey(key: string): X2ShapeSe
   if (raw === undefined) return undefined;
   const facts = x2RestoredDisplaySourceKeyShapeFacts(new Set<X2ShapeFact>([raw as X2ShapeFact]));
   return facts.size === 0 ? undefined : facts;
+}
+
+function stableExpressionKeyDirectShapeSet(key: string): X2ShapeSet | undefined {
+  const raw = /^shape:(.*)$/u.exec(key)?.[1];
+  if (raw === undefined) return undefined;
+  const canonical = x2CanonicalShapeFactIfValid(raw as X2ShapeFact);
+  return canonical === undefined ? undefined : new Set<X2ShapeFact>([canonical]);
 }
 
 function normalizedDecimalValueSet(values: X2ValueSet | undefined): Set<string> {
@@ -10961,6 +11269,19 @@ function stableExpressionKeyHasStructuralShapeEvidence(key: string, seen: Set<st
 
 function stableExpressionKeyShapeSet(key: string): X2ShapeSet | undefined {
   const shapes = stableExpressionKeyShapeSetForEvaluation(key, new Set());
+  return shapes.size === 0 ? undefined : shapes;
+}
+
+function stableExpressionKeyShapeSetForOperand(
+  opcode: number,
+  key: string,
+  seen: Set<string>,
+): X2ShapeSet | undefined {
+  const direct = opcodeHasStructuralOperandSemantics(opcode)
+    ? stableExpressionKeyDirectShapeSet(key)
+    : undefined;
+  if (direct !== undefined && direct.size > 0) return direct;
+  const shapes = stableExpressionKeyShapeSetForEvaluation(key, seen);
   return shapes.size === 0 ? undefined : shapes;
 }
 
@@ -11021,7 +11342,7 @@ function stableExpressionKeyConcreteDecimalValues(key: string, seen: Set<string>
     for (const fact of plainProducesConcreteDecimalValues(
       op,
       stableExpressionKeyValueSetForOperand(parsed.opcode, xKey, seen),
-      stableExpressionKeyShapeSetForEvaluation(xKey, seen),
+      stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey, seen),
       options,
     )) {
       const value = normalizedDecimalValueFromFact(fact);
@@ -11033,9 +11354,10 @@ function stableExpressionKeyConcreteDecimalValues(key: string, seen: Set<string>
       op,
       stableExpressionKeyValueSetForOperand(parsed.opcode, yKey!, seen),
       stableExpressionKeyValueSetForOperand(parsed.opcode, xKey!, seen),
-      stableExpressionKeyShapeSetForEvaluation(yKey!, seen),
-      stableExpressionKeyShapeSetForEvaluation(xKey!, seen),
+      stableExpressionKeyShapeSetForOperand(parsed.opcode, yKey!, seen),
+      stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey!, seen),
       options,
+      stableExpressionKeyDirectShapeSet(yKey!),
     )) {
       const value = normalizedDecimalValueFromFact(fact);
       if (value !== undefined) output.add(value);
@@ -11088,7 +11410,7 @@ function stableExpressionKeyConcreteShapeFacts(key: string, seen: Set<string>): 
       op,
       stableExpressionKeyValueSetForOperand(parsed.opcode, xKey, seen),
       undefined,
-      stableExpressionKeyShapeSetForEvaluation(xKey, seen),
+      stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey, seen),
       undefined,
       options,
     )) output.add(fact);
@@ -11098,9 +11420,10 @@ function stableExpressionKeyConcreteShapeFacts(key: string, seen: Set<string>): 
       op,
       stableExpressionKeyValueSetForOperand(parsed.opcode, xKey!, seen),
       stableExpressionKeyValueSetForOperand(parsed.opcode, yKey!, seen),
-      stableExpressionKeyShapeSetForEvaluation(xKey!, seen),
-      stableExpressionKeyShapeSetForEvaluation(yKey!, seen),
+      stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey!, seen),
+      stableExpressionKeyShapeSetForOperand(parsed.opcode, yKey!, seen),
       options,
+      stableExpressionKeyDirectShapeSet(yKey!),
     )) output.add(fact);
   }
   seen.delete(key);
@@ -11465,11 +11788,25 @@ function signChangeClosedDecimalState(
   if (exponentShapeBacked !== undefined) return exponentShapeBacked;
   const shaped = signChangedVpEntryMantissas(input);
   if (shaped !== undefined) {
-    return x2ValueStateFromMantissaShapes(shaped, input.memory, input.shapeMemory, input.y, input.yShape);
+    return x2ValueStateFromMantissaShapes(
+      shaped,
+      input.memory,
+      input.shapeMemory,
+      input.y,
+      input.yShape,
+      input.yDirectShape,
+    );
   }
   const shapeBacked = signChangedClosedShapeMantissas(input);
   if (shapeBacked !== undefined) {
-    return x2ValueStateFromMantissaShapes(shapeBacked, input.memory, input.shapeMemory, input.y, input.yShape);
+    return x2ValueStateFromMantissaShapes(
+      shapeBacked,
+      input.memory,
+      input.shapeMemory,
+      input.y,
+      input.yShape,
+      input.yDirectShape,
+    );
   }
   const decimalShapeSource = signChangedVpEntryDecimalShapeState(input);
   if (decimalShapeSource !== undefined) return decimalShapeSource;
@@ -11522,6 +11859,8 @@ function signChangeClosedDecimalState(
     xShape: shapes,
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: new Set(shapes),
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
@@ -11625,6 +11964,8 @@ function signChangedClosedDecimalExponentShapeState(
     xShape: shapes,
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: new Set(shapes),
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
@@ -11669,6 +12010,8 @@ function signChangedVpEntryDecimalShapeState(input: X2ValueDataflowState): X2Val
     xShape: shapes,
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: new Set(shapes),
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
@@ -11703,6 +12046,7 @@ function signChangedClosedStructuralState(
     input.shapeMemory,
     input.y,
     input.yShape,
+    input.yDirectShape,
   );
   const values = new Set<X2ValueFact>();
   if (producerIndex !== undefined) values.add(expressionValueFact(producerIndex));
@@ -12084,6 +12428,7 @@ function x2ValueStateFromMantissaShapes(
   shapeMemory: X2ShapeMemory | undefined = undefined,
   y: X2ValueSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
+  yDirectShape: X2ShapeSet | undefined = undefined,
 ): X2ValueDataflowState | undefined {
   const x = new Set<X2ValueFact>();
   const x2 = new Set<X2ValueFact>();
@@ -12105,6 +12450,8 @@ function x2ValueStateFromMantissaShapes(
     xShape,
     yShape: cloneOptionalShapeSet(yShape),
     x2Shape,
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
@@ -12122,6 +12469,7 @@ function x2ValueStateFromStructuralShapes(
   shapeMemory: X2ShapeMemory | undefined = undefined,
   y: X2ValueSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
+  yDirectShape: X2ShapeSet | undefined = undefined,
 ): X2ValueDataflowState {
   const shapeSet = canonicalStructuralShapeFacts(shapes);
   return {
@@ -12131,6 +12479,8 @@ function x2ValueStateFromStructuralShapes(
     xShape: shapeSet,
     yShape: cloneOptionalShapeSet(yShape),
     x2Shape: new Set(shapeSet),
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
@@ -12147,6 +12497,7 @@ function x2ValueStateFromStructuralExponentEntry(
   shapeMemory: X2ShapeMemory | undefined = undefined,
   y: X2ValueSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
+  yDirectShape: X2ShapeSet | undefined = undefined,
 ): X2ValueDataflowState {
   if (input.kind !== "exponent") {
     return {
@@ -12156,6 +12507,8 @@ function x2ValueStateFromStructuralExponentEntry(
       xShape: new Set(),
       yShape: cloneOptionalShapeSet(yShape),
       x2Shape: new Set(),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: cloneX2StructuralEntryState(input),
@@ -12171,6 +12524,8 @@ function x2ValueStateFromStructuralExponentEntry(
     xShape: new Set(shapes),
     yShape: cloneOptionalShapeSet(yShape),
     x2Shape: new Set(shapes),
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: cloneX2StructuralEntryState(input),
@@ -12207,6 +12562,8 @@ function x2ValueStateFromSignedStructuralVpContext(
     xShape: new Set(shapes),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: new Set(shapes),
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
     structuralEntry: noneX2StructuralEntryState(),
@@ -12223,6 +12580,7 @@ function x2ValueStateFromExponentEntry(
   shapeMemory: X2ShapeMemory | undefined = undefined,
   y: X2ValueSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
+  yDirectShape: X2ShapeSet | undefined = undefined,
 ): X2ValueDataflowState {
   if (input.kind !== "exponent") {
     return {
@@ -12232,6 +12590,8 @@ function x2ValueStateFromExponentEntry(
       xShape: new Set(),
       yShape: cloneOptionalShapeSet(yShape),
       x2Shape: new Set(),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(yDirectShape),
       entry: cloneX2EntryState(input),
       vpContext: { kind: "unknown" },
       structuralEntry: noneX2StructuralEntryState(),
@@ -12251,6 +12611,8 @@ function x2ValueStateFromExponentEntry(
     xShape: new Set(shapes),
     yShape: cloneOptionalShapeSet(yShape),
     x2Shape: new Set(shapes),
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(yDirectShape),
     entry: cloneX2EntryState(input),
     vpContext: x2VpContextFromExponentEntry(input),
     structuralEntry: noneX2StructuralEntryState(),
@@ -12272,6 +12634,8 @@ function x2ValueStateFromSignedDecimalVpContext(
       xShape: new Set(),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: cloneX2VpContextState(context),
       structuralEntry: noneX2StructuralEntryState(),
@@ -12288,6 +12652,8 @@ function x2ValueStateFromSignedDecimalVpContext(
       xShape: new Set(),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(),
+      xDirectShape: new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: cloneX2VpContextState(context),
       structuralEntry: noneX2StructuralEntryState(),
@@ -12304,6 +12670,8 @@ function x2ValueStateFromSignedDecimalVpContext(
     xShape: new Set(shapes),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: new Set(shapes),
+    xDirectShape: new Set(),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: closedX2EntryState(),
     vpContext: x2VpContextFromExponentEntry(entry),
     structuralEntry: noneX2StructuralEntryState(),
@@ -12439,6 +12807,8 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
       xShape: new Set(closedExponentShapes),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(closedExponentShapes),
+      xDirectShape: new Set(closedExponentShapes),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: cloneX2VpContextState(input.vpContext),
       structuralEntry: noneX2StructuralEntryState(),
@@ -12459,6 +12829,8 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
       xShape: new Set(shapes),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(shapes),
+      xDirectShape: new Set(shapes),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: cloneX2VpContextState(input.vpContext),
       structuralEntry: noneX2StructuralEntryState(),
@@ -12475,6 +12847,8 @@ function closeX2ValueEntry(input: X2ValueDataflowState): X2ValueDataflowState {
     xShape: cloneOptionalShapeSet(input.xShape),
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
+    xDirectShape: cloneOptionalShapeSet(input.xDirectShape),
+    yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: closedX2EntryState(),
     vpContext: cloneX2VpContextState(input.vpContext),
     structuralEntry: noneX2StructuralEntryState(),

@@ -4881,9 +4881,21 @@ describe("ir passes on synthetic programs", () => {
       x2: new Set(),
       entry: { kind: "closed" },
     };
+    const directCarryState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:10(shape:hex:A0:mantissa,decimal:1:normalized)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const exponentDerivedState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:10(shape:hex-exponent:A:1,decimal:1:normalized)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
 
     const constant = transferX2ValueStateForEdge(constantState, plain(0x34, "К [x]"), "normal", {}, 0);
     const structural = transferX2ValueStateForEdge(structuralState, plain(0x32, "К ЗН"), "normal", {}, 0);
+    const directCarry = transferX2ValueStateForEdge(directCarryState, plain(0x34, "К [x]"), "normal", {}, 0);
+    const exponentDerived = transferX2ValueStateForEdge(exponentDerivedState, plain(0x34, "К [x]"), "normal", {}, 0);
 
     expect(x2ValueStateText(constant?.x)).toContain("decimal:3:normalized");
     expect(x2ValueStateText(constant?.x)).not.toContain("expr-key:34(expr-key:20())");
@@ -4892,6 +4904,11 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(structural?.x)).not.toContain(
       "expr-key:32(expr-key:31(shape:hex:-8F:mantissa))",
     );
+    expect(x2ValueStateText(directCarry?.x)).toContain("decimal:101:normalized");
+    expect(x2ShapeStateText(directCarry?.xShape)).toContain("mantissa:101:decimal");
+    expect(x2ValueStateText(exponentDerived?.x)).toContain("decimal:1:normalized");
+    expect(x2ValueStateText(exponentDerived?.x)).not.toContain("decimal:101:normalized");
+    expect(x2ShapeStateText(exponentDerived?.xShape)).toContain("mantissa:1:decimal");
   });
 
   it("x2-hidden-temp-restore uses stable expr keys across repeated constant stack producers", () => {
@@ -6108,6 +6125,7 @@ describe("ir passes on synthetic programs", () => {
       x: new Set<X2ValueFact>(["decimal:1:normalized"]),
       x2: new Set(),
       yShape: new Set<X2ShapeFact>(["hex:9AЕ:mantissa"]),
+      yDirectShape: new Set<X2ShapeFact>(["hex:9AЕ:mantissa"]),
       xShape: new Set<X2ShapeFact>(["mantissa:1:decimal"]),
       entry: { kind: "closed" },
     };
@@ -6116,20 +6134,35 @@ describe("ir passes on synthetic programs", () => {
       y: new Set<X2ValueFact>(["decimal:1:normalized"]),
       x: new Set(),
       yShape: new Set<X2ShapeFact>(["mantissa:1:decimal"]),
+      yDirectShape: new Set<X2ShapeFact>(["mantissa:1:decimal"]),
       xShape: new Set<X2ShapeFact>(["hex:9AЕ:mantissa"]),
     };
     const unsafeFState: X2ValueDataflowState = {
       ...state,
       yShape: new Set<X2ShapeFact>(["hex:9AF:mantissa"]),
+      yDirectShape: new Set<X2ShapeFact>(["hex:9AF:mantissa"]),
+    };
+    const singleNibbleCarryState: X2ValueDataflowState = {
+      ...state,
+      yShape: new Set<X2ShapeFact>(["hex:A0:mantissa"]),
+      yDirectShape: new Set<X2ShapeFact>(["hex:A0:mantissa"]),
+    };
+    const asciiECarryState: X2ValueDataflowState = {
+      ...state,
+      yShape: new Set<X2ShapeFact>(["hex:9AE:mantissa"]),
+      yDirectShape: new Set<X2ShapeFact>(["hex:9AE:mantissa"]),
     };
     const overWideState: X2ValueDataflowState = {
       ...state,
       yShape: new Set<X2ShapeFact>(["hex:Е9999999:mantissa"]),
+      yDirectShape: new Set<X2ShapeFact>(["hex:Е9999999:mantissa"]),
     };
 
     const result = transferX2ValueStateForEdge(state, plain(0x10, "+"), "normal", {}, 0);
     const rightStructuralResult = transferX2ValueStateForEdge(rightStructuralState, plain(0x10, "+"), "normal", {}, 0);
     const unsafeFResult = transferX2ValueStateForEdge(unsafeFState, plain(0x10, "+"), "normal", {}, 0);
+    const singleNibbleCarryResult = transferX2ValueStateForEdge(singleNibbleCarryState, plain(0x10, "+"), "normal", {}, 0);
+    const asciiECarryResult = transferX2ValueStateForEdge(asciiECarryState, plain(0x10, "+"), "normal", {}, 0);
     const overWideResult = transferX2ValueStateForEdge(overWideState, plain(0x10, "+"), "normal", {}, 0);
 
     expect(x2ValueStateText(result?.x) ?? []).toContain("decimal:1015:normalized");
@@ -6138,6 +6171,10 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(rightStructuralResult?.xShape)).toEqual([]);
     expect(x2ValueStateText(unsafeFResult?.x) ?? []).not.toContain("decimal:1016:normalized");
     expect(x2ShapeStateText(unsafeFResult?.xShape)).toEqual([]);
+    expect(x2ValueStateText(singleNibbleCarryResult?.x) ?? []).toContain("decimal:101:normalized");
+    expect(x2ShapeStateText(singleNibbleCarryResult?.xShape)).toContain("mantissa:101:decimal");
+    expect(x2ValueStateText(asciiECarryResult?.x) ?? []).toContain("decimal:1015:normalized");
+    expect(x2ShapeStateText(asciiECarryResult?.xShape)).toContain("mantissa:1015:decimal");
     expect(x2ValueStateText(overWideResult?.x) ?? []).not.toContain("decimal:150000000:normalized");
     expect(x2ShapeStateText(overWideResult?.xShape)).toEqual([]);
   });
