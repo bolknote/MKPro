@@ -1896,9 +1896,14 @@ The pipeline currently contains:
   followed by a pure unary operation and an explicit X-preserving X2 sync can
   also collapse to `.` when the same stable `expr-key:*` is already in X2; the
   source can be either a decimal digit-run or a documented stable constant
-  producer such as `F pi`. The current `X` must prove the same dot-restore value,
-  and the usual unsafe-shape, stack-lift, and context-sensitive restore guards
-  all pass; the sync may sit after documented X/stack/X2-preserving empty cells.
+  producer such as `F pi`. Repeated two-operand RPN runs are handled the same
+  way for stable binary operators when both operand sources are proved by the
+  same source-key algebra; an explicit `В↑` may separate the two numeric
+  operands, but the rewrite remains blocked if removing the second run's entry
+  stack lift can reach a later stack consumer. The current `X` must prove the
+  same dot-restore value, and the usual unsafe-shape, stack-lift, and
+  context-sensitive restore guards all pass; the sync may sit after documented
+  X/stack/X2-preserving empty cells.
   A repeated literal
   may otherwise be replaced before a following `ВП` only when the same-source
   proof survives the shared VP restore-gap/source analysis over free-standing

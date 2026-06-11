@@ -10268,6 +10268,22 @@ export function x2StableUnaryExpressionValueFact(
   return stableExpressionValueFact(opcode, key);
 }
 
+export function x2StableBinaryExpressionValueFact(
+  op: IrOp,
+  ySource: X2ValueFact,
+  xSource: X2ValueFact,
+): X2ValueFact | undefined {
+  if (op.kind !== "plain") return undefined;
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return undefined;
+  if (stableExpressionOpcodeArity(op.opcode) !== 2) return undefined;
+  const yKey = stableExpressionSourceKey(ySource);
+  const xKey = stableExpressionSourceKey(xSource);
+  if (yKey === undefined || xKey === undefined) return undefined;
+  if (stableBinaryExpressionKeyHasConcreteDecimalResult(op, yKey, xKey)) return undefined;
+  const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
+  return stableBinaryExpressionValueFact(op, opcode, yKey, xKey);
+}
+
 export function x2StableConstantExpressionValueFacts(op: IrOp): Set<X2ValueFact> {
   if (op.kind !== "plain") return new Set();
   return plainProducesStableConstantExpressionValues(op);

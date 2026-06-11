@@ -13157,6 +13157,58 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-literal-restore replaces repeated synced binary expressions with dot", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x03, "3"),
+      plain(0x13, "/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x03, "3"),
+      plain(0x13, "/"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(4);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x03, "3"),
+      plain(0x13, "/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal /(1,3) from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps repeated synced binary expressions when their stack lift is consumed", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x03, "3"),
+      plain(0x13, "/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x01, "1"),
+      plain(0x0e, "В↑"),
+      plain(0x03, "3"),
+      plain(0x13, "/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore keeps pure unary expressions across empty gaps without a later sync", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),

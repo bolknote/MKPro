@@ -21,6 +21,7 @@ import {
   x2StateHasSameDotRestoreValueInXAndX2,
   x2StateIsClosedPlainContext,
   x2PreviousStackLiftDuplicateYProducerIndex,
+  x2StableBinaryExpressionValueFact,
   x2StableConstantExpressionValueFacts,
   x2StableUnaryExpressionValueFact,
   x2ValueSetHasFact,
@@ -37,6 +38,7 @@ import {
 const DOT = 0x0a;
 const SIGN_CHANGE = 0x0b;
 const VP = 0x0c;
+const STACK_LIFT = 0x0e;
 
 interface NumericLiteralRun {
   readonly end: number;
@@ -50,6 +52,7 @@ interface UnaryExpressionRun {
   readonly displayValue: string;
   readonly x2Fact: X2ValueFact;
   readonly sourceStackEnd: number;
+  readonly allowDuplicateYStackProof: boolean;
 }
 
 interface ExpressionSourceRun {
@@ -197,6 +200,10 @@ function literalRunsAt(ops: readonly IrOp[], start: number): readonly NumericLit
 }
 
 function unaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
+  return unaryExpressionRunFromSingleSourceAt(ops, start) ?? binaryExpressionRunAt(ops, start);
+}
+
+function unaryExpressionRunFromSingleSourceAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
   const source = expressionSourceRunAt(ops, start);
   if (source === undefined) return undefined;
   const unaryIndex = source.end + 1;
@@ -214,7 +221,45 @@ function unaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpress
     displayValue: `${mnemonic ?? "expr"}(${source.displayValue})`,
     x2Fact,
     sourceStackEnd: source.end,
+    allowDuplicateYStackProof: true,
   };
+}
+
+function binaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
+  const ySource = expressionSourceRunAt(ops, start);
+  if (ySource === undefined) return undefined;
+  const xStart = binaryExpressionXSourceStart(ops, ySource.end + 1);
+  const xSource = expressionSourceRunAt(ops, xStart);
+  if (xSource === undefined) return undefined;
+  const binaryIndex = xSource.end + 1;
+  const binary = ops[binaryIndex];
+  if (binary === undefined || binary.kind !== "plain") return undefined;
+  const x2Fact = stableBinaryExpressionValueFactForSources(binary, ySource, xSource);
+  if (x2Fact === undefined) return undefined;
+  let syncIndex = binaryIndex + 1;
+  while (isPlainExpressionSyncGapOp(ops[syncIndex])) syncIndex += 1;
+  if (!isPlainXPreservingX2Sync(ops[syncIndex])) return undefined;
+  const mnemonic = "mnemonic" in binary.meta ? binary.meta.mnemonic : undefined;
+  return {
+    end: syncIndex,
+    displayValue: `${mnemonic ?? "expr"}(${ySource.displayValue},${xSource.displayValue})`,
+    x2Fact,
+    sourceStackEnd: binaryIndex,
+    allowDuplicateYStackProof: false,
+  };
+}
+
+function binaryExpressionXSourceStart(ops: readonly IrOp[], start: number): number {
+  return isPlainStackLiftSeparator(ops[start]) ? start + 1 : start;
+}
+
+function isPlainStackLiftSeparator(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }> {
+  return op !== undefined &&
+    op.kind === "plain" &&
+    op.opcode === STACK_LIFT &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op) &&
+    !hasRoles(op);
 }
 
 function expressionSourceRunAt(ops: readonly IrOp[], start: number): ExpressionSourceRun | undefined {
@@ -252,6 +297,20 @@ function stableUnaryExpressionValueFactForSource(
   for (const sourceFact of source.x2Facts) {
     const x2Fact = x2StableUnaryExpressionValueFact(unary, sourceFact);
     if (x2Fact !== undefined) return x2Fact;
+  }
+  return undefined;
+}
+
+function stableBinaryExpressionValueFactForSources(
+  binary: IrOp,
+  ySource: ExpressionSourceRun,
+  xSource: ExpressionSourceRun,
+): X2ValueFact | undefined {
+  for (const yFact of ySource.x2Facts) {
+    for (const xFact of xSource.x2Facts) {
+      const x2Fact = x2StableBinaryExpressionValueFact(binary, yFact, xFact);
+      if (x2Fact !== undefined) return x2Fact;
+    }
   }
   return undefined;
 }
@@ -545,7 +604,10 @@ function replacingExpressionStackLiftCanExpose(
   context: DirectReturnAnalysisContext,
 ): boolean {
   return replacingNumberEntryCanExposeStackLift(ops, run.end) &&
-    !expressionStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run.sourceStackEnd, state, context);
+    (
+      !run.allowDuplicateYStackProof ||
+      !expressionStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run.sourceStackEnd, state, context)
+    );
 }
 
 function literalStackLiftAlreadySuppliedByDuplicateY(

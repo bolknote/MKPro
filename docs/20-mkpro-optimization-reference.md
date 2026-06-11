@@ -1755,7 +1755,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     a decimal digit-run or a documented stable constant producer such as
     `F pi`, the hidden X2 set already contains the same stable `expr-key:*`,
     visible `X` proves the same dot-restore value, and the unsafe-shape,
-    stack-lift, and context-sensitive restore guards all remain clean. The
+    stack-lift, and context-sensitive restore guards all remain clean. Repeated
+    two-operand RPN runs are handled through the same stable key model for
+    binary operators when both operand sources are proved; an explicit `В↑`
+    may separate two numeric operands, and the rewrite is refused if deleting
+    the second run's entry/lift cells can expose a later stack consumer. The
     expression parser can cross documented X/stack/X2-preserving empty cells
     before that explicit sync, while role-bearing `/-/` cells
     are not parsed as replaceable literal sign suffixes. When a cell range can
