@@ -45,7 +45,7 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
 // baselines just like top-level examples. Growth is reserved for semantic or
 // machine-safety fixes.
 export const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 134,
+  "cave-highlevel-baseline": 133,
   "cave-treasure": 116,
   "giants-country": 114,
   "tic-tac-toe-4x4": 317,

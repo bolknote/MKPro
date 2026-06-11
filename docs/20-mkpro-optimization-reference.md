@@ -1932,11 +1932,16 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `hex-exponent:123:1` or `hex-exponent:1.23:2`; value-only integer facts
     are not enough because `К [x]` could otherwise normalize a leading-zero or
     fractional exponent display. Role-free `К |x|` is removed under an exact
-    non-negative display proof, including scientific decimal display shapes and
-    decimal-only structural hex/super mantissas or closed structural exponents
-    such as `hex:0.123:mantissa` or `hex-exponent:1.23:-1`; this ABS-only proof
-    does not make structural shapes dot-safe or promote them to ordinary
-    decimal values. Negative values and raw display spellings remain observable.
+    non-negative display proof, including scientific decimal display shapes,
+    structural exact-display forms, and decimal-only structural hex/super
+    mantissas or closed structural exponents such as `hex:0.123:mantissa` or
+    `hex-exponent:1.23:-1`; this ABS-only proof does not make structural shapes
+    dot-safe or promote them to ordinary decimal values. Negative values and raw
+    display spellings remain observable. Role-free `К ЗН` is removed when the
+    same closed-context value/shape proof shows visible `X` is already one of
+    `-1`, `0`, or `1`; it uses the shared context-sensitive X2 exposure guard,
+    so a following `.`/`/-/`/`ВП` that could observe the removed opcode as
+    previous-command context keeps the command explicit.
     Separate value dataflow can still derive the visible results of `К [x]` and
     `К {x}` from exact decimal-only structural displays, but those facts are
     treated as the operation's result, not as proof that the original

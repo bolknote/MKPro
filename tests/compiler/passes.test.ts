@@ -25230,6 +25230,66 @@ describe("ir passes on synthetic programs", () => {
     expect(vpX2Peephole.run(rawAbs, ctx).applied).toBe(0);
   });
 
+  it("vp-x2-peephole removes a no-op К ЗН for exact sign-normal display values", () => {
+    const positive: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+    const negative: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+    const zero: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+    const nonNoop: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+
+    expect(vpX2Peephole.run(positive, ctx).ops).toEqual([
+      plain(0x01, "1"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+    expect(vpX2Peephole.run(negative, ctx).ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0b, "/-/"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+    expect(vpX2Peephole.run(zero, ctx).ops).toEqual([
+      plain(0x00, "0"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+    expect(vpX2Peephole.run(nonNoop, ctx).applied).toBe(0);
+  });
+
+  it("vp-x2-peephole keeps no-op К ЗН when it shields a following dot restore", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x32, "К ЗН"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-x2-peephole keeps no-op-looking К {x} during active fractional entry", () => {
     const program: IrOp[] = [
       plain(0x00, "0"),

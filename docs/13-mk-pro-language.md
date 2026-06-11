@@ -2109,10 +2109,12 @@ The pipeline currently contains:
   algebra proves a non-negative exact display, including decimal-only
   structural hex/super mantissas or closed structural exponents; this is an
   ABS-only shape proof and does not make those structural facts dot-safe or
-  promote them to ordinary decimal values. Structural exact-display operands
-  for `К [x]`/`К {x}` can nevertheless seed the visible decimal result and
-  result display shape for later value dataflow, under the same no-dot-safety
-  restriction. Because these unary ops preserve hidden X2, the
+  promote them to ordinary decimal values. Role-free `К ЗН` uses the same
+  closed-context value/shape proof when visible `X` is already exactly `-1`,
+  `0`, or `1`. Structural exact-display operands for `К [x]`/`К {x}` can
+  nevertheless seed the visible decimal result and result display shape for
+  later value dataflow, under the same no-dot-safety restriction. Because these
+  unary ops preserve hidden X2, the
   rewrite does not require hidden X2 to already match visible `X`; it only
   requires a preserving executable gap before any later context-sensitive `.`,
   `/-/`, or `ВП` restore so removing the opcode cannot change the restore's

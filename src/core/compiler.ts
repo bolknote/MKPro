@@ -15187,7 +15187,7 @@ const optimizerCapabilities: Array<{
     source: "mk61-delta",
     requires: ["x2-register"],
     activeWhen: ["vp-fraction-restore", "vp-exponent-splice"],
-    detail: "Uses compiler-marked ВП cells where they simultaneously restore X2 and provide the needed fractional/mantissa side effect, including X-preserving store/empty/marker/direct-return gaps before redundant К {x}; also collapses redundant ВП ВП, empty-op runs before ВП, proved exponent /-/ /-/ toggles, and VP/X2 restore runs before fresh digits or dead overwrites across transparent return helpers.",
+    detail: "Uses compiler-marked ВП cells where they simultaneously restore X2 and provide the needed fractional/mantissa side effect, including X-preserving store/empty/marker/direct-return gaps before redundant К {x}; also removes proved no-op К {x}/К [x]/К |x|/К ЗН cells under the shared X2 exposure guard, collapses redundant ВП ВП, empty-op runs before ВП, proved exponent /-/ /-/ toggles, and VP/X2 restore runs before fresh digits or dead overwrites across transparent return helpers.",
   },
   {
     id: "x2-hidden-temp",

@@ -24,6 +24,7 @@ import {
 } from "./helpers.ts";
 
 const ABS = 0x31;
+const SIGN = 0x32;
 const INTEGER = 0x34;
 const FRACTION = 0x35;
 
@@ -62,8 +63,16 @@ function isFreeStandingAbsOp(op: IrOp): boolean {
   return op.kind === "plain" && op.opcode === ABS && !hasRoles(op);
 }
 
+function isFreeStandingSignOp(op: IrOp): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  return op.kind === "plain" && op.opcode === SIGN && !hasRoles(op);
+}
+
 function isFreeStandingNoopUnaryOp(op: IrOp): boolean {
-  return isFreeStandingFractionOp(op) || isFreeStandingIntegerOp(op) || isFreeStandingAbsOp(op);
+  return isFreeStandingFractionOp(op) ||
+    isFreeStandingIntegerOp(op) ||
+    isFreeStandingAbsOp(op) ||
+    isFreeStandingSignOp(op);
 }
 
 function isFractionalNoopValue(value: string): boolean {
@@ -94,6 +103,14 @@ function stateHasAbsNoopX(state: X2ValueDataflowState | undefined): boolean {
     x2ShapeSetHasExactNonNegativeDisplay(effectiveVisibleXStateShape(state));
 }
 
+function stateHasSignNoopX(state: X2ValueDataflowState | undefined): boolean {
+  if (state === undefined || !x2StateIsClosedPlainContext(state)) return false;
+  for (const visible of x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(state))) {
+    if (visible === "-1" || visible === "0" || visible === "1") return true;
+  }
+  return false;
+}
+
 function isKnownNoopUnaryOp(
   ops: readonly IrOp[],
   index: number,
@@ -106,15 +123,15 @@ function isKnownNoopUnaryOp(
     ? stateHasFractionalNoopX(state)
     : op.kind === "plain" && op.opcode === INTEGER
       ? stateHasIntegerNoopX(state)
-      : stateHasAbsNoopX(state);
+      : op.kind === "plain" && op.opcode === ABS
+        ? stateHasAbsNoopX(state)
+        : stateHasSignNoopX(state);
   return knownNoop &&
-    // К {x} preserves hidden X2. Once dataflow proves it is also a visible-X
-    // no-op, and К [x] is treated the same only when the display shape is
-    // already the exact integer display. К |x| follows the same rule for exact
-    // non-negative displays, including scientific decimal display shapes.
-    // Removing any of them cannot change a later restore value. The exposure
-    // guard still keeps immediate restore boundaries where the opcode itself
-    // could be the observable previous-command context.
+    // К {x}, К [x], К |x|, and К ЗН preserve hidden X2. Once dataflow proves
+    // the opcode is also a visible-X no-op, removing it cannot change a later
+    // restore value. The exposure guard still keeps immediate restore
+    // boundaries where the opcode itself could be the observable
+    // previous-command context.
     !x2SyncCanExposeContextSensitiveRestore(
       ops,
       index,
@@ -196,7 +213,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-fraction-restore",
-        detail: `Removed ${remove.size} redundant К {x}/К [x]/К |x| op(s) already supplied by a ВП/X2 boundary or proved no-op X value.`,
+        detail: `Removed ${remove.size} redundant К {x}/К [x]/К |x|/К ЗН op(s) already supplied by a ВП/X2 boundary or proved no-op X value.`,
       },
     ],
   };
