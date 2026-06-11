@@ -34,6 +34,7 @@ import {
   analyzeRecallRemoval,
   analyzeX2StackEffect,
   analyzeX2VpShapeContext,
+  analyzeX2VpShapeTransition,
   canonicalStructuralRestoreSourceKeyFacts,
   computeX2ImmediateSyncStates,
   computeX2RegisterStates,
@@ -10088,6 +10089,49 @@ describe("ir passes on synthetic programs", () => {
       canDiscardSeparatorBeforeSignChange: true,
       canDiscardRestoreBeforeFreshDigit: true,
       canCancelExponentSignPair: false,
+    });
+  });
+
+  it("x2 VP shape transition analysis maps contexts to removable splice operations", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x54, "КНОП"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(analyzeX2VpShapeTransition(states[3], "vp")).toMatchObject({
+      operation: "vp",
+      canDiscardCurrentOp: true,
+      canDiscardRestoreRun: false,
+      canDiscardSignPair: false,
+      reason: "duplicate-vp",
+    });
+    expect(analyzeX2VpShapeTransition(states[4], "empty-before-non-digit")).toMatchObject({
+      canDiscardCurrentOp: true,
+      reason: "exponent-separator",
+    });
+    expect(analyzeX2VpShapeTransition(states[4], "sign-pair")).toMatchObject({
+      canDiscardSignPair: true,
+      reason: "exponent-sign-pair",
+    });
+    expect(analyzeX2VpShapeTransition(states[6], "fresh-digit")).toMatchObject({
+      canDiscardRestoreRun: true,
+      reason: "vp-context-overwritten",
+    });
+    expect(analyzeX2VpShapeTransition(states[6], "hard-overwrite")).toMatchObject({
+      canDiscardRestoreRun: true,
+      reason: "vp-context-overwritten",
+    });
+    expect(analyzeX2VpShapeTransition(states[0], "vp")).toMatchObject({
+      canDiscardCurrentOp: false,
+      canDiscardRestoreRun: false,
+      canDiscardSignPair: false,
+      reason: "none",
     });
   });
 

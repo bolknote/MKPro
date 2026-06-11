@@ -278,6 +278,28 @@ export interface X2VpShapeContextAnalysis {
   readonly canCancelExponentSignPair: boolean;
 }
 
+export type X2VpShapeTransitionOperation =
+  | "vp"
+  | "empty-before-non-digit"
+  | "empty-before-sign-change"
+  | "fresh-digit"
+  | "hard-overwrite"
+  | "sign-pair";
+
+export interface X2VpShapeTransitionAnalysis {
+  readonly operation: X2VpShapeTransitionOperation;
+  readonly context: X2VpShapeContextAnalysis;
+  readonly canDiscardCurrentOp: boolean;
+  readonly canDiscardRestoreRun: boolean;
+  readonly canDiscardSignPair: boolean;
+  readonly reason:
+    | "duplicate-vp"
+    | "exponent-separator"
+    | "vp-context-overwritten"
+    | "exponent-sign-pair"
+    | "none";
+}
+
 export interface X2StackEffectAnalysis {
   readonly x2Effect: OpcodeInfo["x2Effect"];
   readonly stackEffect: OpcodeInfo["stackEffect"];
@@ -5512,6 +5534,76 @@ export function analyzeX2VpShapeContext(
     return emptyX2VpShapeContextAnalysis("none");
   }
   return emptyX2VpShapeContextAnalysis("unknown");
+}
+
+export function analyzeX2VpShapeTransition(
+  state: X2ValueDataflowState | undefined,
+  operation: X2VpShapeTransitionOperation,
+): X2VpShapeTransitionAnalysis {
+  const context = analyzeX2VpShapeContext(state);
+  switch (operation) {
+    case "vp": {
+      const canDiscardCurrentOp = context.kind === "active-mantissa" ||
+        context.kind === "active-exponent" ||
+        context.kind === "active-structural-exponent";
+      return {
+        operation,
+        context,
+        canDiscardCurrentOp,
+        canDiscardRestoreRun: false,
+        canDiscardSignPair: false,
+        reason: canDiscardCurrentOp ? "duplicate-vp" : "none",
+      };
+    }
+    case "empty-before-non-digit":
+      return {
+        operation,
+        context,
+        canDiscardCurrentOp: context.canDiscardSeparatorBeforeNonDigit,
+        canDiscardRestoreRun: false,
+        canDiscardSignPair: false,
+        reason: context.canDiscardSeparatorBeforeNonDigit ? "exponent-separator" : "none",
+      };
+    case "empty-before-sign-change": {
+      const canDiscardCurrentOp = context.canDiscardSeparatorBeforeSignChange ||
+        context.canDiscardSeparatorBeforeNonDigit;
+      return {
+        operation,
+        context,
+        canDiscardCurrentOp,
+        canDiscardRestoreRun: false,
+        canDiscardSignPair: false,
+        reason: canDiscardCurrentOp ? "exponent-separator" : "none",
+      };
+    }
+    case "fresh-digit":
+      return {
+        operation,
+        context,
+        canDiscardCurrentOp: false,
+        canDiscardRestoreRun: context.canDiscardRestoreBeforeFreshDigit,
+        canDiscardSignPair: false,
+        reason: context.canDiscardRestoreBeforeFreshDigit ? "vp-context-overwritten" : "none",
+      };
+    case "hard-overwrite":
+      return {
+        operation,
+        context,
+        canDiscardCurrentOp: false,
+        canDiscardRestoreRun: context.restoresX2,
+        canDiscardSignPair: false,
+        reason: context.restoresX2 ? "vp-context-overwritten" : "none",
+      };
+    case "sign-pair":
+      return {
+        operation,
+        context,
+        canDiscardCurrentOp: false,
+        canDiscardRestoreRun: false,
+        canDiscardSignPair: context.canCancelExponentSignPair,
+        reason: context.canCancelExponentSignPair ? "exponent-sign-pair" : "none",
+      };
+  }
 }
 
 function emptyX2VpShapeContextAnalysis(

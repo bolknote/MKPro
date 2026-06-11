@@ -2,6 +2,7 @@ import type { IrOp } from "../types.ts";
 import {
   analyzeX2StackEffect,
   analyzeX2VpShapeContext,
+  analyzeX2VpShapeTransition,
   computeX2ValueStates,
   directReturnAnalysisContext,
   emptyResult,
@@ -16,7 +17,6 @@ import {
   x2RestoreGapBeforeVp,
   x2RestoreGapDirectReturnDoesNotObserveRestore,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
-  x2StateHasX2RestoreContext,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateIsClosedPlainContext,
   x2StatesHaveSameVpEntrySource,
@@ -111,8 +111,8 @@ function x2ContextRestoreRunBeforeFreshDigit(
   state: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): readonly number[] {
-  const vpContext = analyzeX2VpShapeContext(state);
-  if (!vpContext.canDiscardRestoreBeforeFreshDigit) {
+  const transition = analyzeX2VpShapeTransition(state, "fresh-digit");
+  if (!transition.canDiscardRestoreRun) {
     if (!x2StateIsClosedPlainContext(state) || previousExecutableIsFreeStandingRestoreOp(ops, startIndex)) return [];
   }
   return x2ContextRestoreRunBeforeFreshDigitEntry(ops, startIndex, context);
@@ -133,7 +133,7 @@ function x2ContextRestoreRunBeforeDeadOverwrite(
   state: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): readonly number[] {
-  if (!x2StateHasX2RestoreContext(state)) return [];
+  if (!analyzeX2VpShapeTransition(state, "hard-overwrite").canDiscardRestoreRun) return [];
   return x2ContextRestoreRunBeforeHardOverwrite(ops, startIndex, context);
 }
 
@@ -223,8 +223,10 @@ function removableExponentSeparatorRun(
   startIndex: number,
   state: X2ValueDataflowState | undefined,
 ): readonly number[] {
-  const context = analyzeX2VpShapeContext(state);
-  if (!context.canDiscardSeparatorBeforeNonDigit && !context.canDiscardSeparatorBeforeSignChange) return [];
+  if (
+    !analyzeX2VpShapeTransition(state, "empty-before-non-digit").canDiscardCurrentOp &&
+    !analyzeX2VpShapeTransition(state, "empty-before-sign-change").canDiscardCurrentOp
+  ) return [];
 
   const run: number[] = [];
   for (let index = startIndex; index < ops.length; index += 1) {
@@ -237,9 +239,9 @@ function removableExponentSeparatorRun(
     if (run.length === 0) return [];
     if (isDecimalDigit(op)) return [];
     if (isFreeStandingX2SignChangeOp(op)) {
-      return context.canDiscardSeparatorBeforeSignChange || context.canDiscardSeparatorBeforeNonDigit ? run : [];
+      return analyzeX2VpShapeTransition(state, "empty-before-sign-change").canDiscardCurrentOp ? run : [];
     }
-    return context.canDiscardSeparatorBeforeNonDigit ? run : [];
+    return analyzeX2VpShapeTransition(state, "empty-before-non-digit").canDiscardCurrentOp ? run : [];
   }
   return [];
 }
@@ -247,10 +249,7 @@ function removableExponentSeparatorRun(
 function canRemoveSecondVpAfterPreviousVp(
   stateBeforePreviousVp: X2ValueDataflowState | undefined,
 ): boolean {
-  const context = analyzeX2VpShapeContext(stateBeforePreviousVp);
-  return context.kind === "active-mantissa" ||
-    context.kind === "active-exponent" ||
-    context.kind === "active-structural-exponent";
+  return analyzeX2VpShapeTransition(stateBeforePreviousVp, "vp").canDiscardCurrentOp;
 }
 
 // These rewrites are proven behaviorally equivalent on the MK-61 emulator:
@@ -308,7 +307,6 @@ const run: IrPassFn = (ops) => {
     // from the following non-digit command. Removing it leaves that following
     // command to close exponent entry in the same place. Labels are not
     // commands here: the scanner decides from the next executable opcode.
-    const previousContext = analyzeX2VpShapeContext(x2ValueStates[i - 1]);
     if (isFreeStandingX2EmptyOp(cur)) {
       const separatorRun = removableExponentSeparatorRun(ops, i, x2ValueStates[i]);
       if (separatorRun.length > 0) {
@@ -322,7 +320,7 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingX2EmptyOp(prev) &&
       isFreeStandingX2SignChangeOp(cur) &&
-      previousContext.canDiscardSeparatorBeforeSignChange
+      analyzeX2VpShapeTransition(x2ValueStates[i - 1], "empty-before-sign-change").canDiscardCurrentOp
     ) {
       remove.add(i - 1);
       continue;
@@ -342,7 +340,7 @@ const run: IrPassFn = (ops) => {
     if (
       isFreeStandingX2SignChangeOp(prev) &&
       isFreeStandingX2SignChangeOp(cur) &&
-      previousContext.canCancelExponentSignPair
+      analyzeX2VpShapeTransition(x2ValueStates[i - 1], "sign-pair").canDiscardSignPair
     ) {
       remove.add(i - 1);
       remove.add(i);

@@ -1355,7 +1355,11 @@ The pipeline currently contains:
   restored-display shapes through one restored-display equality layer, including
   closed decimal exponent forms and structural exponent shifts. This is
   separate from dot-safety: `exponent:*:*:decimal` is not promoted to a safe `.`
-  restore source merely because the visible display matches. The same canonical
+  restore source merely because the visible display matches. The same
+  VP/X2 shape model also drives the optimizer's splice decisions for duplicate
+  `ВП`, exponent separators, sign-pair cancellation, and restore runs before
+  fresh digit or hard-overwrite contexts; MKPro syntax is unchanged.
+  The same canonical
   decimal display shapes may seed opaque stable-expression source keys for later
   hidden-temp proofs; those keys identify the displayed source shape but do not
   infer a decimal result value for the operation. Restored visible-decimal

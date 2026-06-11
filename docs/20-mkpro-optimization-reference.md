@@ -1277,7 +1277,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `hex:0.0Г`; shifted two-byte `super:FA` forms compare as the resulting
     hex-like display mantissa). `ВП` source comparisons now use the same
     source-key algebra for decimal mantissas and structural restore shapes,
-    rather than separate exact-set checks. Closed structural exponent-entry
+    rather than separate exact-set checks. The `vp-splice` pass now queries a
+    shared VP/X2 shape-transition helper for duplicate `ВП`, exponent
+    separator, exponent sign-pair, fresh-digit overwrite, and hard-overwrite
+    cases; this keeps the local rewrite rules tied to the same shape/context
+    model instead of reimplementing those booleans inside the pass. Closed
+    structural exponent-entry
     shapes also feed `ВП` source proofs through that restored mantissa form, so a
     later `.` restore of `hex-exponent:Г:2` exposes `hex:Г00` as the next
     structural mantissa source instead of dropping the context. The same
