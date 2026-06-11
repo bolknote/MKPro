@@ -6202,10 +6202,21 @@ function recallRemovalPreservesImmediateVpRestoreContext(
   const recalledMantissas = vpEntryMantissasFromValueFacts(recalledValues);
   const recalledShapes = recallVpEntryShapeSourceFacts(op, state, valueProof.register);
   const recalledSourceKeys = vpSourceKeys(recalledMantissas, recalledShapes);
+  const recalledState = transferX2ValueStateForEdge(
+    state,
+    op,
+    "normal",
+    { trackRegisterMemory: true },
+    recallIndex,
+  );
+  const vpSource = analyzeX2VpRestoreGapSource(ops, recallIndex + 1, state, recalledState, context);
   if (
-    x2HasSignRestoreGapBeforeVp(ops, recallIndex + 1, context) &&
-    x2HasOnlyRestoreGapBeforeVp(ops, recallIndex + 1, context) &&
-    stringSetsHaveIntersection(vpEntrySignSourceKeys(state), recalledSourceKeys)
+    vpSource.hasSignRestoreGapBeforeVp &&
+    vpSource.hasOnlyRestoreGapBeforeVp &&
+    (
+      vpSource.canDiscardSignRestoreRunBeforeProvedVp ||
+      stringSetsHaveIntersection(vpEntrySignSourceKeys(state), recalledSourceKeys)
+    )
   ) return true;
   const nextRestore = nextImmediateX2RestoreOp(ops, recallIndex + 1);
   if (nextRestore?.kind !== "plain" || nextRestore.opcode !== 0x0c) return false;

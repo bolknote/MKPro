@@ -1219,7 +1219,8 @@ The pipeline currently contains:
   treats an immediate `ВП` as safe for direct or proved stable-indirect decimal
   or structural recalls when the same decimal mantissa or structural `ВП`
   source is already active before the removed recall. For decimal recalls the
-  same guard also accepts a free-standing `/-/ ... ВП` restore gap when the
+  same shared VP restore-gap/source analysis also accepts a free-standing
+  `/-/ ... ВП` restore gap when the
   store-backed sign source, a proved closed `X == X2` normalized-decimal sign
   source, or a proved shared structural hex/super source shape is the same
   source the recall would have synchronized; the gap may cross transparent
@@ -1864,7 +1865,8 @@ The pipeline currently contains:
   current `X` proves the same dot-restore value, and the usual unsafe-shape,
   stack-lift, and context-sensitive restore guards all pass. A repeated literal
   may otherwise be replaced before a following `ВП` only when the same-source
-  proof survives the free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap, so
+  proof survives the shared VP restore-gap/source analysis over free-standing
+  `КНОП`/`К1`/`К2` and `/-/` cells, so
   standalone fractional digit-runs and unsafe leading-zero/signed-zero shapes
   stay explicit until a separate proof exists.
   The same shared CFG-aware X2 exposure walker used by `x2-noop-restore`

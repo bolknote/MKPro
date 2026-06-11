@@ -10,13 +10,13 @@ import {
   isDisplayFocusSensitive,
   knownIndirectFlowTarget,
   labelIndexes,
+  analyzeX2VpRestoreGapSource,
   analyzeX2StackEffect,
   removingPreShiftLiftCanExposeStack,
   replacingNumberEntryCanExposeStackLift,
   plainPreservesXValue,
+  transferX2ValueStateForEdge,
   x2CanUseSourceDotRestoreAt,
-  x2HasOnlyRestoreGapBeforeVp,
-  x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateHasSameDotRestoreValueInXAndX2,
@@ -330,6 +330,8 @@ function hasRoles(op: Extract<IrOp, { kind: "plain" }>): boolean {
 function replacingLiteralCanExposeContextSensitiveRestore(
   ops: readonly IrOp[],
   run: NumericLiteralRun,
+  state: X2ValueDataflowState | undefined,
+  producerIndex: number,
   context: DirectReturnAnalysisContext,
   vpReachabilityCache: Map<number, boolean>,
   redundantSync: {
@@ -348,16 +350,30 @@ function replacingLiteralCanExposeContextSensitiveRestore(
     }
     return replacementCanReachVpRestore;
   };
+  const replacementDotState = transferX2ValueStateForEdge(
+    state,
+    { kind: "plain", opcode: DOT, meta: { mnemonic: "." } },
+    "normal",
+    { trackRegisterMemory: true },
+    producerIndex,
+  );
+  const vpSource = analyzeX2VpRestoreGapSource(
+    ops,
+    run.end + 1,
+    state,
+    replacementDotState,
+    context,
+  );
   if (
     !run.dotPreservesVpEntrySource &&
-    x2ReplacementDotHasOnlyRestoreGapBeforeVp(ops, run.end + 1, context)
+    vpSource.replacementDotHasOnlyRestoreGapBeforeVp
   ) return true;
   if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
   if (
     run.dotPreservesVpEntrySource &&
     (
-      x2HasOnlyRestoreGapBeforeVp(ops, run.end + 1, context) ||
-      x2ReplacementDotHasOnlyRestoreGapBeforeVp(ops, run.end + 1, context)
+      vpSource.hasOnlyRestoreGapBeforeVp ||
+      vpSource.replacementDotHasOnlyRestoreGapBeforeVp
     )
   ) return false;
   if (
@@ -528,11 +544,19 @@ const run: IrPassFn = (ops) => {
         ) &&
         (exactX2Fact || visibleDecimalX2Fact) &&
         !replacingLiteralStackLiftCanExpose(ops, index, runAtIndex, state, directReturnContext) &&
-        !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext, vpReachabilityCache, {
-          value: exactX2Fact,
-          displayValue: visibleDecimalX2DisplayValueFact,
-          shape: visibleDecimalX2DotSafeShapeFact,
-        })
+        !replacingLiteralCanExposeContextSensitiveRestore(
+          ops,
+          runAtIndex,
+          state,
+          index,
+          directReturnContext,
+          vpReachabilityCache,
+          {
+            value: exactX2Fact,
+            displayValue: visibleDecimalX2DisplayValueFact,
+            shape: visibleDecimalX2DotSafeShapeFact,
+          },
+        )
       ) {
         result.push(dotRestoreOp(runAtIndex.displayValue, ops[index]!));
         removed += runAtIndex.end - index;
@@ -566,6 +590,8 @@ const run: IrPassFn = (ops) => {
           x2Fact: expressionRun.x2Fact,
           dotPreservesVpEntrySource: false,
         },
+        state,
+        index,
         directReturnContext,
         vpReachabilityCache,
         {
