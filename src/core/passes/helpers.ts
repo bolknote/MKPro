@@ -5237,25 +5237,13 @@ export function x2CanUseClosedSignChangeDotSourceAt(
   state: X2ValueDataflowState | undefined,
   context?: DirectReturnAnalysisContext,
 ): boolean {
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const op = ops[cursor]!;
-    if (op.kind === "label" || op.kind === "orphan-address") continue;
-    if (isFreeStandingX2EmptyOp(op)) continue;
-    if (
-      context !== undefined &&
-      isKnownReturnCallOp(op) &&
-      x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
-    ) continue;
-    if (hasRewriteBarrier(op)) return false;
-    return isFreeStandingX2SignChangeOp(op) &&
-      x2StateIsClosedPlainContext(state) &&
-      (
-        !x2StateHasUnsafeDotRestoreShapeX2(state) ||
-        x2StateHasOnlyDotSafeStructuralMantissaX2(state)
-      ) &&
-      x2StateHasSameClosedSignChangeSourceInXAndX2(state);
-  }
-  return false;
+  return x2RestoreRunBeforeIndex(ops, index, context).sawSignRestore &&
+    x2StateIsClosedPlainContext(state) &&
+    (
+      !x2StateHasUnsafeDotRestoreShapeX2(state) ||
+      x2StateHasOnlyDotSafeStructuralMantissaX2(state)
+    ) &&
+    x2StateHasSameClosedSignChangeSourceInXAndX2(state);
 }
 
 export function isFreeStandingX2SignChangeOp(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
@@ -5547,7 +5535,7 @@ export function x2ScanRestoreRunBeforeTerminal(
 export function x2RestoreRunBeforeIndex(
   ops: readonly IrOp[],
   terminalIndex: number,
-  context: DirectReturnAnalysisContext,
+  context?: DirectReturnAnalysisContext,
   options: X2RestoreRunBeforeIndexOptions = {},
 ): X2RestoreRunBeforeIndexScan {
   const removableIndexes: number[] = [];
@@ -5565,7 +5553,11 @@ export function x2RestoreRunBeforeIndex(
       sawSignRestore = true;
       continue;
     }
-    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    if (
+      context !== undefined &&
+      isKnownReturnCallOp(op) &&
+      x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
+    ) continue;
     removableIndexes.reverse();
     return {
       blockedIndex: index,

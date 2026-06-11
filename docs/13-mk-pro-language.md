@@ -1801,9 +1801,9 @@ The pipeline currently contains:
   fact as the scratch register, even if there is no live `reg:r` alias. A separate
   `.` restore-gap proof must have seen two safe X2-preserving executable steps
   after the last X2 sync; alternatively, the shared X2 model can prove a
-  closed-context `/-/` dot source through only free-standing `КНОП`/`К1`/`К2`
-  empty ops, or a normalized decimal source fact already in X2 through a
-  display-free local gap. The normal stack-lift/X2-context guards still prove that
+  closed-context `/-/` dot source through the shared backward restore-run
+  scanner over only free-standing `КНОП`/`К1`/`К2` empty ops, or a normalized
+  decimal source fact already in X2 through a display-free local gap. The normal stack-lift/X2-context guards still prove that
   the recall's stack shift and previous-command class are not observable. The
   normalized decimal path includes fractional facts, while raw leading-zero
   fractional hidden mantissas are kept as non-equivalent unnormalized X2 facts. The

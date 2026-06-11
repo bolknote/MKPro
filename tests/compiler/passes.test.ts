@@ -16287,6 +16287,14 @@ describe("ir passes on synthetic programs", () => {
     expect(x2RestoreRunBeforeIndex(
       transparentProgram,
       9,
+    )).toEqual({
+      blockedIndex: 6,
+      removableIndexes: [7],
+      sawSignRestore: false,
+    });
+    expect(x2RestoreRunBeforeIndex(
+      transparentProgram,
+      9,
       directReturnAnalysisContext(transparentProgram),
     )).toEqual({
       blockedIndex: 3,
