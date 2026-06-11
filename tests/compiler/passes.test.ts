@@ -17296,6 +17296,28 @@ describe("ir passes on synthetic programs", () => {
     }
   });
 
+  it("x2-hidden-temp-restore uses computed structural VP-source proofs after path-sensitive syncs", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x22, "F x^2"),
+      store("2"),
+      cjump("done"),
+      recall("2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[4]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
   it("x2-hidden-temp-restore crosses stable known indirect conditional fallthrough", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -21285,6 +21307,66 @@ describe("ir passes on synthetic programs", () => {
       label("end"),
       halt(),
     ]);
+  });
+
+  it("branch-target-x-reuse crosses transparent return-helper target prefixes", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("6"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      call("transparent"),
+      recall("6"),
+      halt(),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("6"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      call("transparent"),
+      halt(),
+      label("end"),
+      halt(),
+    ]);
+  });
+
+  it("branch-target-x-reuse keeps target recalls after nontransparent return-helper prefixes", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("clobber"),
+      plain(0x0d, "Cx"),
+      ret(),
+      label("main"),
+      recall("6"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      call("clobber"),
+      recall("6"),
+      halt(),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("branch-target-x-reuse handles numeric conditional targets", () => {

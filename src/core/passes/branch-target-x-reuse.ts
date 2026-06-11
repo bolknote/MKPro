@@ -10,12 +10,15 @@ import {
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
+  isKnownReturnCallOp,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
   plainPreservesXValue,
   removableRecallValueRegister,
   transferX2RegisterStateForEdge,
   transferX2ValueStateForEdge,
+  x2KnownReturnCallPreservesStackXAndX2,
+  type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
   type X2ValueFact,
@@ -60,6 +63,7 @@ const run: IrPassFn = (ops) => {
         { trackRegisterMemory: true },
         index,
       ),
+      directReturnContext,
     );
     if (targetRecall === undefined || remove.has(targetRecall.index)) continue;
     const target = ops[targetRecall.index]!;
@@ -220,6 +224,7 @@ function branchTargetRecallAfterTransparentPrefix(
   references: ReadonlyMap<number, number>,
   x2RegisterState: ReadonlySet<RegisterName> | undefined,
   targetValueState: X2ValueDataflowState | undefined,
+  directReturnContext: DirectReturnAnalysisContext,
 ): {
   readonly index: number;
   readonly x2RegisterState?: ReadonlySet<RegisterName> | undefined;
@@ -231,7 +236,7 @@ function branchTargetRecallAfterTransparentPrefix(
     if (index !== targetIndex && (references.get(index) ?? 0) > 0) return undefined;
     const op = ops[index]!;
     if (removableRecallValueRegister(op) !== undefined) return { index, x2RegisterState: registerState, valueState };
-    if (!isTransparentBranchTargetPrefixOp(op)) return undefined;
+    if (!isTransparentBranchTargetPrefixOp(ops, op, directReturnContext)) return undefined;
     const storedRegister = transparentPrefixStoredRegister(op);
     if (storedRegister !== undefined) {
       registerState = transferTransparentStoreX2RegisterState(registerState, valueState?.x, storedRegister);
@@ -241,8 +246,13 @@ function branchTargetRecallAfterTransparentPrefix(
   return undefined;
 }
 
-function isTransparentBranchTargetPrefixOp(op: IrOp): boolean {
+function isTransparentBranchTargetPrefixOp(
+  ops: readonly IrOp[],
+  op: IrOp,
+  directReturnContext: DirectReturnAnalysisContext,
+): boolean {
   if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  if (isKnownReturnCallOp(op)) return x2KnownReturnCallPreservesStackXAndX2(ops, op, directReturnContext);
   switch (op.kind) {
     case "label":
     case "store":
