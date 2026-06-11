@@ -1100,7 +1100,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `planRecallRemovalWithStackScheduler`, which combines the base X2/stack
     exposure analysis with the previous duplicate-`Y` producer override; branch
     target reuse supplies its projected branch state and target exposure index
-    to the same planner. Plain context-sensitive X2 restores
+    to the same planner. Replacement-to-dot passes use
+    `planX2ReplacementStackLift` for the same producer proof while also carrying
+    pass-local invalidated producer indexes, so a literal/hidden-temp rewrite
+    cannot rely on a stack-lift producer that the same pass has already
+    replaced with `.`. Plain context-sensitive X2 restores
     (`.`, `/-/`, `ВП`) and display-sensitive cells are barriers for those
     scans even when their stack profile is otherwise preserving.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.

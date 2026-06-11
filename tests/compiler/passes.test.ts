@@ -72,6 +72,7 @@ import {
   x2NextStackPreservingReturnX2SyncIndex,
   x2NextXPreservingX2SyncIndex,
   planRecallRemovalWithStackScheduler,
+  planX2ReplacementStackLift,
   x2PlanDotReplacementVpSource,
   x2PlanRestoreRunBeforeProvedVp,
   x2PlanRestoreRunBeforeTerminal,
@@ -11996,6 +11997,58 @@ describe("ir passes on synthetic programs", () => {
       stackLiftProducerIndex: 1,
       stackLiftAlreadySupplied: true,
       removable: true,
+    });
+  });
+
+  it("replacement stack scheduler rejects disabled or invalidated duplicate-Y producers", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x02, "2"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const x2ValueStates = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const context = directReturnAnalysisContext(program);
+
+    expect(planX2ReplacementStackLift(
+      program,
+      2,
+      3,
+      x2ValueStates[2],
+      context,
+      true,
+    )).toMatchObject({
+      initiallyExposesStackLift: true,
+      stackLiftProducerIndex: 1,
+      stackLiftAlreadySupplied: true,
+      exposesStackLift: false,
+    });
+    expect(planX2ReplacementStackLift(
+      program,
+      2,
+      3,
+      x2ValueStates[2],
+      context,
+      true,
+      { allowDuplicateYStackProof: false },
+    )).toMatchObject({
+      stackLiftProducerIndex: undefined,
+      stackLiftAlreadySupplied: false,
+      exposesStackLift: true,
+    });
+    expect(planX2ReplacementStackLift(
+      program,
+      2,
+      3,
+      x2ValueStates[2],
+      context,
+      true,
+      { invalidatedProducerIndexes: new Set([1]) },
+    )).toMatchObject({
+      stackLiftProducerIndex: 1,
+      stackLiftAlreadySupplied: false,
+      exposesStackLift: true,
     });
   });
 

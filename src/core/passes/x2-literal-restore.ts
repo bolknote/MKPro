@@ -11,6 +11,7 @@ import {
   knownIndirectFlowTarget,
   labelIndexes,
   analyzeX2StackEffect,
+  planX2ReplacementStackLift,
   replacingNumberEntryCanExposeStackLift,
   plainPreservesXValue,
   transferX2ValueStateForEdge,
@@ -20,7 +21,6 @@ import {
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateHasSameDotRestoreValueInXAndX2,
   x2StateIsClosedPlainContext,
-  x2PreviousStackLiftDuplicateYProducerIndex,
   x2StableBinaryExpressionValueFact,
   x2StableConstantExpressionValueFacts,
   x2StableUnaryExpressionValueFact,
@@ -591,9 +591,17 @@ function replacingLiteralStackLiftCanExpose(
   run: NumericLiteralRun,
   state: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
+  invalidatedProducerIndexes: ReadonlySet<number>,
 ): boolean {
-  return replacingNumberEntryCanExposeStackLift(ops, run.end) &&
-    !literalStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run, state, context);
+  return planX2ReplacementStackLift(
+    ops,
+    runStart,
+    run.end,
+    state,
+    context,
+    replacingNumberEntryCanExposeStackLift(ops, run.end),
+    { invalidatedProducerIndexes },
+  ).exposesStackLift;
 }
 
 function replacingExpressionStackLiftCanExpose(
@@ -602,32 +610,32 @@ function replacingExpressionStackLiftCanExpose(
   run: UnaryExpressionRun,
   state: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
+  invalidatedProducerIndexes: ReadonlySet<number>,
 ): boolean {
-  return replacingNumberEntryCanExposeStackLift(ops, run.end) &&
-    (
-      !run.allowDuplicateYStackProof ||
-      !expressionStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run.sourceStackEnd, state, context)
-    );
+  return planX2ReplacementStackLift(
+    ops,
+    runStart,
+    run.sourceStackEnd,
+    state,
+    context,
+    replacingNumberEntryCanExposeStackLift(ops, run.end),
+    {
+      allowDuplicateYStackProof: run.allowDuplicateYStackProof,
+      invalidatedProducerIndexes,
+    },
+  ).exposesStackLift;
 }
 
-function literalStackLiftAlreadySuppliedByDuplicateY(
+function markReplacedStackLiftProducers(
   ops: readonly IrOp[],
-  runStart: number,
-  run: NumericLiteralRun,
-  state: X2ValueDataflowState | undefined,
-  context: DirectReturnAnalysisContext,
-): boolean {
-  return expressionStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run.end, state, context);
-}
-
-function expressionStackLiftAlreadySuppliedByDuplicateY(
-  ops: readonly IrOp[],
-  runStart: number,
-  sourceEnd: number,
-  state: X2ValueDataflowState | undefined,
-  context: DirectReturnAnalysisContext,
-): boolean {
-  return x2PreviousStackLiftDuplicateYProducerIndex(ops, runStart, sourceEnd, state, context) !== undefined;
+  start: number,
+  end: number,
+  output: Set<number>,
+): void {
+  for (let index = start; index < end; index += 1) {
+    const op = ops[index];
+    if (op !== undefined && analyzeX2StackEffect(op).stackLiftAndX2Sync) output.add(index);
+  }
 }
 
 const run: IrPassFn = (ops) => {
@@ -636,6 +644,7 @@ const run: IrPassFn = (ops) => {
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const directReturnContext = directReturnAnalysisContext(ops);
   const vpReachabilityCache = new Map<number, boolean>();
+  const replacedStackLiftProducerIndexes = new Set<number>();
   const result: IrOp[] = [];
   let removed = 0;
 
@@ -666,7 +675,14 @@ const run: IrPassFn = (ops) => {
           directReturnContext,
         ) &&
         (exactX2Fact || visibleDecimalX2Fact) &&
-        !replacingLiteralStackLiftCanExpose(ops, index, runAtIndex, state, directReturnContext) &&
+        !replacingLiteralStackLiftCanExpose(
+          ops,
+          index,
+          runAtIndex,
+          state,
+          directReturnContext,
+          replacedStackLiftProducerIndexes,
+        ) &&
         !replacingLiteralCanExposeContextSensitiveRestore(
           ops,
           runAtIndex,
@@ -681,6 +697,7 @@ const run: IrPassFn = (ops) => {
           },
         )
       ) {
+        markReplacedStackLiftProducers(ops, index, runAtIndex.end, replacedStackLiftProducerIndexes);
         result.push(dotRestoreOp(runAtIndex.displayValue, ops[index]!));
         removed += runAtIndex.end - index;
         index = runAtIndex.end;
@@ -704,7 +721,14 @@ const run: IrPassFn = (ops) => {
         expressionSourceProvesFreeStandingRestore,
         directReturnContext,
       ) &&
-      !replacingExpressionStackLiftCanExpose(ops, index, expressionRun, state, directReturnContext) &&
+      !replacingExpressionStackLiftCanExpose(
+        ops,
+        index,
+        expressionRun,
+        state,
+        directReturnContext,
+        replacedStackLiftProducerIndexes,
+      ) &&
       !replacingLiteralCanExposeContextSensitiveRestore(
         ops,
         {
@@ -724,6 +748,7 @@ const run: IrPassFn = (ops) => {
         },
       )
     ) {
+      markReplacedStackLiftProducers(ops, index, expressionRun.end, replacedStackLiftProducerIndexes);
       result.push(dotRestoreOp(expressionRun.displayValue, ops[index]!));
       removed += expressionRun.end - index;
       index = expressionRun.end;

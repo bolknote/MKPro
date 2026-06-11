@@ -3,6 +3,7 @@ import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import { computeLiveness } from "./liveness-analysis.ts";
 import {
   analyzeRecallRemoval,
+  analyzeX2StackEffect,
   computeX2DotRestoreGapStates,
   computeX2ImmediateSyncStates,
   computeX2RegisterStates,
@@ -17,10 +18,10 @@ import {
   removableRecallValueRegister,
   removingRecallCanExposeX2Restore,
   x2CanUseSourceDotRestoreAt,
+  planX2ReplacementStackLift,
   x2PlanDotReplacementVpSource,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2ValueFactIsNormalizedDecimal,
-  x2PreviousStackLiftDuplicateYProducerIndex,
   x2ValueSetHasFact,
   x2ValueShapeSetsHaveSameDotSafeDecimal,
   x2ValueShapeSetsHaveSameDotSafeStructuralMantissa,
@@ -43,6 +44,7 @@ const run: IrPassFn = (ops) => {
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const liveness = computeLiveness(ops);
   const directReturnContext = directReturnAnalysisContext(ops);
+  const replacedStackLiftProducerIndexes = new Set<number>();
   let applied = 0;
 
   const result = ops.map((op, index): IrOp => {
@@ -160,11 +162,19 @@ const run: IrPassFn = (ops) => {
             sourceRestoresSameDotSafeStructuralShape,
         })
         : removal.exposesX2Restore;
-    const exposesStackLift = removal.exposesStackLift &&
-      !hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(ops, index, x2ValueStates[index], directReturnContext);
-    if (exposesStackLift || exposesX2Restore) return op;
+    const stackLiftPlan = planX2ReplacementStackLift(
+      ops,
+      index,
+      index,
+      x2ValueStates[index],
+      directReturnContext,
+      removal.exposesStackLift,
+      { invalidatedProducerIndexes: replacedStackLiftProducerIndexes },
+    );
+    if (stackLiftPlan.exposesStackLift || exposesX2Restore) return op;
 
     applied += 1;
+    if (analyzeX2StackEffect(op).stackLiftAndX2Sync) replacedStackLiftProducerIndexes.add(index);
     return dotRestoreOp(register, op);
   });
 
@@ -283,21 +293,6 @@ function hiddenTempStoreSourceRestoresSameDotSafeStructuralShapeFromX2(
     recallState?.x2,
     recallState?.x2Shape,
   );
-}
-
-function hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(
-  ops: readonly IrOp[],
-  recallIndex: number,
-  recallState: X2ValueDataflowState | undefined,
-  directReturnContext: DirectReturnAnalysisContext,
-): boolean {
-  return x2PreviousStackLiftDuplicateYProducerIndex(
-    ops,
-    recallIndex,
-    recallIndex,
-    recallState,
-    directReturnContext,
-  ) !== undefined;
 }
 
 function hiddenTempStoreComputedSourceAlreadySyncedInX2(

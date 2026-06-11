@@ -361,6 +361,18 @@ export interface RecallRemovalStackSchedulerOptions {
   readonly stackSchedulerState?: X2ValueDataflowState | undefined;
 }
 
+export interface X2ReplacementStackLiftPlan {
+  readonly initiallyExposesStackLift: boolean;
+  readonly stackLiftProducerIndex: number | undefined;
+  readonly stackLiftAlreadySupplied: boolean;
+  readonly exposesStackLift: boolean;
+}
+
+export interface X2ReplacementStackLiftOptions {
+  readonly allowDuplicateYStackProof?: boolean | undefined;
+  readonly invalidatedProducerIndexes?: ReadonlySet<number> | undefined;
+}
+
 export interface DirectReturnAnalysisContext {
   readonly labelEntries: ReadonlySet<number>;
   readonly labels: ReadonlyMap<string, number>;
@@ -3602,6 +3614,35 @@ export function x2PreviousStackLiftDuplicateYProducerIndex(
   return removingPreShiftLiftCanExposeStack(ops, stackExposureEnd) ? undefined : producerIndex;
 }
 
+export function planX2ReplacementStackLift(
+  ops: readonly IrOp[],
+  replacementStart: number,
+  stackExposureEnd: number,
+  state: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+  initiallyExposesStackLift: boolean,
+  options: X2ReplacementStackLiftOptions = {},
+): X2ReplacementStackLiftPlan {
+  const stackLiftProducerIndex = initiallyExposesStackLift && options.allowDuplicateYStackProof !== false
+    ? x2PreviousStackLiftDuplicateYProducerIndex(
+      ops,
+      replacementStart,
+      stackExposureEnd,
+      state,
+      context,
+    )
+    : undefined;
+  const stackLiftAlreadySupplied =
+    stackLiftProducerIndex !== undefined &&
+    options.invalidatedProducerIndexes?.has(stackLiftProducerIndex) !== true;
+  return {
+    initiallyExposesStackLift,
+    stackLiftProducerIndex,
+    stackLiftAlreadySupplied,
+    exposesStackLift: initiallyExposesStackLift && !stackLiftAlreadySupplied,
+  };
+}
+
 export function planRecallRemovalWithStackScheduler(
   ops: readonly IrOp[],
   recallIndex: number,
@@ -3612,23 +3653,20 @@ export function planRecallRemovalWithStackScheduler(
 ): RecallRemovalStackSchedulerPlan | undefined {
   const analysis = analyzeRecallRemoval(ops, recallIndex, x2RegisterState, x2ValueState, context);
   if (analysis === undefined) return undefined;
-  const stackLiftProducerIndex = analysis.exposesStackLift === true && analysis.exposesX2Restore !== true
-    ? x2PreviousStackLiftDuplicateYProducerIndex(
-      ops,
-      options.stackSchedulerStart ?? recallIndex,
-      options.stackExposureEnd ?? recallIndex,
-      options.stackSchedulerState ?? x2ValueState,
-      context,
-    )
-    : undefined;
-  const stackLiftAlreadySupplied =
-    stackLiftProducerIndex !== undefined &&
-    options.removedIndexes?.has(stackLiftProducerIndex) !== true;
+  const stackLift = planX2ReplacementStackLift(
+    ops,
+    options.stackSchedulerStart ?? recallIndex,
+    options.stackExposureEnd ?? recallIndex,
+    options.stackSchedulerState ?? x2ValueState,
+    context,
+    analysis.exposesStackLift === true && analysis.exposesX2Restore !== true,
+    { invalidatedProducerIndexes: options.removedIndexes },
+  );
   return {
     analysis,
-    stackLiftProducerIndex,
-    stackLiftAlreadySupplied,
-    removable: analysis.removable || stackLiftAlreadySupplied,
+    stackLiftProducerIndex: stackLift.stackLiftProducerIndex,
+    stackLiftAlreadySupplied: stackLift.stackLiftAlreadySupplied,
+    removable: analysis.removable || stackLift.stackLiftAlreadySupplied,
   };
 }
 

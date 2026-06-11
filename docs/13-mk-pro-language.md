@@ -2011,7 +2011,11 @@ The pipeline currently contains:
   difference is dead. Recall-removal passes use one
   `planRecallRemovalWithStackScheduler` helper for that combined base-removal
   and duplicate-`Y` producer decision, including branch-target projections with
-  a different scheduler start and target exposure point.
+  a different scheduler start and target exposure point. Replacement-to-dot
+  passes use the companion `planX2ReplacementStackLift` helper so literal and
+  hidden-temp rewrites share the same duplicate-`Y` proof, can disable it for
+  unsafe expression shapes, and do not rely on a producer already replaced by
+  `.` in the same pass.
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
   drops a direct or stable-indirect proved recall when every direct predecessor
   reaches that point with the same register value still in X. The same
