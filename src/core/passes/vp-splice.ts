@@ -14,9 +14,8 @@ import {
   isDisplayFocusSensitive,
   removingRecallCanExposeX2Restore,
   x2PlanRestoreRunBeforeProvedVp,
-  x2PreviousFreeStandingRestoreExecutableIndex,
+  x2PlanRestoreRunBeforeTerminal,
   x2RestoreRunBeforeIndex,
-  x2RestoreRunBeforeTerminal,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
   x2StateIsClosedPlainContext,
   type DirectReturnAnalysisContext,
@@ -92,14 +91,14 @@ function x2ContextRestoreRunBeforeFreshDigit(
   state: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): readonly number[] {
-  const transition = analyzeX2VpShapeTransition(state, "fresh-digit");
-  if (!transition.canDiscardRestoreRun) {
-    if (
-      !x2StateIsClosedPlainContext(state) ||
-      x2PreviousFreeStandingRestoreExecutableIndex(ops, startIndex) !== undefined
-    ) return [];
-  }
-  return x2ContextRestoreRunBeforeFreshDigitEntry(ops, startIndex, context);
+  return x2PlanRestoreRunBeforeTerminal(
+    ops,
+    startIndex,
+    state,
+    context,
+    "fresh-digit",
+    isDecimalDigit,
+  ).removableIndexes;
 }
 
 function x2ContextRestoreRunBeforeDeadOverwrite(
@@ -108,42 +107,18 @@ function x2ContextRestoreRunBeforeDeadOverwrite(
   state: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): readonly number[] {
-  if (!analyzeX2VpShapeTransition(state, "hard-overwrite").canDiscardRestoreRun) return [];
-  return x2ContextRestoreRunBeforeHardOverwrite(ops, startIndex, context);
-}
-
-function x2ContextRestoreRunBeforeFreshDigitEntry(
-  ops: readonly IrOp[],
-  startIndex: number,
-  context: DirectReturnAnalysisContext,
-): readonly number[] {
-  return x2ContextRestoreRunBeforeTerminal(ops, startIndex, context, isDecimalDigit);
+  return x2PlanRestoreRunBeforeTerminal(
+    ops,
+    startIndex,
+    state,
+    context,
+    "hard-overwrite",
+    isHardX2OverwriteWithoutStackUse,
+  ).removableIndexes;
 }
 
 function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
   return analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse;
-}
-
-function x2ContextRestoreRunBeforeHardOverwrite(
-  ops: readonly IrOp[],
-  startIndex: number,
-  context: DirectReturnAnalysisContext,
-): readonly number[] {
-  return x2ContextRestoreRunBeforeTerminal(ops, startIndex, context, isHardX2OverwriteWithoutStackUse);
-}
-
-function x2ContextRestoreRunBeforeTerminal(
-  ops: readonly IrOp[],
-  startIndex: number,
-  context: DirectReturnAnalysisContext,
-  isTerminal: (op: IrOp) => boolean,
-): readonly number[] {
-  return x2RestoreRunBeforeTerminal(
-    ops,
-    startIndex,
-    context,
-    (op) => isTerminal(op),
-  ).removableIndexes;
 }
 
 function canRemoveClosedContextSignPairBeforeProvedVp(

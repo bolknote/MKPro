@@ -1873,7 +1873,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     and non-empty restore gaps return the same structured source/sign proof;
     the proved-`ВП` restore-run planner then packages removable indexes, source
     analysis, and refusal reasons instead of leaving each pass to combine the
-    scan booleans itself; orphan address-byte cells
+    scan booleans itself. Fresh-digit and hard-overwrite restore-run decisions
+    use the same terminal planner, including the closed-plain-context fresh-digit
+    fallback and its previous-restore-source guard; orphan address-byte cells
     are treated as the same transparent gap elements here as they are inside
     transparent return helpers. The shared admission only
     proves that `.` is available as a restore mechanism; each pass still proves

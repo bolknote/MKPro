@@ -1369,7 +1369,9 @@ The pipeline currently contains:
   source/sign proof. A companion proved-`ВП` restore-run planner returns the
   removable indexes, source analysis, and refusal reason (`no-restore-run`,
   `no-sign-restore`, or `source-mismatch`) so splice passes do not rebuild this
-  decision locally. A companion
+  decision locally. Fresh-digit and hard-overwrite restore runs use the same
+  terminal planner, including the closed-plain-context fresh-digit fallback and
+  its previous-restore-source guard. A companion
   VP-gap source analysis feeds `vp-splice`, `x2-noop-restore`, literal restore,
   and hidden-temp restore rewrites from the same target/sign/source proof;
   MKPro syntax is unchanged.

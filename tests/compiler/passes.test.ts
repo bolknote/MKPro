@@ -72,6 +72,7 @@ import {
   x2NextStackPreservingReturnX2SyncIndex,
   x2NextXPreservingX2SyncIndex,
   x2PlanRestoreRunBeforeProvedVp,
+  x2PlanRestoreRunBeforeTerminal,
   x2PreviousHardX2OverwriteIndex,
   x2KnownReturnCallReachesStackLiftAndX2Sync,
   x2PreviousFreeStandingRestoreExecutableIndex,
@@ -10296,6 +10297,106 @@ describe("ir passes on synthetic programs", () => {
       reason: "source-mismatch",
       source: {
         canDiscardRestoreRunBeforeProvedVp: false,
+      },
+    });
+  });
+
+  it("x2 terminal restore-run planner handles fresh digits and hard overwrites", () => {
+    const isDigit = (op: IrOp) => op.kind === "plain" && op.opcode >= 0 && op.opcode <= 9;
+    const isClearX = (op: IrOp) => op.kind === "plain" && op.opcode === 0x0d;
+    const vpContextFreshDigit: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const closedFallbackFreshDigit: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x54, "КНОП"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const previousRestoreFreshDigit: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const hardOverwrite: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+
+    const vpContextStates = computeX2ValueStates(vpContextFreshDigit);
+    expect(x2PlanRestoreRunBeforeTerminal(
+      vpContextFreshDigit,
+      4,
+      vpContextStates[4],
+      directReturnAnalysisContext(vpContextFreshDigit),
+      "fresh-digit",
+      isDigit,
+    )).toMatchObject({
+      removableIndexes: [4, 5],
+      reason: "vp-context-overwritten",
+      scan: {
+        terminalIndex: 6,
+      },
+    });
+
+    const closedFallbackStates = computeX2ValueStates(closedFallbackFreshDigit);
+    expect(x2PlanRestoreRunBeforeTerminal(
+      closedFallbackFreshDigit,
+      2,
+      closedFallbackStates[2],
+      directReturnAnalysisContext(closedFallbackFreshDigit),
+      "fresh-digit",
+      isDigit,
+    )).toMatchObject({
+      removableIndexes: [2],
+      reason: "closed-context-fresh-digit",
+      previousRestoreIndex: undefined,
+    });
+
+    const previousRestoreStates = computeX2ValueStates(previousRestoreFreshDigit);
+    expect(x2PlanRestoreRunBeforeTerminal(
+      previousRestoreFreshDigit,
+      3,
+      previousRestoreStates[3],
+      directReturnAnalysisContext(previousRestoreFreshDigit),
+      "fresh-digit",
+      isDigit,
+    )).toMatchObject({
+      removableIndexes: [],
+      reason: "previous-restore-source",
+      previousRestoreIndex: 2,
+      scan: undefined,
+    });
+
+    const hardOverwriteStates = computeX2ValueStates(hardOverwrite);
+    expect(x2PlanRestoreRunBeforeTerminal(
+      hardOverwrite,
+      4,
+      hardOverwriteStates[4],
+      directReturnAnalysisContext(hardOverwrite),
+      "hard-overwrite",
+      isClearX,
+    )).toMatchObject({
+      removableIndexes: [4],
+      reason: "vp-context-overwritten",
+      scan: {
+        terminalIndex: 5,
       },
     });
   });

@@ -5401,6 +5401,24 @@ export interface X2ProvedVpRestoreRunPlanOptions {
   readonly useScannedSignRestores?: boolean | undefined;
 }
 
+export type X2TerminalRestoreRunPlanOperation = "fresh-digit" | "hard-overwrite";
+
+export type X2TerminalRestoreRunPlanReason =
+  "vp-context-overwritten" |
+  "closed-context-fresh-digit" |
+  "transition-blocked" |
+  "previous-restore-source" |
+  "terminal-missing";
+
+export interface X2TerminalRestoreRunPlan {
+  readonly operation: X2TerminalRestoreRunPlanOperation;
+  readonly removableIndexes: readonly number[];
+  readonly scan: X2RestoreRunBeforeTerminalScan | undefined;
+  readonly transition: X2VpShapeTransitionAnalysis;
+  readonly previousRestoreIndex: number | undefined;
+  readonly reason: X2TerminalRestoreRunPlanReason;
+}
+
 export interface X2RestoreRunBeforeTerminalScan {
   readonly terminalIndex: number | undefined;
   readonly blockedIndex: number | undefined;
@@ -5567,6 +5585,65 @@ export function x2PlanRestoreRunBeforeProvedVp(
     scan,
     source,
     reason: "proved-vp-source",
+  };
+}
+
+export function x2PlanRestoreRunBeforeTerminal(
+  ops: readonly IrOp[],
+  startIndex: number,
+  state: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+  operation: X2TerminalRestoreRunPlanOperation,
+  isTerminal: X2RestoreRunTerminalPredicate,
+): X2TerminalRestoreRunPlan {
+  const transition = analyzeX2VpShapeTransition(state, operation);
+  let reason: X2TerminalRestoreRunPlanReason = "vp-context-overwritten";
+  let previousRestoreIndex: number | undefined;
+  let canScan = transition.canDiscardRestoreRun;
+
+  if (!canScan && operation === "fresh-digit") {
+    previousRestoreIndex = x2PreviousFreeStandingRestoreExecutableIndex(ops, startIndex);
+    if (!x2StateIsClosedPlainContext(state)) {
+      reason = "transition-blocked";
+    } else if (previousRestoreIndex !== undefined) {
+      reason = "previous-restore-source";
+    } else {
+      canScan = true;
+      reason = "closed-context-fresh-digit";
+    }
+  } else if (!canScan) {
+    reason = "transition-blocked";
+  }
+
+  if (!canScan) {
+    return {
+      operation,
+      removableIndexes: [],
+      scan: undefined,
+      transition,
+      previousRestoreIndex,
+      reason,
+    };
+  }
+
+  const scan = x2RestoreRunBeforeTerminal(ops, startIndex, context, isTerminal);
+  if (scan.terminalIndex === undefined) {
+    return {
+      operation,
+      removableIndexes: [],
+      scan,
+      transition,
+      previousRestoreIndex,
+      reason: "terminal-missing",
+    };
+  }
+  return {
+    operation,
+    removableIndexes: scan.removableIndexes,
+    scan,
+    transition,
+    previousRestoreIndex,
+    reason,
   };
 }
 
