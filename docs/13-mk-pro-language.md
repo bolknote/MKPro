@@ -1963,7 +1963,10 @@ The pipeline currently contains:
   source, proved closed `X == X2` normalized-decimal sign source, exact decimal
   display-shape source, or proved shared structural hex/super source shape
   already names that recalled source, including through transparent
-  direct/proved-indirect return helpers.
+  direct/proved-indirect return helpers. The recall-removal path uses the same
+  dot-replacement VP-source planner as literal/no-op/hidden-temp replacement,
+  so immediate `ВП` and sign-gap proofs share one source analysis rather than
+  keeping a private scanner branch.
   If a store closed that source, the recall stays. Structural
   shape sync proofs do not make a later
   `.` dot-safe; they only prove the recall would not change hidden X2. The same

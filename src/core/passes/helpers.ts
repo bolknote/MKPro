@@ -5669,7 +5669,7 @@ export function x2PlanDotReplacementVpSource(
   dotIndex: number,
   stateBeforeDot: X2ValueDataflowState | undefined,
   stateAfterDot: X2ValueDataflowState | undefined,
-  context: DirectReturnAnalysisContext,
+  context?: DirectReturnAnalysisContext,
   options: X2DotReplacementVpSourcePlanOptions = {},
 ): X2DotReplacementVpSourcePlan {
   const source = analyzeX2VpRestoreGapSource(
@@ -6560,7 +6560,13 @@ function recallRemovalPreservesImmediateVpRestoreContext(
     { trackRegisterMemory: true },
     recallIndex,
   );
-  const vpSource = analyzeX2VpRestoreGapSource(ops, recallIndex + 1, state, recalledState, context);
+  const vpSource = x2PlanDotReplacementVpSource(
+    ops,
+    recallIndex,
+    state,
+    recalledState,
+    context,
+  ).source;
   if (
     vpSource.hasSignRestoreGapBeforeVp &&
     vpSource.hasOnlyRestoreGapBeforeVp &&
