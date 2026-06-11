@@ -3979,6 +3979,35 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(rawJoined.x2Shape)).toEqual([]);
   });
 
+  it("x2 value dataflow joins visible exact decimal display shapes without promoting hidden X2", () => {
+    const exponentBacked: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      shapeMemory: {
+        "1": new Set<X2ShapeFact>(["exponent:100:0:decimal"]),
+      },
+      entry: { kind: "closed" },
+    };
+    const mantissaBacked: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      x2Shape: new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      shapeMemory: {
+        "1": new Set<X2ShapeFact>(["mantissa:100:decimal"]),
+      },
+      entry: { kind: "closed" },
+    };
+
+    const joined = joinX2ValueDataflowStates(exponentBacked, mantissaBacked, true);
+
+    expect(x2ShapeStateText(joined.xShape)).toEqual(["mantissa:100:decimal"]);
+    expect(x2ShapeStateText(joined.x2Shape)).toEqual([]);
+    expect(x2ShapeStateText(joined.shapeMemory?.["1"]) ?? []).toEqual([]);
+  });
+
   it("x2 value dataflow joins stable structural shape facts across mixed paths", () => {
     const left: X2ValueDataflowState = {
       x: new Set<X2ValueFact>(["expr-key:31(shape:hex:-A:mantissa)"]),

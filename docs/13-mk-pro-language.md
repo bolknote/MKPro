@@ -1593,7 +1593,11 @@ The pipeline currently contains:
   `mantissa:100:decimal`), and structural restored-shape sources are compared
   by one algebra while remaining separate safety classes. Leading-zero decimal
   entry text such as `02` still stays text-sensitive and is not normalized to
-  the `2` source key. Structural mantissa forms
+  the `2` source key. Visible `xShape`/`yShape` joins can keep the shared exact
+  decimal display shape for such mixed decimal spellings, but hidden `x2Shape`
+  and shape-memory joins do not get that promotion; an error-prone exponent
+  display is not made dot-safe just because another path has the same visible
+  display. Structural mantissa forms
   seed a separate shape-only `ВП`-entry source after direct/proved recalls,
   closed-context `.` restores of structural hidden X2, direct/proved-indirect
   `В/О` return continuations, and path-sensitive direct-conditional fallthrough X2 syncs; the

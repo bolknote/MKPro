@@ -1602,6 +1602,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     keeps that restored mantissa as a structural-only fact for `X`, `X2`, `Y`,
     `ВП` sources, and shape memory; identical straight-line facts are not
     expanded into aliases by themselves.
+    Visible `xShape`/`yShape` joins also keep a shared exact decimal display
+    when direct shape intersection is empty (`exponent:100:0:decimal` meeting
+    `mantissa:100:decimal` keeps `mantissa:100:decimal`). That rule is not used
+    for hidden `x2Shape` or shape-memory joins, so an error-prone hidden
+    exponent display is not promoted into a dot-safe mantissa alias merely
+    because another path had the same visible display.
     Closed structural exponent shapes become fresh `ВП`-entry sources only
     after X2 value/shape dataflow proves the same structural restore-shape is
     visible in both `X` and hidden `X2`; the source is the restored mantissa

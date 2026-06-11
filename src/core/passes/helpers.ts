@@ -8724,8 +8724,8 @@ export function joinX2ValueDataflowStates(
     x: joinX2ValueSets(current.x, incoming.x),
     y: joinX2ValueSets(current.y ?? new Set(), incoming.y ?? new Set()),
     x2: joinX2ValueSets(current.x2, incoming.x2),
-    xShape: joinX2ShapeSetsWithValues(current.xShape, current.x, incoming.xShape, incoming.x),
-    yShape: joinX2ShapeSetsWithValues(current.yShape, current.y, incoming.yShape, incoming.y),
+    xShape: joinVisibleX2ShapeSetsWithValues(current.xShape, current.x, incoming.xShape, incoming.x),
+    yShape: joinVisibleX2ShapeSetsWithValues(current.yShape, current.y, incoming.yShape, incoming.y),
     x2Shape: joinX2SyncedShapeSetsWithValues(current.x2Shape, current.x2, incoming.x2Shape, incoming.x2),
     entry: joinX2EntryStates(current.entry, incoming.entry),
     vpContext: joinX2VpContextStates(current.vpContext, incoming.vpContext),
@@ -8972,13 +8972,19 @@ function intersectKnownX2SyncedShapeSetsWithValues(
   );
 }
 
-function joinX2ShapeSetsWithValues(
+function joinVisibleX2ShapeSetsWithValues(
   current: X2ShapeSet | undefined,
   currentValues: X2ValueSet | undefined,
   incoming: X2ShapeSet | undefined,
   incomingValues: X2ValueSet | undefined,
 ): Set<X2ShapeFact> {
-  return intersectKnownX2ShapeSetsWithValues(current, currentValues, incoming, incomingValues);
+  const currentShapes = shapeSetWithFallbackValueDerivedDisplayShapes(current, currentValues);
+  const incomingShapes = shapeSetWithFallbackValueDerivedDisplayShapes(incoming, incomingValues);
+  const output = intersectX2ShapeSets(currentShapes, incomingShapes);
+  if (output.size === 0) {
+    for (const shape of commonDecimalDisplayShapeFacts(current, incoming)) output.add(shape);
+  }
+  return output;
 }
 
 function joinX2SyncedShapeSetsWithValues(
@@ -9021,6 +9027,18 @@ function commonStructuralRestoreShapeFacts(
     if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) {
       output.add(fact);
     }
+  }
+  return output;
+}
+
+function commonDecimalDisplayShapeFacts(
+  left: X2ShapeSet | undefined,
+  right: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const leftDisplays = decimalDisplayShapeFacts(left);
+  const output = new Set<X2ShapeFact>();
+  for (const shape of decimalDisplayShapeFacts(right)) {
+    if (leftDisplays.has(shape)) output.add(shape);
   }
   return output;
 }
