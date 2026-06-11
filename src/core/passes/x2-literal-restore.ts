@@ -10,13 +10,13 @@ import {
   isDisplayFocusSensitive,
   knownIndirectFlowTarget,
   labelIndexes,
-  analyzeX2VpRestoreGapSource,
   analyzeX2StackEffect,
   removingPreShiftLiftCanExposeStack,
   replacingNumberEntryCanExposeStackLift,
   plainPreservesXValue,
   transferX2ValueStateForEdge,
   x2CanUseSourceDotRestoreAt,
+  x2PlanDotReplacementVpSource,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateHasSameDotRestoreValueInXAndX2,
@@ -357,23 +357,23 @@ function replacingLiteralCanExposeContextSensitiveRestore(
     { trackRegisterMemory: true },
     producerIndex,
   );
-  const vpSource = analyzeX2VpRestoreGapSource(
+  const vpSourcePlan = x2PlanDotReplacementVpSource(
     ops,
-    run.end + 1,
+    run.end,
     state,
     replacementDotState,
     context,
   );
   if (
     !run.dotPreservesVpEntrySource &&
-    vpSource.replacementDotHasOnlyRestoreGapBeforeVp
+    vpSourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp
   ) return true;
   if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
   if (
     run.dotPreservesVpEntrySource &&
     (
-      vpSource.hasOnlyRestoreGapBeforeVp ||
-      vpSource.replacementDotHasOnlyRestoreGapBeforeVp
+      vpSourcePlan.source.hasOnlyRestoreGapBeforeVp ||
+      vpSourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp
     )
   ) return false;
   if (
