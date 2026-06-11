@@ -3555,6 +3555,19 @@ export function x2PreviousStackLiftAndX2SyncProducerIndex(
   return undefined;
 }
 
+export function x2PreviousStackLiftDuplicateYProducerIndex(
+  ops: readonly IrOp[],
+  start: number,
+  stackExposureEnd: number,
+  state: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  if (!x2StateHasSameVisibleXAndY(state)) return undefined;
+  const producerIndex = x2PreviousStackLiftAndX2SyncProducerIndex(ops, start, context);
+  if (producerIndex === undefined) return undefined;
+  return removingPreShiftLiftCanExposeStack(ops, stackExposureEnd) ? undefined : producerIndex;
+}
+
 export function x2KnownReturnCallReachesStackLiftAndX2Sync(
   ops: readonly IrOp[],
   call: KnownReturnCallOp,

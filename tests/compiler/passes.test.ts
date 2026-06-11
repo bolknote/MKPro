@@ -18558,6 +18558,46 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("last-x-reuse drops recall before a binary op when a previous stack producer already supplied duplicate Y", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      store("1"),
+      plain(0x0e, "В↑"),
+      recall("1"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      store("1"),
+      plain(0x0e, "В↑"),
+      plain(0x10, "+"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse does not use a recall producer already removed in the same pass", () => {
+    const program: IrOp[] = [
+      store("1"),
+      recall("1"),
+      recall("1"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      store("1"),
+      recall("1"),
+      plain(0x10, "+"),
+      halt(),
+    ]);
+  });
+
   it("last-x-reuse keeps recall whose stack lift reaches a later binary op", () => {
     const program: IrOp[] = [
       store("1"),
@@ -23126,6 +23166,52 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("store-recall-peephole drops recall before a binary op when a previous stack producer already supplied duplicate Y", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      store("2"),
+      plain(0x0e, "В↑"),
+      store("2"),
+      recall("2"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      store("2"),
+      plain(0x0e, "В↑"),
+      store("2"),
+      plain(0x10, "+"),
+      halt(),
+    ]);
+  });
+
+  it("store-recall-peephole does not use a recall producer already removed in the same pass", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      store("1"),
+      recall("1"),
+      store("2"),
+      recall("2"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = storeRecallPeephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      store("1"),
+      store("2"),
+      recall("2"),
+      plain(0x10, "+"),
+      halt(),
+    ]);
   });
 
   it("store-recall-peephole keeps recall whose stack lift reaches a later binary op", () => {

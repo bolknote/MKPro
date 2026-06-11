@@ -10,6 +10,7 @@ import {
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
+  x2PreviousStackLiftDuplicateYProducerIndex,
 } from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
@@ -28,9 +29,14 @@ const run: IrPassFn = (ops) => {
     x2ValueStates ??= computeX2ValueStates(ops, { trackRegisterMemory: true });
     directReturnContext ??= directReturnAnalysisContext(ops);
     const removal = analyzeRecallRemoval(ops, i + 1, x2States[i + 1], x2ValueStates[i + 1], directReturnContext);
+    const duplicateYProducerIndex = removal?.exposesStackLift === true && removal.exposesX2Restore !== true
+      ? x2PreviousStackLiftDuplicateYProducerIndex(ops, i + 1, i + 1, x2ValueStates[i + 1], directReturnContext)
+      : undefined;
+    const removable = removal?.removable === true ||
+      (duplicateYProducerIndex !== undefined && !remove.has(duplicateYProducerIndex));
     if (
       (storedRegister === recalledRegister || removal?.valueProof?.inX === true) &&
-      removal?.removable === true
+      removable
     ) {
       remove.add(i + 1);
     }

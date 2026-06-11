@@ -14,6 +14,7 @@ import {
   type IrPassFn,
   type PassResult,
   x2KnownReturnCallPreservesStackXAndX2,
+  x2PreviousStackLiftDuplicateYProducerIndex,
 } from "./helpers.ts";
 
 function clobbersX(op: IrOp): boolean {
@@ -71,10 +72,16 @@ const run: IrPassFn = (ops) => {
     }
     const recallRegister = removableRecallValueRegister(op);
     const removal = analyzeRecallRemoval(ops, i, x2States[i], x2ValueStates[i], directReturnContext);
+    const duplicateYProducerIndex = removal?.exposesStackLift === true && removal.exposesX2Restore !== true
+      ? x2PreviousStackLiftDuplicateYProducerIndex(ops, i, i, x2ValueStates[i], directReturnContext)
+      : undefined;
+    const stackLiftAlreadySuppliedByKeptProducer =
+      duplicateYProducerIndex !== undefined && !removed.has(duplicateYProducerIndex);
+    const removable = removal?.removable === true || stackLiftAlreadySuppliedByKeptProducer;
     if (
       recallRegister !== undefined &&
       (xHolds === recallRegister || (canTrustValueX && removal?.valueProof?.inX === true)) &&
-      removal?.removable === true
+      removable
     ) {
       removed.add(i);
       continue;

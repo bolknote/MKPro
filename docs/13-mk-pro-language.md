@@ -1977,7 +1977,10 @@ The pipeline currently contains:
   proof accepts stable indirect recalls (`К П->X R7..Re`) when lowering has
   proved the actual memory target.
   Downstream binary/stack-consuming ops that can still observe the recall's
-  stack lift through direct or proved-indirect flow also block the rewrite.
+  stack lift through direct or proved-indirect flow also block the rewrite,
+  unless the shared stack+X2 scheduler proves a previous kept stack-lift+X2
+  producer already supplied the same visible value in `Y` and the deeper stack
+  difference is dead.
 - **flow-x-reuse** — runs forward CFG dataflow for values already in X and
   drops a direct or stable-indirect proved recall when every direct predecessor
   reaches that point with the same register value still in X. The same

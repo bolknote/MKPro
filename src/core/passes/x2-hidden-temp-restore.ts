@@ -16,13 +16,11 @@ import {
   knownIndirectMemoryTarget,
   removableRecallValueRegister,
   removingRecallCanExposeX2Restore,
-  removingPreShiftLiftCanExposeStack,
   x2CanUseSourceDotRestoreAt,
   x2PlanDotReplacementVpSource,
   x2StateHasUnsafeDotRestoreShapeX2,
-  x2StateHasSameVisibleXAndY,
   x2ValueFactIsNormalizedDecimal,
-  x2PreviousStackLiftAndX2SyncProducerIndex,
+  x2PreviousStackLiftDuplicateYProducerIndex,
   x2ValueSetHasFact,
   x2ValueShapeSetsHaveSameDotSafeDecimal,
   x2ValueShapeSetsHaveSameDotSafeStructuralMantissa,
@@ -293,9 +291,13 @@ function hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(
   recallState: X2ValueDataflowState | undefined,
   directReturnContext: DirectReturnAnalysisContext,
 ): boolean {
-  return x2StateHasSameVisibleXAndY(recallState) &&
-    x2PreviousStackLiftAndX2SyncProducerIndex(ops, recallIndex, directReturnContext) !== undefined &&
-    !removingPreShiftLiftCanExposeStack(ops, recallIndex);
+  return x2PreviousStackLiftDuplicateYProducerIndex(
+    ops,
+    recallIndex,
+    recallIndex,
+    recallState,
+    directReturnContext,
+  ) !== undefined;
 }
 
 function hiddenTempStoreComputedSourceAlreadySyncedInX2(

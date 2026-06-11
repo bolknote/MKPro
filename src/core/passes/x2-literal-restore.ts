@@ -11,7 +11,6 @@ import {
   knownIndirectFlowTarget,
   labelIndexes,
   analyzeX2StackEffect,
-  removingPreShiftLiftCanExposeStack,
   replacingNumberEntryCanExposeStackLift,
   plainPreservesXValue,
   transferX2ValueStateForEdge,
@@ -20,9 +19,8 @@ import {
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateHasSameDotRestoreValueInXAndX2,
-  x2StateHasSameVisibleXAndY,
   x2StateIsClosedPlainContext,
-  x2PreviousStackLiftAndX2SyncProducerIndex,
+  x2PreviousStackLiftDuplicateYProducerIndex,
   x2StableUnaryExpressionValueFact,
   x2ValueSetHasFact,
   x2ValueSetHasRestoredVisibleDecimal,
@@ -502,9 +500,7 @@ function literalStackLiftAlreadySuppliedByDuplicateY(
   state: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return x2StateHasSameVisibleXAndY(state) &&
-    x2PreviousStackLiftAndX2SyncProducerIndex(ops, runStart, context) !== undefined &&
-    !removingPreShiftLiftCanExposeStack(ops, run.end);
+  return x2PreviousStackLiftDuplicateYProducerIndex(ops, runStart, run.end, state, context) !== undefined;
 }
 
 const run: IrPassFn = (ops) => {
