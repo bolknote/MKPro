@@ -4430,21 +4430,29 @@ export function x2NormalizedDecimalRestoreGapIsFreeStanding(
   index: number,
   context?: DirectReturnAnalysisContext,
 ): boolean {
+  return x2PreviousNormalizedDecimalRestoreGapSyncIndex(ops, index, context) !== undefined;
+}
+
+export function x2PreviousNormalizedDecimalRestoreGapSyncIndex(
+  ops: readonly IrOp[],
+  index: number,
+  context?: DirectReturnAnalysisContext,
+): number | undefined {
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
     if (op.kind === "label") continue;
-    if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+    if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return undefined;
 
     switch (op.kind) {
       case "plain": {
         const effect = plainX2Effect(op);
-        if (effect === "affects" || effect === "restores") return true;
+        if (effect === "affects" || effect === "restores") return cursor;
         if (effect === "preserves") continue;
-        return false;
+        return undefined;
       }
       case "recall":
       case "indirect-recall":
-        return true;
+        return cursor;
       case "store":
       case "indirect-store":
       case "orphan-address":
@@ -4453,20 +4461,22 @@ export function x2NormalizedDecimalRestoreGapIsFreeStanding(
         continue;
       case "indirect-cjump":
         if (knownIndirectFlowTarget(op) !== undefined) continue;
-        return false;
+        return undefined;
       case "call":
       case "indirect-call":
         if (
           context !== undefined &&
           isKnownReturnCallOp(op) &&
           x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
-        ) continue;
-        return false;
+        ) {
+          continue;
+        }
+        return undefined;
       default:
-        return false;
+        return undefined;
     }
   }
-  return false;
+  return undefined;
 }
 
 export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {

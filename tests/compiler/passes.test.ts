@@ -76,6 +76,7 @@ import {
   x2PreviousStackLiftAndX2SyncProducerIndex,
   x2PreviousStackPreservingReturnX2SyncIndex,
   x2PreviousXPreservingX2SyncIndex,
+  x2PreviousNormalizedDecimalRestoreGapSyncIndex,
   x2NormalizedDecimalRestoreGapIsFreeStanding,
   x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateHasOnlyDotSafeStructuralMantissaX2,
@@ -8148,6 +8149,7 @@ describe("ir passes on synthetic programs", () => {
     ];
 
     expect(x2NormalizedDecimalRestoreGapIsFreeStanding(transparentGap, 10)).toBe(false);
+    expect(x2PreviousNormalizedDecimalRestoreGapSyncIndex(transparentGap, 10)).toBeUndefined();
     expect(
       x2NormalizedDecimalRestoreGapIsFreeStanding(
         transparentGap,
@@ -8156,12 +8158,26 @@ describe("ir passes on synthetic programs", () => {
       ),
     ).toBe(true);
     expect(
+      x2PreviousNormalizedDecimalRestoreGapSyncIndex(
+        transparentGap,
+        10,
+        directReturnAnalysisContext(transparentGap),
+      ),
+    ).toBe(7);
+    expect(
       x2NormalizedDecimalRestoreGapIsFreeStanding(
         observingGap,
         10,
         directReturnAnalysisContext(observingGap),
       ),
     ).toBe(false);
+    expect(
+      x2PreviousNormalizedDecimalRestoreGapSyncIndex(
+        observingGap,
+        10,
+        directReturnAnalysisContext(observingGap),
+      ),
+    ).toBeUndefined();
   });
 
   it("x2 source dot-restore admission shares transparent return-helper crossing", () => {
@@ -8224,6 +8240,7 @@ describe("ir passes on synthetic programs", () => {
     ];
 
     expect(x2NormalizedDecimalRestoreGapIsFreeStanding(transparentGap, 13)).toBe(false);
+    expect(x2PreviousNormalizedDecimalRestoreGapSyncIndex(transparentGap, 13)).toBeUndefined();
     expect(
       x2NormalizedDecimalRestoreGapIsFreeStanding(
         transparentGap,
@@ -8232,12 +8249,26 @@ describe("ir passes on synthetic programs", () => {
       ),
     ).toBe(true);
     expect(
+      x2PreviousNormalizedDecimalRestoreGapSyncIndex(
+        transparentGap,
+        13,
+        directReturnAnalysisContext(transparentGap),
+      ),
+    ).toBe(10);
+    expect(
       x2NormalizedDecimalRestoreGapIsFreeStanding(
         observingGap,
         13,
         directReturnAnalysisContext(observingGap),
       ),
     ).toBe(false);
+    expect(
+      x2PreviousNormalizedDecimalRestoreGapSyncIndex(
+        observingGap,
+        13,
+        directReturnAnalysisContext(observingGap),
+      ),
+    ).toBeUndefined();
   });
 
   it("x2 value dataflow keeps signed zero sticky across repeated sign-change before ВП", () => {

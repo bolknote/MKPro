@@ -1164,10 +1164,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     transparent helper or orphan address-byte gap between the modeled
     sign-change and the candidate `.` does not reset the proof, while a helper
     that performs its own X2 restore still blocks it.
-    A separate normalized/visible-decimal/dot-safe-structural escape hatch
-    handles proved X2-preserving gaps such as stable indirect conditionals: if
-    `X` and `X2` carry the same normalized decimal fact, restore to the same
-    visible decimal after raw X2 normalization, or carry the same
+    A separate named previous-X2-sync scanner handles normalized/visible-decimal
+    and dot-safe-structural escape hatches across proved X2-preserving gaps such
+    as stable indirect conditionals: if `X` and `X2` carry the same normalized
+    decimal fact, restore to the same visible decimal after raw X2
+    normalization, or carry the same
     emulator-pinned single-hex `A`/`B`/`C` restore key, and the local gap back
     to the X2 sync contains no display-focused cell, `.` can still be removed.
     This escape hatch uses the
