@@ -1,16 +1,19 @@
 import type { IrOp, RegisterName } from "../types.ts";
+import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import {
   analyzeRecallRemoval,
   computeLabelEntryIndexes,
   computeX2RegisterStates,
   computeX2ValueStates,
   directReturnAnalysisContext,
+  isKnownReturnCallOp,
   plainPreservesXValue,
   removableRecallValueRegister,
   storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
   type PassResult,
+  x2KnownReturnCallPreservesStackXAndX2,
 } from "./helpers.ts";
 
 function clobbersX(op: IrOp): boolean {
@@ -79,6 +82,13 @@ const run: IrPassFn = (ops) => {
     if (recallRegister !== undefined) {
       xHolds = recallRegister;
       canTrustValueX = true;
+      continue;
+    }
+    if (isKnownReturnCallOp(op) && x2KnownReturnCallPreservesStackXAndX2(ops, op, directReturnContext)) {
+      if (op.kind === "indirect-call" && !isStableIndirectSelector(op.register) && xHolds === op.register) {
+        xHolds = undefined;
+        canTrustValueX = false;
+      }
       continue;
     }
     if (

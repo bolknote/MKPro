@@ -18345,6 +18345,96 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("last-x-reuse preserves X facts through transparent return helpers", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("4"),
+      call("transparent"),
+      recall("4"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("4"),
+      call("transparent"),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse preserves X facts through proved stable-indirect transparent return helpers", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("4"),
+      knownTargetIndirectCall("8", 2),
+      recall("4"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("4"),
+      knownTargetIndirectCall("8", 2),
+      halt(),
+    ]);
+  });
+
+  it("last-x-reuse drops selector X facts across mutating indirect transparent return helpers", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "КНОП"),
+      ret(),
+      label("main"),
+      recall("4"),
+      knownTargetIndirectCall("4", 2),
+      recall("4"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("last-x-reuse treats nontransparent return helpers as X barriers", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("clobber"),
+      plain(0x0d, "Cx"),
+      ret(),
+      label("main"),
+      recall("4"),
+      call("clobber"),
+      recall("4"),
+      halt(),
+    ];
+    const result = lastXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("last-x-reuse preserves X facts through documented empty operators", () => {
     const program: IrOp[] = [
       recall("1"),

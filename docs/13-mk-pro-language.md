@@ -1938,6 +1938,10 @@ The pipeline currently contains:
   as `hex:Г; ВП 2`. They only remove recalls whose X2/previous-command side
   effects are already proven unobservable; they do not make `.`/`/-/` restores
   dot-safe.
+  The linear X proof also crosses transparent direct or proved-indirect
+  return helpers when the shared return analysis proves that the helper
+  preserves stack, visible X, and X2; mutating `R0`..`R6` indirect-call
+  selectors still drop the alias to the mutated selector register.
   Compiler marker labels that are not reachable branch/call targets also
   preserve the fact, while string targets, numeric-address targets, proved
   indirect-flow targets, procedure starts, and unknown indirect flow make labels
