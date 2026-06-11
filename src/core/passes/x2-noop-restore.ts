@@ -48,7 +48,11 @@ const run: IrPassFn = (ops) => {
     const sourceProvesFreeStandingRestore =
       x2StateHasSameNormalizedDecimalInXAndX2(state) ||
       x2StateHasSameRestoredVisibleDecimalInXAndX2(state) ||
-      x2StateHasSameDotSafeStructuralMantissaInXAndX2(state);
+      x2StateHasSameDotSafeStructuralMantissaInXAndX2(state) ||
+      (
+        x2StateHasSameDotRestoreValueInXAndX2(state) &&
+        !x2StateHasUnsafeDotRestoreShapeX2(state)
+      );
     if (!x2CanUseSourceDotRestoreAt(
       ops,
       index,

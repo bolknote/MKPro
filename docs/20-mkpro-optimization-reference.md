@@ -1122,7 +1122,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     when visible `X` and hidden X2 carry the same structural restore key, the
     trailing `.` is removable under the existing exposure guards. Unsafe
     structural digits (`D`/`F`), structural exponent shapes, and observable
-    next-`ВП` contexts remain blocked. The value proof also
+    next-`ВП` contexts remain blocked. Stable `expr-key:*` equality now also
+    feeds the free-standing restore proof after an explicit X-preserving X2
+    sync, so a pure computed value already present in both visible `X` and
+    hidden X2 can drop a later no-op `.` across preserving empty cells. The
+    value proof also
     models closed-context `.` as a real X2-to-X restore, normalizing decimal
     facts only for visible `X`. Open number-entry dots are modeled separately
     as decimal separators: `1.` remains an open raw mantissa with

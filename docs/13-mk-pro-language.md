@@ -1675,7 +1675,10 @@ The pipeline currently contains:
   the fallthrough side of a direct conditional and the value
   proof still shows `X = X2`; this treats recall as a combined
   stack-lift/value-load/X2-sync operation and turns path-sensitive conditional
-  X2 sync from a guard into an active rewrite. The pass refuses the rewrite
+  X2 sync from a guard into an active rewrite. The same free-standing proof also
+  accepts stable `expr-key:*` equality after an explicit X-preserving X2 sync,
+  such as a pure unary computation whose result is already visible in `X` and
+  hidden in X2. The pass refuses the rewrite
   before another reachable `.`/`/-/`/`ВП` context-sensitive restore, across opaque
   control flow, raw cells, and display-focused cells, so it does not erase a dot
   whose main job is to shape the next X2 restoration rather than to change `X`.

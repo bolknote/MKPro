@@ -13919,6 +13919,44 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-noop-restore removes dot after a synced pure unary expr across a free-standing gap", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x55, "К 1"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x55, "К 1"),
+      halt(),
+    ]);
+  });
+
+  it("x2-noop-restore keeps dot after a pure unary expr without an explicit result sync", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x54, "К НОП"),
+      plain(0x55, "К 1"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-noop-restore keeps dot when it is a decimal separator", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
