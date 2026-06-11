@@ -93,6 +93,7 @@ import {
   x2StateHasSameStructuralShapeInXAndX2,
   x2StateHasStructuralShapeX2,
   x2StateHasVpDotSafeStructuralContextX2,
+  x2StateHasVisibleUnaryNoop,
   x2StateIsClosedPlainContext,
   x2VpDotRestoreGapBeforeIndex,
   x2ShapeDataModelForFact,
@@ -4120,6 +4121,37 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(joined.x)).toEqual([]);
     expect(x2ValueStateText(joined.x2)).toEqual([]);
+  });
+
+  it("x2 visible unary no-op proof uses closed value and display-shape facts", () => {
+    const fractional: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["decimal:0.5:normalized"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const integerShape: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:2:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const signShape: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:-1:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const openEntry: X2ValueDataflowState = {
+      ...fractional,
+      entry: { kind: "open", raw: new Set(["0.5"]) },
+    };
+
+    expect(x2StateHasVisibleUnaryNoop(fractional, 0x35)).toBe(true);
+    expect(x2StateHasVisibleUnaryNoop(fractional, 0x34)).toBe(false);
+    expect(x2StateHasVisibleUnaryNoop(integerShape, 0x34)).toBe(true);
+    expect(x2StateHasVisibleUnaryNoop(integerShape, 0x31)).toBe(true);
+    expect(x2StateHasVisibleUnaryNoop(signShape, 0x32)).toBe(true);
+    expect(x2StateHasVisibleUnaryNoop(openEntry, 0x35)).toBe(false);
   });
 
   it("x2 value dataflow canonicalizes structural shape sources inside stable expr keys", () => {

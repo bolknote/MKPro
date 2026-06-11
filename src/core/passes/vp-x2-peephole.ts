@@ -3,7 +3,6 @@ import {
   computeX2ValueStates,
   computeLabelEntryIndexes,
   directReturnAnalysisContext,
-  effectiveVisibleXStateShape,
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
@@ -15,12 +14,8 @@ import {
   type IrPassFn,
   type KnownReturnCallOp,
   type X2ValueDataflowState,
-  x2StateIsClosedPlainContext,
+  x2StateHasVisibleUnaryNoop,
   x2SyncCanExposeContextSensitiveRestore,
-  x2ShapeSetHasExactIntegerDisplay,
-  x2ShapeSetHasExactNonNegativeDisplay,
-  x2ShapeSetRestoredVisibleDecimals,
-  x2ValueFactRestoredVisibleDecimal,
 } from "./helpers.ts";
 
 const ABS = 0x31;
@@ -75,42 +70,6 @@ function isFreeStandingNoopUnaryOp(op: IrOp): boolean {
     isFreeStandingSignOp(op);
 }
 
-function isFractionalNoopValue(value: string): boolean {
-  return value === "0" || /^-?0\.[0-9]+$/u.test(value);
-}
-
-function stateHasFractionalNoopX(state: X2ValueDataflowState | undefined): boolean {
-  if (state === undefined || !x2StateIsClosedPlainContext(state)) return false;
-  for (const fact of state.x) {
-    const visible = x2ValueFactRestoredVisibleDecimal(fact);
-    if (visible !== undefined && isFractionalNoopValue(visible)) return true;
-  }
-  for (const visible of x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(state))) {
-    if (isFractionalNoopValue(visible)) return true;
-  }
-  return false;
-}
-
-function stateHasIntegerNoopX(state: X2ValueDataflowState | undefined): boolean {
-  return state !== undefined &&
-    x2StateIsClosedPlainContext(state) &&
-    x2ShapeSetHasExactIntegerDisplay(effectiveVisibleXStateShape(state));
-}
-
-function stateHasAbsNoopX(state: X2ValueDataflowState | undefined): boolean {
-  return state !== undefined &&
-    x2StateIsClosedPlainContext(state) &&
-    x2ShapeSetHasExactNonNegativeDisplay(effectiveVisibleXStateShape(state));
-}
-
-function stateHasSignNoopX(state: X2ValueDataflowState | undefined): boolean {
-  if (state === undefined || !x2StateIsClosedPlainContext(state)) return false;
-  for (const visible of x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(state))) {
-    if (visible === "-1" || visible === "0" || visible === "1") return true;
-  }
-  return false;
-}
-
 function isKnownNoopUnaryOp(
   ops: readonly IrOp[],
   index: number,
@@ -119,13 +78,7 @@ function isKnownNoopUnaryOp(
   const op = ops[index]!;
   const state = states[index];
   if (!isFreeStandingNoopUnaryOp(op)) return false;
-  const knownNoop = op.kind === "plain" && op.opcode === FRACTION
-    ? stateHasFractionalNoopX(state)
-    : op.kind === "plain" && op.opcode === INTEGER
-      ? stateHasIntegerNoopX(state)
-      : op.kind === "plain" && op.opcode === ABS
-        ? stateHasAbsNoopX(state)
-        : stateHasSignNoopX(state);
+  const knownNoop = op.kind === "plain" && x2StateHasVisibleUnaryNoop(state, op.opcode);
   return knownNoop &&
     // К {x}, К [x], К |x|, and К ЗН preserve hidden X2. Once dataflow proves
     // the opcode is also a visible-X no-op, removing it cannot change a later

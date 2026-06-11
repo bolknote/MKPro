@@ -2024,7 +2024,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     mantissas or closed structural exponents such as `hex:0.123:mantissa` or
     `hex-exponent:1.23:-1`; this ABS-only proof does not make structural shapes
     dot-safe or promote them to ordinary decimal values. Negative values and raw
-    display spellings remain observable. Role-free `К ЗН` is removed when the
+    display spellings remain observable. These visible-unary no-op decisions
+    are now centralized in the shared X2 value/shape helper, so later passes can
+    reuse the same closed-context proof instead of duplicating local
+    `К {x}`/`К [x]`/`К |x|`/`К ЗН` rules. Role-free `К ЗН` is removed when the
     same closed-context value/shape proof shows visible `X` is already one of
     `-1`, `0`, or `1`; it uses the shared context-sensitive X2 exposure guard,
     so a following `.`/`/-/`/`ВП` that could observe the removed opcode as

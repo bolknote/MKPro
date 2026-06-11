@@ -5443,6 +5443,52 @@ export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefi
     (state.structuralVpContext === undefined || state.structuralVpContext.kind === "none");
 }
 
+const X2_UNARY_ABS = 0x31;
+const X2_UNARY_SIGN = 0x32;
+const X2_UNARY_INTEGER = 0x34;
+const X2_UNARY_FRACTION = 0x35;
+
+export function x2StateHasVisibleUnaryNoop(
+  state: X2ValueDataflowState | undefined,
+  opcode: number,
+): boolean {
+  if (state === undefined || !x2StateIsClosedPlainContext(state)) return false;
+  switch (opcode) {
+    case X2_UNARY_FRACTION:
+      return x2StateHasFractionalNoopVisibleX(state);
+    case X2_UNARY_INTEGER:
+      return x2ShapeSetHasExactIntegerDisplay(effectiveVisibleXStateShape(state));
+    case X2_UNARY_ABS:
+      return x2ShapeSetHasExactNonNegativeDisplay(effectiveVisibleXStateShape(state));
+    case X2_UNARY_SIGN:
+      return x2StateHasSignNoopVisibleX(state);
+    default:
+      return false;
+  }
+}
+
+function x2StateHasFractionalNoopVisibleX(state: X2ValueDataflowState): boolean {
+  for (const fact of state.x) {
+    const visible = x2ValueFactRestoredVisibleDecimal(fact);
+    if (visible !== undefined && isFractionalNoopVisibleDecimal(visible)) return true;
+  }
+  for (const visible of x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(state))) {
+    if (isFractionalNoopVisibleDecimal(visible)) return true;
+  }
+  return false;
+}
+
+function x2StateHasSignNoopVisibleX(state: X2ValueDataflowState): boolean {
+  for (const visible of x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(state))) {
+    if (visible === "-1" || visible === "0" || visible === "1") return true;
+  }
+  return false;
+}
+
+function isFractionalNoopVisibleDecimal(value: string): boolean {
+  return value === "0" || /^-?0\.[0-9]+$/u.test(value);
+}
+
 export function x2StateHasSameDotRestoreValueInXAndX2(state: X2ValueDataflowState | undefined): boolean {
   return x2ValueSetHasIntersection(state?.x, state?.x2) ||
     x2StateHasSameDotSafeDecimalInXAndX2(state) ||
