@@ -1279,9 +1279,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     source-key algebra for decimal mantissas and structural restore shapes,
     rather than separate exact-set checks. The `vp-splice` pass now queries a
     shared VP/X2 shape-transition helper for duplicate `ВП`, exponent
-    separator, exponent sign-pair, fresh-digit overwrite, and hard-overwrite
-    cases; this keeps the local rewrite rules tied to the same shape/context
-    model instead of reimplementing those booleans inside the pass. Closed
+    separator, exponent sign-pair, proved-source restore runs before `ВП`,
+    fresh-digit overwrite, and hard-overwrite cases; this keeps the local
+    rewrite rules tied to the same shape/context model instead of
+    reimplementing those booleans and source-equality checks inside the pass.
+    Closed
     structural exponent-entry
     shapes also feed `ВП` source proofs through that restored mantissa form, so a
     later `.` restore of `hex-exponent:Г:2` exposes `hex:Г00` as the next

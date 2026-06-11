@@ -280,11 +280,17 @@ export interface X2VpShapeContextAnalysis {
 
 export type X2VpShapeTransitionOperation =
   | "vp"
+  | "proved-vp"
   | "empty-before-non-digit"
   | "empty-before-sign-change"
   | "fresh-digit"
   | "hard-overwrite"
   | "sign-pair";
+
+export interface X2VpShapeTransitionOptions {
+  readonly beforeVp?: X2ValueDataflowState | undefined;
+  readonly hasSignRestore?: boolean | undefined;
+}
 
 export interface X2VpShapeTransitionAnalysis {
   readonly operation: X2VpShapeTransitionOperation;
@@ -294,6 +300,7 @@ export interface X2VpShapeTransitionAnalysis {
   readonly canDiscardSignPair: boolean;
   readonly reason:
     | "duplicate-vp"
+    | "proved-vp-source"
     | "exponent-separator"
     | "vp-context-overwritten"
     | "exponent-sign-pair"
@@ -5539,6 +5546,7 @@ export function analyzeX2VpShapeContext(
 export function analyzeX2VpShapeTransition(
   state: X2ValueDataflowState | undefined,
   operation: X2VpShapeTransitionOperation,
+  options: X2VpShapeTransitionOptions = {},
 ): X2VpShapeTransitionAnalysis {
   const context = analyzeX2VpShapeContext(state);
   switch (operation) {
@@ -5553,6 +5561,22 @@ export function analyzeX2VpShapeTransition(
         canDiscardRestoreRun: false,
         canDiscardSignPair: false,
         reason: canDiscardCurrentOp ? "duplicate-vp" : "none",
+      };
+    }
+    case "proved-vp": {
+      const canDiscardRestoreRun = options.beforeVp !== undefined &&
+        x2StateCanDiscardRestoreRunBeforeProvedVp(
+          state,
+          options.beforeVp,
+          { hasSignRestore: options.hasSignRestore },
+        );
+      return {
+        operation,
+        context,
+        canDiscardCurrentOp: false,
+        canDiscardRestoreRun,
+        canDiscardSignPair: canDiscardRestoreRun && options.hasSignRestore === true,
+        reason: canDiscardRestoreRun ? "proved-vp-source" : "none",
       };
     }
     case "empty-before-non-digit":

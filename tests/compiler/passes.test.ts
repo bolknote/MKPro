@@ -10135,6 +10135,40 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("x2 VP shape transition analysis proves restore runs before matching VP sources", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(analyzeX2VpShapeTransition(
+      states[3],
+      "proved-vp",
+      { beforeVp: states[6], hasSignRestore: true },
+    )).toMatchObject({
+      canDiscardRestoreRun: true,
+      canDiscardSignPair: true,
+      reason: "proved-vp-source",
+    });
+    expect(analyzeX2VpShapeTransition(
+      states[3],
+      "proved-vp",
+      { hasSignRestore: true },
+    )).toMatchObject({
+      canDiscardRestoreRun: false,
+      canDiscardSignPair: false,
+      reason: "none",
+    });
+  });
+
   it("x2 value dataflow proves a closed integer exponent-entry after an X2 sync", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),

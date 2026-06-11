@@ -17,9 +17,7 @@ import {
   x2RestoreGapBeforeVp,
   x2RestoreGapDirectReturnDoesNotObserveRestore,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
-  x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateIsClosedPlainContext,
-  x2StatesHaveSameVpEntrySource,
   type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
@@ -61,18 +59,22 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
 ): boolean {
   if (analyzeX2VpShapeContext(state).kind !== "active-mantissa") return false;
   if (x2RestoreGapBeforeVp(ops, secondSignIndex + 1, context).vpIndex === undefined) return false;
-  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterPair, { hasSignRestore: true });
+  return analyzeX2VpShapeTransition(
+    state,
+    "proved-vp",
+    { beforeVp: stateAfterPair, hasSignRestore: true },
+  ).canDiscardSignPair;
 }
 
 function canRemoveMantissaRestoreRunBeforeProvedVp(
   state: X2ValueDataflowState | undefined,
   stateAfterRun: X2ValueDataflowState | undefined,
 ): boolean {
-  return x2StateCanDiscardRestoreRunBeforeProvedVp(
+  return analyzeX2VpShapeTransition(
     state,
-    stateAfterRun,
-    { hasSignRestore: !x2StateIsClosedPlainContext(state) },
-  );
+    "proved-vp",
+    { beforeVp: stateAfterRun, hasSignRestore: !x2StateIsClosedPlainContext(state) },
+  ).canDiscardRestoreRun;
 }
 
 function mantissaRestoreRunBeforeProvedVp(
@@ -185,7 +187,11 @@ function canRemoveClosedContextSignPairBeforeProvedVp(
   context: DirectReturnAnalysisContext,
 ): boolean {
   if (x2RestoreGapBeforeVp(ops, secondSignIndex + 1, context).vpIndex === undefined) return false;
-  return x2StatesHaveSameVpEntrySource(state, stateAfterPair);
+  return analyzeX2VpShapeTransition(
+    state,
+    "proved-vp",
+    { beforeVp: stateAfterPair },
+  ).canDiscardRestoreRun;
 }
 
 function freeStandingEmptyRunBeforeProvedVp(
