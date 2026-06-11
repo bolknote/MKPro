@@ -1401,7 +1401,11 @@ The pipeline currently contains:
   through `F x^2` can seed `decimal:0.015129:normalized` plus the matching
   scientific display shape, while raw leading-zero structural spellings stay
   shape-only. Materialized stable expression keys use the same proof after a
-  real X2 sync; the original structural source still is not made dot-safe. For non-negative concrete
+  real X2 sync; the original structural source still is not made dot-safe. A
+  producer-local `expr:<step>` may also become the operand of a later unary or
+  closed-context stable `expr-key:<opcode>(expr:<step>)`, letting repeated pure
+  operations over the same hidden computed source compare as one SSA-like temporary without
+  promoting the source to a decimal or display-safe value. For non-negative concrete
   decimal values, `К {x}` is also modeled as an exact normalized fractional
   decimal in visible `X` while preserving the previous hidden X2 fact. Its
   display shape is tracked separately from that normalized value: a non-zero
@@ -1796,7 +1800,8 @@ The pipeline currently contains:
   can also prove the hidden temp from the dead scratch store's own stable source
   fact (`decimal:*:normalized`, `expr:*`, or a stable `expr-key:*` whose
   operands include canonical structural shape sources, canonical decimal
-  exponent display-shape sources, or constant stack producers such as `F pi`)
+  exponent display-shape sources, producer-local `expr:<step>` facts in
+  unary/closed-context keys, or constant stack producers such as `F pi`)
   when register-memory at a join has become too conservative. Decimal exponent
   display keys only prove that the same displayed source was recomputed; they do
   not make that source dot-safe. The same escape can use dot-safe decimal

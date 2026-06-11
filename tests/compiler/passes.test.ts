@@ -2752,10 +2752,10 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[2]?.x)).toEqual(["expr:0"]);
     expect(x2ValueStateText(states[2]?.x2)).toEqual(["expr:0"]);
-    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr:2"]);
-    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr:2"]);
-    expect(x2ValueStateText(states[4]?.x)).toEqual(["expr:2", "reg:2"]);
-    expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:2", "reg:2"]);
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["expr-key:0B(expr:0)", "expr:2"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["expr-key:0B(expr:0)", "expr:2"]);
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["expr-key:0B(expr:0)", "expr:2", "reg:2"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr-key:0B(expr:0)", "expr:2", "reg:2"]);
   });
 
   it("x2 value dataflow gives closed sign-change a stable expr key from stable sources", () => {
@@ -2778,10 +2778,12 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(registerStates[2]?.x2)).toEqual(["expr-key:0B(reg:1)", "expr:1"]);
     expect(x2ValueStateText(nestedStates[4]?.x)).toEqual([
       "expr-key:0B(expr-key:21(decimal:2:normalized))",
+      "expr-key:0B(expr:1)",
       "expr:3",
     ]);
     expect(x2ValueStateText(nestedStates[4]?.x2)).toEqual([
       "expr-key:0B(expr-key:21(decimal:2:normalized))",
+      "expr-key:0B(expr:1)",
       "expr:3",
     ]);
   });
@@ -3005,6 +3007,24 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(1);
     expect(result.ops[6]).toMatchObject({ kind: "plain", opcode: 0x0a });
+  });
+
+  it("x2-hidden-temp-restore uses stable expr keys from opaque SSA sources", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      plain(0x31, "К |x|"),
+      store("2"),
+      plain(0x0a, "."),
+      plain(0x31, "К |x|"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      halt(),
+    ];
+    const result = x2HiddenTempRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops[7]).toMatchObject({ kind: "plain", opcode: 0x0a });
   });
 
   it("x2-hidden-temp-restore keeps register-dependent expr keys stable across direct-return helpers", () => {

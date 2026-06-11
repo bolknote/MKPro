@@ -195,6 +195,9 @@ const REGISTER_NAMES: readonly RegisterName[] = [
   "d",
   "e",
 ];
+interface StableExpressionSourceKeyOptions {
+  readonly includeOpaqueExpr?: boolean;
+}
 
 export interface X2ValueDataflowState {
   readonly x: X2ValueSet;
@@ -707,8 +710,9 @@ function plainProducesStableExpressionValues(
     }
   } else if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") {
     for (const fact of plainProducesConcreteBinaryDecimalValues(op, y, x, yShape, xShape, options)) output.add(fact);
-    for (const yKey of stableExpressionSourceKeys(y, yShape)) {
-      for (const xKey of stableExpressionSourceKeys(x, xShape)) {
+    const binarySourceOptions = { includeOpaqueExpr: false };
+    for (const yKey of stableExpressionSourceKeys(y, yShape, binarySourceOptions)) {
+      for (const xKey of stableExpressionSourceKeys(x, xShape, binarySourceOptions)) {
         if (stableBinaryExpressionKeyHasConcreteDecimalResult(op, yKey, xKey)) continue;
         output.add(stableBinaryExpressionValueFact(op, opcode, yKey, xKey));
       }
@@ -9538,8 +9542,12 @@ export function x2StableUnaryExpressionValueFact(
   return stableExpressionValueFact(opcode, key);
 }
 
-function stableExpressionSourceKey(fact: X2ValueFact): string | undefined {
+function stableExpressionSourceKey(
+  fact: X2ValueFact,
+  options: StableExpressionSourceKeyOptions = {},
+): string | undefined {
   if (fact.startsWith("reg:")) return fact;
+  if (options.includeOpaqueExpr !== false && /^expr:\d+$/u.test(fact)) return fact;
   if (fact.startsWith("expr-key:")) return canonicalStableExpressionValueFactIfValid(fact);
   const decimal = computationDecimalValueFromFact(fact);
   if (decimal !== undefined) return decimalValueFact(decimal, "normalized");
@@ -9591,10 +9599,11 @@ function canonicalStableShapeSourceKey(fact: X2ShapeFact): string | undefined {
 function stableExpressionSourceKeys(
   values: X2ValueSet | undefined,
   shapes: X2ShapeSet | undefined,
+  options: StableExpressionSourceKeyOptions = {},
 ): Set<string> {
   const keys = new Set<string>();
   for (const fact of values ?? []) {
-    const key = stableExpressionSourceKey(fact);
+    const key = stableExpressionSourceKey(fact, options);
     if (key !== undefined) keys.add(key);
   }
   for (const key of stableExpressionDisplayShapeSourceKeys(values, shapes)) keys.add(key);
