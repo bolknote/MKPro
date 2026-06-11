@@ -198,7 +198,8 @@ function unaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpress
   if (unary.kind !== "plain") return undefined;
   const x2Fact = x2StableUnaryExpressionValueFact(unary, source.x2Fact);
   if (x2Fact === undefined) return undefined;
-  const syncIndex = unaryIndex + 1;
+  let syncIndex = unaryIndex + 1;
+  while (isPlainExpressionSyncGapOp(ops[syncIndex])) syncIndex += 1;
   if (!isPlainXPreservingX2Sync(ops[syncIndex])) return undefined;
   const mnemonic = "mnemonic" in unary.meta ? unary.meta.mnemonic : undefined;
   return {
@@ -207,6 +208,14 @@ function unaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpress
     x2Fact,
     source,
   };
+}
+
+function isPlainExpressionSyncGapOp(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }> {
+  if (op === undefined || op.kind !== "plain" || hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasRoles(op)) {
+    return false;
+  }
+  const effect = analyzeX2StackEffect(op);
+  return plainPreservesXValue(op) && effect.stackPreserves && effect.x2Preserves;
 }
 
 function isPlainXPreservingX2Sync(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }> {

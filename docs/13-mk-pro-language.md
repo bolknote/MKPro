@@ -1896,7 +1896,8 @@ The pipeline currently contains:
   followed by a pure unary operation and an explicit X-preserving X2 sync can
   also collapse to `.` when the same stable `expr-key:*` is already in X2, the
   current `X` proves the same dot-restore value, and the usual unsafe-shape,
-  stack-lift, and context-sensitive restore guards all pass. A repeated literal
+  stack-lift, and context-sensitive restore guards all pass; the sync may sit
+  after documented X/stack/X2-preserving empty cells. A repeated literal
   may otherwise be replaced before a following `ВП` only when the same-source
   proof survives the shared VP restore-gap/source analysis over free-standing
   `КНОП`/`К1`/`К2` and `/-/` cells, so
