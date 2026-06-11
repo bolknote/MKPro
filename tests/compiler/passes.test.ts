@@ -64,6 +64,7 @@ import {
   x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2RestoreGapBeforeVp,
   x2RestoreRunBeforeTerminal,
+  x2ScanRestoreRunBeforeTerminal,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
   x2NextStackPreservingReturnX2SyncIndex,
@@ -16174,6 +16175,34 @@ describe("ir passes on synthetic programs", () => {
       terminalIndex: undefined,
       blockedIndex: 1,
       removableIndexes: [],
+    });
+
+    const segmentedProgram: IrOp[] = [
+      plain(0x0b, "/-/"),
+      label("entry"),
+      plain(0x55, "К 1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    let sawLabel = false;
+    expect(x2ScanRestoreRunBeforeTerminal(
+      segmentedProgram,
+      0,
+      directReturnAnalysisContext(segmentedProgram),
+      (op, index) => {
+        if (index === 0) return "remove";
+        if (op.kind === "plain" && op.opcode === 0x55) return sawLabel ? "transparent" : "remove";
+        return op.kind === "plain" && op.opcode === 0x0d ? "terminal" : "block";
+      },
+      {
+        onTransparentGap: (op) => {
+          if (op.kind === "label") sawLabel = true;
+        },
+      },
+    )).toEqual({
+      terminalIndex: 3,
+      blockedIndex: undefined,
+      removableIndexes: [0],
     });
   });
 

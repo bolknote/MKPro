@@ -1287,8 +1287,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     free-standing `КНОП`/`К1`/`К2`/`/-/` cells, labels, address gaps, and
     transparent direct/proved-indirect return helpers before a proved terminal
     opcode; `vp-splice` consumes this scanner for fresh-digit and hard-overwrite
-    terminal rewrites, and later X2 passes can reuse the same blocked/terminal
-    result instead of duplicating gap semantics.
+    terminal rewrites, and `x2-dead-restore-before-overwrite` consumes the
+    classifier form of the same scanner while keeping its stricter
+    same-segment collection rule after labels. Later X2 passes can reuse the
+    same blocked/terminal result instead of duplicating gap semantics.
     Closed
     structural exponent-entry
     shapes also feed `ВП` source proofs through that restored mantissa form, so a
@@ -1668,8 +1670,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `.`/`/-/`/`ВП` restore, plus adjacent free-standing `КНОП`/`К1`/`К2`
     separators, when a following hard X/X2 overwrite such as `Cx` destroys the
     restored `X` before it can be observed. Consecutive same-segment dead
-    restores and free-standing separators are removed as one run, while labels
-    split the run and orphan address-byte cells are transparent but preserved. `.` requires a closed, non-`ВП`
+    restores and free-standing separators are removed as one run through the
+    shared X2 restore-run terminal scanner, while labels split the collected
+    run and orphan address-byte cells are transparent but preserved. `.` requires a closed, non-`ВП`
     context with a proved decimal X2 value, an emulator-pinned single-hex
     A/B/C structural mantissa, or the same shared dot-restore safety proof used
     by `x2-noop-restore` (for example an immediate sync or closed sign-change

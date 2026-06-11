@@ -9,12 +9,11 @@ import {
   hasRewriteBarrier,
   isFreeStandingX2EmptyOp,
   isDisplayFocusSensitive,
-  isKnownReturnCallOp,
   plainPreservesXValue,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
   removingStackLiftCanExposeStack,
-  x2RestoreGapDirectReturnDoesNotObserveRestore,
+  x2ScanRestoreRunBeforeTerminal,
   x2CanUseDotRestoreAt,
   x2CanUseVpDotRestoreAt,
   x2StateHasDotSafeDecimalX2,
@@ -180,46 +179,45 @@ function deadRestoreRunBeforeHardOverwrite(
   recallStackExposure: Map<number, boolean>,
   stackProducerExposure: Map<number, boolean>,
 ): readonly number[] | undefined {
-  const remove: number[] = [start];
   let sameSegment = true;
-  for (let index = start + 1; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") {
-      sameSegment = false;
-      continue;
-    }
-    if (op.kind === "orphan-address") continue;
-    if (isFreeStandingX2EmptyOp(op)) {
-      if (sameSegment) remove.push(index);
-      continue;
-    }
-    if (
-      sameSegment &&
-      isDeadRestoreCandidate(
+  const scan = x2ScanRestoreRunBeforeTerminal(
+    ops,
+    start,
+    context,
+    (op, index) => {
+      if (index === start) return "remove";
+      if (isFreeStandingX2EmptyOp(op)) return sameSegment ? "remove" : "transparent";
+      if (
+        sameSegment &&
+        isDeadRestoreCandidate(
+          ops,
+          op,
+          states[index],
+          index,
+          dotSafeStates[index] === true,
+          immediateSyncStates[index] === true,
+          context,
+        )
+      ) {
+        return "remove";
+      }
+      return isOverwriteEndpointThatCannotObserveRestoredX(
         ops,
-        op,
-        states[index],
         index,
-        dotSafeStates[index] === true,
-        immediateSyncStates[index] === true,
-        context,
+        op,
+        recallStackExposure,
+        stackProducerExposure,
       )
-    ) {
-      remove.push(index);
-      continue;
-    }
-    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
-    return isOverwriteEndpointThatCannotObserveRestoredX(
-      ops,
-      index,
-      op,
-      recallStackExposure,
-      stackProducerExposure,
-    )
-      ? remove
-      : undefined;
-  }
-  return undefined;
+        ? "terminal"
+        : "block";
+    },
+    {
+      onTransparentGap: (op) => {
+        if (op.kind === "label") sameSegment = false;
+      },
+    },
+  );
+  return scan.terminalIndex === undefined ? undefined : scan.removableIndexes;
 }
 
 function isFreeStandingPlain(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {

@@ -5357,6 +5357,12 @@ export interface X2RestoreRunBeforeTerminalScan {
 }
 
 export type X2RestoreRunTerminalPredicate = (op: IrOp, index: number) => boolean;
+export type X2RestoreRunScanDecision = "remove" | "transparent" | "terminal" | "block";
+export type X2RestoreRunClassifier = (op: IrOp, index: number) => X2RestoreRunScanDecision;
+
+export interface X2RestoreRunScannerOptions {
+  readonly onTransparentGap?: ((op: IrOp, index: number) => void) | undefined;
+}
 
 export function x2HasOnlyRestoreGapBeforeVp(
   ops: readonly IrOp[],
@@ -5426,20 +5432,52 @@ export function x2RestoreRunBeforeTerminal(
   context: DirectReturnAnalysisContext,
   isTerminal: X2RestoreRunTerminalPredicate,
 ): X2RestoreRunBeforeTerminalScan {
+  return x2ScanRestoreRunBeforeTerminal(
+    ops,
+    start,
+    context,
+    (op, index) => {
+      if (isFreeStandingX2RestoreGapOp(op)) return "remove";
+      return isTerminal(op, index) ? "terminal" : "block";
+    },
+  );
+}
+
+export function x2ScanRestoreRunBeforeTerminal(
+  ops: readonly IrOp[],
+  start: number,
+  context: DirectReturnAnalysisContext,
+  classify: X2RestoreRunClassifier,
+  options: X2RestoreRunScannerOptions = {},
+): X2RestoreRunBeforeTerminalScan {
   const removableIndexes: number[] = [];
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
-    if (isFreeStandingX2RestoreGapOp(op)) {
+    if (op.kind === "label" || op.kind === "orphan-address") {
+      options.onTransparentGap?.(op, index);
+      continue;
+    }
+    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) {
+      options.onTransparentGap?.(op, index);
+      continue;
+    }
+    const decision = classify(op, index);
+    if (decision === "remove") {
       removableIndexes.push(index);
       continue;
     }
-    if (op.kind === "label" || op.kind === "orphan-address") continue;
-    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
-    const terminal = removableIndexes.length > 0 && isTerminal(op, index);
+    if (decision === "transparent") continue;
+    if (decision === "terminal" && removableIndexes.length > 0) {
+      return {
+        terminalIndex: index,
+        blockedIndex: undefined,
+        removableIndexes,
+      };
+    }
     return {
-      terminalIndex: terminal ? index : undefined,
-      blockedIndex: terminal ? undefined : index,
-      removableIndexes: terminal ? removableIndexes : [],
+      terminalIndex: undefined,
+      blockedIndex: index,
+      removableIndexes: [],
     };
   }
   return {
