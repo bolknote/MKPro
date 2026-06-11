@@ -1997,7 +1997,10 @@ The pipeline currently contains:
   operators `К НОП`/`К 1`/`К 2` preserve it inside straight-line or merged CFG
   paths. Unknown indirect flow and absolute numeric direct targets are left untouched. The same
   X2-register/value/shape-aware `.`/`/-/`/`ВП` sync guard (stopped by direct `В/О`
-  returns) plus downstream stack-consumer guards are applied before removing a recall.
+  returns) plus downstream stack-consumer guards are applied before removing a recall; a recall whose
+  only remaining job is stack lift before a downstream consumer can still be removed when the shared
+  stack+X2 scheduler proves a previous producer kept by this pass already supplied the same visible
+  value in `Y` and the deeper stack difference is dead.
 - **branch-target-x-reuse** — drops the first `П->X r` inside a unique branch
   target when the incoming branch path already carries that value in X. The
   proof can be the direct register alias from the tested X value, a projected

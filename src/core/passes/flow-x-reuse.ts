@@ -15,6 +15,7 @@ import {
   storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
+  x2PreviousStackLiftDuplicateYProducerIndex,
 } from "./helpers.ts";
 
 type XRegisterSet = ReadonlySet<RegisterName>;
@@ -44,7 +45,14 @@ const run: IrPassFn = (ops) => {
     const recallRegister = removableRecallValueRegister(op);
     if (recallRegister === undefined) continue;
     const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index], directReturnContext);
-    if (removal?.removable !== true) continue;
+    if (removal === undefined) continue;
+    const previousDuplicateYProducerIndex = removal.exposesStackLift && !removal.exposesX2Restore
+      ? x2PreviousStackLiftDuplicateYProducerIndex(ops, index, index, x2ValueStates[index], directReturnContext)
+      : undefined;
+    const stackLiftAlreadySupplied =
+      previousDuplicateYProducerIndex !== undefined &&
+      !remove.has(previousDuplicateYProducerIndex);
+    if (removal.removable !== true && !stackLiftAlreadySupplied) continue;
     const alreadyInX =
       inStates[index]?.has(recallRegister) === true ||
       removal.valueProof?.inX === true;

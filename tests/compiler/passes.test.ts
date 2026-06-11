@@ -19199,6 +19199,46 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("flow-x-reuse drops recall before a binary op when a previous stack producer already supplied duplicate Y", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      store("4"),
+      plain(0x0e, "В↑"),
+      recall("4"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      store("4"),
+      plain(0x0e, "В↑"),
+      plain(0x10, "+"),
+      halt(),
+    ]);
+  });
+
+  it("flow-x-reuse does not use a recall producer already removed in the same pass", () => {
+    const program: IrOp[] = [
+      store("4"),
+      recall("4"),
+      recall("4"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      store("4"),
+      recall("4"),
+      plain(0x10, "+"),
+      halt(),
+    ]);
+  });
+
   it("flow-x-reuse keeps recall whose stack lift survives X-only ops before binary use", () => {
     const program: IrOp[] = [
       store("4"),
