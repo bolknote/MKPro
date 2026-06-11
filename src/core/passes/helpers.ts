@@ -4927,7 +4927,8 @@ export function x2CanUseVpDotRestoreAt(
   index: number,
   state: X2ValueDataflowState | undefined,
 ): boolean {
-  return x2StateHasVpDotSafeStructuralContextX2(state) && x2VpDotRestoreGapIsSafe(ops, index);
+  return x2StateHasVpDotSafeStructuralContextX2(state) &&
+    x2VpDotRestoreGapBeforeIndex(ops, index).vpIndex !== undefined;
 }
 
 export function x2StateHasVpDotSafeStructuralContextX2(state: X2ValueDataflowState | undefined): boolean {
@@ -4960,20 +4961,38 @@ function structuralMantissaHasVpDotSafeLead(model: X2MantissaDataModel): boolean
   return false;
 }
 
-function x2VpDotRestoreGapIsSafe(ops: readonly IrOp[], index: number): boolean {
+export interface X2VpDotRestoreGapScan {
+  readonly vpIndex: number | undefined;
+  readonly blockedIndex: number | undefined;
+  readonly preservingNonEmptyCount: number;
+}
+
+export function x2VpDotRestoreGapBeforeIndex(ops: readonly IrOp[], index: number): X2VpDotRestoreGapScan {
   let preservingNonEmpty = 0;
   for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
     const op = ops[cursor]!;
     if (op.kind === "label" || op.kind === "orphan-address") continue;
-    if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
-    if (op.kind !== "plain") return false;
-    if (op.opcode === 0x0c) return preservingNonEmpty <= 1;
+    if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) {
+      return { vpIndex: undefined, blockedIndex: cursor, preservingNonEmptyCount: preservingNonEmpty };
+    }
+    if (op.kind !== "plain") {
+      return { vpIndex: undefined, blockedIndex: cursor, preservingNonEmptyCount: preservingNonEmpty };
+    }
+    if (op.opcode === 0x0c) {
+      return preservingNonEmpty <= 1
+        ? { vpIndex: cursor, blockedIndex: undefined, preservingNonEmptyCount: preservingNonEmpty }
+        : { vpIndex: undefined, blockedIndex: cursor, preservingNonEmptyCount: preservingNonEmpty };
+    }
     if (isFreeStandingX2EmptyOp(op)) continue;
-    if (plainX2Effect(op) !== "preserves" || hasIrRoles(op)) return false;
+    if (plainX2Effect(op) !== "preserves" || hasIrRoles(op)) {
+      return { vpIndex: undefined, blockedIndex: cursor, preservingNonEmptyCount: preservingNonEmpty };
+    }
     preservingNonEmpty += 1;
-    if (preservingNonEmpty > 1) return false;
+    if (preservingNonEmpty > 1) {
+      return { vpIndex: undefined, blockedIndex: cursor, preservingNonEmptyCount: preservingNonEmpty };
+    }
   }
-  return false;
+  return { vpIndex: undefined, blockedIndex: undefined, preservingNonEmptyCount: preservingNonEmpty };
 }
 
 export function x2StateHasUnsafeDotRestoreShapeX2(state: X2ValueDataflowState | undefined): boolean {

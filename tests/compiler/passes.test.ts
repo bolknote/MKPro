@@ -88,6 +88,7 @@ import {
   x2StateHasStructuralShapeX2,
   x2StateHasVpDotSafeStructuralContextX2,
   x2StateIsClosedPlainContext,
+  x2VpDotRestoreGapBeforeIndex,
   x2ShapeDataModelForFact,
   x2ShapeFactRestoredVisibleDecimal,
   x2ShapeFactSafety,
@@ -1659,6 +1660,26 @@ describe("ir passes on synthetic programs", () => {
       x2Shape: new Set<X2ShapeFact>(["mantissa:1300:decimal"]),
     };
 
+    expect(x2VpDotRestoreGapBeforeIndex(dProgram, 2)).toEqual({
+      vpIndex: 1,
+      blockedIndex: undefined,
+      preservingNonEmptyCount: 0,
+    });
+    expect(x2VpDotRestoreGapBeforeIndex(eGapProgram, 3)).toEqual({
+      vpIndex: 1,
+      blockedIndex: undefined,
+      preservingNonEmptyCount: 1,
+    });
+    expect(x2VpDotRestoreGapBeforeIndex(addressGapProgram, 4)).toEqual({
+      vpIndex: 1,
+      blockedIndex: undefined,
+      preservingNonEmptyCount: 1,
+    });
+    expect(x2VpDotRestoreGapBeforeIndex(twoGapProgram, 4)).toEqual({
+      vpIndex: undefined,
+      blockedIndex: 2,
+      preservingNonEmptyCount: 2,
+    });
     expect(x2StateHasVpDotSafeStructuralContextX2(dStates[2])).toBe(true);
     expect(x2CanUseVpDotRestoreAt(dProgram, 2, dStates[2])).toBe(true);
     expect(x2StateHasVpDotSafeStructuralContextX2(eGapStates[3])).toBe(true);

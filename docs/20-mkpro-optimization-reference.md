@@ -1126,7 +1126,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     when visible `X` and hidden X2 carry the same structural restore key, the
     trailing `.` is removable under the existing exposure guards. Unsafe
     structural digits (`D`/`F`), structural exponent shapes, and observable
-    next-`ВП` contexts remain blocked. Stable `expr-key:*` equality now also
+    next-`ВП` contexts remain blocked. The structural VP-dot gap proof is now
+    an inspectable scanner result carrying the source `ВП`, blocker, and
+    non-empty preserving-command count, so downstream passes can share the same
+    “at most one preserving command after `ВП`” rule. Stable `expr-key:*` equality now also
     feeds the free-standing restore proof after an explicit X-preserving X2
     sync, so a pure computed value already present in both visible `X` and
     hidden X2 can drop a later no-op `.` across preserving empty cells. The

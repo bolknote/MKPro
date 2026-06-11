@@ -1703,7 +1703,10 @@ The pipeline currently contains:
   proves visible `X` and hidden X2 carry the same dot-safe structural mantissa,
   a trailing `.` is removable under the ordinary exposure guards. Unsafe
   structural digits such as `D`/`F`, structural exponent forms, and observable
-  next-`ВП` contexts stay conservative.
+  next-`ВП` contexts stay conservative. The structural VP-dot gap is exposed as
+  a scanner result with the source `ВП` index, blocker index, and count of
+  non-empty preserving commands, so callers do not reimplement the “one
+  preserving command after `ВП`” rule.
   A narrow exception is proved same-source exponent entry: if dataflow shows
   that `.` would leave the same `ВП` mantissa source, the dot can be removed
   before immediate `ВП` only when the explicit sign-source is also unchanged.
