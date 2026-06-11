@@ -1751,12 +1751,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `5 ВП 3`, `1.2 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
     X2-affecting sync. A repeated `literal; pure unary; explicit
-    X-preserving X2 sync` run can also collapse to `.` when the hidden X2 set
-    already contains the same stable `expr-key:*`, visible `X` proves the same
-    dot-restore value, and the unsafe-shape, stack-lift, and
-    context-sensitive restore guards all remain clean. The expression parser can
-    cross documented X/stack/X2-preserving empty cells before that explicit
-    sync, while role-bearing `/-/` cells
+    X-preserving X2 sync` run can also collapse to `.` when the source is either
+    a decimal digit-run or a documented stable constant producer such as
+    `F pi`, the hidden X2 set already contains the same stable `expr-key:*`,
+    visible `X` proves the same dot-restore value, and the unsafe-shape,
+    stack-lift, and context-sensitive restore guards all remain clean. The
+    expression parser can cross documented X/stack/X2-preserving empty cells
+    before that explicit sync, while role-bearing `/-/` cells
     are not parsed as replaceable literal sign suffixes. When a cell range can
     be read both as a full
     exponent-entry literal and as a mantissa prefix before `ВП`, the pass tries

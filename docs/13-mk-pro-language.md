@@ -1894,10 +1894,12 @@ The pipeline currently contains:
   the prefix form is accepted when the inserted `.` itself is the first X2
   restore and recreates the same mantissa source for `ВП`. A repeated literal
   followed by a pure unary operation and an explicit X-preserving X2 sync can
-  also collapse to `.` when the same stable `expr-key:*` is already in X2, the
-  current `X` proves the same dot-restore value, and the usual unsafe-shape,
-  stack-lift, and context-sensitive restore guards all pass; the sync may sit
-  after documented X/stack/X2-preserving empty cells. A repeated literal
+  also collapse to `.` when the same stable `expr-key:*` is already in X2; the
+  source can be either a decimal digit-run or a documented stable constant
+  producer such as `F pi`. The current `X` must prove the same dot-restore value,
+  and the usual unsafe-shape, stack-lift, and context-sensitive restore guards
+  all pass; the sync may sit after documented X/stack/X2-preserving empty cells.
+  A repeated literal
   may otherwise be replaced before a following `ВП` only when the same-source
   proof survives the shared VP restore-gap/source analysis over free-standing
   `КНОП`/`К1`/`К2` and `/-/` cells, so

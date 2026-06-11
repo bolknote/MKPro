@@ -10268,6 +10268,11 @@ export function x2StableUnaryExpressionValueFact(
   return stableExpressionValueFact(opcode, key);
 }
 
+export function x2StableConstantExpressionValueFacts(op: IrOp): Set<X2ValueFact> {
+  if (op.kind !== "plain") return new Set();
+  return plainProducesStableConstantExpressionValues(op);
+}
+
 function stableExpressionSourceKey(
   fact: X2ValueFact,
   options: StableExpressionSourceKeyOptions = {},

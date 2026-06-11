@@ -21,6 +21,7 @@ import {
   x2StateHasSameDotRestoreValueInXAndX2,
   x2StateIsClosedPlainContext,
   x2PreviousStackLiftDuplicateYProducerIndex,
+  x2StableConstantExpressionValueFacts,
   x2StableUnaryExpressionValueFact,
   x2ValueSetHasFact,
   x2ValueSetHasRestoredVisibleDecimal,
@@ -48,7 +49,13 @@ interface UnaryExpressionRun {
   readonly end: number;
   readonly displayValue: string;
   readonly x2Fact: X2ValueFact;
-  readonly source: NumericLiteralRun;
+  readonly sourceStackEnd: number;
+}
+
+interface ExpressionSourceRun {
+  readonly end: number;
+  readonly displayValue: string;
+  readonly x2Facts: readonly X2ValueFact[];
 }
 
 function isPlainDigit(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
@@ -190,13 +197,13 @@ function literalRunsAt(ops: readonly IrOp[], start: number): readonly NumericLit
 }
 
 function unaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
-  const source = decimalLiteralRunAt(ops, start, { allowSinglePositiveInteger: true });
+  const source = expressionSourceRunAt(ops, start);
   if (source === undefined) return undefined;
   const unaryIndex = source.end + 1;
   const unary = ops[unaryIndex];
   if (unary === undefined) return undefined;
   if (unary.kind !== "plain") return undefined;
-  const x2Fact = x2StableUnaryExpressionValueFact(unary, source.x2Fact);
+  const x2Fact = stableUnaryExpressionValueFactForSource(unary, source);
   if (x2Fact === undefined) return undefined;
   let syncIndex = unaryIndex + 1;
   while (isPlainExpressionSyncGapOp(ops[syncIndex])) syncIndex += 1;
@@ -206,8 +213,47 @@ function unaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpress
     end: syncIndex,
     displayValue: `${mnemonic ?? "expr"}(${source.displayValue})`,
     x2Fact,
-    source,
+    sourceStackEnd: source.end,
   };
+}
+
+function expressionSourceRunAt(ops: readonly IrOp[], start: number): ExpressionSourceRun | undefined {
+  const decimal = decimalLiteralRunAt(ops, start, { allowSinglePositiveInteger: true });
+  if (decimal !== undefined) {
+    return {
+      end: decimal.end,
+      displayValue: decimal.displayValue,
+      x2Facts: [decimal.x2Fact],
+    };
+  }
+  return stableConstantExpressionSourceRunAt(ops, start);
+}
+
+function stableConstantExpressionSourceRunAt(
+  ops: readonly IrOp[],
+  start: number,
+): ExpressionSourceRun | undefined {
+  const op = ops[start];
+  if (op === undefined || op.kind !== "plain") return undefined;
+  const x2Facts = [...x2StableConstantExpressionValueFacts(op)];
+  if (x2Facts.length === 0) return undefined;
+  const mnemonic = "mnemonic" in op.meta ? op.meta.mnemonic : undefined;
+  return {
+    end: start,
+    displayValue: mnemonic ?? "const",
+    x2Facts,
+  };
+}
+
+function stableUnaryExpressionValueFactForSource(
+  unary: IrOp,
+  source: ExpressionSourceRun,
+): X2ValueFact | undefined {
+  for (const sourceFact of source.x2Facts) {
+    const x2Fact = x2StableUnaryExpressionValueFact(unary, sourceFact);
+    if (x2Fact !== undefined) return x2Fact;
+  }
+  return undefined;
 }
 
 function isPlainExpressionSyncGapOp(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }> {
@@ -499,7 +545,7 @@ function replacingExpressionStackLiftCanExpose(
   context: DirectReturnAnalysisContext,
 ): boolean {
   return replacingNumberEntryCanExposeStackLift(ops, run.end) &&
-    !literalStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run.source, state, context);
+    !expressionStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run.sourceStackEnd, state, context);
 }
 
 function literalStackLiftAlreadySuppliedByDuplicateY(
@@ -509,7 +555,17 @@ function literalStackLiftAlreadySuppliedByDuplicateY(
   state: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  return x2PreviousStackLiftDuplicateYProducerIndex(ops, runStart, run.end, state, context) !== undefined;
+  return expressionStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run.end, state, context);
+}
+
+function expressionStackLiftAlreadySuppliedByDuplicateY(
+  ops: readonly IrOp[],
+  runStart: number,
+  sourceEnd: number,
+  state: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return x2PreviousStackLiftDuplicateYProducerIndex(ops, runStart, sourceEnd, state, context) !== undefined;
 }
 
 const run: IrPassFn = (ops) => {
