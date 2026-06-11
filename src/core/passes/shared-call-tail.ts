@@ -1,5 +1,6 @@
 import type { IrOp } from "../types.ts";
 import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
+import { createLabelAllocator, targetKey } from "./outline.ts";
 
 interface SharedCallTail {
   key: string;
@@ -103,17 +104,16 @@ function collectSharedCallTails(ops: readonly IrOp[]): Map<string, SharedCallTai
   }
 
   const result = new Map<string, SharedCallTail>();
-  let index = 0;
+  const labels = createLabelAllocator(ops, "__shared_call_tail_");
   for (const [key, candidate] of counts) {
     if (candidate.count < 3) continue;
     result.set(key, {
       key,
-      label: `__shared_call_tail_${index}`,
+      label: labels.next(),
       call: candidate.call,
       continuation: candidate.continuation,
       count: candidate.count,
     });
-    index += 1;
   }
   return result;
 }
@@ -124,10 +124,6 @@ function callTailKey(
   normalizeContinuation: (target: string | number) => string | number,
 ): string {
   return `${targetKey(call.target)}|${targetKey(normalizeContinuation(continuation.target))}`;
-}
-
-function targetKey(target: string | number): string {
-  return typeof target === "number" ? `#${target}` : target;
 }
 
 function buildContinuationNormalizer(ops: readonly IrOp[]): (target: string | number) => string | number {

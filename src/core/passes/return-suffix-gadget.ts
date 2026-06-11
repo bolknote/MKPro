@@ -1,26 +1,22 @@
 import type { IrMeta, IrOp } from "../types.ts";
 import { cellsPerOp, emptyResult, hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
-
-interface ReturnSuffixOccurrence {
-  key: string;
-  bodyKey: string;
-  start: number;
-  end: number;
-  cells: number;
-  bodyCells: number;
-}
-
-interface ReturnSuffixCandidate {
-  key: string;
-  occurrences: ReturnSuffixOccurrence[];
-  cells: number;
-}
+import {
+  collectSuffixCandidates,
+  createLabelAllocator,
+  hasNumericOutlineFlowTarget,
+  markRange,
+  rangeIntersects,
+  selectSharedSuffixes,
+  targetKey,
+  type LabelAllocator,
+  type OutlineOccurrence,
+} from "./outline.ts";
 
 interface SelectedSuffix {
   kind: "jump";
   label: string;
-  target: ReturnSuffixOccurrence;
-  replacements: ReturnSuffixOccurrence[];
+  target: OutlineOccurrence;
+  replacements: OutlineOccurrence[];
 }
 
 interface BodyOccurrence {
@@ -48,12 +44,16 @@ interface SelectedBodyCall {
 type SelectedGadget = SelectedSuffix | SelectedBodyCall;
 
 const run: IrPassFn = (ops) => {
-  if (hasNumericFlowTarget(ops)) return emptyResult(ops);
+  if (hasNumericOutlineFlowTarget(ops)) return emptyResult(ops);
   if (ops.some((op) => op.kind === "label" && op.name.startsWith("__shared_straight_line_helper_"))) {
     return emptyResult(ops);
   }
 
-  const candidates = collectReturnSuffixCandidates(ops);
+  const candidates = collectSuffixCandidates(ops, {
+    isTerminal: isShareableReturn,
+    isBodyOp: isShareableBodyOp,
+    opKey,
+  });
   const selected = selectGadgets(candidates, ops);
   if (selected.length === 0) return emptyResult(ops);
 
@@ -143,80 +143,23 @@ export const returnSuffixGadget: IrPass = {
   layoutSafe: false,
 };
 
-function collectReturnSuffixCandidates(ops: readonly IrOp[]): ReturnSuffixCandidate[] {
-  const byKey = new Map<string, ReturnSuffixOccurrence[]>();
-
-  for (let end = 0; end < ops.length; end += 1) {
-    const final = ops[end]!;
-    if (!isShareableReturn(final)) continue;
-
-    const parts = [opKey(final)];
-    let cells = cellsPerOp(final);
-    for (let start = end - 1; start >= 0; start -= 1) {
-      const op = ops[start]!;
-      if (!isShareableBodyOp(op)) break;
-
-      parts.unshift(opKey(op));
-      cells += cellsPerOp(op);
-      if (cells <= 2) continue;
-
-      const key = parts.join("\n");
-      const bodyKey = parts.slice(0, -1).join("\n");
-      const occurrences = byKey.get(key) ?? [];
-      occurrences.push({ key, bodyKey, start, end, cells, bodyCells: cells - cellsPerOp(final) });
-      byKey.set(key, occurrences);
-    }
-  }
-
-  return [...byKey.entries()]
-    .map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0]!.cells }));
-}
-
 function selectGadgets(
-  candidates: readonly ReturnSuffixCandidate[],
+  candidates: ReturnType<typeof collectSuffixCandidates>,
   ops: readonly IrOp[],
 ): SelectedGadget[] {
-  const existingLabels = new Set(ops.flatMap((op) => op.kind === "label" ? [op.name] : []));
+  const labels = createLabelAllocator(ops, "__return_suffix_gadget_");
   const protectedIndexes = new Set<number>();
-  const selected: SelectedGadget[] = [];
-  let labelIndex = 0;
+  const selected: SelectedGadget[] = selectSharedSuffixes(candidates, labels, protectedIndexes)
+    .map((suffix) => ({ kind: "jump", ...suffix }));
 
-  const ordered = [...candidates].sort((left, right) => {
-    const leftSavings = (left.occurrences.length - 1) * (left.cells - 2);
-    const rightSavings = (right.occurrences.length - 1) * (right.cells - 2);
-    return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
-  });
-
-  for (const candidate of ordered) {
-    const available = candidate.occurrences.filter((occurrence) =>
-      !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
-    );
-    if (available.length < 2) continue;
-
-    const [target, ...replacements] = available;
-    if (target === undefined || replacements.length === 0) continue;
-
-    const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
-    if (savedCells <= 0) continue;
-
-    const label = freshLabel(existingLabels, labelIndex);
-    labelIndex += 1;
-    existingLabels.add(label);
-    selected.push({ kind: "jump", label, target, replacements });
-
-    for (const occurrence of [target, ...replacements]) {
-      markRange(protectedIndexes, occurrence.start, occurrence.end);
-    }
-  }
-
-  const bodyTargets = collectBodyTargets(candidates);
+  const bodyTargets = collectBodyTargets(ops, candidates);
   const bodyOccurrences = collectBodyOccurrences(ops, new Set(bodyTargets.keys()));
-  const bodyCalls = selectBodyCalls(bodyTargets, bodyOccurrences, existingLabels, protectedIndexes, labelIndex);
+  const bodyCalls = selectBodyCalls(bodyTargets, bodyOccurrences, labels, protectedIndexes);
   selected.push(...bodyCalls);
 
   const tailCallTargets = collectTailCallTargets(ops);
   const tailCallOccurrences = collectTailCallOccurrences(ops, new Set(tailCallTargets.keys()));
-  const tailCalls = selectBodyCalls(tailCallTargets, tailCallOccurrences, existingLabels, protectedIndexes, labelIndex);
+  const tailCalls = selectBodyCalls(tailCallTargets, tailCallOccurrences, labels, protectedIndexes);
   selected.push(...tailCalls);
 
   return selected;
@@ -312,20 +255,6 @@ function isTailCallGadgetBodyOp(op: IrOp): boolean {
   }
 }
 
-function hasNumericFlowTarget(ops: readonly IrOp[]): boolean {
-  return ops.some((op) => {
-    switch (op.kind) {
-      case "jump":
-      case "cjump":
-      case "call":
-      case "loop":
-        return typeof op.target === "number";
-      default:
-        return false;
-    }
-  });
-}
-
 function opKey(op: IrOp): string {
   switch (op.kind) {
     case "store":
@@ -357,23 +286,34 @@ function opKey(op: IrOp): string {
   }
 }
 
-function collectBodyTargets(candidates: readonly ReturnSuffixCandidate[]): Map<string, BodyTarget[]> {
+function collectBodyTargets(
+  ops: readonly IrOp[],
+  candidates: ReturnType<typeof collectSuffixCandidates>,
+): Map<string, BodyTarget[]> {
   const result = new Map<string, BodyTarget[]>();
   for (const candidate of candidates) {
     for (const occurrence of candidate.occurrences) {
-      if (occurrence.bodyKey.length === 0 || occurrence.bodyCells <= 2) continue;
-      const targets = result.get(occurrence.bodyKey) ?? [];
+      const bodyKey = suffixBodyKey(occurrence.key);
+      const bodyCells = occurrence.cells - cellsPerOp(ops[occurrence.end]!);
+      if (bodyKey.length === 0 || bodyCells <= 2) continue;
+      const targets = result.get(bodyKey) ?? [];
       targets.push({
-        key: occurrence.bodyKey,
+        key: bodyKey,
         start: occurrence.start,
         bodyEnd: occurrence.end - 1,
         end: occurrence.end,
-        cells: occurrence.bodyCells,
+        cells: bodyCells,
       });
-      result.set(occurrence.bodyKey, targets);
+      result.set(bodyKey, targets);
     }
   }
   return result;
+}
+
+/** The suffix key minus its final (return) op: everything before the last newline. */
+function suffixBodyKey(key: string): string {
+  const cut = key.lastIndexOf("\n");
+  return cut === -1 ? "" : key.slice(0, cut);
 }
 
 function collectBodyOccurrences(
@@ -471,12 +411,10 @@ function collectTailCallOccurrences(
 function selectBodyCalls(
   targets: ReadonlyMap<string, readonly BodyTarget[]>,
   occurrences: ReadonlyMap<string, readonly BodyOccurrence[]>,
-  existingLabels: Set<string>,
+  labels: LabelAllocator,
   protectedIndexes: Set<number>,
-  initialLabelIndex: number,
 ): SelectedBodyCall[] {
   const selected: SelectedBodyCall[] = [];
-  let labelIndex = initialLabelIndex;
   const keys = [...targets.keys()].sort((left, right) => {
     const leftCells = targets.get(left)?.[0]?.cells ?? 0;
     const rightCells = targets.get(right)?.[0]?.cells ?? 0;
@@ -496,10 +434,7 @@ function selectBodyCalls(
     const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
     if (savedCells <= 0) continue;
 
-    const label = freshLabel(existingLabels, labelIndex);
-    labelIndex += 1;
-    existingLabels.add(label);
-    selected.push({ kind: "call", label, target, replacements: [...replacements] });
+    selected.push({ kind: "call", label: labels.next(), target, replacements: [...replacements] });
 
     markRange(protectedIndexes, target.start, target.end);
     for (const occurrence of replacements) {
@@ -510,32 +445,6 @@ function selectBodyCalls(
   return selected;
 }
 
-function targetKey(target: string | number): string {
-  return typeof target === "number" ? `#${target}` : target;
-}
-
 function sameTargetBody(occurrence: BodyOccurrence, target: BodyTarget): boolean {
   return occurrence.start === target.start && occurrence.end === target.bodyEnd;
-}
-
-function rangeIntersects(indexes: ReadonlySet<number>, start: number, end: number): boolean {
-  for (let index = start; index <= end; index += 1) {
-    if (indexes.has(index)) return true;
-  }
-  return false;
-}
-
-function markRange(indexes: Set<number>, start: number, end: number): void {
-  for (let index = start; index <= end; index += 1) {
-    indexes.add(index);
-  }
-}
-
-function freshLabel(existingLabels: ReadonlySet<string>, index: number): string {
-  let suffix = index;
-  while (true) {
-    const label = `__return_suffix_gadget_${suffix}`;
-    if (!existingLabels.has(label)) return label;
-    suffix += 1;
-  }
 }

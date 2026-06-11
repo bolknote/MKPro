@@ -8,6 +8,13 @@ import {
   type IrPass,
   type IrPassFn,
 } from "./helpers.ts";
+import {
+  createLabelAllocator,
+  hasNumericOutlineFlowTarget,
+  markRange,
+  rangeIntersects,
+  type LabelAllocator,
+} from "./outline.ts";
 
 interface Occurrence {
   key: string;
@@ -46,7 +53,7 @@ const GENERATED_BODY_LABEL_PREFIXES = [
 ];
 
 const run: IrPassFn = (ops, context) => {
-  if (hasNumericFlowTarget(ops)) return emptyResult(ops);
+  if (hasNumericOutlineFlowTarget(ops)) return emptyResult(ops);
 
   const selected = selectHelpers(collectCandidates(ops, context.options.sharedStraightLineCallBodies === true), ops);
   if (selected.length === 0) return emptyResult(ops);
@@ -228,10 +235,9 @@ function endsStraightLineSegment(op: IrOp): boolean {
 }
 
 function selectHelpers(candidates: readonly Candidate[], ops: readonly IrOp[]): SelectedHelper[] {
-  const existingLabels = new Set(ops.flatMap((op) => op.kind === "label" ? [op.name] : []));
+  const labels = createLabelAllocator(ops, "__shared_straight_line_helper_");
   const protectedIndexes = new Set<number>();
   const selected: SelectedHelper[] = [];
-  let labelIndex = 0;
 
   const ordered = candidates.filter((candidate) => candidate.cells >= MIN_BODY_CELLS).sort((left, right) => {
     const leftSavings = netSavings(left.occurrences.length, left.cells);
@@ -246,11 +252,8 @@ function selectHelpers(candidates: readonly Candidate[], ops: readonly IrOp[]): 
     if (occurrences.length < 2) continue;
     if (netSavings(occurrences.length, candidate.cells) <= 0) continue;
 
-    const label = freshLabel(existingLabels, labelIndex);
-    labelIndex += 1;
-    existingLabels.add(label);
     selected.push({
-      label,
+      label: labels.next(),
       body: ops.slice(occurrences[0]!.start, occurrences[0]!.end + 1),
       occurrences,
       cells: candidate.cells,
@@ -261,7 +264,7 @@ function selectHelpers(candidates: readonly Candidate[], ops: readonly IrOp[]): 
     }
   }
 
-  selectInternalEntries(selected, candidates, existingLabels, protectedIndexes, labelIndex);
+  selectInternalEntries(selected, candidates, labels, protectedIndexes);
   return selected;
 }
 
@@ -280,9 +283,8 @@ interface InternalEntryCandidate {
 function selectInternalEntries(
   helpers: readonly SelectedHelper[],
   candidates: readonly Candidate[],
-  existingLabels: Set<string>,
+  labels: LabelAllocator,
   protectedIndexes: Set<number>,
-  startLabelIndex: number,
 ): void {
   const candidateByKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
   const entryCandidates: InternalEntryCandidate[] = [];
@@ -299,7 +301,6 @@ function selectInternalEntries(
     }
   }
 
-  let labelIndex = startLabelIndex;
   const ordered = entryCandidates.sort((left, right) => {
     const leftSavings = left.occurrences.length * (left.cells - 2);
     const rightSavings = right.occurrences.length * (right.cells - 2);
@@ -312,11 +313,8 @@ function selectInternalEntries(
     );
     if (replacements.length === 0) continue;
 
-    const label = freshLabel(existingLabels, labelIndex);
-    labelIndex += 1;
-    existingLabels.add(label);
     candidate.helper.entries.push({
-      label,
+      label: labels.next(),
       offset: candidate.offset,
       replacements,
       cells: candidate.cells,
@@ -457,36 +455,3 @@ function opKey(op: IrOp): string {
   }
 }
 
-function hasNumericFlowTarget(ops: readonly IrOp[]): boolean {
-  return ops.some((op) => {
-    switch (op.kind) {
-      case "jump":
-      case "cjump":
-      case "call":
-      case "loop":
-        return typeof op.target === "number";
-      default:
-        return false;
-    }
-  });
-}
-
-function rangeIntersects(indexes: ReadonlySet<number>, start: number, end: number): boolean {
-  for (let index = start; index <= end; index += 1) {
-    if (indexes.has(index)) return true;
-  }
-  return false;
-}
-
-function markRange(indexes: Set<number>, start: number, end: number): void {
-  for (let index = start; index <= end; index += 1) indexes.add(index);
-}
-
-function freshLabel(existingLabels: ReadonlySet<string>, index: number): string {
-  let suffix = index;
-  while (true) {
-    const label = `__shared_straight_line_helper_${suffix}`;
-    if (!existingLabels.has(label)) return label;
-    suffix += 1;
-  }
-}
