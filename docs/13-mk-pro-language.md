@@ -2023,7 +2023,10 @@ The pipeline currently contains:
   that recall is needed as the target-side X2 sync before `.`/`/-/`/`ВП` before a
   direct `В/О` return syncs X2. The shared X2-register proof can now show that
   the branch path already has the same X2 value, so only immediate
-  previous-command context and real stack-lift consumers keep the target recall.
+  previous-command context and real stack-lift consumers keep the target recall;
+  when the unique branch path has a previous kept stack-lift+X2 producer that
+  already supplied the same value in `Y`, that stack-lift consumer no longer
+  blocks the rewrite if the deeper stack difference is dead.
 - **liveness-analysis** — foundational dataflow used by DSE, register
   coalescing, and dead-code analysis. Proved indirect flow targets
   (`indirect-target=NN`) participate in the liveness CFG, so stores are kept

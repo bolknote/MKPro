@@ -24,6 +24,7 @@ import {
   type IrPassFn,
   type X2ValueFact,
   type X2ValueDataflowState,
+  x2PreviousStackLiftDuplicateYProducerIndex,
 } from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
@@ -82,7 +83,20 @@ const run: IrPassFn = (ops) => {
       directReturnContext,
     );
     if (preservedRegister !== targetRegister && removal?.valueProof?.inX !== true) continue;
-    if (removal?.removable !== true) {
+    if (removal === undefined) continue;
+    const previousDuplicateYProducerIndex = removal.exposesStackLift && !removal.exposesX2Restore
+      ? x2PreviousStackLiftDuplicateYProducerIndex(
+        ops,
+        index,
+        targetRecall.index,
+        x2ValueStates[index],
+        directReturnContext,
+      )
+      : undefined;
+    const stackLiftAlreadySupplied =
+      previousDuplicateYProducerIndex !== undefined &&
+      !remove.has(previousDuplicateYProducerIndex);
+    if (removal.removable !== true && !stackLiftAlreadySupplied) {
       continue;
     }
 

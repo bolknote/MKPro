@@ -21974,6 +21974,66 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("branch-target-x-reuse drops target recall before a binary op when the branch path already supplied duplicate Y", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      plain(0x0e, "В↑"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      recall("6"),
+      plain(0x10, "+"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("6"),
+      plain(0x0e, "В↑"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      plain(0x10, "+"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
+  it("branch-target-x-reuse does not use a target recall producer already removed in the same pass", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      cjump("first"),
+      jump("end"),
+      label("first"),
+      recall("6"),
+      cjump("second"),
+      jump("end"),
+      label("second"),
+      recall("6"),
+      plain(0x10, "+"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("6"),
+      cjump("first"),
+      jump("end"),
+      label("first"),
+      cjump("second"),
+      jump("end"),
+      label("second"),
+      recall("6"),
+      plain(0x10, "+"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
   it("branch-target-x-reuse keeps target recall whose stack lift reaches a later binary op", () => {
     const program: IrOp[] = [
       recall("6"),
