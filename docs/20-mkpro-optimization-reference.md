@@ -1595,7 +1595,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     primitive: pure structural digit mantissas and pure decimal digit runs can
     combine into shape-only hex/super results across whole shape sets, while
     signed tails, fractional tails, ambiguous sources, and too-wide displays
-    produce no fact rather than an unsafe decimal value. Shape-set joins and equality checks use the same canonical
+    produce no fact rather than an unsafe decimal value. A shared structural
+    restore primitive can also recover the source-side structural mantissa when
+    the visible side proves the same exact decimal display (`exponent:1.23:-1`
+    can prove source `hex:0.123`) without making that structural source
+    dot-safe. Shape-set joins and equality checks use the same canonical
     spelling, so branch-merged structural `ВП`/restore proofs do not split on
     formatting. The shared VP-source helpers use the same materialized
     stable-key shapes after X2-sync boundaries: computed decimal display shapes

@@ -107,6 +107,7 @@ import {
   x2ShapeSetHasExactNonNegativeIntegerDisplay,
   x2ShapeSetHasOnlyDotSafeStructuralMantissas,
   x2ShapeSetRestoredVisibleDecimals,
+  x2SharedStructuralRestoreShapeFacts,
   x2ShapeSetsHaveSameDecimalDisplayShape,
   x2ShapeSetsHaveSameDotSafeStructuralMantissa,
   x2ShapeSetsHaveSameDotSafeDecimal,
@@ -1426,6 +1427,18 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(canonicalStructuralRestoreSourceKeyFacts(new Set(["hex-exponent:Г:99"])))).toEqual([
       "hex-exponent:Г:99",
     ]);
+    expect(x2ShapeStateText(x2SharedStructuralRestoreShapeFacts(
+      new Set(["hex:Г00:mantissa"]),
+      new Set(["hex-exponent:Г:2"]),
+    ))).toEqual(["hex:Г00:mantissa"]);
+    expect(x2ShapeStateText(x2SharedStructuralRestoreShapeFacts(
+      new Set(["exponent:1.23:-1:decimal"]),
+      new Set(["hex:0.123:mantissa"]),
+    ))).toEqual(["hex:0.123:mantissa"]);
+    expect(x2ShapeStateText(x2SharedStructuralRestoreShapeFacts(
+      new Set(["hex:0.123:mantissa"]),
+      new Set(["exponent:1.23:-1:decimal"]),
+    ))).toEqual([]);
   });
 
   it("x2 shape algebra compares decimal display shapes without making them dot-safe", () => {
@@ -2577,6 +2590,23 @@ describe("ir passes on synthetic programs", () => {
       new Set(["mantissa:123:decimal"]),
       new Set(["hex:0123:mantissa"]),
     ))).toEqual([]);
+  });
+
+  it("x2 value dataflow seeds structural VP sources from exact decimal display equality", () => {
+    const state: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:31(shape:hex:0.123:mantissa)"]),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["exponent:1.23:-1:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const result = transferX2ValueStateForEdge(state, plain(0xf0, "F* empty F0"), "normal", {}, 0);
+
+    expect(x2VpEntryShapeText(result)).toEqual(["hex:0.123:mantissa"]);
+    expect(x2ShapeStateText(result?.x2Shape)).toEqual(["exponent:1.23:-1:decimal", "hex:0.123:mantissa"]);
+    expect(x2ValueStateText(result?.x2)).toEqual([
+      "decimal:0.123:normalized",
+      "expr-key:31(decimal:0.123:normalized)",
+    ]);
   });
 
   it("x2 shape algebra rebuilds canonical mantissa facts from data models", () => {

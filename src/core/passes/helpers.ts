@@ -5305,6 +5305,26 @@ export function x2ShapeSetsHaveSameStructuralShape(
   return false;
 }
 
+export function x2SharedStructuralRestoreShapeFacts(
+  visible: X2ShapeSet | undefined,
+  source: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const visibleRestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(visible));
+  const visibleExactDisplays = x2ShapeSetExactDecimalDisplays(visible);
+  const output = new Set<X2ShapeFact>();
+  for (const sourceFact of canonicalStructuralShapeFacts(source)) {
+    const sourceRestoreShapes = structuralRestoreShapeFacts(new Set([sourceFact]));
+    if (
+      !structuralShapeSetHasIntersection(visibleRestoreShapes, sourceRestoreShapes) &&
+      !structuralShapeSetHasExactDecimalDisplayIntersection(visibleExactDisplays, sourceRestoreShapes)
+    ) {
+      continue;
+    }
+    for (const fact of structuralMantissaShapeFacts(sourceRestoreShapes)) output.add(fact);
+  }
+  return output;
+}
+
 export function x2StructuralRestoreShapeFacts(input: X2ShapeSet | undefined): Set<X2ShapeFact> {
   return structuralRestoreShapeFacts(canonicalStructuralShapeFacts(input));
 }
@@ -11757,14 +11777,7 @@ function sharedStructuralShapeFacts(
   input: Pick<X2ValueDataflowState, "xShape" | "x2Shape"> &
     Partial<Pick<X2ValueDataflowState, "x" | "x2">>,
 ): X2ShapeSet | undefined {
-  const xRestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(effectiveInputXShape(input)));
-  const x2RestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(effectiveInputX2Shape(input)));
-  const shapes = new Set<X2ShapeFact>();
-  for (const fact of x2RestoreShapes) {
-    if (!xRestoreShapes.has(fact)) continue;
-    const model = x2ShapeDataModelForFact(fact);
-    if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) shapes.add(fact);
-  }
+  const shapes = x2SharedStructuralRestoreShapeFacts(effectiveInputXShape(input), effectiveInputX2Shape(input));
   return shapes.size === 0 ? undefined : shapes;
 }
 
