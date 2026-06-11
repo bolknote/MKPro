@@ -5531,6 +5531,29 @@ export interface X2TerminalRestoreRunPlan {
   readonly reason: X2TerminalRestoreRunPlanReason;
 }
 
+export type X2VpSplicePlanReason =
+  "none" |
+  "duplicate-vp" |
+  "proved-vp-restore-run" |
+  "empty-run-before-proved-vp" |
+  "exponent-separator" |
+  "exponent-empty-before-sign" |
+  "hard-overwrite-restore-run" |
+  "exponent-sign-pair" |
+  "open-mantissa-sign-pair-before-proved-vp" |
+  "fresh-digit-restore-run" |
+  "closed-context-sign-pair";
+
+export interface X2VpSplicePlan {
+  readonly removableIndexes: readonly number[];
+  readonly reason: X2VpSplicePlanReason;
+}
+
+export interface X2VpSplicePlannerOptions {
+  readonly isDecimalDigit: X2RestoreRunTerminalPredicate;
+  readonly isHardX2OverwriteWithoutStackUse: X2RestoreRunTerminalPredicate;
+}
+
 export type X2DotReplacementVpSourcePlanReason =
   "restore-gap-source" |
   "sign-restore-gap-source" |
@@ -5774,6 +5797,239 @@ export function x2PlanRestoreRunBeforeTerminal(
     previousRestoreIndex,
     reason,
   };
+}
+
+export function x2PlanVpSpliceAt(
+  ops: readonly IrOp[],
+  index: number,
+  states: readonly (X2ValueDataflowState | undefined)[],
+  context: DirectReturnAnalysisContext,
+  options: X2VpSplicePlannerOptions,
+): X2VpSplicePlan {
+  if (index <= 0 || index >= ops.length) return emptyX2VpSplicePlan();
+  const prev = ops[index - 1]!;
+  const cur = ops[index]!;
+
+  if (
+    isFreeStandingX2VpOp(prev) &&
+    isFreeStandingX2VpOp(cur) &&
+    x2CanRemoveSecondVpAfterPreviousVp(states[index - 1])
+  ) {
+    return x2VpSplicePlan([index], "duplicate-vp");
+  }
+
+  if (isFreeStandingX2VpOp(cur)) {
+    const restoreRun = x2PlanRestoreRunBeforeProvedVp(
+      ops,
+      index,
+      states,
+      context,
+      { requireSignRestore: true },
+    ).removableIndexes;
+    if (restoreRun.length > 0) {
+      return x2VpSplicePlan(restoreRun, "proved-vp-restore-run");
+    }
+    const emptyRun = x2FreeStandingEmptyRunBeforeProvedVp(ops, index, context);
+    if (emptyRun.length > 0) {
+      const removableIndexes = [...emptyRun];
+      const firstEmpty = emptyRun[0]!;
+      if (
+        firstEmpty === index - emptyRun.length &&
+        firstEmpty > 0 &&
+        isFreeStandingX2VpOp(ops[firstEmpty - 1]!) &&
+        x2CanRemoveSecondVpAfterPreviousVp(states[firstEmpty - 1])
+      ) {
+        removableIndexes.push(index);
+      }
+      return x2VpSplicePlan(removableIndexes, "empty-run-before-proved-vp");
+    }
+  }
+
+  if (isFreeStandingX2EmptyOp(cur)) {
+    const separatorRun = x2ExponentSeparatorRun(ops, index, states[index], options);
+    if (separatorRun.length > 0) return x2VpSplicePlan(separatorRun, "exponent-separator");
+  }
+
+  if (
+    isFreeStandingX2EmptyOp(prev) &&
+    isFreeStandingX2SignChangeOp(cur) &&
+    analyzeX2VpShapeTransition(states[index - 1], "empty-before-sign-change").canDiscardCurrentOp
+  ) {
+    return x2VpSplicePlan([index - 1], "exponent-empty-before-sign");
+  }
+
+  if (isFreeStandingX2EmptyOp(cur) || isFreeStandingX2SignChangeOp(cur)) {
+    const restoreRun = x2PlanRestoreRunBeforeTerminal(
+      ops,
+      index,
+      states[index],
+      context,
+      "hard-overwrite",
+      options.isHardX2OverwriteWithoutStackUse,
+    ).removableIndexes;
+    if (restoreRun.length > 0) {
+      return x2VpSplicePlan(restoreRun, "hard-overwrite-restore-run");
+    }
+  }
+
+  if (
+    isFreeStandingX2SignChangeOp(prev) &&
+    isFreeStandingX2SignChangeOp(cur) &&
+    analyzeX2VpShapeTransition(states[index - 1], "sign-pair").canDiscardSignPair
+  ) {
+    return x2VpSplicePlan([index - 1, index], "exponent-sign-pair");
+  }
+
+  if (
+    isFreeStandingX2SignChangeOp(prev) &&
+    isFreeStandingX2SignChangeOp(cur) &&
+    x2CanRemoveOpenMantissaSignPairBeforeProvedVp(
+      ops,
+      index,
+      states[index - 1],
+      states[index + 1],
+      context,
+    )
+  ) {
+    return x2VpSplicePlan([index - 1, index], "open-mantissa-sign-pair-before-proved-vp");
+  }
+
+  if (isFreeStandingX2EmptyOp(cur) || isFreeStandingX2SignChangeOp(cur)) {
+    const restoreRun = x2PlanRestoreRunBeforeTerminal(
+      ops,
+      index,
+      states[index],
+      context,
+      "fresh-digit",
+      options.isDecimalDigit,
+    ).removableIndexes;
+    if (restoreRun.length > 0) return x2VpSplicePlan(restoreRun, "fresh-digit-restore-run");
+  }
+
+  if (
+    isFreeStandingX2SignChangeOp(prev) &&
+    isFreeStandingX2SignChangeOp(cur) &&
+    x2CanRemoveClosedContextSignPair(ops, index, states[index - 1], states[index + 1], context)
+  ) {
+    return x2VpSplicePlan([index - 1, index], "closed-context-sign-pair");
+  }
+
+  return emptyX2VpSplicePlan();
+}
+
+function emptyX2VpSplicePlan(): X2VpSplicePlan {
+  return { removableIndexes: [], reason: "none" };
+}
+
+function x2VpSplicePlan(
+  removableIndexes: readonly number[],
+  reason: X2VpSplicePlanReason,
+): X2VpSplicePlan {
+  return { removableIndexes, reason };
+}
+
+function x2CanRemoveClosedContextSignPair(
+  ops: readonly IrOp[],
+  secondSignIndex: number,
+  state: X2ValueDataflowState | undefined,
+  stateAfterPair: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  if (!x2StateIsClosedPlainContext(state)) return false;
+  if (state === undefined) return false;
+  if (!x2StateHasSameClosedSignChangeSourceInXAndX2(state)) return false;
+  if (!removingRecallCanExposeX2Restore(ops, secondSignIndex)) return true;
+  return x2CanRemoveClosedContextSignPairBeforeProvedVp(
+    ops,
+    secondSignIndex,
+    state,
+    stateAfterPair,
+    context,
+  );
+}
+
+function x2CanRemoveOpenMantissaSignPairBeforeProvedVp(
+  ops: readonly IrOp[],
+  secondSignIndex: number,
+  state: X2ValueDataflowState | undefined,
+  stateAfterPair: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  if (analyzeX2VpShapeContext(state).kind !== "active-mantissa") return false;
+  const plan = x2PlanDotReplacementVpSource(
+    ops,
+    secondSignIndex,
+    state,
+    stateAfterPair,
+    context,
+    { includesLeadingSignRestore: true },
+  );
+  return plan.source.replacementDotHasOnlyRestoreGapBeforeVp &&
+    plan.source.canDiscardShapeSignPairBeforeProvedVp;
+}
+
+function x2CanRemoveClosedContextSignPairBeforeProvedVp(
+  ops: readonly IrOp[],
+  secondSignIndex: number,
+  state: X2ValueDataflowState,
+  stateAfterPair: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  const plan = x2PlanDotReplacementVpSource(
+    ops,
+    secondSignIndex,
+    state,
+    stateAfterPair,
+    context,
+  );
+  return plan.source.replacementDotHasOnlyRestoreGapBeforeVp &&
+    plan.source.canDiscardRestoreRunBeforeProvedVp;
+}
+
+function x2FreeStandingEmptyRunBeforeProvedVp(
+  ops: readonly IrOp[],
+  index: number,
+  context: DirectReturnAnalysisContext,
+): readonly number[] {
+  return x2RestoreRunBeforeIndex(ops, index, context, { includeSignRestores: false }).removableIndexes;
+}
+
+function x2ExponentSeparatorRun(
+  ops: readonly IrOp[],
+  startIndex: number,
+  state: X2ValueDataflowState | undefined,
+  options: X2VpSplicePlannerOptions,
+): readonly number[] {
+  const beforeNonDigit = analyzeX2VpShapeTransition(state, "empty-before-non-digit");
+  const beforeSignChange = analyzeX2VpShapeTransition(state, "empty-before-sign-change");
+  if (!beforeNonDigit.canDiscardCurrentOp && !beforeSignChange.canDiscardCurrentOp) return [];
+
+  const run: number[] = [];
+  for (let index = startIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (x2TransparentVpGapOp(op)) continue;
+    if (isFreeStandingX2EmptyOp(op)) {
+      run.push(index);
+      continue;
+    }
+    if (run.length === 0) return [];
+    if (options.isDecimalDigit(op, index)) return [];
+    if (isFreeStandingX2SignChangeOp(op)) {
+      return beforeSignChange.canDiscardCurrentOp ? run : [];
+    }
+    return beforeNonDigit.canDiscardCurrentOp ? run : [];
+  }
+  return [];
+}
+
+function x2TransparentVpGapOp(op: IrOp): boolean {
+  return op.kind === "label" || op.kind === "orphan-address";
+}
+
+function x2CanRemoveSecondVpAfterPreviousVp(
+  stateBeforePreviousVp: X2ValueDataflowState | undefined,
+): boolean {
+  return analyzeX2VpShapeTransition(stateBeforePreviousVp, "vp").canDiscardCurrentOp;
 }
 
 export function x2PlanDotReplacementVpSource(

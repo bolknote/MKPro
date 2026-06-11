@@ -1290,6 +1290,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     fresh-digit overwrite, and hard-overwrite cases; this keeps the local
     rewrite rules tied to the same shape/context model instead of
     reimplementing those booleans and source-equality checks inside the pass.
+    A single `x2PlanVpSpliceAt` planner now combines those transition, source,
+    terminal-scan, and sign-pair proofs into removable indexes plus a reason,
+    so later VP/X2 and hex/super splice rules have one extension point rather
+    than a new local branch inside `vp-splice`.
     The same shared VP-gap source analysis is also used for sign-pair decisions
     before a proved `ВП`; when the pass removes the sign-pair itself it requires
     the stricter shape-transition sign-pair flag, not the broader fallback

@@ -74,6 +74,7 @@ import {
   x2PlanDotReplacementVpSource,
   x2PlanRestoreRunBeforeProvedVp,
   x2PlanRestoreRunBeforeTerminal,
+  x2PlanVpSpliceAt,
   x2PreviousHardX2OverwriteIndex,
   x2KnownReturnCallReachesStackLiftAndX2Sync,
   x2PreviousFreeStandingRestoreExecutableIndex,
@@ -10492,6 +10493,103 @@ describe("ir passes on synthetic programs", () => {
       scan: {
         terminalIndex: 5,
       },
+    });
+  });
+
+  it("x2 VP splice planner centralizes duplicate VP, restore-run, terminal, and sign-pair decisions", () => {
+    const plannerOptions = {
+      isDecimalDigit: (op: IrOp) => op.kind === "plain" && op.opcode >= 0 && op.opcode <= 9,
+      isHardX2OverwriteWithoutStackUse: (op: IrOp) => analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse,
+    };
+    const planAt = (program: readonly IrOp[], index: number) =>
+      x2PlanVpSpliceAt(
+        program,
+        index,
+        computeX2ValueStates(program, { trackRegisterMemory: true }),
+        directReturnAnalysisContext(program),
+        plannerOptions,
+      );
+
+    const duplicateVp: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    expect(planAt(duplicateVp, 2)).toEqual({
+      removableIndexes: [2],
+      reason: "duplicate-vp",
+    });
+
+    const emptyRunBeforeVp: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x54, "КНОП"),
+      plain(0x55, "К1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    expect(planAt(emptyRunBeforeVp, 4)).toEqual({
+      removableIndexes: [2, 3, 4],
+      reason: "empty-run-before-proved-vp",
+    });
+
+    const restoreRunBeforeVp: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    expect(planAt(restoreRunBeforeVp, 6)).toEqual({
+      removableIndexes: [3, 4, 5],
+      reason: "proved-vp-restore-run",
+    });
+
+    const beforeDeadOverwrite: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    expect(planAt(beforeDeadOverwrite, 4)).toEqual({
+      removableIndexes: [4],
+      reason: "hard-overwrite-restore-run",
+    });
+
+    const beforeFreshDigit: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    expect(planAt(beforeFreshDigit, 4)).toEqual({
+      removableIndexes: [4],
+      reason: "fresh-digit-restore-run",
+    });
+
+    const closedSignPair: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    expect(planAt(closedSignPair, 3)).toEqual({
+      removableIndexes: [2, 3],
+      reason: "closed-context-sign-pair",
     });
   });
 

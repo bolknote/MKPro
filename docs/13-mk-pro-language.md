@@ -1372,6 +1372,11 @@ The pipeline currently contains:
   decision locally. Fresh-digit and hard-overwrite restore runs use the same
   terminal planner, including closed-plain-context fallbacks for fresh digit
   entry and hard X/X2 overwrite with the same previous-restore-source guard.
+  `vp-splice` itself consumes a single VP-splice planner over these primitives:
+  each executable index yields removable indexes plus a reason such as
+  duplicate `ВП`, proved-`ВП` restore run, exponent separator, terminal
+  overwrite/fresh digit, or sign-pair cancellation. New VP/X2 rules should
+  extend that planner instead of adding independent local checks to the pass.
   Dot replacement before a reachable `ВП`
   uses another shared planner that reports whether the replacement preserves
   the VP source or is blocked by a previous sign source, missing `ВП`, or source
