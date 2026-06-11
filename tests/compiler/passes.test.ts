@@ -117,6 +117,8 @@ import {
   x2StructuralMantissaConcatShapeModel,
   x2StructuralMantissaConcatShapeSetFacts,
   x2StructuralMantissaFirstDigitSpliceShapeFact,
+  x2StructuralMantissaFirstDigitSpliceShapeModel,
+  x2StructuralMantissaFirstDigitSpliceShapeSetFacts,
   x2StructuralMantissaShiftShapeFact,
   x2StatesHaveSameExplicitVpEntrySignSource,
   x2StatesHaveSameVpEntrySource,
@@ -2230,6 +2232,39 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StructuralMantissaFirstDigitSpliceShapeFact(
       "hex:A:mantissa",
       "hex:-8.70:mantissa",
+    )).toBeUndefined();
+  });
+
+  it("x2 shape algebra exposes VP first-digit splice as model and set operations", () => {
+    expect(x2StructuralMantissaFirstDigitSpliceShapeModel(
+      "hex:A:mantissa",
+      "hex:8A0:mantissa",
+    )).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      canonical: "AA0",
+      safety: "structuralOnly",
+    });
+    expect(x2StructuralMantissaFirstDigitSpliceShapeModel(
+      "hex:1:mantissa",
+      "super:FA",
+    )).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      canonical: "1A",
+      safety: "structuralOnly",
+    });
+    expect(x2StructuralMantissaFirstDigitSpliceShapeSetFacts(
+      new Set<X2ShapeFact>(["hex:A:mantissa", "mantissa:3:decimal"]),
+      new Set<X2ShapeFact>(["hex:8A0:mantissa", "mantissa:800:decimal"]),
+    )).toEqual(new Set<X2ShapeFact>([
+      "hex:AA0:mantissa",
+      "hex:A00:mantissa",
+      "hex:3A0:mantissa",
+    ]));
+    expect(x2StructuralMantissaFirstDigitSpliceShapeSetFacts(
+      new Set<X2ShapeFact>(["mantissa:3:decimal"]),
+      new Set<X2ShapeFact>(["mantissa:800:decimal"]),
     )).toBeUndefined();
   });
 

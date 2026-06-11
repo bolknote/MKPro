@@ -1592,6 +1592,10 @@ The pipeline currently contains:
   X2-preserving command before `ВП` can create a shape-only structural source
   such as `hex:A` with hidden `hex:8A0` becoming `hex:AA0`, or `hex:A` with
   hidden decimal `800` becoming `hex:A00`, for the following exponent entry.
+  This first-digit splice is also exposed as model/set-level shape algebra and
+  the dataflow `ВП` source builder consumes that set operation directly, so
+  stable-key materialized shapes and ordinary shape facts share the same
+  structural proof path.
   Decimal first-digit plus decimal tail is deliberately not promoted by this
   structural helper. Non-empty commands create only a transient source for an
   immediate `ВП`; if `КНОП`/`К1`/`К2` follows later, that empty command supplies

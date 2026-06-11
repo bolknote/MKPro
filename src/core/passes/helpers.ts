@@ -4999,6 +4999,14 @@ export function x2StructuralMantissaFirstDigitSpliceShapeFact(
   source: X2ShapeFact,
   target: X2ShapeFact,
 ): X2ShapeFact | undefined {
+  const model = x2StructuralMantissaFirstDigitSpliceShapeModel(source, target);
+  return model === undefined ? undefined : x2MantissaShapeFactFromModel(model);
+}
+
+export function x2StructuralMantissaFirstDigitSpliceShapeModel(
+  source: X2ShapeFact,
+  target: X2ShapeFact,
+): X2MantissaDataModel | undefined {
   const sourceDigit = x2FirstMantissaDigitFromShapeFact(source);
   if (sourceDigit === undefined) return undefined;
   const targetModel = firstDigitSpliceTargetMantissaModel(target);
@@ -5014,7 +5022,21 @@ export function x2StructuralMantissaFirstDigitSpliceShapeFact(
   if (spliced === undefined) return undefined;
   const radix = structuralFirstDigitSpliceRadix(targetModel, sourceDigit, spliced);
   if (radix === undefined) return undefined;
-  return x2MantissaShapeFactFromModel(structuralMantissaDataModel(radix, spliced, "structuralOnly"));
+  return structuralMantissaDataModel(radix, spliced, "structuralOnly");
+}
+
+export function x2StructuralMantissaFirstDigitSpliceShapeSetFacts(
+  source: X2ShapeSet | undefined,
+  target: X2ShapeSet | undefined,
+): X2ShapeSet | undefined {
+  const shapes = new Set<X2ShapeFact>();
+  for (const sourceFact of canonicalShapeSet(source)) {
+    for (const targetFact of canonicalShapeSet(target)) {
+      const spliced = x2StructuralMantissaFirstDigitSpliceShapeFact(sourceFact, targetFact);
+      if (spliced !== undefined) shapes.add(spliced);
+    }
+  }
+  return shapes.size === 0 ? undefined : shapes;
 }
 
 function firstDigitSpliceTargetMantissaModel(fact: X2ShapeFact): X2MantissaDataModel | undefined {
@@ -11643,16 +11665,9 @@ function structuralFirstDigitVpSpliceShapeFacts(
   xShape: X2ShapeSet | undefined,
   x2Shape: X2ShapeSet | undefined,
 ): X2ShapeSet | undefined {
-  const shapes = new Set<X2ShapeFact>();
   const sources = restoredVpFirstDigitSourceShapeFacts(xShape);
   const targets = vpFirstDigitSpliceTargetShapeFacts(x2Shape);
-  for (const source of sources) {
-    for (const target of targets) {
-      const spliced = x2StructuralMantissaFirstDigitSpliceShapeFact(source, target);
-      if (spliced !== undefined) shapes.add(spliced);
-    }
-  }
-  return shapes.size === 0 ? undefined : shapes;
+  return x2StructuralMantissaFirstDigitSpliceShapeSetFacts(sources, targets);
 }
 
 function decimalFirstDigitVpSpliceMantissas(

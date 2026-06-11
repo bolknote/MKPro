@@ -1594,7 +1594,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `expr-key:*` value fact. First-digit `ВП` splices use the same materialized
     source/target shapes across X2-preserving commands, so a computed stable-key
     `X` shape can provide the leading digit and a computed stable-key hidden X2
-    shape can provide the mantissa tail. Store-backed, direct-flow, and proved
+    shape can provide the mantissa tail. The first-digit splice is a
+    model/set-level shape-algebra primitive consumed directly by the dataflow
+    VP-source builder, matching the structural concat set primitive while
+    preserving the rule that decimal-source plus decimal-tail cases do not
+    become structural facts. Store-backed, direct-flow, and proved
     indirect-flow `ВП` splice helpers use the same effective-shape source, so
     they do not require a separate explicit shape fact when a stable `expr-key:*`
     already carries the decimal or structural display form. Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are kept as
