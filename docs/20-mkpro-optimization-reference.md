@@ -1871,7 +1871,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     before `ВП` or before a proved source restore. The VP-gap wrapper now uses
     the generic terminal scanner's empty-run-terminal mode, so immediate `ВП`
     and non-empty restore gaps return the same structured source/sign proof;
-    orphan address-byte cells
+    the proved-`ВП` restore-run planner then packages removable indexes, source
+    analysis, and refusal reasons instead of leaving each pass to combine the
+    scan booleans itself; orphan address-byte cells
     are treated as the same transparent gap elements here as they are inside
     transparent return helpers. The shared admission only
     proves that `.` is available as a restore mechanism; each pass still proves

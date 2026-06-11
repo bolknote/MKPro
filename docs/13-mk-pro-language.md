@@ -1366,7 +1366,10 @@ The pipeline currently contains:
   the classifier form used by dead-restore removal. The VP-gap source wrapper
   now reuses that terminal scanner with an explicit empty-run-terminal mode, so
   immediate `ВП` and non-empty restore gaps report the same structured
-  source/sign proof. A companion
+  source/sign proof. A companion proved-`ВП` restore-run planner returns the
+  removable indexes, source analysis, and refusal reason (`no-restore-run`,
+  `no-sign-restore`, or `source-mismatch`) so splice passes do not rebuild this
+  decision locally. A companion
   VP-gap source analysis feeds `vp-splice`, `x2-noop-restore`, literal restore,
   and hidden-temp restore rewrites from the same target/sign/source proof;
   MKPro syntax is unchanged.

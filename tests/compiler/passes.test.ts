@@ -71,6 +71,7 @@ import {
   x2NextStackShiftingProducerIndex,
   x2NextStackPreservingReturnX2SyncIndex,
   x2NextXPreservingX2SyncIndex,
+  x2PlanRestoreRunBeforeProvedVp,
   x2PreviousHardX2OverwriteIndex,
   x2KnownReturnCallReachesStackLiftAndX2Sync,
   x2PreviousFreeStandingRestoreExecutableIndex,
@@ -10223,6 +10224,79 @@ describe("ir passes on synthetic programs", () => {
       canDiscardRestoreRun: false,
       canDiscardSignPair: false,
       reason: "none",
+    });
+  });
+
+  it("x2 proved-VP restore-run planner returns removals and refusal reasons", () => {
+    const removableProgram: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const noSignProgram: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const mismatchProgram: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+
+    const removablePlan = x2PlanRestoreRunBeforeProvedVp(
+      removableProgram,
+      6,
+      computeX2ValueStates(removableProgram),
+      directReturnAnalysisContext(removableProgram),
+    );
+    expect(removablePlan).toMatchObject({
+      removableIndexes: [3, 4, 5],
+      firstRunIndex: 3,
+      reason: "proved-vp-source",
+      scan: {
+        sawSignRestore: true,
+      },
+      source: {
+        canDiscardRestoreRunBeforeProvedVp: true,
+      },
+    });
+
+    expect(x2PlanRestoreRunBeforeProvedVp(
+      noSignProgram,
+      4,
+      computeX2ValueStates(noSignProgram),
+      directReturnAnalysisContext(noSignProgram),
+    )).toMatchObject({
+      removableIndexes: [],
+      firstRunIndex: 3,
+      reason: "no-sign-restore",
+      source: undefined,
+    });
+
+    expect(x2PlanRestoreRunBeforeProvedVp(
+      mismatchProgram,
+      4,
+      computeX2ValueStates(mismatchProgram),
+      directReturnAnalysisContext(mismatchProgram),
+    )).toMatchObject({
+      removableIndexes: [],
+      firstRunIndex: 3,
+      reason: "source-mismatch",
+      source: {
+        canDiscardRestoreRunBeforeProvedVp: false,
+      },
     });
   });
 

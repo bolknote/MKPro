@@ -5382,6 +5382,25 @@ export interface X2VpRestoreGapSourceOptions {
   readonly useScannedSignRestores?: boolean | undefined;
 }
 
+export type X2ProvedVpRestoreRunPlanReason =
+  "proved-vp-source" |
+  "no-restore-run" |
+  "no-sign-restore" |
+  "source-mismatch";
+
+export interface X2ProvedVpRestoreRunPlan {
+  readonly removableIndexes: readonly number[];
+  readonly firstRunIndex: number | undefined;
+  readonly scan: X2RestoreRunBeforeIndexScan;
+  readonly source: X2VpRestoreGapSourceAnalysis | undefined;
+  readonly reason: X2ProvedVpRestoreRunPlanReason;
+}
+
+export interface X2ProvedVpRestoreRunPlanOptions {
+  readonly requireSignRestore?: boolean | undefined;
+  readonly useScannedSignRestores?: boolean | undefined;
+}
+
 export interface X2RestoreRunBeforeTerminalScan {
   readonly terminalIndex: number | undefined;
   readonly blockedIndex: number | undefined;
@@ -5491,6 +5510,63 @@ export function analyzeX2VpRestoreGapSource(
         x2StatesHaveSameVpEntrySignSource(beforeRun, beforeVp)
       ),
     hasSameExplicitVpEntrySignSource: x2StatesHaveSameExplicitVpEntrySignSource(beforeRun, beforeVp),
+  };
+}
+
+export function x2PlanRestoreRunBeforeProvedVp(
+  ops: readonly IrOp[],
+  vpIndex: number,
+  states: readonly (X2ValueDataflowState | undefined)[],
+  context: DirectReturnAnalysisContext,
+  options: X2ProvedVpRestoreRunPlanOptions = {},
+): X2ProvedVpRestoreRunPlan {
+  const scan = x2RestoreRunBeforeIndex(ops, vpIndex, context);
+  const firstRunIndex = scan.removableIndexes[0];
+  if (firstRunIndex === undefined) {
+    return {
+      removableIndexes: [],
+      firstRunIndex,
+      scan,
+      source: undefined,
+      reason: "no-restore-run",
+    };
+  }
+  if (options.requireSignRestore !== false && !scan.sawSignRestore) {
+    return {
+      removableIndexes: [],
+      firstRunIndex,
+      scan,
+      source: undefined,
+      reason: "no-sign-restore",
+    };
+  }
+  const beforeRun = states[firstRunIndex];
+  const source = analyzeX2VpRestoreGapSource(
+    ops,
+    firstRunIndex,
+    beforeRun,
+    states[vpIndex],
+    context,
+    {
+      useScannedSignRestores: options.useScannedSignRestores ??
+        !x2StateIsClosedPlainContext(beforeRun),
+    },
+  );
+  if (!source.canDiscardRestoreRunBeforeProvedVp) {
+    return {
+      removableIndexes: [],
+      firstRunIndex,
+      scan,
+      source,
+      reason: "source-mismatch",
+    };
+  }
+  return {
+    removableIndexes: scan.removableIndexes,
+    firstRunIndex,
+    scan,
+    source,
+    reason: "proved-vp-source",
   };
 }
 

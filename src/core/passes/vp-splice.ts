@@ -13,6 +13,7 @@ import {
   isFreeStandingX2VpOp,
   isDisplayFocusSensitive,
   removingRecallCanExposeX2Restore,
+  x2PlanRestoreRunBeforeProvedVp,
   x2PreviousFreeStandingRestoreExecutableIndex,
   x2RestoreRunBeforeIndex,
   x2RestoreRunBeforeTerminal,
@@ -70,36 +71,19 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
     source.canDiscardShapeSignPairBeforeProvedVp;
 }
 
-function canRemoveMantissaRestoreRunBeforeProvedVp(
-  ops: readonly IrOp[],
-  firstRunIndex: number,
-  state: X2ValueDataflowState | undefined,
-  stateAfterRun: X2ValueDataflowState | undefined,
-  context: DirectReturnAnalysisContext,
-): boolean {
-  return analyzeX2VpRestoreGapSource(
-    ops,
-    firstRunIndex,
-    state,
-    stateAfterRun,
-    context,
-    { useScannedSignRestores: !x2StateIsClosedPlainContext(state) },
-  ).canDiscardRestoreRunBeforeProvedVp;
-}
-
 function mantissaRestoreRunBeforeProvedVp(
   ops: readonly IrOp[],
   vpIndex: number,
   states: readonly (X2ValueDataflowState | undefined)[],
   context: DirectReturnAnalysisContext,
 ): readonly number[] {
-  const scan = x2RestoreRunBeforeIndex(ops, vpIndex, context);
-  if (!scan.sawSignRestore) return [];
-  const first = scan.removableIndexes[0];
-  if (first === undefined) return [];
-  return canRemoveMantissaRestoreRunBeforeProvedVp(ops, first, states[first], states[vpIndex], context)
-    ? scan.removableIndexes
-    : [];
+  return x2PlanRestoreRunBeforeProvedVp(
+    ops,
+    vpIndex,
+    states,
+    context,
+    { requireSignRestore: true },
+  ).removableIndexes;
 }
 
 function x2ContextRestoreRunBeforeFreshDigit(
