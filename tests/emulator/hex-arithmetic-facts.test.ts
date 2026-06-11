@@ -177,10 +177,20 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(runUnaryRegisterProgram("_0", [IP1, SQUARE])).toBe("0,");
     expect(runUnaryRegisterProgram("0,A", [IP1, SQUARE])).toBe("0,-01");
     expect(runUnaryRegisterProgram("0,0A", [IP1, SQUARE])).toBe("0,-03");
+    expect(runUnaryRegisterProgram("0,AE2", [IP1, SQUARE])).toBe("0000,");
+    expect(runUnaryRegisterProgram("0,AE0", [IP1, SQUARE])).toBe("0,-01");
+    expect(runUnaryRegisterProgram("0,0AE2", [IP1, SQUARE])).toBe("00,");
     expect(runUnaryRegisterProgram("0,Е", [IP1, SQUARE])).toBe("0,");
     expect(runUnaryRegisterProgram("0,0Е", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("0,ЕE2", [IP1, SQUARE])).toBe("0,");
     expect(runUnaryRegisterProgram("0,_", [IP1, SQUARE])).toBe("0,");
     expect(runUnaryRegisterProgram("0,0_", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("0,_E2", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("0,BE2", [IP1, SQUARE])).toBe("1000,");
+    expect(runUnaryRegisterProgram("0,BE0", [IP1, SQUARE])).toBe("1,-01");
+    expect(runUnaryRegisterProgram("0,0BE2", [IP1, SQUARE])).toBe("10,");
+    expect(runUnaryRegisterProgram("0,СE2", [IP1, SQUARE])).toBe("2000,");
+    expect(runUnaryRegisterProgram("0,ГE2", [IP1, SQUARE])).toBe("3000,");
   });
 
   it("super-number square result is pinned as decimal zero", () => {

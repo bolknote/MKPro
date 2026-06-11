@@ -1135,18 +1135,10 @@ function structuralScaledHexZeroSquareOperandFromShapeModel(
   model: X2ShapeDataModel,
 ): StructuralScaledHexSquareOperand | undefined {
   if (model.kind === "exponent-entry") {
-    if (
-      model.mantissa.radix !== "hex" ||
-      model.mantissa.hasDecimalPoint ||
-      model.mantissa.digits.length !== 1
-    ) {
-      return undefined;
-    }
-    const digit = structuralHexNibbleValue(model.mantissa.digits[0]!);
     const exponent = structuralHexSquareExponentNumber(model.exponentRaw);
-    return digit === undefined || exponent === undefined || !isVerifiedScaledHexZeroSquareDigit(digit)
+    return exponent === undefined
       ? undefined
-      : { digit, exponent };
+      : structuralHexSquareExponentOperandFromMantissa(model.mantissa, exponent, isVerifiedScaledHexZeroSquareDigit);
   }
   if (model.kind !== "mantissa" || model.radix !== "hex") return undefined;
   const raw = model.sign === "" ? model.canonical : model.canonical.slice(1);
@@ -1157,32 +1149,17 @@ function structuralScaledHexZeroSquareOperandFromShapeModel(
       ? undefined
       : { digit, exponent: integer[2]!.length };
   }
-  const fraction = /^(?:0)?\.(0*)([AЕEF])$/u.exec(raw);
-  if (fraction !== null) {
-    const digit = structuralHexNibbleValue(fraction[2]!);
-    return digit === undefined || !isVerifiedScaledHexZeroSquareDigit(digit)
-      ? undefined
-      : { digit, exponent: -(fraction[1]!.length + 1) };
-  }
-  return undefined;
+  return structuralFractionalHexSquareOperandFromRaw(raw, 0, isVerifiedScaledHexZeroSquareDigit);
 }
 
 function structuralScaledHexSquareOperandFromShapeModel(
   model: X2ShapeDataModel,
 ): StructuralScaledHexSquareOperand | undefined {
   if (model.kind === "exponent-entry") {
-    if (
-      model.mantissa.radix !== "hex" ||
-      model.mantissa.hasDecimalPoint ||
-      model.mantissa.digits.length !== 1
-    ) {
-      return undefined;
-    }
-    const digit = structuralHexNibbleValue(model.mantissa.digits[0]!);
     const exponent = structuralHexSquareExponentNumber(model.exponentRaw);
-    return digit === undefined || exponent === undefined || !isVerifiedScaledHexSquareDigit(digit)
+    return exponent === undefined
       ? undefined
-      : { digit, exponent };
+      : structuralHexSquareExponentOperandFromMantissa(model.mantissa, exponent, isVerifiedScaledHexSquareDigit);
   }
   if (model.kind !== "mantissa" || model.radix !== "hex") return undefined;
   const raw = model.sign === "" ? model.canonical : model.canonical.slice(1);
@@ -1193,14 +1170,35 @@ function structuralScaledHexSquareOperandFromShapeModel(
       ? undefined
       : { digit, exponent: integer[2]!.length };
   }
-  const fraction = /^(?:0)?\.(0*)([BСГD])$/u.exec(raw);
-  if (fraction !== null) {
-    const digit = structuralHexNibbleValue(fraction[2]!);
-    return digit === undefined || !isVerifiedScaledHexSquareDigit(digit)
-      ? undefined
-      : { digit, exponent: -(fraction[1]!.length + 1) };
+  return structuralFractionalHexSquareOperandFromRaw(raw, 0, isVerifiedScaledHexSquareDigit);
+}
+
+function structuralHexSquareExponentOperandFromMantissa(
+  mantissa: X2MantissaDataModel,
+  exponent: number,
+  isVerifiedDigit: (digit: number) => boolean,
+): StructuralScaledHexSquareOperand | undefined {
+  if (mantissa.radix !== "hex") return undefined;
+  const raw = mantissa.sign === "" ? mantissa.canonical : mantissa.canonical.slice(1);
+  const integer = /^0*([A-FСГЕ])$/u.exec(raw);
+  if (integer !== null) {
+    const digit = structuralHexNibbleValue(integer[1]!);
+    return digit === undefined || !isVerifiedDigit(digit) ? undefined : { digit, exponent };
   }
-  return undefined;
+  return structuralFractionalHexSquareOperandFromRaw(raw, exponent, isVerifiedDigit);
+}
+
+function structuralFractionalHexSquareOperandFromRaw(
+  raw: string,
+  exponent: number,
+  isVerifiedDigit: (digit: number) => boolean,
+): StructuralScaledHexSquareOperand | undefined {
+  const fraction = /^(?:0)?\.(0*)([A-FСГЕ])$/u.exec(raw);
+  if (fraction === null) return undefined;
+  const digit = structuralHexNibbleValue(fraction[2]!);
+  return digit === undefined || !isVerifiedDigit(digit)
+    ? undefined
+    : { digit, exponent: exponent - (fraction[1]!.length + 1) };
 }
 
 function structuralHexSquareExponentNumber(exponentRaw: string): number | undefined {
