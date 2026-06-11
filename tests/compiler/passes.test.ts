@@ -33,6 +33,7 @@ import { x2NoopRestore } from "../../src/core/passes/x2-noop-restore.ts";
 import {
   analyzeRecallRemoval,
   analyzeX2StackEffect,
+  analyzeX2VpRestoreGapSource,
   analyzeX2VpShapeContext,
   analyzeX2VpShapeTransition,
   canonicalStructuralRestoreSourceKeyFacts,
@@ -10168,6 +10169,55 @@ describe("ir passes on synthetic programs", () => {
       canDiscardRestoreRun: false,
       canDiscardSignPair: false,
       reason: "none",
+    });
+  });
+
+  it("x2 VP restore-gap source analysis aggregates proved source and sign-gap facts", () => {
+    const restoreGapProgram: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const restoreGapStates = computeX2ValueStates(restoreGapProgram);
+    expect(analyzeX2VpRestoreGapSource(
+      restoreGapProgram,
+      3,
+      restoreGapStates[3],
+      restoreGapStates[6],
+      directReturnAnalysisContext(restoreGapProgram),
+    )).toMatchObject({
+      hasOnlyRestoreGapBeforeVp: true,
+      replacementDotHasOnlyRestoreGapBeforeVp: true,
+      hasSignRestoreGapBeforeVp: true,
+      canDiscardRestoreRunBeforeProvedVp: true,
+      canDiscardSignRestoreRunBeforeProvedVp: true,
+    });
+
+    const replacementDotProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const replacementDotStates = computeX2ValueStates(replacementDotProgram);
+    expect(analyzeX2VpRestoreGapSource(
+      replacementDotProgram,
+      2,
+      replacementDotStates[2],
+      replacementDotStates[2],
+      directReturnAnalysisContext(replacementDotProgram),
+    )).toMatchObject({
+      hasOnlyRestoreGapBeforeVp: false,
+      replacementDotHasOnlyRestoreGapBeforeVp: true,
+      hasSignRestoreGapBeforeVp: false,
+      canDiscardRestoreRunBeforeProvedVp: true,
     });
   });
 

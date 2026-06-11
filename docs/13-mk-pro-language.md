@@ -1361,8 +1361,9 @@ The pipeline currently contains:
   runs before `ВП`, and restore runs before fresh digit or hard-overwrite
   contexts. The shared restore-run scanner owns the transparent label/address
   gap and direct/proved-indirect return-helper rules for those terminals,
-  including the classifier form used by dead-restore removal; MKPro syntax is
-  unchanged.
+  including the classifier form used by dead-restore removal. A companion
+  VP-gap source analysis feeds `x2-noop-restore` and hidden-temp restore
+  rewrites from the same target/sign/source proof; MKPro syntax is unchanged.
   The same canonical
   decimal display shapes may seed opaque stable-expression source keys for later
   hidden-temp proofs; those keys identify the displayed source shape but do not

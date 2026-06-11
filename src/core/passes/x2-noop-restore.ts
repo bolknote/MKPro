@@ -9,21 +9,16 @@ import {
   isFreeStandingX2EmptyOp,
   isFreeStandingX2SignChangeOp,
   isDisplayFocusSensitive,
+  analyzeX2VpRestoreGapSource,
   x2CanUseSourceDotRestoreAt,
-  x2HasSignRestoreGapBeforeVp,
   x2SyncCanExposeContextSensitiveRestore,
-  x2HasOnlyRestoreGapBeforeVp,
-  x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2StateHasSameDotRestoreValueInXAndX2,
   x2StateHasSameNormalizedDecimalInXAndX2,
   x2StateHasSameRestoredVisibleDecimalInXAndX2,
-  x2StateCanDiscardRestoreRunBeforeProvedVp,
   x2StateHasSameDotSafeStructuralMantissaInXAndX2,
   x2StateHasOnlyDotSafeStructuralMantissaX2,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateIsClosedPlainContext,
-  x2StatesHaveSameExplicitVpEntrySignSource,
-  x2StatesHaveSameVpEntrySignSource,
   type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
@@ -110,19 +105,17 @@ function dotPreservesVpEntrySourceThroughRestoreGap(
   stateAfterDot: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  if (x2HasOnlyRestoreGapBeforeVp(ops, index + 1, context)) {
-    return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterDot) ||
-      (
-        x2HasSignRestoreGapBeforeVp(ops, index + 1, context) &&
-        x2StatesHaveSameVpEntrySignSource(state, stateAfterDot)
-      );
+  const source = analyzeX2VpRestoreGapSource(ops, index + 1, state, stateAfterDot, context);
+  if (source.hasOnlyRestoreGapBeforeVp) {
+    return source.canDiscardRestoreRunBeforeProvedVp ||
+      source.canDiscardSignRestoreRunBeforeProvedVp;
   }
   if (
-    !x2ReplacementDotHasOnlyRestoreGapBeforeVp(ops, index + 1, context) ||
+    !source.replacementDotHasOnlyRestoreGapBeforeVp ||
     dotFollowsClosedSignChangeSource(ops, index)
   ) return false;
-  return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterDot) &&
-    x2StatesHaveSameExplicitVpEntrySignSource(state, stateAfterDot);
+  return source.canDiscardRestoreRunBeforeProvedVp &&
+    source.hasSameExplicitVpEntrySignSource;
 }
 
 function dotFollowsClosedSignChangeSource(ops: readonly IrOp[], index: number): boolean {

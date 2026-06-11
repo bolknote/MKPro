@@ -5350,6 +5350,15 @@ export interface X2RestoreGapBeforeVpScan {
   readonly sawSignRestore: boolean;
 }
 
+export interface X2VpRestoreGapSourceAnalysis {
+  readonly hasOnlyRestoreGapBeforeVp: boolean;
+  readonly replacementDotHasOnlyRestoreGapBeforeVp: boolean;
+  readonly hasSignRestoreGapBeforeVp: boolean;
+  readonly canDiscardRestoreRunBeforeProvedVp: boolean;
+  readonly canDiscardSignRestoreRunBeforeProvedVp: boolean;
+  readonly hasSameExplicitVpEntrySignSource: boolean;
+}
+
 export interface X2RestoreRunBeforeTerminalScan {
   readonly terminalIndex: number | undefined;
   readonly blockedIndex: number | undefined;
@@ -5423,6 +5432,34 @@ export function x2RestoreGapBeforeVp(
     blockedIndex: undefined,
     sawRestoreGap,
     sawSignRestore: sawSign,
+  };
+}
+
+export function analyzeX2VpRestoreGapSource(
+  ops: readonly IrOp[],
+  start: number,
+  beforeRun: X2ValueDataflowState | undefined,
+  beforeVp: X2ValueDataflowState | undefined,
+  context?: DirectReturnAnalysisContext,
+): X2VpRestoreGapSourceAnalysis {
+  const scan = x2RestoreGapBeforeVp(ops, start, context);
+  const transition = analyzeX2VpShapeTransition(
+    beforeRun,
+    "proved-vp",
+    { beforeVp, hasSignRestore: scan.sawSignRestore },
+  );
+  return {
+    hasOnlyRestoreGapBeforeVp: scan.sawRestoreGap && scan.vpIndex !== undefined,
+    replacementDotHasOnlyRestoreGapBeforeVp: scan.vpIndex !== undefined,
+    hasSignRestoreGapBeforeVp: scan.sawSignRestore && scan.vpIndex !== undefined,
+    canDiscardRestoreRunBeforeProvedVp: transition.canDiscardRestoreRun,
+    canDiscardSignRestoreRunBeforeProvedVp: transition.canDiscardSignPair ||
+      (
+        scan.sawSignRestore &&
+        scan.vpIndex !== undefined &&
+        x2StatesHaveSameVpEntrySignSource(beforeRun, beforeVp)
+      ),
+    hasSameExplicitVpEntrySignSource: x2StatesHaveSameExplicitVpEntrySignSource(beforeRun, beforeVp),
   };
 }
 

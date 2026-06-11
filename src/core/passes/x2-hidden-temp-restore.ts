@@ -11,6 +11,7 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
+  analyzeX2VpRestoreGapSource,
   knownReturnCallReturnsThroughNestedTransparentRange,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
@@ -18,12 +19,7 @@ import {
   removingRecallCanExposeX2Restore,
   removingPreShiftLiftCanExposeStack,
   x2CanUseSourceDotRestoreAt,
-  x2HasSignRestoreGapBeforeVp,
-  x2HasOnlyRestoreGapBeforeVp,
-  x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2StateHasUnsafeDotRestoreShapeX2,
-  x2StateCanDiscardRestoreRunBeforeProvedVp,
-  x2StatesHaveSameVpEntrySignSource,
   x2StateHasSameVisibleXAndY,
   x2ValueFactIsNormalizedDecimal,
   x2PreviousStackLiftAndX2SyncProducerIndex,
@@ -114,13 +110,13 @@ const run: IrPassFn = (ops) => {
       sourceProvesFreeStandingRestore,
       directReturnContext,
     );
-    const hasOnlyRestoreGapBeforeVp = x2HasOnlyRestoreGapBeforeVp(ops, index + 1, directReturnContext);
-    const insertedDotHasOnlyRestoreGapBeforeVp = x2ReplacementDotHasOnlyRestoreGapBeforeVp(
+    const vpSource = analyzeX2VpRestoreGapSource(
       ops,
       index + 1,
+      x2ValueStates[index],
+      x2ValueStates[index + 1],
       directReturnContext,
     );
-    const hasSignRestoreGapBeforeVp = x2HasSignRestoreGapBeforeVp(ops, index + 1, directReturnContext);
     const recallSyncProvesVpSource =
       removal.valueProof?.x2SyncVpShape === true ||
       removal.valueProof?.x2SyncShape === true;
@@ -128,19 +124,16 @@ const run: IrPassFn = (ops) => {
       (
         (
           sourceAlreadyDotSafe &&
-          hasOnlyRestoreGapBeforeVp &&
+          vpSource.hasOnlyRestoreGapBeforeVp &&
           (
-            x2StateCanDiscardRestoreRunBeforeProvedVp(x2ValueStates[index], x2ValueStates[index + 1]) ||
-            (
-              hasSignRestoreGapBeforeVp &&
-              x2StatesHaveSameVpEntrySignSource(x2ValueStates[index], x2ValueStates[index + 1])
-            )
+            vpSource.canDiscardRestoreRunBeforeProvedVp ||
+            vpSource.canDiscardSignRestoreRunBeforeProvedVp
           )
         ) ||
         (
           recallSyncProvesVpSource &&
-          insertedDotHasOnlyRestoreGapBeforeVp &&
-          !hasSignRestoreGapBeforeVp
+          vpSource.replacementDotHasOnlyRestoreGapBeforeVp &&
+          !vpSource.hasSignRestoreGapBeforeVp
         )
       );
     if (

@@ -1291,6 +1291,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     classifier form of the same scanner while keeping its stricter
     same-segment collection rule after labels. Later X2 passes can reuse the
     same blocked/terminal result instead of duplicating gap semantics.
+    A companion VP restore-gap source analysis aggregates the `ВП` target scan,
+    replacement-dot scan, sign-restore presence, proved source transition, and
+    explicit sign-source equality; `x2-noop-restore` and
+    `x2-hidden-temp-restore` use this aggregate proof instead of open-coding the
+    same `ВП` gap checks.
     Closed
     structural exponent-entry
     shapes also feed `ВП` source proofs through that restored mantissa form, so a
