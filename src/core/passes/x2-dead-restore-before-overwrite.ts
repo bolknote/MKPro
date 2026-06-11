@@ -9,6 +9,7 @@ import {
   hasRewriteBarrier,
   isFreeStandingX2EmptyOp,
   isDisplayFocusSensitive,
+  planX2ReplacementStackLift,
   plainPreservesXValue,
   removableRecallValueRegister,
   removingRecallCanExposeStackLift,
@@ -66,8 +67,28 @@ const run: IrPassFn = (ops) => {
       stackProducerExposure,
     );
     if (deadRun === undefined) continue;
-    if (isDeadRecallCandidate(op) && removingRecallCanExposeStackLift(ops, index)) continue;
-    if (isDeadStackShiftingProducerCandidate(op) && stackShiftCanExposeStack(ops, index, stackProducerExposure)) {
+    if (
+      isDeadRecallCandidate(op) &&
+      deadProducerStackLiftCanExpose(
+        ops,
+        index,
+        states[index],
+        context,
+        removingRecallCanExposeStackLift(ops, index),
+        remove,
+      )
+    ) continue;
+    if (
+      isDeadStackShiftingProducerCandidate(op) &&
+      deadProducerStackLiftCanExpose(
+        ops,
+        index,
+        states[index],
+        context,
+        stackShiftCanExposeStack(ops, index, stackProducerExposure),
+        remove,
+      )
+    ) {
       continue;
     }
 
@@ -272,6 +293,25 @@ function stackShiftCanExposeStack(
     stackProducerExposure.set(index, exposes);
   }
   return exposes;
+}
+
+function deadProducerStackLiftCanExpose(
+  ops: readonly IrOp[],
+  index: number,
+  state: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+  initiallyExposesStackLift: boolean,
+  removedIndexes: ReadonlySet<number>,
+): boolean {
+  return planX2ReplacementStackLift(
+    ops,
+    index,
+    index,
+    state,
+    context,
+    initiallyExposesStackLift,
+    { invalidatedProducerIndexes: removedIndexes },
+  ).exposesStackLift;
 }
 
 export const x2DeadRestoreBeforeOverwrite: IrPass = {

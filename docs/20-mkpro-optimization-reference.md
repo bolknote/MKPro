@@ -1734,11 +1734,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `К П->X R7..Re` is treated as a terminal overwrite for an earlier dead
     restore, and as the same kind of dead X/X2 producer before a later hard
     overwrite, but only when the shared stack-exposure proof shows that the
-    recall's stack lift cannot reach a later stack consumer. Free-standing
+    recall's stack lift cannot reach a later stack consumer or the shared
+    replacement stack scheduler proves a previous kept stack/X2 producer already
+    supplied the same visible value in `Y`. Free-standing
     stack-shifting plain opcodes whose metadata says they affect X2 and replace
     `X` are also terminal overwrite endpoints for earlier dead restores, and
     are themselves deleted before a later hard overwrite only when their
-    produced `X` is not observed and their implicit stack lift is dead.
+    produced `X` is not observed and their implicit stack lift is dead or
+    already covered by that same duplicate-`Y` producer proof.
     `ВП` may also be removed from a structural
     hex/super `vpEntryShape` source, including one produced by an immediate
     direct/proved-indirect store-splice, a direct or proved-indirect `В/О` return continuation or the fallthrough side of a direct conditional/`F Lx`

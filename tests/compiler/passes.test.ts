@@ -15514,6 +15514,27 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-dead-restore-before-overwrite removes dead recalls when prior duplicate-Y lift supplies the consumer", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      recall("1"),
+      plain(0x0d, "Cx"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x0d, "Cx"),
+      plain(0x10, "+"),
+      halt(),
+    ]);
+  });
+
   it("x2-dead-restore-before-overwrite removes dead stack-shifting producers before hard overwrite", () => {
     const program: IrOp[] = [
       plain(0x20, "F pi"),
@@ -15541,6 +15562,27 @@ describe("ir passes on synthetic programs", () => {
 
     expect(result.applied).toBe(0);
     expect(result.ops).toEqual(program);
+  });
+
+  it("x2-dead-restore-before-overwrite removes stack-shifting producers when prior duplicate-Y lift supplies the consumer", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x20, "F pi"),
+      plain(0x0d, "Cx"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      plain(0x0d, "Cx"),
+      plain(0x10, "+"),
+      halt(),
+    ]);
   });
 
   it("x2-dead-restore-before-overwrite keeps display-role stack-shifting producers", () => {

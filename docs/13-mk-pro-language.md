@@ -1819,7 +1819,11 @@ The pipeline currently contains:
   signal `ЕГГ0Г` before the overwrite can run. `/-/` may also be removed from closed proved structural
   shapes, including synced structural exponent shapes, open mantissa, active
   exponent-entry, or VP/X2 restore contexts because the following hard overwrite
-  destroys both the restored X and the toggled X2. `ВП` is removed only when the X2 value dataflow
+  destroys both the restored X and the toggled X2. Dead recalls and stack-shifting
+  X2 producers before that overwrite use the same replacement stack scheduler
+  as literal/hidden-temp `.` rewrites: if a previous kept stack/X2 producer
+  already supplied the same visible value in `Y`, a downstream stack consumer
+  no longer forces the dead producer to stay. `ВП` is removed only when the X2 value dataflow
   still knows an open mantissa, active exponent entry, proved decimal
   `vpEntryMantissa` source, or structural hex/super `vpEntryShape` source from
   the same general proof used by `vp-splice`. Proved indirect jump edges seed a
