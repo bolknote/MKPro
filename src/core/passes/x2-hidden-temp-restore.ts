@@ -11,7 +11,6 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
-  analyzeX2VpRestoreGapSource,
   knownReturnCallReturnsThroughNestedTransparentRange,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
@@ -19,6 +18,7 @@ import {
   removingRecallCanExposeX2Restore,
   removingPreShiftLiftCanExposeStack,
   x2CanUseSourceDotRestoreAt,
+  x2PlanDotReplacementVpSource,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateHasSameVisibleXAndY,
   x2ValueFactIsNormalizedDecimal,
@@ -110,9 +110,9 @@ const run: IrPassFn = (ops) => {
       sourceProvesFreeStandingRestore,
       directReturnContext,
     );
-    const vpSource = analyzeX2VpRestoreGapSource(
+    const vpSourcePlan = x2PlanDotReplacementVpSource(
       ops,
-      index + 1,
+      index,
       x2ValueStates[index],
       x2ValueStates[index + 1],
       directReturnContext,
@@ -124,16 +124,13 @@ const run: IrPassFn = (ops) => {
       (
         (
           sourceAlreadyDotSafe &&
-          vpSource.hasOnlyRestoreGapBeforeVp &&
-          (
-            vpSource.canDiscardRestoreRunBeforeProvedVp ||
-            vpSource.canDiscardSignRestoreRunBeforeProvedVp
-          )
+          vpSourcePlan.source.hasOnlyRestoreGapBeforeVp &&
+          vpSourcePlan.preservesVpEntrySource
         ) ||
         (
           recallSyncProvesVpSource &&
-          vpSource.replacementDotHasOnlyRestoreGapBeforeVp &&
-          !vpSource.hasSignRestoreGapBeforeVp
+          vpSourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp &&
+          !vpSourcePlan.source.hasSignRestoreGapBeforeVp
         )
       );
     if (
