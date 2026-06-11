@@ -6102,6 +6102,46 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(rawResult?.xShape)).toEqual([]);
   });
 
+  it("x2 value dataflow carry-normalizes integer hex mantissas before left-side addition", () => {
+    const state: X2ValueDataflowState = {
+      y: new Set(),
+      x: new Set<X2ValueFact>(["decimal:1:normalized"]),
+      x2: new Set(),
+      yShape: new Set<X2ShapeFact>(["hex:9AЕ:mantissa"]),
+      xShape: new Set<X2ShapeFact>(["mantissa:1:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const rightStructuralState: X2ValueDataflowState = {
+      ...state,
+      y: new Set<X2ValueFact>(["decimal:1:normalized"]),
+      x: new Set(),
+      yShape: new Set<X2ShapeFact>(["mantissa:1:decimal"]),
+      xShape: new Set<X2ShapeFact>(["hex:9AЕ:mantissa"]),
+    };
+    const unsafeFState: X2ValueDataflowState = {
+      ...state,
+      yShape: new Set<X2ShapeFact>(["hex:9AF:mantissa"]),
+    };
+    const overWideState: X2ValueDataflowState = {
+      ...state,
+      yShape: new Set<X2ShapeFact>(["hex:Е9999999:mantissa"]),
+    };
+
+    const result = transferX2ValueStateForEdge(state, plain(0x10, "+"), "normal", {}, 0);
+    const rightStructuralResult = transferX2ValueStateForEdge(rightStructuralState, plain(0x10, "+"), "normal", {}, 0);
+    const unsafeFResult = transferX2ValueStateForEdge(unsafeFState, plain(0x10, "+"), "normal", {}, 0);
+    const overWideResult = transferX2ValueStateForEdge(overWideState, plain(0x10, "+"), "normal", {}, 0);
+
+    expect(x2ValueStateText(result?.x) ?? []).toContain("decimal:1015:normalized");
+    expect(x2ShapeStateText(result?.xShape)).toContain("mantissa:1015:decimal");
+    expect(x2ValueStateText(rightStructuralResult?.x) ?? []).not.toContain("decimal:1015:normalized");
+    expect(x2ShapeStateText(rightStructuralResult?.xShape)).toEqual([]);
+    expect(x2ValueStateText(unsafeFResult?.x) ?? []).not.toContain("decimal:1016:normalized");
+    expect(x2ShapeStateText(unsafeFResult?.xShape)).toEqual([]);
+    expect(x2ValueStateText(overWideResult?.x) ?? []).not.toContain("decimal:150000000:normalized");
+    expect(x2ShapeStateText(overWideResult?.xShape)).toEqual([]);
+  });
+
   it("x2 value dataflow feeds exact decimal display shapes to structural hex arithmetic", () => {
     const shapeOnly: X2ValueDataflowState = {
       y: new Set(),

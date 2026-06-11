@@ -1416,6 +1416,11 @@ function structuralHexBinaryDecimalProducts(
     return output;
   }
   if (op.opcode === 0x10) {
+    for (const leftNormalized of structuralHexCarryNormalizedIntegerProducts(yShape)) {
+      for (const right of normalizedDecimalValues(x, xShape)) {
+        addStructuralHexDecimalProduct(output, structuralHexCarryNormalizedPlusDecimalProduct(leftNormalized, right));
+      }
+    }
     for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
       for (const right of normalizedDecimalValues(x, xShape)) {
         addStructuralHexDecimalProduct(output, structuralHexDigitPlusDecimalProduct(leftDigit, right));
@@ -1739,6 +1744,68 @@ function structuralSingleHexExponentOperandFromShapeModel(
     return { digit, exponent: `-${fraction[1]!.length + 1}` };
   }
   return undefined;
+}
+
+function structuralHexCarryNormalizedIntegerProducts(shapes: X2ShapeSet | undefined): StructuralHexDecimalProduct[] {
+  const output = new Map<string, StructuralHexDecimalProduct>();
+  for (const fact of canonicalStructuralShapeFacts(shapes)) {
+    const product = structuralHexCarryNormalizedIntegerProduct(fact);
+    if (product === undefined) continue;
+    output.set(`${product.value}:${product.display ?? ""}:${product.displayShape ?? ""}`, product);
+  }
+  return [...output.values()];
+}
+
+function structuralHexCarryNormalizedIntegerProduct(fact: X2ShapeFact): StructuralHexDecimalProduct | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  if (
+    model.kind !== "mantissa" ||
+    model.radix !== "hex" ||
+    model.sign !== "" ||
+    model.hasDecimalPoint ||
+    structuralNonDecimalDigitCount(model.canonical) < 2
+  ) {
+    return undefined;
+  }
+  const display = structuralHexCarryNormalizedIntegerDisplay(model.canonical);
+  if (display === undefined) return undefined;
+  const value = normalizePlainDecimal(display);
+  return value === undefined ? undefined : { value, display };
+}
+
+function structuralHexCarryNormalizedIntegerDisplay(raw: string): string | undefined {
+  if (raw.includes("E")) return undefined;
+  const digits = shapeDigits(raw);
+  if (digits.length === 0 || digits.length > 8 || digits.length !== raw.length) return undefined;
+  let carry = 0;
+  let display = "";
+  for (let index = digits.length - 1; index >= 0; index -= 1) {
+    const nibble = structuralHexNibbleValue(digits[index]!);
+    if (nibble === undefined || nibble > 14) return undefined;
+    const value = nibble + carry;
+    display = String(value % 10) + display;
+    carry = value >= 10 ? 1 : 0;
+  }
+  if (carry > 0) display = `${carry}${display}`;
+  return display.length <= 8 ? display : undefined;
+}
+
+function structuralNonDecimalDigitCount(raw: string): number {
+  let count = 0;
+  for (const char of raw) {
+    const digit = structuralHexNibbleValue(char);
+    if (digit !== undefined && digit >= 10) count += 1;
+  }
+  return count;
+}
+
+function structuralHexCarryNormalizedPlusDecimalProduct(
+  left: StructuralHexDecimalProduct,
+  right: string,
+): StructuralHexDecimalProduct | undefined {
+  const rightValue = verifiedDecimalOperandValue(right);
+  if (rightValue === undefined || !/^[0-9]+$/u.test(left.value)) return undefined;
+  return structuralHexDecimalProductFromExact(BigInt(left.value) + BigInt(rightValue), 0);
 }
 
 function structuralHexDigitPlusDecimalProduct(
