@@ -1842,6 +1842,10 @@ The pipeline currently contains:
   pass first tries that full literal and then the mantissa prefix before `ВП`;
   the prefix form is accepted when the inserted `.` itself is the first X2
   restore and recreates the same mantissa source for `ВП`. A repeated literal
+  followed by a pure unary operation and an explicit X-preserving X2 sync can
+  also collapse to `.` when the same stable `expr-key:*` is already in X2, the
+  current `X` proves the same dot-restore value, and the usual unsafe-shape,
+  stack-lift, and context-sensitive restore guards all pass. A repeated literal
   may otherwise be replaced before a following `ВП` only when the same-source
   proof survives the free-standing `КНОП`/`К1`/`К2` and `/-/` restore gap, so
   standalone fractional digit-runs and unsafe leading-zero/signed-zero shapes

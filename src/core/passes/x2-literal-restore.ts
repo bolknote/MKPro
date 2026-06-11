@@ -13,14 +13,17 @@ import {
   analyzeX2StackEffect,
   removingPreShiftLiftCanExposeStack,
   replacingNumberEntryCanExposeStackLift,
+  plainPreservesXValue,
   x2CanUseSourceDotRestoreAt,
   x2HasOnlyRestoreGapBeforeVp,
   x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasUnsafeDotRestoreShapeX2,
+  x2StateHasSameDotRestoreValueInXAndX2,
   x2StateHasSameVisibleXAndY,
   x2StateIsClosedPlainContext,
   x2PreviousStackLiftAndX2SyncProducerIndex,
+  x2StableUnaryExpressionValueFact,
   x2ValueSetHasFact,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueShapeSetHasRestoredVisibleDecimal,
@@ -41,6 +44,13 @@ interface NumericLiteralRun {
   readonly displayValue: string;
   readonly x2Fact: X2ValueFact;
   readonly dotPreservesVpEntrySource: boolean;
+}
+
+interface UnaryExpressionRun {
+  readonly end: number;
+  readonly displayValue: string;
+  readonly x2Fact: X2ValueFact;
+  readonly source: NumericLiteralRun;
 }
 
 function isPlainDigit(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
@@ -76,7 +86,11 @@ function isPlainVp(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }>
     !isDisplayFocusSensitive(op);
 }
 
-function decimalLiteralRunAt(ops: readonly IrOp[], start: number): NumericLiteralRun | undefined {
+function decimalLiteralRunAt(
+  ops: readonly IrOp[],
+  start: number,
+  options: { readonly allowSinglePositiveInteger?: boolean } = {},
+): NumericLiteralRun | undefined {
   const digits: string[] = [];
   let end = start;
   while (end < ops.length) {
@@ -108,7 +122,7 @@ function decimalLiteralRunAt(ops: readonly IrOp[], start: number): NumericLitera
   if (x2Fact === undefined) return undefined;
   const dotPreservesVpEntrySource = !hasPoint && raw === normalized && normalized !== "0";
   if (sign === "") {
-    if (digits.length < 2 && !hasPoint) return undefined;
+    if (!options.allowSinglePositiveInteger && digits.length < 2 && !hasPoint) return undefined;
     return { end: end - 1, displayValue: raw, x2Fact, dotPreservesVpEntrySource };
   }
   return { end, displayValue: raw, x2Fact, dotPreservesVpEntrySource };
@@ -175,6 +189,34 @@ function literalRunsAt(ops: readonly IrOp[], start: number): readonly NumericLit
   if (exponent === undefined) return decimal === undefined ? [] : [decimal];
   if (decimal === undefined || decimal.end === exponent.end) return [exponent];
   return [exponent, decimal];
+}
+
+function unaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
+  const source = decimalLiteralRunAt(ops, start, { allowSinglePositiveInteger: true });
+  if (source === undefined) return undefined;
+  const unaryIndex = source.end + 1;
+  const unary = ops[unaryIndex];
+  if (unary === undefined) return undefined;
+  if (unary.kind !== "plain") return undefined;
+  const x2Fact = x2StableUnaryExpressionValueFact(unary, source.x2Fact);
+  if (x2Fact === undefined) return undefined;
+  const syncIndex = unaryIndex + 1;
+  if (!isPlainXPreservingX2Sync(ops[syncIndex])) return undefined;
+  const mnemonic = "mnemonic" in unary.meta ? unary.meta.mnemonic : undefined;
+  return {
+    end: syncIndex,
+    displayValue: `${mnemonic ?? "expr"}(${source.displayValue})`,
+    x2Fact,
+    source,
+  };
+}
+
+function isPlainXPreservingX2Sync(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }> {
+  if (op === undefined || op.kind !== "plain" || hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) {
+    return false;
+  }
+  const effect = analyzeX2StackEffect(op);
+  return effect.stackPreserves && effect.x2Affects && plainPreservesXValue(op);
 }
 
 function decimalValueFact(value: string, flavor: "normalized" | "unnormalized"): X2ValueFact {
@@ -426,6 +468,17 @@ function replacingLiteralStackLiftCanExpose(
     !literalStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run, state, context);
 }
 
+function replacingExpressionStackLiftCanExpose(
+  ops: readonly IrOp[],
+  runStart: number,
+  run: UnaryExpressionRun,
+  state: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  return replacingNumberEntryCanExposeStackLift(ops, run.end) &&
+    !literalStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run.source, state, context);
+}
+
 function literalStackLiftAlreadySuppliedByDuplicateY(
   ops: readonly IrOp[],
   runStart: number,
@@ -486,6 +539,46 @@ const run: IrPassFn = (ops) => {
         index = runAtIndex.end;
         continue opLoop;
       }
+    }
+    const expressionRun = unaryExpressionRunAt(ops, index);
+    const expressionSourceProvesFreeStandingRestore =
+      x2StateHasSameDotRestoreValueInXAndX2(state) &&
+      !x2StateHasUnsafeDotRestoreShapeX2(state);
+    if (
+      expressionRun !== undefined &&
+      x2StateIsClosedPlainContext(state) &&
+      x2ValueSetHasFact(state?.x2, expressionRun.x2Fact) &&
+      x2CanUseSourceDotRestoreAt(
+        ops,
+        index,
+        state,
+        dotSafeStates[index] === true,
+        immediateSyncStates[index] === true,
+        expressionSourceProvesFreeStandingRestore,
+        directReturnContext,
+      ) &&
+      !replacingExpressionStackLiftCanExpose(ops, index, expressionRun, state, directReturnContext) &&
+      !replacingLiteralCanExposeContextSensitiveRestore(
+        ops,
+        {
+          end: expressionRun.end,
+          displayValue: expressionRun.displayValue,
+          x2Fact: expressionRun.x2Fact,
+          dotPreservesVpEntrySource: false,
+        },
+        directReturnContext,
+        vpReachabilityCache,
+        {
+          value: true,
+          displayValue: false,
+          shape: false,
+        },
+      )
+    ) {
+      result.push(dotRestoreOp(expressionRun.displayValue, ops[index]!));
+      removed += expressionRun.end - index;
+      index = expressionRun.end;
+      continue opLoop;
     }
     result.push(ops[index]!);
   }

@@ -1702,8 +1702,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent-entry literals such as
     `5 ВП 3`, `1.2 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
-    X2-affecting sync; role-bearing `/-/` cells are not parsed as replaceable
-    literal sign suffixes. When a cell range can be read both as a full
+    X2-affecting sync. A repeated `literal; pure unary; explicit
+    X-preserving X2 sync` run can also collapse to `.` when the hidden X2 set
+    already contains the same stable `expr-key:*`, visible `X` proves the same
+    dot-restore value, and the unsafe-shape, stack-lift, and
+    context-sensitive restore guards all remain clean; role-bearing `/-/` cells
+    are not parsed as replaceable literal sign suffixes. When a cell range can
+    be read both as a full
     exponent-entry literal and as a mantissa prefix before `ВП`, the pass tries
     the full literal first and then the prefix; the prefix is replaceable only
     when the inserted `.` itself becomes the first X2 restore and recreates the

@@ -9524,6 +9524,20 @@ function stableExpressionValueFact(opcode: string, source: string): X2ValueFact 
   return canonicalStableExpressionValueFact(`expr-key:${opcode}(${source})` as X2ValueFact);
 }
 
+export function x2StableUnaryExpressionValueFact(
+  op: IrOp,
+  source: X2ValueFact,
+): X2ValueFact | undefined {
+  if (op.kind !== "plain") return undefined;
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return undefined;
+  if (stableExpressionOpcodeArity(op.opcode) !== 1) return undefined;
+  const key = stableExpressionSourceKey(source);
+  if (key === undefined) return undefined;
+  if (stableExpressionKeyHasConcreteDecimalResult(op, key)) return undefined;
+  const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
+  return stableExpressionValueFact(opcode, key);
+}
+
 function stableExpressionSourceKey(fact: X2ValueFact): string | undefined {
   if (fact.startsWith("reg:")) return fact;
   if (fact.startsWith("expr-key:")) return canonicalStableExpressionValueFactIfValid(fact);
