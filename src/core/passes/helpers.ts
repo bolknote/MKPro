@@ -5387,6 +5387,10 @@ export interface X2RestoreRunBeforeIndexOptions {
   readonly includeSignRestores?: boolean | undefined;
 }
 
+export interface X2PreviousFreeStandingRestoreExecutableOptions {
+  readonly skipEmptyRestores?: boolean | undefined;
+}
+
 export function x2HasOnlyRestoreGapBeforeVp(
   ops: readonly IrOp[],
   start: number,
@@ -5581,6 +5585,21 @@ export function x2RestoreRunBeforeIndex(
     removableIndexes,
     sawSignRestore,
   };
+}
+
+export function x2PreviousFreeStandingRestoreExecutableIndex(
+  ops: readonly IrOp[],
+  index: number,
+  options: X2PreviousFreeStandingRestoreExecutableOptions = {},
+): number | undefined {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const op = ops[cursor]!;
+    if (op.kind === "label" || op.kind === "orphan-address") continue;
+    if (options.skipEmptyRestores === true && isFreeStandingX2EmptyOp(op)) continue;
+    if (isFreeStandingX2RestoreGapOp(op)) return cursor;
+    return undefined;
+  }
+  return undefined;
 }
 
 export function x2RestoreGapDirectReturnDoesNotObserveRestore(

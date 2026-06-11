@@ -13,6 +13,7 @@ import {
   isFreeStandingX2VpOp,
   isDisplayFocusSensitive,
   removingRecallCanExposeX2Restore,
+  x2PreviousFreeStandingRestoreExecutableIndex,
   x2RestoreRunBeforeIndex,
   x2RestoreRunBeforeTerminal,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
@@ -109,18 +110,12 @@ function x2ContextRestoreRunBeforeFreshDigit(
 ): readonly number[] {
   const transition = analyzeX2VpShapeTransition(state, "fresh-digit");
   if (!transition.canDiscardRestoreRun) {
-    if (!x2StateIsClosedPlainContext(state) || previousExecutableIsFreeStandingRestoreOp(ops, startIndex)) return [];
+    if (
+      !x2StateIsClosedPlainContext(state) ||
+      x2PreviousFreeStandingRestoreExecutableIndex(ops, startIndex) !== undefined
+    ) return [];
   }
   return x2ContextRestoreRunBeforeFreshDigitEntry(ops, startIndex, context);
-}
-
-function previousExecutableIsFreeStandingRestoreOp(ops: readonly IrOp[], index: number): boolean {
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const op = ops[cursor]!;
-    if (isTransparentVpGapOp(op)) continue;
-    return isFreeStandingX2EmptyOp(op) || isFreeStandingX2SignChangeOp(op);
-  }
-  return false;
 }
 
 function x2ContextRestoreRunBeforeDeadOverwrite(

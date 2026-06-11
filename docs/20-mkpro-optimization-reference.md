@@ -1884,7 +1884,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `5 ВП 3 Fπ /-/ /-/ С/П`), but a free-standing `/-/`/empty restore run can
     be dropped before a fresh digit (`5 ВП 3 Fπ /-/ 4`,
     `5 ВП 3 Fπ /-/ КНОП 4`, `5 ВП 3 Fπ /-/ /-/ КНОП 4`), because that digit
-    starts new number entry and discards the restored `X`; labels and orphan
+    starts new number entry and discards the restored `X`. The same
+    previous-executable restore scanner also feeds dot-shielding checks, with
+    an explicit mode that skips empty restore cells when the caller needs the
+    sign source rather than the nearest restore executable; labels and orphan
     address-byte cells inside the gap are preserved. The fresh-digit proof can cross the same direct or
     proved-indirect `ПП` helper-chain shape when every nested helper reaches
     `В/О` through only restore-transparent empty/address cells, because the helper cannot

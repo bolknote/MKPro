@@ -1746,7 +1746,10 @@ The pipeline currently contains:
   shapes use the same proof, while signed-zero forms stay explicit. Adjacent
   sign-pair removal uses the strict shape-transition sign-pair flag rather than
   the broader fallback sign-source proof, so `0 /-/ /-/ ВП` and dot-shielding
-  sign pairs keep their observable source change. VP-context
+  sign pairs keep their observable source change. The previous-executable
+  restore scanner is shared with dot-shielding checks: callers can either stop
+  on any free-standing restore cell or skip empty cells to find the sign source
+  that still shapes a following `ВП`. VP-context
   sign commands and empty
   separators after X2-preserving gaps are collapsed as one restore run when the
   following command starts fresh number entry; otherwise their X2-to-X restore

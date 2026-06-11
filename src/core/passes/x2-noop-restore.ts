@@ -6,11 +6,11 @@ import {
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
-  isFreeStandingX2EmptyOp,
   isFreeStandingX2SignChangeOp,
   isDisplayFocusSensitive,
   analyzeX2VpRestoreGapSource,
   x2CanUseSourceDotRestoreAt,
+  x2PreviousFreeStandingRestoreExecutableIndex,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasSameDotRestoreValueInXAndX2,
   x2StateHasSameNormalizedDecimalInXAndX2,
@@ -119,13 +119,8 @@ function dotPreservesVpEntrySourceThroughRestoreGap(
 }
 
 function dotFollowsClosedSignChangeSource(ops: readonly IrOp[], index: number): boolean {
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const op = ops[cursor]!;
-    if (op.kind === "label" || op.kind === "orphan-address") continue;
-    if (isFreeStandingX2EmptyOp(op)) continue;
-    return isFreeStandingX2SignChangeOp(op);
-  }
-  return false;
+  const previous = x2PreviousFreeStandingRestoreExecutableIndex(ops, index, { skipEmptyRestores: true });
+  return previous !== undefined && isFreeStandingX2SignChangeOp(ops[previous]!);
 }
 
 function isDotSafeValueContext(

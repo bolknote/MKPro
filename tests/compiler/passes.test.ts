@@ -73,6 +73,7 @@ import {
   x2NextXPreservingX2SyncIndex,
   x2PreviousHardX2OverwriteIndex,
   x2KnownReturnCallReachesStackLiftAndX2Sync,
+  x2PreviousFreeStandingRestoreExecutableIndex,
   x2PreviousStackLiftAndX2SyncProducerIndex,
   x2PreviousStackPreservingReturnX2SyncIndex,
   x2PreviousXPreservingX2SyncIndex,
@@ -16370,6 +16371,37 @@ describe("ir passes on synthetic programs", () => {
       blockedIndex: undefined,
       removableIndexes: [0],
     });
+  });
+
+  it("x2 previous restore executable scanner distinguishes empty gaps from sign sources", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      orphanAddress(54),
+      plain(0x54, "КНОП"),
+      label("marker"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const roleBearingGap: IrOp[] = [
+      plain(0x0b, "/-/"),
+      { kind: "plain", opcode: 0x54, meta: { mnemonic: "КНОП", roles: ["display-byte"] } },
+      plain(0x0a, "."),
+      halt(),
+    ];
+
+    expect(x2PreviousFreeStandingRestoreExecutableIndex(program, 5)).toBe(3);
+    expect(x2PreviousFreeStandingRestoreExecutableIndex(
+      program,
+      5,
+      { skipEmptyRestores: true },
+    )).toBe(1);
+    expect(x2PreviousFreeStandingRestoreExecutableIndex(roleBearingGap, 2)).toBeUndefined();
+    expect(x2PreviousFreeStandingRestoreExecutableIndex(
+      roleBearingGap,
+      2,
+      { skipEmptyRestores: true },
+    )).toBeUndefined();
   });
 
   it("x2-noop-restore removes dot before transparent return helpers and empty-op ВП", () => {
