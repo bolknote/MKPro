@@ -1425,8 +1425,10 @@ The pipeline currently contains:
   scientific display shape, while raw leading-zero structural spellings stay
   shape-only. Materialized stable expression keys use the same proof after a
   real X2 sync; the original structural source still is not made dot-safe. A
-  producer-local `expr:<step>` may also become the operand of a later unary or
-  closed-context stable `expr-key:<opcode>(expr:<step>)`, letting repeated pure
+  producer-local `expr:<step>` may also become the operand of a later unary,
+  binary, or closed-context stable `expr-key:<opcode>(expr:<step>)`; binary
+  keys use that opaque operand only when no more stable source name is
+  available for the same operand. This lets repeated pure
   operations over the same hidden computed source compare as one SSA-like temporary without
   promoting the source to a decimal or display-safe value. For non-negative concrete
   decimal values, `К {x}` is also modeled as an exact normalized fractional

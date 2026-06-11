@@ -199,6 +199,8 @@ interface StableExpressionSourceKeyOptions {
   readonly includeOpaqueExpr?: boolean;
 }
 
+const MAX_STABLE_BINARY_SOURCE_KEY_PAIRS = 16;
+
 export interface X2ValueDataflowState {
   readonly x: X2ValueSet;
   readonly y?: X2ValueSet | undefined;
@@ -739,15 +741,33 @@ function plainProducesStableExpressionValues(
     }
   } else if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") {
     for (const fact of plainProducesConcreteBinaryDecimalValues(op, y, x, yShape, xShape, options)) output.add(fact);
-    const binarySourceOptions = { includeOpaqueExpr: false };
-    for (const yKey of stableExpressionSourceKeys(y, yShape, binarySourceOptions)) {
-      for (const xKey of stableExpressionSourceKeys(x, xShape, binarySourceOptions)) {
+    const [yKeys, xKeys] = stableBinaryExpressionSourceKeySets(y, yShape, x, xShape);
+    for (const yKey of yKeys) {
+      for (const xKey of xKeys) {
         if (stableBinaryExpressionKeyHasConcreteDecimalResult(op, yKey, xKey)) continue;
         output.add(stableBinaryExpressionValueFact(op, opcode, yKey, xKey));
       }
     }
   }
   return output;
+}
+
+function stableBinaryExpressionSourceKeySets(
+  y: X2ValueSet | undefined,
+  yShape: X2ShapeSet | undefined,
+  x: X2ValueSet | undefined,
+  xShape: X2ShapeSet | undefined,
+): readonly [Set<string>, Set<string>] {
+  const yKeys = stableExpressionSourceKeys(y, yShape);
+  const xKeys = stableExpressionSourceKeys(x, xShape);
+  const yStableKeys = stableExpressionSourceKeys(y, yShape, { includeOpaqueExpr: false });
+  const xStableKeys = stableExpressionSourceKeys(x, xShape, { includeOpaqueExpr: false });
+  const boundedYKeys = yStableKeys.size === 0 ? yKeys : yStableKeys;
+  const boundedXKeys = xStableKeys.size === 0 ? xKeys : xStableKeys;
+  if (boundedYKeys.size * boundedXKeys.size <= MAX_STABLE_BINARY_SOURCE_KEY_PAIRS) {
+    return [boundedYKeys, boundedXKeys];
+  }
+  return [yStableKeys, xStableKeys];
 }
 
 function stableExpressionKeyHasConcreteDecimalResult(

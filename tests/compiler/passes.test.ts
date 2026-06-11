@@ -2771,6 +2771,22 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["expr:0", "reg:2"]);
   });
 
+  it("x2 value dataflow builds stable binary expr keys over opaque operands", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      plain(0x0e, "В↑"),
+      recall("1"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual([
+      "expr-key:10(expr:0,reg:1)",
+      "expr:3",
+    ]);
+  });
+
   it("x2 value dataflow keeps opaque X/X2 equality through closed sign-change", () => {
     const program: IrOp[] = [
       plain(0x35, "К {x}"),
@@ -11874,6 +11890,33 @@ describe("ir passes on synthetic programs", () => {
 
     expect(restored.applied).toBe(1);
     expect(restored.ops[8]).toMatchObject({ kind: "plain", opcode: 0x0a });
+    expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
+    expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
+  });
+
+  it("x2-hidden-temp-restore uses stable binary expr keys from recalled expression memory", () => {
+    const program: IrOp[] = [
+      plain(0x35, "К {x}"),
+      store("3"),
+      recall("1"),
+      plain(0x10, "+"),
+      store("2"),
+      plain(0x0d, "Cx"),
+      recall("3"),
+      plain(0x0e, "В↑"),
+      recall("1"),
+      plain(0x10, "+"),
+      plain(0x0e, "В↑"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      recall("2"),
+      halt(),
+    ];
+    const restored = x2HiddenTempRestore.run(program, ctx);
+    const dse = deadStoreElimination.run(restored.ops, ctx);
+
+    expect(restored.applied).toBe(1);
+    expect(restored.ops[13]).toMatchObject({ kind: "plain", opcode: 0x0a });
     expect(dse.ops.some((op) => op.kind === "store" && op.register === "2")).toBe(false);
     expect(machineCellCount(dse.ops)).toBe(machineCellCount(program) - 1);
   });
