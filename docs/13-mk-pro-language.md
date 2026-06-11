@@ -1363,7 +1363,10 @@ The pipeline currently contains:
   contexts. The shared restore-run scanners own both forward terminal scans and
   backward scans before a known terminal, with the same transparent
   label/address gap and direct/proved-indirect return-helper rules, including
-  the classifier form used by dead-restore removal. A companion
+  the classifier form used by dead-restore removal. The VP-gap source wrapper
+  now reuses that terminal scanner with an explicit empty-run-terminal mode, so
+  immediate `ВП` and non-empty restore gaps report the same structured
+  source/sign proof. A companion
   VP-gap source analysis feeds `vp-splice`, `x2-noop-restore`, literal restore,
   and hidden-temp restore rewrites from the same target/sign/source proof;
   MKPro syntax is unchanged.

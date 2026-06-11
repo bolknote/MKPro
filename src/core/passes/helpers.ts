@@ -5386,6 +5386,8 @@ export interface X2RestoreRunBeforeTerminalScan {
   readonly terminalIndex: number | undefined;
   readonly blockedIndex: number | undefined;
   readonly removableIndexes: readonly number[];
+  readonly sawRestoreGap: boolean;
+  readonly sawSignRestore: boolean;
 }
 
 export interface X2RestoreRunBeforeIndexScan {
@@ -5399,6 +5401,7 @@ export type X2RestoreRunScanDecision = "remove" | "transparent" | "terminal" | "
 export type X2RestoreRunClassifier = (op: IrOp, index: number) => X2RestoreRunScanDecision;
 
 export interface X2RestoreRunScannerOptions {
+  readonly allowEmptyRunTerminal?: boolean | undefined;
   readonly onTransparentGap?: ((op: IrOp, index: number) => void) | undefined;
 }
 
@@ -5441,34 +5444,21 @@ export function x2RestoreGapBeforeVp(
   start: number,
   context?: DirectReturnAnalysisContext,
 ): X2RestoreGapBeforeVpScan {
-  let sawRestoreGap = false;
-  let sawSign = false;
-  for (let index = start; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label" || op.kind === "orphan-address") continue;
-    if (isFreeStandingX2RestoreGapOp(op)) {
-      sawRestoreGap = true;
-      if (isFreeStandingX2SignChangeOp(op)) sawSign = true;
-      continue;
-    }
-    if (
-      context !== undefined &&
-      isKnownReturnCallOp(op) &&
-      x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
-    ) continue;
-    const isVp = isFreeStandingX2VpOp(op);
-    return {
-      vpIndex: isVp ? index : undefined,
-      blockedIndex: isVp ? undefined : index,
-      sawRestoreGap,
-      sawSignRestore: sawSign,
-    };
-  }
+  const scan = x2ScanRestoreRunBeforeTerminal(
+    ops,
+    start,
+    context,
+    (op) => {
+      if (isFreeStandingX2RestoreGapOp(op)) return "remove";
+      return isFreeStandingX2VpOp(op) ? "terminal" : "block";
+    },
+    { allowEmptyRunTerminal: true },
+  );
   return {
-    vpIndex: undefined,
-    blockedIndex: undefined,
-    sawRestoreGap,
-    sawSignRestore: sawSign,
+    vpIndex: scan.terminalIndex,
+    blockedIndex: scan.blockedIndex,
+    sawRestoreGap: scan.sawRestoreGap,
+    sawSignRestore: scan.sawSignRestore,
   };
 }
 
@@ -5524,44 +5514,58 @@ export function x2RestoreRunBeforeTerminal(
 export function x2ScanRestoreRunBeforeTerminal(
   ops: readonly IrOp[],
   start: number,
-  context: DirectReturnAnalysisContext,
+  context: DirectReturnAnalysisContext | undefined,
   classify: X2RestoreRunClassifier,
   options: X2RestoreRunScannerOptions = {},
 ): X2RestoreRunBeforeTerminalScan {
   const removableIndexes: number[] = [];
+  let sawRestoreGap = false;
+  let sawSignRestore = false;
   for (let index = start; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (op.kind === "label" || op.kind === "orphan-address") {
       options.onTransparentGap?.(op, index);
       continue;
     }
-    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) {
+    if (
+      context !== undefined &&
+      isKnownReturnCallOp(op) &&
+      x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)
+    ) {
       options.onTransparentGap?.(op, index);
       continue;
     }
     const decision = classify(op, index);
     if (decision === "remove") {
       removableIndexes.push(index);
+      sawRestoreGap = true;
+      if (isFreeStandingX2SignChangeOp(op)) sawSignRestore = true;
       continue;
     }
     if (decision === "transparent") continue;
-    if (decision === "terminal" && removableIndexes.length > 0) {
+    if (decision === "terminal" && (removableIndexes.length > 0 || options.allowEmptyRunTerminal === true)) {
       return {
         terminalIndex: index,
         blockedIndex: undefined,
         removableIndexes,
+        sawRestoreGap,
+        sawSignRestore,
       };
     }
     return {
       terminalIndex: undefined,
       blockedIndex: index,
       removableIndexes: [],
+      sawRestoreGap,
+      sawSignRestore,
     };
   }
   return {
     terminalIndex: undefined,
     blockedIndex: undefined,
     removableIndexes: [],
+    sawRestoreGap,
+    sawSignRestore,
   };
 }
 

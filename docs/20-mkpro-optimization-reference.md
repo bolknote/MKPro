@@ -1868,7 +1868,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     those passes use the same
     marker-label/display-sensitive/role safety rules before deciding that a
     `КНОП`/`К1`/`К2`/`/-/` run, including an empty-only run, can be ignored
-    before `ВП` or before a proved source restore; orphan address-byte cells
+    before `ВП` or before a proved source restore. The VP-gap wrapper now uses
+    the generic terminal scanner's empty-run-terminal mode, so immediate `ВП`
+    and non-empty restore gaps return the same structured source/sign proof;
+    orphan address-byte cells
     are treated as the same transparent gap elements here as they are inside
     transparent return helpers. The shared admission only
     proves that `.` is available as a restore mechanism; each pass still proves

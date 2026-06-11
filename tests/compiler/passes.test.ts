@@ -16296,6 +16296,11 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0c, "ВП"),
       halt(),
     ];
+    const immediateVp: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
 
     expect(x2RestoreGapBeforeVp(
       transparentProgram,
@@ -16317,6 +16322,12 @@ describe("ir passes on synthetic programs", () => {
       sawRestoreGap: true,
       sawSignRestore: true,
     });
+    expect(x2RestoreGapBeforeVp(immediateVp, 1)).toEqual({
+      vpIndex: 1,
+      blockedIndex: undefined,
+      sawRestoreGap: false,
+      sawSignRestore: false,
+    });
     expect(x2RestoreRunBeforeTerminal(
       transparentProgram,
       5,
@@ -16326,6 +16337,8 @@ describe("ir passes on synthetic programs", () => {
       terminalIndex: 9,
       blockedIndex: undefined,
       removableIndexes: [5, 7],
+      sawRestoreGap: true,
+      sawSignRestore: true,
     });
     expect(x2RestoreRunBeforeTerminal(
       blockedProgram,
@@ -16336,6 +16349,20 @@ describe("ir passes on synthetic programs", () => {
       terminalIndex: undefined,
       blockedIndex: 1,
       removableIndexes: [],
+      sawRestoreGap: true,
+      sawSignRestore: true,
+    });
+    expect(x2RestoreRunBeforeTerminal(
+      immediateVp,
+      1,
+      directReturnAnalysisContext(immediateVp),
+      (op) => op.kind === "plain" && op.opcode === 0x0c,
+    )).toEqual({
+      terminalIndex: undefined,
+      blockedIndex: 1,
+      removableIndexes: [],
+      sawRestoreGap: false,
+      sawSignRestore: false,
     });
     expect(x2RestoreRunBeforeIndex(
       transparentProgram,
@@ -16391,6 +16418,8 @@ describe("ir passes on synthetic programs", () => {
       terminalIndex: 3,
       blockedIndex: undefined,
       removableIndexes: [0],
+      sawRestoreGap: true,
+      sawSignRestore: true,
     });
   });
 
