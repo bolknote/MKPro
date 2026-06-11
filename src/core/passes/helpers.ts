@@ -5362,6 +5362,7 @@ export interface X2VpRestoreGapSourceAnalysis {
 
 export interface X2VpRestoreGapSourceOptions {
   readonly includesLeadingSignRestore?: boolean | undefined;
+  readonly useScannedSignRestores?: boolean | undefined;
 }
 
 export interface X2RestoreRunBeforeTerminalScan {
@@ -5370,12 +5371,22 @@ export interface X2RestoreRunBeforeTerminalScan {
   readonly removableIndexes: readonly number[];
 }
 
+export interface X2RestoreRunBeforeIndexScan {
+  readonly blockedIndex: number | undefined;
+  readonly removableIndexes: readonly number[];
+  readonly sawSignRestore: boolean;
+}
+
 export type X2RestoreRunTerminalPredicate = (op: IrOp, index: number) => boolean;
 export type X2RestoreRunScanDecision = "remove" | "transparent" | "terminal" | "block";
 export type X2RestoreRunClassifier = (op: IrOp, index: number) => X2RestoreRunScanDecision;
 
 export interface X2RestoreRunScannerOptions {
   readonly onTransparentGap?: ((op: IrOp, index: number) => void) | undefined;
+}
+
+export interface X2RestoreRunBeforeIndexOptions {
+  readonly includeSignRestores?: boolean | undefined;
 }
 
 export function x2HasOnlyRestoreGapBeforeVp(
@@ -5449,7 +5460,8 @@ export function analyzeX2VpRestoreGapSource(
   options: X2VpRestoreGapSourceOptions = {},
 ): X2VpRestoreGapSourceAnalysis {
   const scan = x2RestoreGapBeforeVp(ops, start, context);
-  const hasSignRestore = scan.sawSignRestore || options.includesLeadingSignRestore === true;
+  const hasSignRestore = (options.useScannedSignRestores !== false && scan.sawSignRestore) ||
+    options.includesLeadingSignRestore === true;
   const transition = analyzeX2VpShapeTransition(
     beforeRun,
     "proved-vp",
@@ -5529,6 +5541,43 @@ export function x2ScanRestoreRunBeforeTerminal(
     terminalIndex: undefined,
     blockedIndex: undefined,
     removableIndexes: [],
+  };
+}
+
+export function x2RestoreRunBeforeIndex(
+  ops: readonly IrOp[],
+  terminalIndex: number,
+  context: DirectReturnAnalysisContext,
+  options: X2RestoreRunBeforeIndexOptions = {},
+): X2RestoreRunBeforeIndexScan {
+  const removableIndexes: number[] = [];
+  let sawSignRestore = false;
+  const includeSignRestores = options.includeSignRestores !== false;
+  for (let index = terminalIndex - 1; index >= 0; index -= 1) {
+    const op = ops[index]!;
+    if (op.kind === "label" || op.kind === "orphan-address") continue;
+    if (isFreeStandingX2EmptyOp(op)) {
+      removableIndexes.push(index);
+      continue;
+    }
+    if (includeSignRestores && isFreeStandingX2SignChangeOp(op)) {
+      removableIndexes.push(index);
+      sawSignRestore = true;
+      continue;
+    }
+    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    removableIndexes.reverse();
+    return {
+      blockedIndex: index,
+      removableIndexes,
+      sawSignRestore,
+    };
+  }
+  removableIndexes.reverse();
+  return {
+    blockedIndex: undefined,
+    removableIndexes,
+    sawSignRestore,
   };
 }
 

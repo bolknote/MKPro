@@ -12,9 +12,8 @@ import {
   isFreeStandingX2SignChangeOp,
   isFreeStandingX2VpOp,
   isDisplayFocusSensitive,
-  isKnownReturnCallOp,
   removingRecallCanExposeX2Restore,
-  x2RestoreGapDirectReturnDoesNotObserveRestore,
+  x2RestoreRunBeforeIndex,
   x2RestoreRunBeforeTerminal,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
   x2StateIsClosedPlainContext,
@@ -71,14 +70,20 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
 }
 
 function canRemoveMantissaRestoreRunBeforeProvedVp(
+  ops: readonly IrOp[],
+  firstRunIndex: number,
   state: X2ValueDataflowState | undefined,
   stateAfterRun: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
 ): boolean {
-  return analyzeX2VpShapeTransition(
+  return analyzeX2VpRestoreGapSource(
+    ops,
+    firstRunIndex,
     state,
-    "proved-vp",
-    { beforeVp: stateAfterRun, hasSignRestore: !x2StateIsClosedPlainContext(state) },
-  ).canDiscardRestoreRun;
+    stateAfterRun,
+    context,
+    { useScannedSignRestores: !x2StateIsClosedPlainContext(state) },
+  ).canDiscardRestoreRunBeforeProvedVp;
 }
 
 function mantissaRestoreRunBeforeProvedVp(
@@ -87,28 +92,13 @@ function mantissaRestoreRunBeforeProvedVp(
   states: readonly (X2ValueDataflowState | undefined)[],
   context: DirectReturnAnalysisContext,
 ): readonly number[] {
-  const run: number[] = [];
-  let sawSign = false;
-  for (let cursor = vpIndex - 1; cursor >= 0; cursor -= 1) {
-    const op = ops[cursor]!;
-    if (isTransparentVpGapOp(op)) continue;
-    if (isFreeStandingX2EmptyOp(op)) {
-      run.push(cursor);
-      continue;
-    }
-    if (isFreeStandingX2SignChangeOp(op)) {
-      run.push(cursor);
-      sawSign = true;
-      continue;
-    }
-    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
-    break;
-  }
-  if (!sawSign) return [];
-  run.reverse();
-  const first = run[0];
+  const scan = x2RestoreRunBeforeIndex(ops, vpIndex, context);
+  if (!scan.sawSignRestore) return [];
+  const first = scan.removableIndexes[0];
   if (first === undefined) return [];
-  return canRemoveMantissaRestoreRunBeforeProvedVp(states[first], states[vpIndex]) ? run : [];
+  return canRemoveMantissaRestoreRunBeforeProvedVp(ops, first, states[first], states[vpIndex], context)
+    ? scan.removableIndexes
+    : [];
 }
 
 function x2ContextRestoreRunBeforeFreshDigit(
@@ -200,19 +190,7 @@ function freeStandingEmptyRunBeforeProvedVp(
   index: number,
   context: DirectReturnAnalysisContext,
 ): readonly number[] {
-  const indexes: number[] = [];
-  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-    const op = ops[cursor]!;
-    if (isTransparentVpGapOp(op)) continue;
-    if (isFreeStandingX2EmptyOp(op)) {
-      indexes.push(cursor);
-      continue;
-    }
-    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
-    break;
-  }
-  indexes.reverse();
-  return indexes;
+  return x2RestoreRunBeforeIndex(ops, index, context, { includeSignRestores: false }).removableIndexes;
 }
 
 function nextFreshDigitIndex(ops: readonly IrOp[], start: number): number | undefined {

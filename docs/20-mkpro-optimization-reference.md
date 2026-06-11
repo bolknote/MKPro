@@ -1286,14 +1286,15 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     The same shared VP-gap source analysis is also used for sign-pair decisions
     before a proved `ВП`; when the pass removes the sign-pair itself it requires
     the stricter shape-transition sign-pair flag, not the broader fallback
-    sign-source proof used by recall/dot restore rewrites. A shared restore-run
-    terminal scanner now also owns the forward scan over
-    free-standing `КНОП`/`К1`/`К2`/`/-/` cells, labels, address gaps, and
-    transparent direct/proved-indirect return helpers before a proved terminal
-    opcode; `vp-splice` consumes this scanner for fresh-digit and hard-overwrite
-    terminal rewrites, and `x2-dead-restore-before-overwrite` consumes the
-    classifier form of the same scanner while keeping its stricter
-    same-segment collection rule after labels. Later X2 passes can reuse the
+    sign-source proof used by recall/dot restore rewrites. Shared restore-run
+    scanners now own both forward scans to a proved terminal opcode and backward
+    scans before a known terminal index over free-standing
+    `КНОП`/`К1`/`К2`/`/-/` cells, labels, address gaps, and transparent
+    direct/proved-indirect return helpers; `vp-splice` consumes them for
+    proved-`ВП`, fresh-digit, and hard-overwrite terminal rewrites, and
+    `x2-dead-restore-before-overwrite` consumes the classifier form of the same
+    scanner while keeping its stricter same-segment collection rule after
+    labels. Later X2 passes can reuse the
     same blocked/terminal result instead of duplicating gap semantics.
     A companion VP restore-gap source analysis aggregates the `ВП` target scan,
     replacement-dot scan, sign-restore presence, proved source transition, and

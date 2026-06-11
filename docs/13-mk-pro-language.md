@@ -1360,9 +1360,10 @@ The pipeline currently contains:
   VP/X2 shape model also drives the optimizer's splice decisions for duplicate
   `ВП`, exponent separators, sign-pair cancellation, proved-source restore
   runs before `ВП`, and restore runs before fresh digit or hard-overwrite
-  contexts. The shared restore-run scanner owns the transparent label/address
-  gap and direct/proved-indirect return-helper rules for those terminals,
-  including the classifier form used by dead-restore removal. A companion
+  contexts. The shared restore-run scanners own both forward terminal scans and
+  backward scans before a known terminal, with the same transparent
+  label/address gap and direct/proved-indirect return-helper rules, including
+  the classifier form used by dead-restore removal. A companion
   VP-gap source analysis feeds `vp-splice`, `x2-noop-restore`, literal restore,
   and hidden-temp restore rewrites from the same target/sign/source proof;
   MKPro syntax is unchanged.

@@ -64,6 +64,7 @@ import {
   x2HasOnlyRestoreGapBeforeVp,
   x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2RestoreGapBeforeVp,
+  x2RestoreRunBeforeIndex,
   x2RestoreRunBeforeTerminal,
   x2ScanRestoreRunBeforeTerminal,
   x2NextHardX2OverwriteIndex,
@@ -10198,6 +10199,18 @@ describe("ir passes on synthetic programs", () => {
       canDiscardRestoreRunBeforeProvedVp: true,
       canDiscardSignRestoreRunBeforeProvedVp: true,
     });
+    expect(analyzeX2VpRestoreGapSource(
+      restoreGapProgram,
+      3,
+      restoreGapStates[3],
+      restoreGapStates[6],
+      directReturnAnalysisContext(restoreGapProgram),
+      { useScannedSignRestores: false },
+    )).toMatchObject({
+      hasOnlyRestoreGapBeforeVp: true,
+      replacementDotHasOnlyRestoreGapBeforeVp: true,
+      hasSignRestoreGapBeforeVp: false,
+    });
 
     const replacementDotProgram: IrOp[] = [
       plain(0x02, "2"),
@@ -16270,6 +16283,25 @@ describe("ir passes on synthetic programs", () => {
       terminalIndex: undefined,
       blockedIndex: 1,
       removableIndexes: [],
+    });
+    expect(x2RestoreRunBeforeIndex(
+      transparentProgram,
+      9,
+      directReturnAnalysisContext(transparentProgram),
+    )).toEqual({
+      blockedIndex: 3,
+      removableIndexes: [5, 7],
+      sawSignRestore: true,
+    });
+    expect(x2RestoreRunBeforeIndex(
+      transparentProgram,
+      9,
+      directReturnAnalysisContext(transparentProgram),
+      { includeSignRestores: false },
+    )).toEqual({
+      blockedIndex: 5,
+      removableIndexes: [7],
+      sawSignRestore: false,
     });
 
     const segmentedProgram: IrOp[] = [
