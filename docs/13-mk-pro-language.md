@@ -1359,7 +1359,9 @@ The pipeline currently contains:
   VP/X2 shape model also drives the optimizer's splice decisions for duplicate
   `ВП`, exponent separators, sign-pair cancellation, proved-source restore
   runs before `ВП`, and restore runs before fresh digit or hard-overwrite
-  contexts; MKPro syntax is unchanged.
+  contexts. The shared restore-run scanner owns the transparent label/address
+  gap and direct/proved-indirect return-helper rules for those terminals;
+  MKPro syntax is unchanged.
   The same canonical
   decimal display shapes may seed opaque stable-expression source keys for later
   hidden-temp proofs; those keys identify the displayed source shape but do not

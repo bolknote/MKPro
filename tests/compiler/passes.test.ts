@@ -63,6 +63,7 @@ import {
   x2HasOnlyRestoreGapBeforeVp,
   x2ReplacementDotHasOnlyRestoreGapBeforeVp,
   x2RestoreGapBeforeVp,
+  x2RestoreRunBeforeTerminal,
   x2NextHardX2OverwriteIndex,
   x2NextStackShiftingProducerIndex,
   x2NextStackPreservingReturnX2SyncIndex,
@@ -16153,6 +16154,26 @@ describe("ir passes on synthetic programs", () => {
       blockedIndex: 1,
       sawRestoreGap: true,
       sawSignRestore: true,
+    });
+    expect(x2RestoreRunBeforeTerminal(
+      transparentProgram,
+      5,
+      directReturnAnalysisContext(transparentProgram),
+      (op) => op.kind === "plain" && op.opcode === 0x0c,
+    )).toEqual({
+      terminalIndex: 9,
+      blockedIndex: undefined,
+      removableIndexes: [5, 7],
+    });
+    expect(x2RestoreRunBeforeTerminal(
+      blockedProgram,
+      0,
+      directReturnAnalysisContext(blockedProgram),
+      (op) => op.kind === "plain" && op.opcode === 0x0c,
+    )).toEqual({
+      terminalIndex: undefined,
+      blockedIndex: 1,
+      removableIndexes: [],
     });
   });
 

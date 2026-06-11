@@ -5350,6 +5350,14 @@ export interface X2RestoreGapBeforeVpScan {
   readonly sawSignRestore: boolean;
 }
 
+export interface X2RestoreRunBeforeTerminalScan {
+  readonly terminalIndex: number | undefined;
+  readonly blockedIndex: number | undefined;
+  readonly removableIndexes: readonly number[];
+}
+
+export type X2RestoreRunTerminalPredicate = (op: IrOp, index: number) => boolean;
+
 export function x2HasOnlyRestoreGapBeforeVp(
   ops: readonly IrOp[],
   start: number,
@@ -5409,6 +5417,35 @@ export function x2RestoreGapBeforeVp(
     blockedIndex: undefined,
     sawRestoreGap,
     sawSignRestore: sawSign,
+  };
+}
+
+export function x2RestoreRunBeforeTerminal(
+  ops: readonly IrOp[],
+  start: number,
+  context: DirectReturnAnalysisContext,
+  isTerminal: X2RestoreRunTerminalPredicate,
+): X2RestoreRunBeforeTerminalScan {
+  const removableIndexes: number[] = [];
+  for (let index = start; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (isFreeStandingX2RestoreGapOp(op)) {
+      removableIndexes.push(index);
+      continue;
+    }
+    if (op.kind === "label" || op.kind === "orphan-address") continue;
+    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
+    const terminal = removableIndexes.length > 0 && isTerminal(op, index);
+    return {
+      terminalIndex: terminal ? index : undefined,
+      blockedIndex: terminal ? undefined : index,
+      removableIndexes: terminal ? removableIndexes : [],
+    };
+  }
+  return {
+    terminalIndex: undefined,
+    blockedIndex: undefined,
+    removableIndexes: [],
   };
 }
 

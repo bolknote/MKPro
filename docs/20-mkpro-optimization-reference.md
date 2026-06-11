@@ -1283,6 +1283,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     fresh-digit overwrite, and hard-overwrite cases; this keeps the local
     rewrite rules tied to the same shape/context model instead of
     reimplementing those booleans and source-equality checks inside the pass.
+    A shared restore-run terminal scanner now also owns the forward scan over
+    free-standing `КНОП`/`К1`/`К2`/`/-/` cells, labels, address gaps, and
+    transparent direct/proved-indirect return helpers before a proved terminal
+    opcode; `vp-splice` consumes this scanner for fresh-digit and hard-overwrite
+    terminal rewrites, and later X2 passes can reuse the same blocked/terminal
+    result instead of duplicating gap semantics.
     Closed
     structural exponent-entry
     shapes also feed `ВП` source proofs through that restored mantissa form, so a

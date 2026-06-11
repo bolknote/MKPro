@@ -12,10 +12,10 @@ import {
   isFreeStandingX2VpOp,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
-  isFreeStandingX2RestoreGapOp,
   removingRecallCanExposeX2Restore,
   x2RestoreGapBeforeVp,
   x2RestoreGapDirectReturnDoesNotObserveRestore,
+  x2RestoreRunBeforeTerminal,
   x2StateHasSameClosedSignChangeSourceInXAndX2,
   x2StateIsClosedPlainContext,
   type DirectReturnAnalysisContext,
@@ -165,18 +165,12 @@ function x2ContextRestoreRunBeforeTerminal(
   context: DirectReturnAnalysisContext,
   isTerminal: (op: IrOp) => boolean,
 ): readonly number[] {
-  const removableIndexes: number[] = [];
-  for (let index = startIndex; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (isFreeStandingX2RestoreGapOp(op)) {
-      removableIndexes.push(index);
-      continue;
-    }
-    if (isTransparentVpGapOp(op)) continue;
-    if (isKnownReturnCallOp(op) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op, context)) continue;
-    return removableIndexes.length > 0 && isTerminal(op) ? removableIndexes : [];
-  }
-  return [];
+  return x2RestoreRunBeforeTerminal(
+    ops,
+    startIndex,
+    context,
+    (op) => isTerminal(op),
+  ).removableIndexes;
 }
 
 function canRemoveClosedContextSignPairBeforeProvedVp(
