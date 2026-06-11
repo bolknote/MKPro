@@ -10219,6 +10219,51 @@ describe("ir passes on synthetic programs", () => {
       hasSignRestoreGapBeforeVp: false,
       canDiscardRestoreRunBeforeProvedVp: true,
     });
+
+    const leadingSignPairProgram: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const leadingSignPairStates = computeX2ValueStates(leadingSignPairProgram);
+    expect(analyzeX2VpRestoreGapSource(
+      leadingSignPairProgram,
+      4,
+      leadingSignPairStates[2],
+      leadingSignPairStates[4],
+      directReturnAnalysisContext(leadingSignPairProgram),
+      { includesLeadingSignRestore: true },
+    )).toMatchObject({
+      replacementDotHasOnlyRestoreGapBeforeVp: true,
+      hasSignRestoreGapBeforeVp: true,
+      canDiscardShapeSignPairBeforeProvedVp: true,
+    });
+
+    const zeroLeadingSignPairProgram: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const zeroLeadingSignPairStates = computeX2ValueStates(zeroLeadingSignPairProgram);
+    expect(analyzeX2VpRestoreGapSource(
+      zeroLeadingSignPairProgram,
+      3,
+      zeroLeadingSignPairStates[1],
+      zeroLeadingSignPairStates[3],
+      directReturnAnalysisContext(zeroLeadingSignPairProgram),
+      { includesLeadingSignRestore: true },
+    )).toMatchObject({
+      replacementDotHasOnlyRestoreGapBeforeVp: true,
+      hasSignRestoreGapBeforeVp: true,
+      canDiscardShapeSignPairBeforeProvedVp: false,
+    });
   });
 
   it("x2 value dataflow proves a closed integer exponent-entry after an X2 sync", () => {

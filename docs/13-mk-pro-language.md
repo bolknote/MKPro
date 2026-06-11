@@ -1363,8 +1363,9 @@ The pipeline currently contains:
   contexts. The shared restore-run scanner owns the transparent label/address
   gap and direct/proved-indirect return-helper rules for those terminals,
   including the classifier form used by dead-restore removal. A companion
-  VP-gap source analysis feeds `x2-noop-restore` and hidden-temp restore
-  rewrites from the same target/sign/source proof; MKPro syntax is unchanged.
+  VP-gap source analysis feeds `vp-splice`, `x2-noop-restore`, literal restore,
+  and hidden-temp restore rewrites from the same target/sign/source proof;
+  MKPro syntax is unchanged.
   The same canonical
   decimal display shapes may seed opaque stable-expression source keys for later
   hidden-temp proofs; those keys identify the displayed source shape but do not
@@ -1741,7 +1742,10 @@ The pipeline currently contains:
   resynchronizes the same X into X2, is collapsed when the shared dataflow
   proves that the run leaves the same decimal or structural hex/super mantissa
   source; mixed forms such as `02 /-/ КНОП /-/ ВП` and structural preload
-  shapes use the same proof, while signed-zero forms stay explicit. VP-context
+  shapes use the same proof, while signed-zero forms stay explicit. Adjacent
+  sign-pair removal uses the strict shape-transition sign-pair flag rather than
+  the broader fallback sign-source proof, so `0 /-/ /-/ ВП` and dot-shielding
+  sign pairs keep their observable source change. VP-context
   sign commands and empty
   separators after X2-preserving gaps are collapsed as one restore run when the
   following command starts fresh number entry; otherwise their X2-to-X restore

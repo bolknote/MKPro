@@ -5355,8 +5355,13 @@ export interface X2VpRestoreGapSourceAnalysis {
   readonly replacementDotHasOnlyRestoreGapBeforeVp: boolean;
   readonly hasSignRestoreGapBeforeVp: boolean;
   readonly canDiscardRestoreRunBeforeProvedVp: boolean;
+  readonly canDiscardShapeSignPairBeforeProvedVp: boolean;
   readonly canDiscardSignRestoreRunBeforeProvedVp: boolean;
   readonly hasSameExplicitVpEntrySignSource: boolean;
+}
+
+export interface X2VpRestoreGapSourceOptions {
+  readonly includesLeadingSignRestore?: boolean | undefined;
 }
 
 export interface X2RestoreRunBeforeTerminalScan {
@@ -5441,21 +5446,24 @@ export function analyzeX2VpRestoreGapSource(
   beforeRun: X2ValueDataflowState | undefined,
   beforeVp: X2ValueDataflowState | undefined,
   context?: DirectReturnAnalysisContext,
+  options: X2VpRestoreGapSourceOptions = {},
 ): X2VpRestoreGapSourceAnalysis {
   const scan = x2RestoreGapBeforeVp(ops, start, context);
+  const hasSignRestore = scan.sawSignRestore || options.includesLeadingSignRestore === true;
   const transition = analyzeX2VpShapeTransition(
     beforeRun,
     "proved-vp",
-    { beforeVp, hasSignRestore: scan.sawSignRestore },
+    { beforeVp, hasSignRestore },
   );
   return {
     hasOnlyRestoreGapBeforeVp: scan.sawRestoreGap && scan.vpIndex !== undefined,
     replacementDotHasOnlyRestoreGapBeforeVp: scan.vpIndex !== undefined,
-    hasSignRestoreGapBeforeVp: scan.sawSignRestore && scan.vpIndex !== undefined,
+    hasSignRestoreGapBeforeVp: hasSignRestore && scan.vpIndex !== undefined,
     canDiscardRestoreRunBeforeProvedVp: transition.canDiscardRestoreRun,
+    canDiscardShapeSignPairBeforeProvedVp: transition.canDiscardSignPair,
     canDiscardSignRestoreRunBeforeProvedVp: transition.canDiscardSignPair ||
       (
-        scan.sawSignRestore &&
+        hasSignRestore &&
         scan.vpIndex !== undefined &&
         x2StatesHaveSameVpEntrySignSource(beforeRun, beforeVp)
       ),
