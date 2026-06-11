@@ -5300,6 +5300,8 @@ export function x2StateCanDiscardRestoreRunBeforeProvedVp(
   options: { readonly hasSignRestore?: boolean | undefined } = {},
 ): boolean {
   const context = analyzeX2VpShapeContext(beforeRun);
+  const beforeVpContext = analyzeX2VpShapeContext(beforeVp);
+  if (sameX2ExponentShapeContext(context, beforeVpContext)) return true;
   if (context.kind === "active-mantissa") {
     if (stringSetsHaveIntersection(activeMantissaVpSourceKeys(context), vpEntrySourceKeys(beforeVp))) return true;
   } else if (x2StatesHaveSameVpEntrySource(beforeRun, beforeVp)) {
@@ -5543,7 +5545,10 @@ export function sameX2ExponentShapeContext(
 ): boolean {
   return left.kind !== "none" &&
     left.kind !== "unknown" &&
-    left.kind === right.kind &&
+    right.kind !== "none" &&
+    right.kind !== "unknown" &&
+    left.source === right.source &&
+    left.hasExponentDigit === right.hasExponentDigit &&
     (
       sameNonEmptyStringSet(left.mantissa, right.mantissa) ||
       sameNonEmptyShapeSet(left.shape, right.shape)

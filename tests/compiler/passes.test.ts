@@ -24012,6 +24012,54 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("vp-splice removes a mixed active exponent restore run before proved ВП", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0c, "ВП"),
+      plain(0x04, "4"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a mixed active structural exponent restore run before proved ВП", () => {
+    const program: IrOp[] = [
+      recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      recall("2", "preload const FACE"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ]);
+  });
+
   it("vp-splice keeps a VP-context sign pair when its X2 restore is observable", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),

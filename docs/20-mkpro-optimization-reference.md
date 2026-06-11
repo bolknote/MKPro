@@ -1803,10 +1803,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     active exponent-entry, and closed VP-context phases, decimal vs structural
     source, exponent-digit presence, and the exact splice actions that are
     safe for that state. Restore runs before a proved `ВП` are checked through
-    the same helper for decimal active mantissas and shape-only structural
-    sources; structural source equality now goes through the shared shape
-    algebra, so shifted exponent-entry shapes such as `hex-exponent:Г:2` can
-    match the equivalent `hex:Г00` source without becoming decimal values.
+    the same helper for decimal active mantissas, active/closed exponent contexts,
+    and shape-only structural sources; a mixed `/-/` + empty + `/-/` run may be
+    removed when the classifier proves the exponent mantissa/source and exponent
+    are identical before the run and before `ВП`, even if an empty op has already
+    closed active entry into VP-context. Structural source equality goes through
+    the shared shape algebra, so shifted exponent-entry shapes such as
+    `hex-exponent:Г:2` can match the equivalent `hex:Г00` source without
+    becoming decimal values.
     First-digit splices use that same structural source path, so an immediate
     X2-preserving command before `ВП` can expose a proved pre-command `X` first
     digit plus a hidden decimal/structural X2 tail as the following
