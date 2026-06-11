@@ -4865,18 +4865,8 @@ export function x2StructuralMantissaAppendDigitsShapeFact(
 ): X2ShapeFact | undefined {
   const model = structuralAppendMantissaModel(fact);
   if (model === undefined) return undefined;
-  const suffix = canonicalStructuralDigitRun(suffixRaw);
-  if (suffix === undefined) return undefined;
-  const sign = model.sign;
-  const unsigned = sign === "" ? model.canonical : model.canonical.slice(1);
-  const appended = `${sign}${unsigned}${suffix}`;
-  if (shapeDigits(appended).length > 8) return undefined;
-  const radix: "hex" | "super" = model.radix === "super" && suffix.length > 0
-    ? "hex"
-    : model.radix === "hex"
-      ? "hex"
-      : "super";
-  return x2MantissaShapeFactFromModel(structuralMantissaDataModel(radix, appended, "structuralOnly"));
+  const appended = x2StructuralMantissaAppendDigitsModel(model, suffixRaw);
+  return appended === undefined ? undefined : x2MantissaShapeFactFromModel(appended);
 }
 
 function structuralAppendMantissaModel(fact: X2ShapeFact): X2MantissaDataModel | undefined {
@@ -4895,9 +4885,20 @@ export function x2StructuralMantissaConcatShapeFacts(
   left: X2ShapeFact,
   right: X2ShapeFact,
 ): X2ShapeFact | undefined {
+  const model = x2StructuralMantissaConcatShapeModel(left, right);
+  return model === undefined ? undefined : x2MantissaShapeFactFromModel(model);
+}
+
+export function x2StructuralMantissaConcatShapeModel(
+  left: X2ShapeFact,
+  right: X2ShapeFact,
+): X2MantissaDataModel | undefined {
   const rightDigits = structuralConcatRightDigitRun(right);
   if (rightDigits !== undefined) {
-    const appended = x2StructuralMantissaAppendDigitsShapeFact(left, rightDigits);
+    const leftModel = structuralAppendMantissaModel(left);
+    const appended = leftModel === undefined
+      ? undefined
+      : x2StructuralMantissaAppendDigitsModel(leftModel, rightDigits);
     if (appended !== undefined) return appended;
   }
 
@@ -4907,7 +4908,40 @@ export function x2StructuralMantissaConcatShapeFacts(
   const raw = `${leftDigits}${rightStructuralDigits}`;
   return shapeDigits(raw).length > 8
     ? undefined
-    : x2MantissaShapeFactFromModel(structuralMantissaDataModel("hex", raw, "structuralOnly"));
+    : structuralMantissaDataModel("hex", raw, "structuralOnly");
+}
+
+export function x2StructuralMantissaConcatShapeSetFacts(
+  left: X2ShapeSet | undefined,
+  right: X2ShapeSet | undefined,
+): X2ShapeSet | undefined {
+  const output = new Set<X2ShapeFact>();
+  for (const leftFact of canonicalShapeSet(left)) {
+    for (const rightFact of canonicalShapeSet(right)) {
+      const fact = x2StructuralMantissaConcatShapeFacts(leftFact, rightFact);
+      if (fact !== undefined) output.add(fact);
+    }
+  }
+  return output.size === 0 ? undefined : output;
+}
+
+function x2StructuralMantissaAppendDigitsModel(
+  model: X2MantissaDataModel,
+  suffixRaw: string,
+): X2MantissaDataModel | undefined {
+  if (model.radix !== "hex" && model.radix !== "super") return undefined;
+  const suffix = canonicalStructuralDigitRun(suffixRaw);
+  if (suffix === undefined) return undefined;
+  const sign = model.sign;
+  const unsigned = sign === "" ? model.canonical : model.canonical.slice(1);
+  const appended = `${sign}${unsigned}${suffix}`;
+  if (shapeDigits(appended).length > 8) return undefined;
+  const radix: "hex" | "super" = model.radix === "super" && suffix.length > 0
+    ? "hex"
+    : model.radix === "hex"
+      ? "hex"
+      : "super";
+  return structuralMantissaDataModel(radix, appended, "structuralOnly");
 }
 
 function structuralConcatRightDigitRun(right: X2ShapeFact): string | undefined {

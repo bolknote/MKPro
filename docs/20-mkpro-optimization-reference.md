@@ -1581,7 +1581,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     hex/super arithmetic, carry, or decimalization proofs.
     Structural equality uses canonical shape reconstruction, so equivalent
     hex/super spellings compare as the same shape without becoming decimal
-    values. Shape-set joins and equality checks use the same canonical
+    values. Structural concatenation is also represented as a model/set-level
+    primitive: pure structural digit mantissas and pure decimal digit runs can
+    combine into shape-only hex/super results across whole shape sets, while
+    signed tails, fractional tails, ambiguous sources, and too-wide displays
+    produce no fact rather than an unsafe decimal value. Shape-set joins and equality checks use the same canonical
     spelling, so branch-merged structural `ВП`/restore proofs do not split on
     formatting. The shared VP-source helpers use the same materialized
     stable-key shapes after X2-sync boundaries: computed decimal display shapes

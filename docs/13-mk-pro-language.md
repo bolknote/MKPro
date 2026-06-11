@@ -1567,6 +1567,10 @@ The pipeline currently contains:
   (`hex:8` + decimal `02` proves shape-only `hex:802`, while decimal `8` +
   `hex:1` proves shape-only `hex:81`), preserving leading zeroes and the
   eight-display-digit bound without promoting the result to a decimal value.
+  The same operation is exposed at model and set level: callers can concatenate
+  whole shape sets and receive only the proved structural results, while
+  ambiguous, signed-tail, fractional-tail, or too-wide combinations disappear
+  instead of becoming unknown decimal facts.
   Exact decimal display-shape facts can also feed shape-only unary display
   results, so an exact fractional scientific shape such as
   `exponent:5:-1:decimal` proves that `К {x}` leaves the displayed fractional
