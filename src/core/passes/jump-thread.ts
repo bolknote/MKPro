@@ -1,14 +1,5 @@
 import type { IrOp } from "../types.ts";
-import { hasRewriteBarrier, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
-
-function labelTargets(ops: readonly IrOp[]): Map<string, number> {
-  const map = new Map<string, number>();
-  for (let i = 0; i < ops.length; i += 1) {
-    const op = ops[i]!;
-    if (op.kind === "label") map.set(op.name, i);
-  }
-  return map;
-}
+import { hasRewriteBarrier, labelIndexes, type IrPass, type IrPassFn, type PassResult } from "./helpers.ts";
 
 function followLabel(
   ops: readonly IrOp[],
@@ -33,7 +24,7 @@ function followLabel(
 }
 
 const run: IrPassFn = (ops) => {
-  const labels = labelTargets(ops);
+  const labels = labelIndexes(ops);
   const result: IrOp[] = [];
   let applied = 0;
   for (const op of ops) {

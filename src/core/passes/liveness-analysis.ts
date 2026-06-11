@@ -1,109 +1,10 @@
-import type { IrLoopCounter, IrOp, RegisterName } from "../types.ts";
-import { cellsPerOp, knownIndirectFlowTarget, knownIndirectMemoryTarget } from "./helpers.ts";
+import type { IrOp, RegisterName } from "../types.ts";
+import { buildCfgSuccessors, loopCounterRegister } from "./cfg.ts";
+import { knownIndirectMemoryTarget } from "./helpers.ts";
 
 export interface LivenessInfo {
   readonly liveIn: ReadonlyArray<ReadonlySet<RegisterName>>;
   readonly liveOut: ReadonlyArray<ReadonlySet<RegisterName>>;
-}
-
-interface SuccessorMap {
-  readonly successors: number[][];
-}
-
-function buildTargetIndexes(ops: readonly IrOp[]): {
-  labelIndex: Map<string, number>;
-  addressIndex: Map<number, number>;
-} {
-  const labelIndex = new Map<string, number>();
-  const addressIndex = new Map<number, number>();
-  let address = 0;
-  for (let i = 0; i < ops.length; i += 1) {
-    const op = ops[i]!;
-    if (op.kind === "label") {
-      labelIndex.set(op.name, i);
-      continue;
-    }
-    addressIndex.set(address, i);
-    address += cellsPerOp(op);
-  }
-  return { labelIndex, addressIndex };
-}
-
-function buildSuccessors(ops: readonly IrOp[]): SuccessorMap {
-  const { labelIndex, addressIndex } = buildTargetIndexes(ops);
-  const successors: number[][] = Array.from({ length: ops.length }, () => []);
-  const callReturns: number[] = [];
-  for (let i = 0; i < ops.length; i += 1) {
-    const op = ops[i]!;
-    const next = i + 1;
-    if ((op.kind === "call" || op.kind === "indirect-call") && next < ops.length) {
-      callReturns.push(next);
-    }
-  }
-  for (let i = 0; i < ops.length; i += 1) {
-    const op = ops[i]!;
-    const next = i + 1;
-    const fallthrough = (): void => {
-      if (next < ops.length) successors[i]!.push(next);
-    };
-    const jumpTo = (target: string | number): void => {
-      if (typeof target === "string") {
-        const idx = labelIndex.get(target);
-        if (idx !== undefined) successors[i]!.push(idx);
-      } else {
-        const idx = addressIndex.get(target);
-        if (idx !== undefined) successors[i]!.push(idx);
-      }
-    };
-    switch (op.kind) {
-      case "label":
-      case "store":
-      case "recall":
-      case "indirect-store":
-      case "indirect-recall":
-      case "plain":
-      case "orphan-address":
-        fallthrough();
-        break;
-      case "stop":
-        // On MK-61, С/П pauses execution; pressing С/П again resumes from the next
-        // cell. Treat every stop as falling through for control-flow analysis.
-        fallthrough();
-        break;
-      case "return":
-        successors[i]!.push(...callReturns);
-        break;
-      case "jump":
-        jumpTo(op.target);
-        break;
-      case "cjump":
-      case "loop":
-        jumpTo(op.target);
-        fallthrough();
-        break;
-      case "call":
-        jumpTo(op.target);
-        break;
-      case "indirect-jump": {
-        const target = knownIndirectFlowTarget(op);
-        if (target !== undefined) jumpTo(target);
-        break;
-      }
-      case "indirect-call": {
-        const target = knownIndirectFlowTarget(op);
-        if (target !== undefined) jumpTo(target);
-        fallthrough();
-        break;
-      }
-      case "indirect-cjump": {
-        const target = knownIndirectFlowTarget(op);
-        if (target !== undefined) jumpTo(target);
-        fallthrough();
-        break;
-      }
-    }
-  }
-  return { successors };
 }
 
 function defsAndUses(op: IrOp): { defs: ReadonlyArray<RegisterName>; uses: ReadonlyArray<RegisterName> } {
@@ -139,21 +40,8 @@ function defsAndUses(op: IrOp): { defs: ReadonlyArray<RegisterName>; uses: Reado
   }
 }
 
-function loopCounterRegister(counter: IrLoopCounter): RegisterName {
-  switch (counter) {
-    case "L0":
-      return "0";
-    case "L1":
-      return "1";
-    case "L2":
-      return "2";
-    case "L3":
-      return "3";
-  }
-}
-
 export function computeLiveness(ops: readonly IrOp[]): LivenessInfo {
-  const { successors } = buildSuccessors(ops);
+  const successors = buildCfgSuccessors(ops, { indirectCallFallthrough: true });
   const n = ops.length;
   const liveIn: Set<RegisterName>[] = Array.from({ length: n }, () => new Set<RegisterName>());
   const liveOut: Set<RegisterName>[] = Array.from({ length: n }, () => new Set<RegisterName>());

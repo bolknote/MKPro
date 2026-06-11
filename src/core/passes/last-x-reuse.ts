@@ -1,5 +1,6 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
+import { loopCounterRegister } from "./cfg.ts";
 import {
   computeLabelEntryIndexes,
   computeX2RegisterStates,
@@ -145,19 +146,6 @@ const run: IrPassFn = (ops) => {
   };
   return passResult;
 };
-
-function loopCounterRegister(counter: Extract<IrOp, { kind: "loop" }>["counter"]): RegisterName {
-  switch (counter) {
-    case "L0":
-      return "0";
-    case "L1":
-      return "1";
-    case "L2":
-      return "2";
-    case "L3":
-      return "3";
-  }
-}
 
 export const lastXReuse: IrPass = {
   name: "last-x-reuse",

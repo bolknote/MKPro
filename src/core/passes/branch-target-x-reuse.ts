@@ -1,7 +1,9 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
+import { loopCounterRegister } from "./cfg.ts";
 import {
   addressIndexes,
+  labelIndexes,
   analyzeX2StackEffect,
   computeX2RegisterStates,
   computeX2ValueStates,
@@ -134,28 +136,6 @@ function immediatelyHeldRegister(ops: readonly IrOp[], branchIndex: number): Reg
     return removableRecallValueRegister(op);
   }
   return undefined;
-}
-
-function loopCounterRegister(counter: Extract<IrOp, { kind: "loop" }>["counter"]): RegisterName {
-  switch (counter) {
-    case "L0":
-      return "0";
-    case "L1":
-      return "1";
-    case "L2":
-      return "2";
-    case "L3":
-      return "3";
-  }
-}
-
-function labelIndexes(ops: readonly IrOp[]): Map<string, number> {
-  const result = new Map<string, number>();
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") result.set(op.name, index);
-  }
-  return result;
 }
 
 function targetReferenceCountsByEntryIndex(

@@ -1,7 +1,7 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
+import { buildCfgEdges, loopCounterRegister, type CfgEdge } from "./cfg.ts";
 import {
-  cellsPerOp,
   computeX2RegisterStates,
   computeX2ValueStates,
   directReturnAnalysisContext,
@@ -19,20 +19,11 @@ import {
 
 type XRegisterSet = ReadonlySet<RegisterName>;
 
-interface Graph {
-  successors: Edge[][];
-}
-
-interface Edge {
-  readonly target: number;
-  readonly kind: "normal" | "fallthrough" | "jump";
-}
-
 const run: IrPassFn = (ops) => {
   if (ops.length === 0) return emptyResult(ops);
   if (hasNumericFlowTarget(ops) || hasUnknownIndirectFlow(ops)) return emptyResult(ops);
 
-  const graph = buildGraph(ops);
+  const graph = buildCfgEdges(ops);
   const inStates = computeXRegisterStates(ops, graph);
   const x2States = computeX2RegisterStates(ops);
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
@@ -76,7 +67,7 @@ export const flowXReuse: IrPass = {
   layoutSafe: false,
 };
 
-function computeXRegisterStates(ops: readonly IrOp[], graph: Graph): Array<XRegisterSet | undefined> {
+function computeXRegisterStates(ops: readonly IrOp[], graph: CfgEdge[][]): Array<XRegisterSet | undefined> {
   const inStates: Array<Set<RegisterName> | undefined> = Array.from({ length: ops.length }, () => undefined);
   const outStates: Array<Set<RegisterName> | undefined> = Array.from({ length: ops.length }, () => undefined);
   inStates[0] = new Set();
@@ -97,7 +88,7 @@ function computeXRegisterStates(ops: readonly IrOp[], graph: Graph): Array<XRegi
         changed = true;
       }
 
-      for (const edge of graph.successors[index] ?? []) {
+      for (const edge of graph[index] ?? []) {
         const edgeOutput = edge.kind === "normal" ? output : transferXSet(input, ops[index]!, edge.kind);
         const joined = joinXSets(inStates[edge.target], edgeOutput);
         if (!sameSet(joined, inStates[edge.target])) {
@@ -111,7 +102,7 @@ function computeXRegisterStates(ops: readonly IrOp[], graph: Graph): Array<XRegi
   return inStates;
 }
 
-function transferXSet(input: XRegisterSet, op: IrOp, edge: Edge["kind"]): Set<RegisterName> {
+function transferXSet(input: XRegisterSet, op: IrOp, edge: CfgEdge["kind"]): Set<RegisterName> {
   if (hasRewriteBarrier(op)) return new Set();
 
   switch (op.kind) {
@@ -166,19 +157,6 @@ function removeRegister(input: XRegisterSet, register: RegisterName): Set<Regist
   return output;
 }
 
-function loopCounterRegister(counter: Extract<IrOp, { kind: "loop" }>["counter"]): RegisterName {
-  switch (counter) {
-    case "L0":
-      return "0";
-    case "L1":
-      return "1";
-    case "L2":
-      return "2";
-    case "L3":
-      return "3";
-  }
-}
-
 function joinXSets(current: Set<RegisterName> | undefined, incoming: XRegisterSet): Set<RegisterName> {
   if (current === undefined) return new Set(incoming);
   const joined = new Set<RegisterName>();
@@ -195,99 +173,6 @@ function sameSet(left: XRegisterSet | undefined, right: XRegisterSet | undefined
     if (!right.has(value)) return false;
   }
   return true;
-}
-
-function buildGraph(ops: readonly IrOp[]): Graph {
-  const { labelIndex, addressIndex } = buildTargetIndexes(ops);
-  const successors: Edge[][] = Array.from({ length: ops.length }, () => []);
-  const callReturns: number[] = [];
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    const next = index + 1;
-    if ((op.kind === "call" || op.kind === "indirect-call") && next < ops.length) callReturns.push(next);
-  }
-
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    const next = index + 1;
-    const fallthrough = (): void => {
-      if (next < ops.length) successors[index]!.push({ target: next, kind: "fallthrough" });
-    };
-    const jumpTo = (target: string | number): void => {
-      const targetIndex = typeof target === "string" ? labelIndex.get(target) : addressIndex.get(target);
-      if (targetIndex !== undefined) successors[index]!.push({ target: targetIndex, kind: "jump" });
-    };
-    const normal = (target: number): void => {
-      successors[index]!.push({ target, kind: "normal" });
-    };
-
-    switch (op.kind) {
-      case "label":
-      case "store":
-      case "recall":
-      case "indirect-store":
-      case "indirect-recall":
-      case "plain":
-      case "orphan-address":
-      case "stop":
-        fallthrough();
-        break;
-      case "jump":
-        jumpTo(op.target);
-        break;
-      case "cjump":
-        jumpTo(op.target);
-        fallthrough();
-        break;
-      case "loop":
-        jumpTo(op.target);
-        fallthrough();
-        break;
-      case "call":
-        jumpTo(op.target);
-        break;
-      case "indirect-jump": {
-        const target = knownIndirectFlowTarget(op);
-        if (target !== undefined) jumpTo(target);
-        break;
-      }
-      case "indirect-call": {
-        const target = knownIndirectFlowTarget(op);
-        if (target !== undefined) jumpTo(target);
-        break;
-      }
-      case "indirect-cjump": {
-        const target = knownIndirectFlowTarget(op);
-        if (target !== undefined) jumpTo(target);
-        fallthrough();
-        break;
-      }
-      case "return":
-        for (const target of callReturns) normal(target);
-        break;
-    }
-  }
-
-  return { successors };
-}
-
-function buildTargetIndexes(ops: readonly IrOp[]): {
-  labelIndex: Map<string, number>;
-  addressIndex: Map<number, number>;
-} {
-  const labelIndex = new Map<string, number>();
-  const addressIndex = new Map<number, number>();
-  let address = 0;
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (op.kind === "label") {
-      labelIndex.set(op.name, index);
-      continue;
-    }
-    addressIndex.set(address, index);
-    address += cellsPerOp(op);
-  }
-  return { labelIndex, addressIndex };
 }
 
 function hasNumericFlowTarget(ops: readonly IrOp[]): boolean {
