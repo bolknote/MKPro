@@ -6,11 +6,9 @@ import {
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
-  isFreeStandingX2SignChangeOp,
   isDisplayFocusSensitive,
-  analyzeX2VpRestoreGapSource,
   x2CanUseSourceDotRestoreAt,
-  x2PreviousFreeStandingRestoreExecutableIndex,
+  x2PlanDotReplacementVpSource,
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasSameDotRestoreValueInXAndX2,
   x2StateHasSameNormalizedDecimalInXAndX2,
@@ -95,32 +93,13 @@ function dotCanExposeContextSensitiveRestore(
   context: DirectReturnAnalysisContext,
 ): boolean {
   if (!x2SyncCanExposeContextSensitiveRestore(ops, index)) return false;
-  return !dotPreservesVpEntrySourceThroughRestoreGap(ops, index, state, stateAfterDot, context);
-}
-
-function dotPreservesVpEntrySourceThroughRestoreGap(
-  ops: readonly IrOp[],
-  index: number,
-  state: X2ValueDataflowState | undefined,
-  stateAfterDot: X2ValueDataflowState | undefined,
-  context: DirectReturnAnalysisContext,
-): boolean {
-  const source = analyzeX2VpRestoreGapSource(ops, index + 1, state, stateAfterDot, context);
-  if (source.hasOnlyRestoreGapBeforeVp) {
-    return source.canDiscardRestoreRunBeforeProvedVp ||
-      source.canDiscardSignRestoreRunBeforeProvedVp;
-  }
-  if (
-    !source.replacementDotHasOnlyRestoreGapBeforeVp ||
-    dotFollowsClosedSignChangeSource(ops, index)
-  ) return false;
-  return source.canDiscardRestoreRunBeforeProvedVp &&
-    source.hasSameExplicitVpEntrySignSource;
-}
-
-function dotFollowsClosedSignChangeSource(ops: readonly IrOp[], index: number): boolean {
-  const previous = x2PreviousFreeStandingRestoreExecutableIndex(ops, index, { skipEmptyRestores: true });
-  return previous !== undefined && isFreeStandingX2SignChangeOp(ops[previous]!);
+  return !x2PlanDotReplacementVpSource(
+    ops,
+    index,
+    state,
+    stateAfterDot,
+    context,
+  ).preservesVpEntrySource;
 }
 
 function isDotSafeValueContext(

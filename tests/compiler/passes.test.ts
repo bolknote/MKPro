@@ -71,6 +71,7 @@ import {
   x2NextStackShiftingProducerIndex,
   x2NextStackPreservingReturnX2SyncIndex,
   x2NextXPreservingX2SyncIndex,
+  x2PlanDotReplacementVpSource,
   x2PlanRestoreRunBeforeProvedVp,
   x2PlanRestoreRunBeforeTerminal,
   x2PreviousHardX2OverwriteIndex,
@@ -10398,6 +10399,77 @@ describe("ir passes on synthetic programs", () => {
       scan: {
         terminalIndex: 5,
       },
+    });
+  });
+
+  it("x2 dot-replacement VP-source planner reports preservation and blockers", () => {
+    const restoreGapProgram: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x0a, "."),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const previousSignSourceProgram: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0a, "."),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    const noVpProgram: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+
+    const restoreGapStates = computeX2ValueStates(restoreGapProgram);
+    expect(x2PlanDotReplacementVpSource(
+      restoreGapProgram,
+      3,
+      restoreGapStates[3],
+      restoreGapStates[4],
+      directReturnAnalysisContext(restoreGapProgram),
+    )).toMatchObject({
+      preservesVpEntrySource: true,
+      reason: "restore-gap-source",
+      source: {
+        hasOnlyRestoreGapBeforeVp: true,
+      },
+    });
+
+    const previousSignStates = computeX2ValueStates(previousSignSourceProgram);
+    expect(x2PlanDotReplacementVpSource(
+      previousSignSourceProgram,
+      5,
+      previousSignStates[5],
+      previousSignStates[6],
+      directReturnAnalysisContext(previousSignSourceProgram),
+    )).toMatchObject({
+      preservesVpEntrySource: false,
+      previousSignSourceIndex: 3,
+      reason: "previous-sign-source",
+    });
+
+    const noVpStates = computeX2ValueStates(noVpProgram);
+    expect(x2PlanDotReplacementVpSource(
+      noVpProgram,
+      3,
+      noVpStates[3],
+      noVpStates[4],
+      directReturnAnalysisContext(noVpProgram),
+    )).toMatchObject({
+      preservesVpEntrySource: false,
+      reason: "no-vp-restore",
     });
   });
 

@@ -5419,6 +5419,21 @@ export interface X2TerminalRestoreRunPlan {
   readonly reason: X2TerminalRestoreRunPlanReason;
 }
 
+export type X2DotReplacementVpSourcePlanReason =
+  "restore-gap-source" |
+  "sign-restore-gap-source" |
+  "replacement-dot-explicit-sign-source" |
+  "no-vp-restore" |
+  "previous-sign-source" |
+  "source-mismatch";
+
+export interface X2DotReplacementVpSourcePlan {
+  readonly preservesVpEntrySource: boolean;
+  readonly source: X2VpRestoreGapSourceAnalysis;
+  readonly previousSignSourceIndex: number | undefined;
+  readonly reason: X2DotReplacementVpSourcePlanReason;
+}
+
 export interface X2RestoreRunBeforeTerminalScan {
   readonly terminalIndex: number | undefined;
   readonly blockedIndex: number | undefined;
@@ -5644,6 +5659,84 @@ export function x2PlanRestoreRunBeforeTerminal(
     transition,
     previousRestoreIndex,
     reason,
+  };
+}
+
+export function x2PlanDotReplacementVpSource(
+  ops: readonly IrOp[],
+  dotIndex: number,
+  stateBeforeDot: X2ValueDataflowState | undefined,
+  stateAfterDot: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+): X2DotReplacementVpSourcePlan {
+  const source = analyzeX2VpRestoreGapSource(
+    ops,
+    dotIndex + 1,
+    stateBeforeDot,
+    stateAfterDot,
+    context,
+  );
+  if (source.hasOnlyRestoreGapBeforeVp) {
+    if (source.canDiscardRestoreRunBeforeProvedVp) {
+      return {
+        preservesVpEntrySource: true,
+        source,
+        previousSignSourceIndex: undefined,
+        reason: "restore-gap-source",
+      };
+    }
+    if (source.canDiscardSignRestoreRunBeforeProvedVp) {
+      return {
+        preservesVpEntrySource: true,
+        source,
+        previousSignSourceIndex: undefined,
+        reason: "sign-restore-gap-source",
+      };
+    }
+    return {
+      preservesVpEntrySource: false,
+      source,
+      previousSignSourceIndex: undefined,
+      reason: "source-mismatch",
+    };
+  }
+  if (!source.replacementDotHasOnlyRestoreGapBeforeVp) {
+    return {
+      preservesVpEntrySource: false,
+      source,
+      previousSignSourceIndex: undefined,
+      reason: "no-vp-restore",
+    };
+  }
+  const previousSignSourceIndex = x2PreviousFreeStandingRestoreExecutableIndex(
+    ops,
+    dotIndex,
+    { skipEmptyRestores: true },
+  );
+  if (
+    previousSignSourceIndex !== undefined &&
+    isFreeStandingX2SignChangeOp(ops[previousSignSourceIndex]!)
+  ) {
+    return {
+      preservesVpEntrySource: false,
+      source,
+      previousSignSourceIndex,
+      reason: "previous-sign-source",
+    };
+  }
+  if (source.canDiscardRestoreRunBeforeProvedVp && source.hasSameExplicitVpEntrySignSource) {
+    return {
+      preservesVpEntrySource: true,
+      source,
+      previousSignSourceIndex: undefined,
+      reason: "replacement-dot-explicit-sign-source",
+    };
+  }
+  return {
+    preservesVpEntrySource: false,
+    source,
+    previousSignSourceIndex: undefined,
+    reason: "source-mismatch",
   };
 }
 
