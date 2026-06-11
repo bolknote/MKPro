@@ -2,64 +2,47 @@ import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import { buildCfgEdges, loopCounterRegister, type CfgEdge } from "./cfg.ts";
 import {
-  computeX2RegisterStates,
-  computeX2ValueStates,
-  directReturnAnalysisContext,
-  emptyResult,
   hasRewriteBarrier,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
-  planRecallRemovalWithStackScheduler,
   plainPreservesXValue,
   removableRecallValueRegister,
   storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
 } from "./helpers.ts";
+import { runRecallRemovalPass } from "./recall-removal.ts";
 
 type XRegisterSet = ReadonlySet<RegisterName>;
 
-const run: IrPassFn = (ops) => {
-  if (ops.length === 0) return emptyResult(ops);
-  if (hasNumericFlowTarget(ops) || hasUnknownIndirectFlow(ops)) return emptyResult(ops);
-
-  const graph = buildCfgEdges(ops);
-  const inStates = computeXRegisterStates(ops, graph);
-  const x2States = computeX2RegisterStates(ops);
-  const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
-  const directReturnContext = directReturnAnalysisContext(ops);
-  const remove = new Set<number>();
-
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    const recallRegister = removableRecallValueRegister(op);
-    if (recallRegister === undefined) continue;
-    const removalPlan = planRecallRemovalWithStackScheduler(
-      ops,
-      index,
-      x2States[index],
-      x2ValueStates[index],
-      directReturnContext,
-      { removedIndexes: remove },
-    );
-    if (removalPlan?.removable !== true) continue;
-    const alreadyInX =
-      inStates[index]?.has(recallRegister) === true ||
-      removalPlan.analysis.valueProof?.inX === true;
-    if (alreadyInX) remove.add(index);
-  }
-
-  if (remove.size === 0) return emptyResult(ops);
-
-  return {
-    ops: ops.filter((_, index) => !remove.has(index)),
-    applied: remove.size,
-    optimizations: [{
+const run: IrPassFn = (ops) =>
+  runRecallRemovalPass(
+    ops,
+    {
       name: "flow-x-reuse",
-      detail: `Dropped ${remove.size} recall${remove.size === 1 ? "" : "s"} whose register value already reaches the point in X on every CFG predecessor.`,
-    }],
-  };
-};
+      detail: (count) =>
+        `Dropped ${count} recall${count === 1 ? "" : "s"} whose register value already reaches the point in X on every CFG predecessor.`,
+    },
+    (engine) => {
+      if (ops.length === 0) return;
+      if (hasNumericFlowTarget(ops) || hasUnknownIndirectFlow(ops)) return;
+
+      const graph = buildCfgEdges(ops);
+      const inStates = computeXRegisterStates(ops, graph);
+
+      for (let index = 0; index < ops.length; index += 1) {
+        const op = ops[index]!;
+        const recallRegister = removableRecallValueRegister(op);
+        if (recallRegister === undefined) continue;
+        const removalPlan = engine.plan(index);
+        if (removalPlan?.removable !== true) continue;
+        const alreadyInX =
+          inStates[index]?.has(recallRegister) === true ||
+          removalPlan.analysis.valueProof?.inX === true;
+        if (alreadyInX) engine.removed.add(index);
+      }
+    },
+  );
 
 export const flowXReuse: IrPass = {
   name: "flow-x-reuse",

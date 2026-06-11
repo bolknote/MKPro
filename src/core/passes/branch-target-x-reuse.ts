@@ -5,16 +5,11 @@ import {
   addressIndexes,
   labelIndexes,
   analyzeX2StackEffect,
-  computeX2RegisterStates,
-  computeX2ValueStates,
-  directReturnAnalysisContext,
-  emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
-  planRecallRemovalWithStackScheduler,
   plainPreservesXValue,
   removableRecallValueRegister,
   transferX2ValueStateThroughKnownTransparentReturnCall,
@@ -27,85 +22,72 @@ import {
   type X2ValueFact,
   type X2ValueDataflowState,
 } from "./helpers.ts";
+import { runRecallRemovalPass } from "./recall-removal.ts";
 
-const run: IrPassFn = (ops) => {
-  const labels = labelIndexes(ops);
-  const addresses = addressIndexes(ops);
-  const references = targetReferenceCountsByEntryIndex(ops, labels, addresses);
-  const x2States = computeX2RegisterStates(ops);
-  const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
-  const directReturnContext = directReturnAnalysisContext(ops);
-  const remove = new Set<number>();
-
-  for (let index = 0; index < ops.length; index += 1) {
-    const op = ops[index]!;
-    if (!isConditionalTargetOp(op) || hasRewriteBarrier(op)) continue;
-
-    const targetIndex = branchTargetEntryIndex(ops, op, labels, addresses);
-    if (targetIndex === undefined) continue;
-    if ((references.get(targetIndex) ?? 0) !== 1) continue;
-    if (hasFallthroughIntoIndex(ops, targetIndex)) continue;
-    const heldRegister = immediatelyHeldRegister(ops, index);
-    const targetRegisterState = transferX2RegisterStateForEdge(
-      {
-        x: heldRegister === undefined ? undefined : new Set<RegisterName>([heldRegister]),
-        x2: x2States[index],
-      },
-      op,
-      "jump",
-    );
-    const targetRecall = branchTargetRecallAfterTransparentPrefix(
-      ops,
-      targetIndex,
-      references,
-      targetRegisterState,
-      transferX2ValueStateForEdge(
-        x2ValueStates[index],
-        op,
-        "jump",
-        { trackRegisterMemory: true },
-        index,
-      ),
-      directReturnContext,
-    );
-    if (targetRecall === undefined || remove.has(targetRecall.index)) continue;
-    const target = ops[targetRecall.index]!;
-    const targetRegister = removableRecallValueRegister(target);
-    if (targetRegister === undefined) continue;
-    if (op.kind === "loop" && loopCounterRegister(op.counter) === targetRegister) continue;
-    const preservedRegister = branchPreservedRegister(heldRegister, op, targetRegister);
-    const targetX2RegisterState = targetRecall.x2RegisterState ?? x2States[targetRecall.index];
-    const targetValueState = targetRecall.valueState ?? x2ValueStates[targetRecall.index];
-    const removalPlan = planRecallRemovalWithStackScheduler(
-      ops,
-      targetRecall.index,
-      targetX2RegisterState,
-      targetValueState,
-      directReturnContext,
-      {
-        removedIndexes: remove,
-        stackSchedulerStart: index,
-        stackExposureEnd: targetRecall.index,
-        stackSchedulerState: x2ValueStates[index],
-      },
-    );
-    if (preservedRegister !== targetRegister && removalPlan?.analysis.valueProof?.inX !== true) continue;
-    if (removalPlan?.removable !== true) continue;
-
-    remove.add(targetRecall.index);
-  }
-
-  if (remove.size === 0) return emptyResult(ops);
-
-  return {
-    ops: ops.filter((_, index) => !remove.has(index)),
-    applied: remove.size,
-    optimizations: [{
+const run: IrPassFn = (ops) =>
+  runRecallRemovalPass(
+    ops,
+    {
       name: "branch-target-x-reuse",
-      detail: `Dropped ${remove.size} branch-target recall${remove.size === 1 ? "" : "s"} already preserved in X by the branch path.`,
-    }],
-  };
-};
+      detail: (count) =>
+        `Dropped ${count} branch-target recall${count === 1 ? "" : "s"} already preserved in X by the branch path.`,
+    },
+    (engine) => {
+      const labels = labelIndexes(ops);
+      const addresses = addressIndexes(ops);
+      const references = targetReferenceCountsByEntryIndex(ops, labels, addresses);
+
+      for (let index = 0; index < ops.length; index += 1) {
+        const op = ops[index]!;
+        if (!isConditionalTargetOp(op) || hasRewriteBarrier(op)) continue;
+
+        const targetIndex = branchTargetEntryIndex(ops, op, labels, addresses);
+        if (targetIndex === undefined) continue;
+        if ((references.get(targetIndex) ?? 0) !== 1) continue;
+        if (hasFallthroughIntoIndex(ops, targetIndex)) continue;
+        const heldRegister = immediatelyHeldRegister(ops, index);
+        const targetRegisterState = transferX2RegisterStateForEdge(
+          {
+            x: heldRegister === undefined ? undefined : new Set<RegisterName>([heldRegister]),
+            x2: engine.x2RegisterState(index),
+          },
+          op,
+          "jump",
+        );
+        const targetRecall = branchTargetRecallAfterTransparentPrefix(
+          ops,
+          targetIndex,
+          references,
+          targetRegisterState,
+          transferX2ValueStateForEdge(
+            engine.x2ValueState(index),
+            op,
+            "jump",
+            { trackRegisterMemory: true },
+            index,
+          ),
+          engine.directReturnContext(),
+        );
+        if (targetRecall === undefined || engine.removed.has(targetRecall.index)) continue;
+        const target = ops[targetRecall.index]!;
+        const targetRegister = removableRecallValueRegister(target);
+        if (targetRegister === undefined) continue;
+        if (op.kind === "loop" && loopCounterRegister(op.counter) === targetRegister) continue;
+        const preservedRegister = branchPreservedRegister(heldRegister, op, targetRegister);
+        const removalPlan = engine.plan(targetRecall.index, {
+          x2RegisterState: targetRecall.x2RegisterState ?? engine.x2RegisterState(targetRecall.index),
+          x2ValueState: targetRecall.valueState ?? engine.x2ValueState(targetRecall.index),
+          stackSchedulerStart: index,
+          stackExposureEnd: targetRecall.index,
+          stackSchedulerState: engine.x2ValueState(index),
+        });
+        if (preservedRegister !== targetRegister && removalPlan?.analysis.valueProof?.inX !== true) continue;
+        if (removalPlan?.removable !== true) continue;
+
+        engine.removed.add(targetRecall.index);
+      }
+    },
+  );
 
 export const branchTargetXReuse: IrPass = {
   name: "branch-target-x-reuse",
