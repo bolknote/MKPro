@@ -175,6 +175,12 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(runUnaryRegisterProgram("Е0", [IP1, SQUARE])).toBe("0,");
     expect(runUnaryRegisterProgram("_E2", [IP1, SQUARE])).toBe("0,");
     expect(runUnaryRegisterProgram("_0", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("0,A", [IP1, SQUARE])).toBe("0,-01");
+    expect(runUnaryRegisterProgram("0,0A", [IP1, SQUARE])).toBe("0,-03");
+    expect(runUnaryRegisterProgram("0,Е", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("0,0Е", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("0,_", [IP1, SQUARE])).toBe("0,");
+    expect(runUnaryRegisterProgram("0,0_", [IP1, SQUARE])).toBe("0,");
   });
 
   it("super-number square result is pinned as decimal zero", () => {

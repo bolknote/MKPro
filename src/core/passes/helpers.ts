@@ -1157,6 +1157,13 @@ function structuralScaledHexZeroSquareOperandFromShapeModel(
       ? undefined
       : { digit, exponent: integer[2]!.length };
   }
+  const fraction = /^(?:0)?\.(0*)([AЕEF])$/u.exec(raw);
+  if (fraction !== null) {
+    const digit = structuralHexNibbleValue(fraction[2]!);
+    return digit === undefined || !isVerifiedScaledHexZeroSquareDigit(digit)
+      ? undefined
+      : { digit, exponent: -(fraction[1]!.length + 1) };
+  }
   return undefined;
 }
 
