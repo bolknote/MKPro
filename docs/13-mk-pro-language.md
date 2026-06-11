@@ -1727,7 +1727,10 @@ The pipeline currently contains:
   role-bearing display cells still block the proof. The same check handles the
   store-backed sign source: if `.` only replaces the store's original hidden
   mantissa sign source with the identical restored mantissa before
-  `/-/ ... ВП`, the dot is removed.
+  `/-/ ... ВП`, the dot is removed. The planner accepts the same source options
+  for adjacent sign-pair cases, so `vp-splice` proves open-mantissa and
+  closed-context sign-pair-before-`ВП` rewrites through the shared
+  dot-replacement source path instead of a separate restore-gap scanner call.
   That reachability guard is the shared CFG-aware X2 exposure walker: direct and
   proved-indirect branches are followed path-sensitively instead of being blanket
   barriers, but any X2-preserving edge that can reach a context-sensitive restore

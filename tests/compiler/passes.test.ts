@@ -10431,6 +10431,15 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0a, "."),
       halt(),
     ];
+    const leadingSignPairProgram: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
 
     const restoreGapStates = computeX2ValueStates(restoreGapProgram);
     expect(x2PlanDotReplacementVpSource(
@@ -10470,6 +10479,24 @@ describe("ir passes on synthetic programs", () => {
     )).toMatchObject({
       preservesVpEntrySource: false,
       reason: "no-vp-restore",
+    });
+
+    const leadingSignPairStates = computeX2ValueStates(leadingSignPairProgram);
+    expect(x2PlanDotReplacementVpSource(
+      leadingSignPairProgram,
+      3,
+      leadingSignPairStates[2],
+      leadingSignPairStates[4],
+      directReturnAnalysisContext(leadingSignPairProgram),
+      { includesLeadingSignRestore: true },
+    )).toMatchObject({
+      preservesVpEntrySource: false,
+      reason: "previous-sign-source",
+      source: {
+        replacementDotHasOnlyRestoreGapBeforeVp: true,
+        hasSignRestoreGapBeforeVp: true,
+        canDiscardShapeSignPairBeforeProvedVp: true,
+      },
     });
   });
 

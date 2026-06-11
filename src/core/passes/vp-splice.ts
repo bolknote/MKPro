@@ -1,7 +1,6 @@
 import type { IrOp } from "../types.ts";
 import {
   analyzeX2StackEffect,
-  analyzeX2VpRestoreGapSource,
   analyzeX2VpShapeContext,
   analyzeX2VpShapeTransition,
   computeX2ValueStates,
@@ -13,6 +12,7 @@ import {
   isFreeStandingX2VpOp,
   isDisplayFocusSensitive,
   removingRecallCanExposeX2Restore,
+  x2PlanDotReplacementVpSource,
   x2PlanRestoreRunBeforeProvedVp,
   x2PlanRestoreRunBeforeTerminal,
   x2RestoreRunBeforeIndex,
@@ -58,16 +58,16 @@ function canRemoveOpenMantissaSignPairBeforeProvedVp(
   context: DirectReturnAnalysisContext,
 ): boolean {
   if (analyzeX2VpShapeContext(state).kind !== "active-mantissa") return false;
-  const source = analyzeX2VpRestoreGapSource(
+  const plan = x2PlanDotReplacementVpSource(
     ops,
-    secondSignIndex + 1,
+    secondSignIndex,
     state,
     stateAfterPair,
     context,
     { includesLeadingSignRestore: true },
   );
-  return source.replacementDotHasOnlyRestoreGapBeforeVp &&
-    source.canDiscardShapeSignPairBeforeProvedVp;
+  return plan.source.replacementDotHasOnlyRestoreGapBeforeVp &&
+    plan.source.canDiscardShapeSignPairBeforeProvedVp;
 }
 
 function mantissaRestoreRunBeforeProvedVp(
@@ -128,15 +128,15 @@ function canRemoveClosedContextSignPairBeforeProvedVp(
   stateAfterPair: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
 ): boolean {
-  const source = analyzeX2VpRestoreGapSource(
+  const plan = x2PlanDotReplacementVpSource(
     ops,
-    secondSignIndex + 1,
+    secondSignIndex,
     state,
     stateAfterPair,
     context,
   );
-  return source.replacementDotHasOnlyRestoreGapBeforeVp &&
-    source.canDiscardRestoreRunBeforeProvedVp;
+  return plan.source.replacementDotHasOnlyRestoreGapBeforeVp &&
+    plan.source.canDiscardRestoreRunBeforeProvedVp;
 }
 
 function freeStandingEmptyRunBeforeProvedVp(

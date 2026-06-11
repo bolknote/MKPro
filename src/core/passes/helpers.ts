@@ -5434,6 +5434,8 @@ export interface X2DotReplacementVpSourcePlan {
   readonly reason: X2DotReplacementVpSourcePlanReason;
 }
 
+export interface X2DotReplacementVpSourcePlanOptions extends X2VpRestoreGapSourceOptions {}
+
 export interface X2RestoreRunBeforeTerminalScan {
   readonly terminalIndex: number | undefined;
   readonly blockedIndex: number | undefined;
@@ -5668,6 +5670,7 @@ export function x2PlanDotReplacementVpSource(
   stateBeforeDot: X2ValueDataflowState | undefined,
   stateAfterDot: X2ValueDataflowState | undefined,
   context: DirectReturnAnalysisContext,
+  options: X2DotReplacementVpSourcePlanOptions = {},
 ): X2DotReplacementVpSourcePlan {
   const source = analyzeX2VpRestoreGapSource(
     ops,
@@ -5675,6 +5678,7 @@ export function x2PlanDotReplacementVpSource(
     stateBeforeDot,
     stateAfterDot,
     context,
+    options,
   );
   if (source.hasOnlyRestoreGapBeforeVp) {
     if (source.canDiscardRestoreRunBeforeProvedVp) {
