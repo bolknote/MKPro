@@ -1883,8 +1883,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     the proved-`ВП` restore-run planner then packages removable indexes, source
     analysis, and refusal reasons instead of leaving each pass to combine the
     scan booleans itself. Fresh-digit and hard-overwrite restore-run decisions
-    use the same terminal planner, including the closed-plain-context fresh-digit
-    fallback and its previous-restore-source guard. Dot-replacement decisions
+    use the same terminal planner, including closed-plain-context fallbacks for
+    fresh digit entry and hard X/X2 overwrite, both with the same
+    previous-restore-source guard. Dot-replacement decisions
     before a reachable `ВП` use the same source proof and return explicit
     preservation/blocker reasons, including previous sign-source shielding;
     orphan address-byte cells

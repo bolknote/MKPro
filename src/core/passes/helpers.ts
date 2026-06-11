@@ -5517,6 +5517,7 @@ export type X2TerminalRestoreRunPlanOperation = "fresh-digit" | "hard-overwrite"
 export type X2TerminalRestoreRunPlanReason =
   "vp-context-overwritten" |
   "closed-context-fresh-digit" |
+  "closed-context-hard-overwrite" |
   "transition-blocked" |
   "previous-restore-source" |
   "terminal-missing";
@@ -5729,7 +5730,7 @@ export function x2PlanRestoreRunBeforeTerminal(
   let previousRestoreIndex: number | undefined;
   let canScan = transition.canDiscardRestoreRun;
 
-  if (!canScan && operation === "fresh-digit") {
+  if (!canScan && (operation === "fresh-digit" || operation === "hard-overwrite")) {
     previousRestoreIndex = x2PreviousFreeStandingRestoreExecutableIndex(ops, startIndex);
     if (!x2StateIsClosedPlainContext(state)) {
       reason = "transition-blocked";
@@ -5737,7 +5738,7 @@ export function x2PlanRestoreRunBeforeTerminal(
       reason = "previous-restore-source";
     } else {
       canScan = true;
-      reason = "closed-context-fresh-digit";
+      reason = operation === "fresh-digit" ? "closed-context-fresh-digit" : "closed-context-hard-overwrite";
     }
   } else if (!canScan) {
     reason = "transition-blocked";

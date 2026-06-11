@@ -1370,8 +1370,9 @@ The pipeline currently contains:
   removable indexes, source analysis, and refusal reason (`no-restore-run`,
   `no-sign-restore`, or `source-mismatch`) so splice passes do not rebuild this
   decision locally. Fresh-digit and hard-overwrite restore runs use the same
-  terminal planner, including the closed-plain-context fresh-digit fallback and
-  its previous-restore-source guard. Dot replacement before a reachable `ВП`
+  terminal planner, including closed-plain-context fallbacks for fresh digit
+  entry and hard X/X2 overwrite with the same previous-restore-source guard.
+  Dot replacement before a reachable `ВП`
   uses another shared planner that reports whether the replacement preserves
   the VP source or is blocked by a previous sign source, missing `ВП`, or source
   mismatch. A companion

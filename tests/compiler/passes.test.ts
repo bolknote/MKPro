@@ -10375,6 +10375,22 @@ describe("ir passes on synthetic programs", () => {
       plain(0x04, "4"),
       halt(),
     ];
+    const closedFallbackHardOverwrite: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const previousRestoreHardOverwrite: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
     const hardOverwrite: IrOp[] = [
       plain(0x05, "5"),
       plain(0x0c, "ВП"),
@@ -10423,6 +10439,38 @@ describe("ir passes on synthetic programs", () => {
       directReturnAnalysisContext(previousRestoreFreshDigit),
       "fresh-digit",
       isDigit,
+    )).toMatchObject({
+      removableIndexes: [],
+      reason: "previous-restore-source",
+      previousRestoreIndex: 2,
+      scan: undefined,
+    });
+
+    const closedFallbackHardOverwriteStates = computeX2ValueStates(closedFallbackHardOverwrite);
+    expect(x2PlanRestoreRunBeforeTerminal(
+      closedFallbackHardOverwrite,
+      2,
+      closedFallbackHardOverwriteStates[2],
+      directReturnAnalysisContext(closedFallbackHardOverwrite),
+      "hard-overwrite",
+      isClearX,
+    )).toMatchObject({
+      removableIndexes: [2, 3],
+      reason: "closed-context-hard-overwrite",
+      previousRestoreIndex: undefined,
+      scan: {
+        terminalIndex: 4,
+      },
+    });
+
+    const previousRestoreHardOverwriteStates = computeX2ValueStates(previousRestoreHardOverwrite);
+    expect(x2PlanRestoreRunBeforeTerminal(
+      previousRestoreHardOverwrite,
+      3,
+      previousRestoreHardOverwriteStates[3],
+      directReturnAnalysisContext(previousRestoreHardOverwrite),
+      "hard-overwrite",
+      isClearX,
     )).toMatchObject({
       removableIndexes: [],
       reason: "previous-restore-source",
@@ -25710,6 +25758,26 @@ describe("ir passes on synthetic programs", () => {
       plain(0x02, "2"),
       plain(0xf0, "F* empty F0"),
       plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes closed-context restore runs before hard X2 overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0d, "Cx"),
       halt(),
     ]);
   });
