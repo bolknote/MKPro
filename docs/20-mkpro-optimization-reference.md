@@ -1531,7 +1531,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     structural `ВП` sources and closed structural sign-source `/-/` transfers
     as part of the normal hidden-X2/stack dataflow, so a later binary operation
     can still distinguish a real direct `Y = hex:A0` from an exponent-derived
-    display after the structural context has been consumed.
+    display after the structural context has been consumed. Proved indirect
+    conditional edges, stable indirect stores, and unknown indirect-store memory
+    clears also preserve the direct visible `X/Y` shape metadata; they may affect
+    memory or X2 sync facts, but they do not by themselves rewrite the visible
+    stack values that the later carry proof consumes.
     It is deliberately absent for right-side structural
     operands, `F` nibbles, `super:*`, fractional forms, closed exponent-entry
     forms, and over-wide carries, so it does not turn arbitrary structural

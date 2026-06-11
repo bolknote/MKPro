@@ -1282,6 +1282,51 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(afterPlus?.xShape)).toContain("mantissa:101:decimal");
   });
 
+  it("x2 value dataflow preserves direct shapes through indirect flow and memory effects", () => {
+    const cases: Array<{
+      readonly op: IrOp;
+      readonly edge: "fallthrough" | "jump" | "normal";
+      readonly options?: { readonly trackRegisterMemory?: true };
+    }> = [
+      { op: knownTargetIndirectCjump("7", 5), edge: "fallthrough" },
+      { op: knownTargetIndirectStore("7", "1"), edge: "normal", options: { trackRegisterMemory: true } },
+      { op: indirectStore("7"), edge: "normal", options: { trackRegisterMemory: true } },
+    ];
+
+    for (const { op, edge, options } of cases) {
+      const before: X2ValueDataflowState = {
+        x: new Set(),
+        y: new Set(),
+        x2: new Set(),
+        xShape: new Set<X2ShapeFact>(["hex:C0:mantissa"]),
+        yShape: new Set<X2ShapeFact>(["hex:A0:mantissa"]),
+        x2Shape: new Set(),
+        xDirectShape: new Set<X2ShapeFact>(["hex:C0:mantissa"]),
+        yDirectShape: new Set<X2ShapeFact>(["hex:A0:mantissa"]),
+        entry: { kind: "closed" },
+        vpContext: { kind: "none" },
+        structuralEntry: { kind: "none" },
+        structuralVpContext: { kind: "none" },
+      };
+
+      const afterOp = transferX2ValueStateForEdge(before, op, edge, options ?? {}, 0);
+      const afterClear = afterOp === undefined
+        ? undefined
+        : transferX2ValueStateForEdge(afterOp, plain(0x0d, "Cx"), "normal", {}, 1);
+      const afterDigit = afterClear === undefined
+        ? undefined
+        : transferX2ValueStateForEdge(afterClear, plain(0x01, "1"), "normal", {}, 2);
+      const afterPlus = afterDigit === undefined
+        ? undefined
+        : transferX2ValueStateForEdge(afterDigit, plain(0x10, "+"), "normal", {}, 3);
+
+      expect(x2ShapeStateText(afterOp?.xDirectShape)).toEqual(["hex:C0:mantissa"]);
+      expect(x2ShapeStateText(afterOp?.yDirectShape)).toEqual(["hex:A0:mantissa"]);
+      expect(x2ValueStateText(afterPlus?.x)).toContain("decimal:101:normalized");
+      expect(x2ShapeStateText(afterPlus?.xShape)).toContain("mantissa:101:decimal");
+    }
+  });
+
   it("x2 value dataflow gives preloaded decimal constants display-accurate shapes", () => {
     const program: IrOp[] = [
       recall("1", "preload const 12.3"),
