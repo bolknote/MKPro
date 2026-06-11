@@ -8796,11 +8796,25 @@ function transferVpX2ValueState(input: X2ValueDataflowState): X2ValueDataflowSta
     input.vpEntryShape.size > 0
   ) {
     const structuralEntry = x2StructuralEntryStateFromParts(input.vpEntryShape, input.structuralVpContext.exponent);
-    return x2ValueStateFromStructuralExponentEntry(structuralEntry, input.memory, input.shapeMemory, input.y, input.yShape);
+    return x2ValueStateFromStructuralExponentEntry(
+      structuralEntry,
+      input.memory,
+      input.shapeMemory,
+      input.y,
+      input.yShape,
+      input.yDirectShape,
+    );
   }
   if (input.entry.kind === "closed" && input.vpEntryShape !== undefined && input.vpEntryShape.size > 0) {
     const structuralEntry = structuralExponentEntryFromVpEntryShapes(input.vpEntryShape);
-    return x2ValueStateFromStructuralExponentEntry(structuralEntry, input.memory, input.shapeMemory, input.y, input.yShape);
+    return x2ValueStateFromStructuralExponentEntry(
+      structuralEntry,
+      input.memory,
+      input.shapeMemory,
+      input.y,
+      input.yShape,
+      input.yDirectShape,
+    );
   }
   return {
     x: new Set(),

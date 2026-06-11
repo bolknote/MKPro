@@ -1527,7 +1527,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     the documented right-to-left carry rule (`9AЕ + 1 -> 1015`, `A0 + 1 -> 101`).
     The proof uses direct-source provenance, so exponent-entry displays such as
     `AE1 -> A0` stay on their pinned exponent path instead of being mistaken for
-    explicit `hex:A0`. It is deliberately absent for right-side structural
+    explicit `hex:A0`. That direct-source provenance is preserved through
+    structural `ВП` sources as part of the normal hidden-X2/stack dataflow, so a
+    later binary operation can still distinguish a real direct `Y = hex:A0`
+    from an exponent-derived display after the `ВП` context has been consumed.
+    It is deliberately absent for right-side structural
     operands, `F` nibbles, `super:*`, fractional forms, closed exponent-entry
     forms, and over-wide carries, so it does not turn arbitrary structural
     displays into decimal values.

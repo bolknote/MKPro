@@ -1186,6 +1186,67 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[2]?.xShape)).toEqual(["super-exponent:FA:2"]);
   });
 
+  it("x2 value dataflow preserves direct Y shape through structural ВП sources", () => {
+    const directY = new Set<X2ShapeFact>(["hex:A0:mantissa"]);
+    const beforeVp: X2ValueDataflowState = {
+      x: new Set(),
+      y: new Set(),
+      x2: new Set(),
+      xShape: new Set(),
+      yShape: new Set(directY),
+      x2Shape: new Set(),
+      xDirectShape: new Set(),
+      yDirectShape: new Set(directY),
+      entry: { kind: "closed" },
+      vpContext: { kind: "none" },
+      structuralEntry: { kind: "none" },
+      structuralVpContext: { kind: "none" },
+      vpEntryShape: new Set<X2ShapeFact>(["hex:B:mantissa"]),
+    };
+
+    const afterVp = transferX2ValueStateForEdge(beforeVp, plain(0x0c, "ВП"), "normal", {}, 0);
+    const afterClear = afterVp === undefined
+      ? undefined
+      : transferX2ValueStateForEdge(afterVp, plain(0x0d, "Cx"), "normal", {}, 1);
+    const afterDigit = afterClear === undefined
+      ? undefined
+      : transferX2ValueStateForEdge(afterClear, plain(0x01, "1"), "normal", {}, 2);
+    const afterPlus = afterDigit === undefined
+      ? undefined
+      : transferX2ValueStateForEdge(afterDigit, plain(0x10, "+"), "normal", {}, 3);
+
+    expect(x2ShapeStateText(afterVp?.yDirectShape)).toEqual(["hex:A0:mantissa"]);
+    expect(x2ValueStateText(afterPlus?.x)).toContain("decimal:101:normalized");
+    expect(x2ShapeStateText(afterPlus?.xShape)).toContain("mantissa:101:decimal");
+  });
+
+  it("x2 value dataflow preserves direct Y shape through structural ВП exponent context", () => {
+    const beforeVp: X2ValueDataflowState = {
+      x: new Set(),
+      y: new Set(),
+      x2: new Set(),
+      xShape: new Set(),
+      yShape: new Set<X2ShapeFact>(["hex:A0:mantissa"]),
+      x2Shape: new Set(),
+      xDirectShape: new Set(),
+      yDirectShape: new Set<X2ShapeFact>(["hex:A0:mantissa"]),
+      entry: { kind: "closed" },
+      vpContext: { kind: "none" },
+      structuralEntry: { kind: "none" },
+      structuralVpContext: {
+        kind: "exponent",
+        mantissa: new Set<X2ShapeFact>(["hex:B:mantissa"]),
+        exponent: new Set(["2"]),
+      },
+      vpEntryShape: new Set<X2ShapeFact>(["hex:B:mantissa"]),
+    };
+
+    const afterVp = transferX2ValueStateForEdge(beforeVp, plain(0x0c, "ВП"), "normal", {}, 0);
+
+    expect(x2ShapeStateText(afterVp?.yDirectShape)).toEqual(["hex:A0:mantissa"]);
+    expect(x2ShapeStateText(afterVp?.x2Shape)).toEqual(["hex-exponent:B:2"]);
+  });
+
   it("x2 value dataflow gives preloaded decimal constants display-accurate shapes", () => {
     const program: IrOp[] = [
       recall("1", "preload const 12.3"),
