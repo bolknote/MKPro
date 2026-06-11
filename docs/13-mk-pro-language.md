@@ -1729,6 +1729,9 @@ The pipeline currently contains:
   before another reachable `.`/`/-/`/`ВП` context-sensitive restore, across opaque
   control flow, raw cells, and display-focused cells, so it does not erase a dot
   whose main job is to shape the next X2 restoration rather than to change `X`.
+  The proof runs with register-memory facts enabled, so two different register
+  aliases can still compare equal when both are known to hold the same decimal
+  value and the visible stack operation only moved that value between X/Y.
   The same equality proof now includes emulator-pinned single-hex structural
   mantissas `A`/`B`/`C` after closed-context sign-pair modeling: once dataflow
   proves visible `X` and hidden X2 carry the same dot-safe structural mantissa,

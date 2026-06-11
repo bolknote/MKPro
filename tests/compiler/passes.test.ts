@@ -15024,6 +15024,31 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-noop-restore uses register memory when X and X2 are different aliases of the same value", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      store("1"),
+      store("2"),
+      recall("1"),
+      recall("2"),
+      plain(0x14, "X↔Y"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      store("1"),
+      store("2"),
+      recall("1"),
+      recall("2"),
+      plain(0x14, "X↔Y"),
+      halt(),
+    ]);
+  });
+
   it("x2-noop-restore removes dot immediately after Cx zero sync", () => {
     const program: IrOp[] = [
       plain(0x0d, "Cx"),

@@ -27,7 +27,7 @@ const DOT = 0x0a;
 
 const run: IrPassFn = (ops) => {
   if (!ops.some(isPlainDot)) return emptyResult(ops);
-  const valueStates = computeX2ValueStates(ops);
+  const valueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const directReturnContext = directReturnAnalysisContext(ops);

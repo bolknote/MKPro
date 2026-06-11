@@ -1122,6 +1122,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 16. `indirect-memory-table` — rewrites direct `store/recall` into `К X->П`/`К П->X` when a stable selector maps to the indexed target cell.
 17. `x2-noop-restore` — removes `.` when X2 value dataflow proves that `X`
     already contains the same hidden X2 value, including register aliases,
+    register-memory aliases whose stored decimal/display facts prove that two
+    different registers currently name the same visible value,
     normalized integer or fractional decimal digit-runs (`decimal:12:normalized`,
     `decimal:1.2:normalized`), signed digit-runs
     while number entry is still open (`decimal:-12:normalized`,
