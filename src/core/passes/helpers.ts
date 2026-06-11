@@ -3790,6 +3790,84 @@ export function x2KnownReturnCallPreservesStackXAndX2(
   );
 }
 
+export function transferX2ValueStateThroughKnownTransparentReturnCall(
+  ops: readonly IrOp[],
+  call: KnownReturnCallOp,
+  input: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+  options: X2ValueDataflowOptions = {},
+  producerIndex?: number,
+): X2ValueDataflowState | undefined {
+  if (input === undefined || !x2KnownReturnCallPreservesStackXAndX2(ops, call, context)) return undefined;
+  const targetIndex = knownReturnCallTargetIndex(call, context);
+  if (targetIndex === undefined) return undefined;
+  const entered = transferX2ValueStateForEdge(input, call, "jump", options, producerIndex);
+  return transferX2ValueStateThroughTransparentReturnRange(
+    ops,
+    targetIndex,
+    entered,
+    context,
+    options,
+    new Set(),
+  );
+}
+
+function transferX2ValueStateThroughTransparentReturnRange(
+  ops: readonly IrOp[],
+  targetIndex: number,
+  input: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+  options: X2ValueDataflowOptions,
+  active: Set<number>,
+): X2ValueDataflowState | undefined {
+  if (input === undefined || active.has(targetIndex)) return undefined;
+  const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
+  active.add(targetIndex);
+  let state: X2ValueDataflowState | undefined = input;
+  for (let index = startIndex; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      if (context.labelEntries.has(index)) {
+        active.delete(targetIndex);
+        return undefined;
+      }
+      state = transferX2ValueStateForEdge(state, op, "normal", options, index);
+      continue;
+    }
+    if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) {
+      active.delete(targetIndex);
+      return undefined;
+    }
+    if (op.kind === "return") {
+      active.delete(targetIndex);
+      return transferX2ValueStateForEdge(state, op, "normal", options, index);
+    }
+    if (isKnownReturnCallOp(op)) {
+      if (!x2KnownReturnCallPreservesStackXAndX2(ops, op, context)) {
+        active.delete(targetIndex);
+        return undefined;
+      }
+      const nestedTarget = knownReturnCallTargetIndex(op, context);
+      const entered = transferX2ValueStateForEdge(state, op, "jump", options, index);
+      state = nestedTarget === undefined
+        ? undefined
+        : transferX2ValueStateThroughTransparentReturnRange(ops, nestedTarget, entered, context, options, active);
+      if (state === undefined) {
+        active.delete(targetIndex);
+        return undefined;
+      }
+      continue;
+    }
+    if (!x2IsStackXAndX2PreservingLinearOp(op)) {
+      active.delete(targetIndex);
+      return undefined;
+    }
+    state = transferX2ValueStateForEdge(state, op, "normal", options, index);
+  }
+  active.delete(targetIndex);
+  return undefined;
+}
+
 function x2IsFallthroughX2PreservingGapOp(op: IrOp): boolean {
   if (op.kind !== "cjump" && op.kind !== "loop" && op.kind !== "indirect-cjump") return false;
   if (op.kind === "indirect-cjump" && knownIndirectFlowTarget(op) === undefined) return false;

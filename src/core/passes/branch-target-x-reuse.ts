@@ -15,6 +15,7 @@ import {
   knownIndirectMemoryTarget,
   plainPreservesXValue,
   removableRecallValueRegister,
+  transferX2ValueStateThroughKnownTransparentReturnCall,
   transferX2RegisterStateForEdge,
   transferX2ValueStateForEdge,
   x2KnownReturnCallPreservesStackXAndX2,
@@ -241,7 +242,16 @@ function branchTargetRecallAfterTransparentPrefix(
     if (storedRegister !== undefined) {
       registerState = transferTransparentStoreX2RegisterState(registerState, valueState?.x, storedRegister);
     }
-    valueState = transferX2ValueStateForEdge(valueState, op, "normal", { trackRegisterMemory: true }, index);
+    valueState = isKnownReturnCallOp(op)
+      ? transferX2ValueStateThroughKnownTransparentReturnCall(
+        ops,
+        op,
+        valueState,
+        directReturnContext,
+        { trackRegisterMemory: true },
+        index,
+      )
+      : transferX2ValueStateForEdge(valueState, op, "normal", { trackRegisterMemory: true }, index);
   }
   return undefined;
 }

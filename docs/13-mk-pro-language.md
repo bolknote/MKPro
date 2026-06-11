@@ -2001,7 +2001,9 @@ The pipeline currently contains:
   keep the recall. The proof may cross free-standing stack/X2-preserving empty
   prefix cells and transparent direct/proved-indirect return helpers before
   the target recall, carrying the branch's projected X2 register and
-  value/shape jump-edge state through them. X2-sensitive removal uses that projected path
+  value/shape jump-edge state through them; transparent helper body effects
+  such as stores of the current X are replayed into the projected value/shape
+  memory. X2-sensitive removal uses that projected path
   state instead of the globally joined target state, so a `С/П` separator does
   not erase a proof that is valid on the unique branch entry, and numeric
   direct targets can still use the branch-local X2 proof. The

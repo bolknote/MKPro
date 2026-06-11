@@ -21369,6 +21369,86 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("branch-target-x-reuse uses target-prefix return-helper stores as in-X value proofs", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("save"),
+      store("6"),
+      ret(),
+      label("main"),
+      recall("4"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      call("save"),
+      recall("6"),
+      plain(0x35, "К {x}"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("save"),
+      store("6"),
+      ret(),
+      label("main"),
+      recall("4"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      call("save"),
+      plain(0x35, "К {x}"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
+  it("branch-target-x-reuse uses nested return-helper stores as target-prefix proofs", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("save"),
+      store("6"),
+      ret(),
+      label("outer"),
+      call("save"),
+      ret(),
+      label("main"),
+      recall("4"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      call("outer"),
+      recall("6"),
+      plain(0x35, "К {x}"),
+      label("end"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("save"),
+      store("6"),
+      ret(),
+      label("outer"),
+      call("save"),
+      ret(),
+      label("main"),
+      recall("4"),
+      cjump("target"),
+      jump("end"),
+      label("target"),
+      call("outer"),
+      plain(0x35, "К {x}"),
+      label("end"),
+      halt(),
+    ]);
+  });
+
   it("branch-target-x-reuse handles numeric conditional targets", () => {
     const program: IrOp[] = [
       recall("6"),
