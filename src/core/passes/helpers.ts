@@ -347,6 +347,20 @@ export interface RecallRemovalAnalysis {
   readonly removable: boolean;
 }
 
+export interface RecallRemovalStackSchedulerPlan {
+  readonly analysis: RecallRemovalAnalysis;
+  readonly stackLiftProducerIndex: number | undefined;
+  readonly stackLiftAlreadySupplied: boolean;
+  readonly removable: boolean;
+}
+
+export interface RecallRemovalStackSchedulerOptions {
+  readonly removedIndexes?: ReadonlySet<number> | undefined;
+  readonly stackSchedulerStart?: number | undefined;
+  readonly stackExposureEnd?: number | undefined;
+  readonly stackSchedulerState?: X2ValueDataflowState | undefined;
+}
+
 export interface DirectReturnAnalysisContext {
   readonly labelEntries: ReadonlySet<number>;
   readonly labels: ReadonlyMap<string, number>;
@@ -3586,6 +3600,36 @@ export function x2PreviousStackLiftDuplicateYProducerIndex(
   const producerIndex = x2PreviousStackLiftAndX2SyncProducerIndex(ops, start, context);
   if (producerIndex === undefined) return undefined;
   return removingPreShiftLiftCanExposeStack(ops, stackExposureEnd) ? undefined : producerIndex;
+}
+
+export function planRecallRemovalWithStackScheduler(
+  ops: readonly IrOp[],
+  recallIndex: number,
+  x2RegisterState: RegisterValueSet | undefined,
+  x2ValueState: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+  options: RecallRemovalStackSchedulerOptions = {},
+): RecallRemovalStackSchedulerPlan | undefined {
+  const analysis = analyzeRecallRemoval(ops, recallIndex, x2RegisterState, x2ValueState, context);
+  if (analysis === undefined) return undefined;
+  const stackLiftProducerIndex = analysis.exposesStackLift === true && analysis.exposesX2Restore !== true
+    ? x2PreviousStackLiftDuplicateYProducerIndex(
+      ops,
+      options.stackSchedulerStart ?? recallIndex,
+      options.stackExposureEnd ?? recallIndex,
+      options.stackSchedulerState ?? x2ValueState,
+      context,
+    )
+    : undefined;
+  const stackLiftAlreadySupplied =
+    stackLiftProducerIndex !== undefined &&
+    options.removedIndexes?.has(stackLiftProducerIndex) !== true;
+  return {
+    analysis,
+    stackLiftProducerIndex,
+    stackLiftAlreadySupplied,
+    removable: analysis.removable || stackLiftAlreadySupplied,
+  };
 }
 
 export function x2KnownReturnCallReachesStackLiftAndX2Sync(

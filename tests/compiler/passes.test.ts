@@ -71,6 +71,7 @@ import {
   x2NextStackShiftingProducerIndex,
   x2NextStackPreservingReturnX2SyncIndex,
   x2NextXPreservingX2SyncIndex,
+  planRecallRemovalWithStackScheduler,
   x2PlanDotReplacementVpSource,
   x2PlanRestoreRunBeforeProvedVp,
   x2PlanRestoreRunBeforeTerminal,
@@ -11962,6 +11963,38 @@ describe("ir passes on synthetic programs", () => {
       x2SyncRedundant: true,
       exposesStackLift: false,
       exposesX2Restore: false,
+      removable: true,
+    });
+  });
+
+  it("recall removal scheduler accepts a previous duplicate-Y stack/X2 producer", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x0e, "В↑"),
+      store("1"),
+      recall("1"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const x2RegisterStates = computeX2RegisterStates(program);
+    const x2ValueStates = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const context = directReturnAnalysisContext(program);
+
+    expect(analyzeRecallRemoval(program, 3, x2RegisterStates[3], x2ValueStates[3], context)).toMatchObject({
+      register: "1",
+      exposesStackLift: true,
+      exposesX2Restore: false,
+      removable: false,
+    });
+    expect(planRecallRemovalWithStackScheduler(
+      program,
+      3,
+      x2RegisterStates[3],
+      x2ValueStates[3],
+      context,
+    )).toMatchObject({
+      stackLiftProducerIndex: 1,
+      stackLiftAlreadySupplied: true,
       removable: true,
     });
   });

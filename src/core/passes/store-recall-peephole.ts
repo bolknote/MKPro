@@ -1,16 +1,15 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import {
-  analyzeRecallRemoval,
   computeX2RegisterStates,
   computeX2ValueStates,
   directReturnAnalysisContext,
   emptyResult,
+  planRecallRemovalWithStackScheduler,
   removableRecallValueRegister,
   storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
   type X2ValueDataflowState,
-  x2PreviousStackLiftDuplicateYProducerIndex,
 } from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
@@ -28,15 +27,17 @@ const run: IrPassFn = (ops) => {
     x2States ??= computeX2RegisterStates(ops);
     x2ValueStates ??= computeX2ValueStates(ops, { trackRegisterMemory: true });
     directReturnContext ??= directReturnAnalysisContext(ops);
-    const removal = analyzeRecallRemoval(ops, i + 1, x2States[i + 1], x2ValueStates[i + 1], directReturnContext);
-    const duplicateYProducerIndex = removal?.exposesStackLift === true && removal.exposesX2Restore !== true
-      ? x2PreviousStackLiftDuplicateYProducerIndex(ops, i + 1, i + 1, x2ValueStates[i + 1], directReturnContext)
-      : undefined;
-    const removable = removal?.removable === true ||
-      (duplicateYProducerIndex !== undefined && !remove.has(duplicateYProducerIndex));
+    const removalPlan = planRecallRemovalWithStackScheduler(
+      ops,
+      i + 1,
+      x2States[i + 1],
+      x2ValueStates[i + 1],
+      directReturnContext,
+      { removedIndexes: remove },
+    );
     if (
-      (storedRegister === recalledRegister || removal?.valueProof?.inX === true) &&
-      removable
+      (storedRegister === recalledRegister || removalPlan?.analysis.valueProof?.inX === true) &&
+      removalPlan?.removable === true
     ) {
       remove.add(i + 1);
     }

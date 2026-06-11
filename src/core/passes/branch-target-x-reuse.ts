@@ -1,7 +1,6 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import {
-  analyzeRecallRemoval,
   addressIndexes,
   analyzeX2StackEffect,
   computeX2RegisterStates,
@@ -13,6 +12,7 @@ import {
   isKnownReturnCallOp,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
+  planRecallRemovalWithStackScheduler,
   plainPreservesXValue,
   removableRecallValueRegister,
   transferX2ValueStateThroughKnownTransparentReturnCall,
@@ -24,7 +24,6 @@ import {
   type IrPassFn,
   type X2ValueFact,
   type X2ValueDataflowState,
-  x2PreviousStackLiftDuplicateYProducerIndex,
 } from "./helpers.ts";
 
 const run: IrPassFn = (ops) => {
@@ -75,30 +74,21 @@ const run: IrPassFn = (ops) => {
     const preservedRegister = branchPreservedRegister(heldRegister, op, targetRegister);
     const targetX2RegisterState = targetRecall.x2RegisterState ?? x2States[targetRecall.index];
     const targetValueState = targetRecall.valueState ?? x2ValueStates[targetRecall.index];
-    const removal = analyzeRecallRemoval(
+    const removalPlan = planRecallRemovalWithStackScheduler(
       ops,
       targetRecall.index,
       targetX2RegisterState,
       targetValueState,
       directReturnContext,
+      {
+        removedIndexes: remove,
+        stackSchedulerStart: index,
+        stackExposureEnd: targetRecall.index,
+        stackSchedulerState: x2ValueStates[index],
+      },
     );
-    if (preservedRegister !== targetRegister && removal?.valueProof?.inX !== true) continue;
-    if (removal === undefined) continue;
-    const previousDuplicateYProducerIndex = removal.exposesStackLift && !removal.exposesX2Restore
-      ? x2PreviousStackLiftDuplicateYProducerIndex(
-        ops,
-        index,
-        targetRecall.index,
-        x2ValueStates[index],
-        directReturnContext,
-      )
-      : undefined;
-    const stackLiftAlreadySupplied =
-      previousDuplicateYProducerIndex !== undefined &&
-      !remove.has(previousDuplicateYProducerIndex);
-    if (removal.removable !== true && !stackLiftAlreadySupplied) {
-      continue;
-    }
+    if (preservedRegister !== targetRegister && removalPlan?.analysis.valueProof?.inX !== true) continue;
+    if (removalPlan?.removable !== true) continue;
 
     remove.add(targetRecall.index);
   }

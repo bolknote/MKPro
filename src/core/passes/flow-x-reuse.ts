@@ -1,7 +1,6 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import {
-  analyzeRecallRemoval,
   cellsPerOp,
   computeX2RegisterStates,
   computeX2ValueStates,
@@ -10,12 +9,12 @@ import {
   hasRewriteBarrier,
   knownIndirectFlowTarget,
   knownIndirectMemoryTarget,
+  planRecallRemovalWithStackScheduler,
   plainPreservesXValue,
   removableRecallValueRegister,
   storedCurrentXValueRegister,
   type IrPass,
   type IrPassFn,
-  x2PreviousStackLiftDuplicateYProducerIndex,
 } from "./helpers.ts";
 
 type XRegisterSet = ReadonlySet<RegisterName>;
@@ -44,18 +43,18 @@ const run: IrPassFn = (ops) => {
     const op = ops[index]!;
     const recallRegister = removableRecallValueRegister(op);
     if (recallRegister === undefined) continue;
-    const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index], directReturnContext);
-    if (removal === undefined) continue;
-    const previousDuplicateYProducerIndex = removal.exposesStackLift && !removal.exposesX2Restore
-      ? x2PreviousStackLiftDuplicateYProducerIndex(ops, index, index, x2ValueStates[index], directReturnContext)
-      : undefined;
-    const stackLiftAlreadySupplied =
-      previousDuplicateYProducerIndex !== undefined &&
-      !remove.has(previousDuplicateYProducerIndex);
-    if (removal.removable !== true && !stackLiftAlreadySupplied) continue;
+    const removalPlan = planRecallRemovalWithStackScheduler(
+      ops,
+      index,
+      x2States[index],
+      x2ValueStates[index],
+      directReturnContext,
+      { removedIndexes: remove },
+    );
+    if (removalPlan?.removable !== true) continue;
     const alreadyInX =
       inStates[index]?.has(recallRegister) === true ||
-      removal.valueProof?.inX === true;
+      removalPlan.analysis.valueProof?.inX === true;
     if (alreadyInX) remove.add(index);
   }
 

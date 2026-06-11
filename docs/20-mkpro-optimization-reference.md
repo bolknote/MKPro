@@ -1096,7 +1096,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `x2PreviousStackPreservingReturnX2SyncIndex`,
     `x2KnownReturnCallReachesStackLiftAndX2Sync`), so later stack+X2 scheduler rewrites use
     the same fallthrough, direct-return, and stack-preserving-gap rules instead
-    of reimplementing them locally. Plain context-sensitive X2 restores
+    of reimplementing them locally. Recall-removal users consume
+    `planRecallRemovalWithStackScheduler`, which combines the base X2/stack
+    exposure analysis with the previous duplicate-`Y` producer override; branch
+    target reuse supplies its projected branch state and target exposure index
+    to the same planner. Plain context-sensitive X2 restores
     (`.`, `/-/`, `ВП`) and display-sensitive cells are barriers for those
     scans even when their stack profile is otherwise preserving.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
