@@ -11834,6 +11834,7 @@ function signChangeClosedDecimalState(
       input.shapeMemory,
       input.y,
       input.yShape,
+      input.yDirectShape,
     );
   }
 
