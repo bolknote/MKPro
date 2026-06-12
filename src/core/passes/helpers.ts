@@ -11050,6 +11050,19 @@ export function x2StableUnaryExpressionValueFact(
   return stableExpressionValueFact(opcode, key);
 }
 
+export function x2UnaryExpressionValueFacts(
+  op: IrOp,
+  source: X2ValueFact,
+): Set<X2ValueFact> {
+  if (op.kind !== "plain") return new Set();
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return new Set();
+  if (stableExpressionOpcodeArity(op.opcode) !== 1) return new Set();
+  const output = plainProducesConcreteDecimalValues(op, new Set<X2ValueFact>([source]));
+  const stable = x2StableUnaryExpressionValueFact(op, source);
+  if (stable !== undefined) output.add(stable);
+  return output;
+}
+
 export function x2StableBinaryExpressionValueFact(
   op: IrOp,
   ySource: X2ValueFact,
@@ -11064,6 +11077,24 @@ export function x2StableBinaryExpressionValueFact(
   if (stableBinaryExpressionKeyHasConcreteDecimalResult(op, yKey, xKey)) return undefined;
   const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
   return stableBinaryExpressionValueFact(op, opcode, yKey, xKey);
+}
+
+export function x2BinaryExpressionValueFacts(
+  op: IrOp,
+  ySource: X2ValueFact,
+  xSource: X2ValueFact,
+): Set<X2ValueFact> {
+  if (op.kind !== "plain") return new Set();
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op) || hasIrRoles(op)) return new Set();
+  if (stableExpressionOpcodeArity(op.opcode) !== 2) return new Set();
+  const output = plainProducesConcreteBinaryDecimalValues(
+    op,
+    new Set<X2ValueFact>([ySource]),
+    new Set<X2ValueFact>([xSource]),
+  );
+  const stable = x2StableBinaryExpressionValueFact(op, ySource, xSource);
+  if (stable !== undefined) output.add(stable);
+  return output;
 }
 
 export function x2StableConstantExpressionValueFacts(op: IrOp): Set<X2ValueFact> {

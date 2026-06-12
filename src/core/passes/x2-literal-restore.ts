@@ -23,9 +23,9 @@ import {
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateHasSameDotRestoreValueInXAndX2,
   x2StateIsClosedPlainContext,
-  x2StableBinaryExpressionValueFact,
+  x2BinaryExpressionValueFacts,
   x2StableConstantExpressionValueFacts,
-  x2StableUnaryExpressionValueFact,
+  x2UnaryExpressionValueFacts,
   x2ValueSetHasFact,
   x2ValueSetHasRestoredVisibleDecimal,
   x2ValueShapeSetHasRestoredVisibleDecimal,
@@ -246,19 +246,35 @@ function binaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpres
   const binaryIndex = xSource.end + 1;
   const binary = ops[binaryIndex];
   if (binary === undefined || binary.kind !== "plain") return undefined;
-  const x2Fact = stableBinaryExpressionValueFactForSources(binary, ySource, xSource);
-  if (x2Fact === undefined) return undefined;
-  let syncIndex = binaryIndex + 1;
-  while (isPlainExpressionSyncGapOp(ops[syncIndex])) syncIndex += 1;
-  if (!isPlainXPreservingX2Sync(ops[syncIndex])) return undefined;
+  const binaryFacts = binaryExpressionValueFactsForSources(binary, ySource, xSource);
+  if (binaryFacts.length === 0) return undefined;
   const mnemonic = "mnemonic" in binary.meta ? binary.meta.mnemonic : undefined;
-  return {
-    end: syncIndex,
-    displayValue: `${mnemonic ?? "expr"}(${ySource.displayValue},${xSource.displayValue})`,
-    x2Facts: [x2Fact],
-    sourceStackEnd: binaryIndex,
-    allowDuplicateYStackProof: false,
-  };
+  let cursor = binaryIndex + 1;
+  let displayValue = `${mnemonic ?? "expr"}(${ySource.displayValue},${xSource.displayValue})`;
+  let x2Facts: readonly X2ValueFact[] = binaryFacts;
+
+  while (cursor < ops.length) {
+    while (isPlainExpressionSyncGapOp(ops[cursor])) cursor += 1;
+    if (isPlainXPreservingX2Sync(ops[cursor])) {
+      return {
+        end: cursor,
+        displayValue,
+        x2Facts,
+        sourceStackEnd: binaryIndex,
+        allowDuplicateYStackProof: false,
+      };
+    }
+    const unary = ops[cursor];
+    if (unary === undefined || unary.kind !== "plain") return undefined;
+    const nextFacts = stableUnaryExpressionValueFactsForSource(unary, x2Facts);
+    if (nextFacts.length === 0) return undefined;
+    const unaryMnemonic = "mnemonic" in unary.meta ? unary.meta.mnemonic : undefined;
+    displayValue = `${unaryMnemonic ?? "expr"}(${displayValue})`;
+    x2Facts = nextFacts;
+    cursor += 1;
+  }
+
+  return undefined;
 }
 
 function binaryExpressionXSourceStart(ops: readonly IrOp[], start: number): number {
@@ -333,24 +349,23 @@ function stableUnaryExpressionValueFactsForSource(
 ): readonly X2ValueFact[] {
   const output = new Set<X2ValueFact>();
   for (const sourceFact of sourceFacts) {
-    const x2Fact = x2StableUnaryExpressionValueFact(unary, sourceFact);
-    if (x2Fact !== undefined) output.add(x2Fact);
+    for (const x2Fact of x2UnaryExpressionValueFacts(unary, sourceFact)) output.add(x2Fact);
   }
   return [...output];
 }
 
-function stableBinaryExpressionValueFactForSources(
+function binaryExpressionValueFactsForSources(
   binary: IrOp,
   ySource: ExpressionSourceRun,
   xSource: ExpressionSourceRun,
-): X2ValueFact | undefined {
+): readonly X2ValueFact[] {
+  const output = new Set<X2ValueFact>();
   for (const yFact of ySource.x2Facts) {
     for (const xFact of xSource.x2Facts) {
-      const x2Fact = x2StableBinaryExpressionValueFact(binary, yFact, xFact);
-      if (x2Fact !== undefined) return x2Fact;
+      for (const x2Fact of x2BinaryExpressionValueFacts(binary, yFact, xFact)) output.add(x2Fact);
     }
   }
-  return undefined;
+  return [...output];
 }
 
 function isPlainExpressionSyncGapOp(op: IrOp | undefined): op is Extract<IrOp, { kind: "plain" }> {
