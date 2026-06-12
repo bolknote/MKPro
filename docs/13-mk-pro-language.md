@@ -752,6 +752,13 @@ available as the matching `min-via-max` helper.
 > `random()` or `read()`) is rejected with a diagnostic; bind it to a variable
 > first. The safe helpers cost several extra cells over `К max`, so they are
 > opt-in rather than the default.
+>
+> The compiler backs this up with a quiet lint: when a non-literal `max`/`min`
+> operand's declared range provably includes `0` (for example a
+> `counter 0..9`), a note suggesting `safe_max`/`safe_min` is added to
+> `report.warnings` (the explain channel, next to raw-block hazards). A literal
+> `0` operand stays silent — `max(x, 0) == 0`-style tests are the classic
+> intentional idiom.
 `pi()` is a zero-argument helper (`F pi`). `e()` emits `1; F e^x`, the shortest
 dedicated MK-61 path for Euler's number.
 

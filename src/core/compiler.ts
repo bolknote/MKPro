@@ -118,6 +118,7 @@ import {
   normalizeZeroComparison,
   numberExpression,
   numericLiteralValue,
+  numericRangeForExpression,
   optimizeDispatchDefaultCases,
   parseRawInstruction,
   positiveIntegerPowerOfTenExponent,
@@ -2311,6 +2312,7 @@ function compileMKProOnce(
   validateReservedInternalNames(ast, diagnostics);
   validateFunctionTailRecursion(ast, diagnostics);
   validateRawMachineHazards(ast, warnings);
+  warnHardwareMaxMinZeroOperands(ast, warnings);
   if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
     throw new CompileError(diagnostics);
   }
@@ -6082,6 +6084,105 @@ function validateRawMachineHazards(ast: ProgramAst, warnings: string[]): void {
     }
   };
 
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) visit(proc.body);
+}
+
+// Hardware К max treats 0 as the largest value, so max(5, 0) == 0, and min()
+// (lowered via negated max) inherits the same quirk. Writing a literal 0 is
+// the classic intentional idiom and stays silent; this lint only fires when a
+// non-literal operand's declared range proves it can be exactly 0 at runtime,
+// where an unaware reader would expect the mathematical max/min. The note goes
+// to report.warnings (the same quiet channel as raw-block hazards), not to
+// compile diagnostics, because the behavior is documented and often deliberate.
+function warnHardwareMaxMinZeroOperands(ast: ProgramAst, warnings: string[]): void {
+  const seen = new Set<string>();
+  const checkExpression = (expr: ExpressionAst, line: number): void => {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return;
+      case "indexed":
+        checkExpression(expr.index, line);
+        return;
+      case "unary":
+        checkExpression(expr.expr, line);
+        return;
+      case "binary":
+        checkExpression(expr.left, line);
+        checkExpression(expr.right, line);
+        return;
+      case "call": {
+        for (const arg of expr.args) checkExpression(arg, line);
+        if ((expr.callee !== "max" && expr.callee !== "min") || expr.args.length !== 2) return;
+        for (const arg of expr.args) {
+          if (numericLiteralValue(arg) !== undefined) continue;
+          const range = numericRangeForExpression(arg, ast);
+          if (range?.min === undefined || range.max === undefined) continue;
+          if (range.min > 0 || range.max < 0) continue;
+          const operand = arg.kind === "identifier" ? `'${arg.name}'` : "an operand";
+          const key = `${expr.callee}:${line}:${operand}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          warnings.push(
+            `${expr.callee}() at line ${line}: ${operand} can be exactly 0, and К max treats 0 as the largest value ` +
+            `(max(5, 0) == 0). Use safe_${expr.callee}() if you need the mathematical ${expr.callee === "max" ? "maximum" : "minimum"}.`,
+          );
+        }
+        return;
+      }
+    }
+  };
+  const checkCondition = (condition: ConditionAst, line: number): void => {
+    checkExpression(condition.left, line);
+    checkExpression(condition.right, line);
+  };
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      switch (statement.kind) {
+        case "pause":
+        case "preview":
+        case "halt":
+        case "assign":
+        case "return_value":
+          checkExpression(statement.expr, statement.line);
+          break;
+        case "indexed_assign":
+          checkExpression(statement.target.index, statement.line);
+          checkExpression(statement.expr, statement.line);
+          break;
+        case "coord_list_remove":
+          checkExpression(statement.item, statement.line);
+          break;
+        case "loop":
+          visit(statement.body);
+          break;
+        case "while":
+          checkCondition(statement.condition, statement.line);
+          visit(statement.body);
+          break;
+        case "if":
+          checkCondition(statement.condition, statement.line);
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+          break;
+        case "dispatch":
+          checkExpression(statement.expr, statement.line);
+          for (const dispatchCase of statement.cases) {
+            checkExpression(dispatchCase.value, dispatchCase.line);
+            visit(dispatchCase.body);
+          }
+          if (statement.defaultBody) visit(statement.defaultBody);
+          break;
+        case "core":
+          for (const input of statement.inputs ?? []) checkExpression(input.expr, input.line);
+          break;
+        default:
+          break;
+      }
+    }
+  };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
 }
