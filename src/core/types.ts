@@ -55,6 +55,12 @@ export interface CompileOptions {
   // hide repeated call sites from later indirect-call rewrites, so the top-level
   // compiler enables it only as a whole-program candidate.
   sharedStraightLineCallBodies?: boolean;
+  // Treat every implicit variable allocation as an error: assignments to
+  // undeclared names (normally a warning) and `name = read()` targets that are
+  // silently turned into scratch state fields. On a machine with 15 registers a
+  // typo silently eats one, so strict programs must declare every variable in
+  // `state { ... }` or receive it as a function parameter.
+  strictAllocation?: boolean;
 }
 
 export interface Diagnostic {
@@ -159,6 +165,9 @@ export interface StateFieldAst {
   max?: number;
   initial?: ExpressionAst;
   initialStack?: "X" | "Y";
+  // Synthesized by the compiler (e.g. an undeclared `name = read()` target)
+  // rather than written by the user; strict allocation rejects these.
+  implicit?: boolean;
   line: number;
 }
 

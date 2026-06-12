@@ -2339,8 +2339,8 @@ function lowerV2CoordListState(field: V2StateFieldAst, context: V2LoweringContex
 
 function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>): StateFieldAst[] {
   const fields: StateFieldAst[] = [];
-  const add = (name: string, line: number): void => {
-    fields.push({ name, type: "packed", line });
+  const add = (name: string, line: number, implicit = false): void => {
+    fields.push({ name, type: "packed", ...(implicit ? { implicit } : {}), line });
   };
   for (const rule of v2.rules) {
     if (!specializedRules.has(rule.name)) {
@@ -2367,7 +2367,7 @@ function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>)
         for (const matchCase of statement.cases) visit([matchCase.action]);
         if (statement.otherwise) visit([statement.otherwise]);
       }
-      if (statement.kind === "v2_read") add(statement.target, statement.line);
+      if (statement.kind === "v2_read") add(statement.target, statement.line, true);
     }
   }
 }

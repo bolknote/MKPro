@@ -101,6 +101,15 @@ Functions should stay at the level of game actions: `player = player + 10`,
 `safe_landing()`, normal assignments, comparisons, dispatch, and halts. The
 lowerer turns those into assignments, display commands, dispatch, and stops.
 
+Variables come from `state { ... }` fields, board/domain bindings, and function
+parameters. Assigning to an undeclared name still works — the compiler
+allocates a register implicitly — but emits a warning, because on a machine
+with 15 registers a typo silently eats one. `name = read()` targets are
+promoted to scratch state fields without a warning. The `--strict` CLI flag
+(`strictAllocation` in the API) turns every implicit allocation into an error,
+including the silent `read()` promotion: strict programs must declare each
+variable explicitly.
+
 Display output is a list of visible fragments. A fragment can be state or text:
 
 ```mkpro

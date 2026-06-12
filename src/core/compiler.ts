@@ -2347,6 +2347,7 @@ function compileMKProOnce(
     loweringOptions.forcedRegisterShares ?? [],
     loweringOptions.xParamValueFunctions === true,
     loweringOptions.comparisonGuardedUpdateSelectors === true,
+    opts.strictAllocation === true,
   );
   const context = new EmitContext(
     ast,
@@ -11418,6 +11419,7 @@ function allocateRegisters(
   forcedRegisterShares: ReadonlyArray<{ freeRegister: RegisterName; keepRegister: RegisterName }> = [],
   xParamValueFunctions = false,
   comparisonGuardedUpdateSelectors = false,
+  strictAllocation = false,
 ): RegisterAllocation {
   const declared = new Set<string>();
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
@@ -11474,7 +11476,7 @@ function allocateRegisters(
     if (register === undefined) break;
     hints.set(variable, { mode: "prefer", register });
   }
-  warnUndeclaredAssignments(ast, declared, diagnostics);
+  warnUndeclaredAssignments(ast, declared, diagnostics, strictAllocation);
   collectAssignedVariables(ast, variables, xParamValueNames);
   collectFunctionTailCallScratchVariables(ast, variables);
   collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
@@ -13367,27 +13369,43 @@ function warnUndeclaredAssignments(
   ast: ProgramAst,
   declared: Set<string>,
   diagnostics: Diagnostic[],
+  strictAllocation = false,
 ): void {
   const seen = new Set<string>();
   const ephemeralInputs = collectEphemeralInputTargets(ast);
   const loopPrompts = loopCarriedPromptNames(ast);
   const xParamNames = xParamProcParamNames(ast);
+  const report = (target: string, line: number | undefined): void => {
+    if (seen.has(target)) return;
+    seen.add(target);
+    diagnostics.push({
+      level: strictAllocation ? "error" : "warning",
+      message: strictAllocation
+        ? `Undeclared variable '${target}' (strict allocation). Declare it in state { ... } or pass it as a function parameter.`
+        : `Implicit allocation for undeclared variable '${target}'. Declare it in state { ... } to silence.`,
+      ...(line === undefined ? {} : { line }),
+    });
+  };
+  // `name = read()` targets are silently promoted to scratch state fields during
+  // V2 lowering, so by this point they look declared. Strict allocation rejects
+  // those synthesized declarations too: a typo in a read target must not eat one
+  // of the 15 registers without a trace.
+  if (strictAllocation) {
+    for (const state of ast.states) {
+      for (const field of state.fields) {
+        if (field.implicit === true) report(field.name, field.line);
+      }
+    }
+  }
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "assign" || statement.kind === "input") {
         if (loopPrompts.has(statement.target)) continue;
         if (xParamNames.has(statement.target)) continue;
-        if (statement.kind === "input" && ephemeralInputs.has(statement.target)) continue;
+        if (statement.kind === "input" && !strictAllocation && ephemeralInputs.has(statement.target)) continue;
         if (statement.target.startsWith(DISPLAY_EXPR_PREFIX)) continue;
         if (statement.target.startsWith(INTERNAL_NAME_PREFIX)) continue;
-        if (!declared.has(statement.target) && !seen.has(statement.target)) {
-          diagnostics.push({
-            level: "warning",
-            message: `Implicit allocation for undeclared variable '${statement.target}'. Add 'store ${statement.target}' to silence.`,
-            line: statement.line,
-          });
-          seen.add(statement.target);
-        }
+        if (!declared.has(statement.target)) report(statement.target, statement.line);
       }
       if (statement.kind === "loop") visit(statement.body);
       if (statement.kind === "while") visit(statement.body);

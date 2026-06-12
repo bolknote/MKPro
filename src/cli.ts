@@ -97,6 +97,8 @@ function parseArgs(argv: string[]): CliArgs {
       options.budget = budget;
     } else if (arg === "--analysis") {
       options.analysis = true;
+    } else if (arg === "--strict") {
+      options.strictAllocation = true;
     } else if (arg.startsWith("-")) {
       throw new Error(`Unknown flag '${arg}'.`);
     } else if (!file) {
@@ -140,6 +142,8 @@ Flags:
   --delivery manual|loader|hex default: hex
   --budget N                  default: 105
   --analysis                  emit diagnostic output even when over budget
+  --strict                    error on implicit variable allocation (undeclared
+                              assignment targets and silent read() scratch vars)
 `;
 }
 
