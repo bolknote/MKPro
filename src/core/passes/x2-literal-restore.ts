@@ -1,4 +1,5 @@
 import type { IrOp, RegisterName } from "../types.ts";
+import { isStableIndirectSelector } from "../indirect-addressing.ts";
 import {
   computeX2DotRestoreGapStates,
   computeX2ImmediateSyncStates,
@@ -8,6 +9,7 @@ import {
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
+  knownIndirectMemoryTarget,
   knownIndirectFlowTarget,
   labelIndexes,
   analyzeX2StackEffect,
@@ -279,17 +281,20 @@ function registerExpressionSourceRunAt(
   start: number,
 ): ExpressionSourceRun | undefined {
   const op = ops[start];
-  if (
-    op === undefined ||
-    op.kind !== "recall" ||
-    hasRewriteBarrier(op) ||
-    isDisplayFocusSensitive(op)
-  ) return undefined;
+  if (op === undefined || hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return undefined;
+  const register = registerExpressionSourceRegister(op);
+  if (register === undefined) return undefined;
   return {
     end: start,
-    displayValue: `R${op.register}`,
-    x2Facts: [registerValueFact(op.register)],
+    displayValue: `R${register}`,
+    x2Facts: [registerValueFact(register)],
   };
+}
+
+function registerExpressionSourceRegister(op: IrOp): RegisterName | undefined {
+  if (op.kind === "recall") return op.register;
+  if (op.kind !== "indirect-recall" || !isStableIndirectSelector(op.register)) return undefined;
+  return knownIndirectMemoryTarget(op);
 }
 
 function stableConstantExpressionSourceRunAt(
