@@ -493,14 +493,17 @@ class MKProParser {
         return statement;
       }
       const arrow = /^(.+?)\s*=>\s*(.+)$/u.exec(bodyLine.text);
-      if (!arrow) throw new ParseError("Match cases must look like 'value => action'", bodyLine.line);
+      if (!arrow) throw new ParseError("Match cases must look like 'value => action' or 'value => {'", bodyLine.line);
       const left = arrow[1]!.trim();
-      const action = parseV2InlineStatement(arrow[2]!.trim(), bodyLine.line);
+      const right = arrow[2]!.trim();
+      const action: V2StatementAst = right === "{"
+        ? { kind: "v2_block", body: this.parseV2StatementBlock(), line: bodyLine.line }
+        : parseV2InlineStatement(right, bodyLine.line);
       if (left === "otherwise") {
         otherwise = action;
       } else {
         cases.push({
-          values: left.split(",").map((part) => part.trim()).filter(Boolean),
+          values: expandV2MatchCaseValues(left, bodyLine.line),
           action,
           line: bodyLine.line,
         });
@@ -661,6 +664,30 @@ function isKnownCompactBoardEncoding(encoding: string): boolean {
     "pier_to_ship",
     "row_scan",
   ].includes(encoding);
+}
+
+// Match case values are comma-separated texts; integer ranges like `1..3`
+// expand to the equivalent explicit list so every later lowering (cyclic
+// counter, effect tables, dispatch) sees plain values.
+const MATCH_CASE_RANGE_LIMIT = 100;
+
+function expandV2MatchCaseValues(left: string, line: number): string[] {
+  const values: string[] = [];
+  for (const part of left.split(",").map((item) => item.trim()).filter(Boolean)) {
+    const range = /^(-?\d+)\s*\.\.\s*(-?\d+)$/u.exec(part);
+    if (!range) {
+      values.push(part);
+      continue;
+    }
+    const min = Number(range[1]!);
+    const max = Number(range[2]!);
+    if (min > max) throw new ParseError(`Match range '${part}' must be ascending`, line);
+    if (max - min + 1 > MATCH_CASE_RANGE_LIMIT) {
+      throw new ParseError(`Match range '${part}' expands to more than ${MATCH_CASE_RANGE_LIMIT} values`, line);
+    }
+    for (let value = min; value <= max; value += 1) values.push(String(value));
+  }
+  return values;
 }
 
 function parseV2InlineStatement(text: string, line: number): V2StatementAst {
@@ -1178,6 +1205,8 @@ function v2StatementContainsReturn(statement: V2StatementAst): boolean {
     case "v2_match":
       return statement.cases.some((matchCase) => v2StatementContainsReturn(matchCase.action)) ||
         (statement.otherwise !== undefined && v2StatementContainsReturn(statement.otherwise));
+    case "v2_block":
+      return v2StatementsContainReturn(statement.body);
     default:
       return false;
   }
@@ -1204,6 +1233,8 @@ function v2StatementAlwaysReturns(statement: V2StatementAst): boolean {
       return statement.otherwise !== undefined &&
         statement.cases.every((matchCase) => v2StatementAlwaysReturns(matchCase.action)) &&
         v2StatementAlwaysReturns(statement.otherwise);
+    case "v2_block":
+      return v2StatementsAlwaysReturn(statement.body);
     default:
       return false;
   }
@@ -1259,6 +1290,8 @@ function v2StatementExprTexts(statement: V2StatementAst): string[] {
         ...statement.cases.flatMap((matchCase) => [...matchCase.values, ...v2StatementExprTexts(matchCase.action)]),
         ...(statement.otherwise ? v2StatementExprTexts(statement.otherwise) : []),
       ];
+    case "v2_block":
+      return statement.body.flatMap(v2StatementExprTexts);
     case "v2_raw":
       return statement.inputs.map((input) => input.expr);
     default:
@@ -1345,6 +1378,9 @@ function v2StatementTexts(statements: V2StatementAst[]): string[] {
           for (const matchCase of statement.cases) visit([matchCase.action]);
           if (statement.otherwise) visit([statement.otherwise]);
           break;
+        case "v2_block":
+          visit(statement.body);
+          break;
         case "v2_invoke":
           texts.push(...statement.args);
           break;
@@ -1399,6 +1435,9 @@ function collectV2Invocations(v2: V2ProgramAst): V2InvocationSite[] {
         for (const matchCase of statement.cases) visit([matchCase.action], currentRule);
         if (statement.otherwise) visit([statement.otherwise], currentRule);
       }
+      if (statement.kind === "v2_block") {
+        visit(statement.body, currentRule);
+      }
     }
   };
   if (v2.body.length > 0) visit(v2.body);
@@ -1451,6 +1490,8 @@ function synthesizeV2ParametricSiblingRules(v2: V2ProgramAst): void {
         rewritten.cases = synthesizeV2ParametricSiblingMatchCases(v2, rewritten.cases, rules, callCounts, consumed);
         return rewritten;
       }
+      case "v2_block":
+        return { ...statement, body: rewriteStatements(statement.body) };
       default:
         return statement;
     }
@@ -1670,6 +1711,8 @@ function v2StatementsContainRaw(statements: readonly V2StatementAst[]): boolean 
       case "v2_match":
         return statement.cases.some((matchCase) => v2StatementsContainRaw([matchCase.action])) ||
           (statement.otherwise !== undefined && v2StatementsContainRaw([statement.otherwise]));
+      case "v2_block":
+        return v2StatementsContainRaw(statement.body);
       default:
         return false;
     }
@@ -1747,6 +1790,9 @@ function collectV2UsedNames(v2: V2ProgramAst): Set<string> {
         case "v2_match":
           for (const matchCase of statement.cases) visit([matchCase.action]);
           if (statement.otherwise !== undefined) visit([statement.otherwise]);
+          break;
+        case "v2_block":
+          visit(statement.body);
           break;
         case "v2_invoke":
           used.add(statement.name);
@@ -1866,6 +1912,7 @@ function collectV2InlineScreens(v2: V2ProgramAst): V2ScreenAst[] {
         for (const matchCase of statement.cases) visit([matchCase.action]);
         if (statement.otherwise) visit([statement.otherwise]);
       }
+      if (statement.kind === "v2_block") visit(statement.body);
     }
   };
   if (v2.body.length > 0) visit(v2.body);
@@ -1964,6 +2011,9 @@ function validateV2Statement(
       for (const matchCase of statement.cases) visit([matchCase.action]);
       if (statement.otherwise) visit([statement.otherwise]);
       return;
+    case "v2_block":
+      visit(statement.body);
+      return;
     default:
       return;
   }
@@ -2045,6 +2095,9 @@ function collectV2ExpressionTexts(v2: V2ProgramAst): string[] {
             visit([matchCase.action]);
           }
           if (statement.otherwise !== undefined) visit([statement.otherwise]);
+          break;
+        case "v2_block":
+          visit(statement.body);
           break;
         case "v2_invoke":
           texts.push(...statement.args);
@@ -2367,6 +2420,7 @@ function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>)
         for (const matchCase of statement.cases) visit([matchCase.action]);
         if (statement.otherwise) visit([statement.otherwise]);
       }
+      if (statement.kind === "v2_block") visit(statement.body);
       if (statement.kind === "v2_read") add(statement.target, statement.line, true);
     }
   }
@@ -2810,6 +2864,8 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
       }];
     case "v2_match":
       return lowerV2MatchStatements(statement, context);
+    case "v2_block":
+      return lowerV2Statements(statement.body, context);
     case "v2_return":
       return [{
         kind: "return_value",
@@ -3411,6 +3467,7 @@ function resolveV2ActionBody(
   action: V2StatementAst,
   context: V2LoweringContext,
 ): V2StatementAst[] | undefined {
+  if (action.kind === "v2_block") return action.body;
   if (action.kind !== "v2_invoke") return [action];
   const rule = context.rules.get(action.name);
   if (rule === undefined) return undefined;
@@ -3474,6 +3531,7 @@ function lowerV2MatchAction(
   context: V2LoweringContext,
   line: number,
 ): StatementAst[] {
+  if (action.kind === "v2_block") return lowerV2Statements(action.body, context);
   if (action.kind !== "v2_invoke") return lowerV2Statement(action, context);
   const rule = context.rules.get(action.name);
   if (rule !== undefined && context.specializedRules.has(rule.name)) {
@@ -3576,6 +3634,8 @@ function substituteV2Statement(statement: V2StatementAst, replacements: Map<stri
       }
       return substituted;
     }
+    case "v2_block":
+      return { ...statement, body: substituteV2Statements(statement.body, replacements) };
     case "v2_invoke":
       return { ...statement, args: statement.args.map((arg) => substituteV2Text(arg, replacements)) };
     case "v2_stop":

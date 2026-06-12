@@ -6113,6 +6113,9 @@ function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Arr
         for (const matchCase of statement.cases) visit([matchCase.action]);
         if (statement.otherwise) visit([statement.otherwise]);
       }
+      if (statement.kind === "v2_block") {
+        visit(statement.body);
+      }
     }
   };
   if (ast.body.length > 0) visit(ast.body);
@@ -16120,6 +16123,9 @@ function countV2Statements(statements: V2StatementAst[]): number {
       count += statement.cases.length;
       for (const matchCase of statement.cases) count += countV2Statements([matchCase.action]);
       if (statement.otherwise) count += countV2Statements([statement.otherwise]);
+    }
+    if (statement.kind === "v2_block") {
+      count += countV2Statements(statement.body);
     }
     if (statement.kind === "v2_if") {
       count += countV2Statements(statement.thenBody);

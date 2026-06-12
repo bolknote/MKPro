@@ -135,6 +135,9 @@ function visitV2StatementChildren(
       for (const matchCase of statement.cases) visit([matchCase.action]);
       if (statement.otherwise !== undefined) visit([statement.otherwise]);
       return;
+    case "v2_block":
+      visit(statement.body);
+      return;
     default:
       return;
   }

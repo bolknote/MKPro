@@ -969,7 +969,25 @@ The parser keeps these high-level statements as typed source nodes:
 - `while predicate { ... }`
 - `loop { ... }`
 - `fn_name(arg1, arg2)`
-- `match expr { values => action }`
+- `match expr { values => action }`. Case values are comma-separated and may
+  include inclusive integer ranges: `1..3 => action` is the same as
+  `1, 2, 3 => action`. A case action is either a single inline statement or a
+  braced block:
+
+```mkpro
+match key {
+  1..3 => {
+    score += 10
+    lives -= 1
+  }
+  4 => score += 1
+  otherwise => lives -= 1
+}
+```
+
+  Blocks stay in the enclosing function's scope, so `return` inside a block
+  case returns from the surrounding `fn`. Single-action cases and helper
+  functions (`1 => big_win()`) keep working unchanged and lower the same way.
 - query expressions: `line_count(set, cell)`, `neighbor_count(set, cell)`,
   and `cell_at(board, pos)`
 - formula helpers: `abs`, `acos`, `asin`, `atg`, `bit_and`, `bit_clear`,

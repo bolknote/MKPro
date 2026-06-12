@@ -311,11 +311,23 @@ export type V2StatementAst =
   | V2WhileStatementAst
   | V2LoopStatementAst
   | V2MatchStatementAst
+  | V2BlockStatementAst
   | V2InvokeStatementAst
   | V2AssignStatementAst
   | V2UpdateStatementAst
   | V2ReturnStatementAst
   | V2RawStatementAst;
+
+/**
+ * Braced multi-statement body used where the grammar otherwise takes a single
+ * inline action, e.g. a `value => { ... }` match case. The block stays in the
+ * enclosing function's scope, so `return` inside it returns from that function.
+ */
+export interface V2BlockStatementAst {
+  kind: "v2_block";
+  body: V2StatementAst[];
+  line: number;
+}
 
 export interface V2ShowStatementAst {
   kind: "v2_show";
