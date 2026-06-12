@@ -2313,6 +2313,7 @@ function compileMKProOnce(
   validateFunctionTailRecursion(ast, diagnostics);
   validateRawMachineHazards(ast, warnings);
   warnHardwareMaxMinZeroOperands(ast, warnings);
+  warnShowHaltStyleRule(ast, warnings);
   if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
     throw new CompileError(diagnostics);
   }
@@ -6185,6 +6186,52 @@ function warnHardwareMaxMinZeroOperands(ast: ProgramAst, warnings: string[]): vo
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
+}
+
+// Style rule from the language guide: "Do not write show(...); halt() for one
+// final screen" — that is two source-level effects for one screen even when a
+// lowering can fuse them. The lint flags a show immediately followed by a bare
+// halt() / halt(0) and suggests putting the visible value directly in
+// halt(...). It scans the original V2 statements (before fusion rewrites) and
+// reports through report.warnings like the other style lints.
+function warnShowHaltStyleRule(ast: ProgramAst, warnings: string[]): void {
+  const v2 = ast.v2;
+  if (v2 === undefined) return;
+  const seen = new Set<number>();
+  const visit = (statements: readonly V2StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const next = statements[index + 1];
+      if (
+        statement.kind === "v2_show" &&
+        next?.kind === "v2_stop" &&
+        next.items === undefined &&
+        next.inlineName === undefined &&
+        next.target?.trim() === "0"
+      ) {
+        if (!seen.has(next.line)) {
+          seen.add(next.line);
+          warnings.push(
+            `show(...) immediately followed by halt() at line ${next.line}: for one final screen put the ` +
+            `visible value directly in halt(...) instead of describing two display effects`,
+          );
+        }
+      }
+      if (statement.kind === "v2_if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "v2_while" || statement.kind === "v2_loop" || statement.kind === "v2_block") {
+        visit(statement.body);
+      }
+      if (statement.kind === "v2_match") {
+        for (const matchCase of statement.cases) visit([matchCase.action]);
+        if (statement.otherwise) visit([statement.otherwise]);
+      }
+    }
+  };
+  if (v2.body.length > 0) visit(v2.body);
+  for (const rule of v2.rules) visit(rule.body);
 }
 
 function collectUnsupportedV2Statements(ast: NonNullable<ProgramAst["v2"]>): Array<{ text: string; line: number }> {

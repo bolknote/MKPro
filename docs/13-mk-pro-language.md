@@ -428,7 +428,8 @@ Use `halt(value)` when the terminal display is a value, and `halt("text")` for
 a terminal calculator video literal such as `halt("ЕГГОГ")` or
 `halt("8СГ-Е-78")`. Do not write `show(...); halt()` for one final screen:
 that describes two source-level effects even if a specific lowering can fuse
-some cases. Single-use terminal functions are inlined, and shared terminal
+some cases. The compiler enforces this as a style lint: a `show(...)`
+immediately followed by a bare `halt()` adds a note to `report.warnings`. Single-use terminal functions are inlined, and shared terminal
 functions can be lowered as direct jumps by the optimizer, so authors do not
 need a separate terminal form for layout reasons. Function names must be unique,
 and a call must reference a declared function.
