@@ -13702,6 +13702,48 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces repeated synced pure unary register expressions", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      recall("1"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      recall("1"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(R1) from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps register expressions after the source register changes", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0d, "Cx"),
+      store("1"),
+      recall("1"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore keeps pure unary constant expressions without a later sync", () => {
     const program: IrOp[] = [
       plain(0x20, "F pi"),
@@ -13745,6 +13787,36 @@ describe("ir passes on synthetic programs", () => {
       plain(0xf0, "F* empty F0"),
       plain(0x54, "К НОП"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal /(1,3) from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces repeated synced binary register expressions", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      plain(0x10, "+"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      recall("1"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      plain(0x10, "+"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(4);
+    expect(result.ops).toEqual([
+      recall("1"),
+      plain(0x0e, "В↑"),
+      recall("2"),
+      plain(0x10, "+"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal +(R1,R2) from hidden X2 temp" } },
       halt(),
     ]);
   });

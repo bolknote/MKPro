@@ -1810,7 +1810,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     the second run's entry/lift cells can expose a later stack consumer. The
     expression parser can cross documented X/stack/X2-preserving empty cells
     before that explicit sync, while role-bearing `/-/` cells
-    are not parsed as replaceable literal sign suffixes. When a cell range can
+    are not parsed as replaceable literal sign suffixes. Direct `П->X r`
+    sources also participate in the same stable expression parser, so repeated
+    synced unary or binary runs such as `П->X r; F...; F*` or
+    `П->X a; В↑; П->X b; +; F*` can collapse to `.` while the normal
+    stack-lift and register-dependency guards prove the source registers were
+    not changed. When a cell range can
     be read both as a full
     exponent-entry literal and as a mantissa prefix before `ВП`, the pass tries
     the full literal first and then the prefix; the prefix is replaceable only

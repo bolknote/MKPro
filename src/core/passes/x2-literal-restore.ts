@@ -1,4 +1,4 @@
-import type { IrOp } from "../types.ts";
+import type { IrOp, RegisterName } from "../types.ts";
 import {
   computeX2DotRestoreGapStates,
   computeX2ImmediateSyncStates,
@@ -271,7 +271,25 @@ function expressionSourceRunAt(ops: readonly IrOp[], start: number): ExpressionS
       x2Facts: [decimal.x2Fact],
     };
   }
-  return stableConstantExpressionSourceRunAt(ops, start);
+  return registerExpressionSourceRunAt(ops, start) ?? stableConstantExpressionSourceRunAt(ops, start);
+}
+
+function registerExpressionSourceRunAt(
+  ops: readonly IrOp[],
+  start: number,
+): ExpressionSourceRun | undefined {
+  const op = ops[start];
+  if (
+    op === undefined ||
+    op.kind !== "recall" ||
+    hasRewriteBarrier(op) ||
+    isDisplayFocusSensitive(op)
+  ) return undefined;
+  return {
+    end: start,
+    displayValue: `R${op.register}`,
+    x2Facts: [registerValueFact(op.register)],
+  };
 }
 
 function stableConstantExpressionSourceRunAt(
@@ -288,6 +306,10 @@ function stableConstantExpressionSourceRunAt(
     displayValue: mnemonic ?? "const",
     x2Facts,
   };
+}
+
+function registerValueFact(register: RegisterName): X2ValueFact {
+  return `reg:${register}`;
 }
 
 function stableUnaryExpressionValueFactForSource(
