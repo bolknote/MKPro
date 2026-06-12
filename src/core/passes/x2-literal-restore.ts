@@ -238,10 +238,10 @@ function unaryExpressionRunFromSingleSourceAt(ops: readonly IrOp[], start: numbe
 }
 
 function binaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
-  const ySource = expressionSourceRunAt(ops, start);
+  const ySource = expressionOperandRunAt(ops, start);
   if (ySource === undefined) return undefined;
   const xStart = binaryExpressionXSourceStart(ops, ySource.end + 1);
-  const xSource = expressionSourceRunAt(ops, xStart);
+  const xSource = expressionOperandRunAt(ops, xStart);
   if (xSource === undefined) return undefined;
   const binaryIndex = xSource.end + 1;
   const binary = ops[binaryIndex];
@@ -275,6 +275,35 @@ function binaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpres
   }
 
   return undefined;
+}
+
+function expressionOperandRunAt(ops: readonly IrOp[], start: number): ExpressionSourceRun | undefined {
+  const source = expressionSourceRunAt(ops, start);
+  if (source === undefined) return undefined;
+
+  let cursor = source.end + 1;
+  let end = source.end;
+  let displayValue = source.displayValue;
+  let x2Facts: readonly X2ValueFact[] = source.x2Facts;
+
+  while (cursor < ops.length) {
+    const unary = ops[cursor];
+    if (unary === undefined || unary.kind !== "plain") break;
+    const nextFacts = stableUnaryExpressionValueFactsForSource(unary, x2Facts);
+    if (nextFacts.length === 0) break;
+    const mnemonic = "mnemonic" in unary.meta ? unary.meta.mnemonic : undefined;
+    displayValue = `${mnemonic ?? "expr"}(${displayValue})`;
+    x2Facts = nextFacts;
+    end = cursor;
+    cursor += 1;
+
+    while (isPlainExpressionSyncGapOp(ops[cursor])) {
+      end = cursor;
+      cursor += 1;
+    }
+  }
+
+  return { end, displayValue, x2Facts };
 }
 
 function binaryExpressionXSourceStart(ops: readonly IrOp[], start: number): number {
