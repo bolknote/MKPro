@@ -1799,11 +1799,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `5 ВП 3`, `1.2 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
     X2-affecting sync. A repeated `literal; pure unary; explicit
-    X-preserving X2 sync` run can also collapse to `.` when the source is either
-    a decimal digit-run or a documented stable constant producer such as
-    `F pi`, the hidden X2 set already contains the same stable `expr-key:*`,
-    visible `X` proves the same dot-restore value, and the unsafe-shape,
-    stack-lift, and context-sensitive restore guards all remain clean. Repeated
+    X-preserving X2 sync` run, including a chain of documented pure unary
+    operators separated by free-standing X/stack/X2-preserving empty cells, can
+    also collapse to `.` when the source is either a decimal digit-run or a
+    documented stable constant producer such as `F pi`, the hidden X2 set
+    already contains the same stable `expr-key:*`, visible `X` proves the same
+    dot-restore value, and the unsafe-shape, stack-lift, and context-sensitive
+    restore guards all remain clean. Repeated
     two-operand RPN runs are handled through the same stable key model for
     binary operators when both operand sources are proved; an explicit `В↑`
     may separate two numeric operands, and the rewrite is refused if deleting

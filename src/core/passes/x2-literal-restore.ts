@@ -52,7 +52,7 @@ interface NumericLiteralRun {
 interface UnaryExpressionRun {
   readonly end: number;
   readonly displayValue: string;
-  readonly x2Fact: X2ValueFact;
+  readonly x2Facts: readonly X2ValueFact[];
   readonly sourceStackEnd: number;
   readonly allowDuplicateYStackProof: boolean;
 }
@@ -208,23 +208,33 @@ function unaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpress
 function unaryExpressionRunFromSingleSourceAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
   const source = expressionSourceRunAt(ops, start);
   if (source === undefined) return undefined;
-  const unaryIndex = source.end + 1;
-  const unary = ops[unaryIndex];
-  if (unary === undefined) return undefined;
-  if (unary.kind !== "plain") return undefined;
-  const x2Fact = stableUnaryExpressionValueFactForSource(unary, source);
-  if (x2Fact === undefined) return undefined;
-  let syncIndex = unaryIndex + 1;
-  while (isPlainExpressionSyncGapOp(ops[syncIndex])) syncIndex += 1;
-  if (!isPlainXPreservingX2Sync(ops[syncIndex])) return undefined;
-  const mnemonic = "mnemonic" in unary.meta ? unary.meta.mnemonic : undefined;
-  return {
-    end: syncIndex,
-    displayValue: `${mnemonic ?? "expr"}(${source.displayValue})`,
-    x2Fact,
-    sourceStackEnd: source.end,
-    allowDuplicateYStackProof: true,
-  };
+  let cursor = source.end + 1;
+  let displayValue = source.displayValue;
+  let x2Facts: readonly X2ValueFact[] = source.x2Facts;
+
+  while (cursor < ops.length) {
+    const unary = ops[cursor];
+    if (unary === undefined || unary.kind !== "plain") return undefined;
+    const nextFacts = stableUnaryExpressionValueFactsForSource(unary, x2Facts);
+    if (nextFacts.length === 0) return undefined;
+    const mnemonic = "mnemonic" in unary.meta ? unary.meta.mnemonic : undefined;
+    displayValue = `${mnemonic ?? "expr"}(${displayValue})`;
+    x2Facts = nextFacts;
+    cursor += 1;
+
+    while (isPlainExpressionSyncGapOp(ops[cursor])) cursor += 1;
+    if (isPlainXPreservingX2Sync(ops[cursor])) {
+      return {
+        end: cursor,
+        displayValue,
+        x2Facts,
+        sourceStackEnd: source.end,
+        allowDuplicateYStackProof: true,
+      };
+    }
+  }
+
+  return undefined;
 }
 
 function binaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
@@ -245,7 +255,7 @@ function binaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpres
   return {
     end: syncIndex,
     displayValue: `${mnemonic ?? "expr"}(${ySource.displayValue},${xSource.displayValue})`,
-    x2Fact,
+    x2Facts: [x2Fact],
     sourceStackEnd: binaryIndex,
     allowDuplicateYStackProof: false,
   };
@@ -317,15 +327,16 @@ function registerValueFact(register: RegisterName): X2ValueFact {
   return `reg:${register}`;
 }
 
-function stableUnaryExpressionValueFactForSource(
+function stableUnaryExpressionValueFactsForSource(
   unary: IrOp,
-  source: ExpressionSourceRun,
-): X2ValueFact | undefined {
-  for (const sourceFact of source.x2Facts) {
+  sourceFacts: readonly X2ValueFact[],
+): readonly X2ValueFact[] {
+  const output = new Set<X2ValueFact>();
+  for (const sourceFact of sourceFacts) {
     const x2Fact = x2StableUnaryExpressionValueFact(unary, sourceFact);
-    if (x2Fact !== undefined) return x2Fact;
+    if (x2Fact !== undefined) output.add(x2Fact);
   }
-  return undefined;
+  return [...output];
 }
 
 function stableBinaryExpressionValueFactForSources(
@@ -738,7 +749,7 @@ const run: IrPassFn = (ops) => {
     if (
       expressionRun !== undefined &&
       x2StateIsClosedPlainContext(state) &&
-      x2ValueSetHasFact(state?.x2, expressionRun.x2Fact) &&
+      x2ValueSetHasAnyFact(state?.x2, expressionRun.x2Facts) &&
       x2CanUseSourceDotRestoreAt(
         ops,
         index,
@@ -761,7 +772,7 @@ const run: IrPassFn = (ops) => {
         {
           end: expressionRun.end,
           displayValue: expressionRun.displayValue,
-          x2Fact: expressionRun.x2Fact,
+          x2Fact: expressionRun.x2Facts[0]!,
           dotPreservesVpEntrySource: false,
         },
         state,
@@ -796,6 +807,16 @@ const run: IrPassFn = (ops) => {
     ],
   };
 };
+
+function x2ValueSetHasAnyFact(
+  input: ReadonlySet<X2ValueFact> | undefined,
+  facts: readonly X2ValueFact[],
+): boolean {
+  for (const fact of facts) {
+    if (x2ValueSetHasFact(input, fact)) return true;
+  }
+  return false;
+}
 
 export const x2LiteralRestore: IrPass = {
   name: "x2-literal-restore",

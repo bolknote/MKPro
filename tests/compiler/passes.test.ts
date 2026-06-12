@@ -13677,6 +13677,43 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces repeated synced chained pure unary expressions", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x54, "К НОП"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x55, "К 1"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x54, "К НОП"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(4);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0x54, "К НОП"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x55, "К 1"),
+      {
+        kind: "plain",
+        opcode: 0x0a,
+        meta: {
+          mnemonic: ".",
+          comment: "restore literal F sqrt(F sqrt(2)) from hidden X2 temp",
+        },
+      },
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore replaces repeated synced pure unary constant expressions", () => {
     const program: IrOp[] = [
       plain(0x20, "F pi"),
