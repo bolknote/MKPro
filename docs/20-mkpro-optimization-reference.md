@@ -1803,7 +1803,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     X/stack/X2-preserving empty cells or non-executable address-byte gaps, can
     also collapse to `.` either before
     an explicit X-preserving X2 sync, before `С/П`/end-of-program, before a
-    direct jump to a label/orphan-address-only terminal tail, or before
+    direct jump to a label/orphan-address-only terminal tail, before a proved
+    backward indirect jump whose numeric target already points to such a
+    terminal tail and therefore is not shifted by deleting the repeated run, or before
     a direct `В/О` return when the return-aware stack guard proves the removed
     entry/lift is not observed by the caller. In those terminal cases the
     expression itself preserves X2, the source is either a decimal digit-run or a
@@ -1817,7 +1819,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     a proved decimal, exponent-entry, register, indirect-register, or stable
     constant source followed by documented pure unary operators, and the binary
     result may also feed a pure unary tail before an explicit X2 sync or a
-    terminal boundary, including a guarded `В/О` or a direct jump to a
+    terminal boundary, including a guarded `В/О`, a direct jump to a
+    terminal tail, or a proved backward indirect jump to an address-stable
     terminal tail, when the expression is
     X2-preserving. A more
     general linear RPN parser also builds a small stack of the same stable facts,
