@@ -61,6 +61,8 @@ interface ExpressionSourceRun {
   readonly end: number;
   readonly displayValue: string;
   readonly x2Facts: readonly X2ValueFact[];
+  readonly sourceStackEnd?: number | undefined;
+  readonly allowDuplicateYStackProof?: boolean | undefined;
 }
 
 function isPlainDigit(op: IrOp): op is Extract<IrOp, { kind: "plain" }> {
@@ -202,7 +204,91 @@ function literalRunsAt(ops: readonly IrOp[], start: number): readonly NumericLit
 }
 
 function unaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
-  return unaryExpressionRunFromSingleSourceAt(ops, start) ?? binaryExpressionRunAt(ops, start);
+  return rpnExpressionRunAt(ops, start) ??
+    unaryExpressionRunFromSingleSourceAt(ops, start) ??
+    binaryExpressionRunAt(ops, start);
+}
+
+function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
+  const stack: ExpressionSourceRun[] = [];
+  let cursor = start;
+  let sawOperator = false;
+
+  while (cursor < ops.length) {
+    if (stack.length === 1 && sawOperator && isPlainXPreservingX2Sync(ops[cursor])) {
+      const [result] = stack;
+      return {
+        end: cursor,
+        displayValue: result!.displayValue,
+        x2Facts: result!.x2Facts,
+        sourceStackEnd: result!.sourceStackEnd ?? result!.end,
+        allowDuplicateYStackProof: result!.allowDuplicateYStackProof ?? true,
+      };
+    }
+
+    if (isPlainStackLiftSeparator(ops[cursor]) && stack.length > 0) {
+      cursor += 1;
+      continue;
+    }
+
+    const source = expressionSourceRunAt(ops, cursor);
+    if (source !== undefined) {
+      stack.push({
+        ...source,
+        sourceStackEnd: source.end,
+        allowDuplicateYStackProof: true,
+      });
+      cursor = source.end + 1;
+      continue;
+    }
+
+    const op = ops[cursor];
+    if (op === undefined || op.kind !== "plain") return undefined;
+
+    if (stack.length >= 1) {
+      const source = stack[stack.length - 1]!;
+      const nextFacts = stableUnaryExpressionValueFactsForSource(op, source.x2Facts);
+      if (nextFacts.length > 0) {
+        const mnemonic = "mnemonic" in op.meta ? op.meta.mnemonic : undefined;
+        stack[stack.length - 1] = {
+          end: cursor,
+          displayValue: `${mnemonic ?? "expr"}(${source.displayValue})`,
+          x2Facts: nextFacts,
+          sourceStackEnd: source.sourceStackEnd ?? source.end,
+          allowDuplicateYStackProof: source.allowDuplicateYStackProof ?? true,
+        };
+        sawOperator = true;
+        cursor += 1;
+        while (isPlainExpressionSyncGapOp(ops[cursor])) cursor += 1;
+        continue;
+      }
+    }
+
+    if (stack.length >= 2) {
+      const xSource = stack.pop()!;
+      const ySource = stack.pop()!;
+      const nextFacts = binaryExpressionValueFactsForSources(op, ySource, xSource);
+      if (nextFacts.length > 0) {
+        const mnemonic = "mnemonic" in op.meta ? op.meta.mnemonic : undefined;
+        stack.push({
+          end: cursor,
+          displayValue: `${mnemonic ?? "expr"}(${ySource.displayValue},${xSource.displayValue})`,
+          x2Facts: nextFacts,
+          sourceStackEnd: cursor,
+          allowDuplicateYStackProof: false,
+        });
+        sawOperator = true;
+        cursor += 1;
+        while (isPlainExpressionSyncGapOp(ops[cursor])) cursor += 1;
+        continue;
+      }
+      stack.push(ySource, xSource);
+    }
+
+    return undefined;
+  }
+
+  return undefined;
 }
 
 function unaryExpressionRunFromSingleSourceAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {

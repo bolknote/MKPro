@@ -1811,9 +1811,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     binary operators when both operand sources are proved; each operand may be
     a proved decimal, exponent-entry, register, indirect-register, or stable
     constant source followed by documented pure unary operators, and the binary
-    result may also feed a pure unary tail before the explicit X2 sync. An explicit `В↑`
-    may separate two operands, and the rewrite is refused if deleting
-    the second run's entry/lift cells can expose a later stack consumer. The
+    result may also feed a pure unary tail before the explicit X2 sync. A more
+    general linear RPN parser also builds a small stack of the same stable facts,
+    so nested expressions such as `sqrt(2); В↑; sqrt(3); +; В↑; sqrt(4); +; F*`
+    can reuse the final hidden X2 value through `.`. An explicit `В↑`
+    may separate operands, and the rewrite is refused if deleting
+    the repeated run's entry/lift cells can expose a later stack consumer. The
     expression parser can cross documented X/stack/X2-preserving empty cells
     before that explicit sync, while role-bearing `/-/` cells
     are not parsed as replaceable literal sign suffixes. Direct `П->X r` and
