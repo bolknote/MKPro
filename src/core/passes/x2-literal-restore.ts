@@ -732,7 +732,7 @@ function replacingLiteralCanExposeContextSensitiveRestore(
   state: X2ValueDataflowState | undefined,
   producerIndex: number,
   context: DirectReturnAnalysisContext,
-  vpReachabilityCache: Map<number, boolean>,
+  vpReachabilityCache: Map<string, boolean>,
   redundantSync: {
     readonly value: boolean;
     readonly displayValue: boolean;
@@ -742,10 +742,11 @@ function replacingLiteralCanExposeContextSensitiveRestore(
   let replacementCanReachVpRestore: boolean | undefined;
   const canReachVpRestore = (): boolean => {
     const start = run.end + 1;
-    replacementCanReachVpRestore ??= vpReachabilityCache.get(start);
+    const cacheKey = `${start}:${producerIndex}`;
+    replacementCanReachVpRestore ??= vpReachabilityCache.get(cacheKey);
     if (replacementCanReachVpRestore === undefined) {
-      replacementCanReachVpRestore = literalReplacementCanReachVpRestore(ops, start);
-      vpReachabilityCache.set(start, replacementCanReachVpRestore);
+      replacementCanReachVpRestore = literalReplacementCanReachVpRestore(ops, start, producerIndex);
+      vpReachabilityCache.set(cacheKey, replacementCanReachVpRestore);
     }
     return replacementCanReachVpRestore;
   };
@@ -767,7 +768,11 @@ function replacingLiteralCanExposeContextSensitiveRestore(
     !run.dotPreservesVpEntrySource &&
     vpSourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp
   ) return true;
-  if (!x2SyncCanExposeContextSensitiveRestore(ops, run.end)) return false;
+  if (
+    !x2SyncCanExposeContextSensitiveRestore(ops, run.end, {
+      numericTargetMustBeBeforeIndex: producerIndex,
+    })
+  ) return false;
   if (
     run.dotPreservesVpEntrySource &&
     (
@@ -781,12 +786,17 @@ function replacingLiteralCanExposeContextSensitiveRestore(
       redundantSyncValue: redundantSync.value,
       redundantSyncDisplayValue: redundantSync.displayValue,
       redundantSyncShape: redundantSync.shape,
+      numericTargetMustBeBeforeIndex: producerIndex,
     })
   ) return false;
   return true;
 }
 
-function literalReplacementCanReachVpRestore(ops: readonly IrOp[], start: number): boolean {
+function literalReplacementCanReachVpRestore(
+  ops: readonly IrOp[],
+  start: number,
+  numericTargetMustBeBeforeIndex: number,
+): boolean {
   const labels = labelIndexes(ops);
   const addresses = addressIndexes(ops);
   const visited = new Set<string>();
@@ -813,23 +823,31 @@ function literalReplacementCanReachVpRestore(ops: readonly IrOp[], start: number
         case "jump": {
           if (typeof op.target !== "string") {
             const targetIndex = addresses.get(op.target);
-            return targetIndex === undefined || targetIndex >= start ? true : visit(targetIndex, returnStack);
+            return targetIndex === undefined || targetIndex >= numericTargetMustBeBeforeIndex
+              ? true
+              : visit(targetIndex, returnStack);
           }
           const target = labels.get(op.target);
           return target === undefined ? true : visit(target + 1, returnStack);
         }
         case "cjump":
         case "loop": {
-          if (typeof op.target !== "string") return true;
-          const target = labels.get(op.target);
-          return (target === undefined ? true : visit(target + 1, returnStack)) ||
+          const target = typeof op.target === "string" ? labels.get(op.target) : addresses.get(op.target);
+          if (
+            typeof op.target !== "string" &&
+            (target === undefined || target >= numericTargetMustBeBeforeIndex)
+          ) return true;
+          return (target === undefined ? true : visit(typeof op.target === "string" ? target + 1 : target, returnStack)) ||
             visit(index + 1, returnStack);
         }
         case "call": {
-          if (typeof op.target !== "string") return true;
-          const target = labels.get(op.target);
+          const target = typeof op.target === "string" ? labels.get(op.target) : addresses.get(op.target);
+          if (
+            typeof op.target !== "string" &&
+            (target === undefined || target >= numericTargetMustBeBeforeIndex)
+          ) return true;
           if (target === undefined || returnStack.length >= 5) return true;
-          return visit(target + 1, [index + 1, ...returnStack]);
+          return visit(typeof op.target === "string" ? target + 1 : target, [index + 1, ...returnStack]);
         }
         case "indirect-jump": {
           const target = knownIndirectFlowTarget(op);
@@ -889,7 +907,9 @@ function replacingLiteralStackLiftCanExpose(
     run.end,
     state,
     context,
-    replacingNumberEntryCanExposeStackLift(ops, run.end),
+    replacingNumberEntryCanExposeStackLift(ops, run.end, {
+      numericTargetMustBeBeforeIndex: runStart,
+    }),
     { invalidatedProducerIndexes },
   ).exposesStackLift;
 }
@@ -908,7 +928,9 @@ function replacingExpressionStackLiftCanExpose(
     run.sourceStackEnd,
     state,
     context,
-    replacingNumberEntryCanExposeStackLift(ops, run.end),
+    replacingNumberEntryCanExposeStackLift(ops, run.end, {
+      numericTargetMustBeBeforeIndex: runStart,
+    }),
     {
       allowDuplicateYStackProof: run.allowDuplicateYStackProof,
       invalidatedProducerIndexes,
@@ -933,7 +955,7 @@ const run: IrPassFn = (ops) => {
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
   const immediateSyncStates = computeX2ImmediateSyncStates(ops);
   const directReturnContext = directReturnAnalysisContext(ops);
-  const vpReachabilityCache = new Map<number, boolean>();
+  const vpReachabilityCache = new Map<string, boolean>();
   const replacedStackLiftProducerIndexes = new Set<number>();
   const terminalBoundaryLabels = labelIndexes(ops);
   const terminalBoundaryAddresses = addressIndexes(ops);

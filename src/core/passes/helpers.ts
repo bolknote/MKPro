@@ -259,6 +259,7 @@ export interface X2RestoreExposureOptions {
   readonly redundantSyncDisplayValue?: boolean | undefined;
   readonly redundantSyncShape?: boolean | undefined;
   readonly redundantSyncVpShape?: boolean | undefined;
+  readonly numericTargetMustBeBeforeIndex?: number | undefined;
 }
 
 export interface X2VpShapeContextAnalysis {
@@ -13225,11 +13226,13 @@ function stackDifferenceCanReachConsumer(
   ops: readonly IrOp[],
   start: number,
   initialDepth: StackDifferenceDepth,
+  options: { readonly numericTargetMustBeBeforeIndex?: number } = {},
 ): boolean {
   const labels = labelIndexes(ops);
   const addresses = addressIndexes(ops);
   const callReturnIndexes = stackDifferenceCallReturnIndexes(ops);
   const visited = new Set<string>();
+  const numericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex ?? start;
   const visit = (
     start: number,
     initialDepth: StackDifferenceDepth,
@@ -13278,7 +13281,7 @@ function stackDifferenceCanReachConsumer(
         case "jump": {
           if (typeof op.target !== "string") {
             const targetIndex = addresses.get(op.target);
-            return targetIndex === undefined || targetIndex >= start
+            return targetIndex === undefined || targetIndex >= numericTargetMustBeBeforeIndex
               ? true
               : visit(targetIndex, depth, returnStack);
           }
@@ -13287,18 +13290,24 @@ function stackDifferenceCanReachConsumer(
         }
         case "cjump":
         case "loop": {
-          if (typeof op.target !== "string") return true;
-          const target = labels.get(op.target);
+          const target = typeof op.target === "string" ? labels.get(op.target) : addresses.get(op.target);
+          if (
+            typeof op.target !== "string" &&
+            (target === undefined || target >= numericTargetMustBeBeforeIndex)
+          ) return true;
           return (
-            (target === undefined ? true : visit(target + 1, depth, returnStack)) ||
+            (target === undefined ? true : visit(typeof op.target === "string" ? target + 1 : target, depth, returnStack)) ||
             visit(i + 1, depth, returnStack)
           );
         }
         case "call": {
-          if (typeof op.target !== "string") return true;
-          const target = labels.get(op.target);
+          const target = typeof op.target === "string" ? labels.get(op.target) : addresses.get(op.target);
+          if (
+            typeof op.target !== "string" &&
+            (target === undefined || target >= numericTargetMustBeBeforeIndex)
+          ) return true;
           if (target === undefined || returnStack.length >= 5) return true;
-          return visit(target + 1, depth, [i + 1, ...returnStack]);
+          return visit(typeof op.target === "string" ? target + 1 : target, depth, [i + 1, ...returnStack]);
         }
         case "indirect-jump": {
           const target = knownIndirectFlowTarget(op);
@@ -13360,8 +13369,12 @@ export function removingPreShiftLiftCanExposeStack(ops: readonly IrOp[], produce
   return stackDifferenceCanReachConsumer(ops, producerIndex + 1, 2);
 }
 
-export function replacingNumberEntryCanExposeStackLift(ops: readonly IrOp[], numberEntryEndIndex: number): boolean {
-  return stackDifferenceCanReachConsumer(ops, numberEntryEndIndex + 1, 1);
+export function replacingNumberEntryCanExposeStackLift(
+  ops: readonly IrOp[],
+  numberEntryEndIndex: number,
+  options: { readonly numericTargetMustBeBeforeIndex?: number } = {},
+): boolean {
+  return stackDifferenceCanReachConsumer(ops, numberEntryEndIndex + 1, 1, options);
 }
 
 export function x2SyncCanExposeContextSensitiveRestore(
@@ -13372,6 +13385,7 @@ export function x2SyncCanExposeContextSensitiveRestore(
   const labels = labelIndexes(ops);
   const addresses = addressIndexes(ops);
   const visited = new Set<string>();
+  const numericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex ?? syncIndex;
   const visit = (
     start: number,
     returnStack: readonly number[] = [],
@@ -13416,7 +13430,7 @@ export function x2SyncCanExposeContextSensitiveRestore(
         case "jump": {
           if (typeof op.target !== "string") {
             const targetIndex = addresses.get(op.target);
-            return targetIndex === undefined || targetIndex >= syncIndex
+            return targetIndex === undefined || targetIndex >= numericTargetMustBeBeforeIndex
               ? true
               : visit(targetIndex, returnStack, true);
           }
@@ -13425,21 +13439,31 @@ export function x2SyncCanExposeContextSensitiveRestore(
         }
         case "cjump":
         case "loop": {
-          if (typeof op.target !== "string") return true;
-          const target = labels.get(op.target);
           const fallthrough = conditionalX2Effect(op, "fallthrough");
           const jump = conditionalX2Effect(op, "jump");
           if (fallthrough === "unknown" || jump === "unknown") return true;
+          const target = typeof op.target === "string" ? labels.get(op.target) : addresses.get(op.target);
+          if (
+            jump === "preserves" &&
+            typeof op.target !== "string" &&
+            (target === undefined || target >= numericTargetMustBeBeforeIndex)
+          ) return true;
           return (
-            (jump === "preserves" && (target === undefined ? true : visit(target + 1, returnStack, true))) ||
+            (jump === "preserves" &&
+              (target === undefined
+                ? true
+                : visit(typeof op.target === "string" ? target + 1 : target, returnStack, true))) ||
             (fallthrough === "preserves" && visit(i + 1, returnStack, true))
           );
         }
         case "call": {
-          if (typeof op.target !== "string") return true;
-          const target = labels.get(op.target);
+          const target = typeof op.target === "string" ? labels.get(op.target) : addresses.get(op.target);
+          if (
+            typeof op.target !== "string" &&
+            (target === undefined || target >= numericTargetMustBeBeforeIndex)
+          ) return true;
           if (target === undefined || returnStack.length >= 5) return true;
-          return visit(target + 1, [i + 1, ...returnStack], true);
+          return visit(typeof op.target === "string" ? target + 1 : target, [i + 1, ...returnStack], true);
         }
         case "indirect-jump": {
           const target = knownIndirectFlowTarget(op);
