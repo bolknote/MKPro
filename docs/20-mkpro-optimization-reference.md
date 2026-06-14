@@ -1814,7 +1814,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     to such a terminal tail and therefore is not shifted by deleting the repeated run,
     before a conditional branch/loop whose fallthrough and proved target both reach
     terminal tails, with numeric and proved-indirect targets accepted only when
-    they are likewise address-stable before the removed run, or before
+    they are likewise address-stable before the removed run, across a direct or
+    proved-indirect transparent `ПП`/`В/О` helper that preserves stack, visible
+    `X`, and hidden X2 and whose numeric target is address-stable, or before
     a direct `В/О` return when the return-aware stack guard proves the removed
     entry/lift is not observed by the caller. In those terminal cases the
     expression itself preserves X2, the source is either a decimal digit-run or a

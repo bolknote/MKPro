@@ -9,6 +9,7 @@ import {
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
+  isKnownReturnCallOp,
   knownIndirectMemoryTarget,
   knownIndirectFlowTarget,
   labelIndexes,
@@ -23,6 +24,7 @@ import {
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateHasSameDotRestoreValueInXAndX2,
   x2StateIsClosedPlainContext,
+  x2KnownReturnCallPreservesStackXAndX2,
   x2BinaryExpressionValueFacts,
   x2StableConstantExpressionValueFacts,
   x2UnaryExpressionValueFacts,
@@ -206,10 +208,9 @@ function literalRunsAt(ops: readonly IrOp[], start: number): readonly NumericLit
 function unaryExpressionRunAt(
   ops: readonly IrOp[],
   start: number,
-  terminalBoundaryLabels: ReadonlyMap<string, number>,
-  terminalBoundaryAddresses: ReadonlyMap<number, number>,
+  terminalBoundaryContext: DirectReturnAnalysisContext,
 ): UnaryExpressionRun | undefined {
-  return rpnExpressionRunAt(ops, start, terminalBoundaryLabels, terminalBoundaryAddresses) ??
+  return rpnExpressionRunAt(ops, start, terminalBoundaryContext) ??
     unaryExpressionRunFromSingleSourceAt(ops, start) ??
     binaryExpressionRunAt(ops, start);
 }
@@ -217,8 +218,7 @@ function unaryExpressionRunAt(
 function rpnExpressionRunAt(
   ops: readonly IrOp[],
   start: number,
-  terminalBoundaryLabels: ReadonlyMap<string, number>,
-  terminalBoundaryAddresses: ReadonlyMap<number, number>,
+  terminalBoundaryContext: DirectReturnAnalysisContext,
 ): UnaryExpressionRun | undefined {
   const stack: ExpressionSourceRun[] = [];
   let cursor = start;
@@ -239,7 +239,7 @@ function rpnExpressionRunAt(
     if (
       stack.length === 1 &&
       sawOperator &&
-      isTerminalExpressionBoundary(ops, cursor, terminalBoundaryLabels, terminalBoundaryAddresses, start)
+      isTerminalExpressionBoundary(ops, cursor, terminalBoundaryContext, start)
     ) {
       const [result] = stack;
       return {
@@ -341,29 +341,42 @@ function rpnExpressionRunAt(
 function isTerminalExpressionBoundary(
   ops: readonly IrOp[],
   cursor: number,
-  labels: ReadonlyMap<string, number>,
-  addresses: ReadonlyMap<number, number>,
+  context: DirectReturnAnalysisContext,
   immutableBeforeIndex: number,
   visited: ReadonlySet<number> = new Set(),
 ): boolean {
   const op = ops[cursor];
   if (op?.kind === "label" || op?.kind === "orphan-address") {
-    return isTerminalExpressionBoundary(ops, cursor + 1, labels, addresses, immutableBeforeIndex, visited);
+    return isTerminalExpressionBoundary(ops, cursor + 1, context, immutableBeforeIndex, visited);
+  }
+  if (
+    op !== undefined &&
+    isKnownReturnCallOp(op) &&
+    returnCallTargetAddressIsStableForTerminalBoundary(op, context, immutableBeforeIndex) &&
+    x2KnownReturnCallPreservesStackXAndX2(ops, op, context)
+  ) {
+    if (visited.has(cursor)) return false;
+    return isTerminalExpressionBoundary(
+      ops,
+      cursor + 1,
+      context,
+      immutableBeforeIndex,
+      new Set([...visited, cursor]),
+    );
   }
   if (op?.kind === "jump" && typeof op.target === "string") {
-    const target = labels.get(op.target);
+    const target = context.labels.get(op.target);
     if (target === undefined || visited.has(target)) return false;
     return isTerminalExpressionBoundary(
       ops,
       target + 1,
-      labels,
-      addresses,
+      context,
       immutableBeforeIndex,
       new Set([...visited, target]),
     );
   }
   if (op?.kind === "jump" && typeof op.target === "number") {
-    const targetIndex = addresses.get(op.target);
+    const targetIndex = context.addresses.get(op.target);
     if (
       targetIndex === undefined ||
       targetIndex >= immutableBeforeIndex ||
@@ -372,35 +385,32 @@ function isTerminalExpressionBoundary(
     return isTerminalExpressionBoundary(
       ops,
       targetIndex,
-      labels,
-      addresses,
+      context,
       immutableBeforeIndex,
       new Set([...visited, targetIndex]),
     );
   }
   if (op?.kind === "cjump" || op?.kind === "loop") {
-    const target = directBranchTargetEntryForTerminalBoundary(op, labels, addresses, immutableBeforeIndex);
+    const target = directBranchTargetEntryForTerminalBoundary(op, context, immutableBeforeIndex);
     if (target === undefined || visited.has(target.visitKey)) return false;
     const nextVisited = new Set([...visited, cursor, target.visitKey]);
     return isTerminalExpressionBoundary(
       ops,
       target.entry,
-      labels,
-      addresses,
+      context,
       immutableBeforeIndex,
       nextVisited,
     ) && isTerminalExpressionBoundary(
       ops,
       cursor + 1,
-      labels,
-      addresses,
+      context,
       immutableBeforeIndex,
       nextVisited,
     );
   }
   if (op?.kind === "indirect-jump") {
     const target = knownIndirectFlowTarget(op);
-    const targetIndex = target === undefined ? undefined : addresses.get(target);
+    const targetIndex = target === undefined ? undefined : context.addresses.get(target);
     if (
       targetIndex === undefined ||
       targetIndex >= immutableBeforeIndex ||
@@ -409,15 +419,14 @@ function isTerminalExpressionBoundary(
     return isTerminalExpressionBoundary(
       ops,
       targetIndex,
-      labels,
-      addresses,
+      context,
       immutableBeforeIndex,
       new Set([...visited, targetIndex]),
     );
   }
   if (op?.kind === "indirect-cjump") {
     const target = knownIndirectFlowTarget(op);
-    const targetIndex = target === undefined ? undefined : addresses.get(target);
+    const targetIndex = target === undefined ? undefined : context.addresses.get(target);
     if (
       targetIndex === undefined ||
       targetIndex >= immutableBeforeIndex ||
@@ -427,15 +436,13 @@ function isTerminalExpressionBoundary(
     return isTerminalExpressionBoundary(
       ops,
       targetIndex,
-      labels,
-      addresses,
+      context,
       immutableBeforeIndex,
       nextVisited,
     ) && isTerminalExpressionBoundary(
       ops,
       cursor + 1,
-      labels,
-      addresses,
+      context,
       immutableBeforeIndex,
       nextVisited,
     );
@@ -445,17 +452,31 @@ function isTerminalExpressionBoundary(
 
 function directBranchTargetEntryForTerminalBoundary(
   op: Extract<IrOp, { kind: "cjump" | "loop" }>,
-  labels: ReadonlyMap<string, number>,
-  addresses: ReadonlyMap<number, number>,
+  context: DirectReturnAnalysisContext,
   immutableBeforeIndex: number,
 ): { readonly entry: number; readonly visitKey: number } | undefined {
   if (typeof op.target === "string") {
-    const target = labels.get(op.target);
+    const target = context.labels.get(op.target);
     return target === undefined ? undefined : { entry: target + 1, visitKey: target };
   }
-  const targetIndex = addresses.get(op.target);
+  const targetIndex = context.addresses.get(op.target);
   if (targetIndex === undefined || targetIndex >= immutableBeforeIndex) return undefined;
   return { entry: targetIndex, visitKey: targetIndex };
+}
+
+function returnCallTargetAddressIsStableForTerminalBoundary(
+  op: Extract<IrOp, { kind: "call" | "indirect-call" }>,
+  context: DirectReturnAnalysisContext,
+  immutableBeforeIndex: number,
+): boolean {
+  if (op.kind === "call") {
+    if (typeof op.target === "string") return true;
+    const targetIndex = context.addresses.get(op.target);
+    return targetIndex !== undefined && targetIndex < immutableBeforeIndex;
+  }
+  const target = knownIndirectFlowTarget(op);
+  const targetIndex = target === undefined ? undefined : context.addresses.get(target);
+  return targetIndex !== undefined && targetIndex < immutableBeforeIndex;
 }
 
 function isRpnExpressionNonExecutableGap(op: IrOp | undefined): boolean {
@@ -1028,8 +1049,6 @@ const run: IrPassFn = (ops) => {
   const directReturnContext = directReturnAnalysisContext(ops);
   const vpReachabilityCache = new Map<string, boolean>();
   const replacedStackLiftProducerIndexes = new Set<number>();
-  const terminalBoundaryLabels = labelIndexes(ops);
-  const terminalBoundaryAddresses = addressIndexes(ops);
   const result: IrOp[] = [];
   let removed = 0;
 
@@ -1089,7 +1108,7 @@ const run: IrPassFn = (ops) => {
         continue opLoop;
       }
     }
-    const expressionRun = unaryExpressionRunAt(ops, index, terminalBoundaryLabels, terminalBoundaryAddresses);
+    const expressionRun = unaryExpressionRunAt(ops, index, directReturnContext);
     const expressionSourceProvesFreeStandingRestore =
       x2StateHasSameDotRestoreValueInXAndX2(state) &&
       !x2StateHasUnsafeDotRestoreShapeX2(state);
