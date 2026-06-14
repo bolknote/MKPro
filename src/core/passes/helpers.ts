@@ -13232,7 +13232,8 @@ function stackDifferenceCanReachConsumer(
   const addresses = addressIndexes(ops);
   const callReturnIndexes = stackDifferenceCallReturnIndexes(ops);
   const visited = new Set<string>();
-  const numericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex ?? start;
+  const directNumericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex ?? start;
+  const indirectNumericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex;
   const visit = (
     start: number,
     initialDepth: StackDifferenceDepth,
@@ -13281,7 +13282,7 @@ function stackDifferenceCanReachConsumer(
         case "jump": {
           if (typeof op.target !== "string") {
             const targetIndex = addresses.get(op.target);
-            return targetIndex === undefined || targetIndex >= numericTargetMustBeBeforeIndex
+            return targetIndex === undefined || targetIndex >= directNumericTargetMustBeBeforeIndex
               ? true
               : visit(targetIndex, depth, returnStack);
           }
@@ -13293,7 +13294,7 @@ function stackDifferenceCanReachConsumer(
           const target = typeof op.target === "string" ? labels.get(op.target) : addresses.get(op.target);
           if (
             typeof op.target !== "string" &&
-            (target === undefined || target >= numericTargetMustBeBeforeIndex)
+            (target === undefined || target >= directNumericTargetMustBeBeforeIndex)
           ) return true;
           return (
             (target === undefined ? true : visit(typeof op.target === "string" ? target + 1 : target, depth, returnStack)) ||
@@ -13304,25 +13305,25 @@ function stackDifferenceCanReachConsumer(
           const target = typeof op.target === "string" ? labels.get(op.target) : addresses.get(op.target);
           if (
             typeof op.target !== "string" &&
-            (target === undefined || target >= numericTargetMustBeBeforeIndex)
+            (target === undefined || target >= directNumericTargetMustBeBeforeIndex)
           ) return true;
           if (target === undefined || returnStack.length >= 5) return true;
           return visit(typeof op.target === "string" ? target + 1 : target, depth, [i + 1, ...returnStack]);
         }
         case "indirect-jump": {
           const target = knownIndirectFlowTarget(op);
-          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
           return targetIndex === undefined ? true : visit(targetIndex, depth, returnStack);
         }
         case "indirect-call": {
           const target = knownIndirectFlowTarget(op);
-          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
           if (targetIndex === undefined || returnStack.length >= 5) return true;
           return visit(targetIndex, depth, [i + 1, ...returnStack]);
         }
         case "indirect-cjump": {
           const target = knownIndirectFlowTarget(op);
-          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
           return (
             (targetIndex === undefined ? true : visit(targetIndex, depth, returnStack)) ||
             visit(i + 1, depth, returnStack)
@@ -13377,6 +13378,20 @@ export function replacingNumberEntryCanExposeStackLift(
   return stackDifferenceCanReachConsumer(ops, numberEntryEndIndex + 1, 1, options);
 }
 
+function addressStableFlowTargetIndex(
+  addresses: ReadonlyMap<number, number>,
+  target: number | undefined,
+  numericTargetMustBeBeforeIndex: number | undefined,
+): number | undefined {
+  if (target === undefined) return undefined;
+  const targetIndex = addresses.get(target);
+  if (
+    targetIndex === undefined ||
+    (numericTargetMustBeBeforeIndex !== undefined && targetIndex >= numericTargetMustBeBeforeIndex)
+  ) return undefined;
+  return targetIndex;
+}
+
 export function x2SyncCanExposeContextSensitiveRestore(
   ops: readonly IrOp[],
   syncIndex: number,
@@ -13385,7 +13400,8 @@ export function x2SyncCanExposeContextSensitiveRestore(
   const labels = labelIndexes(ops);
   const addresses = addressIndexes(ops);
   const visited = new Set<string>();
-  const numericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex ?? syncIndex;
+  const directNumericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex ?? syncIndex;
+  const indirectNumericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex;
   const visit = (
     start: number,
     returnStack: readonly number[] = [],
@@ -13430,7 +13446,7 @@ export function x2SyncCanExposeContextSensitiveRestore(
         case "jump": {
           if (typeof op.target !== "string") {
             const targetIndex = addresses.get(op.target);
-            return targetIndex === undefined || targetIndex >= numericTargetMustBeBeforeIndex
+            return targetIndex === undefined || targetIndex >= directNumericTargetMustBeBeforeIndex
               ? true
               : visit(targetIndex, returnStack, true);
           }
@@ -13446,7 +13462,7 @@ export function x2SyncCanExposeContextSensitiveRestore(
           if (
             jump === "preserves" &&
             typeof op.target !== "string" &&
-            (target === undefined || target >= numericTargetMustBeBeforeIndex)
+            (target === undefined || target >= directNumericTargetMustBeBeforeIndex)
           ) return true;
           return (
             (jump === "preserves" &&
@@ -13460,25 +13476,25 @@ export function x2SyncCanExposeContextSensitiveRestore(
           const target = typeof op.target === "string" ? labels.get(op.target) : addresses.get(op.target);
           if (
             typeof op.target !== "string" &&
-            (target === undefined || target >= numericTargetMustBeBeforeIndex)
+            (target === undefined || target >= directNumericTargetMustBeBeforeIndex)
           ) return true;
           if (target === undefined || returnStack.length >= 5) return true;
           return visit(typeof op.target === "string" ? target + 1 : target, [i + 1, ...returnStack], true);
         }
         case "indirect-jump": {
           const target = knownIndirectFlowTarget(op);
-          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
           return targetIndex === undefined ? true : visit(targetIndex, returnStack, true);
         }
         case "indirect-call": {
           const target = knownIndirectFlowTarget(op);
-          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
           if (targetIndex === undefined || returnStack.length >= 5) return true;
           return visit(targetIndex, [i + 1, ...returnStack], true);
         }
         case "indirect-cjump": {
           const target = knownIndirectFlowTarget(op);
-          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
           const fallthrough = conditionalX2Effect(op, "fallthrough");
           const jump = conditionalX2Effect(op, "jump");
           if (fallthrough === "unknown" || jump === "unknown") return true;

@@ -792,6 +792,17 @@ function replacingLiteralCanExposeContextSensitiveRestore(
   return true;
 }
 
+function addressStableFlowTargetIndex(
+  addresses: ReadonlyMap<number, number>,
+  target: number | undefined,
+  numericTargetMustBeBeforeIndex: number,
+): number | undefined {
+  if (target === undefined) return undefined;
+  const targetIndex = addresses.get(target);
+  if (targetIndex === undefined || targetIndex >= numericTargetMustBeBeforeIndex) return undefined;
+  return targetIndex;
+}
+
 function literalReplacementCanReachVpRestore(
   ops: readonly IrOp[],
   start: number,
@@ -851,18 +862,18 @@ function literalReplacementCanReachVpRestore(
         }
         case "indirect-jump": {
           const target = knownIndirectFlowTarget(op);
-          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          const targetIndex = addressStableFlowTargetIndex(addresses, target, numericTargetMustBeBeforeIndex);
           return targetIndex === undefined ? true : visit(targetIndex, returnStack);
         }
         case "indirect-call": {
           const target = knownIndirectFlowTarget(op);
-          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          const targetIndex = addressStableFlowTargetIndex(addresses, target, numericTargetMustBeBeforeIndex);
           if (targetIndex === undefined || returnStack.length >= 5) return true;
           return visit(targetIndex, [index + 1, ...returnStack]);
         }
         case "indirect-cjump": {
           const target = knownIndirectFlowTarget(op);
-          const targetIndex = target === undefined ? undefined : addresses.get(target);
+          const targetIndex = addressStableFlowTargetIndex(addresses, target, numericTargetMustBeBeforeIndex);
           return (targetIndex === undefined ? true : visit(targetIndex, returnStack)) ||
             visit(index + 1, returnStack);
         }

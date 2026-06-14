@@ -14447,6 +14447,106 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
+  it("x2-literal-restore replaces repeated synced expressions before backward proved indirect conditionals", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      halt(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      knownTargetIndirectCjump("7", 2),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      jump("main"),
+      halt(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
+      knownTargetIndirectCjump("7", 2),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces repeated synced expressions before backward proved indirect calls", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      knownTargetIndirectCall("7", 2),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      jump("main"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
+      knownTargetIndirectCall("7", 2),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps repeated synced expressions before forward proved indirect conditionals", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      knownTargetIndirectCjump("7", 8),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-literal-restore keeps repeated synced expressions before forward proved indirect calls", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      knownTargetIndirectCall("7", 8),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore replaces repeated pure unary expressions before backward terminal indirect jumps", () => {
     const program: IrOp[] = [
       jump("main"),

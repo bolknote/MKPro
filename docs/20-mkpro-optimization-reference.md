@@ -1110,6 +1110,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     scanners meet direct numeric flow (`БП NN`, `ПП NN`, `F x?0 NN`, or
     `F Lx NN`), they follow only proved backward targets whose addresses cannot
     be shifted by the candidate deletion; forward numeric targets remain opaque.
+    Proved indirect flow (`indirect-target=NN`) is followed normally in
+    non-deletion scans, but replacement-to-`.` scans apply the same
+    address-stability bound so a deleted entry range cannot stale a selector.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
 12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X, including concrete decimal equality proved through X2 register-memory or decimal preload metadata after X was rebuilt; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, counted-loop `F L0`..`F L3` backedges preserve visible X for non-counter registers while dropping the decremented counter alias, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept unless the shared stack+X2 scheduler proves a previous producer that this pass keeps already supplied the same visible value in `Y` and the deeper stack difference is dead.
@@ -1831,7 +1834,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     can reuse the final hidden X2 value through `.`. For replacements that end
     at an explicit X2 sync, the post-replacement X2/VP/stack exposure guards use
     the shared backward-numeric-flow rule, so address-stable numeric conditionals
-    and calls do not become false barriers. An explicit `В↑`
+    and calls, including proved indirect forms, do not become false barriers.
+    Proved indirect targets at or after the removed range remain opaque in this
+    deletion-sensitive context. An explicit `В↑`
     may separate operands; the parser can cross documented X/stack/X2-preserving
     empty cells and orphan address-byte gaps between source, separator, unary,
     binary tokens, and terminal `С/П`/`В/О` boundaries, and the
