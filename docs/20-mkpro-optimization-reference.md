@@ -1806,7 +1806,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
     X2-affecting sync. A repeated `literal; pure unary` run, including a chain
     of documented pure unary operators separated by free-standing
-    X/stack/X2-preserving empty cells or non-executable address-byte gaps, can
+    X/stack/X2-preserving empty cells, non-executable address-byte gaps, or
+    removable direct/proved-indirect `ПП`/`В/О` helpers whose bodies contain only
+    those same side-effect-free gap cells, can
     also collapse to `.` either before
     an explicit X-preserving X2 sync, before `С/П`/end-of-program, before a
     direct jump to a label/orphan-address-only terminal tail, before a backward
@@ -1843,8 +1845,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Proved indirect targets at or after the removed range remain opaque in this
     deletion-sensitive context. An explicit `В↑`
     may separate operands; the parser can cross documented X/stack/X2-preserving
-    empty cells and orphan address-byte gaps between source, separator, unary,
-    binary tokens, and terminal `С/П`/`В/О` boundaries, and the
+    empty cells, orphan address-byte gaps, and removable transparent return helpers
+    between source, separator, unary, binary tokens, explicit X2 syncs, and
+    terminal `С/П`/`В/О` boundaries, and the
     rewrite is refused if deleting
     the repeated run's entry/lift cells can expose a later stack consumer. The
     expression parser can cross documented X/stack/X2-preserving empty cells

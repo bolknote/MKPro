@@ -10,6 +10,7 @@ import {
   hasRewriteBarrier,
   isDisplayFocusSensitive,
   isKnownReturnCallOp,
+  knownReturnCallReturnsThroughNestedTransparentRange,
   knownIndirectMemoryTarget,
   knownIndirectFlowTarget,
   labelIndexes,
@@ -251,14 +252,7 @@ function rpnExpressionRunAt(
       };
     }
 
-    if (stack.length > 0 && isPlainExpressionSyncGapOp(ops[cursor])) {
-      const top = stack[stack.length - 1]!;
-      stack[stack.length - 1] = { ...top, end: cursor };
-      cursor += 1;
-      continue;
-    }
-
-    if (stack.length > 0 && isRpnExpressionNonExecutableGap(ops[cursor])) {
+    if (stack.length > 0 && isRpnExpressionGapOp(ops, cursor, terminalBoundaryContext, start)) {
       const top = stack[stack.length - 1]!;
       stack[stack.length - 1] = { ...top, end: cursor };
       cursor += 1;
@@ -298,7 +292,7 @@ function rpnExpressionRunAt(
         };
         sawOperator = true;
         cursor += 1;
-        while (isPlainExpressionSyncGapOp(ops[cursor]) || isRpnExpressionNonExecutableGap(ops[cursor])) {
+        while (isRpnExpressionGapOp(ops, cursor, terminalBoundaryContext, start)) {
           const top = stack[stack.length - 1]!;
           stack[stack.length - 1] = { ...top, end: cursor };
           cursor += 1;
@@ -322,7 +316,7 @@ function rpnExpressionRunAt(
         });
         sawOperator = true;
         cursor += 1;
-        while (isPlainExpressionSyncGapOp(ops[cursor]) || isRpnExpressionNonExecutableGap(ops[cursor])) {
+        while (isRpnExpressionGapOp(ops, cursor, terminalBoundaryContext, start)) {
           const top = stack[stack.length - 1]!;
           stack[stack.length - 1] = { ...top, end: cursor };
           cursor += 1;
@@ -481,6 +475,39 @@ function returnCallTargetAddressIsStableForTerminalBoundary(
 
 function isRpnExpressionNonExecutableGap(op: IrOp | undefined): boolean {
   return op !== undefined && op.kind === "orphan-address" && !hasRewriteBarrier(op);
+}
+
+function isRpnExpressionGapOp(
+  ops: readonly IrOp[],
+  cursor: number,
+  context: DirectReturnAnalysisContext,
+  immutableBeforeIndex: number,
+): boolean {
+  const op = ops[cursor];
+  return isPlainExpressionSyncGapOp(op) ||
+    isRpnExpressionNonExecutableGap(op) ||
+    isRemovableExpressionReturnCallGap(ops, op, context, immutableBeforeIndex);
+}
+
+function isRemovableExpressionReturnCallGap(
+  ops: readonly IrOp[],
+  op: IrOp | undefined,
+  context: DirectReturnAnalysisContext,
+  immutableBeforeIndex: number,
+): op is Extract<IrOp, { kind: "call" | "indirect-call" }> {
+  return op !== undefined &&
+    isKnownReturnCallOp(op) &&
+    returnCallTargetAddressIsStableForTerminalBoundary(op, context, immutableBeforeIndex) &&
+    knownReturnCallReturnsThroughNestedTransparentRange(
+      ops,
+      op,
+      context,
+      isRemovableExpressionReturnCallBodyGapOp,
+    );
+}
+
+function isRemovableExpressionReturnCallBodyGapOp(op: IrOp): boolean {
+  return isPlainExpressionSyncGapOp(op) || isRpnExpressionNonExecutableGap(op);
 }
 
 function unaryExpressionRunFromSingleSourceAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {

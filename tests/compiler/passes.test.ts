@@ -13824,6 +13824,99 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore crosses removable transparent return helpers before explicit expression sync", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      call("transparent"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore crosses removable proved indirect return helpers before explicit expression sync", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      knownTargetIndirectCall("7", 2),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps return helper expression gaps with side effects", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("side_effect"),
+      store("1"),
+      ret(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      call("side_effect"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore keeps mutating indirect register expressions", () => {
     const program: IrOp[] = [
       knownTargetIndirectRecall("1", "2"),
@@ -14786,7 +14879,7 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2LiteralRestore.run(program, ctx);
 
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
       jump("main"),
       label("transparent"),
@@ -14798,7 +14891,6 @@ describe("ir passes on synthetic programs", () => {
       plain(0xf0, "F* empty F0"),
       plain(0x54, "К НОП"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
-      call("transparent"),
       halt(),
     ]);
   });
@@ -14821,7 +14913,7 @@ describe("ir passes on synthetic programs", () => {
     ];
     const result = x2LiteralRestore.run(program, ctx);
 
-    expect(result.applied).toBe(1);
+    expect(result.applied).toBe(2);
     expect(result.ops).toEqual([
       jump("main"),
       label("transparent"),
@@ -14833,7 +14925,6 @@ describe("ir passes on synthetic programs", () => {
       plain(0xf0, "F* empty F0"),
       plain(0x54, "К НОП"),
       { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
-      knownTargetIndirectCall("7", 2),
       halt(),
     ]);
   });
