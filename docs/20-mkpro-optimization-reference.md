@@ -1815,7 +1815,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     general linear RPN parser also builds a small stack of the same stable facts,
     so nested expressions such as `sqrt(2); В↑; sqrt(3); +; В↑; sqrt(4); +; F*`
     can reuse the final hidden X2 value through `.`. An explicit `В↑`
-    may separate operands, and the rewrite is refused if deleting
+    may separate operands; the parser can cross documented X/stack/X2-preserving
+    empty cells between source, separator, unary, and binary tokens, and the
+    rewrite is refused if deleting
     the repeated run's entry/lift cells can expose a later stack consumer. The
     expression parser can cross documented X/stack/X2-preserving empty cells
     before that explicit sync, while role-bearing `/-/` cells

@@ -226,6 +226,11 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
       };
     }
 
+    if (stack.length > 0 && isPlainExpressionSyncGapOp(ops[cursor])) {
+      cursor += 1;
+      continue;
+    }
+
     if (isPlainStackLiftSeparator(ops[cursor]) && stack.length > 0) {
       cursor += 1;
       continue;

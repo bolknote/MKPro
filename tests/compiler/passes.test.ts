@@ -14028,6 +14028,61 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces repeated synced RPN expressions across source and separator gaps", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x54, "К НОП"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      plain(0x54, "К НОП"),
+      plain(0x03, "3"),
+      plain(0x54, "К НОП"),
+      plain(0x21, "F sqrt"),
+      plain(0x10, "+"),
+      plain(0x54, "К НОП"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x55, "К 1"),
+      plain(0x02, "2"),
+      plain(0x54, "К НОП"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      plain(0x54, "К НОП"),
+      plain(0x03, "3"),
+      plain(0x54, "К НОП"),
+      plain(0x21, "F sqrt"),
+      plain(0x10, "+"),
+      plain(0x54, "К НОП"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(10);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x54, "К НОП"),
+      plain(0x21, "F sqrt"),
+      plain(0x0e, "В↑"),
+      plain(0x54, "К НОП"),
+      plain(0x03, "3"),
+      plain(0x54, "К НОП"),
+      plain(0x21, "F sqrt"),
+      plain(0x10, "+"),
+      plain(0x54, "К НОП"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x55, "К 1"),
+      {
+        kind: "plain",
+        opcode: 0x0a,
+        meta: {
+          mnemonic: ".",
+          comment: "restore literal +(F sqrt(2),F sqrt(3)) from hidden X2 temp",
+        },
+      },
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore replaces repeated synced nested RPN expressions", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
