@@ -13276,7 +13276,12 @@ function stackDifferenceCanReachConsumer(
           break;
         }
         case "jump": {
-          if (typeof op.target !== "string") return true;
+          if (typeof op.target !== "string") {
+            const targetIndex = addresses.get(op.target);
+            return targetIndex === undefined || targetIndex >= start
+              ? true
+              : visit(targetIndex, depth, returnStack);
+          }
           const target = labels.get(op.target);
           return target === undefined ? true : visit(target + 1, depth, returnStack);
         }
@@ -13409,7 +13414,12 @@ export function x2SyncCanExposeContextSensitiveRestore(
           // checked by a separate analysis that still follows direct returns.
           return false;
         case "jump": {
-          if (typeof op.target !== "string") return true;
+          if (typeof op.target !== "string") {
+            const targetIndex = addresses.get(op.target);
+            return targetIndex === undefined || targetIndex >= syncIndex
+              ? true
+              : visit(targetIndex, returnStack, true);
+          }
           const target = labels.get(op.target);
           return target === undefined ? true : visit(target + 1, returnStack, true);
         }

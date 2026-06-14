@@ -1106,7 +1106,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     cannot rely on a stack-lift producer that the same pass has already
     replaced with `.`. Plain context-sensitive X2 restores
     (`.`, `/-/`, `ВП`) and display-sensitive cells are barriers for those
-    scans even when their stack profile is otherwise preserving.
+    scans even when their stack profile is otherwise preserving. When those
+    scanners meet direct numeric `БП NN`, they follow only proved backward
+    targets whose addresses cannot be shifted by the candidate deletion; forward
+    numeric targets remain opaque.
 10. `jump-to-next-threading` — removes unconditional jumps where target is the next label in sequence.
 11. `jump-thread` — threads labels by replacing jumps to label chains with the final target label.
 12. `flow-x-reuse` — runs forward CFG data-flow for values already held in X and removes a direct `П->X r` or stable-indirect `К П->X R7..Re` with a proved memory target when every predecessor reaches that point with the same value still in X, including concrete decimal equality proved through X2 register-memory or decimal preload metadata after X was rebuilt; proved indirect flow targets (`indirect-target=NN`) are included in the CFG, direct and proved-indirect `ПП`/`В/О` edges carry X facts into callees and back to continuations, documented empty operators `К НОП`/`К 1`/`К 2` preserve X facts, stable selectors preserve the X fact, counted-loop `F L0`..`F L3` backedges preserve visible X for non-counter registers while dropping the decremented counter alias, mutating selectors drop only the mutated selector register from the proof, and unknown indirect flow plus absolute numeric direct targets are still refused. Recalls that provide the last X2 sync before `.`/`/-/`/`ВП` before the next X2-affecting op, including direct `В/О` returns, or a stack lift that can reach a downstream consumer through direct or proved-indirect flow are kept unless the shared stack+X2 scheduler proves a previous producer that this pass keeps already supplied the same visible value in `Y` and the deeper stack difference is dead.
@@ -1803,9 +1806,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     X/stack/X2-preserving empty cells or non-executable address-byte gaps, can
     also collapse to `.` either before
     an explicit X-preserving X2 sync, before `С/П`/end-of-program, before a
-    direct jump to a label/orphan-address-only terminal tail, before a proved
-    backward indirect jump whose numeric target already points to such a
-    terminal tail and therefore is not shifted by deleting the repeated run, or before
+    direct jump to a label/orphan-address-only terminal tail, before a backward
+    direct numeric jump or proved indirect jump whose numeric target already points
+    to such a terminal tail and therefore is not shifted by deleting the repeated run, or before
     a direct `В/О` return when the return-aware stack guard proves the removed
     entry/lift is not observed by the caller. In those terminal cases the
     expression itself preserves X2, the source is either a decimal digit-run or a
@@ -1820,7 +1823,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     constant source followed by documented pure unary operators, and the binary
     result may also feed a pure unary tail before an explicit X2 sync or a
     terminal boundary, including a guarded `В/О`, a direct jump to a
-    terminal tail, or a proved backward indirect jump to an address-stable
+    terminal tail, or a backward direct/proved-indirect numeric jump to an address-stable
     terminal tail, when the expression is
     X2-preserving. A more
     general linear RPN parser also builds a small stack of the same stable facts,

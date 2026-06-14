@@ -362,6 +362,22 @@ function isTerminalExpressionBoundary(
       new Set([...visited, target]),
     );
   }
+  if (op?.kind === "jump" && typeof op.target === "number") {
+    const targetIndex = addresses.get(op.target);
+    if (
+      targetIndex === undefined ||
+      targetIndex >= immutableBeforeIndex ||
+      visited.has(targetIndex)
+    ) return false;
+    return isTerminalExpressionBoundary(
+      ops,
+      targetIndex,
+      labels,
+      addresses,
+      immutableBeforeIndex,
+      new Set([...visited, targetIndex]),
+    );
+  }
   if (op?.kind === "indirect-jump") {
     const target = knownIndirectFlowTarget(op);
     const targetIndex = target === undefined ? undefined : addresses.get(target);
@@ -795,7 +811,10 @@ function literalReplacementCanReachVpRestore(ops: readonly IrOp[], start: number
           return true;
         }
         case "jump": {
-          if (typeof op.target !== "string") return true;
+          if (typeof op.target !== "string") {
+            const targetIndex = addresses.get(op.target);
+            return targetIndex === undefined || targetIndex >= start ? true : visit(targetIndex, returnStack);
+          }
           const target = labels.get(op.target);
           return target === undefined ? true : visit(target + 1, returnStack);
         }
