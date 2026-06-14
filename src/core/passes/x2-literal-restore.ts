@@ -318,7 +318,7 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
 }
 
 function isTerminalExpressionBoundary(op: IrOp | undefined): boolean {
-  return op === undefined || op.kind === "stop";
+  return op === undefined || op.kind === "stop" || op.kind === "return";
 }
 
 function unaryExpressionRunFromSingleSourceAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
