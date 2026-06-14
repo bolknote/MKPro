@@ -203,13 +203,21 @@ function literalRunsAt(ops: readonly IrOp[], start: number): readonly NumericLit
   return [exponent, decimal];
 }
 
-function unaryExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
-  return rpnExpressionRunAt(ops, start) ??
+function unaryExpressionRunAt(
+  ops: readonly IrOp[],
+  start: number,
+  terminalBoundaryLabels: ReadonlyMap<string, number>,
+): UnaryExpressionRun | undefined {
+  return rpnExpressionRunAt(ops, start, terminalBoundaryLabels) ??
     unaryExpressionRunFromSingleSourceAt(ops, start) ??
     binaryExpressionRunAt(ops, start);
 }
 
-function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
+function rpnExpressionRunAt(
+  ops: readonly IrOp[],
+  start: number,
+  terminalBoundaryLabels: ReadonlyMap<string, number>,
+): UnaryExpressionRun | undefined {
   const stack: ExpressionSourceRun[] = [];
   let cursor = start;
   let sawOperator = false;
@@ -226,7 +234,11 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
       };
     }
 
-    if (stack.length === 1 && sawOperator && isTerminalExpressionBoundary(ops[cursor])) {
+    if (
+      stack.length === 1 &&
+      sawOperator &&
+      isTerminalExpressionBoundary(ops, cursor, terminalBoundaryLabels)
+    ) {
       const [result] = stack;
       return {
         end: result!.end,
@@ -324,7 +336,21 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
   return undefined;
 }
 
-function isTerminalExpressionBoundary(op: IrOp | undefined): boolean {
+function isTerminalExpressionBoundary(
+  ops: readonly IrOp[],
+  cursor: number,
+  labels: ReadonlyMap<string, number>,
+  visited: ReadonlySet<number> = new Set(),
+): boolean {
+  const op = ops[cursor];
+  if (op?.kind === "label" || op?.kind === "orphan-address") {
+    return isTerminalExpressionBoundary(ops, cursor + 1, labels, visited);
+  }
+  if (op?.kind === "jump" && typeof op.target === "string") {
+    const target = labels.get(op.target);
+    if (target === undefined || visited.has(target)) return false;
+    return isTerminalExpressionBoundary(ops, target + 1, labels, new Set([...visited, target]));
+  }
   return op === undefined || op.kind === "stop" || op.kind === "return";
 }
 
@@ -862,6 +888,7 @@ const run: IrPassFn = (ops) => {
   const directReturnContext = directReturnAnalysisContext(ops);
   const vpReachabilityCache = new Map<number, boolean>();
   const replacedStackLiftProducerIndexes = new Set<number>();
+  const terminalBoundaryLabels = labelIndexes(ops);
   const result: IrOp[] = [];
   let removed = 0;
 
@@ -921,7 +948,7 @@ const run: IrPassFn = (ops) => {
         continue opLoop;
       }
     }
-    const expressionRun = unaryExpressionRunAt(ops, index);
+    const expressionRun = unaryExpressionRunAt(ops, index, terminalBoundaryLabels);
     const expressionSourceProvesFreeStandingRestore =
       x2StateHasSameDotRestoreValueInXAndX2(state) &&
       !x2StateHasUnsafeDotRestoreShapeX2(state);

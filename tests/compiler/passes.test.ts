@@ -14274,6 +14274,51 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces repeated pure unary expressions before direct terminal jumps", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      jump("done"),
+      label("done"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
+      jump("done"),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps repeated pure unary expressions before non-terminal jumps", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      jump("consumer"),
+      label("consumer"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("x2-literal-restore replaces repeated pure unary expressions before direct return", () => {
     const program: IrOp[] = [
       call("value"),
