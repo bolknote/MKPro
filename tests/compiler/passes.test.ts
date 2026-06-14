@@ -12689,6 +12689,113 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore removes transparent helper gaps after repeated digit runs before explicit sync", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      call("transparent"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore removes proved indirect helper gaps after repeated digit runs before explicit sync", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      knownTargetIndirectCall("7", 2),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("transparent"),
+      plain(0x54, "К НОП"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps side-effect helper gaps after repeated digit runs", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      label("side_effect"),
+      store("1"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      call("side_effect"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      label("side_effect"),
+      store("1"),
+      ret(),
+      label("main"),
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x20, "Fπ"),
+      plain(0x20, "Fπ"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 12 from hidden X2 temp" } },
+      call("side_effect"),
+      plain(0xf0, "F* empty F0"),
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore replaces a repeated fractional digit run with dot", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),

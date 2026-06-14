@@ -206,6 +206,26 @@ function literalRunsAt(ops: readonly IrOp[], start: number): readonly NumericLit
   return [exponent, decimal];
 }
 
+function literalRunWithRemovableSuffix(
+  ops: readonly IrOp[],
+  run: NumericLiteralRun,
+  start: number,
+  context: DirectReturnAnalysisContext,
+): NumericLiteralRun {
+  let cursor = run.end + 1;
+  let end = run.end;
+  let crossedGap = false;
+  while (isRpnExpressionGapOp(ops, cursor, context, start)) {
+    end = cursor;
+    cursor += 1;
+    crossedGap = true;
+  }
+
+  if (isPlainXPreservingX2Sync(ops[cursor])) return { ...run, end: cursor };
+  if (crossedGap && isTerminalExpressionBoundary(ops, cursor, context, start)) return { ...run, end };
+  return run;
+}
+
 function unaryExpressionRunAt(
   ops: readonly IrOp[],
   start: number,
@@ -1082,7 +1102,8 @@ const run: IrPassFn = (ops) => {
   opLoop:
   for (let index = 0; index < ops.length; index += 1) {
     const state = x2ValueStates[index];
-    for (const runAtIndex of literalRunsAt(ops, index)) {
+    for (const baseRunAtIndex of literalRunsAt(ops, index)) {
+      const runAtIndex = literalRunWithRemovableSuffix(ops, baseRunAtIndex, index, directReturnContext);
       const exactX2Fact = x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact);
       const visibleDecimalX2ValueFact = x2ValueSetHasRestoredVisibleDecimal(state?.x2, runAtIndex.x2Fact);
       const visibleDecimalX2ShapeFact = visibleDecimalX2ValueFact

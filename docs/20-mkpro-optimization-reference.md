@@ -1804,7 +1804,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent-entry literals such as
     `5 ВП 3`, `1.2 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
-    X2-affecting sync. A repeated `literal; pure unary` run, including a chain
+    X2-affecting sync. Simple repeated literal runs can absorb the same
+    side-effect-free empty/address/helper suffix before an explicit X-preserving
+    X2 sync or terminal tail; helper bodies that store or otherwise do more than
+    gap preservation remain visible. A repeated `literal; pure unary` run, including a chain
     of documented pure unary operators separated by free-standing
     X/stack/X2-preserving empty cells, non-executable address-byte gaps, or
     removable direct/proved-indirect `ПП`/`В/О` helpers whose bodies contain only
