@@ -1800,7 +1800,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
     X2-affecting sync. A repeated `literal; pure unary` run, including a chain
     of documented pure unary operators separated by free-standing
-    X/stack/X2-preserving empty cells, can also collapse to `.` either before
+    X/stack/X2-preserving empty cells or non-executable address-byte gaps, can
+    also collapse to `.` either before
     an explicit X-preserving X2 sync, before `С/П`/end-of-program, or before
     a direct `В/О` return when the return-aware stack guard proves the removed
     entry/lift is not observed by the caller. In those terminal cases the
@@ -1821,7 +1822,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     so nested expressions such as `sqrt(2); В↑; sqrt(3); +; В↑; sqrt(4); +; F*`
     can reuse the final hidden X2 value through `.`. An explicit `В↑`
     may separate operands; the parser can cross documented X/stack/X2-preserving
-    empty cells between source, separator, unary, and binary tokens, and the
+    empty cells and orphan address-byte gaps between source, separator, unary,
+    binary tokens, and terminal `С/П`/`В/О` boundaries, and the
     rewrite is refused if deleting
     the repeated run's entry/lift cells can expose a later stack consumer. The
     expression parser can cross documented X/stack/X2-preserving empty cells

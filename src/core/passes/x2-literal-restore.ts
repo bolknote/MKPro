@@ -244,6 +244,13 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
       continue;
     }
 
+    if (stack.length > 0 && isRpnExpressionNonExecutableGap(ops[cursor])) {
+      const top = stack[stack.length - 1]!;
+      stack[stack.length - 1] = { ...top, end: cursor };
+      cursor += 1;
+      continue;
+    }
+
     if (isPlainStackLiftSeparator(ops[cursor]) && stack.length > 0) {
       cursor += 1;
       continue;
@@ -277,7 +284,7 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
         };
         sawOperator = true;
         cursor += 1;
-        while (isPlainExpressionSyncGapOp(ops[cursor])) {
+        while (isPlainExpressionSyncGapOp(ops[cursor]) || isRpnExpressionNonExecutableGap(ops[cursor])) {
           const top = stack[stack.length - 1]!;
           stack[stack.length - 1] = { ...top, end: cursor };
           cursor += 1;
@@ -301,7 +308,7 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
         });
         sawOperator = true;
         cursor += 1;
-        while (isPlainExpressionSyncGapOp(ops[cursor])) {
+        while (isPlainExpressionSyncGapOp(ops[cursor]) || isRpnExpressionNonExecutableGap(ops[cursor])) {
           const top = stack[stack.length - 1]!;
           stack[stack.length - 1] = { ...top, end: cursor };
           cursor += 1;
@@ -319,6 +326,10 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
 
 function isTerminalExpressionBoundary(op: IrOp | undefined): boolean {
   return op === undefined || op.kind === "stop" || op.kind === "return";
+}
+
+function isRpnExpressionNonExecutableGap(op: IrOp | undefined): boolean {
+  return op !== undefined && op.kind === "orphan-address" && !hasRewriteBarrier(op);
 }
 
 function unaryExpressionRunFromSingleSourceAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {

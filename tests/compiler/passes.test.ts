@@ -14305,6 +14305,38 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore crosses orphan address gaps before return terminal expressions", () => {
+    const program: IrOp[] = [
+      call("value"),
+      halt(),
+      procStart("value"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      orphanAddress(77),
+      ret(),
+      procEnd("value"),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      call("value"),
+      halt(),
+      procStart("value"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
+      ret(),
+      procEnd("value"),
+    ]);
+  });
+
   it("x2-literal-restore keeps return-bound expressions when their stack lift reaches the caller", () => {
     const program: IrOp[] = [
       call("value"),
