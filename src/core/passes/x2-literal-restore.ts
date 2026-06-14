@@ -320,6 +320,14 @@ function isPlainStackLiftSeparator(op: IrOp | undefined): op is Extract<IrOp, { 
 }
 
 function expressionSourceRunAt(ops: readonly IrOp[], start: number): ExpressionSourceRun | undefined {
+  const exponent = exponentLiteralRunAt(ops, start);
+  if (exponent !== undefined) {
+    return {
+      end: exponent.end,
+      displayValue: exponent.displayValue,
+      x2Facts: [exponent.x2Fact],
+    };
+  }
   const decimal = decimalLiteralRunAt(ops, start, { allowSinglePositiveInteger: true });
   if (decimal !== undefined) {
     return {
