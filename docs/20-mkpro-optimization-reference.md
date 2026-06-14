@@ -1798,10 +1798,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent-entry literals such as
     `5 ВП 3`, `1.2 ВП 3`, `5 ВП 3 /-/`, `5 /-/ ВП 3`, or
     `5 /-/ ВП 3 /-/` once the prior value has been closed by a safe
-    X2-affecting sync. A repeated `literal; pure unary; explicit
-    X-preserving X2 sync` run, including a chain of documented pure unary
-    operators separated by free-standing X/stack/X2-preserving empty cells, can
-    also collapse to `.` when the source is either a decimal digit-run or a
+    X2-affecting sync. A repeated `literal; pure unary` run, including a chain
+    of documented pure unary operators separated by free-standing
+    X/stack/X2-preserving empty cells, can also collapse to `.` either before
+    an explicit X-preserving X2 sync or at a terminal boundary when the
+    expression itself preserves X2, the source is either a decimal digit-run or a
     normalized exponent-entry literal such as `5 ВП 3`, or a documented stable
     constant producer such as `F pi`, the hidden X2 set already contains the
     same stable `expr-key:*`, visible `X` proves the same dot-restore value, and
@@ -1811,7 +1812,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     binary operators when both operand sources are proved; each operand may be
     a proved decimal, exponent-entry, register, indirect-register, or stable
     constant source followed by documented pure unary operators, and the binary
-    result may also feed a pure unary tail before the explicit X2 sync. A more
+    result may also feed a pure unary tail before an explicit X2 sync or a
+    terminal boundary when the expression is X2-preserving. A more
     general linear RPN parser also builds a small stack of the same stable facts,
     so nested expressions such as `sqrt(2); В↑; sqrt(3); +; В↑; sqrt(4); +; F*`
     can reuse the final hidden X2 value through `.`. An explicit `В↑`

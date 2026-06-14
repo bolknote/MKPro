@@ -226,7 +226,20 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
       };
     }
 
+    if (stack.length === 1 && sawOperator && isTerminalExpressionBoundary(ops[cursor])) {
+      const [result] = stack;
+      return {
+        end: result!.end,
+        displayValue: result!.displayValue,
+        x2Facts: result!.x2Facts,
+        sourceStackEnd: result!.sourceStackEnd ?? result!.end,
+        allowDuplicateYStackProof: result!.allowDuplicateYStackProof ?? true,
+      };
+    }
+
     if (stack.length > 0 && isPlainExpressionSyncGapOp(ops[cursor])) {
+      const top = stack[stack.length - 1]!;
+      stack[stack.length - 1] = { ...top, end: cursor };
       cursor += 1;
       continue;
     }
@@ -264,7 +277,11 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
         };
         sawOperator = true;
         cursor += 1;
-        while (isPlainExpressionSyncGapOp(ops[cursor])) cursor += 1;
+        while (isPlainExpressionSyncGapOp(ops[cursor])) {
+          const top = stack[stack.length - 1]!;
+          stack[stack.length - 1] = { ...top, end: cursor };
+          cursor += 1;
+        }
         continue;
       }
     }
@@ -284,7 +301,11 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
         });
         sawOperator = true;
         cursor += 1;
-        while (isPlainExpressionSyncGapOp(ops[cursor])) cursor += 1;
+        while (isPlainExpressionSyncGapOp(ops[cursor])) {
+          const top = stack[stack.length - 1]!;
+          stack[stack.length - 1] = { ...top, end: cursor };
+          cursor += 1;
+        }
         continue;
       }
       stack.push(ySource, xSource);
@@ -294,6 +315,10 @@ function rpnExpressionRunAt(ops: readonly IrOp[], start: number): UnaryExpressio
   }
 
   return undefined;
+}
+
+function isTerminalExpressionBoundary(op: IrOp | undefined): boolean {
+  return op === undefined || op.kind === "stop";
 }
 
 function unaryExpressionRunFromSingleSourceAt(ops: readonly IrOp[], start: number): UnaryExpressionRun | undefined {
