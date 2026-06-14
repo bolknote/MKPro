@@ -1811,7 +1811,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     an explicit X-preserving X2 sync, before `С/П`/end-of-program, before a
     direct jump to a label/orphan-address-only terminal tail, before a backward
     direct numeric jump or proved indirect jump whose numeric target already points
-    to such a terminal tail and therefore is not shifted by deleting the repeated run, or before
+    to such a terminal tail and therefore is not shifted by deleting the repeated run,
+    before a conditional branch/loop whose fallthrough and proved target both reach
+    terminal tails, with numeric and proved-indirect targets accepted only when
+    they are likewise address-stable before the removed run, or before
     a direct `В/О` return when the return-aware stack guard proves the removed
     entry/lift is not observed by the caller. In those terminal cases the
     expression itself preserves X2, the source is either a decimal digit-run or a

@@ -14301,6 +14301,64 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces repeated pure unary expressions before terminal conditionals", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      cjump("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
+      cjump("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore replaces repeated pure unary expressions before terminal loops", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      loop("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
+      loop("done"),
+      halt(),
+      label("done"),
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore keeps repeated pure unary expressions before non-terminal jumps", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
@@ -14309,6 +14367,25 @@ describe("ir passes on synthetic programs", () => {
       plain(0x02, "2"),
       plain(0x21, "F sqrt"),
       jump("consumer"),
+      label("consumer"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-literal-restore keeps repeated pure unary expressions before non-terminal conditionals", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      cjump("consumer"),
+      halt(),
       label("consumer"),
       plain(0x10, "+"),
       halt(),
@@ -14357,6 +14434,54 @@ describe("ir passes on synthetic programs", () => {
       plain(0x02, "2"),
       plain(0x21, "F sqrt"),
       numericJump(8),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-literal-restore replaces repeated pure unary expressions before backward numeric terminal conditionals", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      halt(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      numericCjump(2),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      halt(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
+      numericCjump(2),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps repeated pure unary expressions before forward numeric terminal conditionals", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      numericCjump(8),
       halt(),
     ];
     const result = x2LiteralRestore.run(program, ctx);
@@ -14439,6 +14564,54 @@ describe("ir passes on synthetic programs", () => {
       plain(0x21, "F sqrt"),
       plain(0xf0, "F* empty F0"),
       numericCjump(9),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("x2-literal-restore replaces repeated pure unary expressions before backward proved indirect terminal conditionals", () => {
+    const program: IrOp[] = [
+      jump("main"),
+      halt(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      knownTargetIndirectCjump("7", 2),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      jump("main"),
+      halt(),
+      label("main"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal F sqrt(2) from hidden X2 temp" } },
+      knownTargetIndirectCjump("7", 2),
+      halt(),
+    ]);
+  });
+
+  it("x2-literal-restore keeps repeated pure unary expressions before forward proved indirect terminal conditionals", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x54, "К НОП"),
+      plain(0x02, "2"),
+      plain(0x21, "F sqrt"),
+      knownTargetIndirectCjump("7", 7),
       halt(),
     ];
     const result = x2LiteralRestore.run(program, ctx);

@@ -378,6 +378,26 @@ function isTerminalExpressionBoundary(
       new Set([...visited, targetIndex]),
     );
   }
+  if (op?.kind === "cjump" || op?.kind === "loop") {
+    const target = directBranchTargetEntryForTerminalBoundary(op, labels, addresses, immutableBeforeIndex);
+    if (target === undefined || visited.has(target.visitKey)) return false;
+    const nextVisited = new Set([...visited, cursor, target.visitKey]);
+    return isTerminalExpressionBoundary(
+      ops,
+      target.entry,
+      labels,
+      addresses,
+      immutableBeforeIndex,
+      nextVisited,
+    ) && isTerminalExpressionBoundary(
+      ops,
+      cursor + 1,
+      labels,
+      addresses,
+      immutableBeforeIndex,
+      nextVisited,
+    );
+  }
   if (op?.kind === "indirect-jump") {
     const target = knownIndirectFlowTarget(op);
     const targetIndex = target === undefined ? undefined : addresses.get(target);
@@ -395,7 +415,47 @@ function isTerminalExpressionBoundary(
       new Set([...visited, targetIndex]),
     );
   }
+  if (op?.kind === "indirect-cjump") {
+    const target = knownIndirectFlowTarget(op);
+    const targetIndex = target === undefined ? undefined : addresses.get(target);
+    if (
+      targetIndex === undefined ||
+      targetIndex >= immutableBeforeIndex ||
+      visited.has(targetIndex)
+    ) return false;
+    const nextVisited = new Set([...visited, cursor, targetIndex]);
+    return isTerminalExpressionBoundary(
+      ops,
+      targetIndex,
+      labels,
+      addresses,
+      immutableBeforeIndex,
+      nextVisited,
+    ) && isTerminalExpressionBoundary(
+      ops,
+      cursor + 1,
+      labels,
+      addresses,
+      immutableBeforeIndex,
+      nextVisited,
+    );
+  }
   return op === undefined || op.kind === "stop" || op.kind === "return";
+}
+
+function directBranchTargetEntryForTerminalBoundary(
+  op: Extract<IrOp, { kind: "cjump" | "loop" }>,
+  labels: ReadonlyMap<string, number>,
+  addresses: ReadonlyMap<number, number>,
+  immutableBeforeIndex: number,
+): { readonly entry: number; readonly visitKey: number } | undefined {
+  if (typeof op.target === "string") {
+    const target = labels.get(op.target);
+    return target === undefined ? undefined : { entry: target + 1, visitKey: target };
+  }
+  const targetIndex = addresses.get(op.target);
+  if (targetIndex === undefined || targetIndex >= immutableBeforeIndex) return undefined;
+  return { entry: targetIndex, visitKey: targetIndex };
 }
 
 function isRpnExpressionNonExecutableGap(op: IrOp | undefined): boolean {
