@@ -38,6 +38,9 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   value; `x2-proof` means visible X is proved but the hidden X2 sync is not. The
   blocked column also prints short step-window samples for each blocker, so the
   next proof layer can be targeted at the exact remaining restore exposure. The
+  snapshot counts only `x2`, `x2-proof`, and `stack+x2` as actionable blocked
+  local X2; `visible-x`, display-sensitive, and stack-only rows are still useful
+  audit facts but are not hidden-X2 proof gaps by themselves. The
   report decodes direct address bytes before running its local CFG checks, so
   `БП`/`ПП`/`F x?0`/`F Lx` targets are classified through the same address-cell
   shape that the final listing shows.

@@ -440,6 +440,7 @@ function markdown(rows, workers) {
   const pendingOverBudget = measured.filter((row) => row.pending && row.over > 0);
   const pendingOverBudgetWithoutX2 = pendingOverBudget.filter((row) => row.x2Optimizations.length === 0);
   const withResidualX2Patterns = measured.filter((row) => row.x2Surface.patternCount > 0);
+  const withActionableBlockedX2 = measured.filter((row) => actionableBlockedX2Count(row.x2Surface.counts) > 0);
   const topResidualX2Surface = [...measured]
     .filter((row) => row.x2Surface.score > 0)
     .sort((left, right) => right.x2Surface.score - left.x2Surface.score)
@@ -456,6 +457,7 @@ function markdown(rows, workers) {
     `- Worker threads: ${workers}.`,
     `- Programs with X2-related optimizer hits: ${withX2.length}/${measured.length}.`,
     `- Programs with residual X2 candidate patterns: ${withResidualX2Patterns.length}/${measured.length}.`,
+    `- Programs with actionable blocked local X2: ${withActionableBlockedX2.length}/${measured.length}.`,
     `- Pending programs over ${PROGRAM_LIMIT} cells: ${pendingOverBudget.length}.`,
     `- Pending programs over ${PROGRAM_LIMIT} cells without X2 hits: ${pendingOverBudgetWithoutX2.length}.`,
     "",
@@ -517,6 +519,12 @@ function formatPatterns(patterns) {
     .map((item) => `${item.name}=${item.count}${item.samples.length === 0 ? "" : ` (${item.samples.join("; ")})`}`)
     .join(", ")
     .replace(/\|/gu, "\\|");
+}
+
+function actionableBlockedX2Count(counts) {
+  return counts.requiredRecallRestoreX2 +
+    counts.requiredRecallRestoreX2Proof +
+    counts.requiredRecallRestoreStackAndX2;
 }
 
 function formatBlockedSurface(counts, blockedPatterns = []) {
