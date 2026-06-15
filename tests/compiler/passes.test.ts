@@ -770,6 +770,45 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[3]?.x2)).toEqual(["decimal:0:normalized"]);
   });
 
+  it("x2 value dataflow follows numeric direct call targets and returns", () => {
+    const program: IrOp[] = [
+      numericCall(4),
+      plain(0x54, "К НОП"),
+      halt(),
+      recall("6"),
+      ret(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[1]?.x)).toEqual(["reg:6"]);
+    expect(x2ValueStateText(states[1]?.x2)).toEqual(["reg:6"]);
+  });
+
+  it("x2 value dataflow follows numeric direct conditional targets", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      numericCjump(4),
+      halt(),
+      plain(0x54, "К НОП"),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[3]?.x)).toEqual(["reg:6"]);
+    expect(x2ValueStateText(states[3]?.x2)).toEqual(["reg:6"]);
+  });
+
+  it("x2 value dataflow treats resumable stops as reset fallthroughs", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      pause(),
+      plain(0x54, "К НОП"),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[2]?.x)).toEqual([]);
+    expect(x2ValueStateText(states[2]?.x2)).toEqual([]);
+  });
+
   it("x2 value dataflow tracks normalized decimal digit runs", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
@@ -17899,7 +17938,7 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("x2-dead-restore-before-overwrite uses only the fallthrough conditional structural ВП source", () => {
+  it("x2-dead-restore-before-overwrite uses path-specific conditional structural ВП sources", () => {
     const fallthroughProgram: IrOp[] = [
       recall("1", "preload const 8.70Е2-6С"),
       cjump("done"),
@@ -17929,7 +17968,14 @@ describe("ir passes on synthetic programs", () => {
       label("done"),
       halt(),
     ]);
-    expect(x2DeadRestoreBeforeOverwrite.run(jumpProgram, ctx).ops).toEqual(jumpProgram);
+    expect(x2DeadRestoreBeforeOverwrite.run(jumpProgram, ctx).ops).toEqual([
+      recall("1", "preload const 8.70Е2-6С"),
+      cjump("target"),
+      halt(),
+      label("target"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
   });
 
   it("x2-dead-restore-before-overwrite uses loop fallthrough structural ВП source", () => {

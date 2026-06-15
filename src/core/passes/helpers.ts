@@ -13269,13 +13269,16 @@ function buildRegisterValueGraph(ops: readonly IrOp[]): Edge[][] {
     const normal = (target: number): void => {
       successors[index]!.push({ target, kind: "normal" });
     };
-    const jumpTo = (target: string | number): void => {
-      if (typeof target !== "string") return;
-      const targetIndex = labels.get(target);
-      if (targetIndex !== undefined) successors[index]!.push({ target: targetIndex, kind: "jump" });
-    };
     const jumpToAddress = (target: number): void => {
       const targetIndex = addresses.get(target);
+      if (targetIndex !== undefined) successors[index]!.push({ target: targetIndex, kind: "jump" });
+    };
+    const jumpTo = (target: string | number): void => {
+      if (typeof target === "number") {
+        jumpToAddress(target);
+        return;
+      }
+      const targetIndex = labels.get(target);
       if (targetIndex !== undefined) successors[index]!.push({ target: targetIndex, kind: "jump" });
     };
 
@@ -13287,8 +13290,10 @@ function buildRegisterValueGraph(ops: readonly IrOp[]): Edge[][] {
       case "indirect-recall":
       case "plain":
       case "orphan-address":
-      case "stop":
         fallthrough();
+        break;
+      case "stop":
+        if (op.semantic !== "halt" && op.semantic !== "unknown") fallthrough();
         break;
       case "jump":
         jumpTo(op.target);

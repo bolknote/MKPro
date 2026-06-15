@@ -91,6 +91,8 @@ function analyzeResidualX2Surface(steps) {
     stackExposingLiftSync: 0,
     requiredRecallRestoreNoPlan: 0,
     requiredRecallRestoreNoProof: 0,
+    requiredRecallRestoreVisibleX: 0,
+    requiredRecallRestoreX2Proof: 0,
     requiredRecallRestoreStack: 0,
     requiredRecallRestoreX2: 0,
     requiredRecallRestoreStackAndX2: 0,
@@ -251,9 +253,11 @@ function classifyRecallBeforeRestore(ops, index, x2RegisterStates, x2ValueStates
   );
   if (plan === undefined) return "required:no-plan";
   if (plan.removable === true) return "candidate";
-  if (plan.analysis.valueProof === undefined || plan.analysis.x2SyncRedundant !== true) {
+  if (plan.analysis.valueProof === undefined) {
     return "required:no-proof";
   }
+  if (plan.analysis.valueProof.inX !== true) return "required:visible-x";
+  if (plan.analysis.x2SyncRedundant !== true) return "required:x2-proof";
   const stackBlocked = plan.analysis.exposesStackLift === true && plan.stackLiftAlreadySupplied !== true;
   const x2Blocked = plan.analysis.exposesX2Restore === true;
   if (stackBlocked && x2Blocked) return "required:stack+x2";
@@ -269,6 +273,12 @@ function incrementRequiredRecallRestoreReason(counts, classification) {
       break;
     case "required:no-proof":
       counts.requiredRecallRestoreNoProof += 1;
+      break;
+    case "required:visible-x":
+      counts.requiredRecallRestoreVisibleX += 1;
+      break;
+    case "required:x2-proof":
+      counts.requiredRecallRestoreX2Proof += 1;
       break;
     case "required:stack":
       counts.requiredRecallRestoreStack += 1;
@@ -526,6 +536,8 @@ function formatRequiredRecallRestoreReasons(counts) {
   if (counts.requiredRecallRestoreX2 > 0) reasons.push(`x2=${counts.requiredRecallRestoreX2}`);
   if (counts.requiredRecallRestoreStack > 0) reasons.push(`stack=${counts.requiredRecallRestoreStack}`);
   if (counts.requiredRecallRestoreStackAndX2 > 0) reasons.push(`stack+x2=${counts.requiredRecallRestoreStackAndX2}`);
+  if (counts.requiredRecallRestoreVisibleX > 0) reasons.push(`visible-x=${counts.requiredRecallRestoreVisibleX}`);
+  if (counts.requiredRecallRestoreX2Proof > 0) reasons.push(`x2-proof=${counts.requiredRecallRestoreX2Proof}`);
   if (counts.requiredRecallRestoreNoProof > 0) reasons.push(`no-proof=${counts.requiredRecallRestoreNoProof}`);
   if (counts.requiredRecallRestoreNoPlan > 0) reasons.push(`no-plan=${counts.requiredRecallRestoreNoPlan}`);
   if (counts.requiredRecallRestoreOther > 0) reasons.push(`other=${counts.requiredRecallRestoreOther}`);
