@@ -47,6 +47,9 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   threads (`X2_REPORT_WORKERS`, default capped at 4) and applies a per-file
   worker timeout (`X2_REPORT_TIMEOUT_MS`, default 120000, `0` disables) so one
   pathological compile is reported as a row error instead of hanging the audit.
+  `X2_REPORT_FILES` accepts a comma-separated list of example paths or basenames
+  to run a targeted audit for timeout-heavy programs without compiling the full
+  suite.
 - The shared X2/register/value data-flow graph follows both label targets and
   numeric direct targets. This matters after layout, where direct `БП`, `ПП`,
   and conditional address bytes are ordinary numeric MK-61 cells rather than

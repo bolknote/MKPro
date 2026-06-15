@@ -41,6 +41,31 @@ function exampleFiles() {
   );
 }
 
+function requestedExampleFiles(files) {
+  const raw = process.env.X2_REPORT_FILES;
+  if (raw === undefined || raw.trim() === "") return files;
+  const requested = raw.split(",").map((item) => item.trim()).filter(Boolean);
+  const selected = [];
+  const unmatched = [];
+  for (const item of requested) {
+    const matches = files.filter((file) =>
+      file === item ||
+      relative(".", file) === item ||
+      relative("examples", file) === item ||
+      rowName({ file }) === item ||
+      file.endsWith(`/${item}`));
+    if (matches.length === 0) {
+      unmatched.push(item);
+      continue;
+    }
+    selected.push(...matches);
+  }
+  if (unmatched.length > 0) {
+    throw new Error(`X2_REPORT_FILES did not match example(s): ${unmatched.join(", ")}`);
+  }
+  return [...new Set(selected)];
+}
+
 function compileFile(file) {
   const source = readFileSync(file, "utf8");
   try {
@@ -465,7 +490,7 @@ async function compileFiles(files, workers, timeoutMs = requestedWorkerTimeoutMs
   });
 }
 
-function markdown(rows, workers, timeoutMs = requestedWorkerTimeoutMs()) {
+function markdown(rows, workers, timeoutMs = requestedWorkerTimeoutMs(), options = {}) {
   const measured = rows.filter((row) => !("error" in row));
   const withX2 = measured.filter((row) => row.x2Optimizations.length > 0);
   const pendingOverBudget = measured.filter((row) => row.pending && row.over > 0);
@@ -487,6 +512,7 @@ function markdown(rows, workers, timeoutMs = requestedWorkerTimeoutMs()) {
     `- Programs compiled: ${measured.length}/${rows.length}.`,
     `- Worker threads: ${workers}.`,
     `- Worker timeout: ${timeoutMs <= 0 ? "disabled" : `${timeoutMs}ms`}.`,
+    ...(options.fileFilter === undefined ? [] : [`- File filter: \`${options.fileFilter}\`.`]),
     `- Programs with X2-related optimizer hits: ${withX2.length}/${measured.length}.`,
     `- Programs with residual X2 candidate patterns: ${withResidualX2Patterns.length}/${measured.length}.`,
     `- Programs with actionable blocked local X2: ${withActionableBlockedX2.length}/${measured.length}.`,
@@ -585,11 +611,19 @@ function formatRequiredRecallRestoreReasons(counts) {
 }
 
 if (isMainThread) {
-  const files = exampleFiles();
+  const fileFilter = process.env.X2_REPORT_FILES;
+  let files;
+  try {
+    files = requestedExampleFiles(exampleFiles());
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+    process.exit();
+  }
   const workers = requestedWorkerCount(files.length);
   const timeoutMs = requestedWorkerTimeoutMs();
   const rows = await compileFiles(files, workers, timeoutMs);
-  process.stdout.write(markdown(rows, workers, timeoutMs));
+  process.stdout.write(markdown(rows, workers, timeoutMs, { fileFilter }));
 } else {
   parentPort.postMessage(compileFile(workerData.file));
 }
