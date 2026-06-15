@@ -30,6 +30,10 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
 - `report.proofs` — explicit proofs that some rewrites depended on.
 - `report.machineFeaturesUsed` — machine-feature tactics enabled by successful transformations.
 - `report.preloads` and `report.setupProgram` — auto-initialization strategy.
+- `npm run x2:report` — full example-suite X2 audit. It scores residual
+  restore/sync/lift/conditional surfaces, lists local X2-looking patterns after
+  optimization, and classifies blocked `recall->restore` leftovers by blocker:
+  `x2`, `stack`, `stack+x2`, `no-proof`, `no-plan`, or `other`.
 
 ## 3) Capability families (what the optimizer is able to report)
 

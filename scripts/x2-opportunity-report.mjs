@@ -88,6 +88,12 @@ function analyzeResidualX2Surface(steps) {
     displayRecallRestore: 0,
     displayEmptyBeforeVp: 0,
     stackExposingLiftSync: 0,
+    requiredRecallRestoreNoPlan: 0,
+    requiredRecallRestoreNoProof: 0,
+    requiredRecallRestoreStack: 0,
+    requiredRecallRestoreX2: 0,
+    requiredRecallRestoreStackAndX2: 0,
+    requiredRecallRestoreOther: 0,
   };
   const patterns = new Map();
   const ops = raiseMachineToIr(
@@ -141,6 +147,7 @@ function analyzeResidualX2Surface(steps) {
         counts.displayRecallRestore += 1;
       } else {
         counts.requiredRecallRestore += 1;
+        incrementRequiredRecallRestoreReason(counts, classification);
       }
     }
     if (step.opcode === LIFT && isX2SyncingOpcode(next.opcode)) {
@@ -178,7 +185,7 @@ function analyzeResidualX2Surface(steps) {
 function classifyRecallBeforeRestore(ops, index, x2RegisterStates, x2ValueStates, context, steps) {
   if (isDisplayStep(steps[index]) || isDisplayStep(steps[index + 1])) return "display";
   const register = removableRecallValueRegister(ops[index]);
-  if (register === undefined) return "required";
+  if (register === undefined) return "required:no-plan";
   const plan = planRecallRemovalWithStackScheduler(
     ops,
     index,
@@ -186,7 +193,40 @@ function classifyRecallBeforeRestore(ops, index, x2RegisterStates, x2ValueStates
     x2ValueStates[index],
     context,
   );
-  return plan?.removable === true ? "candidate" : "required";
+  if (plan === undefined) return "required:no-plan";
+  if (plan.removable === true) return "candidate";
+  const stackBlocked = plan.analysis.exposesStackLift === true && plan.stackLiftAlreadySupplied !== true;
+  const x2Blocked = plan.analysis.exposesX2Restore === true;
+  if (stackBlocked && x2Blocked) return "required:stack+x2";
+  if (stackBlocked) return "required:stack";
+  if (x2Blocked) return "required:x2";
+  if (plan.analysis.valueProof === undefined || plan.analysis.x2SyncRedundant !== true) {
+    return "required:no-proof";
+  }
+  return "required:other";
+}
+
+function incrementRequiredRecallRestoreReason(counts, classification) {
+  switch (classification) {
+    case "required:no-plan":
+      counts.requiredRecallRestoreNoPlan += 1;
+      break;
+    case "required:no-proof":
+      counts.requiredRecallRestoreNoProof += 1;
+      break;
+    case "required:stack":
+      counts.requiredRecallRestoreStack += 1;
+      break;
+    case "required:x2":
+      counts.requiredRecallRestoreX2 += 1;
+      break;
+    case "required:stack+x2":
+      counts.requiredRecallRestoreStackAndX2 += 1;
+      break;
+    default:
+      counts.requiredRecallRestoreOther += 1;
+      break;
+  }
 }
 
 function addPattern(patterns, name, steps, index) {
@@ -415,11 +455,24 @@ function formatPatterns(patterns) {
 
 function formatBlockedSurface(counts) {
   const parts = [];
-  if (counts.requiredRecallRestore > 0) parts.push(`required recall->restore=${counts.requiredRecallRestore}`);
+  if (counts.requiredRecallRestore > 0) {
+    parts.push(`required recall->restore=${counts.requiredRecallRestore}${formatRequiredRecallRestoreReasons(counts)}`);
+  }
   if (counts.displayRecallRestore > 0) parts.push(`display recall->restore=${counts.displayRecallRestore}`);
   if (counts.displayEmptyBeforeVp > 0) parts.push(`display empty->vp=${counts.displayEmptyBeforeVp}`);
   if (counts.stackExposingLiftSync > 0) parts.push(`stack-exposing lift sync=${counts.stackExposingLiftSync}`);
   return parts.length === 0 ? "-" : parts.join(", ");
+}
+
+function formatRequiredRecallRestoreReasons(counts) {
+  const reasons = [];
+  if (counts.requiredRecallRestoreX2 > 0) reasons.push(`x2=${counts.requiredRecallRestoreX2}`);
+  if (counts.requiredRecallRestoreStack > 0) reasons.push(`stack=${counts.requiredRecallRestoreStack}`);
+  if (counts.requiredRecallRestoreStackAndX2 > 0) reasons.push(`stack+x2=${counts.requiredRecallRestoreStackAndX2}`);
+  if (counts.requiredRecallRestoreNoProof > 0) reasons.push(`no-proof=${counts.requiredRecallRestoreNoProof}`);
+  if (counts.requiredRecallRestoreNoPlan > 0) reasons.push(`no-plan=${counts.requiredRecallRestoreNoPlan}`);
+  if (counts.requiredRecallRestoreOther > 0) reasons.push(`other=${counts.requiredRecallRestoreOther}`);
+  return reasons.length === 0 ? "" : ` [${reasons.join(", ")}]`;
 }
 
 if (isMainThread) {
