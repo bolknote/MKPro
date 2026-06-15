@@ -1,6 +1,6 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
-import { loopCounterRegister } from "./cfg.ts";
+import { loopCounterRegister, numericFlowTargetLayoutGuard } from "./cfg.ts";
 import {
   addressIndexes,
   labelIndexes,
@@ -36,6 +36,8 @@ const run: IrPassFn = (ops) =>
       const labels = labelIndexes(ops);
       const addresses = addressIndexes(ops);
       const references = targetReferenceCountsByEntryIndex(ops, labels, addresses);
+      const numericTargets = numericFlowTargetLayoutGuard(ops);
+      if (numericTargets === undefined) return;
 
       for (let index = 0; index < ops.length; index += 1) {
         const op = ops[index]!;
@@ -69,6 +71,7 @@ const run: IrPassFn = (ops) =>
           engine.directReturnContext(),
         );
         if (targetRecall === undefined || engine.removed.has(targetRecall.index)) continue;
+        if (!numericTargets.canDeleteAt(targetRecall.index)) continue;
         const target = ops[targetRecall.index]!;
         const targetRegister = removableRecallValueRegister(target);
         if (targetRegister === undefined) continue;

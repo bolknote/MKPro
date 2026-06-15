@@ -24020,6 +24020,22 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("branch-target-x-reuse keeps numeric target recalls before later numeric targets", () => {
+    const program: IrOp[] = [
+      recall("6"),
+      numericCjump(4),
+      halt(),
+      recall("6"),
+      numericJump(7),
+      plain(0x20, "F pi"),
+      halt(),
+    ];
+    const result = branchTargetXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("branch-target-x-reuse keeps target recall when an alias label is another entry", () => {
     const program: IrOp[] = [
       recall("6"),

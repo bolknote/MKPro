@@ -48,6 +48,39 @@ export interface CfgOptions {
   readonly indirectCallFallthrough?: boolean;
 }
 
+export interface NumericFlowTargetLayoutGuard {
+  canDeleteAt(index: number): boolean;
+}
+
+export function numericFlowTargetLayoutGuard(ops: readonly IrOp[]): NumericFlowTargetLayoutGuard | undefined {
+  const { addressIndex } = buildTargetIndexes(ops);
+  let latestTargetIndex = -1;
+  for (const op of ops) {
+    const target = numericFlowTarget(op);
+    if (target === undefined) continue;
+    const targetIndex = addressIndex.get(target);
+    if (targetIndex === undefined) return undefined;
+    latestTargetIndex = Math.max(latestTargetIndex, targetIndex);
+  }
+  return {
+    canDeleteAt: (index) => index >= latestTargetIndex,
+  };
+}
+
+function numericFlowTarget(op: IrOp): number | undefined {
+  switch (op.kind) {
+    case "jump":
+    case "cjump":
+    case "call":
+    case "loop":
+      return typeof op.target === "number" ? op.target : undefined;
+    case "orphan-address":
+      return typeof op.target === "number" ? op.target : undefined;
+    default:
+      return undefined;
+  }
+}
+
 /**
  * Build the successor edge lists for a linear op sequence.
  *
