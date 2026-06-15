@@ -1065,7 +1065,10 @@ Display rewrites are separated into strategy selection + body lowering.
   concrete decimal result has already been proved; otherwise they remain
   producer-local. Stable keys for commutative binary opcodes (`+`, `*`, `К max`,
   `К∧`, `К∨`, `К⊕`) canonicalize operand order, while
-  non-commutative opcodes keep the hardware `Y,X` order. Display-role, barrier,
+  non-commutative opcodes keep the hardware `Y,X` order. Structural arithmetic
+  keeps operand order when MK-61 display-shape rules can distinguish the two
+  sides; structural bitwise `К∧`/`К∨`/`К⊕` still canonicalizes because the
+  shared mantissa-nibble model is commutative. Display-role, barrier,
   exposing, undocumented, dangerous, and random-like commands do not seed such
   facts. The same stack transfer model carries structural `Y` shape facts for
   hex/super values through `В↑`, `X↔Y`, and documented Y-keeping operations, so
@@ -1527,9 +1530,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `ГE-8 + 1 -> 1.0000001` stay out of value rewriting.
     The regular `F x^2` value model can then derive follow-on
     values such as `1`/`4`/`9`. Stable `expr-key:*` proofs keep
-    operand order whenever either operand is structural, even for otherwise
-    commutative opcodes, because MK-61 structural arithmetic can distinguish
-    `A * 16` from `16 * A`; structural operands are also withheld from the
+    operand order whenever either operand is structural for arithmetic opcodes,
+    even for otherwise commutative `+`/`*`, because MK-61 structural arithmetic
+    can distinguish `A * 16` from `16 * A`; structural bitwise `К∧`/`К∨`/`К⊕`
+    still sorts operands through the commutative mantissa-nibble model.
+    Structural operands are also withheld from the
     ordinary decimal evaluation branch while the structural table is being
     evaluated, so shape evidence such as `hex:A` cannot leak a false decimal
     `10` into the same proof. Exact structural decimal displays such as

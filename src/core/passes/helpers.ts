@@ -3619,10 +3619,19 @@ function stableBinaryExpressionValueFact(
       stableExpressionKeyHasStructuralShapeEvidence(yKey, new Set()) ||
       stableExpressionKeyHasStructuralShapeEvidence(xKey, new Set())
     );
-  const operands = COMMUTATIVE_STABLE_EXPR_OPCODES.has(op.opcode) && !structuralOperand
+  const operands = stableExpressionCanCanonicalizeBinaryOperandOrder(op.opcode, structuralOperand)
     ? [yKey, xKey].sort()
     : [yKey, xKey];
   return stableExpressionValueFact(opcode, operands.join(","));
+}
+
+function stableExpressionCanCanonicalizeBinaryOperandOrder(
+  opcode: number,
+  structuralOperand: boolean,
+): boolean {
+  if (!COMMUTATIVE_STABLE_EXPR_OPCODES.has(opcode)) return false;
+  if (!structuralOperand) return true;
+  return opcode === 0x37 || opcode === 0x38 || opcode === 0x39;
 }
 
 function plainXValueAfterNonPreservingOp(

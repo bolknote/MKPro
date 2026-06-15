@@ -5631,6 +5631,40 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2 value dataflow canonicalizes structural bitwise expr keys but preserves structural arithmetic order", () => {
+    const structuralOrLeft: IrOp[] = [
+      recall("1", "preload const FACE"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const ABCD"),
+      plain(0x38, "К∨"),
+      halt(),
+    ];
+    const structuralOrRight: IrOp[] = [
+      recall("2", "preload const ABCD"),
+      plain(0x0e, "В↑"),
+      recall("1", "preload const FACE"),
+      plain(0x38, "К∨"),
+      halt(),
+    ];
+    const structuralMultiply: IrOp[] = [
+      recall("1", "preload const FACE"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const ABCD"),
+      plain(0x12, "×"),
+      halt(),
+    ];
+    const leftStates = computeX2ValueStates(structuralOrLeft);
+    const rightStates = computeX2ValueStates(structuralOrRight);
+    const multiplyStates = computeX2ValueStates(structuralMultiply);
+
+    const canonicalBitwiseKey = "expr-key:38(shape:hex:ABCD:mantissa,shape:hex:FACE:mantissa)";
+    expect(x2ValueStateText(leftStates[4]?.x)).toContain(canonicalBitwiseKey);
+    expect(x2ValueStateText(rightStates[4]?.x)).toContain(canonicalBitwiseKey);
+    expect(x2ValueStateText(multiplyStates[4]?.x)).toContain(
+      "expr-key:12(shape:hex:FACE:mantissa,shape:hex:ABCD:mantissa)",
+    );
+  });
+
   it("x2 value dataflow transfers value facts through X/Y exchange", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),
