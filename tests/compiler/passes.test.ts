@@ -6559,6 +6559,64 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(afterRecall?.xDirectShape)).toEqual([]);
   });
 
+  it("x2 value dataflow treats dot-safe structural dot restores as direct X shapes only when exact", () => {
+    const base: X2ValueDataflowState = {
+      y: new Set(),
+      x: new Set(),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const dotSafe = transferX2ValueStateForEdge(
+      {
+        ...base,
+        x2Shape: new Set<X2ShapeFact>(["hex:A:mantissa"]),
+      },
+      plain(0x0a, "."),
+      "normal",
+      {},
+      0,
+    );
+    const unsafe = transferX2ValueStateForEdge(
+      {
+        ...base,
+        x2Shape: new Set<X2ShapeFact>(["hex:Г:mantissa"]),
+      },
+      plain(0x0a, "."),
+      "normal",
+      {},
+      0,
+    );
+    const exponent = transferX2ValueStateForEdge(
+      {
+        ...base,
+        x2Shape: new Set<X2ShapeFact>(["hex-exponent:A:0"]),
+      },
+      plain(0x0a, "."),
+      "normal",
+      {},
+      0,
+    );
+    const mixed = transferX2ValueStateForEdge(
+      {
+        ...base,
+        x2Shape: new Set<X2ShapeFact>(["hex:A:mantissa", "mantissa:1:decimal"]),
+      },
+      plain(0x0a, "."),
+      "normal",
+      {},
+      0,
+    );
+
+    expect(x2ShapeStateText(dotSafe?.xShape)).toEqual(["hex:A:mantissa"]);
+    expect(x2ShapeStateText(dotSafe?.xDirectShape)).toEqual(["hex:A:mantissa"]);
+    expect(x2ShapeStateText(unsafe?.xShape)).toEqual(["hex:Г:mantissa"]);
+    expect(x2ShapeStateText(unsafe?.xDirectShape)).toEqual([]);
+    expect(x2ShapeStateText(exponent?.xShape)).toEqual(["hex-exponent:A:0"]);
+    expect(x2ShapeStateText(exponent?.xDirectShape)).toEqual([]);
+    expect(x2ShapeStateText(mixed?.xShape)).toEqual(["hex:A:mantissa", "mantissa:1:decimal"]);
+    expect(x2ShapeStateText(mixed?.xDirectShape)).toEqual([]);
+  });
+
   it("x2 value dataflow feeds exact decimal display shapes to structural hex arithmetic", () => {
     const shapeOnly: X2ValueDataflowState = {
       y: new Set(),

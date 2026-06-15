@@ -1584,8 +1584,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     exponent-entry forms stay out of `xDirectShape`. Direct and proved
     stable-indirect recalls also rehydrate structural mantissa shape-memory as
     direct visible-X provenance, while exponent-entry shape-memory remains only
-    a structural shape fact. This is still direct display-shape provenance, not
-    a conversion of arbitrary hex/super shapes into decimal values.
+    a structural shape fact. Closed-context `.` restores seed the same direct
+    provenance only for exact all-structural dot-safe single-hex mantissas
+    (`A`/`B`/`C`); mixed, exponent-entry, `super`, decimal, and unsafe
+    structural restore shapes remain shape-only. This is still direct
+    display-shape provenance, not a conversion of arbitrary hex/super shapes
+    into decimal values.
     The same proof also covers a right-side structural operand when the value is
     still marked as a direct integer hex mantissa through `xDirectShape`; a
     plain `xShape` match is not enough. It is deliberately absent for

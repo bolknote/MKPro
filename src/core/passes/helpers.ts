@@ -8702,14 +8702,15 @@ function transferDotRestoreX2ValueState(input: X2ValueDataflowState): X2ValueDat
     };
   }
   const restoredX2Shape = effectiveInputX2Shape(input);
+  const xShape = normalizeX2RestoreShapesForX(restoredX2Shape);
   return {
     x: normalizeX2RestoreFactsForX(input.x2),
     y: cloneOptionalValueSet(input.y),
     x2: cloneOptionalValueSet(input.x2),
-    xShape: normalizeX2RestoreShapesForX(restoredX2Shape),
+    xShape,
     yShape: cloneOptionalShapeSet(input.yShape),
     x2Shape: cloneOptionalShapeSet(input.x2Shape),
-    xDirectShape: new Set(),
+    xDirectShape: dotRestoreDirectShapeFacts(xShape),
     yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
@@ -10246,6 +10247,14 @@ function recallDirectShapeFacts(
   const output = preloadedConstantShapeFacts(op);
   for (const fact of directStructuralMantissaShapeFacts(memoryShapes)) output.add(fact);
   return output;
+}
+
+function dotRestoreDirectShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  const canonical = canonicalShapeSet(shapes);
+  if (canonical.size === 0) return new Set();
+  const direct = directStructuralMantissaShapeFacts(canonical);
+  if (direct.size !== canonical.size) return new Set();
+  return x2ShapeSetHasOnlyDotSafeStructuralMantissas(direct) ? direct : new Set();
 }
 
 function recallStructuralShapeFacts(
