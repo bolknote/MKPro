@@ -6405,6 +6405,28 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(overWideResult?.xShape)).toEqual([]);
   });
 
+  it("x2 value dataflow treats computed structural display shapes as direct X shapes", () => {
+    const state: X2ValueDataflowState = {
+      y: new Set<X2ValueFact>(["decimal:1:normalized"]),
+      x: new Set(),
+      x2: new Set(),
+      yShape: new Set<X2ShapeFact>(["mantissa:1:decimal"]),
+      yDirectShape: new Set<X2ShapeFact>(["mantissa:1:decimal"]),
+      xShape: new Set<X2ShapeFact>(["hex:-9AЕ:mantissa"]),
+      entry: { kind: "closed" },
+    };
+
+    const afterAbs = transferX2ValueStateForEdge(state, plain(0x31, "К |x|"), "normal", {}, 0);
+    const afterPlus = afterAbs === undefined
+      ? undefined
+      : transferX2ValueStateForEdge(afterAbs, plain(0x10, "+"), "normal", {}, 1);
+
+    expect(x2ShapeStateText(afterAbs?.xShape)).toEqual(["hex:9AЕ:mantissa"]);
+    expect(x2ShapeStateText(afterAbs?.xDirectShape)).toEqual(["hex:9AЕ:mantissa"]);
+    expect(x2ValueStateText(afterPlus?.x) ?? []).toContain("decimal:1015:normalized");
+    expect(x2ShapeStateText(afterPlus?.xShape)).toContain("mantissa:1015:decimal");
+  });
+
   it("x2 value dataflow feeds exact decimal display shapes to structural hex arithmetic", () => {
     const shapeOnly: X2ValueDataflowState = {
       y: new Set(),

@@ -1575,7 +1575,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     conditional edges, stable indirect stores, and unknown indirect-store memory
     clears also preserve the direct visible `X/Y` shape metadata; they may affect
     memory or X2 sync facts, but they do not by themselves rewrite the visible
-    stack values that the later carry proof consumes.
+    stack values that the later carry proof consumes. A plain operation that
+    computes a proved calculator display shape now also seeds `xDirectShape`
+    from that result, so a structural result such as `К |x|` removing the sign
+    from `hex:-9AЕ` can feed the same later carry proof as a directly loaded
+    `hex:9AЕ` operand. This is still direct display-shape provenance, not a
+    conversion of arbitrary hex/super shapes into decimal values.
     The same proof also covers a right-side structural operand when the value is
     still marked as a direct integer hex mantissa through `xDirectShape`; a
     plain `xShape` match is not enough. It is deliberately absent for

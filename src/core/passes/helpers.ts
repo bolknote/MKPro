@@ -8103,7 +8103,7 @@ function transferPlainX2ValueState(
         ? new Set(x)
         : new Set<X2ValueFact>();
     const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect, closedExponentShapes);
-    const xDirectShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
+    const xDirectShape = plainDirectShapeAfterPlainOp(op, closedExponentShapes, xShape);
     return {
       x,
       y: transferPlainYValueSet(input, sourceX, op),
@@ -8193,7 +8193,7 @@ function transferPlainX2ValueState(
       );
     const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect, closedExponentShapes);
     const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
-    const xDirectShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
+    const xDirectShape = plainDirectShapeAfterPlainOp(op, closedExponentShapes, xShape);
     return {
       x,
       y: transferPlainYValueSet(input, sourceX, op),
@@ -8288,7 +8288,7 @@ function transferPlainX2ValueState(
     );
   const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
   const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect);
-  const xDirectShape = plainPreservesXValue(op) ? sourceXDirectShape : new Set<X2ShapeFact>();
+  const xDirectShape = plainDirectShapeAfterPlainOp(op, sourceXDirectShape, xShape);
   const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
   if (structuralEntry.kind === "exponent") {
     const closedStructuralShapes = structuralExponentEntryShapeFacts(structuralEntry);
@@ -8323,9 +8323,7 @@ function transferPlainX2ValueState(
       closedStructuralShapes,
     );
     const structuralX2Value = transferPlainX2ValueSet(input, structuralXValue, structuralXShape, effect);
-    const structuralXDirectShape = plainPreservesXValue(op)
-      ? new Set(closedStructuralShapes)
-      : new Set<X2ShapeFact>();
+    const structuralXDirectShape = plainDirectShapeAfterPlainOp(op, closedStructuralShapes, structuralXShape);
     return {
       x: structuralXValue,
       y: transferPlainYValueSet(input, sourceX, op),
@@ -9307,6 +9305,16 @@ function transferPlainYDirectShapeSet(
     return cloneOptionalShapeSet(input.yDirectShape);
   }
   return new Set();
+}
+
+function plainDirectShapeAfterPlainOp(
+  op: Extract<IrOp, { kind: "plain" }>,
+  sourceXDirectShape: X2ShapeSet | undefined,
+  resultXShape: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  return plainPreservesXValue(op)
+    ? cloneOptionalShapeSet(sourceXDirectShape)
+    : cloneOptionalShapeSet(resultXShape);
 }
 
 function transferPlainX2ShapeSet(
