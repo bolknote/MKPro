@@ -10946,6 +10946,16 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0c, "ВП"),
       halt(),
     ];
+    const closedSignSourceProgram: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
 
     const removablePlan = x2PlanRestoreRunBeforeProvedVp(
       removableProgram,
@@ -10988,6 +10998,20 @@ describe("ir passes on synthetic programs", () => {
       reason: "source-mismatch",
       source: {
         canDiscardRestoreRunBeforeProvedVp: false,
+      },
+    });
+
+    expect(x2PlanRestoreRunBeforeProvedVp(
+      closedSignSourceProgram,
+      5,
+      computeX2ValueStates(closedSignSourceProgram),
+      directReturnAnalysisContext(closedSignSourceProgram),
+    )).toMatchObject({
+      removableIndexes: [2, 3, 4],
+      firstRunIndex: 2,
+      reason: "proved-vp-source",
+      source: {
+        canDiscardRestoreRunBeforeProvedVp: true,
       },
     });
   });
@@ -28413,6 +28437,29 @@ describe("ir passes on synthetic programs", () => {
     const result = vpSplice.run(program, ctx);
 
     expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-splice removes a mixed closed-context restore run before proved ВП through shared sign source", () => {
+    const program: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(3);
     expect(result.ops).toEqual([
       plain(0x02, "2"),
       plain(0xf0, "F* empty F0"),

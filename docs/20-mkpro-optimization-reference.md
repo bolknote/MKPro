@@ -2003,10 +2003,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     shared VP source-key algebra: raw mantissas and their exact display shapes
     can match the source recorded immediately before `ВП`, while signed zero
     stays distinct. When a restore run actually contains `/-/`, the same helper
-    may also consult explicit sign-source shape keys, but only as explicit
-    sign-source evidence; fallback sign sources are deliberately rejected so
-    closed-context sign pairs before store-backed `ВП` and sticky signed-zero
-    mantissas keep their observable source change.
+    may also consult the shared sign-source key algebra: explicit sign-source
+    shape keys and non-zero shared decimal/shape sign sources can prove that
+    the same source reaches the following `ВП`, while zero-like source keys are
+    still rejected so sticky signed-zero mantissas keep their observable source
+    change.
     The pass consumes the shared VP shape-context classifier rather than
     decoding local `kind` strings: the classifier records active mantissa,
     active exponent-entry, and closed VP-context phases, decimal vs structural

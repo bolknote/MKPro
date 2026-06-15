@@ -5852,6 +5852,16 @@ export function x2StatesHaveSameVpEntrySignSource(
   );
 }
 
+function x2StatesHaveSameNonZeroVpEntrySignSource(
+  left: X2ValueDataflowState | undefined,
+  right: X2ValueDataflowState | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return false;
+  const leftKeys = nonZeroVpSourceKeys(vpEntrySignSourceKeys(left));
+  const rightKeys = nonZeroVpSourceKeys(mergeStringSets(vpEntrySourceKeys(right), vpEntrySignSourceKeys(right)));
+  return stringSetsHaveIntersection(leftKeys, rightKeys);
+}
+
 export function x2StatesHaveSameExplicitVpEntrySignSource(
   left: X2ValueDataflowState | undefined,
   right: X2ValueDataflowState | undefined,
@@ -5887,7 +5897,10 @@ export function x2StateCanDiscardRestoreRunBeforeProvedVp(
   } else if (x2StatesHaveSameVpEntrySource(beforeRun, beforeVp)) {
     return true;
   }
-  return options.hasSignRestore === true && x2StateHasExplicitVpEntrySignSourceForProvedVp(beforeRun, beforeVp);
+  return options.hasSignRestore === true && (
+    x2StatesHaveSameNonZeroVpEntrySignSource(beforeRun, beforeVp) ||
+    x2StateHasExplicitVpEntrySignSourceForProvedVp(beforeRun, beforeVp)
+  );
 }
 
 export interface X2RestoreGapBeforeVpScan {
@@ -10991,6 +11004,33 @@ function vpSourceKeys(
   addVpEntryRawMantissaSourceKeys(keys, mantissas);
   addVpEntryDisplaySourceKeys(keys, mantissas, shapes);
   return keys;
+}
+
+function nonZeroVpSourceKeys(input: ReadonlySet<string>): Set<string> {
+  const output = new Set<string>();
+  for (const key of input) {
+    if (!vpSourceKeyIsZeroDecimal(key)) output.add(key);
+  }
+  return output;
+}
+
+function vpSourceKeyIsZeroDecimal(key: string): boolean {
+  const rawMantissa = /^decimal:([^:]+)$/u.exec(key)?.[1];
+  if (rawMantissa !== undefined) return normalizeDecimalMantissaEntry(rawMantissa) === "0";
+
+  const valueFact = /^decimal:([^:]+):(?:normalized|unnormalized)$/u.exec(key)?.[1];
+  if (valueFact !== undefined) return normalizePlainDecimal(valueFact) === "0";
+
+  const shapeRaw = /^shape:(.*)$/u.exec(key)?.[1];
+  if (shapeRaw === undefined) return false;
+  for (const fact of x2RestoredDisplayShapeFactsFromSourceKey(key) ?? []) {
+    const visible = x2ShapeFactRestoredVisibleDecimal(fact);
+    if (visible !== undefined && normalizePlainDecimal(visible) === "0") return true;
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind === "mantissa" && model.radix === "decimal" && model.normalizedDecimal === "0") return true;
+  }
+  const model = x2ShapeDataModelForFact(shapeRaw as X2ShapeFact);
+  return model.kind === "mantissa" && model.radix === "decimal" && model.normalizedDecimal === "0";
 }
 
 export function x2JoinedVpEntryMantissaSources(
