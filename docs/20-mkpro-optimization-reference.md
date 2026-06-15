@@ -1546,10 +1546,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     clears also preserve the direct visible `X/Y` shape metadata; they may affect
     memory or X2 sync facts, but they do not by themselves rewrite the visible
     stack values that the later carry proof consumes.
-    It is deliberately absent for right-side structural
-    operands, `F` nibbles, `super:*`, fractional forms, closed exponent-entry
-    forms, and over-wide carries, so it does not turn arbitrary structural
-    displays into decimal values.
+    The same proof also covers a right-side structural operand when the value is
+    still marked as a direct integer hex mantissa through `xDirectShape`; a
+    plain `xShape` match is not enough. It is deliberately absent for
+    non-direct right-side structural operands, `F` nibbles, `super:*`,
+    fractional forms, closed exponent-entry forms, and over-wide carries, so it
+    does not turn arbitrary structural displays into decimal values.
     Left-operand multiplication/division now scale the
     already pinned single-hex product/quotient by the verified structural
     exponent range `-3..9` while preserving the MK-61 display shape, so cases

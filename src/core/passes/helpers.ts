@@ -745,6 +745,7 @@ function plainProducesStableExpressionValues(
   xShape: X2ShapeSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
   directYShape: X2ShapeSet | undefined = undefined,
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const constants = plainProducesStableConstantExpressionValues(op);
   if (constants.size > 0) return constants;
@@ -771,7 +772,16 @@ function plainProducesStableExpressionValues(
       output.add(stableExpressionValueFact(opcode, key));
     }
   } else if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") {
-    for (const fact of plainProducesConcreteBinaryDecimalValues(op, y, x, yShape, xShape, options, directYShape)) {
+    for (const fact of plainProducesConcreteBinaryDecimalValues(
+      op,
+      y,
+      x,
+      yShape,
+      xShape,
+      options,
+      directYShape,
+      directXShape,
+    )) {
       output.add(fact);
     }
     const [yKeys, xKeys] = stableBinaryExpressionSourceKeySets(op.opcode, y, yShape, x, xShape);
@@ -833,6 +843,7 @@ function stableBinaryExpressionKeyHasConcreteDecimalResult(
     stableExpressionKeyShapeSetForOperand(op.opcode, xKey, new Set()),
     options,
     stableExpressionKeyDirectShapeSet(yKey),
+    stableExpressionKeyDirectShapeSet(xKey),
   );
   return values.size > 0 &&
     !stableBinaryExpressionKeyHasAdditionalShapeResult(op, yKey, xKey, values, options);
@@ -873,6 +884,7 @@ function stableBinaryExpressionKeyHasAdditionalShapeResult(
       stableExpressionKeyShapeSetForOperand(op.opcode, yKey, new Set()),
       options,
       stableExpressionKeyDirectShapeSet(yKey),
+      stableExpressionKeyDirectShapeSet(xKey),
     ),
     values,
   );
@@ -1017,6 +1029,7 @@ function plainProducesConcreteBinaryDecimalValues(
   xShape: X2ShapeSet | undefined = undefined,
   options: ConcreteEvaluationOptions = {},
   directYShape: X2ShapeSet | undefined = undefined,
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
   const effectiveOptions = concreteEvaluationOptionsForOpcode(op.opcode, options);
@@ -1036,7 +1049,15 @@ function plainProducesConcreteBinaryDecimalValues(
       if (concrete !== undefined) output.add(decimalValueFact(concrete, "normalized"));
     }
   }
-  for (const fact of plainProducesStructuralBinaryDecimalValues(op, y, x, effectiveYShape, effectiveXShape, directYShape)) {
+  for (const fact of plainProducesStructuralBinaryDecimalValues(
+    op,
+    y,
+    x,
+    effectiveYShape,
+    effectiveXShape,
+    directYShape,
+    directXShape,
+  )) {
     output.add(fact);
   }
   return output;
@@ -1347,6 +1368,7 @@ function plainProducesConcreteBinaryShapeFacts(
   xShape: X2ShapeSet | undefined,
   options: ConcreteEvaluationOptions = {},
   directYShape: X2ShapeSet | undefined = undefined,
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   const effectiveOptions = concreteEvaluationOptionsForOpcode(op.opcode, options);
@@ -1362,7 +1384,15 @@ function plainProducesConcreteBinaryShapeFacts(
   )) {
     output.add(fact);
   }
-  for (const fact of plainProducesStructuralBinaryDecimalShapes(op, y, x, effectiveYShape, effectiveXShape, directYShape)) {
+  for (const fact of plainProducesStructuralBinaryDecimalShapes(
+    op,
+    y,
+    x,
+    effectiveYShape,
+    effectiveXShape,
+    directYShape,
+    directXShape,
+  )) {
     output.add(fact);
   }
   if (op.opcode < 0x37 || op.opcode > 0x39) return output;
@@ -1404,9 +1434,18 @@ function plainProducesStructuralBinaryDecimalShapes(
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
   directYShape: X2ShapeSet | undefined = undefined,
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  for (const fact of structuralHexBinaryDecimalDisplayShapes(op, y, x, yShape, xShape, directYShape)) output.add(fact);
+  for (const fact of structuralHexBinaryDecimalDisplayShapes(
+    op,
+    y,
+    x,
+    yShape,
+    xShape,
+    directYShape,
+    directXShape,
+  )) output.add(fact);
   for (const fact of structuralBitwiseDecimalDisplayShapes(op, y, x, yShape, xShape)) output.add(fact);
   return output;
 }
@@ -1418,9 +1457,10 @@ function plainProducesStructuralBinaryDecimalValues(
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
   directYShape: X2ShapeSet | undefined = undefined,
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
-  for (const value of structuralHexBinaryDecimalValues(op, y, x, yShape, xShape, directYShape)) {
+  for (const value of structuralHexBinaryDecimalValues(op, y, x, yShape, xShape, directYShape, directXShape)) {
     output.add(decimalValueFact(value, "normalized"));
   }
   return output;
@@ -1433,9 +1473,10 @@ function structuralHexBinaryDecimalValues(
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
   directYShape: X2ShapeSet | undefined = undefined,
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<string> {
   const output = new Set<string>();
-  for (const product of structuralHexBinaryDecimalProducts(op, y, x, yShape, xShape, directYShape)) {
+  for (const product of structuralHexBinaryDecimalProducts(op, y, x, yShape, xShape, directYShape, directXShape)) {
     output.add(product.value);
   }
   for (const value of structuralBitwiseDecimalValues(op, y, x, yShape, xShape)) output.add(value);
@@ -1449,6 +1490,7 @@ function structuralHexBinaryDecimalProducts(
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
   directYShape: X2ShapeSet | undefined = undefined,
+  directXShape: X2ShapeSet | undefined = undefined,
 ): StructuralHexDecimalProduct[] {
   const output: StructuralHexDecimalProduct[] = [];
   if (op.opcode >= 0x37 && op.opcode <= 0x39) {
@@ -1458,6 +1500,11 @@ function structuralHexBinaryDecimalProducts(
     for (const leftNormalized of structuralHexCarryNormalizedIntegerProducts(directYShape)) {
       for (const right of normalizedDecimalValues(x, xShape)) {
         addStructuralHexDecimalProduct(output, structuralHexCarryNormalizedPlusDecimalProduct(leftNormalized, right));
+      }
+    }
+    for (const left of normalizedDecimalValues(y, yShape)) {
+      for (const rightNormalized of structuralHexCarryNormalizedIntegerProducts(directXShape)) {
+        addStructuralHexDecimalProduct(output, structuralHexCarryNormalizedPlusDecimalProduct(rightNormalized, left));
       }
     }
     for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
@@ -1593,9 +1640,10 @@ function structuralHexBinaryDecimalDisplayShapes(
   yShape: X2ShapeSet | undefined,
   xShape: X2ShapeSet | undefined,
   directYShape: X2ShapeSet | undefined = undefined,
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
-  for (const product of structuralHexBinaryDecimalProducts(op, y, x, yShape, xShape, directYShape)) {
+  for (const product of structuralHexBinaryDecimalProducts(op, y, x, yShape, xShape, directYShape, directXShape)) {
     const shape = structuralHexDecimalProductDisplayShape(product);
     if (shape !== undefined) output.add(shape);
   }
@@ -3585,8 +3633,9 @@ function plainXValueAfterNonPreservingOp(
   xShape: X2ShapeSet | undefined = undefined,
   yShape: X2ShapeSet | undefined = undefined,
   directYShape: X2ShapeSet | undefined = undefined,
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
-  const output = plainProducesStableExpressionValues(op, x, y, xShape, yShape, directYShape);
+  const output = plainProducesStableExpressionValues(op, x, y, xShape, yShape, directYShape, directXShape);
   const opaque = plainProducesOpaqueExpressionValue(op, producerIndex);
   if (opaque !== undefined) output.add(opaque);
   return output;
@@ -3600,10 +3649,11 @@ function plainXShapeAfterNonPreservingOp(
   yShape: X2ShapeSet | undefined = undefined,
   options: ConcreteEvaluationOptions = {},
   directYShape: X2ShapeSet | undefined = undefined,
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = plainProducesConcreteDecimalShapeFacts(op, x, xShape, options);
   for (const fact of plainProducesConcreteUnaryShapeFacts(op, x, xShape)) output.add(fact);
-  for (const fact of plainProducesConcreteBinaryShapeFacts(op, y, x, yShape, xShape, options, directYShape)) {
+  for (const fact of plainProducesConcreteBinaryShapeFacts(op, y, x, yShape, xShape, options, directYShape, directXShape)) {
     output.add(fact);
   }
   return output;
@@ -8027,10 +8077,26 @@ function transferPlainX2ValueState(
     const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
     const x = plainPreservesXValue(op)
       ? new Set(sourceX)
-      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape, directYShape);
+      : plainXValueAfterNonPreservingOp(
+        op,
+        producerIndex,
+        sourceX,
+        input.y,
+        closedExponentShapes,
+        input.yShape,
+        directYShape,
+      );
     const xShape = plainPreservesXValue(op)
       ? new Set(closedExponentShapes)
-      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedExponentShapes, input.yShape, {}, directYShape);
+      : plainXShapeAfterNonPreservingOp(
+        op,
+        sourceX,
+        input.y,
+        closedExponentShapes,
+        input.yShape,
+        {},
+        directYShape,
+      );
     const x2 = effect === "preserves"
       ? new Set(closedExponentValues)
       : effect === "affects"
@@ -8105,10 +8171,26 @@ function transferPlainX2ValueState(
     const sourceX = new Set<X2ValueFact>();
     const x = plainPreservesXValue(op)
       ? new Set<X2ValueFact>()
-      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape, directYShape);
+      : plainXValueAfterNonPreservingOp(
+        op,
+        producerIndex,
+        sourceX,
+        input.y,
+        closedExponentShapes,
+        input.yShape,
+        directYShape,
+      );
     const xShape = plainPreservesXValue(op)
       ? new Set(closedExponentShapes)
-      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedExponentShapes, input.yShape, {}, directYShape);
+      : plainXShapeAfterNonPreservingOp(
+        op,
+        sourceX,
+        input.y,
+        closedExponentShapes,
+        input.yShape,
+        {},
+        directYShape,
+      );
     const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect, closedExponentShapes);
     const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
     const xDirectShape = plainPreservesXValue(op) ? new Set(closedExponentShapes) : new Set<X2ShapeFact>();
@@ -8174,20 +8256,38 @@ function transferPlainX2ValueState(
       ...cloneX2MemoryFields(input),
     };
   }
+  const sourceXDirectShape = cloneOptionalShapeSet(input.xDirectShape);
   const x = syncUnknownSameValue(
     plainPreservesXValue(op)
       ? new Set(input.x)
-      : plainXValueAfterNonPreservingOp(op, producerIndex, input.x, input.y, input.xShape, input.yShape, directYShape),
+      : plainXValueAfterNonPreservingOp(
+        op,
+        producerIndex,
+        input.x,
+        input.y,
+        input.xShape,
+        input.yShape,
+        directYShape,
+        sourceXDirectShape,
+      ),
     effect,
     producerIndex,
   );
   const inputXShape = effectiveInputXShape(input);
   const xShape = plainPreservesXValue(op)
     ? cloneOptionalShapeSet(inputXShape)
-    : plainXShapeAfterNonPreservingOp(op, input.x, input.y, input.xShape, input.yShape, {}, directYShape);
+    : plainXShapeAfterNonPreservingOp(
+      op,
+      input.x,
+      input.y,
+      input.xShape,
+      input.yShape,
+      {},
+      directYShape,
+      sourceXDirectShape,
+    );
   const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
   const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect);
-  const sourceXDirectShape = cloneOptionalShapeSet(input.xDirectShape);
   const xDirectShape = plainPreservesXValue(op) ? sourceXDirectShape : new Set<X2ShapeFact>();
   const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
   if (structuralEntry.kind === "exponent") {
@@ -8195,10 +8295,26 @@ function transferPlainX2ValueState(
     const sourceX = new Set<X2ValueFact>();
     const structuralXValue = plainPreservesXValue(op)
       ? new Set<X2ValueFact>()
-      : plainXValueAfterNonPreservingOp(op, producerIndex, sourceX, input.y, closedStructuralShapes, input.yShape, directYShape);
+      : plainXValueAfterNonPreservingOp(
+        op,
+        producerIndex,
+        sourceX,
+        input.y,
+        closedStructuralShapes,
+        input.yShape,
+        directYShape,
+      );
     const structuralXShape = plainPreservesXValue(op)
       ? new Set(closedStructuralShapes)
-      : plainXShapeAfterNonPreservingOp(op, sourceX, input.y, closedStructuralShapes, input.yShape, {}, directYShape);
+      : plainXShapeAfterNonPreservingOp(
+        op,
+        sourceX,
+        input.y,
+        closedStructuralShapes,
+        input.yShape,
+        {},
+        directYShape,
+      );
     const structuralX2Shape = transferPlainX2ShapeSet(
       input,
       structuralXValue,
@@ -11412,6 +11528,7 @@ function stableExpressionKeyConcreteDecimalValues(key: string, seen: Set<string>
       stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey!, seen),
       options,
       stableExpressionKeyDirectShapeSet(yKey!),
+      stableExpressionKeyDirectShapeSet(xKey!),
     )) {
       const value = normalizedDecimalValueFromFact(fact);
       if (value !== undefined) output.add(value);
@@ -11478,6 +11595,7 @@ function stableExpressionKeyConcreteShapeFacts(key: string, seen: Set<string>): 
       stableExpressionKeyShapeSetForOperand(parsed.opcode, yKey!, seen),
       options,
       stableExpressionKeyDirectShapeSet(yKey!),
+      stableExpressionKeyDirectShapeSet(xKey!),
     )) output.add(fact);
   }
   seen.delete(key);

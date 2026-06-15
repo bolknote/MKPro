@@ -1584,8 +1584,12 @@ The pipeline currently contains:
   without creating an ordinary mantissa display shape. Hardware-rounded
   sexagesimal cases remain opaque. Wider results, division by zero,
   non-terminating division, irrational square roots, fractional powers of ten,
-  remaining non-zero powers, and structural hex/super operands keep only structural
-  or opaque expression facts. The shared
+  remaining non-zero powers, and unsupported structural hex/super operands keep
+  only structural or opaque expression facts. Direct integer hex mantissas can
+  participate in the carry-normalization addition proof on either stack side,
+  but only while the dataflow still has the direct-shape provenance for that
+  operand; derived exponent-display, `super:*`, fractional, `F`-nibble, and
+  over-wide forms remain outside the proof. The shared
   shape-algebra layer derives structural `hex-exponent:*:*` /
   `super-exponent:*:*` entries, exponent-context sign toggles, closed-context
   mantissa sign toggles, and exponent shifts that are pure restored-display
