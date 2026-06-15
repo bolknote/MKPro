@@ -1581,9 +1581,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     from `hex:-9AЕ` can feed the same later carry proof as a directly loaded
     `hex:9AЕ` operand. Proved structural `/-/` results seed the same direct
     provenance only when the result is a structural mantissa; structural
-    exponent-entry forms stay out of `xDirectShape`. This is still direct
-    display-shape provenance, not a conversion of arbitrary hex/super shapes
-    into decimal values.
+    exponent-entry forms stay out of `xDirectShape`. Direct and proved
+    stable-indirect recalls also rehydrate structural mantissa shape-memory as
+    direct visible-X provenance, while exponent-entry shape-memory remains only
+    a structural shape fact. This is still direct display-shape provenance, not
+    a conversion of arbitrary hex/super shapes into decimal values.
     The same proof also covers a right-side structural operand when the value is
     still marked as a direct integer hex mantissa through `xDirectShape`; a
     plain `xShape` match is not enough. It is deliberately absent for

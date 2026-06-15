@@ -7564,8 +7564,9 @@ function transferX2ValueDataflowState(
     case "recall": {
       const closed = closeX2ValueEntry(input);
       const value = recallX2ValueFacts(input, op.register, trackRegisterMemory, op);
-      const shape = recallX2ShapeFacts(value, op, trackRegisterMemory ? input.shapeMemory?.[op.register] : undefined);
-      const directShape = preloadedConstantShapeFacts(op);
+      const memoryShape = trackRegisterMemory ? input.shapeMemory?.[op.register] : undefined;
+      const shape = recallX2ShapeFacts(value, op, memoryShape);
+      const directShape = recallDirectShapeFacts(op, memoryShape);
       return {
         x: canonicalX2ValueSet(value),
         y: cloneOptionalValueSet(closed.x),
@@ -7588,14 +7589,12 @@ function transferX2ValueDataflowState(
     case "indirect-recall": {
       const closed = closeX2ValueEntry(input);
       const target = knownIndirectMemoryTarget(op);
+      const memoryShape = target === undefined || !trackRegisterMemory ? undefined : input.shapeMemory?.[target];
       const values = target === undefined
         ? new Set<X2ValueFact>([SAME_UNKNOWN_VALUE])
         : recallX2ValueFacts(input, target, trackRegisterMemory, op);
-      const shape = recallX2ShapeFacts(
-        values,
-        op,
-        target === undefined || !trackRegisterMemory ? undefined : input.shapeMemory?.[target],
-      );
+      const shape = recallX2ShapeFacts(values, op, memoryShape);
+      const directShape = target === undefined ? new Set<X2ShapeFact>() : recallDirectShapeFacts(op, memoryShape);
       return {
         x: canonicalX2ValueSet(values),
         y: cloneOptionalValueSet(closed.x),
@@ -7603,7 +7602,7 @@ function transferX2ValueDataflowState(
         xShape: new Set(shape),
         yShape: cloneOptionalShapeSet(closed.xShape),
         x2Shape: new Set(shape),
-        xDirectShape: new Set(),
+        xDirectShape: new Set(directShape),
         yDirectShape: cloneOptionalShapeSet(closed.xDirectShape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
@@ -10238,6 +10237,15 @@ function recallX2ShapeFacts(
   for (const fact of memoryShapes ?? []) output.add(fact);
   for (const fact of preloadedConstantShapeFacts(op)) output.add(fact);
   return canonicalShapeSet(output);
+}
+
+function recallDirectShapeFacts(
+  op: IrOp | undefined,
+  memoryShapes?: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const output = preloadedConstantShapeFacts(op);
+  for (const fact of directStructuralMantissaShapeFacts(memoryShapes)) output.add(fact);
+  return output;
 }
 
 function recallStructuralShapeFacts(
