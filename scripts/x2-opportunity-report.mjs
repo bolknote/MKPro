@@ -4,12 +4,22 @@ import { readdirSync, readFileSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { join, relative } from "node:path";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
-import { compileMKPro } from "../src/core/index.ts";
+import { compileMKPro, opcodeCatalog } from "../src/core/index.ts";
 
 const PROGRAM_LIMIT = 105;
 const EXAMPLE_DIRS = ["examples", "examples/pending-optimizer"];
-const X2_NAME_RE = /\b(?:x2|vp-(?:splice|fraction)|display-byte-x2)\b/iu;
+const X2_NAME_RE = /\b(?:x2|vp-|display-byte-x2)/iu;
 const DEFAULT_WORKERS = Math.max(1, Math.min(4, availableParallelism()));
+const opcodeByCode = new Map(opcodeCatalog.map((item) => [item.code, item]));
+
+const DOT = 0x0a;
+const SIGN = 0x0b;
+const VP = 0x0c;
+const LIFT = 0x0e;
+const DIRECT_RECALL_START = 0x60;
+const DIRECT_RECALL_END = 0x6f;
+const INDIRECT_RECALL_START = 0xd0;
+const INDIRECT_RECALL_END = 0xdf;
 
 function exampleFiles() {
   return EXAMPLE_DIRS.flatMap((dir) =>
@@ -27,6 +37,7 @@ function compileFile(file) {
     const optimizations = result.report.optimizations ?? [];
     const x2Optimizations = [...new Set(optimizations.map((item) => item.name).filter((name) => X2_NAME_RE.test(name)))]
       .sort();
+    const x2Surface = analyzeResidualX2Surface(result.steps);
     return {
       file,
       steps: result.report.steps,
@@ -34,6 +45,7 @@ function compileFile(file) {
       over: result.report.steps - PROGRAM_LIMIT,
       pending: file.includes("/pending-optimizer/"),
       x2Optimizations,
+      x2Surface,
     };
   } catch (error) {
     return {
@@ -49,6 +61,118 @@ function rowName(row) {
 
 function formatList(items) {
   return items.length === 0 ? "-" : items.map((item) => `\`${item}\``).join(", ");
+}
+
+function analyzeResidualX2Surface(steps) {
+  const counts = {
+    dot: 0,
+    sign: 0,
+    vp: 0,
+    entryRestore: 0,
+    directRecallSync: 0,
+    indirectRecallSync: 0,
+    stackLiftSync: 0,
+    x2Affecting: 0,
+    conditionalX2: 0,
+    unknownX2: 0,
+  };
+  const patterns = new Map();
+
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    const info = opcodeByCode.get(step.opcode);
+    if (step.opcode === DOT) counts.dot += 1;
+    if (step.opcode === SIGN) counts.sign += 1;
+    if (step.opcode === VP) counts.vp += 1;
+    if (step.opcode >= 0 && step.opcode <= VP) counts.entryRestore += 1;
+    if (isDirectRecall(step.opcode)) counts.directRecallSync += 1;
+    if (isIndirectRecall(step.opcode)) counts.indirectRecallSync += 1;
+    if (step.opcode === LIFT) counts.stackLiftSync += 1;
+    if (info?.x2Effect === "affects") counts.x2Affecting += 1;
+    if (info?.conditionalX2Effect !== undefined) counts.conditionalX2 += 1;
+    if (info?.x2Effect === "unknown") counts.unknownX2 += 1;
+
+    const next = steps[index + 1];
+    const afterNext = steps[index + 2];
+    if (next === undefined) continue;
+    if (step.opcode === VP && next.opcode === VP) addPattern(patterns, "adjacent-vp", steps, index);
+    if (isVpEmptySeparator(step.opcode) && next.opcode === VP) addPattern(patterns, "empty-before-vp", steps, index);
+    if (step.opcode === SIGN && next.opcode === SIGN) addPattern(patterns, "sign-pair", steps, index);
+    if (step.opcode === VP && next.opcode === SIGN && afterNext?.opcode === SIGN) {
+      addPattern(patterns, "vp-sign-pair", steps, index);
+    }
+    if (step.opcode === DOT && next.opcode === VP) addPattern(patterns, "dot-vp-context", steps, index);
+    if (step.opcode === VP && next.opcode === DOT) addPattern(patterns, "vp-dot-context", steps, index);
+    if (isRecall(step.opcode) && isContextSensitiveRestore(next.opcode)) {
+      addPattern(patterns, "recall-before-restore", steps, index);
+    }
+    if (step.opcode === LIFT && isX2SyncingOpcode(next.opcode)) {
+      addPattern(patterns, "lift-before-x2-sync", steps, index);
+    }
+  }
+
+  const x2RestoreSurface = counts.dot + counts.sign + counts.vp;
+  const recallSyncSurface = counts.directRecallSync + counts.indirectRecallSync;
+  const patternCount = [...patterns.values()].reduce((total, item) => total + item.count, 0);
+  const score =
+    x2RestoreSurface * 3 +
+    counts.stackLiftSync +
+    Math.ceil(recallSyncSurface / 3) +
+    counts.conditionalX2 +
+    patternCount * 5;
+  return {
+    counts,
+    patternCount,
+    score,
+    patterns: [...patterns.entries()].map(([name, data]) => ({ name, ...data })),
+  };
+}
+
+function addPattern(patterns, name, steps, index) {
+  const current = patterns.get(name) ?? { count: 0, samples: [] };
+  current.count += 1;
+  if (current.samples.length < 3) {
+    current.samples.push(formatStepWindow(steps, index));
+  }
+  patterns.set(name, current);
+}
+
+function formatStepWindow(steps, index) {
+  return steps
+    .slice(index, Math.min(steps.length, index + 3))
+    .map((step) => `${step.address}:${step.mnemonic}`)
+    .join(" ");
+}
+
+function isDirectRecall(opcode) {
+  return opcode >= DIRECT_RECALL_START && opcode <= DIRECT_RECALL_END;
+}
+
+function isIndirectRecall(opcode) {
+  return opcode >= INDIRECT_RECALL_START && opcode <= INDIRECT_RECALL_END;
+}
+
+function isRecall(opcode) {
+  return isDirectRecall(opcode) || isIndirectRecall(opcode);
+}
+
+function isContextSensitiveRestore(opcode) {
+  return opcode === DOT || opcode === SIGN || opcode === VP;
+}
+
+function isVpEmptySeparator(opcode) {
+  return opcode === 0x54 ||
+    opcode === 0x55 ||
+    opcode === 0x56 ||
+    opcode === 0x1f ||
+    opcode === 0x2f ||
+    opcode === 0x3f ||
+    (opcode >= 0xf0 && opcode <= 0xff);
+}
+
+function isX2SyncingOpcode(opcode) {
+  const info = opcodeByCode.get(opcode);
+  return info?.x2Effect === "affects" || info?.conditionalX2Effect !== undefined;
 }
 
 function requestedWorkerCount(fileCount) {
@@ -126,6 +250,11 @@ function markdown(rows, workers) {
   const withX2 = measured.filter((row) => row.x2Optimizations.length > 0);
   const pendingOverBudget = measured.filter((row) => row.pending && row.over > 0);
   const pendingOverBudgetWithoutX2 = pendingOverBudget.filter((row) => row.x2Optimizations.length === 0);
+  const withResidualX2Patterns = measured.filter((row) => row.x2Surface.patternCount > 0);
+  const topResidualX2Surface = [...measured]
+    .filter((row) => row.x2Surface.score > 0)
+    .sort((left, right) => right.x2Surface.score - left.x2Surface.score)
+    .slice(0, 12);
 
   const lines = [
     "# X2 Opportunity Report",
@@ -137,23 +266,42 @@ function markdown(rows, workers) {
     `- Programs compiled: ${measured.length}/${rows.length}.`,
     `- Worker threads: ${workers}.`,
     `- Programs with X2-related optimizer hits: ${withX2.length}/${measured.length}.`,
+    `- Programs with residual X2 candidate patterns: ${withResidualX2Patterns.length}/${measured.length}.`,
     `- Pending programs over ${PROGRAM_LIMIT} cells: ${pendingOverBudget.length}.`,
     `- Pending programs over ${PROGRAM_LIMIT} cells without X2 hits: ${pendingOverBudgetWithoutX2.length}.`,
     "",
     "## Measurements",
     "",
-    "| Example | Cells | Over 105 | X2-related optimizations |",
-    "| --- | ---: | ---: | --- |",
+    "| Example | Cells | Over 105 | X2-related optimizations | X2 surface | Residual patterns |",
+    "| --- | ---: | ---: | --- | ---: | --- |",
   ];
 
   for (const row of rows) {
     if ("error" in row) {
-      lines.push(`| \`${rowName(row)}\` | - | - | compile error: ${row.error.replace(/\|/gu, "\\|")} |`);
+      lines.push(`| \`${rowName(row)}\` | - | - | compile error: ${row.error.replace(/\|/gu, "\\|")} | - | - |`);
       continue;
     }
     lines.push(
-      `| \`${rowName(row)}\` | ${row.steps} | ${row.over > 0 ? `+${row.over}` : row.over} | ${formatList(row.x2Optimizations)} |`,
+      `| \`${rowName(row)}\` | ${row.steps} | ${row.over > 0 ? `+${row.over}` : row.over} | ${formatList(row.x2Optimizations)} | ${row.x2Surface.score} | ${formatPatterns(row.x2Surface.patterns)} |`,
     );
+  }
+
+  if (topResidualX2Surface.length > 0) {
+    lines.push(
+      "",
+      "## Largest Residual X2 Surfaces",
+      "",
+      "This is a static post-optimization scan. A high score is not a proof that cells can be removed; it marks programs where X2 restores, recall-syncs, stack-lifts, conditionals, or nearby VP/sign/dot patterns remain visible after all passes.",
+      "",
+      "| Example | Score | Restore cells (`.` `/-/` `ВП`) | Recall syncs | Lifts | Conditional X2 | Top patterns |",
+      "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+    );
+    for (const row of topResidualX2Surface) {
+      const counts = row.x2Surface.counts;
+      lines.push(
+        `| \`${rowName(row)}\` | ${row.x2Surface.score} | ${counts.dot}/${counts.sign}/${counts.vp} | ${counts.directRecallSync + counts.indirectRecallSync} | ${counts.stackLiftSync} | ${counts.conditionalX2} | ${formatPatterns(row.x2Surface.patterns)} |`,
+      );
+    }
   }
 
   if (pendingOverBudgetWithoutX2.length > 0) {
@@ -161,15 +309,25 @@ function markdown(rows, workers) {
       "",
       "## First Non-X2 Bottlenecks",
       "",
-      "These pending programs are still over budget but currently do not exercise an X2 optimizer pass. They are poor evidence for further X2 work until their IR exposes X2-shaped opportunities.",
+      "These pending programs are still over budget but currently do not report an X2 optimizer hit. The residual surface columns distinguish likely X2-shaped follow-up work from programs that first need non-X2 lowering changes.",
       "",
     );
     for (const row of pendingOverBudgetWithoutX2) {
-      lines.push(`- \`${rowName(row)}\`: ${row.steps} cells (+${row.over}).`);
+      lines.push(
+        `- \`${rowName(row)}\`: ${row.steps} cells (+${row.over}), residual X2 surface ${row.x2Surface.score}, patterns ${formatPatterns(row.x2Surface.patterns)}.`,
+      );
     }
   }
 
   return `${lines.join("\n")}\n`;
+}
+
+function formatPatterns(patterns) {
+  if (patterns.length === 0) return "-";
+  return patterns
+    .map((item) => `${item.name}=${item.count}${item.samples.length === 0 ? "" : ` (${item.samples.join("; ")})`}`)
+    .join(", ")
+    .replace(/\|/gu, "\\|");
 }
 
 if (isMainThread) {
