@@ -5,6 +5,14 @@ import { availableParallelism } from "node:os";
 import { join, relative } from "node:path";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 import { compileMKPro, opcodeCatalog } from "../src/core/index.ts";
+import { raiseMachineToIr } from "../src/core/ir.ts";
+import {
+  computeX2RegisterStates,
+  computeX2ValueStates,
+  directReturnAnalysisContext,
+  planRecallRemovalWithStackScheduler,
+  removableRecallValueRegister,
+} from "../src/core/passes/helpers.ts";
 
 const PROGRAM_LIMIT = 105;
 const EXAMPLE_DIRS = ["examples", "examples/pending-optimizer"];
@@ -76,8 +84,23 @@ function analyzeResidualX2Surface(steps) {
     x2Affecting: 0,
     conditionalX2: 0,
     unknownX2: 0,
+    requiredRecallRestore: 0,
+    displayRecallRestore: 0,
+    displayEmptyBeforeVp: 0,
+    stackExposingLiftSync: 0,
   };
   const patterns = new Map();
+  const ops = raiseMachineToIr(
+    steps.map((step) => ({
+      kind: "op",
+      opcode: step.opcode,
+      mnemonic: step.mnemonic,
+      ...(step.comment === undefined ? {} : { comment: step.comment }),
+    })),
+  );
+  const x2RegisterStates = computeX2RegisterStates(ops);
+  const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
+  const context = directReturnAnalysisContext(ops);
 
   for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
@@ -97,7 +120,13 @@ function analyzeResidualX2Surface(steps) {
     const afterNext = steps[index + 2];
     if (next === undefined) continue;
     if (step.opcode === VP && next.opcode === VP) addPattern(patterns, "adjacent-vp", steps, index);
-    if (isVpEmptySeparator(step.opcode) && next.opcode === VP) addPattern(patterns, "empty-before-vp", steps, index);
+    if (isVpEmptySeparator(step.opcode) && next.opcode === VP) {
+      if (isDisplayStep(step) || isDisplayStep(next)) {
+        counts.displayEmptyBeforeVp += 1;
+      } else {
+        addPattern(patterns, "empty-before-vp", steps, index);
+      }
+    }
     if (step.opcode === SIGN && next.opcode === SIGN) addPattern(patterns, "sign-pair", steps, index);
     if (step.opcode === VP && next.opcode === SIGN && afterNext?.opcode === SIGN) {
       addPattern(patterns, "vp-sign-pair", steps, index);
@@ -105,14 +134,24 @@ function analyzeResidualX2Surface(steps) {
     if (step.opcode === DOT && next.opcode === VP) addPattern(patterns, "dot-vp-context", steps, index);
     if (step.opcode === VP && next.opcode === DOT) addPattern(patterns, "vp-dot-context", steps, index);
     if (isRecall(step.opcode) && isContextSensitiveRestore(next.opcode)) {
-      addPattern(patterns, "recall-before-restore", steps, index);
+      const classification = classifyRecallBeforeRestore(ops, index, x2RegisterStates, x2ValueStates, context, steps);
+      if (classification === "candidate") {
+        addPattern(patterns, "recall-before-restore", steps, index);
+      } else if (classification === "display") {
+        counts.displayRecallRestore += 1;
+      } else {
+        counts.requiredRecallRestore += 1;
+      }
     }
     if (step.opcode === LIFT && isX2SyncingOpcode(next.opcode)) {
       const stopKind = next.opcode === STOP ? classifyStopStep(next) : undefined;
+      const nextInfo = opcodeByCode.get(next.opcode);
       if (stopKind === "terminal") {
         addPattern(patterns, "lift-before-terminal-halt", steps, index);
       } else if (stopKind === "unknown") {
         addPattern(patterns, "lift-before-unknown-stop", steps, index);
+      } else if (nextInfo?.stackEffect === "exposes" || nextInfo?.stackEffect === "unknown") {
+        counts.stackExposingLiftSync += 1;
       } else if (stopKind === undefined) {
         addPattern(patterns, "lift-before-x2-sync", steps, index);
       }
@@ -134,6 +173,20 @@ function analyzeResidualX2Surface(steps) {
     score,
     patterns: [...patterns.entries()].map(([name, data]) => ({ name, ...data })),
   };
+}
+
+function classifyRecallBeforeRestore(ops, index, x2RegisterStates, x2ValueStates, context, steps) {
+  if (isDisplayStep(steps[index]) || isDisplayStep(steps[index + 1])) return "display";
+  const register = removableRecallValueRegister(ops[index]);
+  if (register === undefined) return "required";
+  const plan = planRecallRemovalWithStackScheduler(
+    ops,
+    index,
+    x2RegisterStates[index],
+    x2ValueStates[index],
+    context,
+  );
+  return plan?.removable === true ? "candidate" : "required";
 }
 
 function addPattern(patterns, name, steps, index) {
@@ -198,6 +251,11 @@ function classifyStopStep(step) {
     return "resumable";
   }
   return "unknown";
+}
+
+function isDisplayStep(step) {
+  const comment = step?.comment?.toLowerCase() ?? "";
+  return /\b(?:display|screen|show|template|inline_show|вп)\b/iu.test(comment);
 }
 
 function requestedWorkerCount(fileCount) {
@@ -297,17 +355,17 @@ function markdown(rows, workers) {
     "",
     "## Measurements",
     "",
-    "| Example | Cells | Over 105 | X2-related optimizations | X2 surface | Residual patterns |",
-    "| --- | ---: | ---: | --- | ---: | --- |",
+    "| Example | Cells | Over 105 | X2-related optimizations | X2 surface | Residual patterns | Blocked local X2 |",
+    "| --- | ---: | ---: | --- | ---: | --- | --- |",
   ];
 
   for (const row of rows) {
     if ("error" in row) {
-      lines.push(`| \`${rowName(row)}\` | - | - | compile error: ${row.error.replace(/\|/gu, "\\|")} | - | - |`);
+      lines.push(`| \`${rowName(row)}\` | - | - | compile error: ${row.error.replace(/\|/gu, "\\|")} | - | - | - |`);
       continue;
     }
     lines.push(
-      `| \`${rowName(row)}\` | ${row.steps} | ${row.over > 0 ? `+${row.over}` : row.over} | ${formatList(row.x2Optimizations)} | ${row.x2Surface.score} | ${formatPatterns(row.x2Surface.patterns)} |`,
+      `| \`${rowName(row)}\` | ${row.steps} | ${row.over > 0 ? `+${row.over}` : row.over} | ${formatList(row.x2Optimizations)} | ${row.x2Surface.score} | ${formatPatterns(row.x2Surface.patterns)} | ${formatBlockedSurface(row.x2Surface.counts)} |`,
     );
   }
 
@@ -318,13 +376,13 @@ function markdown(rows, workers) {
       "",
       "This is a static post-optimization scan. A high score is not a proof that cells can be removed; it marks programs where X2 restores, recall-syncs, stack-lifts, conditionals, or nearby VP/sign/dot patterns remain visible after all passes.",
       "",
-      "| Example | Score | Restore cells (`.` `/-/` `ВП`) | Recall syncs | Lifts | Conditional X2 | Top patterns |",
-      "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+      "| Example | Score | Restore cells (`.` `/-/` `ВП`) | Recall syncs | Lifts | Conditional X2 | Top patterns | Blocked local X2 |",
+      "| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     );
     for (const row of topResidualX2Surface) {
       const counts = row.x2Surface.counts;
       lines.push(
-        `| \`${rowName(row)}\` | ${row.x2Surface.score} | ${counts.dot}/${counts.sign}/${counts.vp} | ${counts.directRecallSync + counts.indirectRecallSync} | ${counts.stackLiftSync} | ${counts.conditionalX2} | ${formatPatterns(row.x2Surface.patterns)} |`,
+        `| \`${rowName(row)}\` | ${row.x2Surface.score} | ${counts.dot}/${counts.sign}/${counts.vp} | ${counts.directRecallSync + counts.indirectRecallSync} | ${counts.stackLiftSync} | ${counts.conditionalX2} | ${formatPatterns(row.x2Surface.patterns)} | ${formatBlockedSurface(counts)} |`,
       );
     }
   }
@@ -353,6 +411,15 @@ function formatPatterns(patterns) {
     .map((item) => `${item.name}=${item.count}${item.samples.length === 0 ? "" : ` (${item.samples.join("; ")})`}`)
     .join(", ")
     .replace(/\|/gu, "\\|");
+}
+
+function formatBlockedSurface(counts) {
+  const parts = [];
+  if (counts.requiredRecallRestore > 0) parts.push(`required recall->restore=${counts.requiredRecallRestore}`);
+  if (counts.displayRecallRestore > 0) parts.push(`display recall->restore=${counts.displayRecallRestore}`);
+  if (counts.displayEmptyBeforeVp > 0) parts.push(`display empty->vp=${counts.displayEmptyBeforeVp}`);
+  if (counts.stackExposingLiftSync > 0) parts.push(`stack-exposing lift sync=${counts.stackExposingLiftSync}`);
+  return parts.length === 0 ? "-" : parts.join(", ");
 }
 
 if (isMainThread) {
