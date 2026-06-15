@@ -21714,11 +21714,40 @@ describe("ir passes on synthetic programs", () => {
     expect(result.ops).toEqual(program);
   });
 
-  it("flow-x-reuse avoids programs with absolute or indirect flow targets", () => {
-    const absolute: IrOp[] = [recall("1"), numericJump(4), recall("1"), halt()];
+  it("flow-x-reuse follows resolved numeric flow targets when removal cannot stale later addresses", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      numericJump(3),
+      recall("1"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      recall("1"),
+      numericJump(3),
+      halt(),
+    ]);
+  });
+
+  it("flow-x-reuse keeps recalls before later numeric targets to preserve absolute layout", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      recall("1"),
+      numericJump(4),
+      recall("2"),
+      halt(),
+    ];
+    const result = flowXReuse.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("flow-x-reuse avoids unknown indirect flow targets", () => {
     const indirect: IrOp[] = [recall("1"), indirectJump("7"), recall("1"), halt()];
 
-    expect(flowXReuse.run(absolute, ctx).applied).toBe(0);
     expect(flowXReuse.run(indirect, ctx).applied).toBe(0);
   });
 

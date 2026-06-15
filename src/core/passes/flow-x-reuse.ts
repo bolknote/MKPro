@@ -1,6 +1,6 @@
 import type { IrOp, RegisterName } from "../types.ts";
 import { isStableIndirectSelector } from "../indirect-addressing.ts";
-import { buildCfgEdges, loopCounterRegister, type CfgEdge } from "./cfg.ts";
+import { buildCfgEdges, buildTargetIndexes, loopCounterRegister, type CfgEdge } from "./cfg.ts";
 import {
   hasRewriteBarrier,
   knownIndirectFlowTarget,
@@ -25,7 +25,9 @@ const run: IrPassFn = (ops) =>
     },
     (engine) => {
       if (ops.length === 0) return;
-      if (hasNumericFlowTarget(ops) || hasUnknownIndirectFlow(ops)) return;
+      if (hasUnknownIndirectFlow(ops)) return;
+      const numericTargets = numericFlowTargetLayoutGuard(ops);
+      if (numericTargets === undefined) return;
 
       const graph = buildCfgEdges(ops);
       const inStates = computeXRegisterStates(ops, graph);
@@ -34,6 +36,7 @@ const run: IrPassFn = (ops) =>
         const op = ops[index]!;
         const recallRegister = removableRecallValueRegister(op);
         if (recallRegister === undefined) continue;
+        if (!numericTargets.canRemoveAt(index)) continue;
         const removalPlan = engine.plan(index);
         if (removalPlan?.removable !== true) continue;
         const alreadyInX =
@@ -158,20 +161,37 @@ function sameSet(left: XRegisterSet | undefined, right: XRegisterSet | undefined
   return true;
 }
 
-function hasNumericFlowTarget(ops: readonly IrOp[]): boolean {
-  return ops.some((op) => {
-    switch (op.kind) {
-      case "jump":
-      case "cjump":
-      case "call":
-      case "loop":
-        return typeof op.target === "number";
-      case "orphan-address":
-        return typeof op.target === "number";
-      default:
-        return false;
-    }
-  });
+interface NumericFlowTargetLayoutGuard {
+  canRemoveAt(index: number): boolean;
+}
+
+function numericFlowTargetLayoutGuard(ops: readonly IrOp[]): NumericFlowTargetLayoutGuard | undefined {
+  const { addressIndex } = buildTargetIndexes(ops);
+  let latestTargetIndex = -1;
+  for (const op of ops) {
+    const target = numericFlowTarget(op);
+    if (target === undefined) continue;
+    const targetIndex = addressIndex.get(target);
+    if (targetIndex === undefined) return undefined;
+    latestTargetIndex = Math.max(latestTargetIndex, targetIndex);
+  }
+  return {
+    canRemoveAt: (index) => index >= latestTargetIndex,
+  };
+}
+
+function numericFlowTarget(op: IrOp): number | undefined {
+  switch (op.kind) {
+    case "jump":
+    case "cjump":
+    case "call":
+    case "loop":
+      return typeof op.target === "number" ? op.target : undefined;
+    case "orphan-address":
+      return typeof op.target === "number" ? op.target : undefined;
+    default:
+      return undefined;
+  }
 }
 
 function hasUnknownIndirectFlow(ops: readonly IrOp[]): boolean {
