@@ -29,6 +29,7 @@ const DIRECT_RECALL_START = 0x60;
 const DIRECT_RECALL_END = 0x6f;
 const INDIRECT_RECALL_START = 0xd0;
 const INDIRECT_RECALL_END = 0xdf;
+const FORMAL_ADDRESS_TARGET_RE = /\bformal\s+[0-9a-f]+->(\d+)\b/iu;
 
 function exampleFiles() {
   return EXAMPLE_DIRS.flatMap((dir) =>
@@ -96,14 +97,8 @@ function analyzeResidualX2Surface(steps) {
     requiredRecallRestoreOther: 0,
   };
   const patterns = new Map();
-  const ops = raiseMachineToIr(
-    steps.map((step) => ({
-      kind: "op",
-      opcode: step.opcode,
-      mnemonic: step.mnemonic,
-      ...(step.comment === undefined ? {} : { comment: step.comment }),
-    })),
-  );
+  const blockedPatterns = new Map();
+  const { ops, stepToIrIndex } = raiseStepsToIr(steps);
   const x2RegisterStates = computeX2RegisterStates(ops);
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const context = directReturnAnalysisContext(ops);
@@ -129,6 +124,7 @@ function analyzeResidualX2Surface(steps) {
     if (isVpEmptySeparator(step.opcode) && next.opcode === VP) {
       if (isDisplayStep(step) || isDisplayStep(next)) {
         counts.displayEmptyBeforeVp += 1;
+        addPattern(blockedPatterns, "display:empty->vp", steps, index);
       } else {
         addPattern(patterns, "empty-before-vp", steps, index);
       }
@@ -140,14 +136,25 @@ function analyzeResidualX2Surface(steps) {
     if (step.opcode === DOT && next.opcode === VP) addPattern(patterns, "dot-vp-context", steps, index);
     if (step.opcode === VP && next.opcode === DOT) addPattern(patterns, "vp-dot-context", steps, index);
     if (isRecall(step.opcode) && isContextSensitiveRestore(next.opcode)) {
-      const classification = classifyRecallBeforeRestore(ops, index, x2RegisterStates, x2ValueStates, context, steps);
+      const opIndex = stepToIrIndex.get(index);
+      const classification = classifyRecallBeforeRestore(
+        ops,
+        opIndex,
+        x2RegisterStates,
+        x2ValueStates,
+        context,
+        steps,
+        index,
+      );
       if (classification === "candidate") {
         addPattern(patterns, "recall-before-restore", steps, index);
       } else if (classification === "display") {
         counts.displayRecallRestore += 1;
+        addPattern(blockedPatterns, "display:recall->restore", steps, index);
       } else {
         counts.requiredRecallRestore += 1;
         incrementRequiredRecallRestoreReason(counts, classification);
+        addPattern(blockedPatterns, classification, steps, index);
       }
     }
     if (step.opcode === LIFT && isX2SyncingOpcode(next.opcode)) {
@@ -159,6 +166,7 @@ function analyzeResidualX2Surface(steps) {
         addPattern(patterns, "lift-before-unknown-stop", steps, index);
       } else if (nextInfo?.stackEffect === "exposes" || nextInfo?.stackEffect === "unknown") {
         counts.stackExposingLiftSync += 1;
+        addPattern(blockedPatterns, "stack:lift-sync", steps, index);
       } else if (stopKind === undefined) {
         addPattern(patterns, "lift-before-x2-sync", steps, index);
       }
@@ -179,11 +187,59 @@ function analyzeResidualX2Surface(steps) {
     patternCount,
     score,
     patterns: [...patterns.entries()].map(([name, data]) => ({ name, ...data })),
+    blockedPatterns: [...blockedPatterns.entries()].map(([name, data]) => ({ name, ...data })),
   };
 }
 
-function classifyRecallBeforeRestore(ops, index, x2RegisterStates, x2ValueStates, context, steps) {
-  if (isDisplayStep(steps[index]) || isDisplayStep(steps[index + 1])) return "display";
+function raiseStepsToIr(steps) {
+  const items = [];
+  const stepToIrIndex = new Map();
+  let irIndex = 0;
+  for (let index = 0; index < steps.length; index += 1) {
+    const step = steps[index];
+    items.push(machineOpFromStep(step));
+    stepToIrIndex.set(index, irIndex);
+    const info = opcodeByCode.get(step.opcode);
+    const next = steps[index + 1];
+    if (info?.takesAddress === true && next !== undefined) {
+      const address = machineAddressFromStep(next);
+      items.push(address);
+      index += 1;
+    }
+    irIndex += 1;
+  }
+  return { ops: raiseMachineToIr(items), stepToIrIndex };
+}
+
+function machineOpFromStep(step) {
+  return {
+    kind: "op",
+    opcode: step.opcode,
+    mnemonic: step.mnemonic,
+    ...(step.comment === undefined ? {} : { comment: step.comment }),
+  };
+}
+
+function machineAddressFromStep(step) {
+  const formal = FORMAL_ADDRESS_TARGET_RE.exec(step.comment ?? "");
+  const target = formal === null ? bcdAddressTarget(step.opcode) : Number.parseInt(formal[1], 10);
+  return {
+    kind: "address",
+    target,
+    ...(step.comment === undefined ? {} : { comment: step.comment }),
+    ...(formal === null ? {} : { formalOpcode: step.opcode }),
+  };
+}
+
+function bcdAddressTarget(opcode) {
+  const high = opcode >> 4;
+  const low = opcode & 0x0f;
+  return high <= 9 && low <= 9 ? high * 10 + low : opcode;
+}
+
+function classifyRecallBeforeRestore(ops, index, x2RegisterStates, x2ValueStates, context, steps, stepIndex) {
+  if (isDisplayStep(steps[stepIndex]) || isDisplayStep(steps[stepIndex + 1])) return "display";
+  if (index === undefined) return "required:no-plan";
   const register = removableRecallValueRegister(ops[index]);
   if (register === undefined) return "required:no-plan";
   const plan = planRecallRemovalWithStackScheduler(
@@ -195,14 +251,14 @@ function classifyRecallBeforeRestore(ops, index, x2RegisterStates, x2ValueStates
   );
   if (plan === undefined) return "required:no-plan";
   if (plan.removable === true) return "candidate";
+  if (plan.analysis.valueProof === undefined || plan.analysis.x2SyncRedundant !== true) {
+    return "required:no-proof";
+  }
   const stackBlocked = plan.analysis.exposesStackLift === true && plan.stackLiftAlreadySupplied !== true;
   const x2Blocked = plan.analysis.exposesX2Restore === true;
   if (stackBlocked && x2Blocked) return "required:stack+x2";
   if (stackBlocked) return "required:stack";
   if (x2Blocked) return "required:x2";
-  if (plan.analysis.valueProof === undefined || plan.analysis.x2SyncRedundant !== true) {
-    return "required:no-proof";
-  }
   return "required:other";
 }
 
@@ -405,7 +461,7 @@ function markdown(rows, workers) {
       continue;
     }
     lines.push(
-      `| \`${rowName(row)}\` | ${row.steps} | ${row.over > 0 ? `+${row.over}` : row.over} | ${formatList(row.x2Optimizations)} | ${row.x2Surface.score} | ${formatPatterns(row.x2Surface.patterns)} | ${formatBlockedSurface(row.x2Surface.counts)} |`,
+      `| \`${rowName(row)}\` | ${row.steps} | ${row.over > 0 ? `+${row.over}` : row.over} | ${formatList(row.x2Optimizations)} | ${row.x2Surface.score} | ${formatPatterns(row.x2Surface.patterns)} | ${formatBlockedSurface(row.x2Surface.counts, row.x2Surface.blockedPatterns)} |`,
     );
   }
 
@@ -422,7 +478,7 @@ function markdown(rows, workers) {
     for (const row of topResidualX2Surface) {
       const counts = row.x2Surface.counts;
       lines.push(
-        `| \`${rowName(row)}\` | ${row.x2Surface.score} | ${counts.dot}/${counts.sign}/${counts.vp} | ${counts.directRecallSync + counts.indirectRecallSync} | ${counts.stackLiftSync} | ${counts.conditionalX2} | ${formatPatterns(row.x2Surface.patterns)} | ${formatBlockedSurface(counts)} |`,
+        `| \`${rowName(row)}\` | ${row.x2Surface.score} | ${counts.dot}/${counts.sign}/${counts.vp} | ${counts.directRecallSync + counts.indirectRecallSync} | ${counts.stackLiftSync} | ${counts.conditionalX2} | ${formatPatterns(row.x2Surface.patterns)} | ${formatBlockedSurface(counts, row.x2Surface.blockedPatterns)} |`,
       );
     }
   }
@@ -453,7 +509,7 @@ function formatPatterns(patterns) {
     .replace(/\|/gu, "\\|");
 }
 
-function formatBlockedSurface(counts) {
+function formatBlockedSurface(counts, blockedPatterns = []) {
   const parts = [];
   if (counts.requiredRecallRestore > 0) {
     parts.push(`required recall->restore=${counts.requiredRecallRestore}${formatRequiredRecallRestoreReasons(counts)}`);
@@ -461,6 +517,7 @@ function formatBlockedSurface(counts) {
   if (counts.displayRecallRestore > 0) parts.push(`display recall->restore=${counts.displayRecallRestore}`);
   if (counts.displayEmptyBeforeVp > 0) parts.push(`display empty->vp=${counts.displayEmptyBeforeVp}`);
   if (counts.stackExposingLiftSync > 0) parts.push(`stack-exposing lift sync=${counts.stackExposingLiftSync}`);
+  if (blockedPatterns.length > 0) parts.push(`samples ${formatPatterns(blockedPatterns)}`);
   return parts.length === 0 ? "-" : parts.join(", ");
 }
 

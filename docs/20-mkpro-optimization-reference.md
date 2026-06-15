@@ -33,7 +33,12 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
 - `npm run x2:report` — full example-suite X2 audit. It scores residual
   restore/sync/lift/conditional surfaces, lists local X2-looking patterns after
   optimization, and classifies blocked `recall->restore` leftovers by blocker:
-  `x2`, `stack`, `stack+x2`, `no-proof`, `no-plan`, or `other`.
+  `x2`, `stack`, `stack+x2`, `no-proof`, `no-plan`, or `other`. The blocked
+  column also prints short step-window samples for each blocker, so the next
+  proof layer can be targeted at the exact remaining restore exposure. The
+  report decodes direct address bytes before running its local CFG checks, so
+  `БП`/`ПП`/`F x?0`/`F Lx` targets are classified through the same address-cell
+  shape that the final listing shows.
 
 ## 3) Capability families (what the optimizer is able to report)
 
