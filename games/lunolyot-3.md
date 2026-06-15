@@ -24,4 +24,19 @@
 | `Ra` | `1738000` |
 | `Rd` | `3500` |
 
+All omitted registers are zero in the source `lun3.mkd`.
+
+Modern key sequence:
+
+```text
+8111178 хП1
+81111187 хП3
+1.62 хП4
+2250 хП5
+3660 хП6
+1738000 хП7
+1738000 хПА
+3500 хПД
+```
+
 Start with `В/О С/П`.

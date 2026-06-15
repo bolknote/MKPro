@@ -23,4 +23,18 @@
 | `Rc` | `250000` |
 | `Rd` | `1000` |
 
+All omitted registers are zero in the source `lun2.mkd`.
+
+Modern key sequence:
+
+```text
+1.62 хП4
+2250 хП5
+3660 хП6
+29.43 хП7
+88888888 хП9
+250000 хПС
+1000 хПД
+```
+
 Start with `В/О С/П`.
