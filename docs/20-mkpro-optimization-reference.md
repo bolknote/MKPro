@@ -666,7 +666,11 @@ Display rewrites are separated into strategy selection + body lowering.
   proof also removes `В↑` before a hard X/X2 overwrite such as `Cx` when the
   lift's Y value cannot reach any later stack consumer, or before a plain
   X-preserving X2 sync such as `F0`..`FF` when that sync replaces the removed
-  lift's X2 update and the stack lift is dead. A `В↑` after any proved
+  lift's X2 update and the stack lift is dead. It also removes `В↑` immediately
+  before a semantic terminal `halt`: `С/П` syncs the same X into X2 and the
+  source-level halt has no resumable continuation where the shifted stack could
+  be observed. Resumable `show`/`ask`/`pause` stops are not treated this way. A
+  `В↑` after any proved
   stack-lift + X2-sync producer (`П->X`, proved stable `К П->X`, or another
   `В↑`), after a plain X-preserving X2 sync (`F0`..`FF`), after a hard
   X/X2 overwrite such as `Cx` whose stack lift is dead, after a

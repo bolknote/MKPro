@@ -16,6 +16,7 @@ const DOT = 0x0a;
 const SIGN = 0x0b;
 const VP = 0x0c;
 const LIFT = 0x0e;
+const STOP = 0x50;
 const DIRECT_RECALL_START = 0x60;
 const DIRECT_RECALL_END = 0x6f;
 const INDIRECT_RECALL_START = 0xd0;
@@ -107,7 +108,14 @@ function analyzeResidualX2Surface(steps) {
       addPattern(patterns, "recall-before-restore", steps, index);
     }
     if (step.opcode === LIFT && isX2SyncingOpcode(next.opcode)) {
-      addPattern(patterns, "lift-before-x2-sync", steps, index);
+      const stopKind = next.opcode === STOP ? classifyStopStep(next) : undefined;
+      if (stopKind === "terminal") {
+        addPattern(patterns, "lift-before-terminal-halt", steps, index);
+      } else if (stopKind === "unknown") {
+        addPattern(patterns, "lift-before-unknown-stop", steps, index);
+      } else if (stopKind === undefined) {
+        addPattern(patterns, "lift-before-x2-sync", steps, index);
+      }
     }
   }
 
@@ -173,6 +181,23 @@ function isVpEmptySeparator(opcode) {
 function isX2SyncingOpcode(opcode) {
   const info = opcodeByCode.get(opcode);
   return info?.x2Effect === "affects" || info?.conditionalX2Effect !== undefined;
+}
+
+function classifyStopStep(step) {
+  const comment = step.comment?.toLowerCase() ?? "";
+  if (comment.startsWith("halt") || comment.startsWith("implicit final stop") || comment.includes("implicit stop")) {
+    return "terminal";
+  }
+  if (
+    comment.startsWith("show") ||
+    comment.startsWith("ask") ||
+    comment.startsWith("input") ||
+    comment.startsWith("read") ||
+    comment.startsWith("pause")
+  ) {
+    return "resumable";
+  }
+  return "unknown";
 }
 
 function requestedWorkerCount(fileCount) {

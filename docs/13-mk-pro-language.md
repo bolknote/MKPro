@@ -2225,7 +2225,9 @@ The pipeline currently contains:
   opcode could expose or consume that deeper stack value. The same pass also
   removes a `В↑` before a proved hard X/X2 overwrite such as `Cx` when the
   ordinary stack-difference proof shows the lift's Y value is dead before any
-  consumer can observe it.
+  consumer can observe it, and immediately before a source-level terminal
+  `halt` because the stop itself syncs X into X2 and there is no resumable
+  continuation. `show`, `ask`, and `pause` stops keep the lift.
 - **vp-x2-peephole** — drops a `К {x}` after a proved `ВП`/X2 boundary,
   possibly through free-standing `КНОП`/`К1`/`К2`, other role-free
   X-preserving gaps such as `X->П`/`В↑`, unreferenced marker labels, and simple

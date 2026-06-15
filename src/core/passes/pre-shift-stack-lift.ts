@@ -3,6 +3,7 @@ import {
   directReturnAnalysisContext,
   emptyResult,
   hasRewriteBarrier,
+  isDisplayFocusSensitive,
   removingRecallCanExposeX2Restore,
   removingPreShiftLiftCanExposeStack,
   removingStackLiftCanExposeStack,
@@ -29,6 +30,12 @@ const run: IrPassFn = (ops) => {
   for (let index = 0; index < ops.length - 1; index += 1) {
     const op = ops[index]!;
     if (!isStackLift(op)) continue;
+    if (isTerminalHaltX2Sync(ops[index + 1])) {
+      if (removingStackLiftCanExposeStack(ops, index)) continue;
+      if (removingRecallCanExposeX2Restore(ops, index)) continue;
+      remove.add(index);
+      continue;
+    }
     if (previousProducerAlreadySuppliesLiftX2Sync(ops, index, context)) {
       if (removingStackLiftCanExposeStack(ops, index)) continue;
       remove.add(index);
@@ -87,10 +94,17 @@ const run: IrPassFn = (ops) => {
     applied: remove.size,
     optimizations: [{
       name: "pre-shift-stack-lift",
-      detail: `Removed ${remove.size} В↑ lift${remove.size === 1 ? "" : "s"} already supplied by a following stack-shifting command or made dead before a hard X2 overwrite.`,
+      detail: `Removed ${remove.size} В↑ lift${remove.size === 1 ? "" : "s"} already supplied by a following stack-shifting command, made dead before a hard X2 overwrite, or made dead by a terminal halt sync.`,
     }],
   };
 };
+
+function isTerminalHaltX2Sync(op: IrOp | undefined): boolean {
+  return op?.kind === "stop" &&
+    op.semantic === "halt" &&
+    !hasRewriteBarrier(op) &&
+    !isDisplayFocusSensitive(op);
+}
 
 function previousProducerAlreadySuppliesLiftX2Sync(
   ops: readonly IrOp[],

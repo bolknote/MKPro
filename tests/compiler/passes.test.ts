@@ -21680,6 +21680,32 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("pre-shift-stack-lift removes В↑ before terminal halt", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      halt(),
+    ]);
+  });
+
+  it("pre-shift-stack-lift keeps В↑ before resumable pause", () => {
+    const program: IrOp[] = [
+      plain(0x0e, "В↑"),
+      pause(),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const result = preShiftStackLift.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("pre-shift-stack-lift removes В↑ after recall when the recall already supplies X2 sync", () => {
     const program: IrOp[] = [
       recall("1"),
