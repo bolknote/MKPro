@@ -43,7 +43,10 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   audit facts but are not hidden-X2 proof gaps by themselves. The
   report decodes direct address bytes before running its local CFG checks, so
   `БП`/`ПП`/`F x?0`/`F Lx` targets are classified through the same address-cell
-  shape that the final listing shows.
+  shape that the final listing shows. The report runs examples in worker
+  threads (`X2_REPORT_WORKERS`, default capped at 4) and applies a per-file
+  worker timeout (`X2_REPORT_TIMEOUT_MS`, default 120000, `0` disables) so one
+  pathological compile is reported as a row error instead of hanging the audit.
 - The shared X2/register/value data-flow graph follows both label targets and
   numeric direct targets. This matters after layout, where direct `БП`, `ПП`,
   and conditional address bytes are ordinary numeric MK-61 cells rather than

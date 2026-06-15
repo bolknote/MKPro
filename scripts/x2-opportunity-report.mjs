@@ -18,6 +18,7 @@ const PROGRAM_LIMIT = 105;
 const EXAMPLE_DIRS = ["examples", "examples/pending-optimizer"];
 const X2_NAME_RE = /\b(?:x2|vp-|display-byte-x2)/iu;
 const DEFAULT_WORKERS = Math.max(1, Math.min(4, availableParallelism()));
+const DEFAULT_WORKER_TIMEOUT_MS = 120_000;
 const opcodeByCode = new Map(opcodeCatalog.map((item) => [item.code, item]));
 
 const DOT = 0x0a;
@@ -373,11 +374,21 @@ function requestedWorkerCount(fileCount) {
   return Math.min(fileCount, Math.trunc(requested));
 }
 
-async function compileFiles(files, workers) {
-  if (workers <= 1 || files.length <= 1) {
+function requestedWorkerTimeoutMs() {
+  const raw = process.env.X2_REPORT_TIMEOUT_MS;
+  if (raw === undefined) return DEFAULT_WORKER_TIMEOUT_MS;
+  const requested = Number.parseInt(raw, 10);
+  if (!Number.isFinite(requested) || requested < 0) return DEFAULT_WORKER_TIMEOUT_MS;
+  return Math.trunc(requested);
+}
+
+async function compileFiles(files, workers, timeoutMs = requestedWorkerTimeoutMs()) {
+  if (files.length === 0) return [];
+  if (timeoutMs <= 0 && (workers <= 1 || files.length <= 1)) {
     return files.map(compileFile);
   }
 
+  const workerSlots = Math.max(1, workers);
   const rows = new Array(files.length);
   let next = 0;
   let active = 0;
@@ -410,12 +421,32 @@ async function compileFiles(files, workers) {
       active += 1;
 
       const worker = new Worker(new URL(import.meta.url), { workerData: { file: files[index] } });
+      let timedOut = false;
+      const timeout = timeoutMs <= 0
+        ? undefined
+        : setTimeout(() => {
+          timedOut = true;
+          rows[index] = {
+            file: files[index],
+            error: `compile timeout after ${timeoutMs}ms`,
+          };
+          void worker.terminate();
+        }, timeoutMs);
       worker.on("message", (row) => {
+        if (timedOut) return;
         rows[index] = row;
       });
-      worker.on("error", fail);
+      worker.on("error", (error) => {
+        if (timedOut) return;
+        fail(error);
+      });
       worker.on("exit", (code) => {
+        if (timeout !== undefined) clearTimeout(timeout);
         active -= 1;
+        if (timedOut) {
+          launchNext();
+          return;
+        }
         if (code !== 0) {
           fail(new Error(`worker exited with code ${code} while compiling ${files[index]}`));
           return;
@@ -428,13 +459,13 @@ async function compileFiles(files, workers) {
       });
     }
 
-    for (let i = 0; i < workers; i += 1) {
+    for (let i = 0; i < workerSlots; i += 1) {
       launchNext();
     }
   });
 }
 
-function markdown(rows, workers) {
+function markdown(rows, workers, timeoutMs = requestedWorkerTimeoutMs()) {
   const measured = rows.filter((row) => !("error" in row));
   const withX2 = measured.filter((row) => row.x2Optimizations.length > 0);
   const pendingOverBudget = measured.filter((row) => row.pending && row.over > 0);
@@ -455,6 +486,7 @@ function markdown(rows, workers) {
     "",
     `- Programs compiled: ${measured.length}/${rows.length}.`,
     `- Worker threads: ${workers}.`,
+    `- Worker timeout: ${timeoutMs <= 0 ? "disabled" : `${timeoutMs}ms`}.`,
     `- Programs with X2-related optimizer hits: ${withX2.length}/${measured.length}.`,
     `- Programs with residual X2 candidate patterns: ${withResidualX2Patterns.length}/${measured.length}.`,
     `- Programs with actionable blocked local X2: ${withActionableBlockedX2.length}/${measured.length}.`,
@@ -555,8 +587,9 @@ function formatRequiredRecallRestoreReasons(counts) {
 if (isMainThread) {
   const files = exampleFiles();
   const workers = requestedWorkerCount(files.length);
-  const rows = await compileFiles(files, workers);
-  process.stdout.write(markdown(rows, workers));
+  const timeoutMs = requestedWorkerTimeoutMs();
+  const rows = await compileFiles(files, workers, timeoutMs);
+  process.stdout.write(markdown(rows, workers, timeoutMs));
 } else {
   parentPort.postMessage(compileFile(workerData.file));
 }
