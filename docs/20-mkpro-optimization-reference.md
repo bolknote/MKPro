@@ -43,6 +43,10 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   audit facts but are not hidden-X2 proof gaps by themselves. The
   report decodes direct address bytes before running its local CFG checks, so
   `БП`/`ПП`/`F x?0`/`F Lx` targets are classified through the same address-cell
+  model as the optimizer. `npm run x2:check` runs the same report in assert mode
+  and fails if a residual local X2 candidate pattern or actionable blocked local
+  X2 proof gap appears again; display-sensitive and stack-only rows remain
+  report-only.
   shape that the final listing shows. The report runs examples in worker
   threads (`X2_REPORT_WORKERS`, default capped at 4) and applies a per-file
   worker timeout (`X2_REPORT_TIMEOUT_MS`, default 120000, `0` disables) so one

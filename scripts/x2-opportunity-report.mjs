@@ -19,6 +19,7 @@ const EXAMPLE_DIRS = ["examples", "examples/pending-optimizer"];
 const X2_NAME_RE = /\b(?:x2|vp-|display-byte-x2)/iu;
 const DEFAULT_WORKERS = Math.max(1, Math.min(4, availableParallelism()));
 const DEFAULT_WORKER_TIMEOUT_MS = 120_000;
+const ASSERT_CLEAN = process.env.X2_REPORT_ASSERT_CLEAN === "1";
 const opcodeByCode = new Map(opcodeCatalog.map((item) => [item.code, item]));
 
 const DOT = 0x0a;
@@ -571,6 +572,22 @@ function markdown(rows, workers, timeoutMs = requestedWorkerTimeoutMs(), options
   return `${lines.join("\n")}\n`;
 }
 
+function assertCleanX2Report(rows) {
+  const measured = rows.filter((row) => !("error" in row));
+  const withResidualX2Patterns = measured.filter((row) => row.x2Surface.patternCount > 0);
+  const withActionableBlockedX2 = measured.filter((row) => actionableBlockedX2Count(row.x2Surface.counts) > 0);
+  if (withResidualX2Patterns.length === 0 && withActionableBlockedX2.length === 0) return;
+
+  const lines = ["X2 report is not clean:"];
+  if (withResidualX2Patterns.length > 0) {
+    lines.push(`- residual candidate patterns: ${withResidualX2Patterns.map(rowName).join(", ")}`);
+  }
+  if (withActionableBlockedX2.length > 0) {
+    lines.push(`- actionable blocked local X2: ${withActionableBlockedX2.map(rowName).join(", ")}`);
+  }
+  throw new Error(lines.join("\n"));
+}
+
 function formatPatterns(patterns) {
   if (patterns.length === 0) return "-";
   return patterns
@@ -624,6 +641,14 @@ if (isMainThread) {
   const timeoutMs = requestedWorkerTimeoutMs();
   const rows = await compileFiles(files, workers, timeoutMs);
   process.stdout.write(markdown(rows, workers, timeoutMs, { fileFilter }));
+  if (ASSERT_CLEAN) {
+    try {
+      assertCleanX2Report(rows);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  }
 } else {
   parentPort.postMessage(compileFile(workerData.file));
 }
