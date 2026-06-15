@@ -2,9 +2,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  compileLoweringVariantForTest,
-  compileMKPro,
-} from "../../src/core/compiler.ts";
+  compileLoweringVariantCached as compileLoweringVariantForTest,
+  compileMKProCached as compileMKPro,
+} from "../helpers/compile-cache.ts";
 import {
   formatExplain,
   formatHex,

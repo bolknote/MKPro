@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { compileMKPro } from "../../src/core/index.ts";
+import { compileMKProCached as compileMKPro } from "../helpers/compile-cache.ts";
 import type { PreloadReport } from "../../src/core/types.ts";
 
 const require = createRequire(import.meta.url);

@@ -2,7 +2,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { compileMKPro, formatProgramTokens, formatSetupProgram } from "../../src/core/index.ts";
+import { formatProgramTokens, formatSetupProgram } from "../../src/core/index.ts";
+import { compileMKProCached as compileMKPro } from "../helpers/compile-cache.ts";
 
 const require = createRequire(import.meta.url);
 

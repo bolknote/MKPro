@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-import { compileLoweringVariantForTest } from "../../src/core/compiler.ts";
+import { compileLoweringVariantCached as compileLoweringVariantForTest } from "../helpers/compile-cache.ts";
 import type { PreloadReport } from "../../src/core/types.ts";
 
 const require = createRequire(import.meta.url);

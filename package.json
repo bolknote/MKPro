@@ -17,7 +17,8 @@
     "mk-pro": "node ./bin/mk-pro.mjs",
     "serve:browser": "vite --host 127.0.0.1 --port 4173",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:clean-cache": "node -e \"require('node:fs').rmSync('node_modules/.cache/mkpro-test-compile',{recursive:true,force:true})\""
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -4,12 +4,15 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     pool: "threads",
-    // Several tests compile the heaviest example programs (e.g. rambo-iii is
-    // ~2.5s on its own) and run in parallel threads, so the 5s Vitest default is
-    // too tight under load — heavy-compile tests already worked around this with
-    // explicit 15-20s overrides. Make that the suite-wide default so the search
-    // for additional lowering candidates cannot cause spurious timeouts.
-    testTimeout: 20000,
-    hookTimeout: 20000,
+    // Heavy example programs whose primary lowering overflows the 105-cell window
+    // trigger the full size-rescue candidate matrix and can take ~20s to compile.
+    // The disk compile cache (tests/helpers/compile-cache.ts) makes re-runs and
+    // cross-file duplicates of those compiles free; this generous timeout keeps a
+    // cold compile from spuriously timing out under parallel load. (We keep the
+    // default per-file isolation: these tests are CPU-bound, so cross-file thread
+    // parallelism matters far more than the small module-eval overhead that
+    // disabling isolation would save.)
+    testTimeout: 30000,
+    hookTimeout: 30000,
   },
 });

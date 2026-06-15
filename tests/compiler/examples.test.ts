@@ -3,11 +3,11 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  compileMKPro,
   formatExplain,
   formatHex,
   formatListing,
 } from "../../src/core/index.ts";
+import { compileMKProCached as compileMKPro } from "../helpers/compile-cache.ts";
 
 const require = createRequire(import.meta.url);
 

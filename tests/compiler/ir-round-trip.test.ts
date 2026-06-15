@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { compileMKPro } from "../../src/core/compiler.ts";
+import { compileMKProCached as compileMKPro } from "../helpers/compile-cache.ts";
 import {
   lowerIrToLayout,
   lowerIrToMachine,

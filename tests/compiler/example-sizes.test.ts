@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { compileMKPro } from "../../src/core/index.ts";
+import { compileMKProCached as compileMKPro } from "../helpers/compile-cache.ts";
 import { EXAMPLE_BASELINE, PENDING_BASELINE } from "./example-baselines.ts";
 
 // Exact size baseline lives in `example-baselines.ts` so the `examples:check`
