@@ -12,6 +12,7 @@
     "lint": "eslint .",
     "examples:size": "node ./scripts/example-size-report.mjs",
     "examples:check": "node ./scripts/assert-no-size-regression.mjs",
+    "x2:report": "node ./scripts/x2-opportunity-report.mjs",
     "mk-pro": "node ./bin/mk-pro.mjs",
     "serve:browser": "vite --host 127.0.0.1 --port 4173",
     "typecheck": "tsc --noEmit",
