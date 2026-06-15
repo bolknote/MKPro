@@ -1579,8 +1579,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     computes a proved calculator display shape now also seeds `xDirectShape`
     from that result, so a structural result such as `К |x|` removing the sign
     from `hex:-9AЕ` can feed the same later carry proof as a directly loaded
-    `hex:9AЕ` operand. This is still direct display-shape provenance, not a
-    conversion of arbitrary hex/super shapes into decimal values.
+    `hex:9AЕ` operand. Proved structural `/-/` results seed the same direct
+    provenance only when the result is a structural mantissa; structural
+    exponent-entry forms stay out of `xDirectShape`. This is still direct
+    display-shape provenance, not a conversion of arbitrary hex/super shapes
+    into decimal values.
     The same proof also covers a right-side structural operand when the value is
     still marked as a direct integer hex mantissa through `xDirectShape`; a
     plain `xShape` match is not enough. It is deliberately absent for

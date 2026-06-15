@@ -12660,7 +12660,7 @@ function x2ValueStateFromStructuralShapes(
     xShape: shapeSet,
     yShape: cloneOptionalShapeSet(yShape),
     x2Shape: new Set(shapeSet),
-    xDirectShape: new Set(),
+    xDirectShape: directStructuralMantissaShapeFacts(shapeSet),
     yDirectShape: cloneOptionalShapeSet(yDirectShape),
     entry: closedX2EntryState(),
     vpContext: noneX2VpContextState(),
@@ -12670,6 +12670,10 @@ function x2ValueStateFromStructuralShapes(
     vpEntrySignShape: vpEntrySignShapesFromShapeFacts(shapeSet),
     ...cloneX2MemoryFields({ memory, shapeMemory }),
   };
+}
+
+function directStructuralMantissaShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
+  return structuralMantissaShapeFacts(canonicalStructuralShapeFacts(shapes));
 }
 
 function x2ValueStateFromStructuralExponentEntry(
