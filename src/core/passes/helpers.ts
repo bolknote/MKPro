@@ -11617,6 +11617,33 @@ function stableSignChangeExpressionDecimalValues(operand: string, seen: Set<stri
   return output;
 }
 
+function stableSignChangeExpressionShapeFacts(operand: string, seen: Set<string>): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const fact of stableExpressionKeyShapeSetForEvaluation(operand, seen)) {
+    if (x2ShapeFactSafety(fact) !== "structuralOnly") continue;
+    if (structuralSignChangeShapeKeyMayHideExponentContext(fact)) continue;
+    const signed = x2ExponentMantissaSignChangedShapeFact(fact) ?? x2MantissaSignChangedShapeFact(fact);
+    if (signed === undefined) continue;
+    const canonical = x2CanonicalShapeFactIfValid(signed);
+    if (canonical !== undefined && x2ShapeFactSafety(canonical) === "structuralOnly") output.add(canonical);
+  }
+  return output;
+}
+
+function structuralSignChangeShapeKeyMayHideExponentContext(fact: X2ShapeFact): boolean {
+  const model = x2ShapeDataModelForFact(fact);
+  if (
+    model.kind !== "mantissa" ||
+    model.radix !== "hex" ||
+    model.hasDecimalPoint ||
+    !hasStructuralNonDecimalDigit(model.canonical)
+  ) {
+    return false;
+  }
+  const unsigned = model.sign === "" ? model.canonical : model.canonical.slice(1);
+  return /0+$/u.test(unsigned);
+}
+
 function stableExpressionKeyConcreteShapeFacts(key: string, seen: Set<string>): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   const parsed = parseStableExpressionKey(key);
@@ -11627,6 +11654,9 @@ function stableExpressionKeyConcreteShapeFacts(key: string, seen: Set<string>): 
       for (const value of stableSignChangeExpressionDecimalValues(parsed.operands[0]!, seen)) {
         const shape = exactDecimalDisplayShapeFact(value);
         if (shape !== undefined) output.add(shape);
+      }
+      for (const shape of stableSignChangeExpressionShapeFacts(parsed.operands[0]!, seen)) {
+        output.add(shape);
       }
     }
     seen.delete(key);

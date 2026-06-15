@@ -941,8 +941,15 @@ Display rewrites are separated into strategy selection + body lowering.
   and closed hex/super exponent entries feed concrete-result checks through the
   same canonical shape facts that originally created the key. X2 value-set
   operations, register-memory storage/recall, and CFG joins keep the same canonical form, so equivalent
-  stable-expression facts do not split after path-sensitive propagation. VP
-  source joins also use source keys: a raw decimal mantissa path and an exact
+  stable-expression facts do not split after path-sensitive propagation.
+  Stable sign-change keys over structural operands also materialize signed
+  structural shape facts when a later X2 sync rebuilds the shape set
+  (`expr-key:0B(shape:hex:012:mantissa)` seeds
+  `hex:-012:mantissa`), while raw/non-normal structural spellings still do not
+  become decimal value facts. Non-decimal trailing-zero mantissas that may be
+  restored structural exponent sources remain on the explicit exponent-context
+  path instead of being materialized as ordinary mantissas.
+  VP source joins also use source keys: a raw decimal mantissa path and an exact
   decimal display-shape path can keep their shared mantissa/sign source without
   normalizing leading-zero text, while structural exponent/mantissa spellings
   meet at the restored mantissa source. These joins accumulate every proved

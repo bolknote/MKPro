@@ -7797,6 +7797,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(synced?.x2Shape)).toEqual([
       "exponent:-1.23:-1:decimal",
       "exponent:-1:8:decimal",
+      "hex:-012:mantissa",
     ]);
   });
 
