@@ -4505,7 +4505,30 @@ program FalseBranchZeroReuse {
     expect(materializedZero).toBe(false);
   });
 
-  it("lowers bounded R4..R6 unit increments through indirect pre-increment", () => {
+  it("negates non-current values for compact zero-bound comparisons", () => {
+    const result = compileOk(`
+program NegatedZeroComparison {
+  state {
+    energy: counter -99..99 = 5
+    other: counter 0..9 = 0
+  }
+
+  loop {
+    other++
+    if energy <= 0 {
+      halt(1)
+    }
+    halt(0)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "negated-zero-test")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === "/-/" && step.comment === "negate energy for zero test")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "condition compare")).toBe(false);
+  });
+
+  it("lowers small R4..R6 unit increments through indirect pre-increment", () => {
     const result = compileOk(`
 program IndirectUnitIncrement {
   state {
@@ -4525,6 +4548,29 @@ program IndirectUnitIncrement {
 
     expect(result.report.registers.score).toBe("4");
     expect(result.steps.map((step) => step.hex)).toContain("D4");
+    expect(result.report.optimizations.some((item) => item.name === "indirect-incdec-counter")).toBe(true);
+  });
+
+  it("lowers wide nonnegative R4..R6 unit increments through indirect pre-increment", () => {
+    const result = compileOk(`
+program WideIndirectUnitIncrement {
+  state {
+    a: packed = 0
+    b: packed = 0
+    c: packed = 0
+    d: packed = 0
+    position: counter 0..99 = 0
+  }
+
+  loop {
+    position++
+    halt(position)
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.registers.position).toBe("4");
+    expect(result.steps.some((step) => step.hex === "D4" && step.comment === "increment position")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "indirect-incdec-counter")).toBe(true);
   });
 

@@ -14068,7 +14068,7 @@ function collectUnitIncrementTargets(ast: ProgramAst): Set<string> {
   const rangeFits = (name: string): boolean => {
     const range = rangeByName.get(name);
     return range?.type === "range" && range.min !== undefined && range.max !== undefined &&
-      range.min >= 0 && range.max + 1 <= 14;
+      range.min >= 0;
   };
 
   const visit = (statements: StatementAst[]): void => {

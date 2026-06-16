@@ -1888,6 +1888,7 @@ export function compileCondition(ctx: LoweringCtx,
     }
     if (compileEqualityWithCurrentX(ctx, compiledCondition, falseLabel, line)) return;
     if (compileCurrentXNegatedZeroCondition(ctx, compiledCondition, falseLabel, line, condition)) return;
+    if (compileNegatedZeroCondition(ctx, compiledCondition, falseLabel, line, condition)) return;
     if (compiledCondition.op === ">" || compiledCondition.op === "<=") {
       compileExpression(ctx, compiledCondition.right);
       compileExpression(ctx, compiledCondition.left);
@@ -1946,6 +1947,46 @@ function compileCurrentXNegatedZeroCondition(
     ctx.optimizations.push({
       name: "current-x-negated-zero-test",
       detail: `Reused ${name} already in X and negated it for ${conditionToText(condition)} at line ${line}.`,
+    });
+    return true;
+}
+
+function compileNegatedZeroCondition(
+    ctx: LoweringCtx,
+    condition: ConditionAst,
+    falseLabel: string,
+    line: number,
+    originalCondition: ConditionAst,
+  ): boolean {
+    let directOp: ConditionAst["op"] | undefined;
+    let name: string | undefined;
+    if (
+      condition.left.kind === "identifier" &&
+      isZeroExpression(condition.right)
+    ) {
+      if (condition.op === "<=") directOp = ">=";
+      else if (condition.op === ">") directOp = "<";
+      name = condition.left.name;
+    } else if (
+      isZeroExpression(condition.left) &&
+      condition.right.kind === "identifier"
+    ) {
+      if (condition.op === ">=") directOp = ">=";
+      else if (condition.op === "<") directOp = "<";
+      name = condition.right.name;
+    }
+    if (directOp === undefined || name === undefined) return false;
+
+    compileExpression(ctx, { kind: "identifier", name });
+    ctx.emitOp(0x0b, "/-/", `negate ${name} for zero test`, line);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    const opcode = directTestOpcode(directOp);
+    ctx.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${originalCondition.op}`, line);
+    ctx.optimizations.push({
+      name: "negated-zero-test",
+      detail: `Negated ${name} for ${conditionToText(condition)} instead of materializing zero at line ${line}.`,
     });
     return true;
 }

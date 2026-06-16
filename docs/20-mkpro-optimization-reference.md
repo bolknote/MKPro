@@ -285,6 +285,7 @@ The control-flow family is where the largest byte savings are found.
 - `arithmetic-if-update` — performs conditional assignment in one path instead of multiple instructions; the speculative comparison-mask variant can try `if x == c { y += d }` as `y += d * (1 - sign(abs(x - c)))` and keep it only when the whole layout shrinks.
 - `arithmetic-if-extrema` — computes `max/min` using shorter conditional forms.
 - `zero-condition-test` — emits zero tests in the shortest variant instead of expanded `if`.
+- `negated-zero-test` — emits zero-bound comparisons such as `x <= 0`, `x > 0`, `0 >= x`, and `0 < x` as `x; /-/; F x?0`, avoiding the longer materialized `0; x; -` comparison when the sign-inverted direct test is equivalent.
 - `dispatch-lowering` — converts dispatch nodes to short jump sequences.
 - `dispatch-default-merge` — shares one tail when different `default` branches are identical.
 - `dispatch-case-ordering` — reorders numeric cases for the shortest residual
@@ -545,7 +546,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `post-layout-stop-tail-reuse` — after preloaded indirect-flow has proved a reusable stop tail, replaces repeated `С/П; loop` tails and direct branches to those shims with one-cell indirect jumps/conditionals to the existing stop tail, retargeting generated selector preloads when deleted cells shift later targets.
 - `runtime-indirect-call-flow` — for repeated backward helper calls with legal numeric targets, initializes a dead stable register once at runtime and replaces direct `ПП addr` pairs with one-cell `К ПП r` calls.
 - `preloaded-super-dark-flow` — super-dark path with a preloaded indirect target.
-- `indirect-incdec-counter` — lowers a unit `x++`/`x--` through the indirect pre-increment (R4..R6) or pre-decrement (R0..R3) side effect of `К П->X r`; the zero-underflow edge writes the hardware negative sentinel, so terminal-underflow lowering treats that edge only as a non-returning negative test.
+- `indirect-incdec-counter` — lowers a unit `x++`/`x--` through the indirect pre-increment (R4..R6) or pre-decrement (R0..R3) side effect of `К П->X r`. Unit increments are allowed for any proved nonnegative counter because the incidental recalled `X` value is discarded; unit decrements stay range-guarded because the zero-underflow edge writes the hardware negative sentinel, so terminal-underflow lowering treats that edge only as a non-returning negative test.
 - `indirect-underflow-decrement` — extends the same R0..R3 pre-decrement fact to fused underflow guards by using `К П->X r` for the mutation and a direct `П->X r` for the observable `< 0` test; stored-input show/read variants restore the input from its register afterward.
 - `r0-indirect-counter` — uses R0 as a readable counter/switch for jump dispatch where provably safe.
 - `indirect-memory-table` — builds a compact address table in memory and jumps by index.

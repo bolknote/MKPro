@@ -1637,7 +1637,7 @@ export function emitIndirectUnitIncrement(ctx: LoweringCtx, target: string, comm
 function targetRangeFitsIndirectIncrement(ctx: LoweringCtx, target: string): boolean {
     const field = ctx.findStateField(target);
     if (field?.min === undefined || field.max === undefined) return false;
-    return field.type === "range" && field.min >= 0 && field.max + 1 <= 14;
+    return field.type === "range" && field.min >= 0;
 }
 
 export function emitErrorStopOpcode(ctx: LoweringCtx, comment: string, line: number, raw = false): void {

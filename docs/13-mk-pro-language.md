@@ -1179,6 +1179,8 @@ candidates:
   allocating a second scratch register;
 - zero-condition tests: comparisons against zero use the direct `F x?0`
   command instead of materializing `0` and subtracting;
+- negated-zero tests: comparisons such as `x <= 0` and `x > 0` can recall `x`,
+  apply `/-/`, and use a direct sign test instead of materializing `0 - x`;
 - stack-current-X scheduling and dead-temp-store elimination: consumes the
   current `X` value directly when an expression permits it, including
   single-use temporaries whose first stored value is never needed in memory;
