@@ -8766,6 +8766,7 @@ function transferPlainX2ValueState(
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        false,
         sourceX,
         closedExponentValues,
       ),
@@ -8774,6 +8775,7 @@ function transferPlainX2ValueState(
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        false,
         sourceX,
         closedExponentValues,
       ),
@@ -8856,6 +8858,7 @@ function transferPlainX2ValueState(
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        false,
         sourceX,
         undefined,
       ),
@@ -8864,6 +8867,7 @@ function transferPlainX2ValueState(
         effect,
         closedExponentShapes,
         closedExponentShapes,
+        false,
         sourceX,
         undefined,
       ),
@@ -8994,6 +8998,7 @@ function transferPlainX2ValueState(
         effect,
         closedStructuralShapes,
         closedStructuralShapes,
+        false,
         sourceX,
         undefined,
       ),
@@ -9002,6 +9007,7 @@ function transferPlainX2ValueState(
         effect,
         closedStructuralShapes,
         closedStructuralShapes,
+        false,
         sourceX,
         undefined,
       ),
@@ -9056,6 +9062,7 @@ function transferPlainX2ValueState(
       effect,
       inputXShape,
       input.x2Shape,
+      input.vpContext?.kind === "exponent" || input.structuralVpContext?.kind === "exponent",
       input.x,
       input.x2,
     ),
@@ -9064,6 +9071,7 @@ function transferPlainX2ValueState(
       effect,
       inputXShape,
       input.x2Shape,
+      input.vpContext?.kind === "exponent" || input.structuralVpContext?.kind === "exponent",
       input.x,
       input.x2,
     ),
@@ -9772,6 +9780,7 @@ function transferExchangeXYX2ValueState(
       effect,
       sourceXShape,
       input.x2Shape,
+      false,
       sourceX,
       input.x2,
     ),
@@ -9780,6 +9789,7 @@ function transferExchangeXYX2ValueState(
       effect,
       sourceXShape,
       input.x2Shape,
+      false,
       sourceX,
       input.x2,
     ),
@@ -9846,6 +9856,7 @@ function transferCopyYToXX2ValueState(
       effect,
       closed.xShape,
       closed.x2Shape,
+      false,
       closed.x,
       closed.x2,
     ),
@@ -9854,6 +9865,7 @@ function transferCopyYToXX2ValueState(
       effect,
       closed.xShape,
       closed.x2Shape,
+      false,
       closed.x,
       closed.x2,
     ),
@@ -10053,6 +10065,7 @@ function transferPlainX2VpEntryShapeState(
   effect: ReturnType<typeof plainX2Effect>,
   firstDigitSourceShape: X2ShapeSet | undefined = xShape,
   firstDigitTargetShape: X2ShapeSet | undefined = x2Shape,
+  includeExponentTargets = false,
   firstDigitSourceValues: X2ValueSet | undefined = x,
   firstDigitTargetValues: X2ValueSet | undefined = x2,
 ): X2ShapeSet | undefined {
@@ -10065,7 +10078,7 @@ function transferPlainX2VpEntryShapeState(
     const targetShape = vpSpliceShapeSetWithValueShapes(firstDigitTargetShape, firstDigitTargetValues);
     return mergeOptionalShapeSources(
       inherited,
-      structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape),
+      structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape, includeExponentTargets),
     );
   }
   return undefined;
@@ -10076,13 +10089,14 @@ function transferPlainX2VpEntryShapeTransientState(
   effect: ReturnType<typeof plainX2Effect>,
   firstDigitSourceShape: X2ShapeSet | undefined,
   firstDigitTargetShape: X2ShapeSet | undefined,
+  includeExponentTargets = false,
   firstDigitSourceValues?: X2ValueSet | undefined,
   firstDigitTargetValues?: X2ValueSet | undefined,
 ): true | undefined {
   if (effect !== "preserves" || isEmptyPlainOp(op)) return undefined;
   const sourceShape = vpSpliceShapeSetWithValueShapes(firstDigitSourceShape, firstDigitSourceValues);
   const targetShape = vpSpliceShapeSetWithValueShapes(firstDigitTargetShape, firstDigitTargetValues);
-  return structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape) === undefined
+  return structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape, includeExponentTargets) === undefined
     ? undefined
     : true;
 }
@@ -13086,9 +13100,10 @@ function effectiveInputX2Shape(
 function structuralFirstDigitVpSpliceShapeFacts(
   xShape: X2ShapeSet | undefined,
   x2Shape: X2ShapeSet | undefined,
+  includeExponentTargets = false,
 ): X2ShapeSet | undefined {
   const sources = restoredVpFirstDigitSourceShapeFacts(xShape);
-  const targets = vpFirstDigitSpliceTargetShapeFacts(x2Shape);
+  const targets = vpFirstDigitSpliceTargetShapeFacts(x2Shape, includeExponentTargets);
   return x2StructuralMantissaFirstDigitSpliceShapeSetFacts(sources, targets);
 }
 
@@ -13157,10 +13172,21 @@ function decimalFirstDigitVpSpliceMantissa(
   return normalizeDecimalMantissaEntry(spliced) === undefined ? undefined : spliced;
 }
 
-function vpFirstDigitSpliceTargetShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
+function vpFirstDigitSpliceTargetShapeFacts(
+  shapes: X2ShapeSet | undefined,
+  includeExponentTargets: boolean,
+): Set<X2ShapeFact> {
   const output = structuralMantissaShapeFacts(x2StructuralRestoreShapeFacts(shapes));
   for (const fact of decimalMantissaShapeFacts(shapes)) output.add(fact);
   for (const fact of closedExponentMantissaDisplayShapeFacts(shapes)) output.add(fact);
+  if (!includeExponentTargets) return output;
+  for (const fact of shapes ?? []) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "exponent-entry") continue;
+    if (model.exponentRaw.startsWith("-")) continue;
+    const mantissa = x2MantissaShapeFactFromModel(model.mantissa);
+    if (mantissa !== undefined) output.add(mantissa);
+  }
   return output;
 }
 

@@ -1728,8 +1728,15 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     model/set-level shape-algebra primitive consumed directly by the dataflow
     VP-source builder, matching the structural concat set primitive while
     preserving the rule that decimal-source plus decimal-tail cases do not
-    become structural facts. Store-backed, direct-flow, and proved
-    indirect-flow `ВП` splice helpers use the same effective-shape source, so
+    become structural facts. When an existing decimal or structural `ВП`
+    exponent context is preserved across the gap, the structural path also
+    exposes a non-negative raw exponent mantissa as a splice target alongside
+    the closed display form, so `hex:A` plus `hex-exponent:8.70:2` can prove
+    both the raw `hex:A.70` context source and the closed `hex:A70` display
+    source without promoting either one to a dot-safe value. Negative exponent
+    targets stay on the closed-display path because replacing the first digit
+    before and after a right shift is not equivalent. Store-backed,
+    direct-flow, and proved indirect-flow `ВП` splice helpers use the same effective-shape source, so
     they do not require a separate explicit shape fact when a stable `expr-key:*`
     already carries the decimal or structural display form. Signed-zero decimal mantissas (`-0`, `-0.0`, etc.) are kept as
     `errorProne` shape facts, not dot-safe decimal facts; shared signed-zero

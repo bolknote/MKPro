@@ -2543,6 +2543,34 @@ describe("ir passes on synthetic programs", () => {
     expect(x2VpEntryShapeText(structuralSource)).toEqual(["hex:3A0:mantissa"]);
   });
 
+  it("x2 value dataflow derives structural VP first-digit splice from exponent-entry targets", () => {
+    const structuralExponentTarget: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["hex:A:mantissa"]),
+      x2Shape: new Set<X2ShapeFact>(["hex-exponent:8.70:2"]),
+      entry: { kind: "closed" },
+      structuralVpContext: {
+        kind: "exponent",
+        mantissa: new Set<X2ShapeFact>(["hex:8.70:mantissa"]),
+        exponent: new Set(["2"]),
+      },
+    };
+
+    const result = transferX2ValueStateForEdge(
+      structuralExponentTarget,
+      plain(0x54, "КНОП"),
+      "normal",
+      {},
+      0,
+    );
+
+    expect(x2VpEntryShapeText(result)).toEqual([
+      "hex:A.70:mantissa",
+      "hex:A70:mantissa",
+    ]);
+  });
+
   it("x2 value dataflow derives store-splice sources from decimal value facts", () => {
     const valueOnly: X2ValueDataflowState = {
       x: new Set<X2ValueFact>(["decimal:2:normalized"]),
