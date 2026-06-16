@@ -1023,7 +1023,10 @@ Display rewrites are separated into strategy selection + body lowering.
   first lower each proved shape source through one arithmetic operand model:
   exact single hex digits, the strict closed/exponent single-nibble forms, and
   direct carry-normalized integer displays become `digit`, `exponent`, or
-  `carry-normalized` operands, while `super:*`, ambiguous fractional tails, and
+  `carry-normalized` operands. A carry-normalized operand is then treated as an
+  exact decimal operand for proved `+`, `-`, `*`, and finite `/` arithmetic,
+  still requiring the original direct display-shape proof before it can enter
+  the arithmetic model. `super:*`, ambiguous fractional tails, and
   unsupported/non-direct carry shapes stay structural-only. The opcode tables then
   enumerate one product fact for each proved operand pair and derive both the
   normalized decimal value and display-shape facts from that same product, so

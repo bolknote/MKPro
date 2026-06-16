@@ -6496,6 +6496,51 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(direct?.xShape)).toContain("mantissa:101:decimal");
   });
 
+  it("x2 value dataflow uses carry-normalized structural operands for exact binary arithmetic", () => {
+    const leftStructuralBase: X2ValueDataflowState = {
+      y: new Set(),
+      x: new Set<X2ValueFact>(["decimal:2:normalized"]),
+      x2: new Set(),
+      yShape: new Set<X2ShapeFact>(["hex:9AЕ:mantissa"]),
+      yDirectShape: new Set<X2ShapeFact>(["hex:9AЕ:mantissa"]),
+      xShape: new Set<X2ShapeFact>(["mantissa:2:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const rightStructuralBase: X2ValueDataflowState = {
+      y: new Set<X2ValueFact>(["decimal:18:normalized"]),
+      x: new Set(),
+      x2: new Set(),
+      yShape: new Set<X2ShapeFact>(["mantissa:18:decimal"]),
+      xShape: new Set<X2ShapeFact>(["hex:9AЕ:mantissa"]),
+      xDirectShape: new Set<X2ShapeFact>(["hex:9AЕ:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const shapeOnlyMinus = transferX2ValueStateForEdge(
+      { ...leftStructuralBase, yDirectShape: undefined },
+      plain(0x11, "-"),
+      "normal",
+      {},
+      0,
+    );
+    const minus = transferX2ValueStateForEdge(leftStructuralBase, plain(0x11, "-"), "normal", {}, 0);
+    const multiply = transferX2ValueStateForEdge(leftStructuralBase, plain(0x12, "×"), "normal", {}, 0);
+    const divide = transferX2ValueStateForEdge(leftStructuralBase, plain(0x13, "÷"), "normal", {}, 0);
+    const rightMinus = transferX2ValueStateForEdge(rightStructuralBase, plain(0x11, "-"), "normal", {}, 0);
+    const rightMultiply = transferX2ValueStateForEdge(rightStructuralBase, plain(0x12, "×"), "normal", {}, 0);
+
+    expect(x2ValueStateText(shapeOnlyMinus?.x) ?? []).not.toContain("decimal:1012:normalized");
+    expect(x2ValueStateText(minus?.x) ?? []).toContain("decimal:1012:normalized");
+    expect(x2ShapeStateText(minus?.xShape)).toContain("mantissa:1012:decimal");
+    expect(x2ValueStateText(multiply?.x) ?? []).toContain("decimal:2028:normalized");
+    expect(x2ShapeStateText(multiply?.xShape)).toContain("mantissa:2028:decimal");
+    expect(x2ValueStateText(divide?.x) ?? []).toContain("decimal:507:normalized");
+    expect(x2ShapeStateText(divide?.xShape)).toContain("mantissa:507:decimal");
+    expect(x2ValueStateText(rightMinus?.x) ?? []).toContain("decimal:-996:normalized");
+    expect(x2ShapeStateText(rightMinus?.xShape)).toContain("mantissa:-996:decimal");
+    expect(x2ValueStateText(rightMultiply?.x) ?? []).toContain("decimal:18252:normalized");
+    expect(x2ShapeStateText(rightMultiply?.xShape)).toContain("mantissa:18252:decimal");
+  });
+
   it("x2 value dataflow treats computed structural display shapes as direct X shapes", () => {
     const state: X2ValueDataflowState = {
       y: new Set<X2ValueFact>(["decimal:1:normalized"]),
