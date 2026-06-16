@@ -1711,6 +1711,8 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     significant nibble is `1..E` seed exact decimal `1`/`-1` facts plus the
     matching decimal display shape; `super:FA..FF` mantissas and direct-origin
     non-negative `super-exponent:FA..FF:*` facts seed exact decimal zero.
+    Direct-origin proofs also suppress the redundant stable expression keys for
+    the register/display-shape source they cover.
     Constructed `super` exponent-entry contexts remain separate because
     `FA; ВП; 2; К ЗН` is not display-equivalent to direct `FAE2; К ЗН`.
     Other `F`-leading structural forms remain opaque. Closed-context `/-/`

@@ -6115,6 +6115,16 @@ describe("ir passes on synthetic programs", () => {
       ],
       [
         [
+          recall("1", "preload const FAE2"),
+          plain(0x32, "К ЗН"),
+          halt(),
+        ],
+        2,
+        "decimal:0:normalized",
+        "expr-key:32(shape:hex:FA00:mantissa)",
+      ],
+      [
+        [
           recall("1", "preload const 8F999999"),
           plain(0x3a, "К ИНВ"),
           halt(),
@@ -9714,8 +9724,14 @@ describe("ir passes on synthetic programs", () => {
       .toContain("decimal:0:normalized");
     expect(x2ShapeStateText(computeX2ValueStates(directSuperExponentProgram)[2]?.xShape))
       .toEqual(["mantissa:0:decimal"]);
+    expect(x2ValueStateText(computeX2ValueStates(directSuperExponentProgram)[2]?.x) ?? [])
+      .not.toContain("expr-key:32(reg:1)");
+    expect(x2ValueStateText(computeX2ValueStates(directSuperExponentProgram)[2]?.x) ?? [])
+      .not.toContain("expr-key:32(shape:hex:FA00:mantissa)");
     expect(x2ValueStateText(computeX2ValueStates(constructedSuperExponentProgram)[4]?.x) ?? [])
       .not.toContain("decimal:0:normalized");
+    expect(x2ValueStateText(computeX2ValueStates(constructedSuperExponentProgram)[4]?.x) ?? [])
+      .toContain("expr-key:32(shape:hex:FA00:mantissa)");
     expect(x2ShapeStateText(computeX2ValueStates(constructedSuperExponentProgram)[4]?.xShape))
       .toEqual([]);
   });

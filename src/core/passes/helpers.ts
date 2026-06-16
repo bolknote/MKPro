@@ -779,9 +779,11 @@ function plainProducesStableExpressionValues(
   const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
   const options = concreteEvaluationOptionsForStableExpressionOpcode(op.opcode);
   const output = plainProducesConcreteDecimalValues(op, x, xShape, options, directXShape);
+  const directConcreteKeys = directStructuralUnaryConcreteStableSourceKeys(op, directXShape);
   if (info.stackEffect === "preserves") {
     for (const key of stableExpressionSourceKeys(x, xShape)) {
       if (stableExpressionKeyHasConcreteDecimalResult(op, key)) continue;
+      if (directConcreteKeys !== undefined && directConcreteKeys.has(key)) continue;
       output.add(stableExpressionValueFact(opcode, key));
     }
   } else if (info.stackEffect === "consume-y-drop" || info.stackEffect === "consume-y-keep") {
@@ -1203,6 +1205,36 @@ function plainProducesConcreteDirectStructuralUnaryDecimalShapeFacts(
     if (fact !== undefined) output.add(fact);
   }
   return output;
+}
+
+function directStructuralUnaryConcreteStableSourceKeys(
+  op: Extract<IrOp, { kind: "plain" }>,
+  directXShape: X2ShapeSet | undefined,
+): Set<string> | undefined {
+  if (!directStructuralUnaryDecimalProofIsComplete(op, directXShape)) return undefined;
+  const keys = new Set<string>();
+  for (const key of stableExpressionDisplayShapeSourceKeys(undefined, directXShape)) keys.add(key);
+  for (const register of REGISTER_NAMES) keys.add(registerValueFact(register));
+  return keys;
+}
+
+function directStructuralUnaryDecimalProofIsComplete(
+  op: Extract<IrOp, { kind: "plain" }>,
+  directXShape: X2ShapeSet | undefined,
+): boolean {
+  const facts = canonicalStructuralShapeFacts(directXShape);
+  if (facts.size === 0) return false;
+  for (const fact of facts) {
+    if (directStructuralSignDecimalValueForOp(op, fact) === undefined) return false;
+  }
+  return true;
+}
+
+function directStructuralSignDecimalValueForOp(
+  op: Extract<IrOp, { kind: "plain" }>,
+  fact: X2ShapeFact,
+): string | undefined {
+  return op.opcode === 0x32 ? directStructuralSignDecimalValue(fact) : undefined;
 }
 
 function directStructuralSignDecimalValue(fact: X2ShapeFact): string | undefined {
