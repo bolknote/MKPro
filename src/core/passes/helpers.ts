@@ -81,6 +81,10 @@ export interface X2MantissaDataModel {
   readonly normalizedSameAsRaw: boolean;
   readonly safety: X2ShapeSafety;
 }
+export interface X2MantissaFirstDigitSpliceModel {
+  readonly decimal?: X2MantissaDataModel | undefined;
+  readonly structural?: X2MantissaDataModel | undefined;
+}
 export type X2ShapeDataModel =
   | X2MantissaDataModel
   | {
@@ -5673,22 +5677,39 @@ export function x2StructuralMantissaFirstDigitSpliceShapeModel(
   source: X2ShapeFact,
   target: X2ShapeFact,
 ): X2MantissaDataModel | undefined {
-  const sourceDigit = x2FirstMantissaDigitFromShapeFact(source);
-  if (sourceDigit === undefined) return undefined;
+  const sourceModel = firstDigitSpliceSourceMantissaModel(source);
   const targetModel = firstDigitSpliceTargetMantissaModel(target);
+  if (sourceModel === undefined || targetModel === undefined) return undefined;
+  return x2StructuralMantissaFirstDigitSpliceDataModel(sourceModel, targetModel);
+}
+
+export function x2StructuralMantissaFirstDigitSpliceDataModel(
+  source: X2MantissaDataModel,
+  target: X2MantissaDataModel,
+): X2MantissaDataModel | undefined {
+  const sourceDigit = structuralVpFirstDigitSourceDigitFromModel(source);
   if (
-    targetModel === undefined ||
-    (targetModel.radix !== "decimal" && targetModel.radix !== "hex" && targetModel.radix !== "super") ||
-    targetModel.sign !== "" ||
-    targetModel.digits.length === 0
+    sourceDigit === undefined ||
+    (target.radix !== "decimal" && target.radix !== "hex" && target.radix !== "super") ||
+    target.sign !== "" ||
+    target.digits.length === 0
   ) {
     return undefined;
   }
-  const spliced = replaceFirstShapeDigit(targetModel.canonical, sourceDigit);
+  const spliced = replaceFirstShapeDigit(target.canonical, sourceDigit);
   if (spliced === undefined) return undefined;
-  const radix = structuralFirstDigitSpliceRadix(targetModel, sourceDigit, spliced);
+  const radix = structuralFirstDigitSpliceRadix(target, sourceDigit, spliced);
   if (radix === undefined) return undefined;
   return structuralMantissaDataModel(radix, spliced, "structuralOnly");
+}
+
+export function x2MantissaFirstDigitSpliceModel(
+  source: X2MantissaDataModel,
+  target: X2MantissaDataModel,
+): X2MantissaFirstDigitSpliceModel | undefined {
+  const decimal = x2DecimalMantissaFirstDigitSpliceModel(source, target);
+  const structural = x2StructuralMantissaFirstDigitSpliceDataModel(source, target);
+  return decimal === undefined && structural === undefined ? undefined : { decimal, structural };
 }
 
 export function x2DecimalMantissaFirstDigitSpliceModel(
@@ -11392,14 +11413,8 @@ function canonicalStructuralDigitRun(raw: string): string | undefined {
 }
 
 function x2FirstMantissaDigitFromShapeFact(fact: X2ShapeFact): string | undefined {
-  const model = x2ShapeDataModelForFact(fact);
-  const mantissa = model.kind === "mantissa"
-    ? model
-    : model.kind === "exponent-entry"
-      ? model.mantissa
-      : undefined;
-  if (mantissa === undefined || mantissa.sign !== "" || mantissa.digits.length === 0) return undefined;
-  return mantissa.digits[0];
+  const mantissa = firstDigitSpliceSourceMantissaModel(fact);
+  return mantissa === undefined ? undefined : structuralVpFirstDigitSourceDigitFromModel(mantissa);
 }
 
 function firstDigitSpliceSourceMantissaModel(fact: X2ShapeFact): X2MantissaDataModel | undefined {
@@ -11416,6 +11431,11 @@ function decimalVpFirstDigitSourceDigitFromModel(mantissa: X2MantissaDataModel):
   if (mantissa.sign !== "" || mantissa.digits.length === 0) return undefined;
   const sourceDigit = mantissa.digits[0];
   return sourceDigit !== undefined && /^[0-9]$/u.test(sourceDigit) ? sourceDigit : undefined;
+}
+
+function structuralVpFirstDigitSourceDigitFromModel(mantissa: X2MantissaDataModel): string | undefined {
+  if (mantissa.sign !== "" || mantissa.digits.length === 0) return undefined;
+  return mantissa.digits[0];
 }
 
 function replaceFirstShapeDigit(raw: string, digit: string): string | undefined {
@@ -13406,7 +13426,12 @@ function structuralFirstDigitVpSpliceShapeFacts(
 ): X2ShapeSet | undefined {
   const sources = restoredVpFirstDigitSourceShapeFacts(xShape);
   const targets = vpFirstDigitSpliceTargetShapeFacts(x2Shape, includeExponentTargets);
-  return x2StructuralMantissaFirstDigitSpliceShapeSetFacts(sources, targets);
+  const shapes = new Set<X2ShapeFact>();
+  for (const model of firstDigitVpSpliceModels(sources, targets)) {
+    const fact = model.structural === undefined ? undefined : x2MantissaShapeFactFromModel(model.structural);
+    if (fact !== undefined) shapes.add(fact);
+  }
+  return shapes.size === 0 ? undefined : shapes;
 }
 
 function decimalFirstDigitVpSpliceMantissas(
@@ -13417,17 +13442,28 @@ function decimalFirstDigitVpSpliceMantissas(
   const mantissas = new Set<string>();
   const sources = restoredVpFirstDigitSourceShapeFacts(xShape);
   const targets = decimalVpFirstDigitSpliceTargetShapeFacts(x2Shape, includeExponentTargets);
+  for (const model of firstDigitVpSpliceModels(sources, targets)) {
+    if (model.decimal !== undefined) mantissas.add(model.decimal.canonical);
+  }
+  return mantissas.size === 0 ? undefined : mantissas;
+}
+
+function firstDigitVpSpliceModels(
+  sources: ReadonlySet<X2ShapeFact>,
+  targets: ReadonlySet<X2ShapeFact>,
+): X2MantissaFirstDigitSpliceModel[] {
+  const output: X2MantissaFirstDigitSpliceModel[] = [];
   for (const source of sources) {
     const sourceModel = firstDigitSpliceSourceMantissaModel(source);
     if (sourceModel === undefined) continue;
     for (const target of targets) {
       const targetModel = firstDigitSpliceTargetMantissaModel(target);
       if (targetModel === undefined) continue;
-      const spliced = x2DecimalMantissaFirstDigitSpliceModel(sourceModel, targetModel);
-      if (spliced !== undefined) mantissas.add(spliced.canonical);
+      const spliced = x2MantissaFirstDigitSpliceModel(sourceModel, targetModel);
+      if (spliced !== undefined) output.push(spliced);
     }
   }
-  return mantissas.size === 0 ? undefined : mantissas;
+  return output;
 }
 
 function decimalVpFirstDigitSpliceTargetShapeFacts(

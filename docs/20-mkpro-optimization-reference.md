@@ -1489,6 +1489,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     rejected, and negative decimal targets remain rejected. Dataflow feeds that
     operation with source and target mantissa models directly rather than
     converting through an intermediate digit-string rewrite.
+    A common first-digit splice model now returns both decimal and structural
+    results from the same source/target mantissa pair, so the `ВП` dataflow
+    no longer has separate source/target walking logic for those two result
+    families.
     Decimal first-digit plus decimal tail uses the same context rule for
     ordinary decimal exponent-entry facts: immediate `←→; ВП` inherits the old
     decimal tail (`800`), while an empty preserving gap can prove the current

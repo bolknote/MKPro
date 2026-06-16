@@ -62,6 +62,7 @@ import {
   x2ExponentSignChangedShapeFact,
   x2JoinedVpEntryMantissaSources,
   x2JoinedVpEntrySignShapeSources,
+  x2MantissaFirstDigitSpliceModel,
   x2MantissaShapeFactFromModel,
   x2MantissaSignChangedShapeFact,
   x2HasOnlyRestoreGapBeforeVp,
@@ -133,6 +134,7 @@ import {
   x2StructuralMantissaConcatShapeSetFacts,
   x2StructuralMantissaDropFirstDigitShapeFact,
   x2StructuralMantissaDropFirstDigitShapeModel,
+  x2StructuralMantissaFirstDigitSpliceDataModel,
   x2StructuralMantissaFirstDigitSpliceShapeFact,
   x2StructuralMantissaFirstDigitSpliceShapeModel,
   x2StructuralMantissaFirstDigitSpliceShapeSetFacts,
@@ -2580,6 +2582,24 @@ describe("ir passes on synthetic programs", () => {
       canonical: "1A",
       safety: "structuralOnly",
     });
+    const sourceA = x2ShapeDataModelForFact("hex:A:mantissa");
+    const target800 = x2ShapeDataModelForFact("mantissa:800:decimal");
+    const target8A0 = x2ShapeDataModelForFact("hex:8A0:mantissa");
+    if (sourceA.kind !== "mantissa" || target800.kind !== "mantissa" || target8A0.kind !== "mantissa") {
+      throw new Error("expected mantissa models");
+    }
+    expect(x2StructuralMantissaFirstDigitSpliceDataModel(sourceA, target8A0)).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      canonical: "AA0",
+    });
+    const structuralDecimalTargetSplice = x2MantissaFirstDigitSpliceModel(sourceA, target800);
+    expect(structuralDecimalTargetSplice?.decimal).toBeUndefined();
+    expect(structuralDecimalTargetSplice?.structural).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      canonical: "A00",
+    });
     expect(x2StructuralMantissaFirstDigitSpliceShapeSetFacts(
       new Set<X2ShapeFact>(["hex:A:mantissa", "mantissa:3:decimal"]),
       new Set<X2ShapeFact>(["hex:8A0:mantissa", "mantissa:800:decimal"]),
@@ -2612,6 +2632,13 @@ describe("ir passes on synthetic programs", () => {
       radix: "decimal",
       canonical: "200",
     });
+    const decimalTargetSplice = x2MantissaFirstDigitSpliceModel(decimalSource, decimalTarget);
+    expect(decimalTargetSplice?.decimal).toMatchObject({
+      kind: "mantissa",
+      radix: "decimal",
+      canonical: "200",
+    });
+    expect(decimalTargetSplice?.structural).toBeUndefined();
     expect(x2DecimalMantissaFirstDigitSpliceModel(structuralZeroSource, decimalTarget)).toMatchObject({
       kind: "mantissa",
       radix: "decimal",
