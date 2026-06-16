@@ -34,6 +34,7 @@ import {
   analyzeRecallRemoval,
   analyzeX2StackEffect,
   analyzeX2VpRestoreGapSource,
+  analyzeX2VpSourceMatch,
   analyzeX2VpShapeContext,
   analyzeX2VpShapeTransition,
   canonicalStructuralRestoreSourceKeyFacts,
@@ -2874,6 +2875,41 @@ describe("ir passes on synthetic programs", () => {
       "shape:mantissa:100:decimal",
     ]);
     expect([...x2VpEntrySignSourceModel(signSource).keys]).toEqual(["shape:hex:FACE:mantissa"]);
+  });
+
+  it("x2 VP source match analysis reports the source class used by planner predicates", () => {
+    const base = computeX2ValueStates([halt()])[0]!;
+
+    expect(analyzeX2VpSourceMatch(
+      { ...base, vpEntryMantissa: new Set(["100"]) },
+      { ...base, vpEntryShape: new Set<X2ShapeFact>(["exponent:100:0:decimal"]) },
+    )).toMatchObject({
+      canDiscardRestoreRun: true,
+      reason: "entry-source",
+    });
+    expect(analyzeX2VpSourceMatch(
+      { ...base, vpEntrySignMantissa: new Set(["2"]) },
+      { ...base, vpEntryMantissa: new Set(["2"]) },
+      { hasSignRestore: true },
+    )).toMatchObject({
+      canDiscardRestoreRun: true,
+      reason: "nonzero-sign-source",
+    });
+    expect(analyzeX2VpSourceMatch(
+      { ...base, vpEntrySignMantissa: new Set(["0"]) },
+      { ...base, vpEntryMantissa: new Set(["0"]) },
+      { hasSignRestore: true },
+    )).toMatchObject({
+      canDiscardRestoreRun: true,
+      reason: "explicit-sign-source",
+    });
+    expect(analyzeX2VpSourceMatch(
+      { ...base, vpEntryMantissa: new Set(["02"]) },
+      { ...base, vpEntryShape: new Set<X2ShapeFact>(["mantissa:2:decimal"]) },
+    )).toMatchObject({
+      canDiscardRestoreRun: false,
+      reason: "source-mismatch",
+    });
   });
 
   it("x2 VP sign source proof uses explicit structural sign shapes separately from ordinary VP sources", () => {
@@ -11587,14 +11623,19 @@ describe("ir passes on synthetic programs", () => {
     ];
     const states = computeX2ValueStates(program);
 
-    expect(analyzeX2VpShapeTransition(
+    const provedTransition = analyzeX2VpShapeTransition(
       states[3],
       "proved-vp",
       { beforeVp: states[6], hasSignRestore: true },
-    )).toMatchObject({
+    );
+    expect(provedTransition).toMatchObject({
       canDiscardRestoreRun: true,
       canDiscardSignPair: true,
       reason: "proved-vp-source",
+    });
+    expect(provedTransition.sourceMatch).toMatchObject({
+      canDiscardRestoreRun: true,
+      reason: "same-exponent-context",
     });
     expect(analyzeX2VpShapeTransition(
       states[3],

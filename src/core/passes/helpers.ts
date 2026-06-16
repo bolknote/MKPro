@@ -51,6 +51,23 @@ export interface X2VpSourceModel {
   readonly shapes?: X2ShapeSet | undefined;
   readonly keys: ReadonlySet<string>;
 }
+export type X2VpSourceMatchReason =
+  | "same-exponent-context"
+  | "active-mantissa-source"
+  | "entry-source"
+  | "nonzero-sign-source"
+  | "explicit-sign-source"
+  | "source-mismatch";
+export interface X2VpSourceMatchAnalysis {
+  readonly canDiscardRestoreRun: boolean;
+  readonly reason: X2VpSourceMatchReason;
+  readonly beforeRunSource: X2VpSourceModel;
+  readonly beforeVpSource: X2VpSourceModel;
+  readonly beforeRunSignSource: X2VpSourceModel;
+  readonly beforeVpSignSource: X2VpSourceModel;
+  readonly beforeRunExplicitSignSource: X2VpSourceModel;
+  readonly beforeVpExplicitSignSource: X2VpSourceModel;
+}
 export type X2ShapeSafety = "dotSafeDecimal" | "structuralOnly" | "errorProne" | "unknown";
 export type ParsedX2ShapeFact =
   | {
@@ -324,6 +341,7 @@ export interface X2VpShapeTransitionOptions {
 export interface X2VpShapeTransitionAnalysis {
   readonly operation: X2VpShapeTransitionOperation;
   readonly context: X2VpShapeContextAnalysis;
+  readonly sourceMatch?: X2VpSourceMatchAnalysis | undefined;
   readonly canDiscardCurrentOp: boolean;
   readonly canDiscardRestoreRun: boolean;
   readonly canDiscardSignPair: boolean;
@@ -6315,16 +6333,6 @@ export function x2StatesHaveSameVpEntrySignSource(
   );
 }
 
-function x2StatesHaveSameNonZeroVpEntrySignSource(
-  left: X2ValueDataflowState | undefined,
-  right: X2ValueDataflowState | undefined,
-): boolean {
-  if (left === undefined || right === undefined) return false;
-  const leftKeys = nonZeroVpSourceKeys(vpEntrySignSourceKeys(left));
-  const rightKeys = nonZeroVpSourceKeys(mergeStringSets(vpEntrySourceKeys(right), vpEntrySignSourceKeys(right)));
-  return stringSetsHaveIntersection(leftKeys, rightKeys);
-}
-
 export function x2StatesHaveSameExplicitVpEntrySignSource(
   left: X2ValueDataflowState | undefined,
   right: X2ValueDataflowState | undefined,
@@ -6336,15 +6344,55 @@ export function x2StatesHaveSameExplicitVpEntrySignSource(
   );
 }
 
-function x2StateHasExplicitVpEntrySignSourceForProvedVp(
+export function analyzeX2VpSourceMatch(
   beforeRun: X2ValueDataflowState | undefined,
   beforeVp: X2ValueDataflowState | undefined,
-): boolean {
-  if (beforeRun === undefined || beforeVp === undefined) return false;
-  return stringSetsHaveIntersection(
-    explicitVpEntrySignSourceKeys(beforeRun),
-    mergeStringSets(vpEntrySourceKeys(beforeVp), explicitVpEntrySignSourceKeys(beforeVp)),
-  );
+  options: { readonly hasSignRestore?: boolean | undefined } = {},
+): X2VpSourceMatchAnalysis {
+  const context = analyzeX2VpShapeContext(beforeRun);
+  const beforeVpContext = analyzeX2VpShapeContext(beforeVp);
+  const beforeRunSource = x2VpEntrySourceModel(beforeRun);
+  const beforeVpSource = x2VpEntrySourceModel(beforeVp);
+  const beforeRunSignSource = x2VpEntrySignSourceModel(beforeRun);
+  const beforeVpSignSource = x2VpEntrySignSourceModel(beforeVp);
+  const beforeRunExplicitSignSource = x2ExplicitVpEntrySignSourceModel(beforeRun);
+  const beforeVpExplicitSignSource = x2ExplicitVpEntrySignSourceModel(beforeVp);
+  const result = (canDiscardRestoreRun: boolean, reason: X2VpSourceMatchReason): X2VpSourceMatchAnalysis => ({
+    canDiscardRestoreRun,
+    reason,
+    beforeRunSource,
+    beforeVpSource,
+    beforeRunSignSource,
+    beforeVpSignSource,
+    beforeRunExplicitSignSource,
+    beforeVpExplicitSignSource,
+  });
+
+  if (sameX2ExponentShapeContext(context, beforeVpContext)) return result(true, "same-exponent-context");
+  if (context.kind === "active-mantissa") {
+    const activeSource = x2VpSourceModel(context.mantissa, undefined);
+    if (stringSetsHaveIntersection(activeSource.keys, beforeVpSource.keys)) {
+      return result(true, "active-mantissa-source");
+    }
+  } else if (stringSetsHaveIntersection(beforeRunSource.keys, beforeVpSource.keys)) {
+    return result(true, "entry-source");
+  }
+  if (options.hasSignRestore === true) {
+    const rightSignKeys = mergeStringSets(beforeVpSource.keys, beforeVpSignSource.keys);
+    if (
+      stringSetsHaveIntersection(
+        nonZeroVpSourceKeys(beforeRunSignSource.keys),
+        nonZeroVpSourceKeys(rightSignKeys),
+      )
+    ) {
+      return result(true, "nonzero-sign-source");
+    }
+    const rightExplicitSignKeys = mergeStringSets(beforeVpSource.keys, beforeVpExplicitSignSource.keys);
+    if (stringSetsHaveIntersection(beforeRunExplicitSignSource.keys, rightExplicitSignKeys)) {
+      return result(true, "explicit-sign-source");
+    }
+  }
+  return result(false, "source-mismatch");
 }
 
 export function x2StateCanDiscardRestoreRunBeforeProvedVp(
@@ -6352,18 +6400,7 @@ export function x2StateCanDiscardRestoreRunBeforeProvedVp(
   beforeVp: X2ValueDataflowState | undefined,
   options: { readonly hasSignRestore?: boolean | undefined } = {},
 ): boolean {
-  const context = analyzeX2VpShapeContext(beforeRun);
-  const beforeVpContext = analyzeX2VpShapeContext(beforeVp);
-  if (sameX2ExponentShapeContext(context, beforeVpContext)) return true;
-  if (context.kind === "active-mantissa") {
-    if (stringSetsHaveIntersection(activeMantissaVpSourceKeys(context), vpEntrySourceKeys(beforeVp))) return true;
-  } else if (x2StatesHaveSameVpEntrySource(beforeRun, beforeVp)) {
-    return true;
-  }
-  return options.hasSignRestore === true && (
-    x2StatesHaveSameNonZeroVpEntrySignSource(beforeRun, beforeVp) ||
-    x2StateHasExplicitVpEntrySignSourceForProvedVp(beforeRun, beforeVp)
-  );
+  return analyzeX2VpSourceMatch(beforeRun, beforeVp, options).canDiscardRestoreRun;
 }
 
 export interface X2RestoreGapBeforeVpScan {
@@ -6670,18 +6707,15 @@ export function analyzeX2VpRestoreGapSource(
     "proved-vp",
     { beforeVp, hasSignRestore },
   );
-  const beforeRunSource = x2VpEntrySourceModel(beforeRun);
-  const beforeVpSource = x2VpEntrySourceModel(beforeVp);
-  const beforeRunSignSource = x2VpEntrySignSourceModel(beforeRun);
-  const beforeVpSignSource = x2VpEntrySignSourceModel(beforeVp);
+  const sourceMatch = transition.sourceMatch ?? analyzeX2VpSourceMatch(beforeRun, beforeVp, { hasSignRestore });
   return {
     hasOnlyRestoreGapBeforeVp: scan.sawRestoreGap && scan.vpIndex !== undefined,
     replacementDotHasOnlyRestoreGapBeforeVp: scan.vpIndex !== undefined,
     hasSignRestoreGapBeforeVp: hasSignRestore && scan.vpIndex !== undefined,
-    beforeRunSource,
-    beforeVpSource,
-    beforeRunSignSource,
-    beforeVpSignSource,
+    beforeRunSource: sourceMatch.beforeRunSource,
+    beforeVpSource: sourceMatch.beforeVpSource,
+    beforeRunSignSource: sourceMatch.beforeRunSignSource,
+    beforeVpSignSource: sourceMatch.beforeVpSignSource,
     canDiscardRestoreRunBeforeProvedVp: transition.canDiscardRestoreRun,
     canDiscardShapeSignPairBeforeProvedVp: transition.canDiscardSignPair,
     canDiscardSignRestoreRunBeforeProvedVp: transition.canDiscardSignPair ||
@@ -6689,8 +6723,8 @@ export function analyzeX2VpRestoreGapSource(
         hasSignRestore &&
         scan.vpIndex !== undefined &&
         stringSetsHaveIntersection(
-          beforeRunSignSource.keys,
-          mergeStringSets(beforeVpSource.keys, beforeVpSignSource.keys),
+          sourceMatch.beforeRunSignSource.keys,
+          mergeStringSets(sourceMatch.beforeVpSource.keys, sourceMatch.beforeVpSignSource.keys),
         )
       ),
     hasSameExplicitVpEntrySignSource: stringSetsHaveIntersection(
@@ -7782,15 +7816,18 @@ export function analyzeX2VpShapeTransition(
       };
     }
     case "proved-vp": {
-      const canDiscardRestoreRun = options.beforeVp !== undefined &&
-        x2StateCanDiscardRestoreRunBeforeProvedVp(
+      const sourceMatch = options.beforeVp === undefined
+        ? undefined
+        : analyzeX2VpSourceMatch(
           state,
           options.beforeVp,
           { hasSignRestore: options.hasSignRestore },
         );
+      const canDiscardRestoreRun = sourceMatch?.canDiscardRestoreRun === true;
       return {
         operation,
         context,
+        sourceMatch,
         canDiscardCurrentOp: false,
         canDiscardRestoreRun,
         canDiscardSignPair: canDiscardRestoreRun && options.hasSignRestore === true,
