@@ -311,6 +311,11 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(runUnaryRegisterProgram("-FA", [IP1, K_SIGN])).toBe(",00000,,");
   });
 
+  it("K ЗН direct super-number exponents differ from constructed exponent entry", () => {
+    expect(runUnaryRegisterProgram("FAE2", [IP1, K_SIGN])).toBe(",00000,,");
+    expect(runUnaryRegisterProgram("FA", [IP1, 0x0c, 0x02, K_SIGN])).toBe("-00,");
+  });
+
   it("only emulator-pinned A/B/C single hex digits are safe structural dot restores", () => {
     const restoreWithRecall = (literal: string): string => runUnaryRegisterProgram(literal, [IP1]);
     const restoreWithDot = (literal: string): string => runUnaryRegisterProgram(literal, [IP1, 0x42, 0x20, 0x0a]);

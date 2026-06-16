@@ -778,7 +778,7 @@ function plainProducesStableExpressionValues(
   }
   const opcode = op.opcode.toString(16).toUpperCase().padStart(2, "0");
   const options = concreteEvaluationOptionsForStableExpressionOpcode(op.opcode);
-  const output = plainProducesConcreteDecimalValues(op, x, xShape, options);
+  const output = plainProducesConcreteDecimalValues(op, x, xShape, options, directXShape);
   if (info.stackEffect === "preserves") {
     for (const key of stableExpressionSourceKeys(x, xShape)) {
       if (stableExpressionKeyHasConcreteDecimalResult(op, key)) continue;
@@ -951,6 +951,7 @@ function plainProducesConcreteDecimalValues(
   x: X2ValueSet | undefined,
   xShape: X2ShapeSet | undefined = undefined,
   options: ConcreteEvaluationOptions = {},
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ValueFact> {
   const output = new Set<X2ValueFact>();
   const effectiveOptions = concreteEvaluationOptionsForOpcode(op.opcode, options);
@@ -993,6 +994,9 @@ function plainProducesConcreteDecimalValues(
   for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op, effectiveXShape)) {
     output.add(decimalValueFact(value, "normalized"));
   }
+  for (const value of plainProducesConcreteDirectStructuralUnaryDecimalValues(op, directXShape)) {
+    output.add(decimalValueFact(value, "normalized"));
+  }
   return output;
 }
 
@@ -1001,6 +1005,7 @@ function plainProducesConcreteDecimalShapeFacts(
   x: X2ValueSet | undefined,
   xShape: X2ShapeSet | undefined = undefined,
   options: ConcreteEvaluationOptions = {},
+  directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
   const output = plainProducesStableConstantShapeFacts(op);
   const effectiveOptions = concreteEvaluationOptionsForOpcode(op.opcode, options);
@@ -1016,6 +1021,9 @@ function plainProducesConcreteDecimalShapeFacts(
   }
   for (const fact of plainProducesConcreteStructuralUnaryDecimalShapeFacts(op, effectiveXShape)) {
     if (fact !== undefined) output.add(fact);
+  }
+  for (const fact of plainProducesConcreteDirectStructuralUnaryDecimalShapeFacts(op, directXShape)) {
+    output.add(fact);
   }
   return output;
 }
@@ -1170,6 +1178,40 @@ function plainProducesConcreteStructuralUnaryDecimalShapeFacts(
     if (result !== undefined) output.add(result);
   }
   return output;
+}
+
+function plainProducesConcreteDirectStructuralUnaryDecimalValues(
+  op: Extract<IrOp, { kind: "plain" }>,
+  directXShape: X2ShapeSet | undefined,
+): Set<string> {
+  const output = new Set<string>();
+  if (op.opcode !== 0x32) return output;
+  for (const fact of canonicalStructuralShapeFacts(directXShape)) {
+    const value = directStructuralSignDecimalValue(fact);
+    if (value !== undefined) output.add(value);
+  }
+  return output;
+}
+
+function plainProducesConcreteDirectStructuralUnaryDecimalShapeFacts(
+  op: Extract<IrOp, { kind: "plain" }>,
+  directXShape: X2ShapeSet | undefined,
+): Set<X2ShapeFact> {
+  const output = new Set<X2ShapeFact>();
+  for (const value of plainProducesConcreteDirectStructuralUnaryDecimalValues(op, directXShape)) {
+    const fact = exactPlainIntegerDecimalMantissaShapeFact(value);
+    if (fact !== undefined) output.add(fact);
+  }
+  return output;
+}
+
+function directStructuralSignDecimalValue(fact: X2ShapeFact): string | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  return model.kind === "exponent-entry" &&
+      model.mantissa.radix === "super" &&
+      model.exponentSign === ""
+    ? "0"
+    : undefined;
 }
 
 function structuralAbsDecimalValue(fact: X2ShapeFact): string | undefined {
@@ -3860,7 +3902,7 @@ function plainXShapeAfterNonPreservingOp(
   directYShape: X2ShapeSet | undefined = undefined,
   directXShape: X2ShapeSet | undefined = undefined,
 ): Set<X2ShapeFact> {
-  const output = plainProducesConcreteDecimalShapeFacts(op, x, xShape, options);
+  const output = plainProducesConcreteDecimalShapeFacts(op, x, xShape, options, directXShape);
   for (const fact of plainProducesConcreteUnaryShapeFacts(op, x, xShape)) output.add(fact);
   for (const fact of plainProducesConcreteBinaryShapeFacts(op, y, x, yShape, xShape, options, directYShape, directXShape)) {
     output.add(fact);

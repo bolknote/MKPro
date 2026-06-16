@@ -9666,6 +9666,18 @@ describe("ir passes on synthetic programs", () => {
       plain(0x32, "К ЗН"),
       halt(),
     ];
+    const directSuperExponentProgram: IrOp[] = [
+      recall("1", "preload const FAE2"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+    const constructedSuperExponentProgram: IrOp[] = [
+      recall("1", "preload const FA"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
 
     expect(x2ValueStateText(computeX2ValueStates(positiveProgram)[2]?.x) ?? [])
       .toContain("decimal:1:normalized");
@@ -9698,6 +9710,14 @@ describe("ir passes on synthetic programs", () => {
       .toContain("decimal:0:normalized");
     expect(x2ShapeStateText(computeX2ValueStates(negativeSuperProgram)[2]?.xShape))
       .toEqual(["mantissa:0:decimal"]);
+    expect(x2ValueStateText(computeX2ValueStates(directSuperExponentProgram)[2]?.x) ?? [])
+      .toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(computeX2ValueStates(directSuperExponentProgram)[2]?.xShape))
+      .toEqual(["mantissa:0:decimal"]);
+    expect(x2ValueStateText(computeX2ValueStates(constructedSuperExponentProgram)[4]?.x) ?? [])
+      .not.toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(computeX2ValueStates(constructedSuperExponentProgram)[4]?.xShape))
+      .toEqual([]);
   });
 
   it("x2 value dataflow computes concrete unary arithmetic facts while preserving X2", () => {
