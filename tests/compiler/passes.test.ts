@@ -12617,18 +12617,26 @@ describe("ir passes on synthetic programs", () => {
       halt(),
     ];
     const replacementDotStates = computeX2ValueStates(replacementDotProgram);
-    expect(analyzeX2VpRestoreGapSource(
+    const replacementDotAnalysis = analyzeX2VpRestoreGapSource(
       replacementDotProgram,
       2,
       replacementDotStates[2],
       replacementDotStates[2],
       directReturnAnalysisContext(replacementDotProgram),
-    )).toMatchObject({
+    );
+    expect(replacementDotAnalysis).toMatchObject({
       hasOnlyRestoreGapBeforeVp: false,
       replacementDotHasOnlyRestoreGapBeforeVp: true,
       hasSignRestoreGapBeforeVp: false,
       canDiscardRestoreRunBeforeProvedVp: true,
     });
+    expect(replacementDotAnalysis.beforeRunSource.keys.size).toBeGreaterThan(0);
+    expect([...replacementDotAnalysis.beforeRunSource.keys].sort()).toEqual(
+      [...replacementDotAnalysis.beforeVpSource.keys].sort(),
+    );
+    expect([...replacementDotAnalysis.beforeRunSignSource.keys].sort()).toEqual(
+      [...replacementDotAnalysis.beforeVpSignSource.keys].sort(),
+    );
 
     const leadingSignPairProgram: IrOp[] = [
       plain(0x00, "0"),

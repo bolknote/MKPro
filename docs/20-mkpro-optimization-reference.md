@@ -965,7 +965,10 @@ Display rewrites are separated into strategy selection + body lowering.
   unified `ВП` source model view (`mantissas`, `shapes`, and canonical source
   keys), so equality, sign-source, recall-preservation, and join proofs consume
   the same source-key algebra instead of rebuilding decimal and structural keys
-  independently.
+  independently. Restore-gap source analysis carries those source models for the
+  pre-run, proved-`ВП`, and sign-source sides alongside the boolean rewrite
+  decision, so later planner candidates can inspect the exact shared source
+  evidence instead of re-deriving it from state fields.
   Closed `/-/` shared-source proofs use the same canonical value sets before
   comparing visible `X` and hidden X2, so sign-change keys remain reusable
   after mixed raw/canonical paths meet.

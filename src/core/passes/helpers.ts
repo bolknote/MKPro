@@ -6377,6 +6377,10 @@ export interface X2VpRestoreGapSourceAnalysis {
   readonly hasOnlyRestoreGapBeforeVp: boolean;
   readonly replacementDotHasOnlyRestoreGapBeforeVp: boolean;
   readonly hasSignRestoreGapBeforeVp: boolean;
+  readonly beforeRunSource: X2VpSourceModel;
+  readonly beforeVpSource: X2VpSourceModel;
+  readonly beforeRunSignSource: X2VpSourceModel;
+  readonly beforeVpSignSource: X2VpSourceModel;
   readonly canDiscardRestoreRunBeforeProvedVp: boolean;
   readonly canDiscardShapeSignPairBeforeProvedVp: boolean;
   readonly canDiscardSignRestoreRunBeforeProvedVp: boolean;
@@ -6666,19 +6670,33 @@ export function analyzeX2VpRestoreGapSource(
     "proved-vp",
     { beforeVp, hasSignRestore },
   );
+  const beforeRunSource = x2VpEntrySourceModel(beforeRun);
+  const beforeVpSource = x2VpEntrySourceModel(beforeVp);
+  const beforeRunSignSource = x2VpEntrySignSourceModel(beforeRun);
+  const beforeVpSignSource = x2VpEntrySignSourceModel(beforeVp);
   return {
     hasOnlyRestoreGapBeforeVp: scan.sawRestoreGap && scan.vpIndex !== undefined,
     replacementDotHasOnlyRestoreGapBeforeVp: scan.vpIndex !== undefined,
     hasSignRestoreGapBeforeVp: hasSignRestore && scan.vpIndex !== undefined,
+    beforeRunSource,
+    beforeVpSource,
+    beforeRunSignSource,
+    beforeVpSignSource,
     canDiscardRestoreRunBeforeProvedVp: transition.canDiscardRestoreRun,
     canDiscardShapeSignPairBeforeProvedVp: transition.canDiscardSignPair,
     canDiscardSignRestoreRunBeforeProvedVp: transition.canDiscardSignPair ||
       (
         hasSignRestore &&
         scan.vpIndex !== undefined &&
-        x2StatesHaveSameVpEntrySignSource(beforeRun, beforeVp)
+        stringSetsHaveIntersection(
+          beforeRunSignSource.keys,
+          mergeStringSets(beforeVpSource.keys, beforeVpSignSource.keys),
+        )
       ),
-    hasSameExplicitVpEntrySignSource: x2StatesHaveSameExplicitVpEntrySignSource(beforeRun, beforeVp),
+    hasSameExplicitVpEntrySignSource: stringSetsHaveIntersection(
+      explicitVpEntrySignSourceKeys(beforeRun),
+      explicitVpEntrySignSourceKeys(beforeVp),
+    ),
   };
 }
 
