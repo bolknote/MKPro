@@ -4574,6 +4574,65 @@ program WideIndirectUnitIncrement {
     expect(result.report.optimizations.some((item) => item.name === "indirect-incdec-counter")).toBe(true);
   });
 
+  it("uses indirect pre-decrement when a later terminal guard catches zero underflow", () => {
+    const result = compileLoweringVariantForTest(`
+program TerminalUnderflowIndirectDecrement {
+  state {
+    a: packed = 0
+    b: packed = 0
+    energy: counter 0..99 = 5
+    selector: counter 0..9 = 0
+  }
+
+  loop {
+    if selector == 7 {
+      energy--
+    }
+    if energy <= 0 {
+      halt(1)
+    }
+    halt(energy)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      indirectUnderflowDecrement: true,
+    });
+
+    expect(result.report.registers.energy).toBe("2");
+    expect(result.steps.some((step) => step.hex === "D2" && step.comment === "decrement energy")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "indirect-incdec-counter")).toBe(true);
+  });
+
+  it("keeps ordinary unit decrement when a read precedes the terminal underflow guard", () => {
+    const result = compileLoweringVariantForTest(`
+program TerminalUnderflowIndirectDecrementReadBarrier {
+  state {
+    a: packed = 0
+    b: packed = 0
+    energy: counter 0..99 = 5
+    selector: counter 0..9 = 0
+    score: counter 0..99 = 0
+  }
+
+  loop {
+    if selector == 7 {
+      energy--
+    }
+    score = score + energy
+    if energy <= 0 {
+      halt(1)
+    }
+    halt(score)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      indirectUnderflowDecrement: true,
+    });
+
+    expect(result.report.registers.energy).toBe("2");
+    expect(result.steps.some((step) => step.hex === "D2" && step.comment === "decrement energy")).toBe(false);
+  });
+
   it("shares identical nested guard failure branches", () => {
     const result = compileOk(`
 program NestedGuardFailure {

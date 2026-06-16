@@ -11167,7 +11167,7 @@ function buildProgramAnalysis(ast: ProgramAst, allocation: RegisterAllocation): 
     scaledCoordLists,
     scaledCoordCellNames: collectScaledCoordCellNames(ast, scaledCoordLists),
     removableCoordLists: collectRemovableCoordListNames(ast),
-    terminalUnderflowUnitDecrements: collectTerminalUnderflowUnitDecrements(ast, inlineProcNames),
+    terminalUnderflowUnitDecrements: collectTerminalUnderflowUnitDecrements(ast, inlineProcNames, procCallCounts),
   };
 }
 
@@ -11475,6 +11475,7 @@ function statementTerminatesStatically(
 function collectTerminalUnderflowUnitDecrements(
   ast: ProgramAst,
   inlineProcNames: ReadonlySet<string>,
+  procCallCounts: ReadonlyMap<string, number>,
 ): WeakSet<Extract<StatementAst, { kind: "assign" }>> {
   const protectedDecrements = new WeakSet<Extract<StatementAst, { kind: "assign" }>>();
   const procByName = new Map(ast.procs.map((proc) => [proc.name, proc]));
@@ -11541,7 +11542,11 @@ function collectTerminalUnderflowUnitDecrements(
 
     if (statement.kind === "call") {
       const proc = procByName.get(statement.block);
-      if (proc !== undefined && inlineProcNames.has(proc.name) && !seenInline.has(proc.name)) {
+      if (
+        proc !== undefined &&
+        (inlineProcNames.has(proc.name) || procCallCounts.get(proc.name) === 1) &&
+        !seenInline.has(proc.name)
+      ) {
         const nextSeen = new Set(seenInline);
         nextSeen.add(proc.name);
         return analyzeStatements(proc.body, pendingAfter, nextSeen);
@@ -11550,6 +11555,7 @@ function collectTerminalUnderflowUnitDecrements(
     }
 
     if (statement.kind === "loop" || statement.kind === "while") {
+      analyzeStatements(statement.body, new Set(), new Set(seenInline));
       return killStatementTouches(ast, statement, pendingAfter);
     }
 

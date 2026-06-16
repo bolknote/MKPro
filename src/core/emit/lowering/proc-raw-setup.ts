@@ -1585,6 +1585,7 @@ export function compileUnitDecrement(ctx: LoweringCtx, statement: Extract<Statem
       isPredecrementIndirectRegister(register) &&
       (
         targetRangeFitsIndirectDecrement(ctx, statement.target) ||
+        ctx.loweringOptions.indirectUnderflowDecrement === true &&
         targetRangeFitsTerminalUnderflowDecrement(ctx, statement.target) &&
           ctx.terminalUnderflowUnitDecrementProtected(statement)
       )
@@ -1599,10 +1600,11 @@ export function compileUnitDecrement(ctx: LoweringCtx, statement: Extract<Statem
 function targetRangeFitsIndirectDecrement(ctx: LoweringCtx, target: string): boolean {
     const field = ctx.findStateField(target);
     if (field?.min === undefined || field.max === undefined) return false;
-    // When the source range proves the pre-decrement input is always positive,
-    // the post-decrement indirect address is nonnegative. The incidental recall
-    // is discarded, so it need not stay inside R0..Re.
-    return field.type === "range" && field.min >= 1;
+    // Default lowering keeps the incidental recall inside the register file.
+    // Wider counters can still use the pre-decrement through the speculative
+    // terminal-underflow proof, where the full-program selector must approve the
+    // surrounding layout.
+    return field.type === "range" && field.min >= 1 && field.max <= 14;
 }
 
 function targetRangeFitsTerminalUnderflowDecrement(ctx: LoweringCtx, target: string): boolean {
