@@ -1483,6 +1483,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     common closed-display helper only when they close to an ordinary mantissa
     digit run (`exponent:1:2:decimal` behaves like hidden `100`); fractional
     and wide scientific displays remain rejected.
+    Decimal first-digit splice is exposed as a model operation too: decimal
+    sources use their first non-zero digit, structural sources may contribute an
+    exact leading decimal digit including `0`, signed-zero decimal sources are
+    rejected, and negative decimal targets remain rejected.
     Decimal first-digit plus decimal tail uses the same context rule for
     ordinary decimal exponent-entry facts: immediate `←→; ВП` inherits the old
     decimal tail (`800`), while an empty preserving gap can prove the current

@@ -5691,6 +5691,24 @@ export function x2StructuralMantissaFirstDigitSpliceShapeModel(
   return structuralMantissaDataModel(radix, spliced, "structuralOnly");
 }
 
+export function x2DecimalMantissaFirstDigitSpliceModel(
+  source: X2MantissaDataModel,
+  target: X2MantissaDataModel,
+): X2MantissaDataModel | undefined {
+  const sourceDigit = decimalVpFirstDigitSourceDigitFromModel(source);
+  if (
+    sourceDigit === undefined ||
+    target.radix !== "decimal" ||
+    target.sign !== "" ||
+    target.digits.length === 0
+  ) {
+    return undefined;
+  }
+  const spliced = replaceFirstShapeDigit(target.canonical, sourceDigit);
+  if (spliced === undefined || decimalMantissaDigitCount(spliced) > 8) return undefined;
+  return normalizeDecimalMantissaEntry(spliced) === undefined ? undefined : decimalMantissaDataModel(spliced);
+}
+
 export function x2StructuralMantissaFirstDigitSpliceShapeSetFacts(
   source: X2ShapeSet | undefined,
   target: X2ShapeSet | undefined,
@@ -11391,9 +11409,13 @@ function decimalVpFirstDigitSourceDigitFromShapeFact(fact: X2ShapeFact): string 
     : model.kind === "exponent-entry"
       ? model.mantissa
       : undefined;
-  if (mantissa === undefined) return undefined;
+  return mantissa === undefined ? undefined : decimalVpFirstDigitSourceDigitFromModel(mantissa);
+}
+
+function decimalVpFirstDigitSourceDigitFromModel(mantissa: X2MantissaDataModel): string | undefined {
   if (mantissa.radix === "decimal") return mantissa.digits.find((digit) => digit !== "0");
-  const sourceDigit = x2FirstMantissaDigitFromShapeFact(fact);
+  if (mantissa.sign !== "" || mantissa.digits.length === 0) return undefined;
+  const sourceDigit = mantissa.digits[0];
   return sourceDigit !== undefined && /^[0-9]$/u.test(sourceDigit) ? sourceDigit : undefined;
 }
 
@@ -13440,17 +13462,9 @@ function decimalFirstDigitVpSpliceMantissa(
   target: X2ShapeFact,
 ): string | undefined {
   const targetModel = x2ShapeDataModelForFact(target);
-  if (
-    targetModel.kind !== "mantissa" ||
-    targetModel.radix !== "decimal" ||
-    targetModel.sign !== "" ||
-    targetModel.digits.length === 0
-  ) {
-    return undefined;
-  }
-  const spliced = replaceFirstShapeDigit(targetModel.canonical, sourceDigit);
-  if (spliced === undefined || decimalMantissaDigitCount(spliced) > 8) return undefined;
-  return normalizeDecimalMantissaEntry(spliced) === undefined ? undefined : spliced;
+  if (targetModel.kind !== "mantissa") return undefined;
+  const sourceModel = structuralMantissaDataModel("hex", sourceDigit, "structuralOnly");
+  return x2DecimalMantissaFirstDigitSpliceModel(sourceModel, targetModel)?.canonical;
 }
 
 function vpFirstDigitSpliceTargetShapeFacts(

@@ -56,6 +56,7 @@ import {
   x2ClosedExponentDisplayShapeFact,
   x2ClosedStructuralExponentMantissaShapeFact,
   x2ClosedStructuralExponentMantissaModel,
+  x2DecimalMantissaFirstDigitSpliceModel,
   x2ExponentMantissaSignChangedShapeFact,
   x2ExponentShapeFactFromMantissaFact,
   x2ExponentSignChangedShapeFact,
@@ -2591,6 +2592,34 @@ describe("ir passes on synthetic programs", () => {
       new Set<X2ShapeFact>(["mantissa:3:decimal"]),
       new Set<X2ShapeFact>(["mantissa:800:decimal"]),
     )).toBeUndefined();
+
+    const decimalSource = x2ShapeDataModelForFact("mantissa:-0.2:decimal");
+    const decimalTarget = x2ShapeDataModelForFact("mantissa:800:decimal");
+    const structuralZeroSource = x2ShapeDataModelForFact("hex:0A:mantissa");
+    const signedZeroSource = x2ShapeDataModelForFact("mantissa:-0:decimal");
+    const negativeTarget = x2ShapeDataModelForFact("mantissa:-800:decimal");
+    if (
+      decimalSource.kind !== "mantissa" ||
+      decimalTarget.kind !== "mantissa" ||
+      structuralZeroSource.kind !== "mantissa" ||
+      signedZeroSource.kind !== "mantissa" ||
+      negativeTarget.kind !== "mantissa"
+    ) {
+      throw new Error("expected mantissa models");
+    }
+    expect(x2DecimalMantissaFirstDigitSpliceModel(decimalSource, decimalTarget)).toMatchObject({
+      kind: "mantissa",
+      radix: "decimal",
+      canonical: "200",
+    });
+    expect(x2DecimalMantissaFirstDigitSpliceModel(structuralZeroSource, decimalTarget)).toMatchObject({
+      kind: "mantissa",
+      radix: "decimal",
+      canonical: "000",
+      normalizedDecimal: "0",
+    });
+    expect(x2DecimalMantissaFirstDigitSpliceModel(signedZeroSource, decimalTarget)).toBeUndefined();
+    expect(x2DecimalMantissaFirstDigitSpliceModel(decimalSource, negativeTarget)).toBeUndefined();
   });
 
   it("x2 value dataflow derives VP first-digit splice from decimal value facts", () => {
