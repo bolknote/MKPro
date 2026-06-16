@@ -304,6 +304,13 @@ describe("undocumented MK-61 hex mantissa arithmetic", () => {
     expect(runUnaryRegisterProgram("F", [IP1, 0x0c, 0x02, 0x0b, K_SIGN])).not.toBe("1,");
   });
 
+  it("K ЗН has a pinned zero result for super-number mantissas", () => {
+    expect(runUnaryRegisterProgram("FA", [IP1, K_SIGN])).toBe(",00000,,");
+    expect(runUnaryRegisterProgram("FB", [IP1, K_SIGN])).toBe(",00000,,");
+    expect(runUnaryRegisterProgram("FF", [IP1, K_SIGN])).toBe(",00000,,");
+    expect(runUnaryRegisterProgram("-FA", [IP1, K_SIGN])).toBe(",00000,,");
+  });
+
   it("only emulator-pinned A/B/C single hex digits are safe structural dot restores", () => {
     const restoreWithRecall = (literal: string): string => runUnaryRegisterProgram(literal, [IP1]);
     const restoreWithDot = (literal: string): string => runUnaryRegisterProgram(literal, [IP1, 0x42, 0x20, 0x0a]);

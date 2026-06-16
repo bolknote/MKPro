@@ -1709,8 +1709,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Structural `К ЗН` has a narrow emulator-pinned value model:
     canonical hex mantissas or closed structural exponent mantissas whose first
     significant nibble is `1..E` seed exact decimal `1`/`-1` facts plus the
-    matching decimal display shape, while `F`-leading forms and `super:*` shapes
-    remain opaque. Closed-context `/-/` on a proved shared structural X/X2
+    matching decimal display shape; `super:FA..FF` mantissas seed exact decimal
+    zero. Other `F`-leading structural forms remain opaque. Closed-context `/-/`
+    on a proved shared structural X/X2
     source is still shape-only, but it also emits a stable `expr-key:0B(...)`
     fact keyed by the canonical restored structural source. Exact decimal-only
     structural displays use a decimal source key and can materialize the signed

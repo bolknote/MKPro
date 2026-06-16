@@ -1194,7 +1194,8 @@ function structuralExactDisplayUnaryDecimalShapeFact(opcode: number, fact: X2Sha
 
 function structuralHexSignDecimalValue(fact: X2ShapeFact): string | undefined {
   const model = x2ShapeDataModelForFact(fact);
-  if (model.kind !== "mantissa" || model.radix !== "hex") return undefined;
+  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) return undefined;
+  if (model.radix === "super") return "0";
   for (const digit of model.digits) {
     const value = structuralHexNibbleValue(digit);
     if (value === undefined) return undefined;

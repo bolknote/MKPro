@@ -6105,6 +6105,16 @@ describe("ir passes on synthetic programs", () => {
       ],
       [
         [
+          recall("1", "preload const FA"),
+          plain(0x32, "К ЗН"),
+          halt(),
+        ],
+        2,
+        "decimal:0:normalized",
+        "expr-key:32(shape:super:FA)",
+      ],
+      [
+        [
           recall("1", "preload const 8F999999"),
           plain(0x3a, "К ИНВ"),
           halt(),
@@ -9646,8 +9656,13 @@ describe("ir passes on synthetic programs", () => {
       plain(0x32, "К ЗН"),
       halt(),
     ];
-    const unsafeSuperProgram: IrOp[] = [
+    const superProgram: IrOp[] = [
       recall("1", "preload const FA"),
+      plain(0x32, "К ЗН"),
+      halt(),
+    ];
+    const negativeSuperProgram: IrOp[] = [
+      recall("1", "preload const -FA"),
       plain(0x32, "К ЗН"),
       halt(),
     ];
@@ -9673,9 +9688,16 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(computeX2ValueStates(unsafeFProgram)[2]?.x) ?? [])
       .not.toContain("decimal:0:normalized");
     expect(x2ShapeStateText(computeX2ValueStates(unsafeFProgram)[2]?.xShape)).toEqual([]);
-    expect(x2ValueStateText(computeX2ValueStates(unsafeSuperProgram)[2]?.x) ?? [])
-      .not.toContain("decimal:0:normalized");
-    expect(x2ShapeStateText(computeX2ValueStates(unsafeSuperProgram)[2]?.xShape)).toEqual([]);
+    expect(x2ValueStateText(computeX2ValueStates(superProgram)[2]?.x) ?? [])
+      .toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(computeX2ValueStates(superProgram)[2]?.xShape))
+      .toEqual(["mantissa:0:decimal"]);
+    expect(x2ValueStateText(computeX2ValueStates(superProgram)[2]?.x) ?? [])
+      .not.toContain("expr-key:32(shape:super:FA)");
+    expect(x2ValueStateText(computeX2ValueStates(negativeSuperProgram)[2]?.x) ?? [])
+      .toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(computeX2ValueStates(negativeSuperProgram)[2]?.xShape))
+      .toEqual(["mantissa:0:decimal"]);
   });
 
   it("x2 value dataflow computes concrete unary arithmetic facts while preserving X2", () => {
