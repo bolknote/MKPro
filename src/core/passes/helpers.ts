@@ -4223,23 +4223,125 @@ export function planRecallRemovalWithStackScheduler(
   context: DirectReturnAnalysisContext,
   options: RecallRemovalStackSchedulerOptions = {},
 ): RecallRemovalStackSchedulerPlan | undefined {
+  const stackSchedulerStart = options.stackSchedulerStart ?? recallIndex;
+  const stackExposureEnd = options.stackExposureEnd ?? recallIndex;
+  const stackSchedulerState = options.stackSchedulerState ?? x2ValueState;
+  const canUseCache = (options.removedIndexes?.size ?? 0) === 0;
+  if (canUseCache) {
+    const cached = cachedRecallRemovalStackSchedulerPlan(
+      ops,
+      recallIndex,
+      x2RegisterState,
+      x2ValueState,
+      context,
+      stackSchedulerStart,
+      stackExposureEnd,
+      stackSchedulerState,
+    );
+    if (cached !== undefined) return cached.result;
+  }
   const analysis = analyzeRecallRemoval(ops, recallIndex, x2RegisterState, x2ValueState, context);
-  if (analysis === undefined) return undefined;
+  if (analysis === undefined) {
+    if (canUseCache) {
+      cacheRecallRemovalStackSchedulerPlan(
+        ops,
+        recallIndex,
+        x2RegisterState,
+        x2ValueState,
+        context,
+        stackSchedulerStart,
+        stackExposureEnd,
+        stackSchedulerState,
+        undefined,
+      );
+    }
+    return undefined;
+  }
   const stackLift = planX2ReplacementStackLift(
     ops,
-    options.stackSchedulerStart ?? recallIndex,
-    options.stackExposureEnd ?? recallIndex,
-    options.stackSchedulerState ?? x2ValueState,
+    stackSchedulerStart,
+    stackExposureEnd,
+    stackSchedulerState,
     context,
     analysis.exposesStackLift === true && analysis.exposesX2Restore !== true,
     { invalidatedProducerIndexes: options.removedIndexes },
   );
-  return {
+  const result = {
     analysis,
     stackLiftProducerIndex: stackLift.stackLiftProducerIndex,
     stackLiftAlreadySupplied: stackLift.stackLiftAlreadySupplied,
     removable: analysis.removable || stackLift.stackLiftAlreadySupplied,
   };
+  if (canUseCache) {
+    cacheRecallRemovalStackSchedulerPlan(
+      ops,
+      recallIndex,
+      x2RegisterState,
+      x2ValueState,
+      context,
+      stackSchedulerStart,
+      stackExposureEnd,
+      stackSchedulerState,
+      result,
+    );
+  }
+  return result;
+}
+
+function cachedRecallRemovalStackSchedulerPlan(
+  ops: readonly IrOp[],
+  recallIndex: number,
+  x2RegisterState: RegisterValueSet | undefined,
+  x2ValueState: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+  stackSchedulerStart: number,
+  stackExposureEnd: number,
+  stackSchedulerState: X2ValueDataflowState | undefined,
+): RecallRemovalStackSchedulerCacheEntry | undefined {
+  for (const entry of recallRemovalStackSchedulerPlanCache.get(ops)?.get(recallIndex) ?? []) {
+    if (
+      entry.x2RegisterState === x2RegisterState &&
+      entry.x2ValueState === x2ValueState &&
+      entry.context === context &&
+      entry.stackSchedulerStart === stackSchedulerStart &&
+      entry.stackExposureEnd === stackExposureEnd &&
+      entry.stackSchedulerState === stackSchedulerState
+    ) return entry;
+  }
+  return undefined;
+}
+
+function cacheRecallRemovalStackSchedulerPlan(
+  ops: readonly IrOp[],
+  recallIndex: number,
+  x2RegisterState: RegisterValueSet | undefined,
+  x2ValueState: X2ValueDataflowState | undefined,
+  context: DirectReturnAnalysisContext,
+  stackSchedulerStart: number,
+  stackExposureEnd: number,
+  stackSchedulerState: X2ValueDataflowState | undefined,
+  result: RecallRemovalStackSchedulerPlan | undefined,
+): void {
+  let byIndex = recallRemovalStackSchedulerPlanCache.get(ops);
+  if (byIndex === undefined) {
+    byIndex = new Map();
+    recallRemovalStackSchedulerPlanCache.set(ops, byIndex);
+  }
+  const entry: RecallRemovalStackSchedulerCacheEntry = {
+    x2RegisterState,
+    x2ValueState,
+    context,
+    stackSchedulerStart,
+    stackExposureEnd,
+    stackSchedulerState,
+    result,
+  };
+  const entries = byIndex.get(recallIndex);
+  if (entries === undefined) {
+    byIndex.set(recallIndex, [entry]);
+  } else {
+    entries.push(entry);
+  }
 }
 
 export function x2KnownReturnCallReachesStackLiftAndX2Sync(
@@ -4761,12 +4863,26 @@ const x2RestoreBoundaryStatesCache = new WeakMap<readonly IrOp[], boolean[]>();
 const x2DotRestoreGapStatesCache = new WeakMap<readonly IrOp[], boolean[]>();
 const x2ImmediateSyncStatesCache = new WeakMap<readonly IrOp[], boolean[]>();
 const recallRemovalAnalysisCache = new WeakMap<readonly IrOp[], Map<number, RecallRemovalCacheEntry[]>>();
+const recallRemovalStackSchedulerPlanCache = new WeakMap<
+  readonly IrOp[],
+  Map<number, RecallRemovalStackSchedulerCacheEntry[]>
+>();
 
 interface RecallRemovalCacheEntry {
   readonly x2RegisterState: RegisterValueSet | undefined;
   readonly x2ValueState: X2ValueDataflowState | undefined;
   readonly context: DirectReturnAnalysisContext | undefined;
   readonly result: RecallRemovalAnalysis | undefined;
+}
+
+interface RecallRemovalStackSchedulerCacheEntry {
+  readonly x2RegisterState: RegisterValueSet | undefined;
+  readonly x2ValueState: X2ValueDataflowState | undefined;
+  readonly context: DirectReturnAnalysisContext;
+  readonly stackSchedulerStart: number;
+  readonly stackExposureEnd: number;
+  readonly stackSchedulerState: X2ValueDataflowState | undefined;
+  readonly result: RecallRemovalStackSchedulerPlan | undefined;
 }
 
 export function computeX2RegisterStates(ops: readonly IrOp[]): Array<RegisterValueSet | undefined> {

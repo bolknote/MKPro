@@ -70,14 +70,22 @@ const run: IrPassFn = (ops) =>
           continue;
         }
         const recallRegister = removableRecallValueRegister(op);
-        const removalPlan = engine.plan(i);
         if (
           recallRegister !== undefined &&
-          (xHolds === recallRegister || (canTrustValueX && removalPlan?.analysis.valueProof?.inX === true)) &&
-          removalPlan?.removable === true
+          (
+            xHolds === recallRegister ||
+            canTrustValueX
+          )
         ) {
-          engine.removed.add(i);
-          continue;
+          const directInX = xHolds === recallRegister;
+          const removalPlan = engine.plan(i, { requireValueProof: !directInX });
+          if (
+            (directInX || removalPlan?.analysis.valueProof?.inX === true) &&
+            removalPlan?.removable === true
+          ) {
+            engine.removed.add(i);
+            continue;
+          }
         }
         if (recallRegister !== undefined) {
           xHolds = recallRegister;

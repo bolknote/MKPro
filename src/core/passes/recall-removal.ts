@@ -26,6 +26,8 @@ export interface RecallRemovalPlanOverrides {
   readonly x2RegisterState?: ReadonlySet<RegisterName> | undefined;
   /** Replace the indexed X2 value state, e.g. with a branch-edge projection. */
   readonly x2ValueState?: X2ValueDataflowState | undefined;
+  /** Force the rich X2 value proof when the caller needs `analysis.valueProof`. */
+  readonly requireValueProof?: boolean | undefined;
   readonly stackSchedulerStart?: number;
   readonly stackExposureEnd?: number;
   readonly stackSchedulerState?: X2ValueDataflowState | undefined;
@@ -99,25 +101,41 @@ function createEngine(ops: readonly IrOp[]): RecallRemovalEngine {
     x2RegisterState,
     x2ValueState,
     directReturnContext,
-    plan: (recallIndex, overrides = {}) =>
-      planRecallRemovalWithStackScheduler(
+    plan: (recallIndex, overrides = {}) => {
+      const context = directReturnContext();
+      const planOptions = {
+        removedIndexes: removed,
+        ...(overrides.stackSchedulerStart !== undefined
+          ? { stackSchedulerStart: overrides.stackSchedulerStart }
+          : {}),
+        ...(overrides.stackExposureEnd !== undefined
+          ? { stackExposureEnd: overrides.stackExposureEnd }
+          : {}),
+        ...(overrides.stackSchedulerState !== undefined
+          ? { stackSchedulerState: overrides.stackSchedulerState }
+          : {}),
+      };
+      const hasStateOverride = "x2RegisterState" in overrides || "x2ValueState" in overrides ||
+        "stackSchedulerState" in overrides;
+      if (!hasStateOverride && overrides.requireValueProof !== true) {
+        const cheap = planRecallRemovalWithStackScheduler(
+          ops,
+          recallIndex,
+          undefined,
+          undefined,
+          context,
+          planOptions,
+        );
+        if (cheap?.removable === true) return cheap;
+      }
+      return planRecallRemovalWithStackScheduler(
         ops,
         recallIndex,
         "x2RegisterState" in overrides ? overrides.x2RegisterState : x2RegisterState(recallIndex),
         "x2ValueState" in overrides ? overrides.x2ValueState : x2ValueState(recallIndex),
-        directReturnContext(),
-        {
-          removedIndexes: removed,
-          ...(overrides.stackSchedulerStart !== undefined
-            ? { stackSchedulerStart: overrides.stackSchedulerStart }
-            : {}),
-          ...(overrides.stackExposureEnd !== undefined
-            ? { stackExposureEnd: overrides.stackExposureEnd }
-            : {}),
-          ...(overrides.stackSchedulerState !== undefined
-            ? { stackSchedulerState: overrides.stackSchedulerState }
-            : {}),
-        },
-      ),
+        context,
+        planOptions,
+      );
+    },
   };
 }

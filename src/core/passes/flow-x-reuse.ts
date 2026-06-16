@@ -37,10 +37,11 @@ const run: IrPassFn = (ops) =>
         const recallRegister = removableRecallValueRegister(op);
         if (recallRegister === undefined) continue;
         if (!numericTargets.canDeleteAt(index)) continue;
-        const removalPlan = engine.plan(index);
+        const cfgAlreadyInX = inStates[index]?.has(recallRegister) === true;
+        const removalPlan = engine.plan(index, { requireValueProof: !cfgAlreadyInX });
         if (removalPlan?.removable !== true) continue;
         const alreadyInX =
-          inStates[index]?.has(recallRegister) === true ||
+          cfgAlreadyInX ||
           removalPlan.analysis.valueProof?.inX === true;
         if (alreadyInX) engine.removed.add(index);
       }

@@ -20,7 +20,7 @@ const run: IrPassFn = (ops) =>
         const storedRegister = storedCurrentXValueRegister(current);
         const recalledRegister = next === undefined ? undefined : removableRecallValueRegister(next);
         if (storedRegister === undefined || recalledRegister === undefined) continue;
-        const removalPlan = engine.plan(i + 1);
+        const removalPlan = engine.plan(i + 1, { requireValueProof: storedRegister !== recalledRegister });
         if (
           (storedRegister === recalledRegister || removalPlan?.analysis.valueProof?.inX === true) &&
           removalPlan?.removable === true

@@ -693,10 +693,42 @@ export function compileMKPro(
   source: string,
   options: Partial<CompileOptions> = {},
 ): CompileResult {
+  const attemptCache = new Map<string, CompileAttemptCacheEntry>();
+  const onceCache = new Map<string, CompileAttemptCacheEntry>();
+  const cachedCompileLoweringAttempt = (loweringOptions: LoweringOptions): CompileResult => {
+    const key = loweringOptionsCacheKey(loweringOptions);
+    const cached = attemptCache.get(key);
+    if (cached !== undefined) return compileAttemptCacheResult(cached);
+    try {
+      const result = compileLoweringAttempt(source, options, loweringOptions);
+      attemptCache.set(key, { ok: true, result });
+      return result;
+    } catch (error) {
+      attemptCache.set(key, { ok: false, error });
+      throw error;
+    }
+  };
+  const cachedCompileMKProOnce = (
+    probeOptions: Partial<CompileOptions>,
+    loweringOptions: LoweringOptions,
+  ): CompileResult => {
+    const key = `${stableCompileCacheKey(probeOptions)}|${loweringOptionsCacheKey(loweringOptions)}`;
+    const cached = onceCache.get(key);
+    if (cached !== undefined) return compileAttemptCacheResult(cached);
+    try {
+      const result = compileMKProOnce(source, probeOptions, loweringOptions);
+      onceCache.set(key, { ok: true, result });
+      return result;
+    } catch (error) {
+      onceCache.set(key, { ok: false, error });
+      throw error;
+    }
+  };
+
   let primary: CompileResult | undefined;
   let primaryError: unknown;
   try {
-    primary = compileLoweringAttempt(source, options, {});
+    primary = cachedCompileLoweringAttempt({});
   } catch (error) {
     if (!canRetryLoweringAfterPrimaryFailure(error)) throw error;
     primaryError = error;
@@ -704,7 +736,7 @@ export function compileMKPro(
   const candidates: Array<{ result: CompileResult; name: string; detail: string }> = [];
   const tryCandidate = (loweringOptions: LoweringOptions, name: string, detail: string): void => {
     try {
-      candidates.push({ result: compileLoweringAttempt(source, options, loweringOptions), name, detail });
+      candidates.push({ result: cachedCompileLoweringAttempt(loweringOptions), name, detail });
     } catch {
       // Optional lowering variants are speculative; keep the current best result.
     }
@@ -730,7 +762,7 @@ export function compileMKPro(
   };
   for (const spec of enumerateStaticCandidateSpecs({ source, primaryOverflows })) runSpec(spec);
 
-  reclaimCoalescedPreloadCandidates(source, options, needsSizeRescue, tryCandidate);
+  reclaimCoalescedPreloadCandidates(source, options, needsSizeRescue, tryCandidate, cachedCompileMKProOnce);
 
   const OFFICIAL_PROGRAM_LIMIT = 105;
   const selectBest = (): { best: CompileResult | undefined; selected: (typeof candidates)[number] | undefined } => {
@@ -757,7 +789,7 @@ export function compileMKPro(
   // bundle x layout matrix, and min-size selection means it can only shrink them.
   if ((selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT) {
     for (const spec of enumerateExpansionCandidateSpecs({ source, primaryOverflows })) runSpec(spec);
-    demoteConstantIndirectFlowCandidates(source, options, needsSizeRescue, tryCandidate);
+    demoteConstantIndirectFlowCandidates(source, options, needsSizeRescue, tryCandidate, cachedCompileMKProOnce);
   }
 
   const { best, selected } = selectBest();
@@ -778,6 +810,45 @@ export function compileMKPro(
     return finishCompileAttempt(selected.result, options.analysis === true);
   }
   return finishCompileAttempt(best, options.analysis === true);
+}
+
+type CompileAttemptCacheEntry =
+  | { readonly ok: true; readonly result: CompileResult }
+  | { readonly ok: false; readonly error: unknown };
+
+function compileAttemptCacheResult(entry: CompileAttemptCacheEntry): CompileResult {
+  if (entry.ok) return entry.result;
+  throw entry.error;
+}
+
+function loweringOptionsCacheKey(options: LoweringOptions): string {
+  return stableCompileCacheKey(options);
+}
+
+function stableCompileCacheKey(value: unknown): string {
+  return JSON.stringify(stableCompileCacheValue(value));
+}
+
+function stableCompileCacheValue(value: unknown): unknown {
+  if (value instanceof Set) {
+    return {
+      $set: [...value].map(stableCompileCacheValue).sort(stableCompileCacheValueCompare),
+    };
+  }
+  if (Array.isArray(value)) return value.map(stableCompileCacheValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => [key, stableCompileCacheValue(item)]),
+    );
+  }
+  return value;
+}
+
+function stableCompileCacheValueCompare(left: unknown, right: unknown): number {
+  return JSON.stringify(left).localeCompare(JSON.stringify(right));
 }
 
 // Candidate composition engine (docs §5a).
@@ -801,6 +872,10 @@ interface CandidateSpec {
 }
 
 type TryCandidateFn = (loweringOptions: LoweringOptions, name: string, detail: string) => void;
+type CompileOnceFn = (
+  options: Partial<CompileOptions>,
+  loweringOptions: LoweringOptions,
+) => CompileResult;
 
 interface CandidateEnumerationContext {
   readonly source: string;
@@ -1204,6 +1279,7 @@ function reclaimCoalescedPreloadCandidates(
   options: Partial<CompileOptions>,
   needsSizeRescue: boolean,
   tryCandidate: TryCandidateFn,
+  compileOnce: CompileOnceFn = (compileOptions, loweringOptions) => compileMKProOnce(source, compileOptions, loweringOptions),
 ): void {
   const reclaimBases: LoweringOptions[] = [
     {},
@@ -1222,7 +1298,7 @@ function reclaimCoalescedPreloadCandidates(
   for (const base of reclaimBases) {
     let probe: CompileResult;
     try {
-      probe = compileMKProOnce(source, { ...options, analysis: true }, { ...base, collectCoalesceShares: true });
+      probe = compileOnce({ ...options, analysis: true }, { ...base, collectCoalesceShares: true });
     } catch {
       continue;
     }
@@ -1256,6 +1332,7 @@ function demoteConstantIndirectFlowCandidates(
   options: Partial<CompileOptions>,
   needsSizeRescue: boolean,
   tryCandidate: TryCandidateFn,
+  compileOnce: CompileOnceFn = (compileOptions, loweringOptions) => compileMKProOnce(source, compileOptions, loweringOptions),
 ): void {
   const demoteBases: LoweringOptions[] = [
     {},
@@ -1292,7 +1369,7 @@ function demoteConstantIndirectFlowCandidates(
   for (const base of demoteBases) {
     let probe: CompileResult;
     try {
-      probe = compileMKProOnce(source, { ...options, analysis: true }, base);
+      probe = compileOnce({ ...options, analysis: true }, base);
     } catch {
       continue;
     }
@@ -1311,7 +1388,7 @@ function demoteConstantIndirectFlowCandidates(
     for (let depth = 0; depth < 6; depth += 1) {
       let chainProbe: CompileResult;
       try {
-        chainProbe = compileMKProOnce(source, { ...options, analysis: true }, {
+        chainProbe = compileOnce({ ...options, analysis: true }, {
           ...base,
           suppressConstantPreloads: new Set(suppressed),
         });
