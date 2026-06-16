@@ -1282,6 +1282,15 @@ interface BranchToStopTailSelectorRewrite {
   sourceLine?: number;
 }
 
+interface ExistingSelectorFlowRewrite {
+  branchIndex: number;
+  addressIndex: number;
+  opcode: number;
+  mnemonic: string;
+  comment: string;
+  sourceLine?: number;
+}
+
 function indirectJumpMachineOp(register: RegisterName, comment: string, sourceLine?: number): MachineItem {
   return {
     kind: "op",
@@ -1297,6 +1306,8 @@ function indirectBranchOpcodeForRegister(opcode: number, register: RegisterName)
   switch (opcode) {
     case 0x51:
       return 0x80 + offset;
+    case 0x53:
+      return 0xa0 + offset;
     case 0x57:
       return 0x70 + offset;
     case 0x59:
@@ -1319,6 +1330,8 @@ function indirectBranchMnemonic(opcode: number, register: RegisterName): string 
       return `К БП ${register}`;
     case 0x90:
       return `К x≥0 ${register}`;
+    case 0xa0:
+      return `К ПП ${register}`;
     case 0xc0:
       return `К x<0 ${register}`;
     case 0xe0:
@@ -1326,6 +1339,79 @@ function indirectBranchMnemonic(opcode: number, register: RegisterName): string 
     default:
       return `К БП ${register}`;
   }
+}
+
+function existingSelectorFlowTargets(
+  preloads: readonly PreloadReport[],
+): Array<{ register: RegisterName; value: string; target: number }> {
+  const targets: Array<{ register: RegisterName; value: string; target: number }> = [];
+  for (const preload of preloads) {
+    const register = preload.register as RegisterName;
+    const target = evaluateIndirectAddress(register, preload.value, "flow")?.actualFlowTarget;
+    if (target === undefined) continue;
+    targets.push({ register, value: preload.value, target });
+  }
+  return targets;
+}
+
+function findExistingSelectorFlowRewrite(
+  items: readonly MachineItem[],
+  preloads: readonly PreloadReport[],
+): ExistingSelectorFlowRewrite | undefined {
+  const selectors = existingSelectorFlowTargets(preloads);
+  if (selectors.length === 0) return undefined;
+  const cells = machineCells(items);
+  const labels = machineLabelAddresses(items);
+  const labelsByAddress = machineLabelsByAddress(items);
+  const referencedLabels = referencedMachineLabels(items);
+
+  for (let index = 0; index < cells.length - 1; index += 1) {
+    const branch = cells[index]!;
+    const address = cells[index + 1]!;
+    if (branch.item.kind !== "op" || address.item.kind !== "address") continue;
+    const target = resolvedMachineTarget(address.item.target, labels);
+    if (target === undefined) continue;
+    for (const selector of selectors) {
+      if (selector.target !== target) continue;
+      const opcode = indirectBranchOpcodeForRegister(branch.item.opcode, selector.register);
+      if (opcode === undefined) continue;
+      if (addressHasReferencedLabel(labelsByAddress, referencedLabels, address.address)) continue;
+      return {
+        branchIndex: branch.itemIndex,
+        addressIndex: address.itemIndex,
+        opcode,
+        mnemonic: indirectBranchMnemonic(opcode, selector.register),
+        comment: [
+          branch.item.comment,
+          `reused preloaded R${selector.register}=${selector.value} indirect-target=${target} direct flow`,
+        ].filter(Boolean).join("; "),
+        ...(branch.item.sourceLine === undefined ? {} : { sourceLine: branch.item.sourceLine }),
+      };
+    }
+  }
+  return undefined;
+}
+
+function applyExistingSelectorFlowRewrite(
+  items: readonly MachineItem[],
+  rewrite: ExistingSelectorFlowRewrite,
+): MachineItem[] {
+  const result: MachineItem[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    if (index === rewrite.addressIndex) continue;
+    if (index === rewrite.branchIndex) {
+      result.push({
+        kind: "op",
+        opcode: rewrite.opcode,
+        mnemonic: rewrite.mnemonic,
+        comment: rewrite.comment,
+        ...(rewrite.sourceLine === undefined ? {} : { sourceLine: rewrite.sourceLine }),
+      });
+      continue;
+    }
+    result.push(items[index]!);
+  }
+  return result;
 }
 
 function stopTailReuseBases(
@@ -1582,9 +1668,22 @@ export function optimizePostLayoutStopTailReuse(
 ): PostLayoutIndirectFlowResult {
   let current: MachineItem[] = [...items];
   let currentPreloads: PreloadReport[] = [...preloads];
-  let applied = 0;
+  let stopTailApplied = 0;
+  let existingSelectorApplied = 0;
 
   for (let round = 0; round < MAX_REWRITES; round += 1) {
+    const existingSelectorRewrite = findExistingSelectorFlowRewrite(current, currentPreloads);
+    if (existingSelectorRewrite !== undefined) {
+      const candidate = applyExistingSelectorFlowRewrite(current, existingSelectorRewrite);
+      if (cellCount(candidate) >= cellCount(current)) break;
+      const retargeted = retargetSelectorPreloadsAfterMachineDeletion(current, candidate, currentPreloads);
+      if (retargeted === undefined) break;
+      current = retargeted.items;
+      currentPreloads = retargeted.preloads;
+      existingSelectorApplied += 1;
+      continue;
+    }
+
     const branchRewrite = findBranchToStopTailSelectorRewrite(current, currentPreloads);
     if (branchRewrite !== undefined) {
       const candidate = applyBranchToStopTailSelectorRewrite(current, branchRewrite);
@@ -1593,7 +1692,7 @@ export function optimizePostLayoutStopTailReuse(
       if (retargeted === undefined) break;
       current = retargeted.items;
       currentPreloads = retargeted.preloads;
-      applied += 1;
+      stopTailApplied += 1;
       continue;
     }
 
@@ -1605,19 +1704,30 @@ export function optimizePostLayoutStopTailReuse(
     if (retargeted === undefined) break;
     current = retargeted.items;
     currentPreloads = retargeted.preloads;
-    applied += 1;
+    stopTailApplied += 1;
   }
 
+  const applied = stopTailApplied + existingSelectorApplied;
   if (applied === 0) {
     return { items: [...items], preloads: [...preloads], optimizations: [], applied: 0 };
+  }
+  const optimizations: AppliedOptimization[] = [];
+  if (stopTailApplied > 0) {
+    optimizations.push({
+      name: "post-layout-stop-tail-reuse",
+      detail: `Replaced ${stopTailApplied} repeated stop tail${stopTailApplied === 1 ? "" : "s"} with proven preloaded indirect jumps to an existing stop tail.`,
+    });
+  }
+  if (existingSelectorApplied > 0) {
+    optimizations.push({
+      name: "post-layout-existing-selector-flow",
+      detail: `Replaced ${existingSelectorApplied} direct branch/call${existingSelectorApplied === 1 ? "" : "s"} with already-proven preloaded selector flow after retargeting shifted selectors.`,
+    });
   }
   return {
     items: current,
     preloads: currentPreloads,
-    optimizations: [{
-      name: "post-layout-stop-tail-reuse",
-      detail: `Replaced ${applied} repeated stop tail${applied === 1 ? "" : "s"} with proven preloaded indirect jumps to an existing stop tail.`,
-    }],
+    optimizations,
     applied,
   };
 }

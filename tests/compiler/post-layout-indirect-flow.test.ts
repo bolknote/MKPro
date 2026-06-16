@@ -209,6 +209,28 @@ describe("post-layout indirect flow", () => {
     expect(result.items.find((item) => item.kind === "op" && item.opcode === 0x78)).toBeDefined();
   });
 
+  it("reuses existing selector preloads for ordinary direct flow and retargets shifts", () => {
+    const program: MachineItem[] = [
+      { kind: "label", name: "main" },
+      digit(),
+      ...jump("target"),
+      digit(),
+      { kind: "label", name: "target" },
+      halt(),
+    ];
+    const result = optimizePostLayoutStopTailReuse(program, [
+      { register: "8", value: "B6", countsAgainstProgram: false },
+    ]);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items.some((item) => item.kind === "address" && item.target === "target")).toBe(false);
+    expect(result.items.find((item) => item.kind === "op" && item.opcode === 0x88)).toBeDefined();
+    expect(result.preloads).toEqual([{ register: "8", value: "B5", countsAgainstProgram: false }]);
+    expect(evaluateIndirectAddress("8", "B5", "flow")?.actualFlowTarget).toBe(3);
+    expect(result.optimizations.some((item) => item.name === "post-layout-existing-selector-flow")).toBe(true);
+  });
+
   it("rewrites fractional R0 flow when replacing the branch puts its label target at address 99", () => {
     const program: MachineItem[] = [
       op(0x00, "0"),
