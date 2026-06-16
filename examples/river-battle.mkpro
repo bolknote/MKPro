@@ -1,0 +1,78 @@
+// "River Battle": a one-row shooting game for the MK-61.
+//
+// The river is the digit row 0..9. The calculator hides five distinct occupied
+// river cells during setup. Before each player shot the display shows shells
+// left followed by the previous report: 0 = miss, 1 = hit.
+// After resolving the player shot, the calculator shows its return shot. The
+// human enters 1 if that shot hit their own boat line, or 0 for a miss.
+// Terminal displays: 9 = player won, -7 = player lost.
+
+program RiverBattle {
+  river: board(0..9, 1..1)
+
+  state {
+    shot: coord(river) = 0
+    response: counter 0..1 = 0
+
+    fleet: coord_list(river, 5) = random_unique()
+
+    shells: counter 0..7 = 7
+    left: counter 0..5 = 5
+    own_left: counter 0..5 = 5
+    report: counter 0..1 = 0
+  }
+
+  fn won() {
+    halt(9)
+  }
+
+  fn lost() {
+    halt(-7)
+  }
+
+  loop {
+    show(shells, report)
+    shot = read()
+    shells--
+    if shells <= 0 {
+      lost()
+    }
+    resolve_shot()
+  }
+
+  fn resolve_shot() {
+    if shot in fleet {
+      fleet -= shot
+      left--
+
+      if left <= 0 {
+        won()
+      }
+      else {
+        report = 1
+      }
+    }
+    else {
+      report = 0
+    }
+
+    if shells <= 0 {
+      lost()
+    }
+
+    calculator_turn()
+  }
+
+  fn calculator_turn() {
+    shot = random(river)
+    show(shot)
+    response = read()
+
+    if response > 0 {
+      own_left--
+      if own_left <= 0 {
+        lost()
+      }
+    }
+  }
+}

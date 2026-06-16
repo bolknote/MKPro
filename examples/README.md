@@ -8,7 +8,7 @@ Generated with `npm run examples:size`.
 
 ## Snapshot
 
-- Top-level examples: 26/26 fit in the 105-cell MK-61 window; 26/26 pass the headless load check.
+- Top-level examples: 27/27 fit in the 105-cell MK-61 window; 27/27 pass the headless load check.
 - Referenced top-level examples: 20/20 are no larger than the original MK-61 listing.
 - Tightest runnable examples: `fox-hunt-100.mkpro` (105), `labyrinth777.mkpro` (105), `rambo-iii.mkpro` (104).
 - Pending optimizer: 4 programs still exceed the MK-61 window; nearest is `pending-optimizer/giants-country.mkpro` (116).
@@ -39,6 +39,7 @@ Generated with `npm run examples:size`.
 | `minesweeper-9x9.mkpro` | 85 | 97 | -12 | ok: <= reference | main+setup load ok |
 | `raja-yoga.mkpro` | 87 | 98 | -11 | ok: <= reference | main+setup load ok |
 | `rambo-iii.mkpro` | 104 | 105 | -1 | ok: <= reference | load ok |
+| `river-battle.mkpro` | 95 | - | - | ok: no reference | main+setup load ok |
 | `sea-battle.mkpro` | 74 | 102 | -28 | ok: <= reference | main+setup load ok |
 | `teleport.mkpro` | 97 | 105 | -8 | ok: <= reference | main+setup load ok |
 | `tic-tac-toe.mkpro` | 100 | - | - | ok: no reference | load ok |
