@@ -6,9 +6,10 @@ import {
   emptyResult,
   hasRewriteBarrier,
   isDisplayFocusSensitive,
-  x2PlanVpSpliceAt,
+  x2PlanVpSpliceCandidatesAt,
   type IrPass,
   type IrPassFn,
+  type X2VpSpliceCandidateStage,
 } from "./helpers.ts";
 
 function isDecimalDigit(op: IrOp): boolean {
@@ -23,6 +24,65 @@ function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
   return analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse;
 }
 
+interface VpSpliceCandidateSelection {
+  readonly startIndex: number;
+  readonly stage: X2VpSpliceCandidateStage;
+  readonly removableIndexes: readonly number[];
+}
+
+const stageOrder: readonly X2VpSpliceCandidateStage[] = [
+  "duplicate-vp",
+  "proved-vp",
+  "exponent-boundary",
+  "hard-overwrite-terminal",
+  "sign-pair-before-fresh-digit",
+  "fresh-digit-terminal",
+  "closed-sign-pair",
+];
+
+function stageRank(stage: X2VpSpliceCandidateStage): number {
+  const rank = stageOrder.indexOf(stage);
+  return rank < 0 ? stageOrder.length : rank;
+}
+
+function firstRemovableIndex(removableIndexes: readonly number[]): number {
+  return Math.min(...removableIndexes);
+}
+
+function lastRemovableIndex(removableIndexes: readonly number[]): number {
+  return Math.max(...removableIndexes);
+}
+
+function compareCandidates(left: VpSpliceCandidateSelection, right: VpSpliceCandidateSelection): number {
+  const firstDiff = firstRemovableIndex(left.removableIndexes) - firstRemovableIndex(right.removableIndexes);
+  if (firstDiff !== 0) return firstDiff;
+
+  const lastDiff = lastRemovableIndex(right.removableIndexes) - lastRemovableIndex(left.removableIndexes);
+  if (lastDiff !== 0) return lastDiff;
+
+  const lengthDiff = right.removableIndexes.length - left.removableIndexes.length;
+  if (lengthDiff !== 0) return lengthDiff;
+
+  const stageDiff = stageRank(left.stage) - stageRank(right.stage);
+  if (stageDiff !== 0) return stageDiff;
+
+  return left.startIndex - right.startIndex;
+}
+
+function canApplyCandidate(removableIndexes: readonly number[], remove: ReadonlySet<number>): boolean {
+  return removableIndexes.length > 0 && removableIndexes.every((index) => !remove.has(index));
+}
+
+function stageCountsDetail(stageCounts: ReadonlyMap<X2VpSpliceCandidateStage, number>): string {
+  const parts = stageOrder
+    .map((stage) => {
+      const count = stageCounts.get(stage);
+      return count === undefined ? undefined : `${stage}=${count}`;
+    })
+    .filter((part): part is string => part !== undefined);
+  return parts.length === 0 ? "" : ` Stages: ${parts.join(", ")}.`;
+}
+
 // These rewrites are proven behaviorally equivalent on the MK-61 emulator:
 //   ВП ВП  ≡ ВП   only when the first ВП is entered from an active number-entry
 //       context; a closed-context X2 ВП restore can make the second ВП observable.
@@ -34,20 +94,36 @@ function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
 //      (after an exponent digit the empty op is only a separator before a
 //       non-digit command; before the first digit, or before another digit, it
 //       changes number-entry shape and must stay)
-// Each collapse drops one or two cells without changing any observable result.
+// Each collapse drops one or more cells without changing any observable result.
 const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
+  const stageCounts = new Map<X2VpSpliceCandidateStage, number>();
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const context = directReturnAnalysisContext(ops);
+  const candidates: VpSpliceCandidateSelection[] = [];
   for (let i = 1; i < ops.length; i += 1) {
-    if (remove.has(i - 1)) continue;
-    const plan = x2PlanVpSpliceAt(ops, i, x2ValueStates, context, {
+    const planned = x2PlanVpSpliceCandidatesAt(ops, i, x2ValueStates, context, {
       isDecimalDigit,
       isHardX2OverwriteWithoutStackUse,
     });
-    if (plan.removableIndexes.length > 0) {
-      for (const index of plan.removableIndexes) remove.add(index);
-      continue;
+    for (const candidate of planned) {
+      if (candidate.splice.removableIndexes.length === 0) continue;
+      candidates.push({
+        startIndex: i,
+        stage: candidate.stage,
+        removableIndexes: candidate.splice.removableIndexes,
+      });
+    }
+  }
+
+  candidates.sort(compareCandidates);
+  for (const candidate of candidates) {
+    if (canApplyCandidate(candidate.removableIndexes, remove)) {
+      for (const index of candidate.removableIndexes) remove.add(index);
+      stageCounts.set(
+        candidate.stage,
+        (stageCounts.get(candidate.stage) ?? 0) + candidate.removableIndexes.length,
+      );
     }
   }
   if (remove.size === 0) return emptyResult(ops);
@@ -57,7 +133,7 @@ const run: IrPassFn = (ops) => {
     optimizations: [
       {
         name: "vp-exponent-splice",
-        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (active-entry ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ and empty restore runs before proved ВП/fresh digit -> empty, closed value /-/ /-/ -> empty).`,
+        detail: `Collapsed ${remove.size} redundant ВП/empty/sign cell(s) around an X2 boundary (active-entry ВП ВП -> ВП, КНОП/К1/К2 ВП -> ВП, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ and empty restore runs before proved ВП/fresh digit -> empty, closed value /-/ /-/ -> empty).${stageCountsDetail(stageCounts)}`,
       },
     ],
   };

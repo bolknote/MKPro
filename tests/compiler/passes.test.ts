@@ -27755,6 +27755,31 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-splice applies ordered candidate stages independently", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = vpSplice.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+    expect(result.optimizations[0]?.detail).toContain("Stages: duplicate-vp=1, hard-overwrite-terminal=1.");
+  });
+
   it("vp-splice keeps adjacent ВП after closed-context X2 restore", () => {
     const program: IrOp[] = [
       plain(0x0d, "Cx"),

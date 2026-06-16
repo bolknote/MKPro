@@ -1362,6 +1362,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `x2PlanVpSpliceCandidatesAt` builds an ordered candidate list for the same
     priority sequence and carries each lower-level proof plan with its staged
     candidate; `x2PlanVpSpliceAt` simply returns the first removable candidate.
+    The `vp-splice` pass consumes that ordered list directly, collects all
+    removable candidates for the current program, prefers the widest candidate
+    when multiple proofs start at the same removable cell, applies only
+    candidates whose cells were not already claimed by an earlier selected
+    rewrite, and reports per-stage cell counts in the optimization detail.
+    This keeps overlapping VP/X2 proofs deterministic while making newly added
+    shape-algebra candidates visible without adding a second local priority
+    ladder.
     Adjacent `ВП`/empty-boundary decisions are planned through
     `x2PlanAdjacentVpBoundaryAt`, which covers duplicate `ВП`, exponent
     separator runs, and `empty + /-/` sign-entry boundaries from the shared
