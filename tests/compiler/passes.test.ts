@@ -12013,24 +12013,11 @@ describe("ir passes on synthetic programs", () => {
         source: {
           replacementDotHasOnlyRestoreGapBeforeVp: true,
           canDiscardShapeSignPairBeforeProvedVp: true,
+          sourceMatch: {
+            reason: "active-mantissa-source",
+          },
         },
       },
-    });
-
-    const closedPair: IrOp[] = [
-      plain(0x02, "2"),
-      plain(0xf0, "F0"),
-      plain(0x0b, "/-/"),
-      plain(0x0b, "/-/"),
-      halt(),
-    ];
-    expect(planAt(closedPair, 3, {
-      includeExponentSignPair: false,
-      includeOpenMantissaBeforeProvedVp: false,
-    })).toMatchObject({
-      removableIndexes: [2, 3],
-      reason: "closed-context-sign-pair",
-      sourcePlan: undefined,
     });
 
     const closedPairBeforeVp: IrOp[] = [
@@ -12052,8 +12039,27 @@ describe("ir passes on synthetic programs", () => {
         source: {
           replacementDotHasOnlyRestoreGapBeforeVp: true,
           canDiscardRestoreRunBeforeProvedVp: true,
+          sourceMatch: {
+            reason: "entry-source",
+          },
         },
       },
+    });
+
+    const closedPair: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    expect(planAt(closedPair, 3, {
+      includeExponentSignPair: false,
+      includeOpenMantissaBeforeProvedVp: false,
+    })).toMatchObject({
+      removableIndexes: [2, 3],
+      reason: "closed-context-sign-pair",
+      sourcePlan: undefined,
     });
 
     expect(planAt(closedPair, 3, { includeClosedContext: false })).toMatchObject({
@@ -12341,6 +12347,7 @@ describe("ir passes on synthetic programs", () => {
     ]);
     expect(freshDigitCandidates.find((candidate) => candidate.splice.removableIndexes.length > 0)).toMatchObject({
       stage: "fresh-digit-terminal",
+      sourceMatchReason: undefined,
       splice: {
         removableIndexes: [4],
         reason: "fresh-digit-restore-run",
@@ -12380,6 +12387,7 @@ describe("ir passes on synthetic programs", () => {
     expect(candidatesAt(openMantissaSignPair, 3).find((candidate) => candidate.splice.removableIndexes.length > 0))
       .toMatchObject({
         stage: "sign-pair-before-fresh-digit",
+        sourceMatchReason: "active-mantissa-source",
         splice: {
           removableIndexes: [2, 3],
           reason: "open-mantissa-sign-pair-before-proved-vp",
@@ -12636,6 +12644,9 @@ describe("ir passes on synthetic programs", () => {
       hasSignRestoreGapBeforeVp: true,
       canDiscardRestoreRunBeforeProvedVp: true,
       canDiscardSignRestoreRunBeforeProvedVp: true,
+      sourceMatch: {
+        reason: "same-exponent-context",
+      },
     });
     expect(analyzeX2VpRestoreGapSource(
       restoreGapProgram,

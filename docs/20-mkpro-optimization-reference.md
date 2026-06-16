@@ -972,7 +972,10 @@ Display rewrites are separated into strategy selection + body lowering.
   transition now delegates to the same source-match analysis and records the
   match class (`same-exponent-context`, ordinary source, non-zero sign source,
   explicit sign source, or mismatch), making source-preservation decisions
-  inspectable by later candidate scoring instead of opaque booleans.
+  inspectable by later candidate scoring instead of opaque booleans. The
+  restore-gap planner carries that exact match class into `vp-splice`
+  candidates; when two removable ranges are otherwise equal, the pass prefers
+  the stronger source proof before falling back to legacy stage order.
   Closed `/-/` shared-source proofs use the same canonical value sets before
   comparing visible `X` and hidden X2, so sign-change keys remain reusable
   after mixed raw/canonical paths meet.

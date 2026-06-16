@@ -9,6 +9,7 @@ import {
   x2PlanVpSpliceCandidatesAt,
   type IrPass,
   type IrPassFn,
+  type X2VpSourceMatchReason,
   type X2VpSpliceCandidateStage,
 } from "./helpers.ts";
 
@@ -27,6 +28,7 @@ function isHardX2OverwriteWithoutStackUse(op: IrOp): boolean {
 interface VpSpliceCandidateSelection {
   readonly startIndex: number;
   readonly stage: X2VpSpliceCandidateStage;
+  readonly sourceMatchReason: X2VpSourceMatchReason | undefined;
   readonly removableIndexes: readonly number[];
 }
 
@@ -40,9 +42,34 @@ const stageOrder: readonly X2VpSpliceCandidateStage[] = [
   "closed-sign-pair",
 ];
 
+const sourceMatchReasonOrder: readonly X2VpSourceMatchReason[] = [
+  "same-exponent-context",
+  "active-mantissa-source",
+  "entry-source",
+  "explicit-sign-source",
+  "nonzero-sign-source",
+  "source-mismatch",
+];
+
 function stageRank(stage: X2VpSpliceCandidateStage): number {
   const rank = stageOrder.indexOf(stage);
   return rank < 0 ? stageOrder.length : rank;
+}
+
+function sourceMatchReasonRank(reason: X2VpSourceMatchReason | undefined): number | undefined {
+  if (reason === undefined) return undefined;
+  const rank = sourceMatchReasonOrder.indexOf(reason);
+  return rank < 0 ? sourceMatchReasonOrder.length : rank;
+}
+
+function compareSourceMatchReason(
+  left: X2VpSourceMatchReason | undefined,
+  right: X2VpSourceMatchReason | undefined,
+): number {
+  const leftRank = sourceMatchReasonRank(left);
+  const rightRank = sourceMatchReasonRank(right);
+  if (leftRank === undefined || rightRank === undefined) return 0;
+  return leftRank - rightRank;
 }
 
 function firstRemovableIndex(removableIndexes: readonly number[]): number {
@@ -62,6 +89,9 @@ function compareCandidates(left: VpSpliceCandidateSelection, right: VpSpliceCand
 
   const lengthDiff = right.removableIndexes.length - left.removableIndexes.length;
   if (lengthDiff !== 0) return lengthDiff;
+
+  const sourceDiff = compareSourceMatchReason(left.sourceMatchReason, right.sourceMatchReason);
+  if (sourceDiff !== 0) return sourceDiff;
 
   const stageDiff = stageRank(left.stage) - stageRank(right.stage);
   if (stageDiff !== 0) return stageDiff;
@@ -111,6 +141,7 @@ const run: IrPassFn = (ops) => {
       candidates.push({
         startIndex: i,
         stage: candidate.stage,
+        sourceMatchReason: candidate.sourceMatchReason,
         removableIndexes: candidate.splice.removableIndexes,
       });
     }

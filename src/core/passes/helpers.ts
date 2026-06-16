@@ -6414,6 +6414,7 @@ export interface X2VpRestoreGapSourceAnalysis {
   readonly hasOnlyRestoreGapBeforeVp: boolean;
   readonly replacementDotHasOnlyRestoreGapBeforeVp: boolean;
   readonly hasSignRestoreGapBeforeVp: boolean;
+  readonly sourceMatch: X2VpSourceMatchAnalysis;
   readonly beforeRunSource: X2VpSourceModel;
   readonly beforeVpSource: X2VpSourceModel;
   readonly beforeRunSignSource: X2VpSourceModel;
@@ -6542,6 +6543,7 @@ export type X2VpSpliceCandidateStage =
 export interface X2VpSpliceCandidatePlan {
   readonly stage: X2VpSpliceCandidateStage;
   readonly splice: X2VpSplicePlan;
+  readonly sourceMatchReason: X2VpSourceMatchReason | undefined;
   readonly boundaryPlan: X2AdjacentVpBoundaryPlan | undefined;
   readonly provedVpPlan: X2ProvedVpSplicePlan | undefined;
   readonly terminalPlan: X2TerminalRestoreSplicePlan | undefined;
@@ -6712,6 +6714,7 @@ export function analyzeX2VpRestoreGapSource(
     hasOnlyRestoreGapBeforeVp: scan.sawRestoreGap && scan.vpIndex !== undefined,
     replacementDotHasOnlyRestoreGapBeforeVp: scan.vpIndex !== undefined,
     hasSignRestoreGapBeforeVp: hasSignRestore && scan.vpIndex !== undefined,
+    sourceMatch,
     beforeRunSource: sourceMatch.beforeRunSource,
     beforeVpSource: sourceMatch.beforeVpSource,
     beforeRunSignSource: sourceMatch.beforeRunSignSource,
@@ -7089,11 +7092,19 @@ function x2VpSpliceCandidatePlan(
   return {
     stage,
     splice,
+    sourceMatchReason: x2VpSpliceCandidateSourceMatchReason(details),
     boundaryPlan: details.boundaryPlan,
     provedVpPlan: details.provedVpPlan,
     terminalPlan: details.terminalPlan,
     signPairPlan: details.signPairPlan,
   };
+}
+
+function x2VpSpliceCandidateSourceMatchReason(
+  details: X2VpSpliceCandidatePlanDetails,
+): X2VpSourceMatchReason | undefined {
+  return details.provedVpPlan?.restoreRunPlan?.source?.sourceMatch.reason ??
+    details.signPairPlan?.sourcePlan?.source.sourceMatch.reason;
 }
 
 export function x2PlanProvedVpSpliceAt(
