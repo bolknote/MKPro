@@ -2054,9 +2054,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     before `ВП` or before a proved source restore. The VP-gap wrapper now uses
     the generic terminal scanner's empty-run-terminal mode, so immediate `ВП`
     and non-empty restore gaps return the same structured source/sign proof;
-    the proved-`ВП` restore-run planner then packages removable indexes, source
-    analysis, and refusal reasons instead of leaving each pass to combine the
-    scan booleans itself. Fresh-digit and hard-overwrite restore-run decisions
+    the empty-run-before-`ВП` planner packages the empty-only removal and the
+    optional adjacent duplicate-`ВП` collapse in the same reasoned plan, and the
+    proved-`ВП` restore-run planner packages removable indexes, source analysis,
+    and refusal reasons instead of leaving each pass to combine the scan
+    booleans itself. Fresh-digit and hard-overwrite restore-run decisions
     use the same terminal planner, including closed-plain-context fallbacks for
     fresh digit entry and hard X/X2 overwrite, both with the same
     previous-restore-source guard. Dot-replacement decisions

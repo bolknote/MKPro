@@ -6072,6 +6072,20 @@ export interface X2ProvedVpRestoreRunPlanOptions {
   readonly useScannedSignRestores?: boolean | undefined;
 }
 
+export type X2EmptyRunBeforeProvedVpPlanReason =
+  "empty-run" |
+  "duplicate-vp-after-empty-run" |
+  "no-empty-run";
+
+export interface X2EmptyRunBeforeProvedVpPlan {
+  readonly removableIndexes: readonly number[];
+  readonly emptyRunIndexes: readonly number[];
+  readonly firstEmptyIndex: number | undefined;
+  readonly scan: X2RestoreRunBeforeIndexScan;
+  readonly removesVp: boolean;
+  readonly reason: X2EmptyRunBeforeProvedVpPlanReason;
+}
+
 export type X2TerminalRestoreRunPlanOperation = "fresh-digit" | "hard-overwrite";
 
 export type X2TerminalRestoreRunPlanReason =
@@ -6389,19 +6403,9 @@ export function x2PlanVpSpliceAt(
     if (restoreRun.length > 0) {
       return x2VpSplicePlan(restoreRun, "proved-vp-restore-run");
     }
-    const emptyRun = x2FreeStandingEmptyRunBeforeProvedVp(ops, index, context);
-    if (emptyRun.length > 0) {
-      const removableIndexes = [...emptyRun];
-      const firstEmpty = emptyRun[0]!;
-      if (
-        firstEmpty === index - emptyRun.length &&
-        firstEmpty > 0 &&
-        isFreeStandingX2VpOp(ops[firstEmpty - 1]!) &&
-        x2CanRemoveSecondVpAfterPreviousVp(states[firstEmpty - 1])
-      ) {
-        removableIndexes.push(index);
-      }
-      return x2VpSplicePlan(removableIndexes, "empty-run-before-proved-vp");
+    const emptyRun = x2PlanEmptyRunBeforeProvedVp(ops, index, states, context);
+    if (emptyRun.removableIndexes.length > 0) {
+      return x2VpSplicePlan(emptyRun.removableIndexes, "empty-run-before-proved-vp");
     }
   }
 
@@ -6546,12 +6550,37 @@ function x2CanRemoveClosedContextSignPairBeforeProvedVp(
     plan.source.canDiscardRestoreRunBeforeProvedVp;
 }
 
-function x2FreeStandingEmptyRunBeforeProvedVp(
+export function x2PlanEmptyRunBeforeProvedVp(
   ops: readonly IrOp[],
   index: number,
+  states: readonly (X2ValueDataflowState | undefined)[],
   context: DirectReturnAnalysisContext,
-): readonly number[] {
-  return x2RestoreRunBeforeIndex(ops, index, context, { includeSignRestores: false }).removableIndexes;
+): X2EmptyRunBeforeProvedVpPlan {
+  const scan = x2RestoreRunBeforeIndex(ops, index, context, { includeSignRestores: false });
+  const emptyRunIndexes = scan.removableIndexes;
+  const firstEmptyIndex = emptyRunIndexes[0];
+  if (firstEmptyIndex === undefined) {
+    return {
+      removableIndexes: [],
+      emptyRunIndexes,
+      firstEmptyIndex,
+      scan,
+      removesVp: false,
+      reason: "no-empty-run",
+    };
+  }
+  const removesVp = firstEmptyIndex === index - emptyRunIndexes.length &&
+    firstEmptyIndex > 0 &&
+    isFreeStandingX2VpOp(ops[firstEmptyIndex - 1]!) &&
+    x2CanRemoveSecondVpAfterPreviousVp(states[firstEmptyIndex - 1]);
+  return {
+    removableIndexes: removesVp ? [...emptyRunIndexes, index] : emptyRunIndexes,
+    emptyRunIndexes,
+    firstEmptyIndex,
+    scan,
+    removesVp,
+    reason: removesVp ? "duplicate-vp-after-empty-run" : "empty-run",
+  };
 }
 
 function x2ExponentSeparatorRun(

@@ -74,6 +74,7 @@ import {
   planRecallRemovalWithStackScheduler,
   planX2ReplacementStackLift,
   x2PlanDotReplacementVpSource,
+  x2PlanEmptyRunBeforeProvedVp,
   x2PlanRestoreRunBeforeProvedVp,
   x2PlanRestoreRunBeforeTerminal,
   x2PlanVpSpliceAt,
@@ -11100,6 +11101,73 @@ describe("ir passes on synthetic programs", () => {
       source: {
         canDiscardRestoreRunBeforeProvedVp: true,
       },
+    });
+  });
+
+  it("x2 empty-run before proved-VP planner reports removals and duplicate VP collapse", () => {
+    const emptyRunBeforeVp: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x54, "КНОП"),
+      plain(0x55, "К1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const noEmptyRun: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const closedRestoreVp: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0xf0, "F0"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+
+    expect(x2PlanEmptyRunBeforeProvedVp(
+      emptyRunBeforeVp,
+      4,
+      computeX2ValueStates(emptyRunBeforeVp),
+      directReturnAnalysisContext(emptyRunBeforeVp),
+    )).toMatchObject({
+      removableIndexes: [2, 3, 4],
+      emptyRunIndexes: [2, 3],
+      firstEmptyIndex: 2,
+      removesVp: true,
+      reason: "duplicate-vp-after-empty-run",
+      scan: {
+        blockedIndex: 1,
+      },
+    });
+
+    expect(x2PlanEmptyRunBeforeProvedVp(
+      noEmptyRun,
+      1,
+      computeX2ValueStates(noEmptyRun),
+      directReturnAnalysisContext(noEmptyRun),
+    )).toMatchObject({
+      removableIndexes: [],
+      emptyRunIndexes: [],
+      firstEmptyIndex: undefined,
+      removesVp: false,
+      reason: "no-empty-run",
+    });
+
+    expect(x2PlanEmptyRunBeforeProvedVp(
+      closedRestoreVp,
+      3,
+      computeX2ValueStates(closedRestoreVp),
+      directReturnAnalysisContext(closedRestoreVp),
+    )).toMatchObject({
+      removableIndexes: [2],
+      emptyRunIndexes: [2],
+      firstEmptyIndex: 2,
+      removesVp: false,
+      reason: "empty-run",
     });
   });
 
