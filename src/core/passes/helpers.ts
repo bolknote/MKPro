@@ -5468,15 +5468,23 @@ export function x2ClosedStructuralExponentMantissaShapeFact(fact: X2ShapeFact): 
 export function x2ClosedStructuralExponentMantissaModel(
   model: X2ShapeDataModel,
 ): X2MantissaDataModel | undefined {
-  return model.kind === "exponent-entry" ? model.closedStructuralMantissa : undefined;
+  const closed = x2ClosedExponentDisplayDataModel(model);
+  return closed?.kind === "mantissa" && (closed.radix === "hex" || closed.radix === "super") ? closed : undefined;
 }
 
 export function x2ClosedExponentDisplayShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
   const model = x2ShapeDataModelForFact(fact);
+  const closed = x2ClosedExponentDisplayDataModel(model);
+  return closed === undefined ? undefined : x2ShapeFactFromDataModel(closed);
+}
+
+export function x2ClosedExponentDisplayDataModel(
+  model: X2ShapeDataModel,
+): X2ShapeDataModel | undefined {
   if (model.kind !== "exponent-entry") return undefined;
-  if (model.mantissa.radix === "decimal") return model.closedDecimalDisplay;
-  if (model.closedStructuralMantissa === undefined) return undefined;
-  return x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+  if (model.mantissa.radix !== "decimal") return model.closedStructuralMantissa;
+  const fact = model.closedDecimalDisplay;
+  return fact === undefined ? undefined : x2ShapeDataModelForFact(fact);
 }
 
 export function x2ClosedDecimalExponentDisplayShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
@@ -13466,11 +13474,9 @@ function vpFirstDigitSpliceTargetShapeFacts(
 function closedExponentMantissaDisplayShapeFacts(shapes: X2ShapeSet | undefined): Set<X2ShapeFact> {
   const output = new Set<X2ShapeFact>();
   for (const fact of shapes ?? []) {
-    const closed = x2ClosedExponentDisplayShapeFact(fact);
-    if (closed === undefined) continue;
-    const model = x2ShapeDataModelForFact(closed);
-    if (model.kind !== "mantissa") continue;
-    const canonical = x2ShapeFactFromDataModel(model);
+    const closed = x2ClosedExponentDisplayDataModel(x2ShapeDataModelForFact(fact));
+    if (closed?.kind !== "mantissa") continue;
+    const canonical = x2ShapeFactFromDataModel(closed);
     if (canonical !== undefined) output.add(canonical);
   }
   return output;

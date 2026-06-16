@@ -52,6 +52,7 @@ import {
   x2CanUseVpDotRestoreAt,
   x2CanonicalShapeFact,
   x2ClosedDecimalExponentDisplayShapeFact,
+  x2ClosedExponentDisplayDataModel,
   x2ClosedExponentDisplayShapeFact,
   x2ClosedStructuralExponentMantissaShapeFact,
   x2ClosedStructuralExponentMantissaModel,
@@ -1578,6 +1579,41 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StructuralMantissaDropFirstDigitShapeFact("super-exponent:FA:2")).toBe("hex:A00:mantissa");
     expect(x2StructuralMantissaDropFirstDigitShapeFact("hex:-FACE:mantissa")).toBe("hex:-ACE:mantissa");
     expect(x2StructuralMantissaDropFirstDigitShapeFact("hex:F:mantissa")).toBeUndefined();
+  });
+
+  it("x2 shape algebra exposes closed exponent display as data models", () => {
+    const decimalMantissa = x2ClosedExponentDisplayDataModel(
+      x2ShapeDataModelForFact("exponent:5:3:decimal"),
+    );
+    expect(decimalMantissa).toMatchObject({
+      kind: "mantissa",
+      radix: "decimal",
+      canonical: "5000",
+      safety: "dotSafeDecimal",
+    });
+    if (decimalMantissa?.kind !== "mantissa") throw new Error("expected a mantissa model");
+    expect(x2MantissaShapeFactFromModel(decimalMantissa)).toBe("mantissa:5000:decimal");
+
+    const wideDecimal = x2ClosedExponentDisplayDataModel(
+      x2ShapeDataModelForFact("exponent:100000000:2:decimal"),
+    );
+    expect(wideDecimal).toMatchObject({
+      kind: "exponent-entry",
+      exponentRaw: "10",
+      safety: "errorProne",
+    });
+    const wideDecimalShape = x2ClosedExponentDisplayShapeFact("exponent:100000000:2:decimal");
+    expect(wideDecimalShape === undefined ? undefined : x2CanonicalShapeFact(wideDecimalShape)).toBe(
+      "exponent:1:10:decimal",
+    );
+
+    const structural = x2ClosedExponentDisplayDataModel(x2ShapeDataModelForFact("hex-exponent:Г:-2"));
+    expect(structural).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      canonical: "0.0Г",
+      safety: "structuralOnly",
+    });
   });
 
   it("x2 shape algebra keeps leading-zero and structural shapes out of no-op equality", () => {
