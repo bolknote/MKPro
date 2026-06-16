@@ -62,8 +62,10 @@ import {
   x2ExponentSignChangedShapeFact,
   x2JoinedVpEntryMantissaSources,
   x2JoinedVpEntrySignShapeSources,
+  x2MantissaIndirectFlowVpSpliceModel,
   x2MantissaFirstDigitSpliceModel,
   x2MantissaShapeFactFromModel,
+  x2MantissaStoreVpSpliceModel,
   x2MantissaSignChangedShapeFact,
   x2HasOnlyRestoreGapBeforeVp,
   x2ReplacementDotHasOnlyRestoreGapBeforeVp,
@@ -2647,6 +2649,63 @@ describe("ir passes on synthetic programs", () => {
     });
     expect(x2DecimalMantissaFirstDigitSpliceModel(signedZeroSource, decimalTarget)).toBeUndefined();
     expect(x2DecimalMantissaFirstDigitSpliceModel(decimalSource, negativeTarget)).toBeUndefined();
+  });
+
+  it("x2 shape algebra exposes store and indirect VP splices as shared models", () => {
+    const decimalStoreSource = x2ShapeDataModelForFact("mantissa:123:decimal");
+    const decimalNegativeStoreSource = x2ShapeDataModelForFact("mantissa:-123:decimal");
+    const structuralStoreSource = x2ShapeDataModelForFact("hex:FACE:mantissa");
+    const structuralIndirectSource = x2ShapeDataModelForFact("hex:00CE:mantissa");
+    const superIndirectSource = x2ShapeDataModelForFact("super:FA");
+    if (
+      decimalStoreSource.kind !== "mantissa" ||
+      decimalNegativeStoreSource.kind !== "mantissa" ||
+      structuralStoreSource.kind !== "mantissa" ||
+      structuralIndirectSource.kind !== "mantissa" ||
+      superIndirectSource.kind !== "mantissa"
+    ) {
+      throw new Error("expected mantissa models");
+    }
+
+    const decimalStore = x2MantissaStoreVpSpliceModel(decimalStoreSource);
+    expect(decimalStore?.decimal).toMatchObject({
+      kind: "mantissa",
+      radix: "decimal",
+      canonical: "23",
+    });
+    expect(decimalStore?.structural).toBeUndefined();
+
+    const decimalNegativeStore = x2MantissaStoreVpSpliceModel(decimalNegativeStoreSource);
+    expect(decimalNegativeStore?.decimal).toMatchObject({
+      kind: "mantissa",
+      radix: "decimal",
+      canonical: "-923",
+    });
+    expect(decimalNegativeStore?.structural).toBeUndefined();
+
+    const structuralStore = x2MantissaStoreVpSpliceModel(structuralStoreSource);
+    expect(structuralStore?.decimal).toBeUndefined();
+    expect(structuralStore?.structural).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      canonical: "ACE",
+    });
+
+    const structuralIndirect = x2MantissaIndirectFlowVpSpliceModel(structuralIndirectSource);
+    expect(structuralIndirect?.decimal).toBeUndefined();
+    expect(structuralIndirect?.structural).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      canonical: "70CE",
+    });
+
+    const superIndirect = x2MantissaIndirectFlowVpSpliceModel(superIndirectSource);
+    expect(superIndirect?.decimal).toBeUndefined();
+    expect(superIndirect?.structural).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      canonical: "7A",
+    });
   });
 
   it("x2 value dataflow derives VP first-digit splice from decimal value facts", () => {

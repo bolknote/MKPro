@@ -957,7 +957,11 @@ Display rewrites are separated into strategy selection + body lowering.
   meet at the restored mantissa source. These joins accumulate every proved
   common source class instead of stopping at a direct raw/shape intersection, so
   a CFG merge can preserve both a shared ordinary mantissa and a separate shared
-  exact display/structural source.
+  exact display/structural source. Store-side and proved indirect-flow `ВП`
+  splice proofs now use the same mantissa splice model result shape
+  (`decimal` plus `structural`) as first-digit splice, so decimal mantissa
+  values and hex/super structural shapes are derived by one model operation
+  instead of parallel string-specific walkers.
   Closed `/-/` shared-source proofs use the same canonical value sets before
   comparing visible `X` and hidden X2, so sign-change keys remain reusable
   after mixed raw/canonical paths meet.
