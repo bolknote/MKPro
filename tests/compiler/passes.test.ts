@@ -74,6 +74,7 @@ import {
   planRecallRemovalWithStackScheduler,
   planX2ReplacementStackLift,
   x2PlanDotReplacementVpSource,
+  x2PlanAdjacentSignPairAt,
   x2PlanEmptyRunBeforeProvedVp,
   x2PlanRestoreRunBeforeProvedVp,
   x2PlanRestoreRunBeforeTerminal,
@@ -11168,6 +11169,102 @@ describe("ir passes on synthetic programs", () => {
       firstEmptyIndex: 2,
       removesVp: false,
       reason: "empty-run",
+    });
+  });
+
+  it("x2 adjacent sign-pair planner reports exponent, open-mantissa, and closed-context proofs", () => {
+    const planAt = (
+      program: readonly IrOp[],
+      index: number,
+      options?: Parameters<typeof x2PlanAdjacentSignPairAt>[4],
+    ) =>
+      x2PlanAdjacentSignPairAt(
+        program,
+        index,
+        computeX2ValueStates(program),
+        directReturnAnalysisContext(program),
+        options,
+      );
+
+    const exponentPair: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    expect(planAt(exponentPair, 4)).toMatchObject({
+      removableIndexes: [3, 4],
+      reason: "exponent-sign-pair",
+      transition: {
+        canDiscardSignPair: true,
+      },
+      sourcePlan: undefined,
+    });
+
+    const openMantissaBeforeVp: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    expect(planAt(openMantissaBeforeVp, 3)).toMatchObject({
+      removableIndexes: [2, 3],
+      reason: "open-mantissa-sign-pair-before-proved-vp",
+      sourcePlan: {
+        source: {
+          replacementDotHasOnlyRestoreGapBeforeVp: true,
+          canDiscardShapeSignPairBeforeProvedVp: true,
+        },
+      },
+    });
+
+    const closedPair: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    expect(planAt(closedPair, 3, {
+      includeExponentSignPair: false,
+      includeOpenMantissaBeforeProvedVp: false,
+    })).toMatchObject({
+      removableIndexes: [2, 3],
+      reason: "closed-context-sign-pair",
+      sourcePlan: undefined,
+    });
+
+    const closedPairBeforeVp: IrOp[] = [
+      plain(0x02, "2"),
+      plain(0xf0, "F0"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    expect(planAt(closedPairBeforeVp, 3, {
+      includeExponentSignPair: false,
+      includeOpenMantissaBeforeProvedVp: false,
+    })).toMatchObject({
+      removableIndexes: [2, 3],
+      reason: "closed-context-sign-pair",
+      sourcePlan: {
+        source: {
+          replacementDotHasOnlyRestoreGapBeforeVp: true,
+          canDiscardRestoreRunBeforeProvedVp: true,
+        },
+      },
+    });
+
+    expect(planAt(closedPair, 3, { includeClosedContext: false })).toMatchObject({
+      removableIndexes: [],
+      reason: "no-sign-pair-proof",
     });
   });
 

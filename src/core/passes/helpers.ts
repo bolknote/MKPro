@@ -6145,6 +6145,28 @@ export interface X2DotReplacementVpSourcePlan {
 
 export interface X2DotReplacementVpSourcePlanOptions extends X2VpRestoreGapSourceOptions {}
 
+export type X2AdjacentSignPairPlanReason =
+  "not-sign-pair" |
+  "exponent-sign-pair" |
+  "open-mantissa-sign-pair-before-proved-vp" |
+  "closed-context-sign-pair" |
+  "source-mismatch" |
+  "no-shared-closed-source" |
+  "no-sign-pair-proof";
+
+export interface X2AdjacentSignPairPlanOptions {
+  readonly includeExponentSignPair?: boolean | undefined;
+  readonly includeOpenMantissaBeforeProvedVp?: boolean | undefined;
+  readonly includeClosedContext?: boolean | undefined;
+}
+
+export interface X2AdjacentSignPairPlan {
+  readonly removableIndexes: readonly number[];
+  readonly reason: X2AdjacentSignPairPlanReason;
+  readonly transition: X2VpShapeTransitionAnalysis | undefined;
+  readonly sourcePlan: X2DotReplacementVpSourcePlan | undefined;
+}
+
 export interface X2RestoreRunBeforeTerminalScan {
   readonly terminalIndex: number | undefined;
   readonly blockedIndex: number | undefined;
@@ -6436,26 +6458,18 @@ export function x2PlanVpSpliceAt(
     }
   }
 
+  const signPairBeforeFreshDigit = x2PlanAdjacentSignPairAt(
+    ops,
+    index,
+    states,
+    context,
+    { includeClosedContext: false },
+  );
   if (
-    isFreeStandingX2SignChangeOp(prev) &&
-    isFreeStandingX2SignChangeOp(cur) &&
-    analyzeX2VpShapeTransition(states[index - 1], "sign-pair").canDiscardSignPair
+    signPairBeforeFreshDigit.reason === "exponent-sign-pair" ||
+    signPairBeforeFreshDigit.reason === "open-mantissa-sign-pair-before-proved-vp"
   ) {
-    return x2VpSplicePlan([index - 1, index], "exponent-sign-pair");
-  }
-
-  if (
-    isFreeStandingX2SignChangeOp(prev) &&
-    isFreeStandingX2SignChangeOp(cur) &&
-    x2CanRemoveOpenMantissaSignPairBeforeProvedVp(
-      ops,
-      index,
-      states[index - 1],
-      states[index + 1],
-      context,
-    )
-  ) {
-    return x2VpSplicePlan([index - 1, index], "open-mantissa-sign-pair-before-proved-vp");
+    return x2VpSplicePlan(signPairBeforeFreshDigit.removableIndexes, signPairBeforeFreshDigit.reason);
   }
 
   if (isFreeStandingX2EmptyOp(cur) || isFreeStandingX2SignChangeOp(cur)) {
@@ -6470,12 +6484,19 @@ export function x2PlanVpSpliceAt(
     if (restoreRun.length > 0) return x2VpSplicePlan(restoreRun, "fresh-digit-restore-run");
   }
 
-  if (
-    isFreeStandingX2SignChangeOp(prev) &&
-    isFreeStandingX2SignChangeOp(cur) &&
-    x2CanRemoveClosedContextSignPair(ops, index, states[index - 1], states[index + 1], context)
-  ) {
-    return x2VpSplicePlan([index - 1, index], "closed-context-sign-pair");
+  const closedSignPair = x2PlanAdjacentSignPairAt(
+    ops,
+    index,
+    states,
+    context,
+    {
+      includeExponentSignPair: false,
+      includeOpenMantissaBeforeProvedVp: false,
+      includeClosedContext: true,
+    },
+  );
+  if (closedSignPair.reason === "closed-context-sign-pair") {
+    return x2VpSplicePlan(closedSignPair.removableIndexes, "closed-context-sign-pair");
   }
 
   return emptyX2VpSplicePlan();
@@ -6492,62 +6513,136 @@ function x2VpSplicePlan(
   return { removableIndexes, reason };
 }
 
-function x2CanRemoveClosedContextSignPair(
+export function x2PlanAdjacentSignPairAt(
   ops: readonly IrOp[],
   secondSignIndex: number,
-  state: X2ValueDataflowState | undefined,
-  stateAfterPair: X2ValueDataflowState | undefined,
+  states: readonly (X2ValueDataflowState | undefined)[],
   context: DirectReturnAnalysisContext,
-): boolean {
-  if (!x2StateIsClosedPlainContext(state)) return false;
-  if (state === undefined) return false;
-  if (!x2StateHasSameClosedSignChangeSourceInXAndX2(state)) return false;
-  if (!removingRecallCanExposeX2Restore(ops, secondSignIndex)) return true;
-  return x2CanRemoveClosedContextSignPairBeforeProvedVp(
-    ops,
-    secondSignIndex,
-    state,
-    stateAfterPair,
-    context,
-  );
+  options: X2AdjacentSignPairPlanOptions = {},
+): X2AdjacentSignPairPlan {
+  if (secondSignIndex <= 0 || secondSignIndex >= ops.length) {
+    return emptyX2AdjacentSignPairPlan("not-sign-pair");
+  }
+  const prev = ops[secondSignIndex - 1]!;
+  const cur = ops[secondSignIndex]!;
+  if (!isFreeStandingX2SignChangeOp(prev) || !isFreeStandingX2SignChangeOp(cur)) {
+    return emptyX2AdjacentSignPairPlan("not-sign-pair");
+  }
+
+  const state = states[secondSignIndex - 1];
+  const stateAfterPair = states[secondSignIndex + 1];
+  const transition = analyzeX2VpShapeTransition(state, "sign-pair");
+  if (options.includeExponentSignPair !== false && transition.canDiscardSignPair) {
+    return x2AdjacentSignPairPlan(
+      secondSignIndex,
+      "exponent-sign-pair",
+      transition,
+      undefined,
+    );
+  }
+
+  if (
+    options.includeOpenMantissaBeforeProvedVp !== false &&
+    analyzeX2VpShapeContext(state).kind === "active-mantissa"
+  ) {
+    const sourcePlan = x2PlanDotReplacementVpSource(
+      ops,
+      secondSignIndex,
+      state,
+      stateAfterPair,
+      context,
+      { includesLeadingSignRestore: true },
+    );
+    if (
+      sourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp &&
+      sourcePlan.source.canDiscardShapeSignPairBeforeProvedVp
+    ) {
+      return x2AdjacentSignPairPlan(
+        secondSignIndex,
+        "open-mantissa-sign-pair-before-proved-vp",
+        transition,
+        sourcePlan,
+      );
+    }
+    return x2AdjacentSignPairRefusal("source-mismatch", transition, sourcePlan);
+  }
+
+  if (options.includeClosedContext !== false && x2StateIsClosedPlainContext(state)) {
+    if (state === undefined || !x2StateHasSameClosedSignChangeSourceInXAndX2(state)) {
+      return x2AdjacentSignPairRefusal("no-shared-closed-source", transition, undefined);
+    }
+    if (!removingRecallCanExposeX2Restore(ops, secondSignIndex)) {
+      return x2AdjacentSignPairPlan(
+        secondSignIndex,
+        "closed-context-sign-pair",
+        transition,
+        undefined,
+      );
+    }
+    const sourcePlan = x2PlanDotReplacementVpSource(
+      ops,
+      secondSignIndex,
+      state,
+      stateAfterPair,
+      context,
+    );
+    if (
+      sourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp &&
+      sourcePlan.source.canDiscardRestoreRunBeforeProvedVp
+    ) {
+      return x2AdjacentSignPairPlan(
+        secondSignIndex,
+        "closed-context-sign-pair",
+        transition,
+        sourcePlan,
+      );
+    }
+    return x2AdjacentSignPairRefusal("source-mismatch", transition, sourcePlan);
+  }
+
+  return x2AdjacentSignPairRefusal("no-sign-pair-proof", transition, undefined);
 }
 
-function x2CanRemoveOpenMantissaSignPairBeforeProvedVp(
-  ops: readonly IrOp[],
-  secondSignIndex: number,
-  state: X2ValueDataflowState | undefined,
-  stateAfterPair: X2ValueDataflowState | undefined,
-  context: DirectReturnAnalysisContext,
-): boolean {
-  if (analyzeX2VpShapeContext(state).kind !== "active-mantissa") return false;
-  const plan = x2PlanDotReplacementVpSource(
-    ops,
-    secondSignIndex,
-    state,
-    stateAfterPair,
-    context,
-    { includesLeadingSignRestore: true },
-  );
-  return plan.source.replacementDotHasOnlyRestoreGapBeforeVp &&
-    plan.source.canDiscardShapeSignPairBeforeProvedVp;
+function emptyX2AdjacentSignPairPlan(reason: X2AdjacentSignPairPlanReason): X2AdjacentSignPairPlan {
+  return {
+    removableIndexes: [],
+    reason,
+    transition: undefined,
+    sourcePlan: undefined,
+  };
 }
 
-function x2CanRemoveClosedContextSignPairBeforeProvedVp(
-  ops: readonly IrOp[],
+function x2AdjacentSignPairPlan(
   secondSignIndex: number,
-  state: X2ValueDataflowState,
-  stateAfterPair: X2ValueDataflowState | undefined,
-  context: DirectReturnAnalysisContext,
-): boolean {
-  const plan = x2PlanDotReplacementVpSource(
-    ops,
-    secondSignIndex,
-    state,
-    stateAfterPair,
-    context,
-  );
-  return plan.source.replacementDotHasOnlyRestoreGapBeforeVp &&
-    plan.source.canDiscardRestoreRunBeforeProvedVp;
+  reason: Extract<
+    X2AdjacentSignPairPlanReason,
+    "exponent-sign-pair" | "open-mantissa-sign-pair-before-proved-vp" | "closed-context-sign-pair"
+  >,
+  transition: X2VpShapeTransitionAnalysis,
+  sourcePlan: X2DotReplacementVpSourcePlan | undefined,
+): X2AdjacentSignPairPlan {
+  return {
+    removableIndexes: [secondSignIndex - 1, secondSignIndex],
+    reason,
+    transition,
+    sourcePlan,
+  };
+}
+
+function x2AdjacentSignPairRefusal(
+  reason: Exclude<
+    X2AdjacentSignPairPlanReason,
+    "not-sign-pair" | "exponent-sign-pair" | "open-mantissa-sign-pair-before-proved-vp" | "closed-context-sign-pair"
+  >,
+  transition: X2VpShapeTransitionAnalysis,
+  sourcePlan: X2DotReplacementVpSourcePlan | undefined,
+): X2AdjacentSignPairPlan {
+  return {
+    removableIndexes: [],
+    reason,
+    transition,
+    sourcePlan,
+  };
 }
 
 export function x2PlanEmptyRunBeforeProvedVp(
