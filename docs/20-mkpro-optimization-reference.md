@@ -961,7 +961,11 @@ Display rewrites are separated into strategy selection + body lowering.
   splice proofs now use the same mantissa splice model result shape
   (`decimal` plus `structural`) as first-digit splice, so decimal mantissa
   values and hex/super structural shapes are derived by one model operation
-  instead of parallel string-specific walkers.
+  instead of parallel string-specific walkers. The consumer side also has a
+  unified `ВП` source model view (`mantissas`, `shapes`, and canonical source
+  keys), so equality, sign-source, recall-preservation, and join proofs consume
+  the same source-key algebra instead of rebuilding decimal and structural keys
+  independently.
   Closed `/-/` shared-source proofs use the same canonical value sets before
   comparing visible `X` and hidden X2, so sign-change keys remain reusable
   after mixed raw/canonical paths meet.

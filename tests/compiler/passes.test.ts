@@ -158,6 +158,8 @@ import {
   x2ValueShapeSetHasRestoredVisibleDecimal,
   x2ValueShapeSetsHaveSameRestoredVisibleDecimal,
   x2ValueSetsHaveSameRestoredVisibleDecimal,
+  x2VpEntrySignSourceModel,
+  x2VpEntrySourceModel,
   type X2ShapeFact,
   type X2ShapeSet,
   type X2ValueDataflowState,
@@ -2850,6 +2852,28 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StatesHaveSameVpEntrySource(decimalSource, differentDecimalSource)).toBe(false);
     expect(x2StatesHaveSameVpEntrySource(structuralSource, sameStructuralSource)).toBe(true);
     expect(x2StatesHaveSameVpEntrySource(decimalSource, structuralSource)).toBe(false);
+  });
+
+  it("x2 VP source model exposes unified decimal and structural source keys", () => {
+    const base = computeX2ValueStates([halt()])[0]!;
+    const source = {
+      ...base,
+      vpEntryMantissa: new Set(["100"]),
+      vpEntryShape: new Set<X2ShapeFact>(["hex-exponent:Г:2"]),
+    };
+    const signSource = {
+      ...base,
+      vpEntryShape: new Set<X2ShapeFact>(["hex:ACE:mantissa"]),
+      vpEntryShapeTransient: true as const,
+      vpEntrySignShape: new Set<X2ShapeFact>(["hex:FACE:mantissa"]),
+    };
+
+    expect([...x2VpEntrySourceModel(source).keys].sort()).toEqual([
+      "decimal:100",
+      "shape:hex:Г00:mantissa",
+      "shape:mantissa:100:decimal",
+    ]);
+    expect([...x2VpEntrySignSourceModel(signSource).keys]).toEqual(["shape:hex:FACE:mantissa"]);
   });
 
   it("x2 VP sign source proof uses explicit structural sign shapes separately from ordinary VP sources", () => {

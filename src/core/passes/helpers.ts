@@ -46,6 +46,11 @@ export type X2ShapeFact =
   | `super:${string}`
   | `super-exponent:${string}:${string}`;
 export type X2ShapeSet = ReadonlySet<X2ShapeFact>;
+export interface X2VpSourceModel {
+  readonly mantissas?: ReadonlySet<string> | undefined;
+  readonly shapes?: X2ShapeSet | undefined;
+  readonly keys: ReadonlySet<string>;
+}
 export type X2ShapeSafety = "dotSafeDecimal" | "structuralOnly" | "errorProne" | "unknown";
 export type ParsedX2ShapeFact =
   | {
@@ -8284,7 +8289,7 @@ function recallRemovalPreservesImmediateVpRestoreContext(
   const recalledValues = recallX2ValueFacts(state, valueProof.register, true, op);
   const recalledMantissas = vpEntryMantissasFromValueFacts(recalledValues);
   const recalledShapes = recallVpEntryShapeSourceFacts(op, state, valueProof.register);
-  const recalledSourceKeys = vpSourceKeys(recalledMantissas, recalledShapes);
+  const recalledSourceKeys = x2VpSourceModel(recalledMantissas, recalledShapes).keys;
   const recalledState = transferX2ValueStateForEdge(
     state,
     op,
@@ -11934,24 +11939,51 @@ function stringSetsHaveIntersection(left: ReadonlySet<string>, right: ReadonlySe
 }
 
 function activeMantissaVpSourceKeys(context: X2VpShapeContextAnalysis): Set<string> {
-  return vpSourceKeys(context.mantissa, undefined);
+  return new Set(x2VpSourceModel(context.mantissa, undefined).keys);
 }
 
-function vpEntrySourceKeys(state: X2ValueDataflowState | undefined): Set<string> {
-  return vpSourceKeys(state?.vpEntryMantissa, state?.vpEntryShape);
+function vpEntrySourceKeys(state: X2ValueDataflowState | undefined): ReadonlySet<string> {
+  return x2VpEntrySourceModel(state).keys;
 }
 
-function vpEntrySignSourceKeys(state: X2ValueDataflowState | undefined): Set<string> {
-  const mantissas = state === undefined ? undefined : vpEntrySignSourceMantissas(state);
-  const shapes = state === undefined ? undefined : vpEntrySignSourceShapes(state);
-  return vpSourceKeys(mantissas, shapes);
+function vpEntrySignSourceKeys(state: X2ValueDataflowState | undefined): ReadonlySet<string> {
+  return x2VpEntrySignSourceModel(state).keys;
 }
 
-function explicitVpEntrySignSourceKeys(state: X2ValueDataflowState | undefined): Set<string> {
-  return vpSourceKeys(state?.vpEntrySignMantissa, state?.vpEntrySignShape);
+function explicitVpEntrySignSourceKeys(state: X2ValueDataflowState | undefined): ReadonlySet<string> {
+  return x2ExplicitVpEntrySignSourceModel(state).keys;
 }
 
-function vpSourceKeys(
+export function x2VpEntrySourceModel(
+  state: Pick<X2ValueDataflowState, "vpEntryMantissa" | "vpEntryShape"> | undefined,
+): X2VpSourceModel {
+  return x2VpSourceModel(state?.vpEntryMantissa, state?.vpEntryShape);
+}
+
+export function x2VpEntrySignSourceModel(state: X2ValueDataflowState | undefined): X2VpSourceModel {
+  return state === undefined
+    ? x2VpSourceModel(undefined, undefined)
+    : x2VpSourceModel(vpEntrySignSourceMantissas(state), vpEntrySignSourceShapes(state));
+}
+
+function x2ExplicitVpEntrySignSourceModel(
+  state: Pick<X2ValueDataflowState, "vpEntrySignMantissa" | "vpEntrySignShape"> | undefined,
+): X2VpSourceModel {
+  return x2VpSourceModel(state?.vpEntrySignMantissa, state?.vpEntrySignShape);
+}
+
+export function x2VpSourceModel(
+  mantissas: ReadonlySet<string> | undefined,
+  shapes: X2ShapeSet | undefined,
+): X2VpSourceModel {
+  return {
+    mantissas,
+    shapes,
+    keys: vpSourceKeysFromFields(mantissas, shapes),
+  };
+}
+
+function vpSourceKeysFromFields(
   mantissas: ReadonlySet<string> | undefined,
   shapes: X2ShapeSet | undefined,
 ): Set<string> {
@@ -12019,6 +12051,8 @@ function joinVpSourceMantissas(
   rightMantissas: ReadonlySet<string> | undefined,
   rightShapes: X2ShapeSet | undefined,
 ): ReadonlySet<string> | undefined {
+  const left = x2VpSourceModel(leftMantissas, leftShapes);
+  const right = x2VpSourceModel(rightMantissas, rightShapes);
   const direct = joinOptionalStringSets(leftMantissas, rightMantissas);
   if (
     direct !== undefined &&
@@ -12026,10 +12060,7 @@ function joinVpSourceMantissas(
     (rightShapes?.size ?? 0) === 0
   ) return direct;
   const mantissas = new Set<string>(direct);
-  const sharedKeys = joinStringSets(
-    vpSourceKeys(leftMantissas, leftShapes),
-    vpSourceKeys(rightMantissas, rightShapes),
-  );
+  const sharedKeys = joinStringSets(left.keys, right.keys);
   for (const key of sharedKeys) {
     const mantissa = vpMantissaFromSourceKey(key);
     if (mantissa !== undefined) mantissas.add(mantissa);
@@ -12066,11 +12097,10 @@ function joinVpSourceShapeFacts(
     !shapeSetHasDecimalDisplaySource(leftShapes) &&
     !shapeSetHasDecimalDisplaySource(rightShapes)
   ) return direct;
+  const left = x2VpSourceModel(leftMantissas, leftShapes);
+  const right = x2VpSourceModel(rightMantissas, rightShapes);
   const shapes = new Set<X2ShapeFact>(direct);
-  const sharedKeys = joinStringSets(
-    vpSourceKeys(leftMantissas, leftShapes),
-    vpSourceKeys(rightMantissas, rightShapes),
-  );
+  const sharedKeys = joinStringSets(left.keys, right.keys);
   for (const key of sharedKeys) {
     for (const fact of x2RestoredDisplayShapeFactsFromSourceKey(key) ?? []) {
       const safety = x2ShapeFactSafety(fact);
