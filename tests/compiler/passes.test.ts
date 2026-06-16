@@ -8618,6 +8618,40 @@ describe("ir passes on synthetic programs", () => {
       plain(0x03, "3"),
       halt(),
     ];
+    const negativeSource: IrOp[] = [
+      plain(0x03, "3"),
+      plain(0x0e, "В↑"),
+      plain(0x04, "4"),
+      plain(0x11, "-"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const negativeFractionSource: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0e, "В↑"),
+      plain(0x04, "4"),
+      plain(0x14, "←→"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const signedZeroSource: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0b, "/-/"),
+      plain(0x0e, "В↑"),
+      plain(0x04, "4"),
+      plain(0x14, "←→"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
 
     const immediateStates = computeX2ValueStates(immediate, { trackRegisterMemory: true });
     expect(x2VpEntryMantissaText(immediateStates[3])).toEqual(["800"]);
@@ -8648,6 +8682,24 @@ describe("ir passes on synthetic programs", () => {
     expect(x2VpEntryMantissaText(laterEmptyStates[5])).toEqual(["300"]);
     expect(laterEmptyStates[5]?.vpEntryMantissaTransient).toBeUndefined();
     expect(x2EntryStateText(laterEmptyStates[6])).toBe("exponent:300:");
+
+    const negativeSourceStates = computeX2ValueStates(negativeSource);
+    expect(x2ShapeStateText(negativeSourceStates[4]?.xShape)).toEqual(["mantissa:-1:decimal"]);
+    expect(x2VpEntryMantissaText(negativeSourceStates[5])).toEqual(["1"]);
+    expect(x2EntryStateText(negativeSourceStates[6])).toBe("exponent:1:");
+    expect(x2EntryStateText(negativeSourceStates[7])).toBe("exponent:1:2");
+    expect(x2ValueStateText(negativeSourceStates[7]?.x)).toEqual(["decimal:100:normalized"]);
+
+    const negativeFractionStates = computeX2ValueStates(negativeFractionSource);
+    expect(x2ShapeStateText(negativeFractionStates[8]?.xShape)).toEqual(["mantissa:-0.2:decimal"]);
+    expect(x2VpEntryMantissaText(negativeFractionStates[8])).toEqual(["2"]);
+    expect(x2EntryStateText(negativeFractionStates[9])).toBe("exponent:2:");
+    expect(x2EntryStateText(negativeFractionStates[10])).toBe("exponent:2:2");
+    expect(x2ValueStateText(negativeFractionStates[10]?.x)).toEqual(["decimal:200:normalized"]);
+
+    const signedZeroStates = computeX2ValueStates(signedZeroSource);
+    expect(x2ShapeStateText(signedZeroStates[6]?.xShape)).toEqual(["mantissa:0:decimal"]);
+    expect(x2VpEntryMantissaText(signedZeroStates[6])).toBeUndefined();
   });
 
   it("x2 value dataflow models decimal VP first-digit splice over safe closed decimal exponent displays", () => {

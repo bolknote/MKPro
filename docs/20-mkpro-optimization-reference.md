@@ -1475,6 +1475,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     ordinary decimal exponent-entry facts: immediate `←→; ВП` inherits the old
     decimal tail (`800`), while an empty preserving gap can prove the current
     visible first digit plus the hidden tail (`3` with `800` gives `300`).
+    For decimal source shapes the source digit is taken from the first
+    non-zero significant digit of the restored absolute display, so delayed
+    `-1; ВП` proves source digit `1` and delayed `-0.2; ВП` proves `2`.
+    All-zero delayed sources are deliberately not promoted to ordinary decimal
+    exponent-entry facts: on the emulator they stay zero instead of behaving
+    like a freshly keyed `0; ВП`.
     Safe closed decimal exponent displays join that same decimal path when the
     closed display is a positive pure mantissa digit run (`3` with
     `exponent:1:2:decimal` also gives `300`); negative, fractional, and wide

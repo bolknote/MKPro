@@ -11274,6 +11274,19 @@ function x2FirstMantissaDigitFromShapeFact(fact: X2ShapeFact): string | undefine
   return mantissa.digits[0];
 }
 
+function decimalVpFirstDigitSourceDigitFromShapeFact(fact: X2ShapeFact): string | undefined {
+  const model = x2ShapeDataModelForFact(fact);
+  const mantissa = model.kind === "mantissa"
+    ? model
+    : model.kind === "exponent-entry"
+      ? model.mantissa
+      : undefined;
+  if (mantissa === undefined) return undefined;
+  if (mantissa.radix === "decimal") return mantissa.digits.find((digit) => digit !== "0");
+  const sourceDigit = x2FirstMantissaDigitFromShapeFact(fact);
+  return sourceDigit !== undefined && /^[0-9]$/u.test(sourceDigit) ? sourceDigit : undefined;
+}
+
 function replaceFirstShapeDigit(raw: string, digit: string): string | undefined {
   let replaced = false;
   let output = "";
@@ -13275,8 +13288,8 @@ function decimalFirstDigitVpSpliceMantissas(
   const sources = restoredVpFirstDigitSourceShapeFacts(xShape);
   const targets = decimalVpFirstDigitSpliceTargetShapeFacts(x2Shape, includeExponentTargets);
   for (const source of sources) {
-    const sourceDigit = x2FirstMantissaDigitFromShapeFact(source);
-    if (sourceDigit === undefined || !/^[0-9]$/u.test(sourceDigit)) continue;
+    const sourceDigit = decimalVpFirstDigitSourceDigitFromShapeFact(source);
+    if (sourceDigit === undefined) continue;
     for (const target of targets) {
       const spliced = decimalFirstDigitVpSpliceMantissa(sourceDigit, target);
       if (spliced !== undefined) mantissas.add(spliced);
