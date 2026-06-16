@@ -81,6 +81,7 @@ import {
   x2PlanRestoreRunBeforeProvedVp,
   x2PlanRestoreRunBeforeTerminal,
   x2PlanTerminalRestoreSpliceAt,
+  x2PlanVpSpliceCandidatesAt,
   x2PlanVpSpliceAt,
   x2PreviousHardX2OverwriteIndex,
   x2KnownReturnCallReachesStackLiftAndX2Sync,
@@ -11658,6 +11659,98 @@ describe("ir passes on synthetic programs", () => {
       hardOverwritePlan: undefined,
       freshDigitPlan: undefined,
     });
+  });
+
+  it("x2 VP splice candidate planner preserves staged rewrite order", () => {
+    const plannerOptions = {
+      isDecimalDigit: (op: IrOp) => op.kind === "plain" && op.opcode >= 0 && op.opcode <= 9,
+      isHardX2OverwriteWithoutStackUse: (op: IrOp) => analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse,
+    };
+    const candidatesAt = (program: readonly IrOp[], index: number) =>
+      x2PlanVpSpliceCandidatesAt(
+        program,
+        index,
+        computeX2ValueStates(program, { trackRegisterMemory: true }),
+        directReturnAnalysisContext(program),
+        plannerOptions,
+      );
+
+    const freshDigit: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    const freshDigitCandidates = candidatesAt(freshDigit, 4);
+    expect(freshDigitCandidates.map((candidate) => candidate.stage)).toEqual([
+      "duplicate-vp",
+      "proved-vp",
+      "exponent-boundary",
+      "hard-overwrite-terminal",
+      "sign-pair-before-fresh-digit",
+      "fresh-digit-terminal",
+      "closed-sign-pair",
+    ]);
+    expect(freshDigitCandidates.map((candidate) => candidate.splice.reason)).toEqual([
+      "none",
+      "none",
+      "none",
+      "none",
+      "none",
+      "fresh-digit-restore-run",
+      "none",
+    ]);
+    expect(freshDigitCandidates.find((candidate) => candidate.splice.removableIndexes.length > 0)).toMatchObject({
+      stage: "fresh-digit-terminal",
+      splice: {
+        removableIndexes: [4],
+        reason: "fresh-digit-restore-run",
+      },
+      terminalPlan: {
+        reason: "fresh-digit-restore-run",
+      },
+    });
+
+    const hardOverwrite: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    expect(candidatesAt(hardOverwrite, 4).find((candidate) => candidate.splice.removableIndexes.length > 0))
+      .toMatchObject({
+        stage: "hard-overwrite-terminal",
+        splice: {
+          removableIndexes: [4],
+          reason: "hard-overwrite-restore-run",
+        },
+      });
+
+    const openMantissaSignPair: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x02, "2"),
+      plain(0x0b, "/-/"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    expect(candidatesAt(openMantissaSignPair, 3).find((candidate) => candidate.splice.removableIndexes.length > 0))
+      .toMatchObject({
+        stage: "sign-pair-before-fresh-digit",
+        splice: {
+          removableIndexes: [2, 3],
+          reason: "open-mantissa-sign-pair-before-proved-vp",
+        },
+      });
+
+    expect(candidatesAt(freshDigit, 0)).toEqual([]);
   });
 
   it("x2 VP splice planner centralizes duplicate VP, restore-run, terminal, and sign-pair decisions", () => {

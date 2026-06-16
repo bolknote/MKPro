@@ -6154,6 +6154,24 @@ export interface X2VpSplicePlan {
   readonly reason: X2VpSplicePlanReason;
 }
 
+export type X2VpSpliceCandidateStage =
+  "duplicate-vp" |
+  "proved-vp" |
+  "exponent-boundary" |
+  "hard-overwrite-terminal" |
+  "sign-pair-before-fresh-digit" |
+  "fresh-digit-terminal" |
+  "closed-sign-pair";
+
+export interface X2VpSpliceCandidatePlan {
+  readonly stage: X2VpSpliceCandidateStage;
+  readonly splice: X2VpSplicePlan;
+  readonly boundaryPlan: X2AdjacentVpBoundaryPlan | undefined;
+  readonly provedVpPlan: X2ProvedVpSplicePlan | undefined;
+  readonly terminalPlan: X2TerminalRestoreSplicePlan | undefined;
+  readonly signPairPlan: X2AdjacentSignPairPlan | undefined;
+}
+
 export interface X2VpSplicePlannerOptions {
   readonly isDecimalDigit: X2RestoreRunTerminalPredicate;
   readonly isHardX2OverwriteWithoutStackUse: X2RestoreRunTerminalPredicate;
@@ -6527,7 +6545,21 @@ export function x2PlanVpSpliceAt(
   context: DirectReturnAnalysisContext,
   options: X2VpSplicePlannerOptions,
 ): X2VpSplicePlan {
-  if (index <= 0 || index >= ops.length) return emptyX2VpSplicePlan();
+  for (const candidate of x2PlanVpSpliceCandidatesAt(ops, index, states, context, options)) {
+    if (candidate.splice.removableIndexes.length > 0) return candidate.splice;
+  }
+  return emptyX2VpSplicePlan();
+}
+
+export function x2PlanVpSpliceCandidatesAt(
+  ops: readonly IrOp[],
+  index: number,
+  states: readonly (X2ValueDataflowState | undefined)[],
+  context: DirectReturnAnalysisContext,
+  options: X2VpSplicePlannerOptions,
+): readonly X2VpSpliceCandidatePlan[] {
+  if (index <= 0 || index >= ops.length) return [];
+  const candidates: X2VpSpliceCandidatePlan[] = [];
 
   const duplicateVp = x2PlanAdjacentVpBoundaryAt(
     ops,
@@ -6539,17 +6571,22 @@ export function x2PlanVpSpliceAt(
       includeEmptyBeforeSignChange: false,
     },
   );
-  if (duplicateVp.reason === "duplicate-vp") {
-    return x2VpSplicePlan(duplicateVp.removableIndexes, "duplicate-vp");
-  }
+  candidates.push(x2VpSpliceCandidatePlan(
+    "duplicate-vp",
+    duplicateVp.reason === "duplicate-vp"
+      ? x2VpSplicePlan(duplicateVp.removableIndexes, "duplicate-vp")
+      : emptyX2VpSplicePlan(),
+    { boundaryPlan: duplicateVp },
+  ));
 
   const provedVp = x2PlanProvedVpSpliceAt(ops, index, states, context);
-  if (
-    provedVp.reason === "proved-vp-restore-run" ||
-    provedVp.reason === "empty-run-before-proved-vp"
-  ) {
-    return x2VpSplicePlan(provedVp.removableIndexes, provedVp.reason);
-  }
+  candidates.push(x2VpSpliceCandidatePlan(
+    "proved-vp",
+    provedVp.reason === "proved-vp-restore-run" || provedVp.reason === "empty-run-before-proved-vp"
+      ? x2VpSplicePlan(provedVp.removableIndexes, provedVp.reason)
+      : emptyX2VpSplicePlan(),
+    { provedVpPlan: provedVp },
+  ));
 
   const exponentBoundary = x2PlanAdjacentVpBoundaryAt(
     ops,
@@ -6558,12 +6595,13 @@ export function x2PlanVpSpliceAt(
     options,
     { includeDuplicateVp: false },
   );
-  if (
-    exponentBoundary.reason === "exponent-separator" ||
-    exponentBoundary.reason === "exponent-empty-before-sign"
-  ) {
-    return x2VpSplicePlan(exponentBoundary.removableIndexes, exponentBoundary.reason);
-  }
+  candidates.push(x2VpSpliceCandidatePlan(
+    "exponent-boundary",
+    exponentBoundary.reason === "exponent-separator" || exponentBoundary.reason === "exponent-empty-before-sign"
+      ? x2VpSplicePlan(exponentBoundary.removableIndexes, exponentBoundary.reason)
+      : emptyX2VpSplicePlan(),
+    { boundaryPlan: exponentBoundary },
+  ));
 
   const hardOverwriteTerminal = x2PlanTerminalRestoreSpliceAt(
     ops,
@@ -6573,9 +6611,13 @@ export function x2PlanVpSpliceAt(
     options,
     { includeFreshDigit: false },
   );
-  if (hardOverwriteTerminal.reason === "hard-overwrite-restore-run") {
-    return x2VpSplicePlan(hardOverwriteTerminal.removableIndexes, "hard-overwrite-restore-run");
-  }
+  candidates.push(x2VpSpliceCandidatePlan(
+    "hard-overwrite-terminal",
+    hardOverwriteTerminal.reason === "hard-overwrite-restore-run"
+      ? x2VpSplicePlan(hardOverwriteTerminal.removableIndexes, "hard-overwrite-restore-run")
+      : emptyX2VpSplicePlan(),
+    { terminalPlan: hardOverwriteTerminal },
+  ));
 
   const signPairBeforeFreshDigit = x2PlanAdjacentSignPairAt(
     ops,
@@ -6584,12 +6626,14 @@ export function x2PlanVpSpliceAt(
     context,
     { includeClosedContext: false },
   );
-  if (
+  candidates.push(x2VpSpliceCandidatePlan(
+    "sign-pair-before-fresh-digit",
     signPairBeforeFreshDigit.reason === "exponent-sign-pair" ||
-    signPairBeforeFreshDigit.reason === "open-mantissa-sign-pair-before-proved-vp"
-  ) {
-    return x2VpSplicePlan(signPairBeforeFreshDigit.removableIndexes, signPairBeforeFreshDigit.reason);
-  }
+      signPairBeforeFreshDigit.reason === "open-mantissa-sign-pair-before-proved-vp"
+      ? x2VpSplicePlan(signPairBeforeFreshDigit.removableIndexes, signPairBeforeFreshDigit.reason)
+      : emptyX2VpSplicePlan(),
+    { signPairPlan: signPairBeforeFreshDigit },
+  ));
 
   const freshDigitTerminal = x2PlanTerminalRestoreSpliceAt(
     ops,
@@ -6602,9 +6646,13 @@ export function x2PlanVpSpliceAt(
       includeFreshDigit: true,
     },
   );
-  if (freshDigitTerminal.reason === "fresh-digit-restore-run") {
-    return x2VpSplicePlan(freshDigitTerminal.removableIndexes, "fresh-digit-restore-run");
-  }
+  candidates.push(x2VpSpliceCandidatePlan(
+    "fresh-digit-terminal",
+    freshDigitTerminal.reason === "fresh-digit-restore-run"
+      ? x2VpSplicePlan(freshDigitTerminal.removableIndexes, "fresh-digit-restore-run")
+      : emptyX2VpSplicePlan(),
+    { terminalPlan: freshDigitTerminal },
+  ));
 
   const closedSignPair = x2PlanAdjacentSignPairAt(
     ops,
@@ -6617,11 +6665,15 @@ export function x2PlanVpSpliceAt(
       includeClosedContext: true,
     },
   );
-  if (closedSignPair.reason === "closed-context-sign-pair") {
-    return x2VpSplicePlan(closedSignPair.removableIndexes, "closed-context-sign-pair");
-  }
+  candidates.push(x2VpSpliceCandidatePlan(
+    "closed-sign-pair",
+    closedSignPair.reason === "closed-context-sign-pair"
+      ? x2VpSplicePlan(closedSignPair.removableIndexes, "closed-context-sign-pair")
+      : emptyX2VpSplicePlan(),
+    { signPairPlan: closedSignPair },
+  ));
 
-  return emptyX2VpSplicePlan();
+  return candidates;
 }
 
 function emptyX2VpSplicePlan(): X2VpSplicePlan {
@@ -6633,6 +6685,28 @@ function x2VpSplicePlan(
   reason: X2VpSplicePlanReason,
 ): X2VpSplicePlan {
   return { removableIndexes, reason };
+}
+
+interface X2VpSpliceCandidatePlanDetails {
+  readonly boundaryPlan?: X2AdjacentVpBoundaryPlan | undefined;
+  readonly provedVpPlan?: X2ProvedVpSplicePlan | undefined;
+  readonly terminalPlan?: X2TerminalRestoreSplicePlan | undefined;
+  readonly signPairPlan?: X2AdjacentSignPairPlan | undefined;
+}
+
+function x2VpSpliceCandidatePlan(
+  stage: X2VpSpliceCandidateStage,
+  splice: X2VpSplicePlan,
+  details: X2VpSpliceCandidatePlanDetails = {},
+): X2VpSpliceCandidatePlan {
+  return {
+    stage,
+    splice,
+    boundaryPlan: details.boundaryPlan,
+    provedVpPlan: details.provedVpPlan,
+    terminalPlan: details.terminalPlan,
+    signPairPlan: details.signPairPlan,
+  };
 }
 
 export function x2PlanProvedVpSpliceAt(

@@ -1358,10 +1358,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     A single `x2PlanVpSpliceAt` planner now combines those transition, source,
     terminal-scan, and sign-pair proofs into removable indexes plus a reason,
     so later VP/X2 and hex/super splice rules have one extension point rather
-    than a new local branch inside `vp-splice`. Adjacent `ВП`/empty-boundary
-    decisions are planned through `x2PlanAdjacentVpBoundaryAt`, which covers
-    duplicate `ВП`, exponent separator runs, and `empty + /-/` sign-entry
-    boundaries from the shared shape-transition model. Proved-`ВП` restore
+    than a new local branch inside `vp-splice`. Internally
+    `x2PlanVpSpliceCandidatesAt` builds an ordered candidate list for the same
+    priority sequence and carries each lower-level proof plan with its staged
+    candidate; `x2PlanVpSpliceAt` simply returns the first removable candidate.
+    Adjacent `ВП`/empty-boundary decisions are planned through
+    `x2PlanAdjacentVpBoundaryAt`, which covers duplicate `ВП`, exponent
+    separator runs, and `empty + /-/` sign-entry boundaries from the shared
+    shape-transition model. Proved-`ВП` restore
     decisions are planned through `x2PlanProvedVpSpliceAt`, which preserves the
     priority of source-proved restore runs over empty-run duplicate-`ВП`
     collapses while carrying both lower-level proof plans. Terminal restore
