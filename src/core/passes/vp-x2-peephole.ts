@@ -15,6 +15,7 @@ import {
   type KnownReturnCallOp,
   type X2ValueDataflowState,
   x2StateHasVisibleUnaryNoop,
+  x2StatesHaveSameVpEntrySource,
   x2SyncCanExposeContextSensitiveRestore,
 } from "./helpers.ts";
 
@@ -74,22 +75,55 @@ function isKnownNoopUnaryOp(
   ops: readonly IrOp[],
   index: number,
   states: readonly (X2ValueDataflowState | undefined)[],
+  labelEntries: ReadonlySet<number>,
 ): boolean {
   const op = ops[index]!;
   const state = states[index];
   if (!isFreeStandingNoopUnaryOp(op)) return false;
   const knownNoop = op.kind === "plain" && x2StateHasVisibleUnaryNoop(state, op.opcode);
-  return knownNoop &&
-    // К {x}, К [x], К |x|, and К ЗН preserve hidden X2. Once dataflow proves
-    // the opcode is also a visible-X no-op, removing it cannot change a later
-    // restore value. The exposure guard still keeps immediate restore
-    // boundaries where the opcode itself could be the observable
-    // previous-command context.
-    !x2SyncCanExposeContextSensitiveRestore(
-      ops,
-      index,
-      { redundantSyncValue: true, redundantSyncShape: true },
-    );
+  if (!knownNoop) return false;
+  // К {x}, К [x], К |x|, and К ЗН preserve hidden X2. Once dataflow proves
+  // the opcode is also a visible-X no-op, removing it cannot change a later
+  // restore value. The exposure guard still keeps immediate restore boundaries
+  // where the opcode itself could be the observable previous-command context.
+  if (!x2SyncCanExposeContextSensitiveRestore(
+    ops,
+    index,
+    { redundantSyncValue: true, redundantSyncShape: true },
+  )) return true;
+  return noopUnaryPreservesImmediateVpSource(ops, index, states, labelEntries);
+}
+
+function noopUnaryPreservesImmediateVpSource(
+  ops: readonly IrOp[],
+  index: number,
+  states: readonly (X2ValueDataflowState | undefined)[],
+  labelEntries: ReadonlySet<number>,
+): boolean {
+  const vpIndex = immediateVpRestoreAfterNoopIndex(ops, index, labelEntries);
+  if (vpIndex === undefined) return false;
+  return x2StatesHaveSameVpEntrySource(states[index], states[vpIndex]);
+}
+
+function immediateVpRestoreAfterNoopIndex(
+  ops: readonly IrOp[],
+  index: number,
+  labelEntries: ReadonlySet<number>,
+): number | undefined {
+  for (let cursor = index + 1; cursor < ops.length; cursor += 1) {
+    const op = ops[cursor]!;
+    if (op.kind === "label") {
+      if (labelEntries.has(cursor)) return undefined;
+      continue;
+    }
+    return isFreeStandingVpRestore(op) ? cursor : undefined;
+  }
+  return undefined;
+}
+
+function isFreeStandingVpRestore(op: IrOp): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  return op.kind === "plain" && op.opcode === 0x0c && !hasRoles(op);
 }
 
 function isFreeStandingEmptyOp(op: IrOp): boolean {
@@ -157,7 +191,7 @@ const run: IrPassFn = (ops) => {
     if (fractionIndex !== undefined) remove.add(fractionIndex);
   }
   for (let i = 0; i < ops.length; i += 1) {
-    if (!remove.has(i) && isKnownNoopUnaryOp(ops, i, states)) remove.add(i);
+    if (!remove.has(i) && isKnownNoopUnaryOp(ops, i, states, labelEntries)) remove.add(i);
   }
   if (remove.size === 0) return emptyResult(ops);
   return {

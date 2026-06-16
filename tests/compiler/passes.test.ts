@@ -30579,6 +30579,59 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("vp-x2-peephole removes a visible sign no-op before immediate ВП when the source is unchanged", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x32, "К ЗН"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+
+    expect(vpX2Peephole.run(program, ctx).ops).toEqual([
+      plain(0x01, "1"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole keeps a visible fractional no-op before immediate ВП when the source is not proved unchanged", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0a, "."),
+      plain(0x05, "5"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x35, "К {x}"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("vp-x2-peephole keeps a visible no-op before immediate ВП when a label can enter there", () => {
+    const program: IrOp[] = [
+      jump("entry"),
+      plain(0x01, "1"),
+      plain(0xf0, "F* empty F0"),
+      plain(0x32, "К ЗН"),
+      label("entry"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
   it("vp-x2-peephole keeps the first negative-integer fractional op before its later signed-zero sync", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),

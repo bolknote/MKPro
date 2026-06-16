@@ -2303,6 +2303,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     no-op proofs do not require hidden X2 to match visible `X`; a later
     context-sensitive `.`, `/-/`, or `ВП` is allowed after a preserving
     executable gap because the restore's previous-command context is unchanged.
+    An immediate `ВП` boundary can also remove a proved visible no-op unary
+    command when the shared VP source model proves that the command and its
+    removal expose the same mantissa source; immediate `.` and unproved
+    fractional-source cases remain explicit.
     Negative-integer `К {x}` is handled through the same visible-zero proof, but
     the first signed-zero-producing `К {x}` is kept if a later X2 sync can feed
     a context-sensitive restore; only repeated no-op fractional operations after
