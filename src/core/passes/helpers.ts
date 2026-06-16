@@ -137,6 +137,30 @@ const X2_SHAPE_DATA_MODEL_CACHE = new Map<X2ShapeFact, X2ShapeDataModel>();
 const CANONICAL_SHAPE_RAW_CACHE = new Map<string, string>();
 const NORMALIZE_PLAIN_DECIMAL_CACHE = new Map<string, string | undefined>();
 const SIGNIFICANT_DECIMAL_DIGITS_CACHE = new Map<string, number>();
+const NO_SHAPE_SET_CACHE_KEY = new Set<X2ShapeFact>();
+const NO_VALUE_SET_CACHE_KEY = new Set<X2ValueFact>();
+const STABLE_EXPRESSION_VALUE_SET_CACHE = new Map<string, X2ValueSet | undefined>();
+const STABLE_EXPRESSION_SHAPE_SET_CACHE = new Map<string, X2ShapeSet | undefined>();
+const SHAPE_SET_WITH_STABLE_VALUE_SHAPES_CACHE = new WeakMap<
+  X2ShapeSet,
+  WeakMap<X2ValueSet, X2ShapeSet | undefined>
+>();
+const SHAPE_SET_WITH_STABLE_VALUE_SYNC_SHAPES_CACHE = new WeakMap<
+  X2ShapeSet,
+  WeakMap<X2ValueSet, X2ShapeSet | undefined>
+>();
+const SHAPE_SET_WITH_VALUE_DISPLAY_SHAPES_CACHE = new WeakMap<
+  X2ShapeSet,
+  WeakMap<X2ValueSet, X2ShapeSet | undefined>
+>();
+const SHAPE_SET_WITH_FALLBACK_VALUE_DISPLAY_SHAPES_CACHE = new WeakMap<
+  X2ShapeSet,
+  WeakMap<X2ValueSet, X2ShapeSet | undefined>
+>();
+const SHAPE_SET_WITH_FALLBACK_VALUE_SYNC_DISPLAY_SHAPES_CACHE = new WeakMap<
+  X2ShapeSet,
+  WeakMap<X2ValueSet, X2ShapeSet | undefined>
+>();
 interface ConcreteEvaluationOptions {
   readonly includeStructuralShapeDecimals?: boolean;
   readonly includeStructuralExponentClosureDecimals?: boolean;
@@ -1829,6 +1853,18 @@ function shapeSetWithStableExpressionValueShapes(
   shapes: X2ShapeSet | undefined,
   values: X2ValueSet | undefined,
 ): X2ShapeSet | undefined {
+  return cachedShapeValueResult(
+    SHAPE_SET_WITH_STABLE_VALUE_SHAPES_CACHE,
+    shapes,
+    values,
+    () => shapeSetWithStableExpressionValueShapesImpl(shapes, values),
+  );
+}
+
+function shapeSetWithStableExpressionValueShapesImpl(
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+): X2ShapeSet | undefined {
   const output = cloneOptionalShapeSet(shapes);
   for (const value of values ?? []) {
     if (!value.startsWith("expr-key:")) continue;
@@ -1838,6 +1874,18 @@ function shapeSetWithStableExpressionValueShapes(
 }
 
 function shapeSetWithStableExpressionValueShapesForX2Sync(
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+): X2ShapeSet | undefined {
+  return cachedShapeValueResult(
+    SHAPE_SET_WITH_STABLE_VALUE_SYNC_SHAPES_CACHE,
+    shapes,
+    values,
+    () => shapeSetWithStableExpressionValueShapesForX2SyncImpl(shapes, values),
+  );
+}
+
+function shapeSetWithStableExpressionValueShapesForX2SyncImpl(
   shapes: X2ShapeSet | undefined,
   values: X2ValueSet | undefined,
 ): X2ShapeSet | undefined {
@@ -1855,6 +1903,18 @@ function shapeSetWithValueDerivedDisplayShapes(
   shapes: X2ShapeSet | undefined,
   values: X2ValueSet | undefined,
 ): X2ShapeSet | undefined {
+  return cachedShapeValueResult(
+    SHAPE_SET_WITH_VALUE_DISPLAY_SHAPES_CACHE,
+    shapes,
+    values,
+    () => shapeSetWithValueDerivedDisplayShapesImpl(shapes, values),
+  );
+}
+
+function shapeSetWithValueDerivedDisplayShapesImpl(
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+): X2ShapeSet | undefined {
   const output = cloneOptionalShapeSet(shapes);
   if (values !== undefined) {
     for (const fact of x2ShapesFromValueFacts(values)) output.add(fact);
@@ -1866,6 +1926,18 @@ function shapeSetWithFallbackValueDerivedDisplayShapes(
   shapes: X2ShapeSet | undefined,
   values: X2ValueSet | undefined,
 ): X2ShapeSet | undefined {
+  return cachedShapeValueResult(
+    SHAPE_SET_WITH_FALLBACK_VALUE_DISPLAY_SHAPES_CACHE,
+    shapes,
+    values,
+    () => shapeSetWithFallbackValueDerivedDisplayShapesImpl(shapes, values),
+  );
+}
+
+function shapeSetWithFallbackValueDerivedDisplayShapesImpl(
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+): X2ShapeSet | undefined {
   const stable = shapeSetWithStableExpressionValueShapes(shapes, values);
   return stable === undefined || stable.size === 0
     ? shapeSetWithValueDerivedDisplayShapes(undefined, values)
@@ -1873,6 +1945,18 @@ function shapeSetWithFallbackValueDerivedDisplayShapes(
 }
 
 function shapeSetWithFallbackValueDerivedDisplayShapesForX2Sync(
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+): X2ShapeSet | undefined {
+  return cachedShapeValueResult(
+    SHAPE_SET_WITH_FALLBACK_VALUE_SYNC_DISPLAY_SHAPES_CACHE,
+    shapes,
+    values,
+    () => shapeSetWithFallbackValueDerivedDisplayShapesForX2SyncImpl(shapes, values),
+  );
+}
+
+function shapeSetWithFallbackValueDerivedDisplayShapesForX2SyncImpl(
   shapes: X2ShapeSet | undefined,
   values: X2ValueSet | undefined,
 ): X2ShapeSet | undefined {
@@ -1889,6 +1973,26 @@ function vpSpliceShapeSetWithValueShapes(
   values: X2ValueSet | undefined,
 ): X2ShapeSet | undefined {
   return shapeSetWithValueDerivedDisplayShapes(shapes, values);
+}
+
+function cachedShapeValueResult(
+  cache: WeakMap<X2ShapeSet, WeakMap<X2ValueSet, X2ShapeSet | undefined>>,
+  shapes: X2ShapeSet | undefined,
+  values: X2ValueSet | undefined,
+  compute: () => X2ShapeSet | undefined,
+): X2ShapeSet | undefined {
+  const shapeKey = shapes ?? NO_SHAPE_SET_CACHE_KEY;
+  const valueKey = values ?? NO_VALUE_SET_CACHE_KEY;
+  let byValue = cache.get(shapeKey);
+  if (byValue === undefined) {
+    byValue = new WeakMap();
+    cache.set(shapeKey, byValue);
+  } else if (byValue.has(valueKey)) {
+    return byValue.get(valueKey);
+  }
+  const result = compute();
+  byValue.set(valueKey, result);
+  return result;
 }
 
 function structuralSingleHexDigitValues(shapes: X2ShapeSet | undefined): Set<number> {
@@ -12693,8 +12797,11 @@ function stableExpressionShapeSourceKey(fact: X2ShapeFact): string {
 }
 
 function stableExpressionKeyValueSet(key: string): X2ValueSet | undefined {
+  if (STABLE_EXPRESSION_VALUE_SET_CACHE.has(key)) return STABLE_EXPRESSION_VALUE_SET_CACHE.get(key);
   const values = stableExpressionKeyValueSetForEvaluation(key, new Set());
-  return values.size === 0 ? undefined : values;
+  const result = values.size === 0 ? undefined : values;
+  STABLE_EXPRESSION_VALUE_SET_CACHE.set(key, result);
+  return result;
 }
 
 function stableExpressionKeyValueSetForOperand(
@@ -12720,8 +12827,11 @@ function stableExpressionKeyHasStructuralShapeEvidence(key: string, seen: Set<st
 }
 
 function stableExpressionKeyShapeSet(key: string): X2ShapeSet | undefined {
+  if (STABLE_EXPRESSION_SHAPE_SET_CACHE.has(key)) return STABLE_EXPRESSION_SHAPE_SET_CACHE.get(key);
   const shapes = stableExpressionKeyShapeSetForEvaluation(key, new Set());
-  return shapes.size === 0 ? undefined : shapes;
+  const result = shapes.size === 0 ? undefined : shapes;
+  STABLE_EXPRESSION_SHAPE_SET_CACHE.set(key, result);
+  return result;
 }
 
 function stableExpressionKeyShapeSetForOperand(
