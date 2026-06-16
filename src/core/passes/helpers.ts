@@ -97,6 +97,19 @@ export type X2ShapeDataModel =
   | { readonly kind: "unknown"; readonly raw: string; readonly safety: "unknown" };
 type X2ValueMemory = Partial<Record<RegisterName, X2ValueSet>>;
 type X2ShapeMemory = Partial<Record<RegisterName, X2ShapeSet>>;
+
+// Memoization caches for hot, pure shape/decimal canonicalization helpers.
+// These are called extremely often during the whole-program candidate search
+// (which recompiles the same program through the size-rescue matrix), almost
+// always on a small set of recurring fact/decimal strings. All are pure and
+// return immutable values (primitives or deeply-readonly data models that are
+// never mutated), so a process-global string-keyed cache is sound regardless of
+// which program is being compiled. Declared here (before module-init lookup
+// tables that call these helpers) so the consts are initialized first.
+const X2_SHAPE_DATA_MODEL_CACHE = new Map<X2ShapeFact, X2ShapeDataModel>();
+const CANONICAL_SHAPE_RAW_CACHE = new Map<string, string>();
+const NORMALIZE_PLAIN_DECIMAL_CACHE = new Map<string, string | undefined>();
+const SIGNIFICANT_DECIMAL_DIGITS_CACHE = new Map<string, number>();
 interface ConcreteEvaluationOptions {
   readonly includeStructuralShapeDecimals?: boolean;
   readonly includeStructuralExponentClosureDecimals?: boolean;
@@ -5159,6 +5172,14 @@ export function parseX2ShapeFact(fact: X2ShapeFact): ParsedX2ShapeFact {
 }
 
 export function x2ShapeDataModelForFact(fact: X2ShapeFact): X2ShapeDataModel {
+  const cached = X2_SHAPE_DATA_MODEL_CACHE.get(fact);
+  if (cached !== undefined) return cached;
+  const result = x2ShapeDataModelForFactImpl(fact);
+  X2_SHAPE_DATA_MODEL_CACHE.set(fact, result);
+  return result;
+}
+
+function x2ShapeDataModelForFactImpl(fact: X2ShapeFact): X2ShapeDataModel {
   const mantissa = /^mantissa:(.*):decimal$/u.exec(fact);
   if (mantissa !== null) {
     return decimalMantissaShapeRawIsValid(mantissa[1]!)
@@ -11242,7 +11263,11 @@ function x2MantissaShapeFactFromParts(radix: X2MantissaRadix, raw: string): X2Sh
 }
 
 function canonicalShapeRaw(raw: string): string {
-  return raw.trim().replace(/\s+/gu, "").replace(/,/gu, ".").toUpperCase();
+  const cached = CANONICAL_SHAPE_RAW_CACHE.get(raw);
+  if (cached !== undefined) return cached;
+  const result = raw.trim().replace(/\s+/gu, "").replace(/,/gu, ".").toUpperCase();
+  CANONICAL_SHAPE_RAW_CACHE.set(raw, result);
+  return result;
 }
 
 function canonicalExponentShapeRaw(raw: string): string | undefined {
@@ -12622,6 +12647,14 @@ function exactScientificDecimalDisplayShapeFact(value: string): X2ShapeFact | un
 }
 
 function normalizePlainDecimal(raw: string): string | undefined {
+  const cached = NORMALIZE_PLAIN_DECIMAL_CACHE.get(raw);
+  if (cached !== undefined || NORMALIZE_PLAIN_DECIMAL_CACHE.has(raw)) return cached;
+  const result = normalizePlainDecimalImpl(raw);
+  NORMALIZE_PLAIN_DECIMAL_CACHE.set(raw, result);
+  return result;
+}
+
+function normalizePlainDecimalImpl(raw: string): string | undefined {
   const match = /^(-?)(?:([0-9]+)(?:\.([0-9]+))?|\.(\d+))$/u.exec(raw);
   if (match === null) return undefined;
   const sign = match[1]!;
@@ -12633,11 +12666,15 @@ function normalizePlainDecimal(raw: string): string | undefined {
 }
 
 function significantDecimalDigits(input: string): number {
+  const cached = SIGNIFICANT_DECIMAL_DIGITS_CACHE.get(input);
+  if (cached !== undefined) return cached;
   const unsigned = input.startsWith("-") ? input.slice(1) : input;
   const [integer, fraction] = unsigned.split(".");
   const digits = `${integer ?? ""}${fraction ?? ""}`.replace(/^0+/u, "");
   const significant = fraction === undefined ? digits.replace(/0+$/u, "") : digits;
-  return significant.length === 0 ? 1 : significant.length;
+  const result = significant.length === 0 ? 1 : significant.length;
+  SIGNIFICANT_DECIMAL_DIGITS_CACHE.set(input, result);
+  return result;
 }
 
 function normalizeDecimalEntry(raw: string): string | undefined {
