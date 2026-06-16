@@ -1434,7 +1434,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Structural exponent closure, shift, and append are exposed at the
     `X2ShapeDataModel`/`X2MantissaDataModel` layer, so later `ВП`/X2 splice
     and hidden-temp passes can compose these proofs without round-tripping
-    through string-shaped facts.
+    through string-shaped facts. The same model layer owns structural
+    first-digit drop for store-splice sources, including closed exponent-entry
+    forms such as `super-exponent:FA:2 -> hex:A00`.
     Exact decimal
     display-shape facts feed unary display-shape
     results and, when the unary result itself is proved exact, concrete decimal

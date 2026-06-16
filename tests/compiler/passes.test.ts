@@ -129,6 +129,8 @@ import {
   x2StructuralMantissaConcatShapeFacts,
   x2StructuralMantissaConcatShapeModel,
   x2StructuralMantissaConcatShapeSetFacts,
+  x2StructuralMantissaDropFirstDigitShapeFact,
+  x2StructuralMantissaDropFirstDigitShapeModel,
   x2StructuralMantissaFirstDigitSpliceShapeFact,
   x2StructuralMantissaFirstDigitSpliceShapeModel,
   x2StructuralMantissaFirstDigitSpliceShapeSetFacts,
@@ -1570,6 +1572,12 @@ describe("ir passes on synthetic programs", () => {
     expect(x2MantissaShapeFactFromModel(x2StructuralMantissaAppendDigitsModel(superMantissa, "0")!)).toBe(
       "hex:FA0:mantissa",
     );
+    expect(x2MantissaShapeFactFromModel(x2StructuralMantissaDropFirstDigitShapeModel(superMantissa)!)).toBe(
+      "hex:A:mantissa",
+    );
+    expect(x2StructuralMantissaDropFirstDigitShapeFact("super-exponent:FA:2")).toBe("hex:A00:mantissa");
+    expect(x2StructuralMantissaDropFirstDigitShapeFact("hex:-FACE:mantissa")).toBe("hex:-ACE:mantissa");
+    expect(x2StructuralMantissaDropFirstDigitShapeFact("hex:F:mantissa")).toBeUndefined();
   });
 
   it("x2 shape algebra keeps leading-zero and structural shapes out of no-op equality", () => {

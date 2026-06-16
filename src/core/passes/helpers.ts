@@ -5513,6 +5513,20 @@ export function x2StructuralMantissaAppendDigitsShapeFact(
   return appended === undefined ? undefined : x2MantissaShapeFactFromModel(appended);
 }
 
+export function x2StructuralMantissaDropFirstDigitShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
+  const model = structuralAppendMantissaModel(fact);
+  const dropped = model === undefined ? undefined : x2StructuralMantissaDropFirstDigitShapeModel(model);
+  return dropped === undefined ? undefined : x2MantissaShapeFactFromModel(dropped);
+}
+
+export function x2StructuralMantissaDropFirstDigitShapeModel(
+  model: X2MantissaDataModel,
+): X2MantissaDataModel | undefined {
+  if (model.radix !== "hex" && model.radix !== "super") return undefined;
+  const dropped = dropFirstStructuralMantissaDigit(model.canonical);
+  return dropped === undefined ? undefined : structuralMantissaDataModel("hex", dropped, "structuralOnly");
+}
+
 function structuralAppendMantissaModel(fact: X2ShapeFact): X2MantissaDataModel | undefined {
   const model = x2ShapeDataModelForFact(fact);
   const mantissa = model.kind === "mantissa"
@@ -11727,14 +11741,10 @@ function negativeDecimalStoreVpSpliceMantissa(integer: string, fraction: string)
 }
 
 function structuralStoreVpSpliceShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
-  const model = x2ShapeDataModelForFact(fact);
-  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) return undefined;
-  const spliced = removeFirstStructuralMantissaDigit(model.canonical);
-  if (spliced === undefined) return undefined;
-  return x2MantissaShapeFactFromModel(structuralMantissaDataModel("hex", spliced, "structuralOnly"));
+  return x2StructuralMantissaDropFirstDigitShapeFact(fact);
 }
 
-function removeFirstStructuralMantissaDigit(raw: string): string | undefined {
+function dropFirstStructuralMantissaDigit(raw: string): string | undefined {
   const sign = raw.startsWith("-") ? "-" : "";
   const unsigned = sign === "" ? raw : raw.slice(1);
   let removed = false;
