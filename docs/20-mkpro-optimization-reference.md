@@ -2199,10 +2199,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     preceding `ВП` must carry a boundary marker because a plain opcode pattern
     such as `П->X r; Fπ; ВП` restores X2 but does not generally make `К {x}`
     redundant. The same pass also uses X2 value/shape dataflow to remove a
-    role-free, non-display `К {x}` when closed-context `X` is proved to be an
-    already-fractional decimal (`0`, `0.x`, or `-0.x`), including exact decimal
-    display-shape facts that remain shape-only. It also removes role-free,
-    non-display `К [x]` when closed-context `X` already has an exact integer
+    role-free, non-display `К {x}` when closed dot-restore value-context `X`
+    is proved to be an already-fractional decimal (`0`, `0.x`, or `-0.x`),
+    including exact decimal display-shape facts that remain shape-only. It also
+    removes role-free, non-display `К [x]` when that closed value context
+    already has an exact integer
     display shape, including exact decimal exponent displays whose restored
     value is an integer, exact decimal structural mantissas such as
     `hex:123:mantissa`, and closed structural exponent displays such as
@@ -2214,7 +2215,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     mantissas or closed structural exponents such as `hex:0.123:mantissa` or
     `hex-exponent:1.23:-1`; this ABS-only proof does not make structural shapes
     dot-safe or promote them to ordinary decimal values. Negative values and raw
-    display spellings remain observable. These visible-unary no-op decisions
+    display spellings remain observable. This closed value context includes
+    proved decimal exponent-entry/`ВП` display contexts when the visible-X
+    proof itself is exact; unsafe structural restore contexts remain outside
+    the value-context helper. These visible-unary no-op decisions
     are now centralized in the shared X2 value/shape helper, so later passes can
     reuse the same closed-context proof instead of duplicating local
     `К {x}`/`К [x]`/`К |x|`/`К ЗН` rules. Role-free `К ЗН` is removed when the

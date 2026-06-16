@@ -4418,6 +4418,17 @@ describe("ir passes on synthetic programs", () => {
       xShape: new Set<X2ShapeFact>(["mantissa:-1:decimal"]),
       entry: { kind: "closed" },
     };
+    const vpContextShape: X2ValueDataflowState = {
+      x: new Set(),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:3.1415926:decimal"]),
+      entry: { kind: "closed" },
+      vpContext: {
+        kind: "exponent",
+        mantissa: new Set(["12"]),
+        exponent: new Set(["3"]),
+      },
+    };
     const openEntry: X2ValueDataflowState = {
       ...fractional,
       entry: { kind: "open", raw: new Set(["0.5"]) },
@@ -4428,6 +4439,8 @@ describe("ir passes on synthetic programs", () => {
     expect(x2StateHasVisibleUnaryNoop(integerShape, 0x34)).toBe(true);
     expect(x2StateHasVisibleUnaryNoop(integerShape, 0x31)).toBe(true);
     expect(x2StateHasVisibleUnaryNoop(signShape, 0x32)).toBe(true);
+    expect(x2StateHasVisibleUnaryNoop(vpContextShape, 0x31)).toBe(true);
+    expect(x2StateHasVisibleUnaryNoop(vpContextShape, 0x34)).toBe(false);
     expect(x2StateHasVisibleUnaryNoop(openEntry, 0x35)).toBe(false);
   });
 
@@ -29735,6 +29748,29 @@ describe("ir passes on synthetic programs", () => {
       plain(0x0e, "В↑"),
       plain(0x02, "2"),
       plain(0x13, "/"),
+      halt(),
+    ]);
+  });
+
+  it("vp-x2-peephole removes a no-op К |x| in closed VP display context", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x31, "К |x|"),
+      halt(),
+    ];
+    const result = vpX2Peephole.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x02, "2"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
       halt(),
     ]);
   });

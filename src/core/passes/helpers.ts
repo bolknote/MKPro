@@ -5892,7 +5892,7 @@ export function x2StateHasVisibleUnaryNoop(
   state: X2ValueDataflowState | undefined,
   opcode: number,
 ): boolean {
-  if (state === undefined || !x2StateIsClosedPlainContext(state)) return false;
+  if (state === undefined || !x2StateIsClosedDotRestoreValueContext(state)) return false;
   switch (opcode) {
     case X2_UNARY_FRACTION:
       return x2StateHasFractionalNoopVisibleX(state);
