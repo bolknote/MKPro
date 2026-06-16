@@ -16,7 +16,6 @@ import {
   x2StateHasSameDotSafeStructuralMantissaInXAndX2,
   x2StateHasOnlyDotSafeStructuralMantissaX2,
   x2StateHasUnsafeDotRestoreShapeX2,
-  x2StateIsClosedPlainContext,
   type DirectReturnAnalysisContext,
   type IrPass,
   type IrPassFn,
@@ -55,7 +54,7 @@ const run: IrPassFn = (ops) => {
       sourceProvesFreeStandingRestore,
       directReturnContext,
     )) continue;
-    if (!isDotSafeValueContext(state)) continue;
+    if (!isClosedDotRestoreValueContext(state)) continue;
     if (
       x2StateHasUnsafeDotRestoreShapeX2(state) &&
       !x2StateHasOnlyDotSafeStructuralMantissaX2(state)
@@ -102,10 +101,16 @@ function dotCanExposeContextSensitiveRestore(
   ).preservesVpEntrySource;
 }
 
-function isDotSafeValueContext(
+function isClosedDotRestoreValueContext(
   state: ReturnType<typeof computeX2ValueStates>[number],
 ): boolean {
-  return x2StateIsClosedPlainContext(state);
+  if (state?.entry.kind !== "closed") return false;
+  const structuralEntry = state.structuralEntry?.kind ?? "none";
+  if (structuralEntry !== "none") return false;
+  const decimalVpContext = state.vpContext?.kind ?? "none";
+  if (decimalVpContext !== "none" && decimalVpContext !== "exponent") return false;
+  const structuralVpContext = state.structuralVpContext?.kind ?? "none";
+  return structuralVpContext === "none" || structuralVpContext === "exponent";
 }
 
 export const x2NoopRestore: IrPass = {

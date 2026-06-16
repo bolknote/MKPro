@@ -1188,7 +1188,11 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     vs `-02`) so they do not satisfy the exact equality proof, but a separate
     visible-decimal proof can still remove `.` when the restored display value
     is the same and no later context-sensitive restore observes the raw X2
-    mantissa shape. The same proof accepts emulator-pinned dot-safe structural
+    mantissa shape. That restored-visible decimal proof also applies after a
+    closed `ВП` exponent-entry context, so exact decimal exponent display
+    shapes such as `1 ВП 8` can drop a no-op `.` after non-observing stores or
+    gaps without promoting the exponent spelling to a general dot-safe value.
+    The same proof accepts emulator-pinned dot-safe structural
     single-hex mantissas `A`/`B`/`C` after closed-context sign-pair modeling:
     when visible `X` and hidden X2 carry the same structural restore key, the
     trailing `.` is removable under the existing exposure guards. Unsafe

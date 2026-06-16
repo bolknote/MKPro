@@ -17919,6 +17919,29 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-noop-restore removes dot after a proved decimal exponent display shape", () => {
+    const program: IrOp[] = [
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      store("2"),
+      store("3"),
+      plain(0x0a, "."),
+      halt(),
+    ];
+    const result = x2NoopRestore.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops).toEqual([
+      plain(0x01, "1"),
+      plain(0x0c, "ВП"),
+      plain(0x08, "8"),
+      store("2"),
+      store("3"),
+      halt(),
+    ]);
+  });
+
   it("x2-noop-restore keeps dot in active exponent-entry context", () => {
     const program: IrOp[] = [
       plain(0x05, "5"),
