@@ -121,6 +121,7 @@ import {
   x2ShapeSetsHaveSameStructuralShape,
   x2ShapeSetSafety,
   x2SignChangedSharedStructuralShapeFacts,
+  x2StableUnaryExpressionValueFact,
   x2StructuralRestoreShapeFacts,
   x2StructuralMantissaAppendDigitsShapeFact,
   x2StructuralMantissaConcatShapeFacts,
@@ -134,6 +135,7 @@ import {
   x2StatesHaveSameVpEntrySource,
   x2StatesHaveSameVpEntrySignSource,
   x2StateHasUnsafeDotRestoreShapeX2,
+  x2UnaryExpressionValueFacts,
   x2ValueFactRestoredVisibleDecimal,
   x2ValueSetHasFact,
   x2ValueSetHasIntersection,
@@ -5196,6 +5198,18 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueFactRestoredVisibleDecimal("expr-key:32(shape:super-exponent:FA:2)")).toBe("0");
     expect(x2ValueFactRestoredVisibleDecimal("expr-key:31(expr-key:32(shape:super-exponent:FA:2))")).toBe("0");
     expect(x2ValueFactRestoredVisibleDecimal("expr-key:32(shape:hex:FA00:mantissa)")).toBeUndefined();
+    expect(x2StableUnaryExpressionValueFact(
+      plain(0x31, "К |x|"),
+      "expr-key:32(shape:super-exponent:FA:2)",
+    )).toBeUndefined();
+    expect(x2ValueStateText(x2UnaryExpressionValueFacts(
+      plain(0x31, "К |x|"),
+      "expr-key:32(shape:super-exponent:FA:2)",
+    ))).toEqual(["decimal:0:normalized"]);
+    expect(x2StableUnaryExpressionValueFact(
+      plain(0x31, "К |x|"),
+      "expr-key:32(shape:hex:FA00:mantissa)",
+    )).toBe("expr-key:31(expr-key:32(shape:hex:FA00:mantissa))");
     expect(x2ValueStateText(directSuperExponent?.x)).toContain("decimal:0:normalized");
     expect(x2ShapeStateText(directSuperExponent?.xShape)).toContain("mantissa:0:decimal");
     expect(x2ValueStateText(directSuperExponent?.x)).not.toContain(

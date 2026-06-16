@@ -12195,7 +12195,7 @@ function stableExpressionValueFactOpcode(fact: X2ValueFact): number | undefined 
 }
 
 function opcodePreservesPinnedStructuralExponentSource(opcode: number): boolean {
-  return opcode === 0x10 || opcode === 0x11 || opcode === 0x12 || opcode === 0x13;
+  return opcode === 0x10 || opcode === 0x11 || opcode === 0x12 || opcode === 0x13 || opcode === 0x32;
 }
 
 function canonicalStableShapeSourceKey(
