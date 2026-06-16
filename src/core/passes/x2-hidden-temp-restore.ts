@@ -130,7 +130,7 @@ const run: IrPassFn = (ops) => {
         (
           recallSyncProvesVpSource &&
           vpSourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp &&
-          !vpSourcePlan.source.hasSignRestoreGapBeforeVp
+          hiddenTempRecallSyncPreservesSignedVpSource(vpSourcePlan.source)
         )
       );
     if (
@@ -202,6 +202,14 @@ function dotRestoreOp(register: RegisterName, source: IrOp): IrOp {
       comment: [sourceComment, `restore ${register} from hidden X2 temp`].filter(Boolean).join("; "),
     },
   };
+}
+
+function hiddenTempRecallSyncPreservesSignedVpSource(
+  source: ReturnType<typeof x2PlanDotReplacementVpSource>["source"],
+): boolean {
+  if (!source.hasSignRestoreGapBeforeVp) return true;
+  return source.signRestoreSourceProof.reason === "source-match-explicit-sign" ||
+    source.signRestoreSourceProof.reason === "source-match-nonzero-sign";
 }
 
 function hiddenTempStoreSourceAlreadySyncedInX2(
