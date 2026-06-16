@@ -5461,9 +5461,14 @@ export function x2ExponentMantissaSignChangedShapeFact(fact: X2ShapeFact): X2Sha
 
 export function x2ClosedStructuralExponentMantissaShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
   const model = x2ShapeDataModelForFact(fact);
-  if (model.kind !== "exponent-entry") return undefined;
-  const mantissa = x2MantissaShapeFactFromModel(model.mantissa);
-  return mantissa === undefined ? undefined : x2StructuralMantissaShiftShapeFact(mantissa, model.exponentRaw);
+  const mantissa = x2ClosedStructuralExponentMantissaModel(model);
+  return mantissa === undefined ? undefined : x2MantissaShapeFactFromModel(mantissa);
+}
+
+export function x2ClosedStructuralExponentMantissaModel(
+  model: X2ShapeDataModel,
+): X2MantissaDataModel | undefined {
+  return model.kind === "exponent-entry" ? model.closedStructuralMantissa : undefined;
 }
 
 export function x2ClosedExponentDisplayShapeFact(fact: X2ShapeFact): X2ShapeFact | undefined {
@@ -5486,11 +5491,16 @@ export function x2StructuralMantissaShiftShapeFact(
   exponentRaw: string,
 ): X2ShapeFact | undefined {
   const model = x2ShapeDataModelForFact(fact);
-  if (model.kind !== "mantissa" || (model.radix !== "hex" && model.radix !== "super")) return undefined;
-  const shifted = shiftedStructuralMantissaRaw(model.canonical, exponentRaw);
-  if (shifted === undefined) return undefined;
-  const radix = model.radix === "super" && shifted !== model.canonical ? "hex" : model.radix;
-  return x2MantissaShapeFactFromModel(structuralMantissaDataModel(radix, shifted, "structuralOnly"));
+  if (model.kind !== "mantissa") return undefined;
+  const shifted = x2StructuralMantissaShiftShapeModel(model, exponentRaw);
+  return shifted === undefined ? undefined : x2MantissaShapeFactFromModel(shifted);
+}
+
+export function x2StructuralMantissaShiftShapeModel(
+  model: X2MantissaDataModel,
+  exponentRaw: string,
+): X2MantissaDataModel | undefined {
+  return closedStructuralExponentMantissaModel(model, exponentRaw);
 }
 
 export function x2StructuralMantissaAppendDigitsShapeFact(
@@ -5559,7 +5569,7 @@ export function x2StructuralMantissaConcatShapeSetFacts(
   return output.size === 0 ? undefined : output;
 }
 
-function x2StructuralMantissaAppendDigitsModel(
+export function x2StructuralMantissaAppendDigitsModel(
   model: X2MantissaDataModel,
   suffixRaw: string,
 ): X2MantissaDataModel | undefined {

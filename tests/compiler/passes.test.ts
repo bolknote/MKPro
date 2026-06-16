@@ -54,6 +54,7 @@ import {
   x2ClosedDecimalExponentDisplayShapeFact,
   x2ClosedExponentDisplayShapeFact,
   x2ClosedStructuralExponentMantissaShapeFact,
+  x2ClosedStructuralExponentMantissaModel,
   x2ExponentMantissaSignChangedShapeFact,
   x2ExponentShapeFactFromMantissaFact,
   x2ExponentSignChangedShapeFact,
@@ -123,6 +124,7 @@ import {
   x2SignChangedSharedStructuralShapeFacts,
   x2StableUnaryExpressionValueFact,
   x2StructuralRestoreShapeFacts,
+  x2StructuralMantissaAppendDigitsModel,
   x2StructuralMantissaAppendDigitsShapeFact,
   x2StructuralMantissaConcatShapeFacts,
   x2StructuralMantissaConcatShapeModel,
@@ -131,6 +133,7 @@ import {
   x2StructuralMantissaFirstDigitSpliceShapeModel,
   x2StructuralMantissaFirstDigitSpliceShapeSetFacts,
   x2StructuralMantissaShiftShapeFact,
+  x2StructuralMantissaShiftShapeModel,
   x2StatesHaveSameExplicitVpEntrySignSource,
   x2StatesHaveSameVpEntrySource,
   x2StatesHaveSameVpEntrySignSource,
@@ -1526,6 +1529,47 @@ describe("ir passes on synthetic programs", () => {
       raw: "super:FA.",
       safety: "unknown",
     });
+  });
+
+  it("x2 shape algebra exposes structural exponent closure as model operations", () => {
+    const superExponent = x2ShapeDataModelForFact("super-exponent:FA:2");
+    const closedSuperExponent = x2ClosedStructuralExponentMantissaModel(superExponent);
+    expect(closedSuperExponent).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      canonical: "FA00",
+      safety: "structuralOnly",
+    });
+    expect(
+      closedSuperExponent === undefined
+        ? undefined
+        : x2MantissaShapeFactFromModel(closedSuperExponent),
+    ).toBe("hex:FA00:mantissa");
+    expect(x2ClosedStructuralExponentMantissaShapeFact("super-exponent:FA:2")).toBe("hex:FA00:mantissa");
+    expect(x2ShapeFactRestoredVisibleDecimal("hex:FA00:mantissa")).toBeUndefined();
+
+    const hexExponent = x2ShapeDataModelForFact("hex-exponent:Г:-2");
+    const closedHexExponent = x2ClosedStructuralExponentMantissaModel(hexExponent);
+    expect(closedHexExponent).toMatchObject({
+      kind: "mantissa",
+      radix: "hex",
+      canonical: "0.0Г",
+      safety: "structuralOnly",
+    });
+    expect(
+      closedHexExponent === undefined
+        ? undefined
+        : x2MantissaShapeFactFromModel(closedHexExponent),
+    ).toBe("hex:0.0Г:mantissa");
+
+    const superMantissa = x2ShapeDataModelForFact("super:FA");
+    if (superMantissa.kind !== "mantissa") throw new Error("expected a mantissa model");
+    expect(x2MantissaShapeFactFromModel(x2StructuralMantissaShiftShapeModel(superMantissa, "2")!)).toBe(
+      "hex:FA00:mantissa",
+    );
+    expect(x2MantissaShapeFactFromModel(x2StructuralMantissaAppendDigitsModel(superMantissa, "0")!)).toBe(
+      "hex:FA0:mantissa",
+    );
   });
 
   it("x2 shape algebra keeps leading-zero and structural shapes out of no-op equality", () => {

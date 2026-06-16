@@ -1430,7 +1430,12 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `hex:1` proves shape-only `hex:81`) or a restored structural
     exponent-entry with a pure mantissa (`hex:A` + `hex-exponent:B:2` proves
     shape-only `hex:AB00`; `hex-exponent:Г:2` + decimal `05` proves
-    `hex:Г0005`) without becoming a decimal value. Exact decimal
+    `hex:Г0005`) without becoming a decimal value.
+    Structural exponent closure, shift, and append are exposed at the
+    `X2ShapeDataModel`/`X2MantissaDataModel` layer, so later `ВП`/X2 splice
+    and hidden-temp passes can compose these proofs without round-tripping
+    through string-shaped facts.
+    Exact decimal
     display-shape facts feed unary display-shape
     results and, when the unary result itself is proved exact, concrete decimal
     result facts: `exponent:5:-1:decimal` through `К {x}` yields both the
