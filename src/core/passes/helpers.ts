@@ -4032,9 +4032,52 @@ export function x2PreviousStackLiftDuplicateYProducerIndex(
   context: DirectReturnAnalysisContext,
 ): number | undefined {
   if (!x2StateHasSameVisibleXAndY(state)) return undefined;
-  const producerIndex = x2PreviousStackLiftAndX2SyncProducerIndex(ops, start, context);
+  const producerIndex = x2PreviousStackLiftDuplicateYStackProducerIndex(ops, start, context);
   if (producerIndex === undefined) return undefined;
   return removingPreShiftLiftCanExposeStack(ops, stackExposureEnd) ? undefined : producerIndex;
+}
+
+function x2PreviousStackLiftDuplicateYStackProducerIndex(
+  ops: readonly IrOp[],
+  end: number,
+  context: DirectReturnAnalysisContext,
+): number | undefined {
+  for (let index = end - 1; index >= 0; index -= 1) {
+    const op = ops[index]!;
+    if (x2IsStackLiftAndX2SyncProducer(op)) return index;
+    if (isKnownReturnCallOp(op) && x2KnownReturnCallReachesStackLiftAndX2Sync(ops, op, context)) return index;
+    if (!x2IsBackwardDuplicateYStackGapOp(ops, op, index, context)) return undefined;
+  }
+  return undefined;
+}
+
+function x2IsBackwardDuplicateYStackGapOp(
+  ops: readonly IrOp[],
+  op: IrOp,
+  index: number,
+  context: DirectReturnAnalysisContext,
+): boolean {
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  if (op.kind === "label") return !context.labelEntries.has(index);
+  if (isKnownReturnCallOp(op)) return x2SimpleDirectReturnPreservesStack(ops, op, context);
+  if (x2IsKnownFallthroughStackPreservingConditional(op)) return true;
+  switch (op.kind) {
+    case "store":
+    case "indirect-store":
+    case "orphan-address":
+      return true;
+    case "plain":
+      return analyzeX2StackEffect(op).stackPreserves;
+    default:
+      return false;
+  }
+}
+
+function x2IsKnownFallthroughStackPreservingConditional(op: IrOp): boolean {
+  if (op.kind !== "cjump" && op.kind !== "loop" && op.kind !== "indirect-cjump") return false;
+  if (op.kind === "indirect-cjump" && knownIndirectFlowTarget(op) === undefined) return false;
+  if (hasRewriteBarrier(op) || isDisplayFocusSensitive(op)) return false;
+  return analyzeX2StackEffect(op).stackPreserves;
 }
 
 export function planX2ReplacementStackLift(

@@ -13303,6 +13303,39 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("replacement stack scheduler accepts duplicate-Y producers through X-changing stack gaps", () => {
+    const program: IrOp[] = [
+      plain(0x00, "0"),
+      plain(0x0e, "В↑"),
+      plain(0x0d, "Cx"),
+      store("1"),
+      recall("1"),
+      plain(0x10, "+"),
+      halt(),
+    ];
+    const x2RegisterStates = computeX2RegisterStates(program);
+    const x2ValueStates = computeX2ValueStates(program, { trackRegisterMemory: true });
+    const context = directReturnAnalysisContext(program);
+
+    expect(analyzeRecallRemoval(program, 4, x2RegisterStates[4], x2ValueStates[4], context)).toMatchObject({
+      register: "1",
+      exposesStackLift: true,
+      exposesX2Restore: false,
+      removable: false,
+    });
+    expect(planRecallRemovalWithStackScheduler(
+      program,
+      4,
+      x2RegisterStates[4],
+      x2ValueStates[4],
+      context,
+    )).toMatchObject({
+      stackLiftProducerIndex: 1,
+      stackLiftAlreadySupplied: true,
+      removable: true,
+    });
+  });
+
   it("replacement stack scheduler rejects disabled or invalidated duplicate-Y producers", () => {
     const program: IrOp[] = [
       plain(0x02, "2"),
