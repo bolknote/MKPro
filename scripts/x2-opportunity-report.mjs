@@ -522,17 +522,17 @@ function markdown(rows, workers, timeoutMs = requestedWorkerTimeoutMs(), options
     "",
     "## Measurements",
     "",
-    "| Example | Cells | Over 105 | X2-related optimizations | X2 surface | Residual patterns | Blocked local X2 |",
-    "| --- | ---: | ---: | --- | ---: | --- | --- |",
+    "| Example | Cells | Over 105 | X2-related optimizations | X2 surface | Residual patterns | Actionable X2 blockers | Non-actionable audit |",
+    "| --- | ---: | ---: | --- | ---: | --- | --- | --- |",
   ];
 
   for (const row of rows) {
     if ("error" in row) {
-      lines.push(`| \`${rowName(row)}\` | - | - | compile error: ${row.error.replace(/\|/gu, "\\|")} | - | - | - |`);
+      lines.push(`| \`${rowName(row)}\` | - | - | compile error: ${row.error.replace(/\|/gu, "\\|")} | - | - | - | - |`);
       continue;
     }
     lines.push(
-      `| \`${rowName(row)}\` | ${row.steps} | ${row.over > 0 ? `+${row.over}` : row.over} | ${formatList(row.x2Optimizations)} | ${row.x2Surface.score} | ${formatPatterns(row.x2Surface.patterns)} | ${formatBlockedSurface(row.x2Surface.counts, row.x2Surface.blockedPatterns)} |`,
+      `| \`${rowName(row)}\` | ${row.steps} | ${row.over > 0 ? `+${row.over}` : row.over} | ${formatList(row.x2Optimizations)} | ${row.x2Surface.score} | ${formatPatterns(row.x2Surface.patterns)} | ${formatActionableBlockedX2Surface(row.x2Surface.counts, row.x2Surface.blockedPatterns)} | ${formatNonActionableAuditSurface(row.x2Surface.counts, row.x2Surface.blockedPatterns)} |`,
     );
   }
 
@@ -543,13 +543,13 @@ function markdown(rows, workers, timeoutMs = requestedWorkerTimeoutMs(), options
       "",
       "This is a static post-optimization scan. A high score is not a proof that cells can be removed; it marks programs where X2 restores, recall-syncs, stack-lifts, conditionals, or nearby VP/sign/dot patterns remain visible after all passes.",
       "",
-      "| Example | Score | Restore cells (`.` `/-/` `ВП`) | Recall syncs | Lifts | Conditional X2 | Top patterns | Blocked local X2 |",
-      "| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
+      "| Example | Score | Restore cells (`.` `/-/` `ВП`) | Recall syncs | Lifts | Conditional X2 | Top patterns | Actionable X2 blockers | Non-actionable audit |",
+      "| --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |",
     );
     for (const row of topResidualX2Surface) {
       const counts = row.x2Surface.counts;
       lines.push(
-        `| \`${rowName(row)}\` | ${row.x2Surface.score} | ${counts.dot}/${counts.sign}/${counts.vp} | ${counts.directRecallSync + counts.indirectRecallSync} | ${counts.stackLiftSync} | ${counts.conditionalX2} | ${formatPatterns(row.x2Surface.patterns)} | ${formatBlockedSurface(counts, row.x2Surface.blockedPatterns)} |`,
+        `| \`${rowName(row)}\` | ${row.x2Surface.score} | ${counts.dot}/${counts.sign}/${counts.vp} | ${counts.directRecallSync + counts.indirectRecallSync} | ${counts.stackLiftSync} | ${counts.conditionalX2} | ${formatPatterns(row.x2Surface.patterns)} | ${formatActionableBlockedX2Surface(counts, row.x2Surface.blockedPatterns)} | ${formatNonActionableAuditSurface(counts, row.x2Surface.blockedPatterns)} |`,
       );
     }
   }
@@ -602,28 +602,54 @@ function actionableBlockedX2Count(counts) {
     counts.requiredRecallRestoreStackAndX2;
 }
 
-function formatBlockedSurface(counts, blockedPatterns = []) {
+function nonActionableRequiredRecallRestoreCount(counts) {
+  return counts.requiredRecallRestore -
+    actionableBlockedX2Count(counts);
+}
+
+const ACTIONABLE_BLOCKED_PATTERN_NAMES = new Set([
+  "required:x2",
+  "required:x2-proof",
+  "required:stack+x2",
+]);
+
+function formatActionableBlockedX2Surface(counts, blockedPatterns = []) {
+  const count = actionableBlockedX2Count(counts);
   const parts = [];
-  if (counts.requiredRecallRestore > 0) {
-    parts.push(`required recall->restore=${counts.requiredRecallRestore}${formatRequiredRecallRestoreReasons(counts)}`);
+  if (count > 0) {
+    parts.push(`recall->restore=${count}${formatRequiredRecallRestoreReasons(counts, "actionable")}`);
+  }
+  const samples = blockedPatterns.filter((item) => ACTIONABLE_BLOCKED_PATTERN_NAMES.has(item.name));
+  if (samples.length > 0) parts.push(`samples ${formatPatterns(samples)}`);
+  return parts.length === 0 ? "-" : parts.join(", ");
+}
+
+function formatNonActionableAuditSurface(counts, blockedPatterns = []) {
+  const parts = [];
+  const requiredNonActionable = nonActionableRequiredRecallRestoreCount(counts);
+  if (requiredNonActionable > 0) {
+    parts.push(`required recall->restore=${requiredNonActionable}${formatRequiredRecallRestoreReasons(counts, "non-actionable")}`);
   }
   if (counts.displayRecallRestore > 0) parts.push(`display recall->restore=${counts.displayRecallRestore}`);
   if (counts.displayEmptyBeforeVp > 0) parts.push(`display empty->vp=${counts.displayEmptyBeforeVp}`);
   if (counts.stackExposingLiftSync > 0) parts.push(`stack-exposing lift sync=${counts.stackExposingLiftSync}`);
-  if (blockedPatterns.length > 0) parts.push(`samples ${formatPatterns(blockedPatterns)}`);
+  const samples = blockedPatterns.filter((item) => !ACTIONABLE_BLOCKED_PATTERN_NAMES.has(item.name));
+  if (samples.length > 0) parts.push(`samples ${formatPatterns(samples)}`);
   return parts.length === 0 ? "-" : parts.join(", ");
 }
 
-function formatRequiredRecallRestoreReasons(counts) {
+function formatRequiredRecallRestoreReasons(counts, mode = "all") {
   const reasons = [];
-  if (counts.requiredRecallRestoreX2 > 0) reasons.push(`x2=${counts.requiredRecallRestoreX2}`);
-  if (counts.requiredRecallRestoreStack > 0) reasons.push(`stack=${counts.requiredRecallRestoreStack}`);
-  if (counts.requiredRecallRestoreStackAndX2 > 0) reasons.push(`stack+x2=${counts.requiredRecallRestoreStackAndX2}`);
-  if (counts.requiredRecallRestoreVisibleX > 0) reasons.push(`visible-x=${counts.requiredRecallRestoreVisibleX}`);
-  if (counts.requiredRecallRestoreX2Proof > 0) reasons.push(`x2-proof=${counts.requiredRecallRestoreX2Proof}`);
-  if (counts.requiredRecallRestoreNoProof > 0) reasons.push(`no-proof=${counts.requiredRecallRestoreNoProof}`);
-  if (counts.requiredRecallRestoreNoPlan > 0) reasons.push(`no-plan=${counts.requiredRecallRestoreNoPlan}`);
-  if (counts.requiredRecallRestoreOther > 0) reasons.push(`other=${counts.requiredRecallRestoreOther}`);
+  const includeActionable = mode === "all" || mode === "actionable";
+  const includeNonActionable = mode === "all" || mode === "non-actionable";
+  if (includeActionable && counts.requiredRecallRestoreX2 > 0) reasons.push(`x2=${counts.requiredRecallRestoreX2}`);
+  if (includeNonActionable && counts.requiredRecallRestoreStack > 0) reasons.push(`stack=${counts.requiredRecallRestoreStack}`);
+  if (includeActionable && counts.requiredRecallRestoreStackAndX2 > 0) reasons.push(`stack+x2=${counts.requiredRecallRestoreStackAndX2}`);
+  if (includeNonActionable && counts.requiredRecallRestoreVisibleX > 0) reasons.push(`visible-x=${counts.requiredRecallRestoreVisibleX}`);
+  if (includeActionable && counts.requiredRecallRestoreX2Proof > 0) reasons.push(`x2-proof=${counts.requiredRecallRestoreX2Proof}`);
+  if (includeNonActionable && counts.requiredRecallRestoreNoProof > 0) reasons.push(`no-proof=${counts.requiredRecallRestoreNoProof}`);
+  if (includeNonActionable && counts.requiredRecallRestoreNoPlan > 0) reasons.push(`no-plan=${counts.requiredRecallRestoreNoPlan}`);
+  if (includeNonActionable && counts.requiredRecallRestoreOther > 0) reasons.push(`other=${counts.requiredRecallRestoreOther}`);
   return reasons.length === 0 ? "" : ` [${reasons.join(", ")}]`;
 }
 

@@ -35,19 +35,21 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
   optimization, and classifies blocked `recall->restore` leftovers by blocker:
   `x2`, `stack`, `stack+x2`, `visible-x`, `x2-proof`, `no-proof`, `no-plan`, or
   `other`. `visible-x` means the recall is still needed to load the visible X
-  value; `x2-proof` means visible X is proved but the hidden X2 sync is not. The
-  blocked column also prints short step-window samples for each blocker, so the
-  next proof layer can be targeted at the exact remaining restore exposure. The
+  value; `x2-proof` means visible X is proved but the hidden X2 sync is not.
+  The report separates actionable hidden-X2 proof gaps from non-actionable audit
+  leftovers: `Actionable X2 blockers` contains only `x2`, `x2-proof`, and
+  `stack+x2`; `Non-actionable audit` keeps `visible-x`, display-sensitive,
+  stack-only, no-proof/no-plan, and sample windows visible without treating them
+  as unfinished X2 work. The
   snapshot counts only `x2`, `x2-proof`, and `stack+x2` as actionable blocked
-  local X2; `visible-x`, display-sensitive, and stack-only rows are still useful
-  audit facts but are not hidden-X2 proof gaps by themselves. The
+  local X2. The
   report decodes direct address bytes before running its local CFG checks, so
   `БП`/`ПП`/`F x?0`/`F Lx` targets are classified through the same address-cell
   model as the optimizer. `npm run x2:check` runs the same report in assert mode
   and fails if a residual local X2 candidate pattern or actionable blocked local
   X2 proof gap appears again; display-sensitive and stack-only rows remain
-  report-only.
-  shape that the final listing shows. The report runs examples in worker
+  report-only. The report runs against the final listing shape emitted by the
+  compiler. The report runs examples in worker
   threads (`X2_REPORT_WORKERS`, default capped at 4) and applies a per-file
   worker timeout (`X2_REPORT_TIMEOUT_MS`, default 120000, `0` disables) so one
   pathological compile is reported as a row error instead of hanging the audit.
