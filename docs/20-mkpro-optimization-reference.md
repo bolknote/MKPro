@@ -1486,7 +1486,9 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     Decimal first-digit splice is exposed as a model operation too: decimal
     sources use their first non-zero digit, structural sources may contribute an
     exact leading decimal digit including `0`, signed-zero decimal sources are
-    rejected, and negative decimal targets remain rejected.
+    rejected, and negative decimal targets remain rejected. Dataflow feeds that
+    operation with source and target mantissa models directly rather than
+    converting through an intermediate digit-string rewrite.
     Decimal first-digit plus decimal tail uses the same context rule for
     ordinary decimal exponent-entry facts: immediate `←→; ВП` inherits the old
     decimal tail (`800`), while an empty preserving gap can prove the current

@@ -11402,14 +11402,13 @@ function x2FirstMantissaDigitFromShapeFact(fact: X2ShapeFact): string | undefine
   return mantissa.digits[0];
 }
 
-function decimalVpFirstDigitSourceDigitFromShapeFact(fact: X2ShapeFact): string | undefined {
+function firstDigitSpliceSourceMantissaModel(fact: X2ShapeFact): X2MantissaDataModel | undefined {
   const model = x2ShapeDataModelForFact(fact);
-  const mantissa = model.kind === "mantissa"
+  return model.kind === "mantissa"
     ? model
     : model.kind === "exponent-entry"
       ? model.mantissa
       : undefined;
-  return mantissa === undefined ? undefined : decimalVpFirstDigitSourceDigitFromModel(mantissa);
 }
 
 function decimalVpFirstDigitSourceDigitFromModel(mantissa: X2MantissaDataModel): string | undefined {
@@ -13419,11 +13418,13 @@ function decimalFirstDigitVpSpliceMantissas(
   const sources = restoredVpFirstDigitSourceShapeFacts(xShape);
   const targets = decimalVpFirstDigitSpliceTargetShapeFacts(x2Shape, includeExponentTargets);
   for (const source of sources) {
-    const sourceDigit = decimalVpFirstDigitSourceDigitFromShapeFact(source);
-    if (sourceDigit === undefined) continue;
+    const sourceModel = firstDigitSpliceSourceMantissaModel(source);
+    if (sourceModel === undefined) continue;
     for (const target of targets) {
-      const spliced = decimalFirstDigitVpSpliceMantissa(sourceDigit, target);
-      if (spliced !== undefined) mantissas.add(spliced);
+      const targetModel = firstDigitSpliceTargetMantissaModel(target);
+      if (targetModel === undefined) continue;
+      const spliced = x2DecimalMantissaFirstDigitSpliceModel(sourceModel, targetModel);
+      if (spliced !== undefined) mantissas.add(spliced.canonical);
     }
   }
   return mantissas.size === 0 ? undefined : mantissas;
@@ -13455,16 +13456,6 @@ function closedDecimalExponentPureMantissaDigitShapeFacts(shapes: X2ShapeSet | u
     output.add(closed);
   }
   return output;
-}
-
-function decimalFirstDigitVpSpliceMantissa(
-  sourceDigit: string,
-  target: X2ShapeFact,
-): string | undefined {
-  const targetModel = x2ShapeDataModelForFact(target);
-  if (targetModel.kind !== "mantissa") return undefined;
-  const sourceModel = structuralMantissaDataModel("hex", sourceDigit, "structuralOnly");
-  return x2DecimalMantissaFirstDigitSpliceModel(sourceModel, targetModel)?.canonical;
 }
 
 function vpFirstDigitSpliceTargetShapeFacts(
