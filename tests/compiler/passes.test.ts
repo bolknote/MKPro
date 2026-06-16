@@ -14114,6 +14114,33 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-literal-restore replaces a repeated decimal display shape in a closed VP context", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      store("2"),
+      store("3"),
+      plain(0x05, "5"),
+      plain(0x00, "0"),
+      plain(0x00, "0"),
+      plain(0x00, "0"),
+      halt(),
+    ];
+    const result = x2LiteralRestore.run(program, ctx);
+
+    expect(result.applied).toBe(3);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      store("2"),
+      store("3"),
+      { kind: "plain", opcode: 0x0a, meta: { mnemonic: ".", comment: "restore literal 5000 from hidden X2 temp" } },
+      halt(),
+    ]);
+  });
+
   it("x2-literal-restore replaces a repeated fractional-mantissa exponent literal with dot", () => {
     const program: IrOp[] = [
       plain(0x01, "1"),

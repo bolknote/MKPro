@@ -5806,6 +5806,16 @@ export function x2StateIsClosedPlainContext(state: X2ValueDataflowState | undefi
     (state.structuralVpContext === undefined || state.structuralVpContext.kind === "none");
 }
 
+export function x2StateIsClosedDotRestoreValueContext(state: X2ValueDataflowState | undefined): boolean {
+  if (state?.entry.kind !== "closed") return false;
+  const structuralEntry = state.structuralEntry?.kind ?? "none";
+  if (structuralEntry !== "none") return false;
+  const decimalVpContext = state.vpContext?.kind ?? "none";
+  if (decimalVpContext !== "none" && decimalVpContext !== "exponent") return false;
+  const structuralVpContext = state.structuralVpContext?.kind ?? "none";
+  return structuralVpContext === "none" || structuralVpContext === "exponent";
+}
+
 const X2_UNARY_ABS = 0x31;
 const X2_UNARY_SIGN = 0x32;
 const X2_UNARY_INTEGER = 0x34;

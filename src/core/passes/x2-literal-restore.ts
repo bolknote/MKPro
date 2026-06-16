@@ -24,6 +24,7 @@ import {
   x2SyncCanExposeContextSensitiveRestore,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateHasSameDotRestoreValueInXAndX2,
+  x2StateIsClosedDotRestoreValueContext,
   x2StateIsClosedPlainContext,
   x2KnownReturnCallPreservesStackXAndX2,
   x2BinaryExpressionValueFacts,
@@ -1089,6 +1090,23 @@ function markReplacedStackLiftProducers(
   }
 }
 
+function canReplaceRunInCurrentX2Context(
+  ops: readonly IrOp[],
+  start: number,
+  end: number,
+  state: X2ValueDataflowState | undefined,
+): boolean {
+  if (x2StateIsClosedPlainContext(state)) return true;
+  return x2StateIsClosedDotRestoreValueContext(state) && !runContainsVp(ops, start, end);
+}
+
+function runContainsVp(ops: readonly IrOp[], start: number, end: number): boolean {
+  for (let index = start; index <= end; index += 1) {
+    if (isPlainVp(ops[index])) return true;
+  }
+  return false;
+}
+
 const run: IrPassFn = (ops) => {
   const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
   const dotSafeStates = computeX2DotRestoreGapStates(ops);
@@ -1116,7 +1134,7 @@ const run: IrPassFn = (ops) => {
       const sourceProvesFreeStandingRestore = x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) ||
         visibleDecimalX2Fact;
       if (
-        x2StateIsClosedPlainContext(state) &&
+        canReplaceRunInCurrentX2Context(ops, index, runAtIndex.end, state) &&
         x2CanUseSourceDotRestoreAt(
           ops,
           index,
@@ -1162,7 +1180,7 @@ const run: IrPassFn = (ops) => {
       !x2StateHasUnsafeDotRestoreShapeX2(state);
     if (
       expressionRun !== undefined &&
-      x2StateIsClosedPlainContext(state) &&
+      canReplaceRunInCurrentX2Context(ops, index, expressionRun.end, state) &&
       x2ValueSetHasAnyFact(state?.x2, expressionRun.x2Facts) &&
       x2CanUseSourceDotRestoreAt(
         ops,

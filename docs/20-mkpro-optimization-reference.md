@@ -1898,9 +1898,13 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     `КНОП`/`К1`/`К2` empty ops), and removing number entry cannot
     expose a consumed stack lift unless the shared stack/X2 proof shows the
     pre-literal `X` and `Y` already hold the same value/display shape and the
-    deeper stack shift is unobservable. The pass uses the shared closed plain-context
-    guard, so active decimal or structural `ВП` contexts keep their numeric
-    entry explicit instead of being treated as ordinary decimal literal input.
+    deeper stack shift is unobservable. The pass uses the shared closed
+    dot-restore value-context guard, so a closed decimal or structural `ВП`
+    context can reuse an exact restored decimal display shape for a repeated
+    literal that does not itself contain `ВП` (for example `5 ВП 3; X->П; X->П;
+    5000` can become a single `.`). Runs that contain their own `ВП` still
+    require the older closed plain context, because deleting that `ВП` can
+    change the previous-command context observed by exponent entry.
     It recognizes ordinary integer or fractional
     digit-runs (`12`, `1.2`), their signed open-entry forms, and normalized
     exponent-entry literals such as
