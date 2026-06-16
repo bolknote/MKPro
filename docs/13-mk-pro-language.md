@@ -944,6 +944,11 @@ raw machine facts appear only when a real IR lowering or optimizer pass selected
 them. Super-dark dispatch and cyclic/dark layout stay as rejected candidates
 unless the layout verifier proves both halves: FA..FF entry/continuation cells
 and a dispatch register containing a proved FA..FF selector.
+Numeric dispatch lowering normally reorders cases for the cheapest residual
+compare chain, but the compiler also tries a size-rescue source-order variant;
+allocator decisions for ephemeral input and dispatch scratch are made against
+the same chosen ordering mode as lowering, so speculative layout candidates do
+not lose required selector storage.
 
 Documented capabilities such as `branch-removal`, `arithmetic-if-*`,
 `zero-condition-test`, `dispatch-compare-chain`, and `fl-decrement-branch` are
@@ -1129,7 +1134,10 @@ candidates:
   lowers as one fused sequence; terminal error underflows use a self-trapping
   `F sqrt` domain guard, and `show; read; resource--; if resource < 0 { ... };
   match key` can keep the read key in `Y` while the resource is checked,
-  including loop-carried prompt headers;
+  including loop-carried prompt headers. When full-program rescue proves it is
+  smaller and the counter is allocated to R0..R3, the stored-input form can use
+  the `К П->X r` pre-decrement side effect for the mutation and recall the stored
+  key afterward;
 - pure expression helpers: repeated expensive pure expressions such as
   generated `digit_at(...)` bodies are shared as ordinary subroutines;
 - remainder fraction lowering: `x - n * int(x / n)` lowers as `frac(x / n) * n`
@@ -2178,13 +2186,16 @@ The pipeline currently contains:
 - **address-code-overlay** — final post-layout proof that can move a label from
   a single-cell op after `БП target` or a proved-terminal `ПП target` onto that
   branch's address byte when the byte is itself the same executable opcode, then
-  remove the duplicated cell. The overlaid executable cell may be an ordinary op
-  or an existing numeric/formal address byte; if its opcode itself takes an
-  address, its operand remains in the next cell. Fixed numeric/formal branch
-  operands are accepted only when their real target is before the removed cell,
-  so shrinking cannot retarget them. The verifier also accepts the self-target
-  form where the branch jumps directly to its own operand byte as executable
-  code, but only after re-layout proves that byte still encodes the removed op.
+  remove the duplicated cell. If the official address byte would not match, the
+  verifier may use the executable byte as a formal-address alias, but only when
+  that formal byte decodes to the same final target label. The overlaid
+  executable cell may be an ordinary op or an existing numeric/formal address
+  byte; if its opcode itself takes an address, its operand remains in the next
+  cell. Fixed numeric/formal branch operands are accepted only when their real
+  target is before the removed cell, so shrinking cannot retarget them. The
+  verifier also accepts the self-target form where the branch jumps directly to
+  its own operand byte as executable code, but only after re-layout proves that
+  byte still encodes the removed op.
 - **x2 opcode profile** — the opcode catalog models the reference split between
   X2-preserving commands, X2-syncing commands that copy X into X2 and then
   normalize/check X, and X2-restoring commands (`0`..`9`, `.`, `/-/`, `ВП`) that

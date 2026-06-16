@@ -17,6 +17,31 @@ function isTerminalFlow(op: IrOp): boolean {
   return op.kind === "jump" || op.kind === "indirect-jump" || op.kind === "return";
 }
 
+function cannotFallThrough(op: IrOp | undefined): boolean {
+  return op === undefined || isTerminalFlow(op);
+}
+
+function previousExecutableCannotFallThrough(ops: readonly IrOp[], index: number): boolean {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const op = ops[cursor];
+    if (op?.kind === "label") return false;
+    return cannotFallThrough(op);
+  }
+  return true;
+}
+
+function removableLabelRun(ops: readonly IrOp[], index: number): { labels: string[]; next: number } | undefined {
+  const labels: string[] = [];
+  let cursor = index;
+  while (cursor < ops.length) {
+    const op = ops[cursor];
+    if (op === undefined || !canRemoveLabel(op)) break;
+    labels.push(op.name);
+    cursor += 1;
+  }
+  return labels.length === 0 ? undefined : { labels, next: cursor };
+}
+
 function terminalFlowKey(op: IrOp): string | undefined {
   if (op.kind === "jump") return `jump:${String(op.target)}:${op.opcode}`;
   if (op.kind === "indirect-jump") return `indirect-jump:${op.register}:${op.opcode}`;
@@ -33,8 +58,41 @@ const run: IrPassFn = (ops) => {
   const remove = new Set<number>();
   let applied = 0;
   let pauseOnlyApplied = 0;
+  const separatedPauseTails = new Map<string, string>();
+
+  for (let i = 0; i + 2 < ops.length; i += 1) {
+    if (remove.has(i)) continue;
+    const run = removableLabelRun(ops, i);
+    if (run === undefined) continue;
+    const pause = ops[run.next];
+    const flow = ops[run.next + 1];
+    if (
+      pause !== undefined &&
+      isPauseLike(pause) &&
+      flow !== undefined &&
+      isTerminalFlow(flow) &&
+      previousExecutableCannotFallThrough(ops, i) &&
+      !hasRewriteBarrier(pause) &&
+      !hasRewriteBarrier(flow)
+    ) {
+      const key = terminalFlowKey(flow);
+      if (key === undefined) continue;
+      const keptLabel = separatedPauseTails.get(key);
+      if (keptLabel === undefined) {
+        separatedPauseTails.set(key, run.labels[0]!);
+        i = run.next + 1;
+        continue;
+      }
+      for (const label of run.labels) rewrite.set(label, keptLabel);
+      for (let index = i; index <= run.next + 1; index += 1) remove.add(index);
+      applied += 1;
+      pauseOnlyApplied += 1;
+      i = run.next + 1;
+    }
+  }
 
   for (let i = 0; i + 7 < ops.length; i += 1) {
+    if (remove.has(i)) continue;
     const firstLabel = ops[i];
     const firstPause = ops[i + 1];
     const firstFlowLabel = ops[i + 2];

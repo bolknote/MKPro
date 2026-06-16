@@ -41,6 +41,7 @@ import {
   buildDiagnostic,
   conditionCompileCost,
   conditionToText,
+  countExpressionCalls,
   countIdentifierReadsInCondition,
   addExpressions,
   binaryOpcode,
@@ -607,6 +608,10 @@ export function compileProcedures(ctx: LoweringCtx): void {
     const order = procEmissionOrder(ctx);
     for (const proc of order) {
       if (ctx.inlineProcNames.has(proc.name)) continue;
+      const skipSingleUseXParamStackStopRisk =
+        matchXParamStackStopRiskRead(ctx.ast, proc) !== undefined &&
+        countExpressionCalls(ctx.ast, proc.name) === 1;
+      if (skipSingleUseXParamStackStopRisk) continue;
       ctx.emitProcedureLabel(proc.name);
       ctx.compileWithinProcedure(proc, () => {
         const xParam = ctx.xParamProcs.get(proc.name);
@@ -1572,8 +1577,10 @@ export function compileUnitDecrement(ctx: LoweringCtx, statement: Extract<Statem
     // A standalone `x--` writes a value that later statements observe directly
     // (e.g. `if x == 0`, `if x <= 0`, `while x != 0`, or `show(x)`). F Lx is not a
     // sound unit decrement for that: it clamps a positive counter at 1 instead of
-    // reaching 0, so any such observation breaks. The correct compact form is the
-    // indirect pre-decrement through R0..R3, which is a true arithmetic -1.
+    // reaching 0, so any such observation breaks. The compact form is the
+    // indirect pre-decrement through R0..R3. The hardware zero-underflow edge
+    // writes a negative sentinel; terminal underflow fusions handle that edge
+    // separately by proving the negative path cannot return.
     if (
       isPredecrementIndirectRegister(register) &&
       targetRangeFitsIndirectDecrement(ctx, statement.target)

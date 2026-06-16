@@ -189,7 +189,7 @@ Smoke tests for packaged games live under `tests/emulator/`.
 | `examples/raja-yoga.mkpro` | Anvarov one-dimensional mask game port that fits the original |
 | `examples/rambo-iii.mkpro` | Lord_BSS three-front defense port that fits the original |
 | `examples/jack-pot.mkpro` | Lord_BSS Jack Pot slot-machine port that fits the original |
-| `examples/pending-optimizer/cave-treasure.mkpro` | hard high-level compactness reference needing size work |
+| `examples/cave-treasure.mkpro` | high-level Treasure Cave port that fits the original |
 
 ## Sources
 

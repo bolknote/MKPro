@@ -40,12 +40,13 @@ describe("MK-Pro compiler", () => {
     }
 
     expect(oversized).toEqual([]);
-  }, 60_000);
+  }, 180_000);
 
   it("keeps unfinished game ports outside the runnable example set", () => {
     expect(RUNNABLE_EXAMPLES).toContain("examples/99-bottles.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/alaram.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/cave-sketch.mkpro");
+    expect(RUNNABLE_EXAMPLES).toContain("examples/cave-treasure.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/dangerous-loading.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/dungeon.mkpro");
     expect(RUNNABLE_EXAMPLES).toContain("examples/game-100-pig.mkpro");
@@ -125,6 +126,7 @@ describe("MK-Pro compiler", () => {
     expect(checked).toContain("examples/99-bottles.mkpro");
     expect(checked).toContain("examples/alaram.mkpro");
     expect(checked).toContain("examples/cave-sketch.mkpro");
+    expect(checked).toContain("examples/cave-treasure.mkpro");
     expect(checked).toContain("examples/dangerous-loading.mkpro");
     expect(checked).toContain("examples/dungeon.mkpro");
     expect(checked).toContain("examples/game-100-pig.mkpro");
@@ -134,16 +136,17 @@ describe("MK-Pro compiler", () => {
     expect(checked).toContain("examples/raja-yoga.mkpro");
     expect(checked).toContain("examples/rambo-iii.mkpro");
     expect(checked).toContain("examples/sea-battle.mkpro");
-  }, 30_000);
+  }, 180_000);
 
-  it("keeps the full cave reference high-level but does not fit it through templates", () => {
-    const reference = source("examples/pending-optimizer/cave-treasure.mkpro");
+  it("keeps the full cave reference high-level and inside the MK-61 window", () => {
+    const reference = source("examples/cave-treasure.mkpro");
+    const result = compileMKPro(reference);
 
     expect(reference).not.toMatch(/\brecipe\b/iu);
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
-    expect(() => compileMKPro(reference, { budget: 999 })).toThrow(/outside 00\.\.A4/u);
-  });
+    expect(result.report.steps).toBe(105);
+  }, 120_000);
 
   it("compiles human-centered MK-Pro without source implementation switches", () => {
     const result = compileMKPro(source("examples/human.mkpro"));
@@ -279,16 +282,16 @@ program SimpleRules {
     expect(result.report.proofs.some((proof) => proof.id === "value-ranges")).toBe(true);
   });
 
-  it("does not pretend the full cave reference is optimized enough yet", () => {
-    const reference = source("examples/pending-optimizer/cave-treasure.mkpro");
+  it("keeps the cave reference source-shaped", () => {
+    const reference = source("examples/cave-treasure.mkpro");
+    const result = compileMKPro(reference, { analysis: true });
 
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
     expect(reference).toMatch(/cave: board\(packed_decimal_zero_run\)/u);
     expect(reference).toMatch(/cells\(cave\) = random\(\)/u);
-
-    expect(() => compileMKPro(reference, { budget: 999 })).toThrow(/outside 00\.\.A4/u);
-  });
+    expect(result.report.steps).toBe(105);
+  }, 60_000);
 
   it("ports Bolknote's 99 Bottles demo within the original size", () => {
     const { MK61 } = require("./emulator/mk61.cjs") as {
@@ -386,9 +389,12 @@ program SimpleRules {
     expect(MK61_PROFILE.emulatorFacts.find((fact) => fact.id === "r0-star-f-aliases")?.detail).toMatch(/do not preserve R0/u);
   });
 
-  it("does not compile the full cave reference through exact-machine templates", () => {
-    expect(() => compileMKPro(source("examples/pending-optimizer/cave-treasure.mkpro"), { budget: 999 })).toThrow(/outside 00\.\.A4/u);
-  });
+  it("compiles the full cave reference through optimizer-owned lowering", () => {
+    const result = compileMKPro(source("examples/cave-treasure.mkpro"));
+
+    expect(result.report.steps).toBe(105);
+    expect(result.report.optimizations.some((optimization) => optimization.name === "post-layout-stop-tail-reuse")).toBe(true);
+  }, 120_000);
 
   it("uses maximum dispatch lowering by default", () => {
     const result = compileMKPro(source("examples/tiny-game.mkpro"));

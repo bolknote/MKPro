@@ -115,6 +115,8 @@ All top-level `examples/*.mkpro` programs are runnable MK-Pro programs. They cov
 - `examples/basic.mkpro`: minimal input/output and arithmetic.
 - `examples/alaram.mkpro`: cockpit interceptor port that fits the original.
 - `examples/cave-sketch.mkpro`: compact cave sketch with generated board movement.
+- `examples/cave-treasure.mkpro`: high-level Treasure Cave port that fits the
+  original without raw code.
 - `examples/dangerous-loading.mkpro`: ferry/loading game whose natural default
   command branch compiles smaller than the original.
 - `examples/dungeon.mkpro`: Lord_BSS corridor dungeon port that fits the original.

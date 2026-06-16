@@ -11,6 +11,7 @@ import {
   optimizePostLayoutAddressCodeOverlay,
   optimizePostLayoutFractionalR0Flow,
   optimizePostLayoutIndirectFlow,
+  optimizePostLayoutStopTailReuse,
 } from "./post-layout-indirect-flow.ts";
 import { buildProgramPatchReport } from "./program-patch.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
@@ -18,9 +19,9 @@ import { MachineEmitter } from "./emit/machine-emitter.ts";
 import type { ProgramAnalysis } from "./emit/program-analysis.ts";
 import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
 import { compileExpression, compileStackStopRiskTail, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
-import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitDomainTrapOnX, emitKnownOneIndirectLoopBack, planDomainErrorGuard, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
+import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitDomainTrapOnX, emitKnownOneIndirectLoopBack, indirectPredecrementUnderflowRegister, planDomainErrorGuard, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
-import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
+import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileSingleBitMaskOpCopyReuse, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountFormattedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
 import { compileBlockCall, compileDecimalSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileOneBasedModuloNormalization, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
 import { compileMultiStackResidentTemps } from "./emit/stack-residency-lowering.ts";
@@ -103,6 +104,7 @@ import {
   matchEqualityConstantCondition,
   matchNearAnyHelperCondition,
   matchNegativeZeroThresholdCondition,
+  matchResidualGuardedUpdate,
   matchStackStopRisk,
   matchXParamReturnDecay,
   matchXParamStackStopRiskRead,
@@ -359,6 +361,27 @@ interface LoweringOptions {
   // occasionally regress an unrelated program; gated as a speculative variant
   // and adopted only when it produces fewer cells.
   freeResidualDispatchScratch?: boolean;
+  // Keep source order for numeric dispatch cases instead of locally reordering
+  // them for the shortest residual compare chain. The local residual order can
+  // block later layout-sensitive dark/indirect dispatch rewrites; this candidate
+  // gives full-program selection the unmodified order when it wins globally.
+  preserveDispatchCaseOrder?: boolean;
+  // Reorder a single-bit mask update followed by a copy of the mask source so
+  // the source is computed once, copied, then transformed into the mask. This is
+  // layout-sensitive because it can break a later shared tail, so it is only a
+  // rescue candidate.
+  singleBitMaskOpCopyReuse?: boolean;
+  // Let setup-time constant preloads double as stable indirect-flow selectors
+  // when the IR can prove no direct or possible indirect store overwrites them.
+  // Layout-sensitive: a locally valid selector can still consume the wrong
+  // target opportunity, so this is selected only by full-program size.
+  dualUseConstantIndirectFlow?: boolean;
+  // Use R0..R3 indirect pre-decrement as the mutation for `x--; if x < 0`
+  // terminal guards, then recall the decremented counter for the actual test.
+  // This preserves normal storage while removing the explicit `1; -; X->П`
+  // sequence. Speculative because the indirect recall's stack effect can change
+  // surrounding show/read fusions, so the full-program selector must approve it.
+  indirectUnderflowDecrement?: boolean;
   // Reuse the value already in X for a read of any copy-equivalent variable
   // (after `A = B`, a read of A or B can reuse X), at scalar sites only
   // (equality/commutative conditions, near_any candidates). Sound because the
@@ -462,6 +485,12 @@ interface LoweringOptions {
   // local model prefers a branch. The whole-program variant is adopted only when
   // the final layout shrinks, so ordinary comparison branches stay byte-stable.
   comparisonGuardedUpdateSelectors?: boolean;
+  // In stored-input show/read/decrement fusion, restore the input after the
+  // resource guard with `П->X input` instead of `X↔Y`. It costs the same local
+  // cell but creates a real X2 sync for downstream recall/dot optimizations.
+  // Speculative because the stack shape changes; selected only by full-program
+  // size search.
+  recallStoredInputAfterDecrement?: boolean;
   // Probe hook: surface the non-overlapping register coalescing pairs on
   // CompileResult.coalesceShares so a follow-up compile can reclaim the freed
   // registers for preloaded constants. Set only on the internal trial compile.
@@ -946,6 +975,42 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     "Freed the unused residual-dispatch scratch register to unlock more preloaded constants",
   );
   add(
+    { preserveDispatchCaseOrder: true },
+    "source-order-dispatch-layout",
+    "Kept numeric dispatch cases in source order so full layout can choose when local residual ordering blocks a cheaper layout",
+    "sizeRescue",
+  );
+  add(
+    { preserveDispatchCaseOrder: true, freeResidualDispatchScratch: true },
+    "source-order-dispatch-free-scratch",
+    "Combined source-order numeric dispatch layout with residual scratch freeing",
+    "sizeRescue",
+  );
+  add(
+    { recallStoredInputAfterDecrement: true },
+    "stored-input-decrement-recall-sync",
+    "Restored stored prompt input with П->X after decrement guards to expose an X2 sync for later optimizer passes",
+    "sizeRescue",
+  );
+  add(
+    { singleBitMaskOpCopyReuse: true },
+    "single-bit-mask-op-copy-reuse",
+    "Copied a mask source once and reused the live X value for a following single-bit mask update when the full layout wins",
+    "sizeRescue",
+  );
+  add(
+    { dualUseConstantIndirectFlow: true },
+    "dual-use-constant-indirect-flow",
+    "Reused existing setup constant preloads as indirect-flow selectors when store-target proofs keep those registers stable",
+    "sizeRescue",
+  );
+  add(
+    { indirectUnderflowDecrement: true },
+    "indirect-underflow-decrement",
+    "Used R0..R3 indirect pre-decrement for terminal underflow guards when full-program layout wins",
+    "sizeRescue",
+  );
+  add(
     { aliasXReuse: true },
     "alias-x-reuse",
     "Reused X for copy-equivalent variables at scalar sites (conditions, near_any)",
@@ -1336,6 +1401,9 @@ function demoteConstantIndirectFlowCandidates(
 ): void {
   const demoteBases: LoweringOptions[] = [
     {},
+    { indirectUnderflowDecrement: true },
+    { dualUseConstantIndirectFlow: true },
+    { indirectUnderflowDecrement: true, dualUseConstantIndirectFlow: true },
     { shareRandomCell: true, hoistSharedHelpers: true },
     { freeResidualDispatchScratch: true },
     { sharedBitMaskHelperCalls: true },
@@ -1374,14 +1442,15 @@ function demoteConstantIndirectFlowCandidates(
       continue;
     }
     for (const preload of probe.report.preloads ?? []) {
-      if (preload.countsAgainstProgram || !/^-?\d+$/u.test(preload.value)) continue;
-      const key = `${JSON.stringify(base)}|${preload.value}`;
+      const value = demotableIndirectFlowPreloadValue(preload);
+      if (value === undefined) continue;
+      const key = `${JSON.stringify(base)}|${value}`;
       if (triedDemotions.has(key)) continue;
       triedDemotions.add(key);
       tryCandidate(
-        { ...base, suppressConstantPreloads: new Set([preload.value]) },
+        { ...base, suppressConstantPreloads: new Set([value]) },
         "demote-constant-indirect-flow",
-        `Inlined single-use constant ${preload.value} to free a register for post-layout indirect flow`,
+        `Inlined single-use constant ${value} to free a register for post-layout indirect flow`,
       );
     }
     const suppressed = new Set<string>();
@@ -1396,14 +1465,15 @@ function demoteConstantIndirectFlowCandidates(
         break;
       }
       const next = (chainProbe.report.preloads ?? [])
-        .filter((preload) => !preload.countsAgainstProgram && /^-?\d+$/u.test(preload.value) && !suppressed.has(preload.value))
+        .map(demotableIndirectFlowPreloadValue)
+        .filter((value): value is string => value !== undefined && !suppressed.has(value))
         .sort((left, right) =>
-          estimateNumberCost(left.value) - estimateNumberCost(right.value) ||
-          left.value.length - right.value.length ||
-          left.value.localeCompare(right.value)
+          estimateNumberCost(left) - estimateNumberCost(right) ||
+          left.length - right.length ||
+          left.localeCompare(right)
         )[0];
       if (next === undefined) break;
-      suppressed.add(next.value);
+      suppressed.add(next);
       const values = [...suppressed];
       const key = `${JSON.stringify(base)}|chain:${values.join(",")}`;
       if (triedDemotions.has(key)) continue;
@@ -1415,6 +1485,13 @@ function demoteConstantIndirectFlowCandidates(
       );
     }
   }
+}
+
+function demotableIndirectFlowPreloadValue(preload: PreloadReport): string | undefined {
+  if (preload.countsAgainstProgram) return undefined;
+  const value = normalizeConstantLiteral(preload.value);
+  if (/^[A-F][0-9A-F]$/iu.test(value)) return undefined;
+  return executableSetupValue(value) === undefined ? undefined : value;
 }
 
 function estimatedStartupProgramCost(result: CompileResult): number {
@@ -1439,7 +1516,7 @@ function compileLoweringAttempt(
   try {
     return compileMKProOnce(source, options, loweringOptions);
   } catch (error) {
-    if (options.analysis === true || !isOnlyBudgetExceeded(error)) throw error;
+    if (options.analysis === true || !canRetryLoweringAttemptInAnalysis(error, options)) throw error;
     return compileMKProOnce(source, { ...options, analysis: true }, loweringOptions);
   }
 }
@@ -1461,6 +1538,16 @@ function isOnlyBudgetExceeded(error: unknown): error is CompileError {
   return error instanceof CompileError &&
     error.diagnostics.some((diagnostic) => diagnostic.level === "error" && diagnostic.code === "BUDGET_EXCEEDED") &&
     error.diagnostics.every((diagnostic) => diagnostic.level !== "error" || diagnostic.code === "BUDGET_EXCEEDED");
+}
+
+function canRetryLoweringAttemptInAnalysis(
+  error: unknown,
+  options: Partial<CompileOptions>,
+): boolean {
+  if (isOnlyBudgetExceeded(error)) return true;
+  const requestedBudget = { ...DEFAULT_OPTIONS, ...options }.budget;
+  if (requestedBudget > DEFAULT_OPTIONS.budget) return false;
+  return canRetryLoweringAfterPrimaryFailure(error);
 }
 
 function canRetryLoweringAfterPrimaryFailure(error: unknown): boolean {
@@ -2361,7 +2448,9 @@ function compileMKProOnce(
   inlineDisplayStringValues(ast, optimizations);
   trimDisplayEdgeWhitespace(ast, optimizations);
   fuseTailCopyAssignments(ast, optimizations);
-  eliminateUnobservedState(ast, optimizations);
+  eliminateUnobservedState(ast, optimizations, {
+    preserveDispatchCaseOrder: loweringOptions.preserveDispatchCaseOrder === true,
+  });
   eliminateIdentityAssignments(ast, optimizations);
   // Value propagation can expose new dead stores and vice-versa, so run the two
   // interprocedural passes to a small fixpoint before register allocation.
@@ -2427,6 +2516,7 @@ function compileMKProOnce(
     loweringOptions.forcedRegisterShares ?? [],
     loweringOptions.xParamValueFunctions === true,
     loweringOptions.comparisonGuardedUpdateSelectors === true,
+    loweringOptions.preserveDispatchCaseOrder === true,
     opts.strictAllocation === true,
   );
   const context = new EmitContext(
@@ -2450,13 +2540,19 @@ function compileMKProOnce(
       ([freeRegister, keepRegister]) => ({ freeRegister, keepRegister }),
     )
     : undefined;
+  const preloadedConstantRegisters = constantPreloadRegisters(allocation);
   const passOptions = loweringOptions.tailBranchInversion === true
     ? { ...opts, tailBranchInversion: true }
     : opts;
+  const passOptionsWithPreloads = {
+    ...passOptions,
+    preloadedConstantRegisters,
+    dualUseConstantIndirectFlow: loweringOptions.dualUseConstantIndirectFlow === true,
+  };
   const exactDecimalSeries = programContainsDecimalSeries(ast);
   const optimizedResult = exactDecimalSeries
     ? { items: context.items, preloads: [] }
-    : optimizeItems(context.items, passOptions, optimizations);
+    : optimizeItems(context.items, passOptionsWithPreloads, optimizations);
   const referenceMetrics = ast.reference === undefined ? undefined : resolveReferenceMetrics(ast.reference);
   const indirectFlowRescueAbove = opts.indirectFlowRescueAbove
     ?? (referenceMetrics === undefined ? undefined : Math.min(referenceMetrics.span, opts.budget));
@@ -2464,7 +2560,7 @@ function compileMKProOnce(
     ? { items: optimizedResult.items, optimizations: [], preloads: [] }
     : optimizePostLayoutIndirectFlow(
       optimizedResult.items,
-      passOptions,
+      passOptionsWithPreloads,
       indirectFlowRescueAbove,
     );
   const postLayoutR0Flow = exactDecimalSeries
@@ -2473,16 +2569,24 @@ function compileMKProOnce(
       postLayoutFlow.items,
       [...optimizedResult.preloads, ...postLayoutFlow.preloads],
     );
+  const postLayoutStopTail = exactDecimalSeries
+    ? { items: postLayoutR0Flow.items, optimizations: [], preloads: postLayoutFlow.preloads }
+    : optimizePostLayoutStopTailReuse(postLayoutR0Flow.items, postLayoutFlow.preloads);
   const postLayoutOverlay = exactDecimalSeries
-    ? { items: postLayoutR0Flow.items, optimizations: [], preloads: [] }
-    : optimizePostLayoutAddressCodeOverlay(postLayoutR0Flow.items);
+    ? { items: postLayoutStopTail.items, optimizations: [], preloads: [] }
+    : optimizePostLayoutAddressCodeOverlay(postLayoutStopTail.items);
   const optimized = postLayoutOverlay.items;
-  optimizations.push(...postLayoutFlow.optimizations, ...postLayoutR0Flow.optimizations, ...postLayoutOverlay.optimizations);
+  optimizations.push(
+    ...postLayoutFlow.optimizations,
+    ...postLayoutR0Flow.optimizations,
+    ...postLayoutStopTail.optimizations,
+    ...postLayoutOverlay.optimizations,
+  );
   const preloads = [
     ...buildPreloadReport(ast, allocation),
     ...buildNegativeZeroDegreePreloadReport(allocation, optimizations),
     ...optimizedResult.preloads,
-    ...postLayoutFlow.preloads,
+    ...postLayoutStopTail.preloads,
   ];
   const setupProgram = buildGeneratedSetupProgram(
     ast,
@@ -3645,6 +3749,8 @@ function materializeDisplayExpressions(
   inlineFloorPackedRowExpressions: boolean,
 ): void {
   let materialized = 0;
+  let residualElisions = 0;
+  const residualDirectDisplays = residualGuardedDisplayExpressionElisions(ast);
   const plans = new Map<string, StatementAst[]>();
 
   for (const display of ast.displays) {
@@ -3652,6 +3758,10 @@ function materializeDisplayExpressions(
     const items = display.items.map((item, index): DisplayItemAst => {
       if (item.kind !== "source" || item.expr === undefined) return item;
       if (inlineFloorPackedRowExpressions && canInlineFloorPackedRowDisplayExpression(ast, display, index)) return item;
+      if (residualDirectDisplays.has(display.name)) {
+        residualElisions += 1;
+        return item;
+      }
       const target = `${DISPLAY_EXPR_PREFIX}${display.name}_${index}`;
       assignments.push({
         kind: "assign",
@@ -3673,6 +3783,13 @@ function materializeDisplayExpressions(
     display.items = items;
     display.sources = sourceNamesForDisplayItems(items);
     plans.set(display.name, assignments);
+  }
+
+  if (residualElisions > 0) {
+    optimizations.push({
+      name: "residual-display-materialization-elision",
+      detail: `Kept ${residualElisions} residual display expression field${residualElisions === 1 ? "" : "s"} inline for direct branch-X reuse.`,
+    });
   }
 
   if (plans.size === 0) return;
@@ -3724,6 +3841,83 @@ function materializeDisplayExpressions(
     name: "display-expression-materialization",
     detail: `Materialized ${materialized} display expression field${materialized === 1 ? "" : "s"} before show().`,
   });
+}
+
+function residualGuardedDisplayExpressionElisions(ast: ProgramAst): Set<string> {
+  const expressions = new Map<string, ExpressionAst>();
+  for (const display of ast.displays) {
+    if (display.items.length !== 1) continue;
+    const item = display.items[0];
+    if (
+      item?.kind !== "source" ||
+      item.expr === undefined ||
+      item.width !== undefined ||
+      item.pad !== undefined
+    ) {
+      continue;
+    }
+    expressions.set(display.name, item.expr);
+  }
+  if (expressions.size === 0) return new Set();
+
+  const uses = new Map<string, number>();
+  const residualUses = new Map<string, number>();
+
+  const countUse = (displayName: string | undefined): void => {
+    if (displayName === undefined || !expressions.has(displayName)) return;
+    uses.set(displayName, (uses.get(displayName) ?? 0) + 1);
+  };
+
+  const countResidualUse = (statement: Extract<StatementAst, { kind: "if" }>): void => {
+    const match = matchResidualGuardedUpdate(statement);
+    if (match === undefined) return;
+    const firstElse = statement.elseBody?.[0];
+    if (firstElse?.kind !== "show") return;
+    const expression = expressions.get(firstElse.display);
+    if (expression === undefined) return;
+    const residual = subtractExpressions(match.condition.left, match.condition.right);
+    if (!expressionEquals(expression, residual)) return;
+    residualUses.set(firstElse.display, (residualUses.get(firstElse.display) ?? 0) + 1);
+  };
+
+  const visitStatements = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "show") {
+        countUse(statement.display);
+        continue;
+      }
+      if (statement.kind === "halt") {
+        countUse(statement.display);
+        continue;
+      }
+      if (statement.kind === "if") {
+        countResidualUse(statement);
+        visitStatements(statement.thenBody);
+        if (statement.elseBody !== undefined) visitStatements(statement.elseBody);
+        continue;
+      }
+      if (statement.kind === "while" || statement.kind === "loop") {
+        visitStatements(statement.body);
+        continue;
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body);
+        if (statement.defaultBody !== undefined) visitStatements(statement.defaultBody);
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+
+  const result = new Set<string>();
+  for (const displayName of expressions.keys()) {
+    const total = uses.get(displayName) ?? 0;
+    if (total > 0 && total === (residualUses.get(displayName) ?? 0)) {
+      result.add(displayName);
+    }
+  }
+  return result;
 }
 
 function canInlineFloorPackedRowDisplayExpression(
@@ -4346,10 +4540,14 @@ function countIdentifierReadsInProgram(ast: ProgramAst, name: string): number {
   return reads;
 }
 
-function eliminateUnobservedState(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+function eliminateUnobservedState(
+  ast: ProgramAst,
+  optimizations: AppliedOptimization[],
+  options: { preserveDispatchCaseOrder?: boolean } = {},
+): void {
   const stateFields = new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
   if (stateFields.size === 0) return;
-  const ephemeralInputTargets = collectEphemeralInputTargets(ast);
+  const ephemeralInputTargets = collectEphemeralInputTargets(ast, options);
   const externallyRead = new Set<string>();
   const inputTargets = new Set<string>();
   const assigned = new Map<string, ExpressionAst[]>();
@@ -6821,6 +7019,15 @@ export class EmitContext {
         index += 1;
         continue;
       }
+      if (
+        this.loweringOptions.singleBitMaskOpCopyReuse === true &&
+        statement.kind === "assign" &&
+        next?.kind === "assign" &&
+        compileSingleBitMaskOpCopyReuse(this, statement, next)
+      ) {
+        index += 1;
+        continue;
+      }
       if (statement.kind === "assign" && next?.kind === "assign" && compileIntFracSharedTail(this, statement, next)) {
         index += 1;
         continue;
@@ -7981,7 +8188,9 @@ export class EmitContext {
     input: Extract<StatementAst, { kind: "input" }>,
     dispatch: Extract<StatementAst, { kind: "dispatch" }>,
   ): boolean {
-    const optimized = optimizeDispatchDefaultCases(dispatch).statement;
+    const optimized = optimizeDispatchDefaultCases(dispatch, {
+      preserveCaseOrder: this.loweringOptions.preserveDispatchCaseOrder === true,
+    }).statement;
     if (!dispatchUsesNumericResidualChain(optimized)) return false;
     const reads = countIdentifierReads(optimized.expr, input.target);
     return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
@@ -8207,6 +8416,13 @@ export class EmitContext {
     const keepStoredInput = !omitInputStore &&
       this.inputFeedsStoredGuardedDecrementConsumer(input, decrement, branch, consumer);
     if (!omitInputStore && !keepStoredInput) return false;
+    if (
+      keepStoredInput &&
+      this.loweringOptions.indirectUnderflowDecrement === true &&
+      this.compileShowReadStoredIndirectDecrementUnderflow(show, input, decrement, branch)
+    ) {
+      return true;
+    }
 
     compileShow(this, show.display, show.line);
     if (keepStoredInput) this.emitStore(input.target, `read ${input.target}`, input.line);
@@ -8221,7 +8437,15 @@ export class EmitContext {
     this.currentXAliases.clear();
     this.currentXKnownZero = false;
     this.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
-    this.emitOp(0x14, "X↔Y", `restore read ${input.target}`, input.line);
+    if (keepStoredInput && this.loweringOptions.recallStoredInputAfterDecrement === true) {
+      this.emitRecall(input.target, `restore read ${input.target}`, input.line);
+      this.optimizations.push({
+        name: "show-read-stored-decrement-recall-sync",
+        detail: `Restored stored read ${input.target} through П->X after checking ${decrement.target}, exposing an X2 sync.`,
+      });
+    } else {
+      this.emitOp(0x14, "X↔Y", `restore read ${input.target}`, input.line);
+    }
     this.markCurrentX(input.target);
     this.optimizations.push({
       name: keepStoredInput
@@ -8230,6 +8454,37 @@ export class EmitContext {
       detail: keepStoredInput
         ? `Stored read ${input.target} while also restoring it from Y after checking ${decrement.target} at lines ${input.line}/${branch.line}.`
         : `Kept read ${input.target} in Y while checking ${decrement.target} at lines ${input.line}/${branch.line}.`,
+    });
+    return true;
+  }
+
+  compileShowReadStoredIndirectDecrementUnderflow(
+    show: Extract<StatementAst, { kind: "show" }>,
+    input: Extract<StatementAst, { kind: "input" }>,
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    const register = indirectPredecrementUnderflowRegister(this, decrement.target);
+    if (register === undefined) return false;
+
+    compileShow(this, show.display, show.line);
+    this.emitStore(input.target, `read ${input.target}`, input.line);
+    const okLabel = this.freshLabel("decrement_ok");
+    this.emitOp(0xd0 + registerIndex(register), `К П->X ${register}`, `predecrement ${decrement.target}`, decrement.line);
+    this.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+    this.emitJump(0x5c, "F x<0", okLabel, `decrement underflow ${decrement.target}`, branch.line);
+    this.compileStatements(branch.thenBody);
+    this.emitLabel(okLabel);
+    this.markCurrentX(decrement.target);
+    this.emitRecall(input.target, `restore read ${input.target}`, input.line);
+    this.markCurrentX(input.target);
+    this.optimizations.push({
+      name: "show-read-stored-indirect-decrement-underflow",
+      detail: `Stored read ${input.target}, decremented ${decrement.target} through ${getOpcode(0xd0 + registerIndex(register)).name}, and restored the read by recall at lines ${input.line}/${branch.line}.`,
+    });
+    this.optimizations.push({
+      name: "indirect-underflow-decrement",
+      detail: `Used ${getOpcode(0xd0 + registerIndex(register)).name}'s pre-decrement side effect for ${decrement.target} before the underflow branch at lines ${decrement.line}/${branch.line}.`,
     });
     return true;
   }
@@ -10107,7 +10362,7 @@ export class EmitContext {
     this.emitOp(
       0xd0 + registerIndex(selector),
       `К П->X ${selector}`,
-      `indexed recall ${bankMemberKey(expr.base, expr.field)}${integerPart === undefined ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
+      indexedMemoryComment("indexed recall", expr, resolved.member, this.allocation, integerPart),
       sourceLine,
     );
     this.currentXVariable = undefined;
@@ -10137,7 +10392,7 @@ export class EmitContext {
     this.emitOp(
       0xb0 + registerIndex(selector),
       `К X->П ${selector}`,
-      `indexed set ${bankMemberKey(expr.base, expr.field)}${integerPart === undefined ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
+      indexedMemoryComment("indexed set", expr, resolved.member, this.allocation, integerPart),
       sourceLine,
     );
     this.currentXVariable = undefined;
@@ -10164,7 +10419,7 @@ export class EmitContext {
     this.emitOp(
       0xd0 + registerIndex(selector),
       `К П->X ${selector}`,
-      `indexed recall ${bankMemberKey(expr.base, expr.field)}${integerPart === undefined ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
+      indexedMemoryComment("indexed recall", expr, findStateBankMember(this.ast, expr)?.member, this.allocation, integerPart),
       sourceLine,
     );
     this.currentXVariable = undefined;
@@ -10182,7 +10437,7 @@ export class EmitContext {
     this.emitOp(
       0xb0 + registerIndex(selector),
       `К X->П ${selector}`,
-      `indexed set ${bankMemberKey(expr.base, expr.field)}${integerPart === undefined ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
+      indexedMemoryComment("indexed set", expr, findStateBankMember(this.ast, expr)?.member, this.allocation, integerPart),
       sourceLine,
     );
     this.currentXVariable = undefined;
@@ -11647,6 +11902,7 @@ function allocateRegisters(
   forcedRegisterShares: ReadonlyArray<{ freeRegister: RegisterName; keepRegister: RegisterName }> = [],
   xParamValueFunctions = false,
   comparisonGuardedUpdateSelectors = false,
+  preserveDispatchCaseOrder = false,
   strictAllocation = false,
 ): RegisterAllocation {
   const declared = new Set<string>();
@@ -11704,10 +11960,10 @@ function allocateRegisters(
     if (register === undefined) break;
     hints.set(variable, { mode: "prefer", register });
   }
-  warnUndeclaredAssignments(ast, declared, diagnostics, strictAllocation);
-  collectAssignedVariables(ast, variables, xParamValueNames);
+  warnUndeclaredAssignments(ast, declared, diagnostics, strictAllocation, preserveDispatchCaseOrder);
+  collectAssignedVariables(ast, variables, xParamValueNames, preserveDispatchCaseOrder);
   collectFunctionTailCallScratchVariables(ast, variables);
-  collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
+  collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch, preserveDispatchCaseOrder);
   collectGridCellScratchVariables(ast, variables);
   collectBitMaskScratchVariables(ast, variables);
   collectCoordListScratchVariables(ast, variables);
@@ -13598,9 +13854,10 @@ function warnUndeclaredAssignments(
   declared: Set<string>,
   diagnostics: Diagnostic[],
   strictAllocation = false,
+  preserveDispatchCaseOrder = false,
 ): void {
   const seen = new Set<string>();
-  const ephemeralInputs = collectEphemeralInputTargets(ast);
+  const ephemeralInputs = collectEphemeralInputTargets(ast, { preserveDispatchCaseOrder });
   const loopPrompts = loopCarriedPromptNames(ast);
   const xParamNames = xParamProcParamNames(ast);
   const report = (target: string, line: number | undefined): void => {
@@ -13655,8 +13912,9 @@ function collectAssignedVariables(
   ast: ProgramAst,
   variables: Set<string>,
   ignoredTargets: ReadonlySet<string> = new Set(),
+  preserveDispatchCaseOrder = false,
 ): void {
-  const ephemeralInputs = collectEphemeralInputTargets(ast);
+  const ephemeralInputs = collectEphemeralInputTargets(ast, { preserveDispatchCaseOrder });
   const loopPrompts = loopCarriedPromptNames(ast);
   const xParamNames = xParamProcParamNames(ast);
   const visit = (statements: StatementAst[]): void => {
@@ -13722,9 +13980,16 @@ function collectFunctionTailCallScratchVariables(ast: ProgramAst, variables: Set
   }
 }
 
-function collectEphemeralInputTargets(ast: ProgramAst): Set<string> {
+function collectEphemeralInputTargets(
+  ast: ProgramAst,
+  options: { preserveDispatchCaseOrder?: boolean } = {},
+): Set<string> {
   const readCounts = collectVariableReadCounts(ast);
   const targets = new Set<string>();
+  const optimizeDispatch = (dispatch: Extract<StatementAst, { kind: "dispatch" }>) =>
+    optimizeDispatchDefaultCases(dispatch, {
+      preserveCaseOrder: options.preserveDispatchCaseOrder === true,
+    }).statement;
   const visit = (statements: StatementAst[]): void => {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
@@ -13735,7 +14000,7 @@ function collectEphemeralInputTargets(ast: ProgramAst): Set<string> {
         if (reads > 0 && (readCounts.get(statement.target) ?? 0) === reads) targets.add(statement.target);
       }
       if (statement.kind === "input" && next?.kind === "dispatch") {
-        const dispatch = optimizeDispatchDefaultCases(next).statement;
+        const dispatch = optimizeDispatch(next);
         const reads = dispatchUsesNumericResidualChain(dispatch) ? countIdentifierReads(dispatch.expr, statement.target) : 0;
         if (reads > 0 && (readCounts.get(statement.target) ?? 0) === reads) targets.add(statement.target);
       }
@@ -13744,7 +14009,7 @@ function collectEphemeralInputTargets(ast: ProgramAst): Set<string> {
         if (reads > 0 && (readCounts.get(next.target) ?? 0) === reads) targets.add(next.target);
       }
       if (statement.kind === "show" && next?.kind === "input" && afterNext?.kind === "dispatch") {
-        const dispatch = optimizeDispatchDefaultCases(afterNext).statement;
+        const dispatch = optimizeDispatch(afterNext);
         const reads = dispatchUsesNumericResidualChain(dispatch) ? countIdentifierReads(dispatch.expr, next.target) : 0;
         if (reads > 0 && (readCounts.get(next.target) ?? 0) === reads) targets.add(next.target);
       }
@@ -13836,12 +14101,16 @@ function collectDispatchScratchVariables(
   ast: ProgramAst,
   variables: Set<string>,
   freeResidualDispatchScratch = false,
+  preserveDispatchCaseOrder = false,
 ): void {
   const visit = (statements: StatementAst[]): void => {
     for (const statement of statements) {
       if (statement.kind === "dispatch") {
-        const residualNeedsNoScratch = freeResidualDispatchScratch && dispatchUsesNumericResidualChain(statement);
-        if (statement.expr.kind !== "identifier" && !residualNeedsNoScratch) {
+        const optimized = optimizeDispatchDefaultCases(statement, {
+          preserveCaseOrder: preserveDispatchCaseOrder,
+        }).statement;
+        const residualNeedsNoScratch = freeResidualDispatchScratch && dispatchUsesNumericResidualChain(optimized);
+        if (optimized.expr.kind !== "identifier" && !residualNeedsNoScratch) {
           variables.add(`${DISPATCH_SCRATCH_PREFIX}${statement.scratchId}`);
         }
         for (const dispatchCase of statement.cases) visit(dispatchCase.body);
@@ -15352,8 +15621,8 @@ const optimizerCapabilities: Array<{
     category: "flow",
     source: "documented",
     requires: [],
-    activeWhen: ["fl-decrement-zero-branch", "indirect-incdec-counter", "r0-indirect-counter"],
-    detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters.",
+    activeWhen: ["fl-decrement-zero-branch", "indirect-incdec-counter", "indirect-underflow-decrement", "r0-indirect-counter"],
+    detail: "Uses compact counter-side-effect decrement forms: F L0..F L3 for zero branches and R0..R3 indirect pre-decrement for proved unit updates or underflow guards.",
   },
   {
     id: "address-constant-overlay",
@@ -15361,7 +15630,7 @@ const optimizerCapabilities: Array<{
     source: "undocumented",
     requires: ["address-constants", "code-data-overlay"],
     activeWhen: ["code-data-overlay", "address-code-overlay"],
-    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; БП overlays and ПП overlays with proved terminal targets are rewritten only after final address proof, including self-target operand execution, existing formal/numeric address bytes used as executable cells, address-taking executable bytes whose operand remains next, and fixed-address guards that reject overlays whose real target would shift.",
+    detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; БП overlays and ПП overlays with proved terminal targets are rewritten only after final address proof, including self-target operand execution, existing formal/numeric address bytes used as executable cells, executable bytes reused as formal-address aliases to the same target, address-taking executable bytes whose operand remains next, and fixed-address guards that reject overlays whose real target would shift.",
   },
   {
     id: "cyclic-address-layout",
@@ -15750,6 +16019,36 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
   return [...synthetic, ...constants, ...displayTemplateMasks];
 }
 
+function constantPreloadRegisters(allocation: RegisterAllocation): Partial<Record<RegisterName, string>> {
+  const result: Partial<Record<RegisterName, string>> = {};
+  for (const [value, register] of Object.entries(allocation.constants)) {
+    result[register] = value;
+  }
+  return result;
+}
+
+function indexedMemoryComment(
+  action: "indexed recall" | "indexed set",
+  expr: Extract<ExpressionAst, { kind: "indexed" }>,
+  member: StateBankMemberAst | undefined,
+  allocation: RegisterAllocation,
+  integerPart: string | undefined,
+): string {
+  const suffixes: string[] = [];
+  if (integerPart !== undefined) suffixes.push(`indirect-selector-integer-part=${integerPart}`);
+  const targets = member === undefined
+    ? []
+    : [...new Set(member.elements.flatMap((element) => {
+        const register = allocation.registers[element.name];
+        return register === undefined ? [] : [register];
+      }))].sort((left, right) => registerIndex(left) - registerIndex(right));
+  if (targets.length > 0) suffixes.push(`indirect-memory-targets=${targets.join(",")}`);
+  return [
+    `${action} ${bankMemberKey(expr.base, expr.field)}`,
+    ...suffixes,
+  ].join("; ");
+}
+
 function isIndexedInitializerListText(initial: string): boolean {
   return initial.trimStart().startsWith("[");
 }
@@ -16022,8 +16321,11 @@ function buildMachineFeaturesUsed(
   if (optimizations.some((optimization) => optimization.name === "branch-removal")) {
     add("branch-removal", "Optimizer removed a conditional branch through a proved branchless equivalent.", "optimizer");
   }
-  if (optimizations.some((optimization) => optimization.name === "fl-decrement-zero-branch")) {
-    add("fl-decrement-branch", "Optimizer fused a decrement and zero test through F L0..F L3.", "optimizer");
+  if (optimizations.some((optimization) =>
+    optimization.name === "fl-decrement-zero-branch" ||
+    optimization.name === "indirect-underflow-decrement"
+  )) {
+    add("fl-decrement-branch", "Optimizer fused decrement tests through compact counter side-effect opcodes.", "optimizer");
   }
   if (
     optimizations.some((optimization) =>

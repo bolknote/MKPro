@@ -57,6 +57,7 @@ import {
   ifSelectorScratchName,
   invertCondition,
   isBitClearAssignment,
+  isPredecrementIndirectRegister,
   isUnitDecrementExpression,
   isZeroExpression,
   maskedGuardedUpdateExpression,
@@ -88,6 +89,7 @@ import {
 import type {
   ConditionAst,
   ProgramAst,
+  RegisterName,
 } from "../../types.ts";
 
 type MembershipSetStatement =
@@ -188,6 +190,12 @@ export function compileDecrementUnderflowBranch(ctx: LoweringCtx,
       });
       return true;
     }
+    if (
+      ctx.loweringOptions.indirectUnderflowDecrement === true &&
+      compileIndirectPredecrementUnderflowBranch(ctx, decrement, branch)
+    ) {
+      return true;
+    }
 
     const okLabel = ctx.freshLabel("decrement_ok");
     ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
@@ -205,6 +213,34 @@ export function compileDecrementUnderflowBranch(ctx: LoweringCtx,
       detail: `Fused ${decrement.target} decrement and negative branch at lines ${decrement.line}/${branch.line}.`,
     });
     return true;
+}
+
+export function compileIndirectPredecrementUnderflowBranch(
+    ctx: LoweringCtx,
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    const register = indirectPredecrementUnderflowRegister(ctx, decrement.target);
+    if (register === undefined) return false;
+
+    const okLabel = ctx.freshLabel("decrement_ok");
+    ctx.emitOp(0xd0 + registerIndex(register), `К П->X ${register}`, `predecrement ${decrement.target}`, decrement.line);
+    ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+    ctx.emitJump(0x5c, "F x<0", okLabel, `decrement underflow ${decrement.target}`, branch.line);
+    ctx.compileStatements(branch.thenBody);
+    ctx.emitLabel(okLabel);
+    ctx.markCurrentX(decrement.target);
+    ctx.optimizations.push({
+      name: "indirect-underflow-decrement",
+      detail: `Used ${getOpcode(0xd0 + registerIndex(register)).name}'s pre-decrement side effect for ${decrement.target} before the underflow branch at lines ${decrement.line}/${branch.line}.`,
+    });
+    return true;
+}
+
+export function indirectPredecrementUnderflowRegister(ctx: LoweringCtx, target: string): RegisterName | undefined {
+    const register = ctx.allocation.registers[target];
+    if (register === undefined || !isPredecrementIndirectRegister(register)) return undefined;
+    return register;
 }
 
 // True when `statements` is exactly a domain-error trap: a single `halt("ЕГГОГ")`
@@ -1466,7 +1502,9 @@ export function compileDoubleBranchRemoval(ctx: LoweringCtx,
 }
 
 export function compileDispatch(ctx: LoweringCtx, statement: Extract<StatementAst, { kind: "dispatch" }>): void {
-    const optimized = optimizeDispatchDefaultCases(statement);
+    const optimized = optimizeDispatchDefaultCases(statement, {
+      preserveCaseOrder: ctx.loweringOptions.preserveDispatchCaseOrder === true,
+    });
     if (optimized.removed > 0) {
       ctx.optimizations.push({
         name: "dispatch-default-merge",

@@ -22,6 +22,12 @@ export interface PostLayoutIndirectFlowResult {
   applied: number;
 }
 
+interface MachineCell {
+  itemIndex: number;
+  address: number;
+  item: Exclude<MachineItem, { kind: "label" }>;
+}
+
 type DirectBranch = Extract<IrOp, { kind: "jump" | "call" | "cjump" }>;
 type IndirectBranch = Extract<IrOp, { kind: "indirect-jump" | "indirect-call" | "indirect-cjump" }>;
 type R0FlowBranch = Extract<IrOp, { kind: "jump" | "call" | "cjump" }>;
@@ -95,6 +101,64 @@ function machineLabelAddresses(items: readonly MachineItem[]): Map<string, numbe
   return labels;
 }
 
+function machineCells(items: readonly MachineItem[]): MachineCell[] {
+  const cells: MachineCell[] = [];
+  let address = 0;
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+    const item = items[itemIndex]!;
+    if (item.kind === "label") continue;
+    cells.push({ itemIndex, address, item });
+    address += 1;
+  }
+  return cells;
+}
+
+function machineLabelsByAddress(items: readonly MachineItem[]): Map<number, string[]> {
+  const labels = new Map<number, string[]>();
+  let address = 0;
+  for (const item of items) {
+    if (item.kind === "label") {
+      const list = labels.get(address) ?? [];
+      list.push(item.name);
+      labels.set(address, list);
+    } else {
+      address += 1;
+    }
+  }
+  return labels;
+}
+
+function machineCellAt(cells: readonly MachineCell[], address: number): MachineCell | undefined {
+  return cells.find((cell) => cell.address === address);
+}
+
+function referencedMachineLabels(items: readonly MachineItem[]): Set<string> {
+  const referenced = new Set<string>();
+  for (const item of items) {
+    if (item.kind === "address" && typeof item.target === "string") referenced.add(item.target);
+  }
+  return referenced;
+}
+
+function addressHasReferencedLabel(
+  labels: ReadonlyMap<number, readonly string[]>,
+  referenced: ReadonlySet<string>,
+  address: number,
+): boolean {
+  return labels.get(address)?.some((label) => referenced.has(label)) === true;
+}
+
+function machineAddressByItemIndex(items: readonly MachineItem[]): Map<number, number> {
+  const addresses = new Map<number, number>();
+  let address = 0;
+  for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+    if (items[itemIndex]?.kind === "label") continue;
+    addresses.set(itemIndex, address);
+    address += 1;
+  }
+  return addresses;
+}
+
 function opAddresses(ops: readonly IrOp[]): number[] {
   const addresses: number[] = [];
   let address = 0;
@@ -123,9 +187,29 @@ function usedRegisters(ops: readonly IrOp[]): Set<RegisterName> {
   return used;
 }
 
-function spareStableRegister(ops: readonly IrOp[]): RegisterName | undefined {
+function spareStableRegister(ops: readonly IrOp[], reserved: ReadonlySet<RegisterName> = new Set()): RegisterName | undefined {
   const used = usedRegisters(ops);
-  return STABLE_REGISTERS.find((register) => !used.has(register));
+  return STABLE_REGISTERS.find((register) => !used.has(register) && !reserved.has(register));
+}
+
+function preloadRegisterMap(preloads: readonly PreloadReport[]): Partial<Record<RegisterName, string>> {
+  const result: Partial<Record<RegisterName, string>> = {};
+  for (const preload of preloads) result[preload.register as RegisterName] = preload.value;
+  return result;
+}
+
+function optionsWithReservedPreloads(
+  options: CompileOptions,
+  preloads: readonly PreloadReport[],
+): CompileOptions {
+  if (preloads.length === 0) return options;
+  return {
+    ...options,
+    preloadedConstantRegisters: {
+      ...options.preloadedConstantRegisters,
+      ...preloadRegisterMap(preloads),
+    },
+  };
 }
 
 function formalLabelFromOrdinal(ordinal: number): string {
@@ -431,6 +515,21 @@ function overlayAddressItem(
   };
 }
 
+function overlayAddressItemWithFormalOpcode(
+  address: Extract<MachineItem, { kind: "address" }>,
+  formalOpcode: number,
+  overlaid: string,
+): Extract<MachineItem, { kind: "address" }> {
+  return {
+    ...address,
+    formalOpcode,
+    comment: [
+      address.comment,
+      `formal address/code overlay for ${overlaid}`,
+    ].filter(Boolean).join("; "),
+  };
+}
+
 function directAddressTarget(
   items: readonly MachineItem[],
   itemIndex: number,
@@ -506,6 +605,33 @@ function fixedAddressActualTarget(address: Extract<MachineItem, { kind: "address
   return typeof address.target === "number" ? address.target : undefined;
 }
 
+function resolvedAddressTarget(
+  items: readonly MachineItem[],
+  address: Extract<MachineItem, { kind: "address" }>,
+): number | undefined {
+  if (typeof address.target === "number") return address.target;
+  return machineLayout(items).labels.get(address.target);
+}
+
+function chooseOverlayAddressItem(
+  candidate: readonly MachineItem[],
+  address: Extract<MachineItem, { kind: "address" }>,
+  executableOpcode: number,
+  overlaid: string,
+): Extract<MachineItem, { kind: "address" }> | undefined {
+  const ordinary = overlayAddressItem(address, overlaid);
+  if (addressOpcodeForItem(candidate, ordinary) === executableOpcode) return ordinary;
+
+  const target = resolvedAddressTarget(candidate, ordinary);
+  if (target === undefined) return undefined;
+  const formal = formalAddressInfo(executableOpcode);
+  if (formal.actual !== target) return undefined;
+
+  const formalAddress = overlayAddressItemWithFormalOpcode(address, executableOpcode, overlaid);
+  if (addressOpcodeForItem(candidate, formalAddress) !== executableOpcode) return undefined;
+  return formalAddress;
+}
+
 function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: MachineItem[]; applied: number } {
   const layout = machineLayout(items);
   const targetMayReturn = createMachineReturnAnalyzer(items);
@@ -533,7 +659,15 @@ function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: Machin
     const fixedTarget = fixedAddressActualTarget(address);
     if (fixedTarget !== undefined && fixedTarget > addressCellAddress) continue;
 
-    const candidateAddress = overlayAddressItem(address, overlaidMnemonic(items, labelsEnd));
+    const overlaid = overlaidMnemonic(items, labelsEnd);
+    const provisional = [
+      ...items.slice(0, index + 1),
+      ...labels,
+      address,
+      ...items.slice(labelsEnd + 1),
+    ];
+    const candidateAddress = chooseOverlayAddressItem(provisional, address, executableOpcode, overlaid);
+    if (candidateAddress === undefined) continue;
     const candidate = [
       ...items.slice(0, index + 1),
       ...labels,
@@ -608,11 +742,13 @@ function mergeDuplicateSelectors(
 function selectorValueForRegister(
   preloads: readonly PreloadReport[],
   register: RegisterName,
-): string | undefined {
+  options?: CompileOptions,
+): { value: string; existing: boolean } | undefined {
   for (const preload of preloads) {
-    if (preload.register === register) return preload.value;
+    if (preload.register === register) return { value: preload.value, existing: false };
   }
-  return undefined;
+  const existing = options?.preloadedConstantRegisters?.[register];
+  return existing === undefined ? undefined : { value: existing, existing: true };
 }
 
 function firstExecutableOpIndexAtAddress(
@@ -729,6 +865,7 @@ interface RewriteStep {
   darkEntry: boolean;
   convertedAddresses: number[];
   protectedTargets: number[];
+  existingPreload: boolean;
   // Number of call/branch sites converted in this step. Calls that share a
   // single backward target (e.g. all calls to one front-hoisted helper) reuse
   // one selector register, so they can be converted together against a single
@@ -753,6 +890,7 @@ function validateRewriteAt(
   targetLabel: ReadonlyArray<string | undefined>,
   result: { ops: IrOp[]; preloads?: readonly PreloadReport[]; optimizations: AppliedOptimization[] },
   items: readonly MachineItem[],
+  options: CompileOptions,
 ): RewriteStep | undefined {
   const rewritten = result.ops[index]!;
   const original = numeric[index]!;
@@ -761,8 +899,9 @@ function validateRewriteAt(
   const label = targetLabel[index];
   if (label === undefined) return undefined; // only rewrite re-resolvable label targets
 
-  const selectorValue = selectorValueForRegister(result.preloads ?? [], rewritten.register);
-  if (selectorValue === undefined) return undefined;
+  const selector = selectorValueForRegister(result.preloads ?? [], rewritten.register, options);
+  if (selector === undefined) return undefined;
+  const selectorValue = selector.value;
 
   const candidate = ir.map((op, i) => (i === index ? rewritten : op));
   const finalLabels = labelAddresses(candidate);
@@ -790,6 +929,7 @@ function validateRewriteAt(
       && decoded.formalAddress.kind !== "super-dark",
     convertedAddresses: [addresses[index]!],
     protectedTargets: [targetFinalAddress],
+    existingPreload: selector.existing,
     converted: 1,
   };
 }
@@ -807,13 +947,15 @@ function validateRewriteGroup(
   targetLabel: ReadonlyArray<string | undefined>,
   result: { ops: IrOp[]; preloads?: readonly PreloadReport[]; optimizations: AppliedOptimization[] },
   items: readonly MachineItem[],
+  options: CompileOptions,
 ): RewriteStep | undefined {
   if (indices.length === 0) return undefined;
   const first = result.ops[indices[0]!]!;
   if (!isIndirectBranch(first)) return undefined;
   const register = first.register;
-  const selectorValue = selectorValueForRegister(result.preloads ?? [], register);
-  if (selectorValue === undefined) return undefined;
+  const selector = selectorValueForRegister(result.preloads ?? [], register, options);
+  if (selector === undefined) return undefined;
+  const selectorValue = selector.value;
 
   const indexSet = new Set(indices);
   const candidate = ir.map((op, i) => (indexSet.has(i) ? result.ops[i]! : op));
@@ -851,6 +993,7 @@ function validateRewriteGroup(
       .map((index) => targetLabel[index])
       .map((label) => label === undefined ? undefined : finalLabels.get(label))
       .filter((target): target is number => target !== undefined),
+    existingPreload: selector.existing,
     converted: indices.length,
   };
 }
@@ -917,6 +1060,7 @@ function validateForwardRewriteGroup(
       && decoded.formalAddress.kind !== "super-dark",
     convertedAddresses: indices.map((index) => addresses[index]!),
     protectedTargets: [finalTarget],
+    existingPreload: false,
     converted: indices.length,
   };
 }
@@ -925,8 +1069,9 @@ function applyForwardRewrite(
   ir: readonly IrOp[],
   targetLabel: ReadonlyArray<string | undefined>,
   items: readonly MachineItem[],
+  reserved: ReadonlySet<RegisterName>,
 ): RewriteStep | undefined {
-  const register = spareStableRegister(ir);
+  const register = spareStableRegister(ir, reserved);
   if (register === undefined) return undefined;
 
   const labels = labelAddresses(ir);
@@ -962,7 +1107,10 @@ function applyForwardRewrite(
 function applyOneRewrite(
   items: readonly MachineItem[],
   options: CompileOptions,
+  existingPreloads: readonly PreloadReport[] = [],
 ): RewriteStep | undefined {
+  const roundOptions = optionsWithReservedPreloads(options, existingPreloads);
+  const reserved = new Set(Object.keys(roundOptions.preloadedConstantRegisters ?? {}) as RegisterName[]);
   const ir = raiseMachineToIr(items);
   const labels = labelAddresses(ir);
   const { numeric, targetLabel } = numericTargetView(ir, labels);
@@ -972,7 +1120,7 @@ function applyOneRewrite(
   // every selector against the fresh address map, so it can safely drop the
   // tail-only guard and reach backward in-window calls anywhere in the program
   // (e.g. calls to a front-hoisted shared helper).
-  const result = runPreloadedIndirectFlow(numeric, { options }, { relaxMaxTargetGuard: true });
+  const result = runPreloadedIndirectFlow(numeric, { options: roundOptions }, { relaxMaxTargetGuard: true });
   if (result.applied > 0) {
     // run() reuses one selector register per distinct backward target, so several
     // call sites can share it. Group the produced rewrites by register and try to
@@ -992,14 +1140,14 @@ function applyOneRewrite(
     // Keep the group that converts the most sites, falling back to a single
     // rewrite. Every choice goes through the same independent proof.
     for (const indices of groups.values()) {
-      const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items);
-      const candidate = group ?? validateRewriteAt(indices[0]!, ir, numeric, targetLabel, result, items);
+      const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items, roundOptions);
+      const candidate = group ?? validateRewriteAt(indices[0]!, ir, numeric, targetLabel, result, items, roundOptions);
       if (candidate === undefined) continue;
       best = betterRewrite(best, candidate);
     }
   }
 
-  return betterRewrite(best, applyForwardRewrite(ir, targetLabel, items));
+  return betterRewrite(best, applyForwardRewrite(ir, targetLabel, items, reserved));
 }
 
 function betterRewrite(current: RewriteStep | undefined, candidate: RewriteStep | undefined): RewriteStep | undefined {
@@ -1041,19 +1189,29 @@ export function optimizePostLayoutIndirectFlow(
   let applied = 0;
   let superDarkApplied = 0;
   let darkEntryApplied = 0;
+  let existingSelectorApplied = 0;
+  const immutableTargets: number[] = [];
 
   if (cellCount(current) <= rescueAbove) {
     return { items: [...items], preloads: [], optimizations: [], applied: 0 };
   }
 
   for (let round = 0; round < MAX_REWRITES; round += 1) {
-    const step = applyOneRewrite(current, options);
+    const step = applyOneRewrite(current, options, preloads);
     if (step === undefined) break;
+    if (step.convertedAddresses.some((address) => immutableTargets.some((target) => address < target))) {
+      break;
+    }
     const retargeted = retargetExistingSelectorsAfterShift(current, step.items, preloads);
     if (retargeted === undefined) break;
     current = retargeted.items;
     preloads.splice(0, preloads.length, ...retargeted.preloads);
-    preloads.push(step.preload);
+    if (step.existingPreload) {
+      existingSelectorApplied += step.converted;
+      immutableTargets.push(...step.protectedTargets);
+    } else {
+      preloads.push(step.preload);
+    }
     applied += step.converted;
     if (step.superDark) superDarkApplied += 1;
     if (step.darkEntry) darkEntryApplied += 1;
@@ -1092,6 +1250,374 @@ export function optimizePostLayoutIndirectFlow(
       detail: `Shared ${merge.merged} duplicate selector register(s): one stored constant now drives several dispatch sites, freeing the rest.`,
     });
   }
+  if (existingSelectorApplied > 0) {
+    optimizations.push({
+      name: "constants-dual-use",
+      detail: `Reused existing setup constant preload(s) as immutable indirect-flow selector(s) for ${existingSelectorApplied} branch/call site(s).`,
+    });
+  }
 
   return { items: current, preloads: finalPreloads, optimizations, applied };
+}
+
+interface StopTailReuseBase {
+  register: RegisterName;
+  target: number;
+  continuationOpcode: number;
+}
+
+interface StopTailReuseRewrite {
+  base: StopTailReuseBase;
+  replaceIndex: number;
+  removeIndex: number;
+  zeroPrefixed: boolean;
+}
+
+interface BranchToStopTailSelectorRewrite {
+  branchIndex: number;
+  addressIndex: number;
+  opcode: number;
+  mnemonic: string;
+  comment: string;
+  sourceLine?: number;
+}
+
+function indirectJumpMachineOp(register: RegisterName, comment: string, sourceLine?: number): MachineItem {
+  return {
+    kind: "op",
+    opcode: 0x80 + registerIndex(register),
+    mnemonic: `К БП ${register}`,
+    comment,
+    ...(sourceLine === undefined ? {} : { sourceLine }),
+  };
+}
+
+function indirectBranchOpcodeForRegister(opcode: number, register: RegisterName): number | undefined {
+  const offset = registerIndex(register);
+  switch (opcode) {
+    case 0x51:
+      return 0x80 + offset;
+    case 0x57:
+      return 0x70 + offset;
+    case 0x59:
+      return 0x90 + offset;
+    case 0x5c:
+      return 0xc0 + offset;
+    case 0x5e:
+      return 0xe0 + offset;
+    default:
+      return undefined;
+  }
+}
+
+function indirectBranchMnemonic(opcode: number, register: RegisterName): string {
+  const base = opcode - registerIndex(register);
+  switch (base) {
+    case 0x70:
+      return `К x≠0 ${register}`;
+    case 0x80:
+      return `К БП ${register}`;
+    case 0x90:
+      return `К x≥0 ${register}`;
+    case 0xc0:
+      return `К x<0 ${register}`;
+    case 0xe0:
+      return `К x=0 ${register}`;
+    default:
+      return `К БП ${register}`;
+  }
+}
+
+function stopTailReuseBases(
+  items: readonly MachineItem[],
+  preloads: readonly PreloadReport[],
+): StopTailReuseBase[] {
+  const cells = machineCells(items);
+  const bases: StopTailReuseBase[] = [];
+  for (const preload of preloads) {
+    const register = preload.register as RegisterName;
+    const decoded = evaluateIndirectAddress(register, preload.value, "flow");
+    const target = decoded?.actualFlowTarget;
+    if (target === undefined) continue;
+    const stop = machineCellAt(cells, target)?.item;
+    const continuation = machineCellAt(cells, target + 1)?.item;
+    if (
+      stop?.kind !== "op" ||
+      stop.opcode !== 0x50 ||
+      continuation?.kind !== "op" ||
+      continuation.opcode < 0x80 ||
+      continuation.opcode > 0x8e
+    ) {
+      continue;
+    }
+    bases.push({ register, target, continuationOpcode: continuation.opcode });
+  }
+  return bases;
+}
+
+function findStopTailReuseRewrite(
+  items: readonly MachineItem[],
+  preloads: readonly PreloadReport[],
+): StopTailReuseRewrite | undefined {
+  const bases = stopTailReuseBases(items, preloads);
+  if (bases.length === 0) return undefined;
+  const cells = machineCells(items);
+  const labels = machineLabelsByAddress(items);
+  const referencedLabels = referencedMachineLabels(items);
+
+  for (const base of bases) {
+    for (const cell of cells) {
+      if (cell.address <= base.target) continue;
+      const item = cell.item;
+      const next = machineCellAt(cells, cell.address + 1);
+      const afterNext = machineCellAt(cells, cell.address + 2);
+
+      if (
+        item.kind === "op" &&
+        item.opcode === 0x50 &&
+        next?.item.kind === "op" &&
+        next.item.opcode === base.continuationOpcode &&
+        !addressHasReferencedLabel(labels, referencedLabels, next.address)
+      ) {
+        return {
+          base,
+          replaceIndex: cell.itemIndex,
+          removeIndex: next.itemIndex,
+          zeroPrefixed: false,
+        };
+      }
+
+      if (
+        item.kind === "op" &&
+        (item.opcode === 0x00 || item.opcode === 0x0d) &&
+        next?.item.kind === "op" &&
+        next.item.opcode === 0x50 &&
+        afterNext?.item.kind === "op" &&
+        afterNext.item.opcode === base.continuationOpcode &&
+        !addressHasReferencedLabel(labels, referencedLabels, next.address) &&
+        !addressHasReferencedLabel(labels, referencedLabels, afterNext.address)
+      ) {
+        return {
+          base,
+          replaceIndex: next.itemIndex,
+          removeIndex: afterNext.itemIndex,
+          zeroPrefixed: true,
+        };
+      }
+    }
+  }
+  return undefined;
+}
+
+function applyStopTailReuseRewrite(
+  items: readonly MachineItem[],
+  rewrite: StopTailReuseRewrite,
+): MachineItem[] {
+  const result: MachineItem[] = [];
+  const source = items[rewrite.replaceIndex];
+  for (let index = 0; index < items.length; index += 1) {
+    if (index === rewrite.removeIndex) continue;
+    if (index === rewrite.replaceIndex) {
+      result.push(indirectJumpMachineOp(
+        rewrite.base.register,
+        `${rewrite.zeroPrefixed ? "zero then " : ""}reuse stop tail at ${rewrite.base.target}`,
+        source?.kind === "op" || source?.kind === "address" ? source.sourceLine : undefined,
+      ));
+      continue;
+    }
+    result.push(items[index]!);
+  }
+  return result;
+}
+
+function preloadValueForRegister(
+  preloads: readonly PreloadReport[],
+  register: RegisterName,
+): string | undefined {
+  return preloads.find((preload) => preload.register === register)?.value;
+}
+
+function findBranchToStopTailSelectorRewrite(
+  items: readonly MachineItem[],
+  preloads: readonly PreloadReport[],
+): BranchToStopTailSelectorRewrite | undefined {
+  const cells = machineCells(items);
+  const labels = machineLabelAddresses(items);
+  const labelsByAddress = machineLabelsByAddress(items);
+  const referencedLabels = referencedMachineLabels(items);
+
+  for (let index = 0; index < cells.length - 1; index += 1) {
+    const branch = cells[index]!;
+    const address = cells[index + 1]!;
+    if (branch.item.kind !== "op" || address.item.kind !== "address") continue;
+    const target = resolvedMachineTarget(address.item.target, labels);
+    if (target === undefined) continue;
+    const targetCell = machineCellAt(cells, target);
+    if (targetCell?.item.kind !== "op") continue;
+    const register = registerFromIndirectOpcode(targetCell.item.opcode);
+    if (register === undefined || targetCell.item.opcode - registerIndex(register) !== 0x80) continue;
+    const selectorValue = preloadValueForRegister(preloads, register);
+    if (selectorValue === undefined) continue;
+    const stopTarget = evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget;
+    if (stopTarget === undefined) continue;
+    const stop = machineCellAt(cells, stopTarget)?.item;
+    if (stop?.kind !== "op" || stop.opcode !== 0x50) continue;
+    const opcode = indirectBranchOpcodeForRegister(branch.item.opcode, register);
+    if (opcode === undefined) continue;
+    if (addressHasReferencedLabel(labelsByAddress, referencedLabels, address.address)) continue;
+    return {
+      branchIndex: branch.itemIndex,
+      addressIndex: address.itemIndex,
+      opcode,
+      mnemonic: indirectBranchMnemonic(opcode, register),
+      comment: [branch.item.comment, `branch to reused stop tail at ${stopTarget}`].filter(Boolean).join("; "),
+      ...(branch.item.sourceLine === undefined ? {} : { sourceLine: branch.item.sourceLine }),
+    };
+  }
+  return undefined;
+}
+
+function applyBranchToStopTailSelectorRewrite(
+  items: readonly MachineItem[],
+  rewrite: BranchToStopTailSelectorRewrite,
+): MachineItem[] {
+  const result: MachineItem[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    if (index === rewrite.addressIndex) continue;
+    if (index === rewrite.branchIndex) {
+      result.push({
+        kind: "op",
+        opcode: rewrite.opcode,
+        mnemonic: rewrite.mnemonic,
+        comment: rewrite.comment,
+        ...(rewrite.sourceLine === undefined ? {} : { sourceLine: rewrite.sourceLine }),
+      });
+      continue;
+    }
+    result.push(items[index]!);
+  }
+  return result;
+}
+
+function registerFromIndirectOpcode(opcode: number): RegisterName | undefined {
+  const offset = opcode & 0x0f;
+  if (offset > 14) return undefined;
+  const base = opcode - offset;
+  if (
+    base !== 0x70 &&
+    base !== 0x80 &&
+    base !== 0x90 &&
+    base !== 0xa0 &&
+    base !== 0xc0 &&
+    base !== 0xe0
+  ) {
+    return undefined;
+  }
+  return offset <= 9 ? String(offset) as RegisterName : String.fromCharCode(87 + offset) as RegisterName;
+}
+
+function retargetMachineSelectorComments(
+  items: readonly MachineItem[],
+  selectorByRegister: ReadonlyMap<RegisterName, string>,
+): MachineItem[] {
+  return items.map((item): MachineItem => {
+    if (item.kind !== "op") return item;
+    const register = registerFromIndirectOpcode(item.opcode);
+    if (register === undefined) return item;
+    const selectorValue = selectorByRegister.get(register);
+    if (selectorValue === undefined) return item;
+    const target = evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget;
+    if (target === undefined) return item;
+    const comment = replaceIndirectTargetComment(item.comment, register, selectorValue, target);
+    if (comment === item.comment) return item;
+    if (comment === undefined) {
+      const { comment: _comment, ...rest } = item;
+      return rest;
+    }
+    return { ...item, comment };
+  });
+}
+
+function retargetSelectorPreloadsAfterMachineDeletion(
+  beforeItems: readonly MachineItem[],
+  afterItems: readonly MachineItem[],
+  preloads: readonly PreloadReport[],
+): { items: MachineItem[]; preloads: PreloadReport[] } | undefined {
+  if (preloads.length === 0) return { items: [...afterItems], preloads: [] };
+
+  const beforeCells = machineCells(beforeItems);
+  const afterAddressByItemIndex = machineAddressByItemIndex(afterItems);
+  const nextPreloads: PreloadReport[] = [];
+  const nextByRegister = new Map<RegisterName, string>();
+
+  for (const preload of preloads) {
+    const register = preload.register as RegisterName;
+    const decoded = evaluateIndirectAddress(register, preload.value, "flow");
+    const target = decoded?.actualFlowTarget;
+    if (target === undefined) return undefined;
+    const beforeCell = machineCellAt(beforeCells, target);
+    if (beforeCell === undefined) return undefined;
+    const targetItem = beforeItems[beforeCell.itemIndex];
+    const afterItemIndex = afterItems.findIndex((item) => item === targetItem);
+    if (afterItemIndex < 0) return undefined;
+    const shiftedTarget = afterAddressByItemIndex.get(afterItemIndex);
+    if (shiftedTarget === undefined) return undefined;
+    const selectorValue = shiftedTarget === target ? preload.value : selectorForActualTarget(shiftedTarget);
+    if (selectorValue === undefined) return undefined;
+    const shiftedDecoded = evaluateIndirectAddress(register, selectorValue, "flow");
+    if (shiftedDecoded?.actualFlowTarget !== shiftedTarget) return undefined;
+    nextPreloads.push({ ...preload, value: selectorValue });
+    nextByRegister.set(register, selectorValue);
+  }
+
+  return {
+    items: retargetMachineSelectorComments(afterItems, nextByRegister),
+    preloads: nextPreloads,
+  };
+}
+
+export function optimizePostLayoutStopTailReuse(
+  items: readonly MachineItem[],
+  preloads: readonly PreloadReport[],
+): PostLayoutIndirectFlowResult {
+  let current: MachineItem[] = [...items];
+  let currentPreloads: PreloadReport[] = [...preloads];
+  let applied = 0;
+
+  for (let round = 0; round < MAX_REWRITES; round += 1) {
+    const branchRewrite = findBranchToStopTailSelectorRewrite(current, currentPreloads);
+    if (branchRewrite !== undefined) {
+      const candidate = applyBranchToStopTailSelectorRewrite(current, branchRewrite);
+      if (cellCount(candidate) >= cellCount(current)) break;
+      const retargeted = retargetSelectorPreloadsAfterMachineDeletion(current, candidate, currentPreloads);
+      if (retargeted === undefined) break;
+      current = retargeted.items;
+      currentPreloads = retargeted.preloads;
+      applied += 1;
+      continue;
+    }
+
+    const rewrite = findStopTailReuseRewrite(current, currentPreloads);
+    if (rewrite === undefined) break;
+    const candidate = applyStopTailReuseRewrite(current, rewrite);
+    if (cellCount(candidate) >= cellCount(current)) break;
+    const retargeted = retargetSelectorPreloadsAfterMachineDeletion(current, candidate, currentPreloads);
+    if (retargeted === undefined) break;
+    current = retargeted.items;
+    currentPreloads = retargeted.preloads;
+    applied += 1;
+  }
+
+  if (applied === 0) {
+    return { items: [...items], preloads: [...preloads], optimizations: [], applied: 0 };
+  }
+  return {
+    items: current,
+    preloads: currentPreloads,
+    optimizations: [{
+      name: "post-layout-stop-tail-reuse",
+      detail: `Replaced ${applied} repeated stop tail${applied === 1 ? "" : "s"} with proven preloaded indirect jumps to an existing stop tail.`,
+    }],
+    applied,
+  };
 }

@@ -55,6 +55,15 @@ export interface CompileOptions {
   // hide repeated call sites from later indirect-call rewrites, so the top-level
   // compiler enables it only as a whole-program candidate.
   sharedStraightLineCallBodies?: boolean;
+  // Internal optimizer metadata: setup-time constant preloads keyed by register.
+  // IR passes use this to prove dual-use constant/address selectors without
+  // parsing listing comments or adding duplicate setup stores.
+  preloadedConstantRegisters?: Partial<Record<RegisterName, string>>;
+  // Speculative IR pass mode: allow setup-time constant preloads to double as
+  // indirect-flow selectors when dataflow proves the register is not overwritten.
+  // Tried as a whole-program candidate because extra indirect rewrites can
+  // perturb layout and lose address-overlay opportunities.
+  dualUseConstantIndirectFlow?: boolean;
   // Treat every implicit variable allocation as an error: assignments to
   // undeclared names (normally a warning) and `name = read()` targets that are
   // silently turned into scratch state fields. On a machine with 15 registers a

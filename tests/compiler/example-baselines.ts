@@ -14,6 +14,7 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
   alaram: 75,
   basic: 8,
   "cave-sketch": 47,
+  "cave-treasure": 105,
   clock: 43,
   "dangerous-loading": 84,
   dungeon: 82,
@@ -47,7 +48,6 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
 // machine-safety fixes.
 export const PENDING_BASELINE: Record<string, number> = {
   "cave-highlevel-baseline": 133,
-  "cave-treasure": 116,
   "giants-country": 114,
   "tic-tac-toe-4x4": 317,
 };

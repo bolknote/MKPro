@@ -521,6 +521,36 @@ program SignedMatchPair {
     expect(folded.steps.length).toBeLessThan(base.steps.length);
   });
 
+  it("keeps preserve-order dispatch allocation aligned with ephemeral input analysis", () => {
+    const source = `
+program PreserveDispatchOrderEphemeralInput {
+  state {
+    key: counter -9..9 = 0
+  }
+  loop {
+    key = read()
+    match key {
+      4 => halt(4)
+      0 => halt(0)
+      6 => halt(6)
+      otherwise => halt(9)
+    }
+  }
+}
+`;
+
+    const reordered = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {});
+    const sourceOrder = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      preserveDispatchCaseOrder: true,
+    });
+
+    expect(reordered.report.optimizations.some((item) => item.name === "ephemeral-input-dispatch")).toBe(true);
+    expect(reordered.report.optimizations.some((item) => item.name === "dispatch-case-ordering")).toBe(true);
+    expect(sourceOrder.report.optimizations.some((item) => item.name === "ephemeral-input-dispatch")).toBe(false);
+    expect(sourceOrder.report.optimizations.some((item) => item.name === "dispatch-case-ordering")).toBe(false);
+    expect(sourceOrder.report.optimizations.some((item) => item.name === "dispatch-source-register")).toBe(true);
+  });
+
   it("branches directly on a single-use input without storing it", () => {
     const result = compileOk(`
 program InputBranch {
@@ -580,12 +610,15 @@ program StackStopRiskReadExpression {
 `, { budget: 999, analysis: true });
 
     expect(result.report.optimizations.some((item) => item.name === "show-read-stack-stop-risk-lowering")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-call")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-inline")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-call")).toBe(false);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(false);
     expect(result.report.registers.stake).toBeUndefined();
     expect(result.steps.some((step) => step.comment === "read()")).toBe(false);
     expect(result.steps.some((step) => step.comment === "risk input read()")).toBe(true);
     expect(result.steps.some((step) => step.comment === "arg stake for robber_fight")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "call function robber_fight")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "x-param stack-stop-risk return")).toBe(false);
   });
 
   // The stack-stop-risk lowering generalizes to a stack-stop fusion over any pure
@@ -621,17 +654,49 @@ program StackStopRiskGeneral {
   ]) {
     it(`generalizes stack-stop risk fusion for ${label}`, () => {
       const result = compileOk(stackStopProgram(formula), { budget: 999, analysis: true });
-      expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(true);
-      expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-call")).toBe(true);
+      expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-inline")).toBe(true);
+      expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(false);
+      expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-call")).toBe(false);
       expect(result.report.optimizations.some((item) => item.name === "show-read-stack-stop-risk-lowering")).toBe(true);
       // The parameter is consumed straight from X: no input register, no arg store.
       expect(result.report.registers.stake).toBeUndefined();
       expect(result.steps.some((step) => step.comment === "read()")).toBe(false);
       expect(result.steps.some((step) => step.comment === "arg stake for robber_fight")).toBe(false);
-      // Locked size: generalized forms are no larger than the canonical fusion.
-      expect(result.steps.length).toBe(cells);
+      expect(result.steps.some((step) => step.comment === "call function robber_fight")).toBe(false);
+      expect(result.steps.some((step) => step.comment === "x-param stack-stop-risk return")).toBe(false);
+      // Single-use forms inline the same fusion and drop the call/return wrapper.
+      expect(result.steps.length).toBeLessThan(cells);
     });
   }
+
+  it("keeps multi-use stack-stop risk helpers on the x-param call path", () => {
+    const result = compileOk(`
+program StackStopRiskMultiUse {
+  state {
+    stake_value: counter 0..99 = 2
+    first: counter 0..99 = 0
+    second: counter 0..99 = 0
+  }
+
+  loop {
+    first = robber_fight(stake_value)
+    second = robber_fight(stake_value)
+    halt(first + second)
+  }
+
+  fn robber_fight(stake) {
+    show(stake)
+    return int(stake * (1 + sin(read())))
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-inline")).toBe(false);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-call")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "call function robber_fight")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "x-param stack-stop-risk return")).toBe(true);
+  });
 
   it("leaves non-fusable risk shapes on the ordinary call path", () => {
     // Two distinct reads cannot share one fused stop, so this must fall back to
@@ -2809,6 +2874,8 @@ program ResidualGuardedUpdateFalseBranch {
 
     expect(result.report.optimizations.some((item) => item.name === "residual-guarded-update")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "branch-residual-x-reuse")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "residual-display-materialization-elision")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "display-expression-materialization")).toBe(false);
     const showStep = result.steps.find((step) => step.comment?.startsWith("show __inline_show_"));
     expect(showStep).toBeDefined();
     expect(result.steps.some((step) => step.comment === "expr -" && step.address > (showStep?.address ?? 0))).toBe(false);
@@ -3597,6 +3664,80 @@ program ReadKeyNestedResourceUnderflow {
     expect(result.steps.some((step) => step.comment === "current-X abs")).toBe(true);
   });
 
+  it("can restore stored read keys through recall to expose an X2 sync candidate", () => {
+    const result = compileLoweringVariantForTest(`
+program ReadKeyNestedResourceRecallSync {
+  state {
+    food: counter 0..9 = 2
+    pos: counter 0..9 = 1
+    result: counter -9..9 = 0
+  }
+
+  loop {
+    show(pos)
+    key = read()
+    food--
+    if food < 0 {
+      loop {
+      }
+    }
+    if abs(key) == 5 {
+      result = sign(key)
+    }
+    else {
+      match key {
+        1 => halt(1)
+        otherwise => halt(0)
+      }
+    }
+    halt(result)
+  }
+}
+`, { budget: 999, analysis: true }, { recallStoredInputAfterDecrement: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "show-read-stored-decrement-recall-sync")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "restore read key" && step.mnemonic?.startsWith("П->X "))).toBe(true);
+    expect(result.steps.some((step) => step.comment === "restore read key" && step.mnemonic === "X↔Y")).toBe(false);
+  });
+
+  it("uses indirect pre-decrement for stored-input underflow guards when selected", () => {
+    const result = compileLoweringVariantForTest(`
+program ReadKeyNestedResourceIndirectUnderflow {
+  state {
+    food: counter 0..9 = 2
+    pos: counter 0..9 = 1
+    result: counter -9..9 = 0
+  }
+
+  loop {
+    show(pos)
+    key = read()
+    food--
+    if food < 0 {
+      loop {
+      }
+    }
+    if abs(key) == 5 {
+      result = sign(key)
+    }
+    else {
+      match key {
+        1 => halt(1)
+        otherwise => halt(0)
+      }
+    }
+    halt(result)
+  }
+}
+`, { budget: 999, analysis: true }, { indirectUnderflowDecrement: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "show-read-stored-indirect-decrement-underflow")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "indirect-underflow-decrement")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "predecrement food" && step.mnemonic?.startsWith("К П->X "))).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set food")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "restore read key" && step.mnemonic?.startsWith("П->X "))).toBe(true);
+  });
+
   it("reuses branch comparison residuals for the first false-branch display", () => {
     const result = compileOk(`
 program BranchResidualDisplay {
@@ -4268,7 +4409,7 @@ program BranchStateStackTemp {
     )).toBe(false);
   });
 
-  it("decrements a zero-reachable counter through the indirect pre-decrement, not F Lx", () => {
+  it("decrements a one-reachable counter through the indirect pre-decrement, not F Lx", () => {
     // arrows is observed via halt(arrows) and must be able to reach 0. F Lx clamps
     // a positive counter at 1, so the correct compact form is the R0..R3 indirect
     // pre-decrement. The false-branch X-preservation around the call still holds.
@@ -4277,7 +4418,7 @@ program FalseBranchXReuse {
   state {
     target: packed = 0
     wumpus: packed = 1
-    arrows: counter 0..5 = 2
+    arrows: counter 1..5 = 2
   }
 
   loop {

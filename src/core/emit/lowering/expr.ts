@@ -10,6 +10,7 @@ import {
   NEGATIVE_ZERO_DEGREE_SELECTOR_GE,
   binaryOpcode,
   buildDiagnostic,
+  countExpressionCalls,
   estimateExpressionCost,
   expressionEquals,
   expressionIsDeterministic,
@@ -39,7 +40,7 @@ import {
   packedGridMacroArity,
   xParamValueScratchName,
 } from "../lowering-helpers.ts";
-import type { StackStopRiskMatch } from "../lowering-helpers.ts";
+import type { StackStopRiskMatch, XParamStackStopRiskRead } from "../lowering-helpers.ts";
 
 export function compileExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
     const randomCellHelper = ctx.sharedRandomCellHelper(expr);
@@ -248,6 +249,18 @@ export function compileFunctionCall(ctx: LoweringCtx, expr: Extract<ExpressionAs
     const xParamStackStopRisk = matchXParamStackStopRiskRead(ctx.ast, proc);
     if (xParamStackStopRisk !== undefined && expr.args.length === 1) {
       compileExpression(ctx, expr.args[0]!);
+      if (countExpressionCalls(ctx.ast, proc.name) === 1) {
+        compileInlineXParamStackStopRiskRead(ctx, xParamStackStopRisk);
+        ctx.optimizations.push({
+          name: "x-param-stack-stop-risk-inline",
+          detail: `Inlined single-use ${proc.name} while passing ${xParamStackStopRisk.param} through X.`,
+        });
+        ctx.optimizations.push({
+          name: "show-read-stack-stop-risk-lowering",
+          detail: `Reused displayed ${xParamStackStopRisk.param} as the parked Y value for ${proc.name}.`,
+        });
+        return true;
+      }
       const bankSelectors = ctx.snapshotBankSelectorCache();
       ctx.emitJump(0x53, "ПП", proc.name, `call function ${proc.name}`, proc.line);
       ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors);
@@ -269,6 +282,24 @@ export function compileFunctionCall(ctx: LoweringCtx, expr: Extract<ExpressionAs
       detail: `Called function ${proc.name} and consumed its result from X.`,
     });
     return true;
+  }
+
+function compileInlineXParamStackStopRiskRead(
+  ctx: LoweringCtx,
+  risk: XParamStackStopRiskRead,
+): void {
+    ctx.emitOp(0x0e, "В↑", "x-param inline keep displayed value", risk.showLine);
+    ctx.emitOp(0x50, "С/П", `show ${risk.display}`, risk.showLine);
+    ctx.armValueInY(risk.param);
+    try {
+      compileStackStopRiskTail(ctx, risk.risk, {
+        inputComment: "risk input read()",
+        inputLine: risk.line,
+        consumerLine: risk.line,
+      });
+    } finally {
+      ctx.clearArmedValueInY();
+    }
   }
 
 // True when compiling `expr` emits a bare read() stop (С/П) as its very first

@@ -4,6 +4,7 @@ import {
   optimizePostLayoutAddressCodeOverlay,
   optimizePostLayoutFractionalR0Flow,
   optimizePostLayoutIndirectFlow,
+  optimizePostLayoutStopTailReuse,
 } from "../../src/core/post-layout-indirect-flow.ts";
 import type { MachineItem, RegisterName } from "../../src/core/types.ts";
 
@@ -137,6 +138,75 @@ describe("post-layout indirect flow", () => {
     );
     expect(indirectConditions).toHaveLength(2);
     expect(evaluateIndirectAddress("7", "B6", "flow")?.actualFlowTarget).toBe(4);
+  });
+
+  it("reuses an existing preloaded stop tail", () => {
+    const program: MachineItem[] = [
+      { kind: "label", name: "base" },
+      halt(),
+      op(0x8b, "К БП b"),
+      digit(),
+      { kind: "label", name: "duplicate" },
+      halt(),
+      op(0x8b, "К БП b"),
+      digit(),
+    ];
+    const result = optimizePostLayoutStopTailReuse(program, [
+      { register: "8", value: "B2", countsAgainstProgram: false },
+    ]);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    const duplicateIndex = result.items.findIndex((item) => item.kind === "label" && item.name === "duplicate");
+    expect(result.items[duplicateIndex + 1]).toMatchObject({ kind: "op", opcode: 0x88 });
+    expect(result.optimizations[0]?.name).toBe("post-layout-stop-tail-reuse");
+  });
+
+  it("reuses zero-prefixed stop tails and retargets shifted selectors", () => {
+    const program: MachineItem[] = [
+      { kind: "label", name: "base" },
+      halt(),
+      op(0x8b, "К БП b"),
+      ...Array.from({ length: 8 }, () => digit()),
+      { kind: "label", name: "zero_tail" },
+      digit(),
+      halt(),
+      op(0x8b, "К БП b"),
+      { kind: "label", name: "late_target" },
+      halt(),
+    ];
+    const result = optimizePostLayoutStopTailReuse(program, [
+      { register: "8", value: "B2", countsAgainstProgram: false },
+      { register: "7", value: "13", countsAgainstProgram: false },
+    ]);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    const zeroIndex = result.items.findIndex((item) => item.kind === "label" && item.name === "zero_tail");
+    expect(result.items[zeroIndex + 1]).toMatchObject({ kind: "op", opcode: 0x00 });
+    expect(result.items[zeroIndex + 2]).toMatchObject({ kind: "op", opcode: 0x88 });
+    expect(result.preloads).toContainEqual({ register: "7", value: "C4", countsAgainstProgram: false });
+  });
+
+  it("rewrites direct branches to reused stop-tail selector shims", () => {
+    const program: MachineItem[] = [
+      { kind: "label", name: "base" },
+      halt(),
+      op(0x8b, "К БП b"),
+      op(0x57, "F x!=0"),
+      { kind: "address", target: "shim" },
+      digit(),
+      { kind: "label", name: "shim" },
+      op(0x88, "К БП 8"),
+    ];
+    const result = optimizePostLayoutStopTailReuse(program, [
+      { register: "8", value: "B2", countsAgainstProgram: false },
+    ]);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items.some((item) => item.kind === "address" && item.target === "shim")).toBe(false);
+    expect(result.items.find((item) => item.kind === "op" && item.opcode === 0x78)).toBeDefined();
   });
 
   it("rewrites fractional R0 flow when replacing the branch puts its label target at address 99", () => {
@@ -306,6 +376,25 @@ describe("post-layout indirect flow", () => {
     expect(result.items[1]).toMatchObject({ kind: "label", name: "entry" });
     expect(result.items[2]).toMatchObject({ kind: "address", target: "target" });
     expect(result.items.some((item) => item.kind === "address" && item.formalOpcode === 0x55)).toBe(false);
+  });
+
+  it("uses a formal address alias when the overlaid executable byte targets the same label", () => {
+    const program: MachineItem[] = [
+      ...jump("target"),
+      { kind: "label", name: "entry" },
+      op(0xb5, "К X->П 5"),
+      digit(),
+      { kind: "label", name: "target" },
+      halt(),
+    ];
+    const result = optimizePostLayoutAddressCodeOverlay(program);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items[0]).toMatchObject({ kind: "op", opcode: 0x51 });
+    expect(result.items[1]).toMatchObject({ kind: "label", name: "entry" });
+    expect(result.items[2]).toMatchObject({ kind: "address", target: "target", formalOpcode: 0xb5 });
+    expect(result.items.some((item) => item.kind === "op" && item.opcode === 0xb5)).toBe(false);
   });
 
   it("overlays a formal branch address byte when its actual target is before the removed cell", () => {

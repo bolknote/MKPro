@@ -8,6 +8,7 @@ import {
   calculateLabelAddresses,
   cellsPerOp,
   hasRewriteBarrier,
+  knownIndirectMemoryTargets,
   targetAddress,
   type IrPass,
   type IrPassFn,
@@ -26,6 +27,7 @@ interface SelectorPlan {
   register: RegisterName;
   selectorValue: string;
   superDark: boolean;
+  existingConstant?: boolean;
 }
 
 interface EligibleTarget {
@@ -60,9 +62,49 @@ function usedRegisters(ops: readonly IrOp[]): Set<RegisterName> {
   return used;
 }
 
-function spareStableRegisters(ops: readonly IrOp[]): RegisterName[] {
+function reservedPreloadedRegisters(
+  preloaded: Partial<Record<RegisterName, string>> | undefined,
+): Set<RegisterName> {
+  return new Set(Object.keys(preloaded ?? {}) as RegisterName[]);
+}
+
+function spareStableRegisters(ops: readonly IrOp[], reserved: ReadonlySet<RegisterName> = new Set()): RegisterName[] {
   const used = usedRegisters(ops);
-  return STABLE_REGISTERS.filter((register) => !used.has(register));
+  return STABLE_REGISTERS.filter((register) => !used.has(register) && !reserved.has(register));
+}
+
+function registerIsOverwritten(ops: readonly IrOp[], register: RegisterName): boolean {
+  for (const op of ops) {
+    if (op.kind === "store" && op.register === register) return true;
+    if (op.kind !== "indirect-store") continue;
+    const targets = knownIndirectMemoryTargets(op);
+    if (targets === undefined || targets.has(register)) return true;
+  }
+  return false;
+}
+
+function existingConstantSelectorPlans(
+  ops: readonly IrOp[],
+  preloaded: Partial<Record<RegisterName, string>> | undefined,
+): Map<number, SelectorPlan> {
+  const plans = new Map<number, SelectorPlan>();
+  if (preloaded === undefined) return plans;
+  for (const register of STABLE_REGISTERS) {
+    const value = preloaded[register];
+    if (value === undefined || registerIsOverwritten(ops, register)) continue;
+    const evaluated = evaluateIndirectAddress(register, value, "flow");
+    if (evaluated === undefined) continue;
+    const target = evaluated?.actualFlowTarget;
+    if (target === undefined || target < 0 || target > 104) continue;
+    if (plans.has(target)) continue;
+    plans.set(target, {
+      register,
+      selectorValue: value,
+      superDark: evaluated.superDark?.entryAddress === target,
+      existingConstant: true,
+    });
+  }
+  return plans;
 }
 
 function numericFlowTarget(op: IrOp): number | undefined {
@@ -297,7 +339,11 @@ function canBorrowRegisterForRuntimeSelector(
   return true;
 }
 
-function runtimeIndirectCallPlans(ops: readonly IrOp[], breakEven = false): RuntimeCallPlan[] {
+function runtimeIndirectCallPlans(
+  ops: readonly IrOp[],
+  breakEven = false,
+  reserved: ReadonlySet<RegisterName> = new Set(),
+): RuntimeCallPlan[] {
   const addresses = addressByIndex(ops);
   const labels = calculateLabelAddresses(ops);
   const targets = new Map<number, RuntimeCallTarget>();
@@ -349,6 +395,7 @@ function runtimeIndirectCallPlans(ops: readonly IrOp[], breakEven = false): Runt
     if (targetIndex === undefined) continue;
     const register = STABLE_REGISTERS.find((item) =>
       !usedRegisters.has(item) &&
+      !reserved.has(item) &&
       canBorrowRegisterForRuntimeSelector(ops, item, targetIndex, candidate.insertIndex, selected)
     );
     if (register === undefined) continue;
@@ -364,7 +411,11 @@ function runtimeIndirectCallPlans(ops: readonly IrOp[], breakEven = false): Runt
 }
 
 const runtimeIndirectCallRun: IrPassFn = (ops, context) => {
-  const plans = runtimeIndirectCallPlans(ops, context.options.aggressiveIndirectCallThreshold === true);
+  const plans = runtimeIndirectCallPlans(
+    ops,
+    context.options.aggressiveIndirectCallThreshold === true,
+    reservedPreloadedRegisters(context.options.preloadedConstantRegisters),
+  );
   if (plans.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
   const byInsert = new Map<number, RuntimeCallPlan[]>();
   const byIndex = new Map<number, RuntimeCallPlan>();
@@ -405,11 +456,15 @@ const runtimeIndirectCallRun: IrPassFn = (ops, context) => {
 
 export function runPreloadedIndirectFlow(
   ops: readonly IrOp[],
-  _context: { options: unknown },
+  context: { options: { preloadedConstantRegisters?: Partial<Record<RegisterName, string>>; dualUseConstantIndirectFlow?: boolean } },
   flowOptions: IndirectFlowOptions = {},
 ): { ops: IrOp[]; applied: number; optimizations: { name: string; detail: string }[]; preloads?: PreloadReport[] } {
-  const registers = spareStableRegisters(ops);
-  if (registers.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+  const reserved = reservedPreloadedRegisters(context.options.preloadedConstantRegisters);
+  const registers = spareStableRegisters(ops, reserved);
+  const existingSelectors = context.options.dualUseConstantIndirectFlow === true
+    ? existingConstantSelectorPlans(ops, context.options.preloadedConstantRegisters)
+    : new Map<number, SelectorPlan>();
+  if (registers.length === 0 && existingSelectors.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
 
   const addresses = addressByIndex(ops);
   const labels = calculateLabelAddresses(ops);
@@ -429,11 +484,17 @@ export function runPreloadedIndirectFlow(
     }
 
     const { selectorValue, superDark } = selectorForTarget(ops, addresses, labels, target);
-    const evaluated = evaluateIndirectAddress(registers[0]!, selectorValue, "flow");
+    const existingSelector = existingSelectors.get(target);
+    const evaluated = registers[0] === undefined
+      ? undefined
+      : evaluateIndirectAddress(registers[0], selectorValue, "flow");
     const selectedSuperDark = evaluated?.superDark?.entryAddress === target;
     if (
-      evaluated?.actualFlowTarget !== target ||
-      selectedSuperDark !== superDark
+      existingSelector === undefined &&
+      (
+        evaluated?.actualFlowTarget !== target ||
+        selectedSuperDark !== superDark
+      )
     ) {
       continue;
     }
@@ -448,11 +509,20 @@ export function runPreloadedIndirectFlow(
 
   const targets = new Map<number, SelectorPlan>();
   const preloads: PreloadReport[] = [];
+  let reusedExistingConstants = 0;
+  const usedExistingRegisters = new Set<RegisterName>();
   const sortedTargets = [...eligibleTargets.values()].sort((left, right) =>
     right.indices.length - left.indices.length ||
     left.indices[0]! - right.indices[0]!
   );
   for (const target of sortedTargets) {
+    const existingSelector = existingSelectors.get(target.target);
+    if (existingSelector !== undefined && !usedExistingRegisters.has(existingSelector.register)) {
+      targets.set(target.target, existingSelector);
+      usedExistingRegisters.add(existingSelector.register);
+      reusedExistingConstants += 1;
+      continue;
+    }
     const register = registers.shift();
     if (register === undefined) break;
     if (!isStableIndirectSelector(register)) continue;
@@ -498,10 +568,13 @@ export function runPreloadedIndirectFlow(
 
   if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
   const formal = preloads.filter((preload) => /[B-F]/iu.test(preload.value)).length;
+  const reused = reusedExistingConstants === 0
+    ? ""
+    : ` and reused ${reusedExistingConstants} existing constant selector${reusedExistingConstants === 1 ? "" : "s"}`;
   const optimizations = [
     {
       name: "preloaded-indirect-flow",
-      detail: `Replaced ${applied} numeric direct branch/call(s) with compiler-owned preloaded indirect flow (${formal} formal alias selector${formal === 1 ? "" : "s"}).`,
+      detail: `Replaced ${applied} numeric direct branch/call(s) with compiler-owned preloaded indirect flow (${formal} formal alias selector${formal === 1 ? "" : "s"})${reused}.`,
     },
   ];
   if (superDarkApplied > 0) {

@@ -263,9 +263,11 @@ export function isPreincrementIndirectRegister(register: RegisterName): boolean 
   return register === "4" || register === "5" || register === "6";
 }
 
-// Indirect addressing through R0..R3 pre-decrements the register by one (a true
-// arithmetic -1 that reaches 0 and below), unlike F Lx which clamps a positive
-// counter at 1. This makes `К П->X r` the correct compact unit-decrement.
+// Indirect addressing through R0..R3 pre-decrements the register by one and
+// reaches 0 from 1, unlike F Lx which clamps a positive counter at 1. From 0
+// the hardware writes the negative sentinel, so general standalone decrements
+// must prove the zero edge is not observable; terminal underflow fusions may use
+// the sentinel only when the negative path cannot return.
 export function isPredecrementIndirectRegister(register: RegisterName): boolean {
   return register === "0" || register === "1" || register === "2" || register === "3";
 }
@@ -3053,6 +3055,89 @@ export function matchXParamStackStopRiskRead(program: ProgramAst, proc: ProcAst)
   return { param, display: show.display, showLine: show.line, line: ret.line, risk };
 }
 
+export function countExpressionCalls(program: ProgramAst, name: string): number {
+  const target = name.toLowerCase();
+  let count = 0;
+
+  const visitExpr = (expr: ExpressionAst): void => {
+    switch (expr.kind) {
+      case "indexed":
+        visitExpr(expr.index);
+        return;
+      case "unary":
+        visitExpr(expr.expr);
+        return;
+      case "binary":
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+        return;
+      case "call":
+        if (expr.callee.toLowerCase() === target) count += 1;
+        for (const arg of expr.args) visitExpr(arg);
+        return;
+      default:
+        return;
+    }
+  };
+
+  const visitCondition = (condition: ConditionAst): void => {
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+
+  const visitStatements = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      switch (statement.kind) {
+        case "pause":
+        case "preview":
+        case "halt":
+        case "return_value":
+          visitExpr(statement.expr);
+          break;
+        case "assign":
+          visitExpr(statement.expr);
+          break;
+        case "indexed_assign":
+          visitExpr(statement.target.index);
+          visitExpr(statement.expr);
+          break;
+        case "coord_list_remove":
+          visitExpr(statement.item);
+          break;
+        case "if":
+          visitCondition(statement.condition);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody !== undefined) visitStatements(statement.elseBody);
+          break;
+        case "while":
+          visitCondition(statement.condition);
+          visitStatements(statement.body);
+          break;
+        case "loop":
+          visitStatements(statement.body);
+          break;
+        case "dispatch":
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody !== undefined) visitStatements(statement.defaultBody);
+          break;
+        case "core":
+          for (const input of statement.inputs ?? []) visitExpr(input.expr);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+
+  for (const entry of program.entries) visitStatements(entry.body);
+  for (const proc of program.procs) visitStatements(proc.body);
+  return count;
+}
+
 export function matchXParamValueFunction(proc: ProcAst): XParamValueFunction | undefined {
   const params = proc.params ?? [];
   const [param] = params;
@@ -3359,9 +3444,11 @@ export function matchStackStopRisk(
 
 export function optimizeDispatchDefaultCases(
   statement: Extract<StatementAst, { kind: "dispatch" }>,
+  options: { preserveCaseOrder?: boolean } = {},
 ): { statement: Extract<StatementAst, { kind: "dispatch" }>; removed: number; reordered: number } {
   if (statement.cases.length === 0) return { statement, removed: 0, reordered: 0 };
   if (!statement.defaultBody) {
+    if (options.preserveCaseOrder === true) return { statement, removed: 0, reordered: 0 };
     const ordered = orderNumericDispatchCasesForResidual(statement.cases);
     return {
       statement: ordered.reordered === 0 ? statement : { ...statement, cases: ordered.cases },
@@ -3389,7 +3476,9 @@ export function optimizeDispatchDefaultCases(
     kept.push(dispatchCase);
   }
 
-  const ordered = orderNumericDispatchCasesForResidual(kept);
+  const ordered = options.preserveCaseOrder === true
+    ? { cases: kept, reordered: 0 }
+    : orderNumericDispatchCasesForResidual(kept);
   const nextStatement = removed === 0 && ordered.reordered === 0
     ? statement
     : { ...statement, cases: ordered.cases };

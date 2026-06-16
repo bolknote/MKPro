@@ -26385,6 +26385,55 @@ describe("ir passes on synthetic programs", () => {
     expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 2);
   });
 
+  it("duplicate-failure-tail shares separated pause-only tails only without fallthrough", () => {
+    const program: IrOp[] = [
+      label("first_pause"),
+      pause(),
+      indirectJump("8"),
+      label("middle"),
+      recall("1"),
+      jump("after_middle"),
+      label("second_pause"),
+      pause(),
+      indirectJump("8"),
+      label("after_middle"),
+      recall("2"),
+      label("fallthrough_pause"),
+      pause(),
+      indirectJump("8"),
+    ];
+    const result = duplicateFailureTail.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.some((op) => op.kind === "label" && op.name === "second_pause")).toBe(false);
+    expect(result.ops.some((op) => op.kind === "label" && op.name === "fallthrough_pause")).toBe(true);
+    expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 2);
+  });
+
+  it("duplicate-failure-tail handles separated pause-only tails behind label runs", () => {
+    const program: IrOp[] = [
+      label("first_pause"),
+      label("first_alias"),
+      pause(),
+      indirectJump("8"),
+      label("middle"),
+      recall("1"),
+      jump("after_middle"),
+      label("second_pause"),
+      label("second_alias"),
+      pause(),
+      indirectJump("8"),
+      label("after_middle"),
+      recall("2"),
+    ];
+    const result = duplicateFailureTail.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.some((op) => op.kind === "label" && op.name === "second_pause")).toBe(false);
+    expect(result.ops.some((op) => op.kind === "label" && op.name === "second_alias")).toBe(false);
+    expect(machineCellCount(result.ops)).toBe(machineCellCount(program) - 2);
+  });
+
   it("shared-straight-line-helper extracts repeated non-terminal bodies", () => {
     const program: IrOp[] = [
       label("first"),

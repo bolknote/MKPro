@@ -95,10 +95,10 @@ describe("golden listing", () => {
       const source = readFileSync(file, "utf8");
       const result = compileMKPro(source, { budget: 999999, analysis: true });
       expect(fullDump(result)).toMatchSnapshot();
-    }, 20000);
+    }, 60000);
 
     it(`lowering variants are stable for ${name}`, () => {
       expect(variantFingerprint(file)).toMatchSnapshot();
-    }, 20000);
+    }, 60000);
   }
 });

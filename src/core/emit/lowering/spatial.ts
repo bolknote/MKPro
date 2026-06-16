@@ -18,6 +18,8 @@ import {
   boardForCellMask,
   cellMaskExpression,
   expressionEquals,
+  expressionIsDeterministic,
+  expressionReferencesIdentifier,
   expressionToIntentText,
   flOpcode,
   isNumericValue,
@@ -117,6 +119,85 @@ export function compileBitSetMaskReuse(ctx: LoweringCtx,
       detail: `Computed bit_mask() once for adjacent set updates at lines ${first.line}/${second.line}.`,
     });
     return true;
+}
+
+export function compileSingleBitMaskOpCopyReuse(ctx: LoweringCtx,
+    first: Extract<StatementAst, { kind: "assign" }>,
+    second: Extract<StatementAst, { kind: "assign" }>,
+  ): boolean {
+    const lowering = matchFractionalMaskOpThenCopy(first, second);
+    if (lowering === undefined) return false;
+
+    compileExpression(ctx, lowering.base);
+    ctx.emitStore(second.target, `set ${second.target}`, second.line);
+    if (lowering.fractional) ctx.emitOp(0x35, "К {x}", "single bit op copy mask fraction", first.line);
+    if (lowering.negate) ctx.emitOp(0x3a, "К ИНВ", "single bit op copy mask complement", first.line);
+    compileExpression(ctx, lowering.collection);
+    ctx.emitOp(lowering.opcode, lowering.mnemonic, `${first.target} bit op with copied mask`, first.line);
+    ctx.emitStore(first.target, `set ${first.target}`, first.line);
+    ctx.optimizations.push({
+      name: "single-bit-mask-op-copy-reuse",
+      detail: `Copied ${expressionToIntentText(lowering.base)} to ${second.target} and reused it for ${first.target} ${lowering.mnemonic} at lines ${first.line}/${second.line}.`,
+    });
+    return true;
+}
+
+interface FractionalMaskOpThenCopy {
+    opcode: number;
+    mnemonic: string;
+    collection: ExpressionAst;
+    base: ExpressionAst;
+    fractional: boolean;
+    negate: boolean;
+}
+
+function matchFractionalMaskOpThenCopy(
+    first: Extract<StatementAst, { kind: "assign" }>,
+    second: Extract<StatementAst, { kind: "assign" }>,
+  ): FractionalMaskOpThenCopy | undefined {
+    if (first.target === second.target) return undefined;
+    const expr = first.expr;
+    if (expr.kind !== "call" || expr.args.length !== 2) return undefined;
+    const op = bitwiseOpcode(expr.callee);
+    if (op === undefined) return undefined;
+    const collection = expr.args[0]!;
+    if (!expressionEquals(collection, { kind: "identifier", name: first.target })) return undefined;
+    const mask = matchFractionalMaskOperand(expr.args[1]!);
+    if (mask === undefined) return undefined;
+    if (!expressionEquals(mask.base, second.expr)) return undefined;
+    if (!expressionIsDeterministic(mask.base) || !expressionIsDeterministic(collection)) return undefined;
+    if (expressionReferencesIdentifier(mask.base, first.target)) return undefined;
+    if (expressionReferencesIdentifier(collection, second.target)) return undefined;
+    return {
+      opcode: op[0],
+      mnemonic: op[1],
+      collection,
+      base: mask.base,
+      fractional: mask.fractional,
+      negate: mask.negate,
+    };
+}
+
+function bitwiseOpcode(name: string): [number, string] | undefined {
+    switch (name.toLowerCase()) {
+      case "bit_and": return [0x37, "К ∧"];
+      case "bit_or": return [0x38, "К ∨"];
+      case "bit_xor": return [0x39, "К ⊕"];
+      default: return undefined;
+    }
+}
+
+function matchFractionalMaskOperand(expr: ExpressionAst): { base: ExpressionAst; fractional: boolean; negate: boolean } | undefined {
+    let mask = expr;
+    let negate = false;
+    if (mask.kind === "call" && mask.callee.toLowerCase() === "bit_not" && mask.args.length === 1) {
+      negate = true;
+      mask = mask.args[0]!;
+    }
+    if (mask.kind === "call" && mask.callee.toLowerCase() === "frac" && mask.args.length === 1) {
+      return { base: mask.args[0]!, fractional: true, negate };
+    }
+    return { base: mask, fractional: false, negate };
 }
 
 export function compileSingleBitMaskOpAssignment(ctx: LoweringCtx, statement: Extract<StatementAst, { kind: "assign" }>): boolean {

@@ -116,7 +116,7 @@ the same generalized lowering strategy.
 - `jump-to-next-threading` — removes intermediate jumps to the next label.
 - `dead-code-after-halt` — removes code unreachable after `HALT`.
 - `register-coalesce` — merges separate temporary cells when lifetime ranges do not overlap.
-- `duplicate-failure-tail-merge` — merges identical error/failure tail sequences, including pause-only tails that display the incoming X value.
+- `duplicate-failure-tail-merge` — merges identical error/failure tail sequences, including adjacent or separated pause-only tails that display the incoming X value when the removed tail cannot be reached by fallthrough.
 - `shared-terminal-tail` — jumps into an existing identical straight-line suffix that already ends in unconditional terminal flow.
 - `shared-straight-line-helper` — extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the `ПП`/`В/О` cost is lower than duplicated inline code; a size-gated candidate extends this to bodies with direct `ПП` calls, and `multi-entry-straight-line-helper` can add internal entry labels for repeated suffixes of the same helper body. X2-restoring numeric-entry commands may be shared only when their restore context is wholly inside the helper body; helper calls/returns are not allowed to become the previous command for an adjacent digit/`.`/`/-/`/`ВП`.
 - `arithmetic-if-pass` — a dedicated pass collecting all `arithmetic-if` opportunities.
@@ -159,7 +159,8 @@ implementation and tuning, many of those names fall into broader families:
   forms and supplies the counter initial value from inline source, setup, or
   state normalization. Includes `state-init-counted-loop`,
   `setup-only-counted-loop-init`, `initialized-counted-while-loop`,
-  `fl-decrement-zero-branch`, `indirect-incdec-counter`, and
+  `fl-decrement-zero-branch`, `indirect-incdec-counter`,
+  `indirect-underflow-decrement`, and
   `r0-indirect-counter`. `counted-loop-unroll` is a separate strategy for
   small constant-trip loops.
 - **Selector, indirect addressing, and hardware side-effect reuse** — plans
@@ -225,6 +226,8 @@ These transformations run on source constructs before machine lowering:
 - `running-display-preview` — lowers `preview(expr)` as expression preparation only, leaving the value visible without inserting a calculator `С/П`.
 - `show-read-decrement-underflow-fusion` — merges `show -> input -> decrement -> if (counter < 0) ...` into one compact sequence, keeping input in `Y` across the decrement-underflow check.
 - `show-read-stored-decrement-underflow-fusion` — the stored-input variant for nested consumers: it keeps the input's ordinary register store, but still restores the same input from `Y` after the decrement-underflow check so the first following expression can use current-`X` scheduling.
+- `show-read-stored-indirect-decrement-underflow` — selected only by full-program rescue: for stored-input variants whose counter lives in R0..R3, uses `К П->X r` to mutate the counter, immediately recalls the counter for the `< 0` test, and restores the stored input through `П->X input`. This preserves ordinary counter storage while removing the explicit `1; -; X->П counter` sequence.
+- `show-read-stored-decrement-recall-sync` — speculative size-rescue variant for the stored-input path: restores the already stored input with `П->X` instead of `X↔Y`, keeping the same local cell count while exposing a real X2 sync for downstream recall/dot optimizations.
 - `show-read-stack-stop-risk-lowering` — a generalized "stack-stop fusion": when a single plain `show` source value (`stake`) is combined with a freshly read input across the stop, it keeps `stake` in `Y`, transforms the input in `X`, and computes the result directly on the stack with no input register. It recognizes any pure shape `wrap*( stake (op) g(input) )` where `op` is `+`/`-`/`*`/`/` (non-commutative ops keep `stake` on the left so they map to the machine's `Y op X` order), `g(input)` is a chain of single-argument X-transform intrinsics over the input (e.g. `sin`, `cos`, `tg`, `sqrt`) optionally fused with one single-digit additive/scaling constant, and `wrap*` is an outer chain of X-transform intrinsics (e.g. `int`, `frac`). The input leaf may be a direct `sin(read())` or a stored input field, avoiding a source-visible throwaway field. The classic `int(stake * (1 + sin(read())))` robber-fight idiom is the canonical case and lowers byte-for-byte identically; the generalization never grows a program because every accepted form reuses the same kept-in-`Y` stack sequence.
 - `loop-carried-prompt-x` — for loops shaped as `show(screen); key = read()` where every non-terminal branch assigns the next `screen`, removes the register-backed prompt state and leaves the next visible value in `X` for the loop-back stop. If the prompt starts from `stack.X` / `stack.Y`, an allocated sibling field initialized from the same stack slot can seed the first prompt.
 - `loop-carried-prompt-input-branch` — after a loop-carried prompt stop, branches directly on the read key with no extra store when the branch condition consumes only that input.
@@ -284,7 +287,10 @@ The control-flow family is where the largest byte savings are found.
 - `zero-condition-test` — emits zero tests in the shortest variant instead of expanded `if`.
 - `dispatch-lowering` — converts dispatch nodes to short jump sequences.
 - `dispatch-default-merge` — shares one tail when different `default` branches are identical.
-- `dispatch-case-ordering` — reorders cases so fast paths are checked earlier.
+- `dispatch-case-ordering` — reorders numeric cases for the shortest residual
+  compare chain. A size-rescue candidate can also keep source order
+  (`source-order-dispatch-layout`) so the full layout/search pipeline can choose
+  it when local residual ordering blocks a cheaper global layout.
 - `dispatch-source-register` — keeps selected source in a dedicated register in advance.
 - `numeric-dispatch-residual-chain` — packs numeric check chains in tail lowering form.
 - `dispatch-default-residual-sign` — derives `sign(selector - bound)` /
@@ -303,6 +309,7 @@ The control-flow family is where the largest byte savings are found.
 - `ephemeral-input-dispatch` — chooses input-based dispatch through denser tables.
 - `decrement-underflow-branch` — decrements and immediately handles underflow in one step.
 - `decrement-underflow-domain-guard` — fuses unit decrement and terminal `halt("ЕГГОГ")` underflow paths through `F sqrt` when the branch target is exactly a one-cell domain-error stop.
+- `indirect-underflow-decrement` — for `x--; if x < 0 { terminal... }` on counters allocated to R0..R3, uses the indirect pre-decrement side effect as the actual store, then recalls `x` for the branch test. The transform is gated as a rescue candidate because the indirect recall changes the stack shape and must compose with surrounding input/branch scheduling.
 - `fl-decrement-zero-branch` — a dedicated “decrement and test zero” sequence in one short block.
 - `one-based-modulo-normalization` — for a proved non-negative scalar, folds
   `x = frac(int(x) / N) * N; if x <= 0 { x += N }` into
@@ -419,6 +426,12 @@ This axis model is realized by a declarative candidate composition engine in
   proc-layout modifiers. It runs only in the rescue regime — when the standard
   search still leaves the program over the 105-cell window — so in-budget
   programs never pay for the broader search and stay byte-identical.
+- In strict mode, candidate probes that fail solely because the intermediate
+  layout is over the official window may be recompiled internally as analysis
+  probes. This keeps over-window intermediates rankable, so a later rescue
+  combination can still be selected if its final result fits; strict public
+  output is still rejected unless the selected result satisfies the requested
+  budget.
 
 Because selection (`selectBest`) is minimum cell count, broadening the candidate
 set can only keep a program the same size or shrink it, never grow it. A
@@ -487,8 +500,14 @@ shared baselines in `tests/compiler/example-baselines.ts`.
 - `inline-floor-packed-row-expression` — computes floor-packed display rows inline to reduce hidden display pressure.
 - `inline-floor-hoisted-proc-tail-layout` — combines inline floor-row lowering with helper/proc hoisting and tail-branch inversion.
 - `reclaim-coalesced-preloads` — compiles with forced coalesce-induced register sharing to free constants for preload allocation.
-- `demote-constant-indirect-flow` — recompiles with selective integer constant inlining to free registers for post-layout indirect-flow rescue.
-- `demote-constant-chain-indirect-flow` — repeatedly suppresses integer preloads (depth-limited) and recompiles to keep a non-dynamic register free for post-layout indirect-flow rescue.
+- `demote-constant-indirect-flow` — recompiles with selective setup-enterable
+  numeric constant inlining to free registers for post-layout indirect-flow
+  rescue; probe bases include existing-constant dual-use selectors when that
+  exposes more indirect-flow replacements, while formal address selector aliases
+  are kept out of this demotion set.
+- `demote-constant-chain-indirect-flow` — repeatedly suppresses setup-enterable
+  numeric preloads (depth-limited) and recompiles to keep a non-dynamic register
+  free for post-layout indirect-flow rescue.
 
 ## 6) Function and call lowering
 
@@ -504,6 +523,7 @@ shared baselines in `tests/compiler/example-baselines.ts`.
 - `x-param-return-decay-call` — applies the same X-return pattern at call sites.
 - `x-param-stack-stop-risk-read` — compiles a single-argument x-param helper proc shaped as `show(param); return wrap*( param (op) g(read()) )` so it consumes its argument from X and returns through direct `В/О`, reusing the same generalized stack-stop fusion prepared by `show-read-stack-stop-risk-lowering` (any X-transform intrinsic, binary op, single-digit constant, and outer wrap chain — not only `int(param * (1 + sin(read())))`).
 - `x-param-stack-stop-risk-call` — compiles a one-argument call into the matched stake/sin helper procedure by passing its argument in X, based on a strict two-statement body shape (`show` of the argument source, then `return int(arg * (1 + sin(read())))` in equivalent forms).
+- `x-param-stack-stop-risk-inline` — when the same helper has exactly one expression-position call, emits the fused `show/read/risk` body at that call site and skips the helper procedure, avoiding the `ПП`/`В/О` wrapper while keeping the same stack-stop semantics.
 - `x-param-value-function` / `x-param-value-function-call` — compiles a one-argument value function shaped like positive modulo normalization (`value = frac(int(value) / N) * N; if value <= 0 return value + N; return value`) so the argument is consumed from `X` and the result is kept in a hidden scratch plus `X`.
 - `x-param-value-call-temp-reuse` — when a nested value-function call must be lifted to protect the MK-61 stack, reuses the same hidden scratch instead of allocating fresh `__mkpro_call_*` temporaries.
 - `x-param-value-scratch-store-elision` — skips the caller-side `X->П scratch` after `scratch = normalize(...)` because the X-param value function already updated that scratch internally.
@@ -522,9 +542,11 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `stable-indirect-flow` — after register-liveness analysis, routes branches/calls through one indirect pointer.
 - `indirect-register-flow` — the same for regions where address is in a register and already safe for indirect jump.
 - `preloaded-indirect-flow` — preloads selector/address once so multiple indirect jumps become shorter. The post-layout pass is not started for already in-budget programs, but if a program needed indirect-flow rescue it keeps applying all further proved shrinking rewrites instead of stopping at the first <=105 result.
+- `post-layout-stop-tail-reuse` — after preloaded indirect-flow has proved a reusable stop tail, replaces repeated `С/П; loop` tails and direct branches to those shims with one-cell indirect jumps/conditionals to the existing stop tail, retargeting generated selector preloads when deleted cells shift later targets.
 - `runtime-indirect-call-flow` — for repeated backward helper calls with legal numeric targets, initializes a dead stable register once at runtime and replaces direct `ПП addr` pairs with one-cell `К ПП r` calls.
 - `preloaded-super-dark-flow` — super-dark path with a preloaded indirect target.
-- `indirect-incdec-counter` — lowers a unit `x++`/`x--` through the indirect pre-increment (R4..R6) or pre-decrement (R0..R3) side effect of `К П->X r`, a one-cell true `±1` that correctly reaches 0 (used as the standalone unit-decrement form).
+- `indirect-incdec-counter` — lowers a unit `x++`/`x--` through the indirect pre-increment (R4..R6) or pre-decrement (R0..R3) side effect of `К П->X r`; the zero-underflow edge writes the hardware negative sentinel, so terminal-underflow lowering treats that edge only as a non-returning negative test.
+- `indirect-underflow-decrement` — extends the same R0..R3 pre-decrement fact to fused underflow guards by using `К П->X r` for the mutation and a direct `П->X r` for the observable `< 0` test; stored-input show/read variants restore the input from its register afterward.
 - `r0-indirect-counter` — uses R0 as a readable counter/switch for jump dispatch where provably safe.
 - `indirect-memory-table` — builds a compact address table in memory and jumps by index.
 - `indirect-memory-alias-selector` — lets indexed-bank lowering use non-linear register aliases from the two-digit indirect-memory table, including negative selector values after a full per-bank-element proof, when that removes selector arithmetic or an allocated selector scratch.
@@ -570,6 +592,7 @@ Display rewrites are separated into strategy selection + body lowering.
 
 - `display-strategy-selection` — chooses the best output mode: packed, display-byte, literal splice, or shared helper.
 - `display-expression-materialization` — prepares expressions for the display node so they can be compacted faster.
+- `residual-display-materialization-elision` — keeps a single-expression display inline when every use is the first false-branch consumer of a matched residual guarded update, so the branch-X residual can be shown without allocating a temporary display register.
 - `display-expression-materialization helper family` — adds temporary helper nodes only when there is a gain.
 - `screen-text-lowering` — turns ordinary text blocks into minimal MK-61 instruction sequences.
 - `screen-text-literal-first-splice` — optimizes the first segment of a text literal separately.
@@ -2101,13 +2124,16 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 26. `address-code-overlay` — a final post-layout verifier moves labels from a
     single-cell op immediately after `БП target` or a proved-terminal
     `ПП target` onto the branch address byte when removing that op proves the
-    address byte will be the same opcode. The overlaid executable cell may be
-    an ordinary op or an existing numeric/formal address byte; if the overlaid
-    opcode itself takes an address, the following operand byte is kept as that
-    command's operand. Fixed numeric/formal branch operands are rejected when
-    shrinking would move their real target. The same verifier can move the
-    branch target label onto the branch's own address byte, allowing that
-    operand byte to be the first executed opcode.
+    address byte will execute as the same opcode. If the ordinary official
+    address byte does not match, the verifier may choose the executable byte as
+    a formal-address alias, but only when that formal byte decodes to the same
+    final target label. The overlaid executable cell may be an ordinary op or an
+    existing numeric/formal address byte; if the overlaid opcode itself takes an
+    address, the following operand byte is kept as that command's operand. Fixed
+    numeric/formal branch operands are rejected when shrinking would move their
+    real target. The same verifier can move the branch target label onto the
+    branch's own address byte, allowing that operand byte to be the first
+    executed opcode.
 27. `vp-splice` — deletes redundant exponent-entry chains (`ВП ВП`) only
     when the first `ВП` is entered from a proved active number-entry context
     (`active-mantissa`, decimal exponent-entry, or structural exponent-entry);
@@ -2313,7 +2339,7 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     visible zero is already proved may be removed. Immediate restore boundaries
     remain conservative unless a separate VP/source proof covers them.
 30. `constant-folding` — deletes identity arithmetic operations (`0+` and `1*`) when both operations are explicit user-facing constants.
-31. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting the first tail to the second; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms.
+31. `duplicate-failure-tail-merge` — removes duplicated failure tails by redirecting one tail label to an equivalent kept tail; this covers both `(label -> 0 -> pause)` and `(label -> pause -> same terminal flow)` forms, including separated pause-only tails when the removed tail has no fallthrough predecessor.
 32. `cse-display-block` — detects identical `recall/plain/.../return(stop)` blocks and replaces duplicates with one canonical block plus jump.
 33. `dead-code-after-halt` — removes unreachable IR ops by CFG reachability from entry.
 34. `register-coalesce` — merges non-overlapping register live ranges and, when enabled, performs copy coalescing for safe `recall/store` aliases.
@@ -2346,7 +2372,7 @@ Feature flags are added only after successful candidate/optimization evidence:
 - `dark-entries` — added from cyclic formal dark-entry selection and related layout features.
 - `address-constants` — added when constants are reused as arithmetic/address-like data.
 - `x2-register` — added when X2/Xп/дисплей-byte scheduling relies on X2 boundaries across display-byte or ordinary hidden-temp paths; opcode metadata follows the reference distinction between X2-preserving, X2-syncing/normalizing, and X2-restoring commands, plus branch-specific effects for direct conditionals.
-- `fl-decrement-branch` — added when one-cell `F Lx` decrement/control forms are selected through optimizer-safe flow patterns (`fl-decrement-zero-branch`, `indirect-incdec-counter`, `r0-indirect-counter`).
+- `fl-decrement-branch` — added when compact decrement/control forms are selected through optimizer-safe flow patterns (`fl-decrement-zero-branch`, `indirect-incdec-counter`, `indirect-underflow-decrement`, `r0-indirect-counter`).
 - `stack-resident-temps` — added when any stack-temporary residency optimization is used (`stack-resident-temps`, `stack-resident-indexed-temp`, or `stack-resident-control-flow`); recall-removal proofs use the shared opcode stack-effect profile to avoid deleting `П->X` lifts that can still be observed downstream.
 - `negative-zero-degree` — added when `negative-zero-threshold-selector` proof uses the `1|-00` preload trick.
 - `x2-restore-boundaries` — added when `vp-fraction-restore` is active.

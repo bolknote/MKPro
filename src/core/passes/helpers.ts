@@ -550,6 +550,15 @@ export function knownIndirectMemoryTarget(op: IrOp): RegisterName | undefined {
   return match[1]!.toLowerCase() as RegisterName;
 }
 
+export function knownIndirectMemoryTargets(op: IrOp): ReadonlySet<RegisterName> | undefined {
+  const single = knownIndirectMemoryTarget(op);
+  if (single !== undefined) return new Set([single]);
+  if (op.kind !== "indirect-recall" && op.kind !== "indirect-store") return undefined;
+  const match = /\bindirect-memory-targets=([0-9a-e](?:,[0-9a-e])*)\b/iu.exec(op.meta.comment ?? "");
+  if (!match) return undefined;
+  return new Set(match[1]!.split(",").map((register) => register.toLowerCase() as RegisterName));
+}
+
 export function knownIndirectFlowTarget(op: IrOp): number | undefined {
   if (op.kind !== "indirect-jump" && op.kind !== "indirect-call" && op.kind !== "indirect-cjump") {
     return undefined;

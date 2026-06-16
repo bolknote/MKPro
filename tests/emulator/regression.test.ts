@@ -238,7 +238,8 @@ program StakeCosProbe {
 }
 `;
     const result = compileMKPro(source, { budget: 999, analysis: true });
-    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-inline")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "x-param-stack-stop-risk-read")).toBe(false);
 
     const runChoice = (keys: string[]): string => {
       const calc = new MK61();
