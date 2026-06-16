@@ -6415,6 +6415,7 @@ export interface X2VpRestoreGapSourceAnalysis {
   readonly replacementDotHasOnlyRestoreGapBeforeVp: boolean;
   readonly hasSignRestoreGapBeforeVp: boolean;
   readonly sourceMatch: X2VpSourceMatchAnalysis;
+  readonly signRestoreSourceProof: X2VpSignRestoreSourceProof;
   readonly beforeRunSource: X2VpSourceModel;
   readonly beforeVpSource: X2VpSourceModel;
   readonly beforeRunSignSource: X2VpSourceModel;
@@ -6423,6 +6424,18 @@ export interface X2VpRestoreGapSourceAnalysis {
   readonly canDiscardShapeSignPairBeforeProvedVp: boolean;
   readonly canDiscardSignRestoreRunBeforeProvedVp: boolean;
   readonly hasSameExplicitVpEntrySignSource: boolean;
+}
+
+export type X2VpSignRestoreSourceProofReason =
+  "shape-transition" |
+  "source-match-nonzero-sign" |
+  "source-match-explicit-sign" |
+  "shared-sign-source" |
+  "no-sign-restore-source";
+
+export interface X2VpSignRestoreSourceProof {
+  readonly canDiscard: boolean;
+  readonly reason: X2VpSignRestoreSourceProofReason;
 }
 
 export interface X2VpRestoreGapSourceOptions {
@@ -6710,31 +6723,59 @@ export function analyzeX2VpRestoreGapSource(
     { beforeVp, hasSignRestore },
   );
   const sourceMatch = transition.sourceMatch ?? analyzeX2VpSourceMatch(beforeRun, beforeVp, { hasSignRestore });
+  const signRestoreSourceProof = x2VpSignRestoreSourceProof(
+    sourceMatch,
+    transition,
+    { hasSignRestore, hasVp: scan.vpIndex !== undefined },
+  );
   return {
     hasOnlyRestoreGapBeforeVp: scan.sawRestoreGap && scan.vpIndex !== undefined,
     replacementDotHasOnlyRestoreGapBeforeVp: scan.vpIndex !== undefined,
     hasSignRestoreGapBeforeVp: hasSignRestore && scan.vpIndex !== undefined,
     sourceMatch,
+    signRestoreSourceProof,
     beforeRunSource: sourceMatch.beforeRunSource,
     beforeVpSource: sourceMatch.beforeVpSource,
     beforeRunSignSource: sourceMatch.beforeRunSignSource,
     beforeVpSignSource: sourceMatch.beforeVpSignSource,
     canDiscardRestoreRunBeforeProvedVp: transition.canDiscardRestoreRun,
     canDiscardShapeSignPairBeforeProvedVp: transition.canDiscardSignPair,
-    canDiscardSignRestoreRunBeforeProvedVp: transition.canDiscardSignPair ||
-      (
-        hasSignRestore &&
-        scan.vpIndex !== undefined &&
-        stringSetsHaveIntersection(
-          sourceMatch.beforeRunSignSource.keys,
-          mergeStringSets(sourceMatch.beforeVpSource.keys, sourceMatch.beforeVpSignSource.keys),
-        )
-      ),
+    canDiscardSignRestoreRunBeforeProvedVp: signRestoreSourceProof.canDiscard,
     hasSameExplicitVpEntrySignSource: stringSetsHaveIntersection(
       explicitVpEntrySignSourceKeys(beforeRun),
       explicitVpEntrySignSourceKeys(beforeVp),
     ),
   };
+}
+
+function x2VpSignRestoreSourceProof(
+  sourceMatch: X2VpSourceMatchAnalysis,
+  transition: X2VpShapeTransitionAnalysis,
+  options: {
+    readonly hasSignRestore: boolean;
+    readonly hasVp: boolean;
+  },
+): X2VpSignRestoreSourceProof {
+  if (transition.canDiscardSignPair) return { canDiscard: true, reason: "shape-transition" };
+  if (!options.hasSignRestore || !options.hasVp) {
+    return { canDiscard: false, reason: "no-sign-restore-source" };
+  }
+  if (sourceMatch.reason === "nonzero-sign-source") {
+    return { canDiscard: true, reason: "source-match-nonzero-sign" };
+  }
+  if (sourceMatch.reason === "explicit-sign-source") {
+    return { canDiscard: true, reason: "source-match-explicit-sign" };
+  }
+  const signTargets = mergeStringSets(sourceMatch.beforeVpSource.keys, sourceMatch.beforeVpSignSource.keys);
+  if (
+    stringSetsHaveIntersection(
+      nonZeroVpSourceKeys(sourceMatch.beforeRunSignSource.keys),
+      nonZeroVpSourceKeys(signTargets),
+    )
+  ) {
+    return { canDiscard: true, reason: "shared-sign-source" };
+  }
+  return { canDiscard: false, reason: "no-sign-restore-source" };
 }
 
 export function x2PlanRestoreRunBeforeProvedVp(
@@ -7489,7 +7530,7 @@ export function x2PlanDotReplacementVpSource(
         reason: "restore-gap-source",
       };
     }
-    if (source.canDiscardSignRestoreRunBeforeProvedVp) {
+    if (source.signRestoreSourceProof.canDiscard) {
       return {
         preservesVpEntrySource: true,
         source,

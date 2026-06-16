@@ -1431,7 +1431,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     same blocked/terminal result instead of duplicating gap semantics.
     A companion VP restore-gap source analysis aggregates the `ВП` target scan,
     replacement-dot scan, sign-restore presence, proved source transition, and
-    explicit sign-source equality; `x2-noop-restore`,
+    explicit sign-source equality; it also returns a named sign-restore source
+    proof (`shape-transition`, source-match sign proof, non-zero shared
+    sign-source, or no proof) instead of leaving consumers to repeat local
+    sign-source intersections. `x2-noop-restore`,
     `x2-hidden-temp-restore`, `x2-literal-restore`, `vp-splice`, and the
     immediate-`ВП` recall-removal proof use this aggregate planner instead of
     open-coding the same `ВП` gap checks.

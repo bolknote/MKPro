@@ -12647,6 +12647,10 @@ describe("ir passes on synthetic programs", () => {
       sourceMatch: {
         reason: "same-exponent-context",
       },
+      signRestoreSourceProof: {
+        canDiscard: true,
+        reason: "shape-transition",
+      },
     });
     expect(analyzeX2VpRestoreGapSource(
       restoreGapProgram,
@@ -12733,6 +12737,10 @@ describe("ir passes on synthetic programs", () => {
       replacementDotHasOnlyRestoreGapBeforeVp: true,
       hasSignRestoreGapBeforeVp: true,
       canDiscardShapeSignPairBeforeProvedVp: false,
+      signRestoreSourceProof: {
+        canDiscard: false,
+        reason: "no-sign-restore-source",
+      },
     });
   });
 
