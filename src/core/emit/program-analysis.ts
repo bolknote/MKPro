@@ -1,6 +1,6 @@
 import type { NearAnyHelperStats } from "../compiler.ts";
 import type { XParamProcLowering } from "./lowering-helpers.ts";
-import type { ExpressionAst, ProcAst } from "../types.ts";
+import type { ExpressionAst, ProcAst, StatementAst } from "../types.ts";
 
 /**
  * Read-only program analysis computed once per lowering attempt and injected
@@ -24,4 +24,5 @@ export interface ProgramAnalysis {
   readonly scaledCoordLists: Set<string>;
   readonly scaledCoordCellNames: Set<string>;
   readonly removableCoordLists: Set<string>;
+  readonly terminalUnderflowUnitDecrements: WeakSet<Extract<StatementAst, { kind: "assign" }>>;
 }

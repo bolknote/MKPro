@@ -1408,6 +1408,12 @@ function demoteConstantIndirectFlowCandidates(
     { freeResidualDispatchScratch: true },
     { sharedBitMaskHelperCalls: true },
     { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
+    ...(sourceHasComparisonGuardedUpdate(source)
+      ? [
+          { comparisonGuardedUpdateSelectors: true },
+          { comparisonGuardedUpdateSelectors: true, invertBranchOrder: true },
+        ]
+      : []),
     ...(sourceMayContainErrorTrap(source)
       ? [
           { domainErrorGuards: true, unrollCountedLoops: true },
@@ -6651,6 +6657,9 @@ export class EmitContext {
   get inlineProcNames(): Set<string> {
     return this.analysis.inlineProcNames;
   }
+  terminalUnderflowUnitDecrementProtected(statement: Extract<StatementAst, { kind: "assign" }>): boolean {
+    return this.analysis.terminalUnderflowUnitDecrements.has(statement);
+  }
   get procCallCounts(): Map<string, number> {
     return this.analysis.procCallCounts;
   }
@@ -11158,6 +11167,7 @@ function buildProgramAnalysis(ast: ProgramAst, allocation: RegisterAllocation): 
     scaledCoordLists,
     scaledCoordCellNames: collectScaledCoordCellNames(ast, scaledCoordLists),
     removableCoordLists: collectRemovableCoordListNames(ast),
+    terminalUnderflowUnitDecrements: collectTerminalUnderflowUnitDecrements(ast, inlineProcNames),
   };
 }
 
@@ -11460,6 +11470,178 @@ function statementTerminatesStatically(
   if (proc === undefined || seenProcs.has(proc.name)) return false;
   seenProcs.add(proc.name);
   return statementListTerminatesStaticallySeen(proc.body, ast, seenProcs);
+}
+
+function collectTerminalUnderflowUnitDecrements(
+  ast: ProgramAst,
+  inlineProcNames: ReadonlySet<string>,
+): WeakSet<Extract<StatementAst, { kind: "assign" }>> {
+  const protectedDecrements = new WeakSet<Extract<StatementAst, { kind: "assign" }>>();
+  const procByName = new Map(ast.procs.map((proc) => [proc.name, proc]));
+
+  const analyzeStatements = (
+    statements: readonly StatementAst[],
+    pendingAfter: ReadonlySet<string>,
+    seenInline = new Set<string>(),
+  ): Set<string> => {
+    let pending = new Set(pendingAfter);
+    for (let index = statements.length - 1; index >= 0; index -= 1) {
+      pending = analyzeStatement(statements[index]!, pending, seenInline);
+    }
+    return pending;
+  };
+
+  const analyzeStatement = (
+    statement: StatementAst,
+    pendingAfter: ReadonlySet<string>,
+    seenInline: Set<string>,
+  ): Set<string> => {
+    const terminalGuard = terminalNonpositiveGuardVariable(ast, statement);
+    if (terminalGuard !== undefined) {
+      const pending = new Set(pendingAfter);
+      pending.add(terminalGuard);
+      return pending;
+    }
+
+    if (statement.kind === "assign") {
+      const pending = killReads(statement.expr, pendingAfter);
+      if (
+        pendingAfter.has(statement.target) &&
+        isUnitDecrementExpression(statement.target, statement.expr)
+      ) {
+        protectedDecrements.add(statement);
+        pending.delete(statement.target);
+        return pending;
+      }
+      pending.delete(statement.target);
+      return pending;
+    }
+
+    if (statement.kind === "if") {
+      const thenPending = analyzeStatements(statement.thenBody, pendingAfter, new Set(seenInline));
+      const elsePending = statement.elseBody === undefined
+        ? new Set(pendingAfter)
+        : analyzeStatements(statement.elseBody, pendingAfter, new Set(seenInline));
+      return killConditionReads(statement.condition, intersectSets(thenPending, elsePending));
+    }
+
+    if (statement.kind === "dispatch") {
+      let pending = statement.defaultBody === undefined
+        ? new Set(pendingAfter)
+        : analyzeStatements(statement.defaultBody, pendingAfter, new Set(seenInline));
+      for (const dispatchCase of statement.cases) {
+        pending = intersectSets(
+          pending,
+          analyzeStatements(dispatchCase.body, pendingAfter, new Set(seenInline)),
+        );
+        pending = killReads(dispatchCase.value, pending);
+      }
+      return killReads(statement.expr, pending);
+    }
+
+    if (statement.kind === "call") {
+      const proc = procByName.get(statement.block);
+      if (proc !== undefined && inlineProcNames.has(proc.name) && !seenInline.has(proc.name)) {
+        const nextSeen = new Set(seenInline);
+        nextSeen.add(proc.name);
+        return analyzeStatements(proc.body, pendingAfter, nextSeen);
+      }
+      return killStatementTouches(ast, statement, pendingAfter);
+    }
+
+    if (statement.kind === "loop" || statement.kind === "while") {
+      return killStatementTouches(ast, statement, pendingAfter);
+    }
+
+    return killStatementTouches(ast, statement, pendingAfter);
+  };
+
+  for (const entry of ast.entries) analyzeStatements(entry.body, new Set());
+  for (const proc of ast.procs) analyzeStatements(proc.body, new Set());
+  return protectedDecrements;
+}
+
+function terminalNonpositiveGuardVariable(ast: ProgramAst, statement: StatementAst): string | undefined {
+  if (statement.kind !== "if" || statement.elseBody !== undefined) return undefined;
+  if (!statementListTerminatesStatically(statement.thenBody, ast)) return undefined;
+  const normalized = normalizeZeroComparison(statement.condition);
+  if (normalized === undefined || normalized.expr.kind !== "identifier") return undefined;
+  return normalized.op === "<" || normalized.op === "<=" ? normalized.expr.name : undefined;
+}
+
+function killStatementTouches(
+  ast: ProgramAst,
+  statement: StatementAst,
+  pendingAfter: ReadonlySet<string>,
+): Set<string> {
+  const pending = new Set(pendingAfter);
+  for (const name of pendingAfter) {
+    if (
+      statementReadsIdentifier(statement, name) ||
+      statementMayWriteIdentifier(ast, statement, name, new Set())
+    ) {
+      pending.delete(name);
+    }
+  }
+  return pending;
+}
+
+function killConditionReads(condition: ConditionAst, pendingAfter: ReadonlySet<string>): Set<string> {
+  let pending = killReads(condition.left, pendingAfter);
+  pending = killReads(condition.right, pending);
+  return pending;
+}
+
+function killReads(expr: ExpressionAst, pendingAfter: ReadonlySet<string>): Set<string> {
+  const pending = new Set(pendingAfter);
+  for (const name of pendingAfter) {
+    if (expressionReferencesIdentifier(expr, name)) pending.delete(name);
+  }
+  return pending;
+}
+
+function statementMayWriteIdentifier(
+  ast: ProgramAst,
+  statement: StatementAst,
+  name: string,
+  seenProcs: Set<string>,
+): boolean {
+  switch (statement.kind) {
+    case "assign":
+    case "input":
+      return statement.target === name;
+    case "indexed_assign":
+      return statement.target.base === name;
+    case "if":
+      return statement.thenBody.some((child) => statementMayWriteIdentifier(ast, child, name, new Set(seenProcs))) ||
+        (statement.elseBody?.some((child) => statementMayWriteIdentifier(ast, child, name, new Set(seenProcs))) ?? false);
+    case "loop":
+    case "while":
+      return statement.body.some((child) => statementMayWriteIdentifier(ast, child, name, new Set(seenProcs)));
+    case "dispatch":
+      return statement.cases.some((dispatchCase) =>
+        dispatchCase.body.some((child) => statementMayWriteIdentifier(ast, child, name, new Set(seenProcs)))
+      ) ||
+        (statement.defaultBody?.some((child) => statementMayWriteIdentifier(ast, child, name, new Set(seenProcs))) ?? false);
+    case "call": {
+      const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === undefined || seenProcs.has(proc.name)) return true;
+      seenProcs.add(proc.name);
+      return proc.body.some((child) => statementMayWriteIdentifier(ast, child, name, seenProcs));
+    }
+    case "core":
+      return statement.outputs?.some((output) => output.target === name) ?? false;
+    default:
+      return false;
+  }
+}
+
+function intersectSets(left: ReadonlySet<string>, right: ReadonlySet<string>): Set<string> {
+  const result = new Set<string>();
+  for (const value of left) {
+    if (right.has(value)) result.add(value);
+  }
+  return result;
 }
 
 function eliminateUnreachableV2Procs(ast: ProgramAst, optimizations: AppliedOptimization[]): void {

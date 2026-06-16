@@ -132,6 +132,7 @@ export type LoweringCtx = Pick<
   | "spatialSumLoopHelpers"
   | "statementsTerminate"
   | "terminalTailHelpers"
+  | "terminalUnderflowUnitDecrementProtected"
   | "variableDisplayMaskRegisters"
   | "variableLeadingMantissaMaskDisplayTemplate"
   | "restoreBankSelectorCacheAfterCall"

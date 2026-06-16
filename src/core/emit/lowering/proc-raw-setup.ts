@@ -1583,7 +1583,11 @@ export function compileUnitDecrement(ctx: LoweringCtx, statement: Extract<Statem
     // separately by proving the negative path cannot return.
     if (
       isPredecrementIndirectRegister(register) &&
-      targetRangeFitsIndirectDecrement(ctx, statement.target)
+      (
+        targetRangeFitsIndirectDecrement(ctx, statement.target) ||
+        targetRangeFitsTerminalUnderflowDecrement(ctx, statement.target) &&
+          ctx.terminalUnderflowUnitDecrementProtected(statement)
+      )
     ) {
       return emitIndirectUnitDecrement(ctx, statement.target, register, `decrement ${statement.target}`, statement.line);
     }
@@ -1595,10 +1599,16 @@ export function compileUnitDecrement(ctx: LoweringCtx, statement: Extract<Statem
 function targetRangeFitsIndirectDecrement(ctx: LoweringCtx, target: string): boolean {
     const field = ctx.findStateField(target);
     if (field?.min === undefined || field.max === undefined) return false;
-    // The pre-decrement also recalls the register at the post-decrement address;
-    // keep that address inside the register file (0..14) so the discarded read is
-    // a plain register fetch. For defined values (>= 1) the address is value-1.
-    return field.type === "range" && field.min >= 0 && field.max <= 14;
+    // When the source range proves the pre-decrement input is always positive,
+    // the post-decrement indirect address is nonnegative. The incidental recall
+    // is discarded, so it need not stay inside R0..Re.
+    return field.type === "range" && field.min >= 1;
+}
+
+function targetRangeFitsTerminalUnderflowDecrement(ctx: LoweringCtx, target: string): boolean {
+    const field = ctx.findStateField(target);
+    if (field?.min === undefined || field.max === undefined) return false;
+    return field.type === "range" && field.min >= 0;
 }
 
 function emitIndirectUnitDecrement(ctx: LoweringCtx, target: string, register: RegisterName, comment: string, line: number): boolean {
