@@ -4,6 +4,12 @@
 - Program: [pi-cho-variant.txt](pi-cho-variant.txt)
 - Decoded from the Android emulator state file inside the package.
 
+## Description
+
+Пи-чо, "вверх по лестнице, бегущей вбок". Игровое поле похоже на цилиндр из четырех уровней по девять клеток, а цель - поднять персонажа с первого уровня на крышу.
+
+Клетки уровней движутся по окружности с разными скоростями. Игрок меняет распределение скоростей, выбирая уровень, и пытается совместить текущую клетку со следующей лестницей; неудачное совпадение с предыдущим уровнем сбрасывает героя вниз.
+
 ## Import Note
 
 This listing is kept as a separate source variant because its opcode sequence does not match the existing local listing by exact hash or by seven-command page set.

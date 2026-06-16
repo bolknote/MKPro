@@ -4,6 +4,12 @@
 - Program: [trenirovka-pamyati-anvarov.txt](trenirovka-pamyati-anvarov.txt)
 - Decoded from the Android emulator state file inside the package.
 
+## Description
+
+Вариант тренажера памяти по описанию Анварова. ПМК показывает несколько чисел, игрок восстанавливает их по памяти, а программа постепенно усложняет задания при успешных ответах.
+
+От обычного варианта этот отличается ограниченной серией попыток и собственными служебными индикациями завершения. Смысл игры тот же: проверить, сколько усложнений игрок выдержит без записей.
+
 ## Import Note
 
 This listing is kept as a separate source variant because its opcode sequence does not match the existing local listing by exact hash or by seven-command page set.

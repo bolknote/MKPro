@@ -4,6 +4,12 @@
 - Program: [shakhmaty-ferz-protiv-korolya-2.txt](shakhmaty-ferz-protiv-korolya-2.txt)
 - Decoded from the Android emulator state file inside the package.
 
+## Description
+
+Обратный вариант ферзевого эндшпиля: ПМК играет белым ферзем при неподвижном белом короле, а человек водит черного короля. Калькулятор начинает с заданной позиции ферзя и после каждого хода выводит новые координаты.
+
+Игрок вводит ходы черного короля в формате вертикаль-точка-горизонталь и сам следит за их легальностью. Цель ПМК - довести позицию до мата.
+
 ## Import Note
 
 This listing is kept as a separate source variant because its opcode sequence does not match the existing local listing by exact hash or by seven-command page set.

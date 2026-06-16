@@ -4,6 +4,12 @@
 - Program: [nochnoy-boy.txt](nochnoy-boy.txt)
 - Decoded from the Android emulator state file inside the package.
 
+## Description
+
+Ночная морская дуэль для двух игроков. Каждый знает координаты своего корабля, но не видит противника, а после выстрела получает раздельные подсказки по горизонтали и вертикали: перелет, недолет или точное попадание.
+
+У кораблей есть запас прочности, число выстрелов за ход и ограничение скорости. После стрельбы или попадания игрок может сменить позицию в пределах допустимого хода, стараясь вычислить противника раньше, чем будет потоплен.
+
 ## Import Note
 
 This listing is kept as a separate source variant because its opcode sequence does not match the existing local listing by exact hash or by seven-command page set.
