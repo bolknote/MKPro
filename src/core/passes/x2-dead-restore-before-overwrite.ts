@@ -22,6 +22,7 @@ import {
   x2StateHasStructuralShapeX2,
   x2StateHasUnsafeDotRestoreShapeX2,
   x2StateHasX2RestoreContext,
+  x2StateIsClosedDotRestoreValueContext,
   x2StateIsClosedPlainContext,
   x2StateHasVpEntrySource,
   type DirectReturnAnalysisContext,
@@ -135,7 +136,7 @@ function isDeadRestoreCandidate(
     if (!hasDotSafeStructuralX2 && !hasVpDotSafeStructuralX2 && x2StateHasUnsafeDotRestoreShapeX2(state)) {
       return false;
     }
-    return (x2StateIsClosedPlainContext(state) || hasVpDotSafeStructuralX2) &&
+    return (x2StateIsClosedDotRestoreValueContext(state) || hasVpDotSafeStructuralX2) &&
       (
         x2StateHasDotSafeDecimalX2(state) ||
         hasDotSafeStructuralX2 ||

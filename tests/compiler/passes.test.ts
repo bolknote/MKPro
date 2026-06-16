@@ -18068,6 +18068,32 @@ describe("ir passes on synthetic programs", () => {
     ]);
   });
 
+  it("x2-dead-restore-before-overwrite removes closed VP-context decimal dots before hard overwrite", () => {
+    const program: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      store("2"),
+      store("3"),
+      plain(0x0a, "."),
+      plain(0x55, "К1"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    const result = x2DeadRestoreBeforeOverwrite.run(program, ctx);
+
+    expect(result.applied).toBe(2);
+    expect(result.ops).toEqual([
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      store("2"),
+      store("3"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ]);
+  });
+
   it("x2-dead-restore-before-overwrite keeps register-only dot restores before overwrite", () => {
     const program: IrOp[] = [
       recall("1"),
