@@ -76,6 +76,7 @@ import {
   x2PlanDotReplacementVpSource,
   x2PlanAdjacentVpBoundaryAt,
   x2PlanAdjacentSignPairAt,
+  x2PlanProvedVpSpliceAt,
   x2PlanEmptyRunBeforeProvedVp,
   x2PlanRestoreRunBeforeProvedVp,
   x2PlanRestoreRunBeforeTerminal,
@@ -11170,6 +11171,79 @@ describe("ir passes on synthetic programs", () => {
       firstEmptyIndex: 2,
       removesVp: false,
       reason: "empty-run",
+    });
+  });
+
+  it("x2 proved-VP splice planner chooses restore runs before empty runs", () => {
+    const planAt = (program: readonly IrOp[], index: number) =>
+      x2PlanProvedVpSpliceAt(
+        program,
+        index,
+        computeX2ValueStates(program),
+        directReturnAnalysisContext(program),
+      );
+
+    const restoreRunBeforeVp: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x0b, "/-/"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    expect(planAt(restoreRunBeforeVp, 6)).toMatchObject({
+      removableIndexes: [3, 4, 5],
+      reason: "proved-vp-restore-run",
+      restoreRunPlan: {
+        reason: "proved-vp-source",
+      },
+      emptyRunPlan: undefined,
+    });
+
+    const emptyRunBeforeVp: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x54, "КНОП"),
+      plain(0x55, "К1"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    expect(planAt(emptyRunBeforeVp, 4)).toMatchObject({
+      removableIndexes: [2, 3, 4],
+      reason: "empty-run-before-proved-vp",
+      restoreRunPlan: {
+        reason: "no-sign-restore",
+      },
+      emptyRunPlan: {
+        reason: "duplicate-vp-after-empty-run",
+      },
+    });
+
+    const noSplice: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    expect(planAt(noSplice, 1)).toMatchObject({
+      removableIndexes: [],
+      reason: "no-proved-vp-splice",
+      restoreRunPlan: {
+        reason: "no-restore-run",
+      },
+      emptyRunPlan: {
+        reason: "no-empty-run",
+      },
+    });
+
+    expect(planAt(noSplice, 2)).toMatchObject({
+      removableIndexes: [],
+      reason: "not-vp",
+      restoreRunPlan: undefined,
+      emptyRunPlan: undefined,
     });
   });
 

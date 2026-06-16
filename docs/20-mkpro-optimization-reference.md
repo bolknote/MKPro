@@ -1361,7 +1361,10 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     than a new local branch inside `vp-splice`. Adjacent `ВП`/empty-boundary
     decisions are planned through `x2PlanAdjacentVpBoundaryAt`, which covers
     duplicate `ВП`, exponent separator runs, and `empty + /-/` sign-entry
-    boundaries from the shared shape-transition model. Adjacent `/-/ /-/`
+    boundaries from the shared shape-transition model. Proved-`ВП` restore
+    decisions are planned through `x2PlanProvedVpSpliceAt`, which preserves the
+    priority of source-proved restore runs over empty-run duplicate-`ВП`
+    collapses while carrying both lower-level proof plans. Adjacent `/-/ /-/`
     decisions are planned through `x2PlanAdjacentSignPairAt`, which reports
     whether the proof came from an active exponent, an open mantissa before a
     proved `ВП`, or a closed context, and carries the VP source proof when that

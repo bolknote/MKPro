@@ -6086,6 +6086,19 @@ export interface X2EmptyRunBeforeProvedVpPlan {
   readonly reason: X2EmptyRunBeforeProvedVpPlanReason;
 }
 
+export type X2ProvedVpSplicePlanReason =
+  "not-vp" |
+  "proved-vp-restore-run" |
+  "empty-run-before-proved-vp" |
+  "no-proved-vp-splice";
+
+export interface X2ProvedVpSplicePlan {
+  readonly removableIndexes: readonly number[];
+  readonly reason: X2ProvedVpSplicePlanReason;
+  readonly restoreRunPlan: X2ProvedVpRestoreRunPlan | undefined;
+  readonly emptyRunPlan: X2EmptyRunBeforeProvedVpPlan | undefined;
+}
+
 export type X2TerminalRestoreRunPlanOperation = "fresh-digit" | "hard-overwrite";
 
 export type X2TerminalRestoreRunPlanReason =
@@ -6438,21 +6451,12 @@ export function x2PlanVpSpliceAt(
     return x2VpSplicePlan(duplicateVp.removableIndexes, "duplicate-vp");
   }
 
-  if (isFreeStandingX2VpOp(cur)) {
-    const restoreRun = x2PlanRestoreRunBeforeProvedVp(
-      ops,
-      index,
-      states,
-      context,
-      { requireSignRestore: true },
-    ).removableIndexes;
-    if (restoreRun.length > 0) {
-      return x2VpSplicePlan(restoreRun, "proved-vp-restore-run");
-    }
-    const emptyRun = x2PlanEmptyRunBeforeProvedVp(ops, index, states, context);
-    if (emptyRun.removableIndexes.length > 0) {
-      return x2VpSplicePlan(emptyRun.removableIndexes, "empty-run-before-proved-vp");
-    }
+  const provedVp = x2PlanProvedVpSpliceAt(ops, index, states, context);
+  if (
+    provedVp.reason === "proved-vp-restore-run" ||
+    provedVp.reason === "empty-run-before-proved-vp"
+  ) {
+    return x2VpSplicePlan(provedVp.removableIndexes, provedVp.reason);
   }
 
   const exponentBoundary = x2PlanAdjacentVpBoundaryAt(
@@ -6536,6 +6540,59 @@ function x2VpSplicePlan(
   reason: X2VpSplicePlanReason,
 ): X2VpSplicePlan {
   return { removableIndexes, reason };
+}
+
+export function x2PlanProvedVpSpliceAt(
+  ops: readonly IrOp[],
+  vpIndex: number,
+  states: readonly (X2ValueDataflowState | undefined)[],
+  context: DirectReturnAnalysisContext,
+): X2ProvedVpSplicePlan {
+  if (vpIndex < 0 || vpIndex >= ops.length || !isFreeStandingX2VpOp(ops[vpIndex]!)) {
+    return emptyX2ProvedVpSplicePlan("not-vp");
+  }
+
+  const restoreRunPlan = x2PlanRestoreRunBeforeProvedVp(
+    ops,
+    vpIndex,
+    states,
+    context,
+    { requireSignRestore: true },
+  );
+  if (restoreRunPlan.removableIndexes.length > 0) {
+    return {
+      removableIndexes: restoreRunPlan.removableIndexes,
+      reason: "proved-vp-restore-run",
+      restoreRunPlan,
+      emptyRunPlan: undefined,
+    };
+  }
+
+  const emptyRunPlan = x2PlanEmptyRunBeforeProvedVp(ops, vpIndex, states, context);
+  if (emptyRunPlan.removableIndexes.length > 0) {
+    return {
+      removableIndexes: emptyRunPlan.removableIndexes,
+      reason: "empty-run-before-proved-vp",
+      restoreRunPlan,
+      emptyRunPlan,
+    };
+  }
+
+  return {
+    removableIndexes: [],
+    reason: "no-proved-vp-splice",
+    restoreRunPlan,
+    emptyRunPlan,
+  };
+}
+
+function emptyX2ProvedVpSplicePlan(reason: Extract<X2ProvedVpSplicePlanReason, "not-vp">): X2ProvedVpSplicePlan {
+  return {
+    removableIndexes: [],
+    reason,
+    restoreRunPlan: undefined,
+    emptyRunPlan: undefined,
+  };
 }
 
 export function x2PlanAdjacentVpBoundaryAt(
