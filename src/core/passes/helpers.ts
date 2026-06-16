@@ -1497,28 +1497,20 @@ function structuralHexBinaryDecimalProducts(
     return output;
   }
   if (op.opcode === 0x10) {
-    for (const leftNormalized of structuralHexCarryNormalizedIntegerProducts(directYShape)) {
-      for (const right of normalizedDecimalValues(x, xShape)) {
-        addStructuralHexDecimalProduct(output, structuralHexCarryNormalizedPlusDecimalProduct(leftNormalized, right));
-      }
-    }
-    for (const left of normalizedDecimalValues(y, yShape)) {
-      for (const rightNormalized of structuralHexCarryNormalizedIntegerProducts(directXShape)) {
-        addStructuralHexDecimalProduct(output, structuralHexCarryNormalizedPlusDecimalProduct(rightNormalized, left));
-      }
-    }
-    for (const leftOperand of structuralHexArithmeticOperands(yShape)) {
+    const leftOperands = structuralHexArithmeticOperands(yShape, { carryShapes: directYShape });
+    const rightOperands = structuralHexArithmeticOperands(xShape, { carryShapes: directXShape });
+    for (const leftOperand of leftOperands) {
       for (const right of normalizedDecimalValues(x, xShape)) {
         addStructuralHexDecimalProduct(output, structuralHexOperandPlusDecimalProduct(leftOperand, right));
       }
     }
     for (const left of normalizedDecimalValues(y, yShape)) {
-      for (const rightOperand of structuralHexArithmeticOperands(xShape)) {
+      for (const rightOperand of rightOperands) {
         addStructuralHexDecimalProduct(output, decimalPlusStructuralHexOperandProduct(left, rightOperand));
       }
     }
-    for (const leftOperand of structuralHexArithmeticOperands(yShape)) {
-      for (const rightOperand of structuralHexArithmeticOperands(xShape)) {
+    for (const leftOperand of leftOperands) {
+      for (const rightOperand of rightOperands) {
         addStructuralHexDecimalProduct(
           output,
           structuralHexOperandPlusStructuralHexOperandProduct(leftOperand, rightOperand),
@@ -1800,9 +1792,17 @@ interface StructuralHexExponentOperand {
 
 type StructuralHexArithmeticOperand =
   | { readonly kind: "digit"; readonly digit: number }
-  | { readonly kind: "exponent"; readonly digit: number; readonly exponent: string };
+  | { readonly kind: "exponent"; readonly digit: number; readonly exponent: string }
+  | { readonly kind: "carry-normalized"; readonly product: StructuralHexDecimalProduct };
 
-function structuralHexArithmeticOperands(shapes: X2ShapeSet | undefined): StructuralHexArithmeticOperand[] {
+interface StructuralHexArithmeticOperandOptions {
+  readonly carryShapes?: X2ShapeSet | undefined;
+}
+
+function structuralHexArithmeticOperands(
+  shapes: X2ShapeSet | undefined,
+  options: StructuralHexArithmeticOperandOptions = {},
+): StructuralHexArithmeticOperand[] {
   const output = new Map<string, StructuralHexArithmeticOperand>();
   for (const digit of structuralSingleHexDigitValues(shapes)) {
     output.set(`digit:${digit}`, { kind: "digit", digit });
@@ -1814,25 +1814,45 @@ function structuralHexArithmeticOperands(shapes: X2ShapeSet | undefined): Struct
       exponent: exponent.exponent,
     });
   }
+  for (const product of structuralHexCarryNormalizedIntegerProducts(options.carryShapes)) {
+    output.set(structuralHexCarryNormalizedOperandKey(product), {
+      kind: "carry-normalized",
+      product,
+    });
+  }
   return [...output.values()];
+}
+
+function structuralHexCarryNormalizedOperandKey(product: StructuralHexDecimalProduct): string {
+  return `carry:${product.value}:${product.display ?? ""}:${product.displayShape ?? ""}`;
 }
 
 function structuralHexOperandPlusDecimalProduct(
   left: StructuralHexArithmeticOperand,
   right: string,
 ): StructuralHexDecimalProduct | undefined {
-  return left.kind === "digit"
-    ? structuralHexDigitPlusDecimalProduct(left.digit, right)
-    : structuralHexExponentPlusDecimalProduct(left, right);
+  switch (left.kind) {
+    case "digit":
+      return structuralHexDigitPlusDecimalProduct(left.digit, right);
+    case "exponent":
+      return structuralHexExponentPlusDecimalProduct(left, right);
+    case "carry-normalized":
+      return structuralHexCarryNormalizedPlusDecimalProduct(left.product, right);
+  }
 }
 
 function decimalPlusStructuralHexOperandProduct(
   left: string,
   right: StructuralHexArithmeticOperand,
 ): StructuralHexDecimalProduct | undefined {
-  return right.kind === "digit"
-    ? decimalPlusStructuralHexDigitProduct(left, right.digit)
-    : decimalPlusStructuralHexExponentProduct(left, right);
+  switch (right.kind) {
+    case "digit":
+      return decimalPlusStructuralHexDigitProduct(left, right.digit);
+    case "exponent":
+      return decimalPlusStructuralHexExponentProduct(left, right);
+    case "carry-normalized":
+      return structuralHexCarryNormalizedPlusDecimalProduct(right.product, left);
+  }
 }
 
 function structuralHexOperandMinusDecimalProduct(
@@ -1841,7 +1861,9 @@ function structuralHexOperandMinusDecimalProduct(
 ): StructuralHexDecimalProduct | undefined {
   return left.kind === "digit"
     ? structuralHexDigitMinusDecimalProduct(left.digit, right)
-    : structuralHexExponentMinusDecimalProduct(left, right);
+    : left.kind === "exponent"
+      ? structuralHexExponentMinusDecimalProduct(left, right)
+      : undefined;
 }
 
 function decimalMinusStructuralHexOperandProduct(
@@ -1850,7 +1872,9 @@ function decimalMinusStructuralHexOperandProduct(
 ): StructuralHexDecimalProduct | undefined {
   return right.kind === "digit"
     ? decimalMinusStructuralHexDigitProduct(left, right.digit)
-    : decimalMinusStructuralHexExponentProduct(left, right);
+    : right.kind === "exponent"
+      ? decimalMinusStructuralHexExponentProduct(left, right)
+      : undefined;
 }
 
 function structuralHexOperandTimesDecimalProduct(
@@ -1859,7 +1883,9 @@ function structuralHexOperandTimesDecimalProduct(
 ): StructuralHexDecimalProduct | undefined {
   return left.kind === "digit"
     ? structuralHexDigitTimesDecimalProduct(left.digit, right)
-    : structuralHexExponentTimesDecimalProduct(left, right);
+    : left.kind === "exponent"
+      ? structuralHexExponentTimesDecimalProduct(left, right)
+      : undefined;
 }
 
 function decimalTimesStructuralHexOperandProduct(
@@ -1868,7 +1894,9 @@ function decimalTimesStructuralHexOperandProduct(
 ): StructuralHexDecimalProduct | undefined {
   return right.kind === "digit"
     ? decimalTimesStructuralHexDigitProduct(left, right.digit)
-    : decimalTimesStructuralHexExponentProduct(left, right);
+    : right.kind === "exponent"
+      ? decimalTimesStructuralHexExponentProduct(left, right)
+      : undefined;
 }
 
 function structuralHexOperandDivideDecimalProduct(
@@ -1877,7 +1905,9 @@ function structuralHexOperandDivideDecimalProduct(
 ): StructuralHexDecimalProduct | undefined {
   return left.kind === "digit"
     ? structuralHexDigitDivideDecimalProduct(left.digit, right)
-    : structuralHexExponentDivideDecimalProduct(left, right);
+    : left.kind === "exponent"
+      ? structuralHexExponentDivideDecimalProduct(left, right)
+      : undefined;
 }
 
 function decimalDivideStructuralHexOperandProduct(
@@ -1886,7 +1916,9 @@ function decimalDivideStructuralHexOperandProduct(
 ): StructuralHexDecimalProduct | undefined {
   return right.kind === "digit"
     ? decimalDivideStructuralHexDigitProduct(left, right.digit)
-    : decimalDivideStructuralHexExponentProduct(left, right);
+    : right.kind === "exponent"
+      ? decimalDivideStructuralHexExponentProduct(left, right)
+      : undefined;
 }
 
 function structuralHexOperandPlusStructuralHexOperandProduct(

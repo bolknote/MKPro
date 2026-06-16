@@ -6439,6 +6439,29 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(overWideResult?.xShape)).toEqual([]);
   });
 
+  it("x2 value dataflow keeps carry-normalized structural operands direct-only", () => {
+    const base: X2ValueDataflowState = {
+      y: new Set<X2ValueFact>(["decimal:1:normalized"]),
+      x: new Set(),
+      x2: new Set(),
+      yShape: new Set<X2ShapeFact>(["mantissa:1:decimal"]),
+      xShape: new Set<X2ShapeFact>(["hex:A0:mantissa"]),
+      entry: { kind: "closed" },
+    };
+    const shapeOnly = transferX2ValueStateForEdge(base, plain(0x10, "+"), "normal", {}, 0);
+    const direct = transferX2ValueStateForEdge(
+      { ...base, xDirectShape: new Set<X2ShapeFact>(["hex:A0:mantissa"]) },
+      plain(0x10, "+"),
+      "normal",
+      {},
+      0,
+    );
+
+    expect(x2ValueStateText(shapeOnly?.x) ?? []).not.toContain("decimal:101:normalized");
+    expect(x2ValueStateText(direct?.x) ?? []).toContain("decimal:101:normalized");
+    expect(x2ShapeStateText(direct?.xShape)).toContain("mantissa:101:decimal");
+  });
+
   it("x2 value dataflow treats computed structural display shapes as direct X shapes", () => {
     const state: X2ValueDataflowState = {
       y: new Set<X2ValueFact>(["decimal:1:normalized"]),
