@@ -6118,6 +6118,24 @@ export interface X2TerminalRestoreRunPlan {
   readonly reason: X2TerminalRestoreRunPlanReason;
 }
 
+export type X2TerminalRestoreSplicePlanReason =
+  "not-restore-start" |
+  "hard-overwrite-restore-run" |
+  "fresh-digit-restore-run" |
+  "no-terminal-splice";
+
+export interface X2TerminalRestoreSplicePlanOptions {
+  readonly includeHardOverwrite?: boolean | undefined;
+  readonly includeFreshDigit?: boolean | undefined;
+}
+
+export interface X2TerminalRestoreSplicePlan {
+  readonly removableIndexes: readonly number[];
+  readonly reason: X2TerminalRestoreSplicePlanReason;
+  readonly hardOverwritePlan: X2TerminalRestoreRunPlan | undefined;
+  readonly freshDigitPlan: X2TerminalRestoreRunPlan | undefined;
+}
+
 export type X2VpSplicePlanReason =
   "none" |
   "duplicate-vp" |
@@ -6427,6 +6445,81 @@ export function x2PlanRestoreRunBeforeTerminal(
   };
 }
 
+export function x2PlanTerminalRestoreSpliceAt(
+  ops: readonly IrOp[],
+  startIndex: number,
+  states: readonly (X2ValueDataflowState | undefined)[],
+  context: DirectReturnAnalysisContext,
+  plannerOptions: X2VpSplicePlannerOptions,
+  options: X2TerminalRestoreSplicePlanOptions = {},
+): X2TerminalRestoreSplicePlan {
+  if (startIndex < 0 || startIndex >= ops.length) {
+    return emptyX2TerminalRestoreSplicePlan("not-restore-start");
+  }
+  const cur = ops[startIndex]!;
+  if (!isFreeStandingX2EmptyOp(cur) && !isFreeStandingX2SignChangeOp(cur)) {
+    return emptyX2TerminalRestoreSplicePlan("not-restore-start");
+  }
+
+  let hardOverwritePlan: X2TerminalRestoreRunPlan | undefined;
+  if (options.includeHardOverwrite !== false) {
+    hardOverwritePlan = x2PlanRestoreRunBeforeTerminal(
+      ops,
+      startIndex,
+      states[startIndex],
+      context,
+      "hard-overwrite",
+      plannerOptions.isHardX2OverwriteWithoutStackUse,
+    );
+    if (hardOverwritePlan.removableIndexes.length > 0) {
+      return {
+        removableIndexes: hardOverwritePlan.removableIndexes,
+        reason: "hard-overwrite-restore-run",
+        hardOverwritePlan,
+        freshDigitPlan: undefined,
+      };
+    }
+  }
+
+  let freshDigitPlan: X2TerminalRestoreRunPlan | undefined;
+  if (options.includeFreshDigit !== false) {
+    freshDigitPlan = x2PlanRestoreRunBeforeTerminal(
+      ops,
+      startIndex,
+      states[startIndex],
+      context,
+      "fresh-digit",
+      plannerOptions.isDecimalDigit,
+    );
+    if (freshDigitPlan.removableIndexes.length > 0) {
+      return {
+        removableIndexes: freshDigitPlan.removableIndexes,
+        reason: "fresh-digit-restore-run",
+        hardOverwritePlan,
+        freshDigitPlan,
+      };
+    }
+  }
+
+  return {
+    removableIndexes: [],
+    reason: "no-terminal-splice",
+    hardOverwritePlan,
+    freshDigitPlan,
+  };
+}
+
+function emptyX2TerminalRestoreSplicePlan(
+  reason: Extract<X2TerminalRestoreSplicePlanReason, "not-restore-start">,
+): X2TerminalRestoreSplicePlan {
+  return {
+    removableIndexes: [],
+    reason,
+    hardOverwritePlan: undefined,
+    freshDigitPlan: undefined,
+  };
+}
+
 export function x2PlanVpSpliceAt(
   ops: readonly IrOp[],
   index: number,
@@ -6435,7 +6528,6 @@ export function x2PlanVpSpliceAt(
   options: X2VpSplicePlannerOptions,
 ): X2VpSplicePlan {
   if (index <= 0 || index >= ops.length) return emptyX2VpSplicePlan();
-  const cur = ops[index]!;
 
   const duplicateVp = x2PlanAdjacentVpBoundaryAt(
     ops,
@@ -6473,18 +6565,16 @@ export function x2PlanVpSpliceAt(
     return x2VpSplicePlan(exponentBoundary.removableIndexes, exponentBoundary.reason);
   }
 
-  if (isFreeStandingX2EmptyOp(cur) || isFreeStandingX2SignChangeOp(cur)) {
-    const restoreRun = x2PlanRestoreRunBeforeTerminal(
-      ops,
-      index,
-      states[index],
-      context,
-      "hard-overwrite",
-      options.isHardX2OverwriteWithoutStackUse,
-    ).removableIndexes;
-    if (restoreRun.length > 0) {
-      return x2VpSplicePlan(restoreRun, "hard-overwrite-restore-run");
-    }
+  const hardOverwriteTerminal = x2PlanTerminalRestoreSpliceAt(
+    ops,
+    index,
+    states,
+    context,
+    options,
+    { includeFreshDigit: false },
+  );
+  if (hardOverwriteTerminal.reason === "hard-overwrite-restore-run") {
+    return x2VpSplicePlan(hardOverwriteTerminal.removableIndexes, "hard-overwrite-restore-run");
   }
 
   const signPairBeforeFreshDigit = x2PlanAdjacentSignPairAt(
@@ -6501,16 +6591,19 @@ export function x2PlanVpSpliceAt(
     return x2VpSplicePlan(signPairBeforeFreshDigit.removableIndexes, signPairBeforeFreshDigit.reason);
   }
 
-  if (isFreeStandingX2EmptyOp(cur) || isFreeStandingX2SignChangeOp(cur)) {
-    const restoreRun = x2PlanRestoreRunBeforeTerminal(
-      ops,
-      index,
-      states[index],
-      context,
-      "fresh-digit",
-      options.isDecimalDigit,
-    ).removableIndexes;
-    if (restoreRun.length > 0) return x2VpSplicePlan(restoreRun, "fresh-digit-restore-run");
+  const freshDigitTerminal = x2PlanTerminalRestoreSpliceAt(
+    ops,
+    index,
+    states,
+    context,
+    options,
+    {
+      includeHardOverwrite: false,
+      includeFreshDigit: true,
+    },
+  );
+  if (freshDigitTerminal.reason === "fresh-digit-restore-run") {
+    return x2VpSplicePlan(freshDigitTerminal.removableIndexes, "fresh-digit-restore-run");
   }
 
   const closedSignPair = x2PlanAdjacentSignPairAt(

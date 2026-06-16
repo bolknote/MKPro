@@ -1364,11 +1364,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     boundaries from the shared shape-transition model. Proved-`ВП` restore
     decisions are planned through `x2PlanProvedVpSpliceAt`, which preserves the
     priority of source-proved restore runs over empty-run duplicate-`ВП`
-    collapses while carrying both lower-level proof plans. Adjacent `/-/ /-/`
-    decisions are planned through `x2PlanAdjacentSignPairAt`, which reports
-    whether the proof came from an active exponent, an open mantissa before a
-    proved `ВП`, or a closed context, and carries the VP source proof when that
-    source is needed. The same shared VP-gap source analysis is also used for sign-pair
+    collapses while carrying both lower-level proof plans. Terminal restore
+    decisions are planned through `x2PlanTerminalRestoreSpliceAt`, which keeps
+    hard-overwrite and fresh-digit terminal scans as separate lower-level proof
+    plans so the caller can stage them around sign-pair rewrites without
+    duplicating scanner logic. Adjacent `/-/ /-/` decisions are planned through
+    `x2PlanAdjacentSignPairAt`, which reports whether the proof came from an
+    active exponent, an open mantissa before a proved `ВП`, or a closed
+    context, and carries the VP source proof when that source is needed. The same shared VP-gap source analysis is also used for sign-pair
     decisions before a proved `ВП`; when the pass removes the sign-pair itself
     it requires the stricter shape-transition sign-pair flag, not the broader
     fallback sign-source proof used by recall/dot restore rewrites. Shared restore-run

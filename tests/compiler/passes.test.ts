@@ -80,6 +80,7 @@ import {
   x2PlanEmptyRunBeforeProvedVp,
   x2PlanRestoreRunBeforeProvedVp,
   x2PlanRestoreRunBeforeTerminal,
+  x2PlanTerminalRestoreSpliceAt,
   x2PlanVpSpliceAt,
   x2PreviousHardX2OverwriteIndex,
   x2KnownReturnCallReachesStackLiftAndX2Sync,
@@ -11569,6 +11570,93 @@ describe("ir passes on synthetic programs", () => {
       scan: {
         terminalIndex: 5,
       },
+    });
+  });
+
+  it("x2 terminal restore splice planner stages hard-overwrite and fresh-digit decisions", () => {
+    const plannerOptions = {
+      isDecimalDigit: (op: IrOp) => op.kind === "plain" && op.opcode >= 0 && op.opcode <= 9,
+      isHardX2OverwriteWithoutStackUse: (op: IrOp) => analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse,
+    };
+    const planAt = (
+      program: readonly IrOp[],
+      index: number,
+      options?: Parameters<typeof x2PlanTerminalRestoreSpliceAt>[5],
+    ) =>
+      x2PlanTerminalRestoreSpliceAt(
+        program,
+        index,
+        computeX2ValueStates(program),
+        directReturnAnalysisContext(program),
+        plannerOptions,
+        options,
+      );
+
+    const hardOverwrite: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x0d, "Cx"),
+      halt(),
+    ];
+    expect(planAt(hardOverwrite, 4)).toMatchObject({
+      removableIndexes: [4],
+      reason: "hard-overwrite-restore-run",
+      hardOverwritePlan: {
+        operation: "hard-overwrite",
+        reason: "vp-context-overwritten",
+      },
+      freshDigitPlan: undefined,
+    });
+
+    const freshDigit: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x20, "Fπ"),
+      plain(0x0b, "/-/"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    expect(planAt(freshDigit, 4)).toMatchObject({
+      removableIndexes: [4],
+      reason: "fresh-digit-restore-run",
+      hardOverwritePlan: {
+        operation: "hard-overwrite",
+        reason: "terminal-missing",
+      },
+      freshDigitPlan: {
+        operation: "fresh-digit",
+        reason: "vp-context-overwritten",
+      },
+    });
+
+    expect(planAt(freshDigit, 4, { includeFreshDigit: false })).toMatchObject({
+      removableIndexes: [],
+      reason: "no-terminal-splice",
+      hardOverwritePlan: {
+        operation: "hard-overwrite",
+        reason: "terminal-missing",
+      },
+      freshDigitPlan: undefined,
+    });
+
+    expect(planAt(freshDigit, 4, { includeHardOverwrite: false })).toMatchObject({
+      removableIndexes: [4],
+      reason: "fresh-digit-restore-run",
+      hardOverwritePlan: undefined,
+      freshDigitPlan: {
+        operation: "fresh-digit",
+      },
+    });
+
+    expect(planAt(freshDigit, 0)).toMatchObject({
+      removableIndexes: [],
+      reason: "not-restore-start",
+      hardOverwritePlan: undefined,
+      freshDigitPlan: undefined,
     });
   });
 
