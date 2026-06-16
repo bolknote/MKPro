@@ -1358,11 +1358,14 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
     A single `x2PlanVpSpliceAt` planner now combines those transition, source,
     terminal-scan, and sign-pair proofs into removable indexes plus a reason,
     so later VP/X2 and hex/super splice rules have one extension point rather
-    than a new local branch inside `vp-splice`. Adjacent `/-/ /-/` decisions
-    are planned through `x2PlanAdjacentSignPairAt`, which reports whether the
-    proof came from an active exponent, an open mantissa before a proved `ВП`,
-    or a closed context, and carries the VP source proof when that source is
-    needed. The same shared VP-gap source analysis is also used for sign-pair
+    than a new local branch inside `vp-splice`. Adjacent `ВП`/empty-boundary
+    decisions are planned through `x2PlanAdjacentVpBoundaryAt`, which covers
+    duplicate `ВП`, exponent separator runs, and `empty + /-/` sign-entry
+    boundaries from the shared shape-transition model. Adjacent `/-/ /-/`
+    decisions are planned through `x2PlanAdjacentSignPairAt`, which reports
+    whether the proof came from an active exponent, an open mantissa before a
+    proved `ВП`, or a closed context, and carries the VP source proof when that
+    source is needed. The same shared VP-gap source analysis is also used for sign-pair
     decisions before a proved `ВП`; when the pass removes the sign-pair itself
     it requires the stricter shape-transition sign-pair flag, not the broader
     fallback sign-source proof used by recall/dot restore rewrites. Shared restore-run

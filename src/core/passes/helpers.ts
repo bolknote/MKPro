@@ -6128,6 +6128,25 @@ export interface X2VpSplicePlannerOptions {
   readonly isHardX2OverwriteWithoutStackUse: X2RestoreRunTerminalPredicate;
 }
 
+export type X2AdjacentVpBoundaryPlanReason =
+  "not-boundary" |
+  "duplicate-vp" |
+  "exponent-separator" |
+  "exponent-empty-before-sign" |
+  "no-boundary-proof";
+
+export interface X2AdjacentVpBoundaryPlanOptions {
+  readonly includeDuplicateVp?: boolean | undefined;
+  readonly includeExponentSeparator?: boolean | undefined;
+  readonly includeEmptyBeforeSignChange?: boolean | undefined;
+}
+
+export interface X2AdjacentVpBoundaryPlan {
+  readonly removableIndexes: readonly number[];
+  readonly reason: X2AdjacentVpBoundaryPlanReason;
+  readonly transition: X2VpShapeTransitionAnalysis | undefined;
+}
+
 export type X2DotReplacementVpSourcePlanReason =
   "restore-gap-source" |
   "sign-restore-gap-source" |
@@ -6403,15 +6422,20 @@ export function x2PlanVpSpliceAt(
   options: X2VpSplicePlannerOptions,
 ): X2VpSplicePlan {
   if (index <= 0 || index >= ops.length) return emptyX2VpSplicePlan();
-  const prev = ops[index - 1]!;
   const cur = ops[index]!;
 
-  if (
-    isFreeStandingX2VpOp(prev) &&
-    isFreeStandingX2VpOp(cur) &&
-    x2CanRemoveSecondVpAfterPreviousVp(states[index - 1])
-  ) {
-    return x2VpSplicePlan([index], "duplicate-vp");
+  const duplicateVp = x2PlanAdjacentVpBoundaryAt(
+    ops,
+    index,
+    states,
+    options,
+    {
+      includeExponentSeparator: false,
+      includeEmptyBeforeSignChange: false,
+    },
+  );
+  if (duplicateVp.reason === "duplicate-vp") {
+    return x2VpSplicePlan(duplicateVp.removableIndexes, "duplicate-vp");
   }
 
   if (isFreeStandingX2VpOp(cur)) {
@@ -6431,17 +6455,18 @@ export function x2PlanVpSpliceAt(
     }
   }
 
-  if (isFreeStandingX2EmptyOp(cur)) {
-    const separatorRun = x2ExponentSeparatorRun(ops, index, states[index], options);
-    if (separatorRun.length > 0) return x2VpSplicePlan(separatorRun, "exponent-separator");
-  }
-
+  const exponentBoundary = x2PlanAdjacentVpBoundaryAt(
+    ops,
+    index,
+    states,
+    options,
+    { includeDuplicateVp: false },
+  );
   if (
-    isFreeStandingX2EmptyOp(prev) &&
-    isFreeStandingX2SignChangeOp(cur) &&
-    analyzeX2VpShapeTransition(states[index - 1], "empty-before-sign-change").canDiscardCurrentOp
+    exponentBoundary.reason === "exponent-separator" ||
+    exponentBoundary.reason === "exponent-empty-before-sign"
   ) {
-    return x2VpSplicePlan([index - 1], "exponent-empty-before-sign");
+    return x2VpSplicePlan(exponentBoundary.removableIndexes, exponentBoundary.reason);
   }
 
   if (isFreeStandingX2EmptyOp(cur) || isFreeStandingX2SignChangeOp(cur)) {
@@ -6511,6 +6536,94 @@ function x2VpSplicePlan(
   reason: X2VpSplicePlanReason,
 ): X2VpSplicePlan {
   return { removableIndexes, reason };
+}
+
+export function x2PlanAdjacentVpBoundaryAt(
+  ops: readonly IrOp[],
+  index: number,
+  states: readonly (X2ValueDataflowState | undefined)[],
+  plannerOptions: X2VpSplicePlannerOptions,
+  options: X2AdjacentVpBoundaryPlanOptions = {},
+): X2AdjacentVpBoundaryPlan {
+  if (index <= 0 || index >= ops.length) {
+    return emptyX2AdjacentVpBoundaryPlan("not-boundary");
+  }
+  const prev = ops[index - 1]!;
+  const cur = ops[index]!;
+
+  if (
+    options.includeDuplicateVp !== false &&
+    isFreeStandingX2VpOp(prev) &&
+    isFreeStandingX2VpOp(cur)
+  ) {
+    const transition = analyzeX2VpShapeTransition(states[index - 1], "vp");
+    if (transition.canDiscardCurrentOp) {
+      return x2AdjacentVpBoundaryPlan([index], "duplicate-vp", transition);
+    }
+    return x2AdjacentVpBoundaryRefusal("no-boundary-proof", transition);
+  }
+
+  if (options.includeExponentSeparator !== false && isFreeStandingX2EmptyOp(cur)) {
+    const separatorRun = x2PlanExponentSeparatorRun(ops, index, states[index], plannerOptions);
+    if (separatorRun.removableIndexes.length > 0 && separatorRun.transition !== undefined) {
+      return x2AdjacentVpBoundaryPlan(
+        separatorRun.removableIndexes,
+        "exponent-separator",
+        separatorRun.transition,
+      );
+    }
+    if (separatorRun.transition !== undefined) {
+      return x2AdjacentVpBoundaryRefusal("no-boundary-proof", separatorRun.transition);
+    }
+  }
+
+  if (
+    options.includeEmptyBeforeSignChange !== false &&
+    isFreeStandingX2EmptyOp(prev) &&
+    isFreeStandingX2SignChangeOp(cur)
+  ) {
+    const transition = analyzeX2VpShapeTransition(states[index - 1], "empty-before-sign-change");
+    if (transition.canDiscardCurrentOp) {
+      return x2AdjacentVpBoundaryPlan([index - 1], "exponent-empty-before-sign", transition);
+    }
+    return x2AdjacentVpBoundaryRefusal("no-boundary-proof", transition);
+  }
+
+  return emptyX2AdjacentVpBoundaryPlan("not-boundary");
+}
+
+function emptyX2AdjacentVpBoundaryPlan(reason: X2AdjacentVpBoundaryPlanReason): X2AdjacentVpBoundaryPlan {
+  return {
+    removableIndexes: [],
+    reason,
+    transition: undefined,
+  };
+}
+
+function x2AdjacentVpBoundaryPlan(
+  removableIndexes: readonly number[],
+  reason: Extract<
+    X2AdjacentVpBoundaryPlanReason,
+    "duplicate-vp" | "exponent-separator" | "exponent-empty-before-sign"
+  >,
+  transition: X2VpShapeTransitionAnalysis,
+): X2AdjacentVpBoundaryPlan {
+  return {
+    removableIndexes,
+    reason,
+    transition,
+  };
+}
+
+function x2AdjacentVpBoundaryRefusal(
+  reason: Extract<X2AdjacentVpBoundaryPlanReason, "no-boundary-proof">,
+  transition: X2VpShapeTransitionAnalysis,
+): X2AdjacentVpBoundaryPlan {
+  return {
+    removableIndexes: [],
+    reason,
+    transition,
+  };
 }
 
 export function x2PlanAdjacentSignPairAt(
@@ -6678,15 +6791,22 @@ export function x2PlanEmptyRunBeforeProvedVp(
   };
 }
 
-function x2ExponentSeparatorRun(
+interface X2ExponentSeparatorRunPlan {
+  readonly removableIndexes: readonly number[];
+  readonly transition: X2VpShapeTransitionAnalysis | undefined;
+}
+
+function x2PlanExponentSeparatorRun(
   ops: readonly IrOp[],
   startIndex: number,
   state: X2ValueDataflowState | undefined,
   options: X2VpSplicePlannerOptions,
-): readonly number[] {
+): X2ExponentSeparatorRunPlan {
   const beforeNonDigit = analyzeX2VpShapeTransition(state, "empty-before-non-digit");
   const beforeSignChange = analyzeX2VpShapeTransition(state, "empty-before-sign-change");
-  if (!beforeNonDigit.canDiscardCurrentOp && !beforeSignChange.canDiscardCurrentOp) return [];
+  if (!beforeNonDigit.canDiscardCurrentOp && !beforeSignChange.canDiscardCurrentOp) {
+    return { removableIndexes: [], transition: beforeNonDigit };
+  }
 
   const run: number[] = [];
   for (let index = startIndex; index < ops.length; index += 1) {
@@ -6696,14 +6816,20 @@ function x2ExponentSeparatorRun(
       run.push(index);
       continue;
     }
-    if (run.length === 0) return [];
-    if (options.isDecimalDigit(op, index)) return [];
+    if (run.length === 0) return { removableIndexes: [], transition: undefined };
+    if (options.isDecimalDigit(op, index)) return { removableIndexes: [], transition: beforeNonDigit };
     if (isFreeStandingX2SignChangeOp(op)) {
-      return beforeSignChange.canDiscardCurrentOp ? run : [];
+      return {
+        removableIndexes: beforeSignChange.canDiscardCurrentOp ? run : [],
+        transition: beforeSignChange,
+      };
     }
-    return beforeNonDigit.canDiscardCurrentOp ? run : [];
+    return {
+      removableIndexes: beforeNonDigit.canDiscardCurrentOp ? run : [],
+      transition: beforeNonDigit,
+    };
   }
-  return [];
+  return { removableIndexes: [], transition: undefined };
 }
 
 function x2TransparentVpGapOp(op: IrOp): boolean {

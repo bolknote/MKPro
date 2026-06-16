@@ -74,6 +74,7 @@ import {
   planRecallRemovalWithStackScheduler,
   planX2ReplacementStackLift,
   x2PlanDotReplacementVpSource,
+  x2PlanAdjacentVpBoundaryAt,
   x2PlanAdjacentSignPairAt,
   x2PlanEmptyRunBeforeProvedVp,
   x2PlanRestoreRunBeforeProvedVp,
@@ -11172,6 +11173,87 @@ describe("ir passes on synthetic programs", () => {
     });
   });
 
+  it("x2 adjacent VP boundary planner reports duplicate VP and exponent separator proofs", () => {
+    const plannerOptions = {
+      isDecimalDigit: (op: IrOp) => op.kind === "plain" && op.opcode >= 0 && op.opcode <= 9,
+      isHardX2OverwriteWithoutStackUse: (op: IrOp) => analyzeX2StackEffect(op).hardX2OverwriteWithoutStackUse,
+    };
+    const planAt = (
+      program: readonly IrOp[],
+      index: number,
+      options?: Parameters<typeof x2PlanAdjacentVpBoundaryAt>[4],
+    ) =>
+      x2PlanAdjacentVpBoundaryAt(
+        program,
+        index,
+        computeX2ValueStates(program),
+        plannerOptions,
+        options,
+      );
+
+    const duplicateVp: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x0c, "ВП"),
+      halt(),
+    ];
+    expect(planAt(duplicateVp, 2)).toMatchObject({
+      removableIndexes: [2],
+      reason: "duplicate-vp",
+      transition: {
+        reason: "duplicate-vp",
+      },
+    });
+
+    const exponentSeparatorRun: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      plain(0x55, "К1"),
+      plain(0x20, "Fπ"),
+      halt(),
+    ];
+    expect(planAt(exponentSeparatorRun, 3, { includeDuplicateVp: false })).toMatchObject({
+      removableIndexes: [3, 4],
+      reason: "exponent-separator",
+      transition: {
+        operation: "empty-before-non-digit",
+        canDiscardCurrentOp: true,
+      },
+    });
+
+    const emptyBeforeSign: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    expect(planAt(emptyBeforeSign, 4, { includeDuplicateVp: false })).toMatchObject({
+      removableIndexes: [3],
+      reason: "exponent-empty-before-sign",
+      transition: {
+        operation: "empty-before-sign-change",
+        canDiscardCurrentOp: true,
+      },
+    });
+
+    const digitTerminal: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      plain(0x04, "4"),
+      halt(),
+    ];
+    expect(planAt(digitTerminal, 3, { includeDuplicateVp: false })).toMatchObject({
+      removableIndexes: [],
+      reason: "no-boundary-proof",
+    });
+  });
+
   it("x2 adjacent sign-pair planner reports exponent, open-mantissa, and closed-context proofs", () => {
     const planAt = (
       program: readonly IrOp[],
@@ -11470,6 +11552,33 @@ describe("ir passes on synthetic programs", () => {
     expect(planAt(restoreRunBeforeVp, 6)).toEqual({
       removableIndexes: [3, 4, 5],
       reason: "proved-vp-restore-run",
+    });
+
+    const exponentSeparatorRun: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      plain(0x55, "К1"),
+      plain(0x20, "Fπ"),
+      halt(),
+    ];
+    expect(planAt(exponentSeparatorRun, 3)).toEqual({
+      removableIndexes: [3, 4],
+      reason: "exponent-separator",
+    });
+
+    const emptyBeforeSign: IrOp[] = [
+      plain(0x05, "5"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      plain(0x54, "КНОП"),
+      plain(0x0b, "/-/"),
+      halt(),
+    ];
+    expect(planAt(emptyBeforeSign, 4)).toEqual({
+      removableIndexes: [3],
+      reason: "exponent-empty-before-sign",
     });
 
     const beforeDeadOverwrite: IrOp[] = [
