@@ -12388,6 +12388,7 @@ describe("ir passes on synthetic programs", () => {
       .toMatchObject({
         stage: "sign-pair-before-fresh-digit",
         sourceMatchReason: "active-mantissa-source",
+        signRestoreSourceProofReason: "shape-transition",
         splice: {
           removableIndexes: [2, 3],
           reason: "open-mantissa-sign-pair-before-proved-vp",
@@ -12715,6 +12716,10 @@ describe("ir passes on synthetic programs", () => {
       replacementDotHasOnlyRestoreGapBeforeVp: true,
       hasSignRestoreGapBeforeVp: true,
       canDiscardShapeSignPairBeforeProvedVp: true,
+      signRestoreSourceProof: {
+        canDiscard: true,
+        reason: "shape-transition",
+      },
     });
 
     const zeroLeadingSignPairProgram: IrOp[] = [

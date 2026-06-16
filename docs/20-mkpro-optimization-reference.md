@@ -975,7 +975,8 @@ Display rewrites are separated into strategy selection + body lowering.
   inspectable by later candidate scoring instead of opaque booleans. The
   restore-gap planner carries that exact match class into `vp-splice`
   candidates; when two removable ranges are otherwise equal, the pass prefers
-  the stronger source proof before falling back to legacy stage order.
+  the stronger source proof, including the named sign-restore source proof
+  when both candidates expose one, before falling back to legacy stage order.
   Closed `/-/` shared-source proofs use the same canonical value sets before
   comparing visible `X` and hidden X2, so sign-change keys remain reusable
   after mixed raw/canonical paths meet.

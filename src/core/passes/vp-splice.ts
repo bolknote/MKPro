@@ -9,6 +9,7 @@ import {
   x2PlanVpSpliceCandidatesAt,
   type IrPass,
   type IrPassFn,
+  type X2VpSignRestoreSourceProofReason,
   type X2VpSourceMatchReason,
   type X2VpSpliceCandidateStage,
 } from "./helpers.ts";
@@ -29,6 +30,7 @@ interface VpSpliceCandidateSelection {
   readonly startIndex: number;
   readonly stage: X2VpSpliceCandidateStage;
   readonly sourceMatchReason: X2VpSourceMatchReason | undefined;
+  readonly signRestoreSourceProofReason: X2VpSignRestoreSourceProofReason | undefined;
   readonly removableIndexes: readonly number[];
 }
 
@@ -51,25 +53,53 @@ const sourceMatchReasonOrder: readonly X2VpSourceMatchReason[] = [
   "source-mismatch",
 ];
 
+const signRestoreSourceProofReasonOrder: readonly X2VpSignRestoreSourceProofReason[] = [
+  "shape-transition",
+  "source-match-explicit-sign",
+  "source-match-nonzero-sign",
+  "shared-sign-source",
+  "no-sign-restore-source",
+];
+
 function stageRank(stage: X2VpSpliceCandidateStage): number {
   const rank = stageOrder.indexOf(stage);
   return rank < 0 ? stageOrder.length : rank;
 }
 
-function sourceMatchReasonRank(reason: X2VpSourceMatchReason | undefined): number | undefined {
-  if (reason === undefined) return undefined;
-  const rank = sourceMatchReasonOrder.indexOf(reason);
-  return rank < 0 ? sourceMatchReasonOrder.length : rank;
+function rankedIndex<T>(order: readonly T[], value: T | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const rank = order.indexOf(value);
+  return rank < 0 ? order.length : rank;
 }
 
-function compareSourceMatchReason(
-  left: X2VpSourceMatchReason | undefined,
-  right: X2VpSourceMatchReason | undefined,
-): number {
-  const leftRank = sourceMatchReasonRank(left);
-  const rightRank = sourceMatchReasonRank(right);
+function sourceMatchReasonRank(reason: X2VpSourceMatchReason | undefined): number | undefined {
+  return rankedIndex(sourceMatchReasonOrder, reason);
+}
+
+function signRestoreSourceProofReasonRank(
+  reason: X2VpSignRestoreSourceProofReason | undefined,
+): number | undefined {
+  return rankedIndex(signRestoreSourceProofReasonOrder, reason);
+}
+
+function compareOptionalRanks(leftRank: number | undefined, rightRank: number | undefined): number {
   if (leftRank === undefined || rightRank === undefined) return 0;
   return leftRank - rightRank;
+}
+
+function compareSourceProofReason(
+  left: VpSpliceCandidateSelection,
+  right: VpSpliceCandidateSelection,
+): number {
+  const sourceDiff = compareOptionalRanks(
+    sourceMatchReasonRank(left.sourceMatchReason),
+    sourceMatchReasonRank(right.sourceMatchReason),
+  );
+  if (sourceDiff !== 0) return sourceDiff;
+  return compareOptionalRanks(
+    signRestoreSourceProofReasonRank(left.signRestoreSourceProofReason),
+    signRestoreSourceProofReasonRank(right.signRestoreSourceProofReason),
+  );
 }
 
 function firstRemovableIndex(removableIndexes: readonly number[]): number {
@@ -90,7 +120,7 @@ function compareCandidates(left: VpSpliceCandidateSelection, right: VpSpliceCand
   const lengthDiff = right.removableIndexes.length - left.removableIndexes.length;
   if (lengthDiff !== 0) return lengthDiff;
 
-  const sourceDiff = compareSourceMatchReason(left.sourceMatchReason, right.sourceMatchReason);
+  const sourceDiff = compareSourceProofReason(left, right);
   if (sourceDiff !== 0) return sourceDiff;
 
   const stageDiff = stageRank(left.stage) - stageRank(right.stage);
@@ -142,6 +172,7 @@ const run: IrPassFn = (ops) => {
         startIndex: i,
         stage: candidate.stage,
         sourceMatchReason: candidate.sourceMatchReason,
+        signRestoreSourceProofReason: candidate.signRestoreSourceProofReason,
         removableIndexes: candidate.splice.removableIndexes,
       });
     }

@@ -6557,6 +6557,7 @@ export interface X2VpSpliceCandidatePlan {
   readonly stage: X2VpSpliceCandidateStage;
   readonly splice: X2VpSplicePlan;
   readonly sourceMatchReason: X2VpSourceMatchReason | undefined;
+  readonly signRestoreSourceProofReason: X2VpSignRestoreSourceProofReason | undefined;
   readonly boundaryPlan: X2AdjacentVpBoundaryPlan | undefined;
   readonly provedVpPlan: X2ProvedVpSplicePlan | undefined;
   readonly terminalPlan: X2TerminalRestoreSplicePlan | undefined;
@@ -7134,6 +7135,7 @@ function x2VpSpliceCandidatePlan(
     stage,
     splice,
     sourceMatchReason: x2VpSpliceCandidateSourceMatchReason(details),
+    signRestoreSourceProofReason: x2VpSpliceCandidateSignRestoreSourceProofReason(details),
     boundaryPlan: details.boundaryPlan,
     provedVpPlan: details.provedVpPlan,
     terminalPlan: details.terminalPlan,
@@ -7146,6 +7148,13 @@ function x2VpSpliceCandidateSourceMatchReason(
 ): X2VpSourceMatchReason | undefined {
   return details.provedVpPlan?.restoreRunPlan?.source?.sourceMatch.reason ??
     details.signPairPlan?.sourcePlan?.source.sourceMatch.reason;
+}
+
+function x2VpSpliceCandidateSignRestoreSourceProofReason(
+  details: X2VpSpliceCandidatePlanDetails,
+): X2VpSignRestoreSourceProofReason | undefined {
+  return details.provedVpPlan?.restoreRunPlan?.source?.signRestoreSourceProof.reason ??
+    details.signPairPlan?.sourcePlan?.source.signRestoreSourceProof.reason;
 }
 
 export function x2PlanProvedVpSpliceAt(
