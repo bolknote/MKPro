@@ -1019,10 +1019,14 @@ Display rewrites are separated into strategy selection + body lowering.
   fractional single-nibble exponent-entry forms by subtracting the fractional
   width from the effective exponent (`0.BE2` behaves like `B0`). The pinned
   zero-square `A`/`Е`/`F` fractional forms share the same exponent shift. Only
-  the already pinned table cases are folded. Structural hex `+`, `-`, `*`, and `/` now enumerate one
-  product fact for each proved operand pair and derive both the normalized
-  decimal value and display-shape facts from that same product, so value and
-  shape proofs cannot drift between opcode-specific local tables. Bitwise
+  the already pinned table cases are folded. Structural hex `+`, `-`, `*`, and `/`
+  first lower each proved shape source through one arithmetic operand model:
+  exact single hex digits and the strict closed/exponent single-nibble forms
+  become `digit` or `exponent` operands, while `super:*`, ambiguous fractional
+  tails, and unsupported shapes stay structural-only. The opcode tables then
+  enumerate one product fact for each proved operand pair and derive both the
+  normalized decimal value and display-shape facts from that same product, so
+  value and shape proofs cannot drift between opcode-specific local tables. Bitwise
   operators remain on the separate mantissa-nibble model because their raw
   hex/super display result is not necessarily decimal. Decimal-only structural
   mantissa shapes also carry a normalized decimal in the shape model, but they

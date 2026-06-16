@@ -7549,6 +7549,35 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(implicitZeroResult?.xShape)).toEqual(["mantissa:5.3:decimal"]);
   });
 
+  it("x2 value dataflow uses one structural hex arithmetic operand model for closed and exponent shapes", () => {
+    const base: X2ValueDataflowState = {
+      y: new Set(),
+      x: new Set<X2ValueFact>(["decimal:5:normalized"]),
+      x2: new Set(),
+      xShape: new Set<X2ShapeFact>(["mantissa:5:decimal"]),
+      entry: { kind: "closed" },
+    };
+    const closedDisplay = transferX2ValueStateForEdge(
+      { ...base, yShape: new Set<X2ShapeFact>(["hex:Г00:mantissa"]) },
+      plain(0x12, "×"),
+      "normal",
+      {},
+      0,
+    );
+    const exponentEntry = transferX2ValueStateForEdge(
+      { ...base, yShape: new Set<X2ShapeFact>(["hex-exponent:Г:2"]) },
+      plain(0x12, "×"),
+      "normal",
+      {},
+      0,
+    );
+
+    expect(x2ValueStateText(closedDisplay?.x)).toContain("decimal:5300:normalized");
+    expect(x2ValueStateText(exponentEntry?.x)).toContain("decimal:5300:normalized");
+    expect(x2ShapeStateText(closedDisplay?.xShape)).toEqual(["mantissa:5300:decimal"]);
+    expect(x2ShapeStateText(exponentEntry?.xShape)).toEqual(["mantissa:5300:decimal"]);
+  });
+
   it("x2 value dataflow preserves hex exponent multiply display shape for VP source", () => {
     const program: IrOp[] = [
       recall("2", "preload const 1"),
