@@ -5770,7 +5770,7 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:2:normalized"]);
   });
 
-  it("x2 value dataflow uses copied Y as the VP source after Y->X", () => {
+  it("x2 value dataflow uses the old X2 source for immediate VP after Y->X", () => {
     const program: IrOp[] = [
       plain(0x03, "3"),
       plain(0x0e, "В↑"),
@@ -5784,10 +5784,72 @@ describe("ir passes on synthetic programs", () => {
 
     expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:3:normalized"]);
     expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:4:normalized"]);
-    expect(x2VpEntryMantissaText(states[4])).toEqual(["3"]);
+    expect(x2VpEntryMantissaText(states[4])).toEqual(["4"]);
     expect(states[4]?.vpEntryMantissaTransient).toBe(true);
-    expect(x2EntryStateText(states[5])).toBe("exponent:3:");
-    expect(x2EntryStateText(states[6])).toBe("exponent:3:2");
+    expect(x2EntryStateText(states[5])).toBe("exponent:4:");
+    expect(x2EntryStateText(states[6])).toBe("exponent:4:2");
+  });
+
+  it("x2 value dataflow uses copied Y as the VP source after an empty op following Y->X", () => {
+    const program: IrOp[] = [
+      plain(0x03, "3"),
+      plain(0x0e, "В↑"),
+      plain(0x04, "4"),
+      plain(0x3e, "Y->X"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:3:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:4:normalized"]);
+    expect(x2VpEntryMantissaText(states[5])).toEqual(["3"]);
+    expect(states[5]?.vpEntryMantissaTransient).toBeUndefined();
+    expect(x2EntryStateText(states[6])).toBe("exponent:3:");
+    expect(x2EntryStateText(states[7])).toBe("exponent:3:2");
+  });
+
+  it("x2 value dataflow uses the old X2 source for immediate VP after X↔Y", () => {
+    const program: IrOp[] = [
+      plain(0x03, "3"),
+      plain(0x0e, "В↑"),
+      plain(0x04, "4"),
+      plain(0x14, "X↔Y"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[4]?.x)).toEqual(["decimal:3:normalized"]);
+    expect(x2ValueStateText(states[4]?.x2)).toEqual(["decimal:4:normalized"]);
+    expect(x2VpEntryMantissaText(states[4])).toEqual(["4"]);
+    expect(states[4]?.vpEntryMantissaTransient).toBe(true);
+    expect(x2EntryStateText(states[5])).toBe("exponent:4:");
+    expect(x2EntryStateText(states[6])).toBe("exponent:4:2");
+  });
+
+  it("x2 value dataflow uses exchanged Y as the VP source after an empty op following X↔Y", () => {
+    const program: IrOp[] = [
+      plain(0x03, "3"),
+      plain(0x0e, "В↑"),
+      plain(0x04, "4"),
+      plain(0x14, "X↔Y"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x02, "2"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program);
+
+    expect(x2ValueStateText(states[5]?.x)).toEqual(["decimal:3:normalized"]);
+    expect(x2ValueStateText(states[5]?.x2)).toEqual(["decimal:4:normalized"]);
+    expect(x2VpEntryMantissaText(states[5])).toEqual(["3"]);
+    expect(states[5]?.vpEntryMantissaTransient).toBeUndefined();
+    expect(x2EntryStateText(states[6])).toBe("exponent:3:");
+    expect(x2EntryStateText(states[7])).toBe("exponent:3:2");
   });
 
   it("x2 value dataflow copies structural Y shapes through Y->X", () => {
@@ -5805,23 +5867,44 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["hex:BEEF:mantissa"]);
   });
 
-  it("x2 value dataflow uses copied structural Y shape as the VP source after Y->X", () => {
+  it("x2 value dataflow uses copied structural Y shape as the VP source after an empty op following Y->X", () => {
     const program: IrOp[] = [
       recall("1", "preload const A"),
       plain(0x0e, "В↑"),
       recall("2", "preload const 800"),
       plain(0x3e, "Y->X"),
+      plain(0x54, "КНОП"),
       plain(0x0c, "ВП"),
       plain(0x03, "3"),
       halt(),
     ];
     const states = computeX2ValueStates(program, { trackRegisterMemory: true });
 
-    expect(x2ShapeStateText(states[4]?.xShape)).toEqual(["hex:A:mantissa"]);
-    expect(x2ShapeStateText(states[4]?.x2Shape)).toEqual(["mantissa:800:decimal"]);
-    expect(x2ShapeStateText(states[4]?.vpEntryShape)).toEqual(["hex:A00:mantissa"]);
-    expect(states[4]?.vpEntryShapeTransient).toBe(true);
-    expect(x2ShapeStateText(states[6]?.x2Shape)).toEqual(["hex-exponent:A00:3"]);
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex:A:mantissa"]);
+    expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["mantissa:800:decimal"]);
+    expect(x2ShapeStateText(states[5]?.vpEntryShape)).toEqual(["hex:A00:mantissa"]);
+    expect(states[5]?.vpEntryShapeTransient).toBeUndefined();
+    expect(x2ShapeStateText(states[7]?.x2Shape)).toEqual(["hex-exponent:A00:3"]);
+  });
+
+  it("x2 value dataflow uses exchanged structural Y shape as the VP source after an empty op following X↔Y", () => {
+    const program: IrOp[] = [
+      recall("1", "preload const A"),
+      plain(0x0e, "В↑"),
+      recall("2", "preload const 800"),
+      plain(0x14, "X↔Y"),
+      plain(0x54, "КНОП"),
+      plain(0x0c, "ВП"),
+      plain(0x03, "3"),
+      halt(),
+    ];
+    const states = computeX2ValueStates(program, { trackRegisterMemory: true });
+
+    expect(x2ShapeStateText(states[5]?.xShape)).toEqual(["hex:A:mantissa"]);
+    expect(x2ShapeStateText(states[5]?.x2Shape)).toEqual(["mantissa:800:decimal"]);
+    expect(x2ShapeStateText(states[5]?.vpEntryShape)).toEqual(["hex:A00:mantissa"]);
+    expect(states[5]?.vpEntryShapeTransient).toBeUndefined();
+    expect(x2ShapeStateText(states[7]?.x2Shape)).toEqual(["hex-exponent:A00:3"]);
   });
 
   it("x2 value dataflow preserves Y through documented Y-keeping computations", () => {

@@ -145,6 +145,15 @@ describe("X2 restore context", () => {
     expect(runX(withoutRecall)).toBe("1,");
   });
 
+  it("Y->X and X↔Y keep the immediate VP transient source until an empty op closes it", () => {
+    const beforeStackCopy = [0x03, 0x0e, 0x04]; // 3; В↑; 4
+
+    expect(runX([...beforeStackCopy, 0x3e, 0x0c, 0x02, 0x50])).toBe("400,");
+    expect(runX([...beforeStackCopy, 0x3e, 0x54, 0x0c, 0x02, 0x50])).toBe("300,");
+    expect(runX([...beforeStackCopy, 0x14, 0x0c, 0x02, 0x50])).toBe("400,");
+    expect(runX([...beforeStackCopy, 0x14, 0x54, 0x0c, 0x02, 0x50])).toBe("300,");
+  });
+
   it("В/О syncs X2 on a direct subroutine return before a following ВП", () => {
     const withRecall = [0x20, 0x35, 0x41, 0x61, 0x53, 0x08, 0x0c, 0x50, 0x52]; // ... П->X 1; ПП 08; ВП; С/П; В/О
     const withoutRecall = [0x20, 0x35, 0x41, 0x53, 0x07, 0x0c, 0x50, 0x52]; // ... ПП 07; ВП; С/П; В/О

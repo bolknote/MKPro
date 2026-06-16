@@ -9944,6 +9944,8 @@ function transferCopyYToXX2ValueState(
 ): X2ValueDataflowState {
   const closed = closeX2ValueEntry(input);
   const effect = plainX2Effect(op);
+  const sourceX = visibleX2ValueFactsForStack(closed);
+  const sourceXShape = visibleX2ShapeFactsForStack(closed);
   const x = cloneOptionalValueSet(closed.y);
   const xShape = cloneOptionalShapeSet(closed.yShape);
   const x2 = transferPlainX2ValueSet(closed, x, xShape, effect);
@@ -9970,19 +9972,19 @@ function transferCopyYToXX2ValueState(
       xShape,
       x2Shape,
       effect,
-      xShape,
+      sourceXShape,
       closed.x2Shape,
       false,
-      x,
+      sourceX,
       closed.x2,
     ),
     vpEntryMantissaTransient: transferPlainX2VpEntryMantissaTransientState(
       op,
       effect,
-      xShape,
+      sourceXShape,
       closed.x2Shape,
       false,
-      x,
+      sourceX,
       closed.x2,
     ),
     vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(closed, op, effect),
@@ -9995,19 +9997,19 @@ function transferCopyYToXX2ValueState(
       xShape,
       x2Shape,
       effect,
-      xShape,
+      sourceXShape,
       closed.x2Shape,
       false,
-      x,
+      sourceX,
       closed.x2,
     ),
     vpEntryShapeTransient: transferPlainX2VpEntryShapeTransientState(
       op,
       effect,
-      xShape,
+      sourceXShape,
       closed.x2Shape,
       false,
-      x,
+      sourceX,
       closed.x2,
     ),
     ...cloneX2MemoryFields(closed),
