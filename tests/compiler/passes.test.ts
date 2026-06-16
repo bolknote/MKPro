@@ -5151,11 +5151,35 @@ describe("ir passes on synthetic programs", () => {
       x2: new Set(),
       entry: { kind: "closed" },
     };
+    const directSuperExponentState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:32(shape:super-exponent:FA:2)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
+    const constructedSuperExponentState: X2ValueDataflowState = {
+      x: new Set<X2ValueFact>(["expr-key:32(shape:hex:FA00:mantissa)"]),
+      x2: new Set(),
+      entry: { kind: "closed" },
+    };
 
     const constant = transferX2ValueStateForEdge(constantState, plain(0x34, "К [x]"), "normal", {}, 0);
     const structural = transferX2ValueStateForEdge(structuralState, plain(0x32, "К ЗН"), "normal", {}, 0);
     const directCarry = transferX2ValueStateForEdge(directCarryState, plain(0x34, "К [x]"), "normal", {}, 0);
     const exponentDerived = transferX2ValueStateForEdge(exponentDerivedState, plain(0x34, "К [x]"), "normal", {}, 0);
+    const directSuperExponent = transferX2ValueStateForEdge(
+      directSuperExponentState,
+      plain(0x31, "К |x|"),
+      "normal",
+      {},
+      0,
+    );
+    const constructedSuperExponent = transferX2ValueStateForEdge(
+      constructedSuperExponentState,
+      plain(0x31, "К |x|"),
+      "normal",
+      {},
+      0,
+    );
 
     expect(x2ValueStateText(constant?.x)).toContain("decimal:3:normalized");
     expect(x2ValueStateText(constant?.x)).not.toContain("expr-key:34(expr-key:20())");
@@ -5169,6 +5193,18 @@ describe("ir passes on synthetic programs", () => {
     expect(x2ValueStateText(exponentDerived?.x)).toContain("decimal:1:normalized");
     expect(x2ValueStateText(exponentDerived?.x)).not.toContain("decimal:101:normalized");
     expect(x2ShapeStateText(exponentDerived?.xShape)).toContain("mantissa:1:decimal");
+    expect(x2ValueFactRestoredVisibleDecimal("expr-key:32(shape:super-exponent:FA:2)")).toBe("0");
+    expect(x2ValueFactRestoredVisibleDecimal("expr-key:31(expr-key:32(shape:super-exponent:FA:2))")).toBe("0");
+    expect(x2ValueFactRestoredVisibleDecimal("expr-key:32(shape:hex:FA00:mantissa)")).toBeUndefined();
+    expect(x2ValueStateText(directSuperExponent?.x)).toContain("decimal:0:normalized");
+    expect(x2ShapeStateText(directSuperExponent?.xShape)).toContain("mantissa:0:decimal");
+    expect(x2ValueStateText(directSuperExponent?.x)).not.toContain(
+      "expr-key:31(expr-key:32(shape:super-exponent:FA:2))",
+    );
+    expect(x2ValueStateText(constructedSuperExponent?.x)).not.toContain("decimal:0:normalized");
+    expect(x2ValueStateText(constructedSuperExponent?.x)).toContain(
+      "expr-key:31(expr-key:32(shape:hex:FA00:mantissa))",
+    );
   });
 
   it("x2-hidden-temp-restore uses stable expr keys across repeated constant stack producers", () => {

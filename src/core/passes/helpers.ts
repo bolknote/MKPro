@@ -839,6 +839,7 @@ function stableExpressionKeyHasConcreteDecimalResult(
     stableExpressionKeyValueSetForOperand(op.opcode, key, new Set()),
     stableExpressionKeyShapeSetForOperand(op.opcode, key, new Set()),
     options,
+    stableExpressionKeyDirectShapeSet(key),
   );
   return values.size > 0 &&
     !stableUnaryExpressionKeyHasAdditionalShapeResult(op, key, values, options);
@@ -878,6 +879,8 @@ function stableUnaryExpressionKeyHasAdditionalShapeResult(
       stableExpressionKeyShapeSetForOperand(op.opcode, key, new Set()),
       undefined,
       options,
+      undefined,
+      stableExpressionKeyDirectShapeSet(key),
     ),
     values,
   );
@@ -12430,6 +12433,7 @@ function stableExpressionKeyConcreteDecimalValues(key: string, seen: Set<string>
       stableExpressionKeyValueSetForOperand(parsed.opcode, xKey, seen),
       stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey, seen),
       options,
+      stableExpressionKeyDirectShapeSet(xKey),
     )) {
       const value = normalizedDecimalValueFromFact(fact);
       if (value !== undefined) output.add(value);
@@ -12530,6 +12534,8 @@ function stableExpressionKeyConcreteShapeFacts(key: string, seen: Set<string>): 
       stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey, seen),
       undefined,
       options,
+      undefined,
+      stableExpressionKeyDirectShapeSet(xKey),
     )) output.add(fact);
   } else if (parsed.operands.length === 2) {
     const [yKey, xKey] = parsed.operands;
