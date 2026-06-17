@@ -87,6 +87,8 @@ describe("MK-Pro compiler", () => {
 
     expect(game).toContain("reference anvarov_tic_tac_toe_4x4");
     expect(game).toContain("occupied: packed = 0");
+    expect(game).toContain("fn occupied_cell()");
+    expect(game).toContain("The source branches back to the input stop");
     expect(game).toContain("cell_mask(x, y)");
     expect(game).toContain("lines: packed[4..7]");
     expect(game).toContain("fn candidate_score()");

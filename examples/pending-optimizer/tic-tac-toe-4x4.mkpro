@@ -28,7 +28,6 @@ program TicTacToe4x4 {
 
   fn occupied_cell() {
     // The source branches back to the input stop without recalling the score.
-    halt(0)
   }
 
   loop {
