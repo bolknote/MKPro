@@ -1101,7 +1101,10 @@ export function compileXParamProcBody(ctx: LoweringCtx, proc: ProgramAst["procs"
     }
     if (lowering.kind === "copy") {
       ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter`, lowering.first.line);
+      const yStack = ctx.xParamYStackProcs.get(proc.name);
+      if (yStack !== undefined) ctx.currentYVariable = yStack.yName;
       ctx.compileStatements(proc.body.slice(1));
+      if (yStack !== undefined) ctx.currentYVariable = undefined;
       ctx.optimizations.push({
         name: "x-param-proc-entry",
         detail: `Compiled rule ${proc.name} to copy ${lowering.param} directly from X.`,
@@ -1120,11 +1123,19 @@ export function compileXParamProcBody(ctx: LoweringCtx, proc: ProgramAst["procs"
         ));
         return;
       }
-      ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter expression`, lowering.first.line);
+      if (ctx.stackOnlyStateFields.has(lowering.first.target)) {
+        ctx.currentXVariable = lowering.first.target;
+        ctx.currentXAliases = new Set([lowering.first.target]);
+        ctx.currentXKnownZero = false;
+      } else {
+        ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter expression`, lowering.first.line);
+      }
       ctx.compileStatements(proc.body.slice(1));
       ctx.optimizations.push({
         name: "x-param-proc-entry",
-        detail: `Compiled rule ${proc.name} to compute ${lowering.first.target} from ${lowering.param} already in X.`,
+        detail: ctx.stackOnlyStateFields.has(lowering.first.target)
+          ? `Compiled rule ${proc.name} to return stack-only ${lowering.first.target} from ${lowering.param} already in X.`
+          : `Compiled rule ${proc.name} to compute ${lowering.first.target} from ${lowering.param} already in X.`,
       });
       return;
     }

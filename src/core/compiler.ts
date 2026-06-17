@@ -16,7 +16,7 @@ import {
 import { buildProgramPatchReport } from "./program-patch.ts";
 import { verifySuperDarkSuffixLayout } from "./super-dark-layout.ts";
 import { MachineEmitter } from "./emit/machine-emitter.ts";
-import type { ProgramAnalysis } from "./emit/program-analysis.ts";
+import type { ProgramAnalysis, XParamYStackProcLowering } from "./emit/program-analysis.ts";
 import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
 import { compileExpression, compileStackStopRiskTail, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
 import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitDomainTrapOnX, emitKnownOneIndirectLoopBack, indirectPredecrementUnderflowRegister, planDomainErrorGuard, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
@@ -147,7 +147,6 @@ import {
   grid4MaskScratchName,
   guardedUpdates,
   zeroDigitTailDisplayProgram,
-  xParamValueFunctionParamNames,
   xParamValueScratchName,
   X_TRANSFORM_UNARY_FUNCTIONS,
 } from "./emit/lowering-helpers.ts";
@@ -4038,7 +4037,22 @@ function loopCarriedPromptNames(ast: ProgramAst): ReadonlySet<string> {
 function xParamProcParamNames(ast: ProgramAst): ReadonlySet<string> {
   const procCallCounts = collectProcCallCounts(ast);
   const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
-  return new Set([...collectXParamProcLowerings(ast, inlineProcNames).values()].map((lowering) => lowering.param));
+  const names = new Set<string>();
+  for (const [procName, lowering] of collectXParamProcLowerings(ast, inlineProcNames)) {
+    if (!identifierReadOutsideProc(ast, procName, lowering.param)) names.add(lowering.param);
+  }
+  return names;
+}
+
+function xParamValueFunctionParamNamesForAllocation(ast: ProgramAst): ReadonlySet<string> {
+  const names = new Set<string>();
+  for (const proc of ast.procs) {
+    const match = matchXParamValueFunction(proc);
+    if (match !== undefined && !identifierReadOutsideProc(ast, proc.name, match.param)) {
+      names.add(match.param);
+    }
+  }
+  return names;
 }
 
 function loopCarriedPromptCandidates(ast: ProgramAst): LoopCarriedPrompt[] {
@@ -6833,6 +6847,12 @@ export class EmitContext {
   get xParamProcs(): Map<string, XParamProcLowering> {
     return this.analysis.xParamProcs;
   }
+  get xParamYStackProcs(): Map<string, XParamYStackProcLowering> {
+    return this.analysis.xParamYStackProcs;
+  }
+  get stackOnlyStateFields(): Set<string> {
+    return this.analysis.stackOnlyStateFields;
+  }
   get readCounts(): Map<string, number> {
     return this.analysis.readCounts;
   }
@@ -7109,6 +7129,34 @@ export class EmitContext {
           index += correction - 1;
           continue;
         }
+      }
+      if (statement.kind === "assign") {
+        const xParamYStack = this.compileXParamYStackProcCallRun(statements, index);
+        if (xParamYStack > 1) {
+          index += xParamYStack - 1;
+          continue;
+        }
+      }
+      if (
+        statement.kind === "assign" &&
+        next?.kind === "call" &&
+        statements[index + 2]?.kind === "assign" &&
+        this.compileXParamProcPackedScoreAccumulation(
+          statement,
+          next,
+          statements[index + 2] as Extract<StatementAst, { kind: "assign" }>,
+        )
+      ) {
+        index += 2;
+        continue;
+      }
+      if (
+        statement.kind === "assign" &&
+        next?.kind === "call" &&
+        this.compileXParamYStackProcCall(statement, next)
+      ) {
+        index += 1;
+        continue;
       }
       if (statement.kind === "assign" && next?.kind === "call" && compileXParamProcCall(this, statement, next)) {
         index += 1;
@@ -8318,6 +8366,114 @@ export class EmitContext {
     return true;
   }
 
+  compileXParamProcPackedScoreAccumulation(
+    paramAssign: Extract<StatementAst, { kind: "assign" }>,
+    call: Extract<StatementAst, { kind: "call" }>,
+    scoreAssign: Extract<StatementAst, { kind: "assign" }>,
+  ): boolean {
+    return this.compileXParamProcPackedScoreAccumulationTail(paramAssign, call, scoreAssign, true);
+  }
+
+  compileXParamYStackProcCallRun(statements: readonly StatementAst[], index: number): number {
+    const producer = statements[index];
+    const paramAssign = statements[index + 1];
+    const call = statements[index + 2];
+    if (producer?.kind !== "assign" || paramAssign?.kind !== "assign" || call?.kind !== "call") return 0;
+    const yStack = this.xParamYStackProcs.get(call.block);
+    if (yStack === undefined || producer.target !== yStack.yName || paramAssign.target !== yStack.xParam) return 0;
+    if (!expressionPureForSubstitution(producer.expr) || expressionReferencesIdentifier(producer.expr, producer.target)) {
+      return 0;
+    }
+    if (!isSimpleStackLoad(paramAssign.expr)) return 0;
+
+    compileExpression(this, producer.expr);
+    this.markCurrentX(yStack.yName);
+    compileExpression(this, paramAssign.expr);
+    this.currentYVariable = yStack.yName;
+    compileBlockCall(this, call.block, call.line);
+    this.currentYVariable = undefined;
+    this.optimizations.push({
+      name: "x-param-y-stack-proc-call",
+      detail: `Passed ${paramAssign.target} in X and kept ${yStack.yName} in Y for ${call.block} at line ${call.line}.`,
+    });
+    return 3;
+  }
+
+  compileXParamYStackProcCall(
+    paramAssign: Extract<StatementAst, { kind: "assign" }>,
+    call: Extract<StatementAst, { kind: "call" }>,
+  ): boolean {
+    const yStack = this.xParamYStackProcs.get(call.block);
+    if (yStack === undefined || paramAssign.target !== yStack.xParam) return false;
+    if (!this.xHolds(yStack.yName) || !isSimpleStackLoad(paramAssign.expr)) return false;
+
+    compileExpression(this, paramAssign.expr);
+    this.currentYVariable = yStack.yName;
+    compileBlockCall(this, call.block, call.line);
+    this.currentYVariable = undefined;
+    this.optimizations.push({
+      name: "x-param-y-stack-proc-call",
+      detail: `Passed ${paramAssign.target} in X while forwarding current ${yStack.yName} in Y for ${call.block} at line ${call.line}.`,
+    });
+    return true;
+  }
+
+  private compileXParamProcPackedScoreAccumulationTail(
+    paramAssign: Extract<StatementAst, { kind: "assign" }>,
+    call: Extract<StatementAst, { kind: "call" }>,
+    scoreAssign: Extract<StatementAst, { kind: "assign" }>,
+    store: boolean,
+  ): boolean {
+    const plan = this.xParamPackedScoreAccumulationPlan(paramAssign, call, scoreAssign);
+    if (plan === undefined) return false;
+
+    compileSimpleBinaryPreservingPreviousX(this, paramAssign.expr, paramAssign.line);
+    compileBlockCall(this, call.block, call.line);
+    compileExpression(this, plan.line);
+    this.emitOp(0x14, "X↔Y", "packed_score returned-index order", scoreAssign.line);
+    this.emitJump(0x53, "ПП", plan.helper.label, "packed_score helper", scoreAssign.line);
+    this.emitOp(0x10, "+", "packed_score stack accumulator", scoreAssign.line);
+    if (store) {
+      this.emitStore(scoreAssign.target, `set ${scoreAssign.target}`, scoreAssign.line);
+    } else {
+      this.currentXVariable = scoreAssign.target;
+      this.currentXAliases = new Set([scoreAssign.target]);
+      this.currentXKnownZero = false;
+    }
+    this.optimizations.push({
+      name: "x-param-packed-score-accumulate",
+      detail: `Kept ${scoreAssign.target} on the stack while ${call.block} produced ${plan.returnX} for packed_score() at line ${scoreAssign.line}.`,
+    });
+    return true;
+  }
+
+  private xParamPackedScoreAccumulationPlan(
+    paramAssign: Extract<StatementAst, { kind: "assign" }>,
+    call: Extract<StatementAst, { kind: "call" }>,
+    scoreAssign: Extract<StatementAst, { kind: "assign" }>,
+  ): { line: ExpressionAst; returnX: string; helper: { label: string; line?: number } } | undefined {
+    const lowering = this.xParamProcs.get(call.block);
+    if (lowering === undefined || paramAssign.target !== lowering.param) return undefined;
+    if (!expressionPureForSubstitution(paramAssign.expr)) return undefined;
+    if (!simpleBinaryPreservesPreviousXAsY(paramAssign.expr)) return undefined;
+    if (!xParamLoweringPreservesCallerY(lowering)) return undefined;
+
+    const proc = this.ast.procs.find((candidate) => candidate.name === call.block);
+    if (proc === undefined || proc.body.length !== 1) return undefined;
+    const returnX = this.procReturnXVariable(proc);
+    if (returnX === undefined) return undefined;
+
+    const packed = packedScoreAccumulator(scoreAssign, returnX);
+    if (packed === undefined) return undefined;
+    if (!this.xHolds(scoreAssign.target)) return undefined;
+    if (!isSimpleStackLoad(packed.line) || expressionReferencesIdentifier(packed.line, scoreAssign.target)) {
+      return undefined;
+    }
+
+    const helper = this.sharedPackedScoreStackHelper(scoreAssign.line);
+    return helper === undefined ? undefined : { line: packed.line, returnX, helper };
+  }
+
   compileIndexedAssignThenDomainTrap(
     assign: Extract<StatementAst, { kind: "indexed_assign" }>,
     branch: Extract<StatementAst, { kind: "if" }>,
@@ -8347,6 +8503,31 @@ export class EmitContext {
     if (delta === undefined) return false;
     if (numericIndexValue(statement.target.index) !== undefined) return false;
     if (!expressionPureForSubstitution(statement.target.index)) return false;
+    const yTerm = this.currentYVariable === undefined
+      ? undefined
+      : yStackPow10DeltaTerm(delta.term, this.currentYVariable);
+    const directSelector = directIndexedSelectorRegister(this.ast, this.allocation.registers, statement.target);
+    if (yTerm !== undefined && directSelector !== undefined) {
+      const yName = this.currentYVariable!;
+      this.emitOp(0x14, "X↔Y", "stack-carried packed digit index", statement.line);
+      this.emitOp(0x15, "F 10ˣ", "stack-carried packed digit pow10", statement.line);
+      compileExpression(this, yTerm.factor);
+      this.emitOp(0x12, "×", "stack-carried packed digit delta", statement.line);
+      this.emitOp(
+        0xd0 + registerIndex(directSelector),
+        `К П->X ${directSelector}`,
+        "indexed packed digit update base",
+        statement.line,
+      );
+      this.emitOp(binaryOpcode(delta.op), delta.op, "indexed packed digit update", statement.line);
+      this.emitPreparedIndexedStore(statement.target, directSelector, statement.line);
+      this.currentYVariable = undefined;
+      this.optimizations.push({
+        name: "indexed-packed-y-stack-pow10-delta",
+        detail: `Used ${yName} carried in Y as the pow10 index for ${bankMemberKey(statement.target.base, statement.target.field)}[${expressionToIntentText(statement.target.index)}] at line ${statement.line}.`,
+      });
+      return true;
+    }
     const preparedSelector = this.prepareIndexedSelector(statement.target, statement.line);
     if (preparedSelector === undefined) return false;
 
@@ -9015,6 +9196,14 @@ export class EmitContext {
         if (this.compileXParamValueScratchAssignment(statement)) return;
         if (isZeroExpression(statement.expr)) this.emitZero(`set ${statement.target}`, statement.line);
         else compileExpression(this, statement.expr);
+        if (this.stackOnlyStateFields.has(statement.target)) {
+          this.markCurrentX(statement.target);
+          this.optimizations.push({
+            name: "stack-only-state-field",
+            detail: `Kept ${statement.target} in X at line ${statement.line} instead of storing a proved stack-only state field.`,
+          });
+          return;
+        }
         this.emitStore(statement.target, `set ${statement.target}`, statement.line);
         return;
       case "coord_list_remove":
@@ -11473,13 +11662,16 @@ function buildProgramAnalysis(ast: ProgramAst, allocation: RegisterAllocation): 
   const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
   const readCounts = collectVariableReadCounts(ast);
   const scaledCoordLists = collectScaledCoordListNames(ast);
+  const xParamProcs = collectXParamProcLowerings(ast, inlineProcNames);
   return {
     procCallCounts,
     inlineProcNames,
     functionProcs: new Map(
       ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => [proc.name, proc]),
     ),
-    xParamProcs: collectXParamProcLowerings(ast, inlineProcNames),
+    xParamProcs,
+    xParamYStackProcs: collectXParamYStackProcLowerings(ast, xParamProcs),
+    stackOnlyStateFields: collectStackOnlyStateFields(ast),
     readCounts,
     displayUseCounts: collectDisplayUseCounts(ast),
     showSequenceUseCounts: collectShowSequenceUseCounts(ast),
@@ -12420,12 +12612,13 @@ function allocateRegisters(
   const hints = new Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>();
   const variables = new Set<string>();
   const xParamNames = xParamProcParamNames(ast);
-  const xParamValueNames = xParamValueFunctions ? xParamValueFunctionParamNames(ast) : new Set<string>();
+  const xParamValueNames = xParamValueFunctions ? xParamValueFunctionParamNamesForAllocation(ast) : new Set<string>();
+  const stackOnlyStateFields = collectStackOnlyStateFields(ast);
 
   for (const state of ast.states) {
     for (const field of state.fields) {
       declared.add(field.name);
-      variables.add(field.name);
+      if (!stackOnlyStateFields.has(field.name)) variables.add(field.name);
     }
   }
   for (const binding of collectDomainBindings(ast)) {
@@ -12472,7 +12665,12 @@ function allocateRegisters(
     hints.set(variable, { mode: "prefer", register });
   }
   warnUndeclaredAssignments(ast, declared, diagnostics, strictAllocation, preserveDispatchCaseOrder);
-  collectAssignedVariables(ast, variables, xParamValueNames, preserveDispatchCaseOrder);
+  collectAssignedVariables(
+    ast,
+    variables,
+    new Set([...xParamValueNames, ...stackOnlyStateFields]),
+    preserveDispatchCaseOrder,
+  );
   collectFunctionTailCallScratchVariables(ast, variables);
   collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch, preserveDispatchCaseOrder);
   collectGridCellScratchVariables(ast, variables);
@@ -12787,6 +12985,51 @@ function indexedPow10DeltaUpdate(
   return { op: expr.op, term: expr.right };
 }
 
+function yStackPow10DeltaTerm(
+  expr: ExpressionAst,
+  yName: string,
+): { factor: ExpressionAst } | undefined {
+  if (isPow10OfIdentifier(expr, yName)) return { factor: { kind: "number", raw: "1" } };
+  if (expr.kind !== "binary" || expr.op !== "*") return undefined;
+  if (isPow10OfIdentifier(expr.left, yName) && isSimpleStackLoad(expr.right)) {
+    return { factor: expr.right };
+  }
+  if (isPow10OfIdentifier(expr.right, yName) && isSimpleStackLoad(expr.left)) {
+    return { factor: expr.left };
+  }
+  return undefined;
+}
+
+function isPow10OfIdentifier(expr: ExpressionAst, name: string): boolean {
+  return expr.kind === "call" &&
+    expr.callee.toLowerCase() === "pow10" &&
+    expr.args.length === 1 &&
+    expr.args[0]?.kind === "identifier" &&
+    expr.args[0].name === name;
+}
+
+function directIndexedSelectorRegister(
+  ast: ProgramAst,
+  registers: Readonly<Record<string, RegisterName>>,
+  expr: Extract<ExpressionAst, { kind: "indexed" }>,
+): RegisterName | undefined {
+  const resolved = findStateBankMember(ast, expr);
+  if (resolved === undefined) return undefined;
+  const linearOffset = contiguousRegisterOffset(resolved.member, registers);
+  if (linearOffset === undefined) return undefined;
+  const affineIndex = affineIndexIdentifierOffset(expr.index);
+  if (affineIndex === undefined || affineIndex.integerPart === true) return undefined;
+  const offsetChoice = indirectMemorySelectorOffset(
+    resolved.member,
+    registers,
+    linearOffset,
+    -affineIndex.offset,
+  );
+  if (offsetChoice.offset + affineIndex.offset !== 0) return undefined;
+  const indexRegister = registers[affineIndex.name];
+  return indexRegister !== undefined && registerIndex(indexRegister) >= 7 ? indexRegister : undefined;
+}
+
 function indexedPow10DeltaBitReportBranch(
   assign: Extract<StatementAst, { kind: "indexed_assign" }>,
   branch: Extract<StatementAst, { kind: "if" }>,
@@ -12942,6 +13185,80 @@ function maxAssignCandidate(
   if (expressionEquals(expr.args[0]!, target)) return expr.args[1]!;
   if (expressionEquals(expr.args[1]!, target)) return expr.args[0]!;
   return undefined;
+}
+
+function packedScoreAccumulator(
+  statement: Extract<StatementAst, { kind: "assign" }>,
+  indexName: string,
+): { line: ExpressionAst } | undefined {
+  const expr = statement.expr;
+  if (expr.kind !== "binary" || expr.op !== "+") return undefined;
+  const target: ExpressionAst = { kind: "identifier", name: statement.target };
+  const right = packedScoreCallWithIndex(expr.right, indexName);
+  if (expressionEquals(expr.left, target) && right !== undefined) return { line: right.line };
+  const left = packedScoreCallWithIndex(expr.left, indexName);
+  if (expressionEquals(expr.right, target) && left !== undefined) return { line: left.line };
+  return undefined;
+}
+
+function packedScoreCallWithIndex(expr: ExpressionAst, indexName: string): { line: ExpressionAst } | undefined {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "packed_score" || expr.args.length !== 2) {
+    return undefined;
+  }
+  const [line, index] = expr.args;
+  return line !== undefined && index?.kind === "identifier" && index.name === indexName
+    ? { line }
+    : undefined;
+}
+
+function simpleBinaryPreservesPreviousXAsY(expr: ExpressionAst): expr is Extract<ExpressionAst, { kind: "binary" }> {
+  return expr.kind === "binary" &&
+    isSimpleStackLoad(expr.left) &&
+    isSimpleStackLoad(expr.right) &&
+    (expr.op === "+" || expr.op === "-" || expr.op === "*" || expr.op === "/");
+}
+
+function compileSimpleBinaryPreservingPreviousX(
+  ctx: EmitContext,
+  expr: Extract<ExpressionAst, { kind: "binary" }>,
+  line?: number,
+): void {
+  compileExpression(ctx, expr.left);
+  compileExpression(ctx, expr.right);
+  ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+}
+
+function xParamLoweringPreservesCallerY(lowering: XParamProcLowering): boolean {
+  if (lowering.kind === "copy") return true;
+  if (lowering.kind === "add") return true;
+  if (lowering.kind !== "expr") return false;
+  return xParamExpressionPreservesCallerY(lowering.first.expr, lowering.param);
+}
+
+function xParamExpressionPreservesCallerY(expr: ExpressionAst, param: string): boolean {
+  switch (expr.kind) {
+    case "identifier":
+      return expr.name === param;
+    case "unary":
+      return expr.op === "-" && xParamExpressionPreservesCallerY(expr.expr, param);
+    case "binary": {
+      const leftUses = expressionReferencesIdentifier(expr.left, param);
+      const rightUses = expressionReferencesIdentifier(expr.right, param);
+      if (leftUses === rightUses) return false;
+      if (leftUses) return xParamExpressionPreservesCallerY(expr.left, param) && isSimpleStackLoad(expr.right);
+      return (expr.op === "+" || expr.op === "*") &&
+        xParamExpressionPreservesCallerY(expr.right, param) &&
+        isSimpleStackLoad(expr.left);
+    }
+    case "call":
+      return expr.args.length === 1 &&
+        X_TRANSFORM_UNARY_FUNCTIONS.has(expr.callee.toLowerCase()) &&
+        xParamExpressionPreservesCallerY(expr.args[0]!, param);
+    case "number":
+    case "string":
+    case "indexed":
+      return false;
+  }
 }
 
 function conditionComparesExpressionWithIdentifier(
@@ -13840,6 +14157,336 @@ function collectXParamProcLowerings(
     }
   }
   return result;
+}
+
+function collectXParamYStackProcLowerings(
+  ast: ProgramAst,
+  xParamProcs: ReadonlyMap<string, XParamProcLowering>,
+): Map<string, XParamYStackProcLowering> {
+  const result = new Map<string, XParamYStackProcLowering>();
+  for (const proc of ast.procs) {
+    const lowering = xParamProcs.get(proc.name);
+    if (lowering?.kind !== "copy") continue;
+    const update = proc.body[1];
+    if (update?.kind !== "indexed_assign") continue;
+    const yName = indexedPow10DeltaStackIndexName(update);
+    if (yName === undefined) continue;
+    if (countIdentifierReadsInStatements(proc.body, yName) !== 1) continue;
+    if (proc.body.some((statement) => statementMayWriteIdentifier(ast, statement, yName, new Set()))) continue;
+    if (!allXParamCallsHaveYStackProducer(ast, proc.name, lowering.param, yName)) continue;
+    result.set(proc.name, { xParam: lowering.param, yName });
+  }
+  return result;
+}
+
+function collectStackOnlyStateFields(ast: ProgramAst): Set<string> {
+  const stateFields = new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
+  if (stateFields.size === 0) return new Set();
+  const procCallCounts = collectProcCallCounts(ast);
+  const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
+  const xParamProcs = collectXParamProcLowerings(ast, inlineProcNames);
+  const yStackProcs = collectXParamYStackProcLowerings(ast, xParamProcs);
+  const result = new Set<string>();
+  for (const name of stateFields) {
+    if (isStackOnlyStateField(ast, name, xParamProcs, yStackProcs)) result.add(name);
+  }
+  return result;
+}
+
+function isStackOnlyStateField(
+  ast: ProgramAst,
+  name: string,
+  xParamProcs: ReadonlyMap<string, XParamProcLowering>,
+  yStackProcs: ReadonlyMap<string, XParamYStackProcLowering>,
+): boolean {
+  const returnOnlyProcs = stackOnlyReturnProcsForTarget(ast, name, xParamProcs);
+  let covered = false;
+
+  const visitStatements = (statements: readonly StatementAst[], currentProc?: string): boolean => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const coveredRun = stackOnlyCoveredRun(ast, statements, index, name, xParamProcs, yStackProcs, returnOnlyProcs);
+      if (coveredRun > 0) {
+        covered = true;
+        index += coveredRun - 1;
+        continue;
+      }
+
+      if (statement.kind === "call" && returnOnlyProcs.has(statement.block)) {
+        covered = true;
+        continue;
+      }
+
+      if (statement.kind === "if") {
+        if (expressionReferencesIdentifier(statement.condition.left, name)) return false;
+        if (expressionReferencesIdentifier(statement.condition.right, name)) return false;
+        if (!visitStatements(statement.thenBody, currentProc)) return false;
+        if (statement.elseBody !== undefined && !visitStatements(statement.elseBody, currentProc)) return false;
+        continue;
+      }
+      if (statement.kind === "loop" || statement.kind === "while") {
+        if (statement.kind === "while") {
+          if (expressionReferencesIdentifier(statement.condition.left, name)) return false;
+          if (expressionReferencesIdentifier(statement.condition.right, name)) return false;
+        }
+        if (!visitStatements(statement.body, currentProc)) return false;
+        continue;
+      }
+      if (statement.kind === "dispatch") {
+        if (expressionReferencesIdentifier(statement.expr, name)) return false;
+        for (const dispatchCase of statement.cases) {
+          if (expressionReferencesIdentifier(dispatchCase.value, name)) return false;
+          if (!visitStatements(dispatchCase.body, currentProc)) return false;
+        }
+        if (statement.defaultBody !== undefined && !visitStatements(statement.defaultBody, currentProc)) return false;
+        continue;
+      }
+
+      if (currentProc !== undefined && returnOnlyProcs.has(currentProc) && stackOnlyReturnAssignment(statement, name, xParamProcs.get(currentProc))) {
+        covered = true;
+        continue;
+      }
+      if (
+        currentProc !== undefined &&
+        statement.kind === "assign" &&
+        statement.target === name &&
+        index === statements.length - 1 &&
+        expressionPureForSubstitution(statement.expr) &&
+        !expressionReferencesIdentifier(statement.expr, name) &&
+        allProcReturnConsumersAreStackOnly(ast, currentProc, name)
+      ) {
+        covered = true;
+        continue;
+      }
+      if (statementReadsIdentifier(statement, name) || statementWritesIdentifier(statement, name)) return false;
+    }
+    return true;
+  };
+
+  for (const entry of ast.entries) {
+    if (!visitStatements(entry.body)) return false;
+  }
+  for (const proc of ast.procs) {
+    if (!visitStatements(proc.body, proc.name)) return false;
+  }
+  return covered;
+}
+
+function stackOnlyReturnProcsForTarget(
+  ast: ProgramAst,
+  name: string,
+  xParamProcs: ReadonlyMap<string, XParamProcLowering>,
+): Set<string> {
+  const result = new Set<string>();
+  for (const proc of ast.procs) {
+    const lowering = xParamProcs.get(proc.name);
+    if (lowering?.kind !== "expr") continue;
+    if (proc.body.length !== 1) continue;
+    const only = proc.body[0];
+    if (!stackOnlyReturnAssignment(only, name, lowering)) continue;
+    result.add(proc.name);
+  }
+  return result;
+}
+
+function stackOnlyReturnAssignment(
+  statement: StatementAst,
+  name: string,
+  lowering: XParamProcLowering | undefined,
+): boolean {
+  return lowering?.kind === "expr" &&
+    statement.kind === "assign" &&
+    statement.target === name &&
+    !expressionReferencesIdentifier(statement.expr, name);
+}
+
+function stackOnlyCoveredRun(
+  ast: ProgramAst,
+  statements: readonly StatementAst[],
+  index: number,
+  name: string,
+  xParamProcs: ReadonlyMap<string, XParamProcLowering>,
+  yStackProcs: ReadonlyMap<string, XParamYStackProcLowering>,
+  returnOnlyProcs: ReadonlySet<string>,
+): number {
+  const statement = statements[index];
+  const next = statements[index + 1];
+  const third = statements[index + 2];
+  const fourth = statements[index + 3];
+
+  if (statement?.kind === "assign" && statement.target === name) {
+    if (next?.kind === "if" && bitOrTestAndSetBranch(statement, next, ast) !== undefined) return 2;
+    if (next?.kind === "assign" && isBitOrUpdate(next.expr, next.target, name)) return 2;
+    if (next?.kind === "assign" && third?.kind === "call") {
+      const yStack = yStackProcs.get(third.block);
+      if (
+        yStack !== undefined &&
+        yStack.yName === name &&
+        next.target === yStack.xParam &&
+        expressionPureForSubstitution(statement.expr) &&
+        !expressionReferencesIdentifier(statement.expr, name)
+      ) {
+        return 3;
+      }
+    }
+  }
+
+  if (statement?.kind === "indexed_assign" && indexedPow10DeltaStackIndexName(statement) === name) return 1;
+
+  if (statement?.kind === "call" && stackOnlyCallReturnConsumerRun(ast, statements, index, name, statement.block) > 0) {
+    return stackOnlyCallReturnConsumerRun(ast, statements, index, name, statement.block);
+  }
+
+  if (statement?.kind === "assign" && next?.kind === "call" && returnOnlyProcs.has(next.block)) {
+    const returnLowering = xParamProcs.get(next.block);
+    if (returnLowering === undefined || statement.target !== returnLowering.param) return 0;
+    if (third?.kind === "assign" && fourth?.kind === "call") {
+      const yStack = yStackProcs.get(fourth.block);
+      if (yStack !== undefined && yStack.yName === name && third.target === yStack.xParam) return 4;
+    }
+    if (third?.kind === "assign") {
+      const accumulator = packedScoreAccumulator(third, name);
+      if (accumulator !== undefined && !expressionReferencesIdentifier(accumulator.line, name)) return 3;
+    }
+    return 2;
+  }
+
+  return 0;
+}
+
+function allProcReturnConsumersAreStackOnly(ast: ProgramAst, procName: string, name: string): boolean {
+  let calls = 0;
+  let ok = true;
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      if (statement.kind === "call" && statement.block === procName) {
+        calls += 1;
+        if (stackOnlyCallReturnConsumerRun(ast, statements, index, name, procName) === 0) ok = false;
+      }
+      if (statement.kind === "loop" || statement.kind === "while") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody !== undefined) visit(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody !== undefined) visit(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) {
+    if (proc.name !== procName) visit(proc.body);
+  }
+  return ok && calls > 0;
+}
+
+function stackOnlyCallReturnConsumerRun(
+  ast: ProgramAst,
+  statements: readonly StatementAst[],
+  index: number,
+  name: string,
+  procName: string,
+): number {
+  const statement = statements[index];
+  if (statement?.kind !== "call" || statement.block !== procName) return 0;
+  const proc = ast.procs.find((candidate) => candidate.name === procName);
+  if (proc === undefined || procReturnXVariableFromAst(ast, proc) !== name) return 0;
+  const next = statements[index + 1];
+  if (next?.kind === "assign" && isBitOrUpdate(next.expr, next.target, name)) return 2;
+  return 0;
+}
+
+function indexedPow10DeltaStackIndexName(
+  statement: Extract<StatementAst, { kind: "indexed_assign" }>,
+): string | undefined {
+  const delta = indexedPow10DeltaUpdate(statement);
+  if (delta === undefined) return undefined;
+  return pow10IndexNameFromStackTerm(delta.term);
+}
+
+function pow10IndexNameFromStackTerm(expr: ExpressionAst): string | undefined {
+  if (expr.kind === "call" && expr.callee.toLowerCase() === "pow10" && expr.args.length === 1) {
+    const arg = expr.args[0];
+    return arg?.kind === "identifier" ? arg.name : undefined;
+  }
+  if (expr.kind !== "binary" || expr.op !== "*") return undefined;
+  const left = pow10IndexNameFromStackTerm(expr.left);
+  if (left !== undefined && isSimpleStackLoad(expr.right)) return left;
+  const right = pow10IndexNameFromStackTerm(expr.right);
+  if (right !== undefined && isSimpleStackLoad(expr.left)) return right;
+  return undefined;
+}
+
+function allXParamCallsHaveYStackProducer(
+  ast: ProgramAst,
+  procName: string,
+  xParam: string,
+  yName: string,
+): boolean {
+  const procByName = new Map(ast.procs.map((proc) => [proc.name, proc]));
+  let calls = 0;
+  let ok = true;
+
+  const visit = (statements: readonly StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      if (statement.kind === "call" && statement.block === procName) {
+        calls += 1;
+        const param = statements[index - 1];
+        const producer = statements[index - 2];
+        if (param?.kind !== "assign" || param.target !== xParam) {
+          ok = false;
+        } else if (!xParamYStackProducer(ast, procByName, producer, yName)) {
+          ok = false;
+        } else if (
+          producer?.kind === "assign" &&
+          statementsReadIdentifierBeforeWrite(statements.slice(index + 1), yName, ast)
+        ) {
+          ok = false;
+        }
+      }
+      if (statement.kind === "loop") visit(statement.body);
+      if (statement.kind === "while") visit(statement.body);
+      if (statement.kind === "if") {
+        visit(statement.thenBody);
+        if (statement.elseBody) visit(statement.elseBody);
+      }
+      if (statement.kind === "dispatch") {
+        for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+        if (statement.defaultBody) visit(statement.defaultBody);
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visit(entry.body);
+  for (const proc of ast.procs) {
+    if (proc.name !== procName) visit(proc.body);
+  }
+  return ok && calls > 0;
+}
+
+function xParamYStackProducer(
+  ast: ProgramAst,
+  procByName: ReadonlyMap<string, ProcAst>,
+  statement: StatementAst | undefined,
+  yName: string,
+): boolean {
+  if (statement?.kind === "assign") {
+    return statement.target === yName &&
+      expressionPureForSubstitution(statement.expr) &&
+      !expressionReferencesIdentifier(statement.expr, yName);
+  }
+  if (statement?.kind !== "call") return false;
+  const proc = procByName.get(statement.block);
+  return proc !== undefined && procReturnXVariableFromAst(ast, proc) === yName;
+}
+
+function procReturnXVariableFromAst(ast: ProgramAst, proc: ProcAst): string | undefined {
+  if (statementListTerminatesStatically(proc.body, ast)) return undefined;
+  const last = proc.body.at(-1);
+  return last?.kind === "assign" ? last.target : undefined;
 }
 
 function matchXParamFirstAssignment(

@@ -133,6 +133,7 @@ export type LoweringCtx = Pick<
   | "spatialHitHelpers"
   | "spatialLineProgressionHelpers"
   | "spatialSumLoopHelpers"
+  | "stackOnlyStateFields"
   | "statementsTerminate"
   | "terminalTailHelpers"
   | "terminalUnderflowUnitDecrementProtected"
@@ -142,5 +143,6 @@ export type LoweringCtx = Pick<
   | "xHolds"
   | "xHoldsExpression"
   | "xParamProcs"
+  | "xParamYStackProcs"
   | "zeroAddressLabels"
 >;

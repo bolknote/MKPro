@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 import { CompileError, compileMKPro } from "../../src/core/index.ts";
 import { compileLoweringVariantForTest } from "../../src/core/compiler.ts";
 import type { CompileOptions } from "../../src/core/index.ts";
@@ -1568,6 +1569,40 @@ program PackedScoreStackHelper {
     expect(result.steps.filter((step) => step.hex === "53" && step.comment === "packed_score helper")).toHaveLength(3);
   });
 
+  it("accumulates packed_score with an X-parameter-produced index on the stack", () => {
+    const result = compileOk(`
+program PackedScoreXParamAccumulator {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    x: counter 0..5 = 2
+    y: counter 0..5 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+
+  loop {
+    score = packed_score(a, y) + packed_score(b, x)
+    normalize(x + y)
+    score += packed_score(c, line)
+    normalize(x - y)
+    score += packed_score(d, line)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+}
+`, { analysis: true });
+
+    expect(result.report.optimizations.filter((item) => item.name === "x-param-packed-score-accumulate")).toHaveLength(2);
+    expect(result.steps.filter((step) => step.comment === "packed_score returned-index order")).toHaveLength(2);
+    expect(result.steps.filter((step) => step.comment === "packed_score stack accumulator")).toHaveLength(2);
+  });
+
   it("adds packed 4-line digits at the reserved-source position", () => {
     const result = compileOk(`
 program Packed4AddShape {
@@ -1656,6 +1691,21 @@ program Packed4FractionalBitReportTemp {
     expect(result.report.registers.report).toBeUndefined();
     expect(result.steps.some((step) => step.comment === "set report")).toBe(false);
     expect(result.steps.some((step) => step.comment === "recall report")).toBe(false);
+  });
+
+  it("keeps packed line indices as stack-only state across helper calls", () => {
+    const source = readFileSync("examples/pending-optimizer/tic-tac-toe-4x4.mkpro", "utf8");
+    const result = compileOk(source, { budget: 999, analysis: true });
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(result.report.registers.line).toBeUndefined();
+    expect(result.report.preloads.some((item) => item.value === "88888834")).toBe(true);
+    expect(optimizationNames).toContain("stack-only-state-field");
+    expect(optimizationNames).toContain("x-param-y-stack-proc-call");
+    expect(optimizationNames).toContain("indexed-packed-y-stack-pow10-delta");
+    expect(result.report.optimizations.some((item) =>
+      item.name === "x-param-proc-entry" && item.detail.includes("stack-only line")
+    )).toBe(true);
   });
 
   it("places source-shaped packed-grid line banks at R4 through R7", () => {
@@ -2411,6 +2461,43 @@ program XParamScopedNames {
     expect(optimizationNames.filter((name) => name === "x-param-indexed-entry")).toHaveLength(2);
     expect(result.report.registers.pos).toBeUndefined();
     expect(result.steps.some((step) => step.comment === "recall pos")).toBe(false);
+  });
+
+  it("keeps same-named parameters allocated when another procedure needs storage", () => {
+    const result = compileOk(`
+program XParamNameCollision {
+  state {
+    line: packed = 0
+    pos: packed = 8
+    other: packed = 7
+    out: packed = 0
+  }
+
+  loop {
+    normalize(pos)
+    normalize(other)
+    out = normalized(3)
+    halt(out + line)
+  }
+
+  fn normalize(value) {
+    line = frac(int(value) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+  }
+
+  fn normalized(value) {
+    return value + 1
+  }
+}
+`, { budget: 999, analysis: true });
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames).toContain("x-param-proc-call");
+    expect(optimizationNames).toContain("x-param-proc-entry");
+    expect(result.report.registers.value).toBeDefined();
+    expect(runCompiledDisplay(result)).toBe("7,");
   });
 
   it("keeps loop prompt state in X when every path assigns the next prompt", () => {

@@ -14,6 +14,8 @@ export interface ProgramAnalysis {
   readonly inlineProcNames: Set<string>;
   readonly functionProcs: Map<string, ProcAst>;
   readonly xParamProcs: Map<string, XParamProcLowering>;
+  readonly xParamYStackProcs: Map<string, XParamYStackProcLowering>;
+  readonly stackOnlyStateFields: Set<string>;
   readonly readCounts: Map<string, number>;
   readonly displayUseCounts: Map<string, number>;
   readonly showSequenceUseCounts: Map<string, number>;
@@ -25,4 +27,9 @@ export interface ProgramAnalysis {
   readonly scaledCoordCellNames: Set<string>;
   readonly removableCoordLists: Set<string>;
   readonly terminalUnderflowUnitDecrements: WeakSet<Extract<StatementAst, { kind: "assign" }>>;
+}
+
+export interface XParamYStackProcLowering {
+  readonly xParam: string;
+  readonly yName: string;
 }
