@@ -1454,6 +1454,29 @@ program CellMaskShape {
     expect(runCompiledDisplay(result)).toBe("12,");
   });
 
+  it("lowers source-shaped 4x4 cells through cell_mask", () => {
+    const result = compileOk(`
+program SourceShaped4x4Cells {
+  grid: board(1..4, 1..4)
+  state {
+    cell: coord(grid) = 12
+    occupied: cells(grid) = 0
+    value: packed = 0
+  }
+  loop {
+    if cell in occupied {
+      value = 1
+    }
+    occupied += cell
+    halt(value + occupied)
+  }
+}
+`, { analysis: true });
+
+    expect(result.steps.some((step) => step.comment?.includes("cell_mask("))).toBe(true);
+    expect(result.steps.some((step) => step.comment?.includes("bit_mask helper"))).toBe(false);
+  });
+
   it("scores packed 4-line tails without extracting the integer digit", () => {
     const result = compileOk(`
 program Packed4ScoreShape {

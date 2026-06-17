@@ -3924,10 +3924,23 @@ function cellMaskExpressionForCollection(
 ): string | undefined {
   const oneDimensional = oneDimensionalCellMaskExpression(mask, cell, context);
   if (oneDimensional !== undefined) return oneDimensional;
+  const board = boardForCells(mask, context);
+  if (board !== undefined && isSourceShapedFourByFourBoard(board)) {
+    return `cell_mask(${decimalOnesExpression(cell)}, int((${cell}) / 10))`;
+  }
   const domain = context.stateDomains.get(mask.trim());
   const world = domain === undefined ? undefined : context.worlds.get(domain);
   if (world?.position?.encoding === "packed_decimal_zero_run") return `frac(${cell})`;
   return undefined;
+}
+
+function isSourceShapedFourByFourBoard(board: V2BoardAst): boolean {
+  return board.xMin === 1 &&
+    board.xMax === 4 &&
+    board.yMin === 1 &&
+    board.yMax === 4 &&
+    board.width === 4 &&
+    board.height === 4;
 }
 
 function decimalPlayerPackedCellsIndex(

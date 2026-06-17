@@ -86,10 +86,11 @@ describe("MK-Pro compiler", () => {
     const game = source("examples/pending-optimizer/tic-tac-toe-4x4.mkpro");
 
     expect(game).toContain("reference anvarov_tic_tac_toe_4x4");
-    expect(game).toContain("occupied: cells(grid)");
+    expect(game).toContain("occupied: packed = 0");
+    expect(game).toContain("cell_mask(x, y)");
     expect(game).toContain("lines: packed[1..4]");
     expect(game).toContain("fn candidate_score()");
-    expect(game).toContain("fn mark_lines(delta)");
+    expect(game).toContain("fn mark_lines_and_check(delta)");
     expect(game).toContain("while y >= 1");
     expect(game).toContain("while x >= 1");
     expect(game).not.toMatch(/\bcore\s*\{/u);

@@ -8,12 +8,11 @@ program TicTacToe4x4 {
   grid: board(1..4, 1..4)
 
   state {
-    occupied: cells(grid) = 0
+    occupied: packed = 0
     lines: packed[1..4] = [44444.4, 44444.4, 44444.4, 44444.4]
 
     x: counter 0..5 = 0
     y: counter 0..5 = 0
-    cell: coord(grid)
 
     best_cell: coord(grid) = 11
     best_score: packed = -1
@@ -41,50 +40,44 @@ program TicTacToe4x4 {
     show(y)
     x = entered()
     y = entered()
-    cell = y * 10 + x
 
-    if cell in occupied {
+    if bit_and(occupied, cell_mask(x, y)) != 0 {
       occupied_cell()
     }
     else {
-      occupied += cell
-      mark_lines(-1)
-      check_win(0)
+      occupied = bit_or(occupied, cell_mask(x, y))
+      score = 0
+      mark_lines_and_check(-1)
       choose_calculator_move()
-      occupied += cell
-      mark_lines(1)
-      check_win(8)
+      occupied = bit_or(occupied, cell_mask(x, y))
+      score = 8
+      mark_lines_and_check(1)
     }
   }
 
-  fn mark_lines(delta) {
+  fn mark_lines_and_check(delta) {
     lines[1] = packed_add(lines[1], y, delta)
+    if packed_digit(lines[1], y) == score {
+      finish_win()
+    }
     lines[2] = packed_add(lines[2], x, delta)
+    if packed_digit(lines[2], x) == score {
+      finish_win()
+    }
     normalize_sum()
     lines[3] = packed_add(lines[3], line, delta)
+    if packed_digit(lines[3], line) == score {
+      finish_win()
+    }
     normalize_diff()
     lines[4] = packed_add(lines[4], line, delta)
-  }
-
-  fn check_win(target) {
-    if packed_digit(lines[1], y) == target {
-      finish_win(target)
-    }
-    if packed_digit(lines[2], x) == target {
-      finish_win(target)
-    }
-    normalize_sum()
-    if packed_digit(lines[3], line) == target {
-      finish_win(target)
-    }
-    normalize_diff()
-    if packed_digit(lines[4], line) == target {
-      finish_win(target)
+    if packed_digit(lines[4], line) == score {
+      finish_win()
     }
   }
 
-  fn finish_win(target) {
-    if target == 0 {
+  fn finish_win() {
+    if score == 0 {
       human_won()
     }
     else {
@@ -99,12 +92,11 @@ program TicTacToe4x4 {
     while y >= 1 {
       x = 4
       while x >= 1 {
-        cell = y * 10 + x
-        unless cell in occupied {
+        unless bit_and(occupied, cell_mask(x, y)) {
           candidate_score()
           if score > best_score {
             best_score = score
-            best_cell = cell
+            best_cell = y * 10 + x
           }
         }
         x--
@@ -116,9 +108,8 @@ program TicTacToe4x4 {
       draw()
     }
 
-    cell = best_cell
-    y = int(cell / 10)
-    x = cell - y * 10
+    y = int(best_cell / 10)
+    x = best_cell - y * 10
   }
 
   fn candidate_score() {
