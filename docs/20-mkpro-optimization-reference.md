@@ -155,6 +155,8 @@ implementation and tuning, many of those names fall into broader families:
   `domain-error-guard`, `assign-zero-domain-guard`,
   `indexed-assign-zero-domain-guard`, `decrement-underflow-domain-guard`,
   `decrement-zero-domain-guard`, `error-stop`, and related literal stop paths.
+  Explicit `ЕГГ0Г` opcodes pause with `PC = addr + 2`; resumable screens need a
+  skipped padding cell, while terminal halts do not.
 - **Counted-loop and decrement-counter lowering** — recognizes safe countdown
   forms and supplies the counter initial value from inline source, setup, or
   state normalization. Includes `state-init-counted-loop`,
@@ -360,7 +362,7 @@ The control-flow family is where the largest byte savings are found.
 - `max-assign-equality-branch` — fuses `target = max(candidate, target)` followed by `if candidate == target` by using the candidate that `К max` leaves in Y after storing the new target value. The candidate must be pure and independent of `target`, preserving the MK-61 `К max` zero-ordering semantics.
 - `negative-zero-threshold-flow` — emits preloaded threshold-flow test through negative-zero selector machinery for tighter `>= / <` checks.
 - `assign-zero-domain-guard` — when a scalar assignment is directly followed by a terminal error check (for example `x <op> 0`), fuses the assignment and trap branch into one domain-guard opcode using the same register value in X.
-- `error-stop` — uses the dedicated one-cell `ЕГГ0Г` error-stop path for literal terminal halts when supported, bypassing generic literal-stop lowering.
+- `error-stop` — uses the dedicated one-cell `ЕГГ0Г` error-stop path for literal terminal halts when supported, bypassing generic literal-stop lowering. This is terminal-only: resumable `show("ЕГГ0Г")` uses the same trap plus an explicit skipped padding cell.
 - `terminal-literal-stop` — lowers supported literal terminal halts through the dedicated literal terminal path and records this compact terminal stop strategy.
 
 Machine-level variants around branches:
@@ -2401,7 +2403,7 @@ Feature flags are added only after successful candidate/optimization evidence:
 - `raw-display-5f` — added when the optimizer emits raw-display opcode `5F` as a display-state mutation.
 - `r0-fractional-sentinel` — added when fractional indirect addressing or R0 fractional sentinel flow/path is active.
 - `r0-t-alias` — added when `r0-indirect-counter` path is selected and R0-transforming aliases are proven safe.
-- `error-stops` — added for domain-error stop/trap lowering (`error-stop`, `screen-error-literal-lowering`, `domain-error-guard`).
+- `error-stops` — added for domain-error stop/trap lowering (`error-stop`, `screen-error-literal-lowering`, `domain-error-guard`). Explicit error opcodes resume at `addr + 2`, so nonterminal uses must account for the skipped cell.
 - `code-data-overlay` — added when layout marks address cells as overlayable with code/data reuse.
 - `super-dark-dispatch` — added when `super-dark-dispatch` or `preloaded-super-dark-flow` candidate is selected and FA..FF routing is proven.
 

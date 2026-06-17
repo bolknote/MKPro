@@ -165,6 +165,11 @@ picture first and then insert the current floor with `↔; F↻; ВП`.
 continues the program, often followed by `name = read()`. For terminal screens,
 put the visible value directly in `halt(...)`.
 
+`show("ЕГГОГ")` lowers as a resumable error pause: the compiler emits the
+one-cell error opcode plus a skipped padding cell because the calculator resumes
+at the cell after that padding. `halt("ЕГГОГ")` can use only the one-cell error
+opcode because the source-level terminal path has no resumable continuation.
+
 `preview(expr)` computes a numeric expression and leaves it visible without
 emitting `С/П`. Use it for source listings that intentionally flash or prepare a
 running display value before the next real stop.

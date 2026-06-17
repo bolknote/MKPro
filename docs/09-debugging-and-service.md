@@ -106,6 +106,12 @@ See [12-danilov-secrets-mk61-delta.md](./12-danilov-secrets-mk61-delta.md).
 refused an operation: division by zero, invalid log, out-of-range trig, explicit
 error opcodes, and similar cases.
 
+Explicit error opcodes such as `К /` are resumable traps, not ordinary `С/П`
+stops. On the tested MK-61 ROM they leave the failed value in `X`, copy it to
+`X1`, and pause with the program counter two cells after the trap. If execution is
+resumed, the cell immediately after the trap is skipped; reserve it as padding or
+as an overlay reached only from another path.
+
 Debugging workflow:
 
 1. Note what you were doing when the error appeared.
