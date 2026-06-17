@@ -4027,8 +4027,7 @@ function loopCarriedPromptNames(ast: ProgramAst): ReadonlySet<string> {
 function xParamProcParamNames(ast: ProgramAst): ReadonlySet<string> {
   const procCallCounts = collectProcCallCounts(ast);
   const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
-  const readCounts = collectVariableReadCounts(ast);
-  return new Set([...collectXParamProcLowerings(ast, readCounts, inlineProcNames).values()].map((lowering) => lowering.param));
+  return new Set([...collectXParamProcLowerings(ast, inlineProcNames).values()].map((lowering) => lowering.param));
 }
 
 function loopCarriedPromptCandidates(ast: ProgramAst): LoopCarriedPrompt[] {
@@ -11250,7 +11249,7 @@ function buildProgramAnalysis(ast: ProgramAst, allocation: RegisterAllocation): 
     functionProcs: new Map(
       ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => [proc.name, proc]),
     ),
-    xParamProcs: collectXParamProcLowerings(ast, readCounts, inlineProcNames),
+    xParamProcs: collectXParamProcLowerings(ast, inlineProcNames),
     readCounts,
     displayUseCounts: collectDisplayUseCounts(ast),
     showSequenceUseCounts: collectShowSequenceUseCounts(ast),
@@ -13426,7 +13425,6 @@ function collectVariableReadCounts(ast: ProgramAst): Map<string, number> {
 
 function collectXParamProcLowerings(
   ast: ProgramAst,
-  readCounts: ReadonlyMap<string, number>,
   inlineProcNames: ReadonlySet<string>,
 ): Map<string, XParamProcLowering> {
   const result = new Map<string, XParamProcLowering>();
@@ -13438,7 +13436,7 @@ function collectXParamProcLowerings(
     const param = params[0]!;
     const first = proc.body[0];
     const indexed = first?.kind === "indexed_assign" && matchXParamFirstIndexedAssignment(first, param);
-    if (indexed !== true && (readCounts.get(param) ?? 0) !== 1) continue;
+    if (indexed !== true && countIdentifierReadsInStatements(proc.body, param) !== 1) continue;
     const matched = first?.kind === "assign" ? matchXParamFirstAssignment(first, param) : undefined;
     if (matched === undefined && indexed !== true) continue;
     if (statementsReadIdentifier(proc.body.slice(1), param)) continue;

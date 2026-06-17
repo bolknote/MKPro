@@ -533,7 +533,9 @@ shared baselines in `tests/compiler/example-baselines.ts`.
   first assignment may be a direct copy, `param + other`, or a pure expression
   that consumes the single-use parameter from the X register through a
   left-deep/commutative stack-safe expression shape, so the parameter itself
-  does not need a storage register.
+  does not need a storage register. Single-use is scoped to the candidate
+  procedure body; unrelated procedures may reuse the same parameter name without
+  disabling the lowering.
 - `x-param-proc-call` — passes parameters through X with fewer instructions.
 - `x-param-return-decay` — prepares a return path through X for safe reuse afterward.
 - `x-param-return-decay-call` — applies the same X-return pattern at call sites.

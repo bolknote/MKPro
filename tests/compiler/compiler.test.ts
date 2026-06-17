@@ -2208,6 +2208,40 @@ program XParamIndexedRule {
     expect(result.steps.some((step) => step.comment?.startsWith("indexed set slots"))).toBe(true);
   });
 
+  it("scopes X-parameter read counts per procedure", () => {
+    const result = compileOk(`
+program XParamScopedNames {
+  state {
+    left: packed[1..3] = [1, 2, 3]
+    right: packed[1..3] = [4, 5, 6]
+    first: counter 1..3 = 1
+    second: counter 1..3 = 2
+  }
+
+  loop {
+    bump_left(first)
+    bump_left(second)
+    bump_right(first)
+    bump_right(second)
+    halt(left[1] + right[2])
+  }
+
+  fn bump_left(pos) {
+    left[pos] = left[pos] + 1
+  }
+
+  fn bump_right(pos) {
+    right[pos] = right[pos] + 1
+  }
+}
+`, { budget: 999, analysis: true });
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames.filter((name) => name === "x-param-indexed-entry")).toHaveLength(2);
+    expect(result.report.registers.pos).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "recall pos")).toBe(false);
+  });
+
   it("keeps loop prompt state in X when every path assigns the next prompt", () => {
     const result = compileOk(`
 program LoopPromptX {
