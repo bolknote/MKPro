@@ -547,29 +547,29 @@ sharedBitMaskHelperCalls+hoistSharedHelpers: steps=98 | 51 29 69 13 4E 35 04 12 
 `;
 
 exports[`golden listing > lowering variants are stable for examples/pending-optimizer/tic-tac-toe-4x4.mkpro 1`] = `
-"primary: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-aggressiveTerminalDirect: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-invertBranchOrder: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-aggressiveTerminalDirect+invertBranchOrder: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-hoistSharedHelpers: steps=159 | 51 18 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 62 50 41 42 69 53 02 38 49 11 5E 32 51 18 01 0B 53 A1 01 0B 40 04 42 04 41 69 53 02 37 5E 61 53 7A 60 36 40 11 5E 61 61 4D 62 43 5B 43 58 41 60 5C 70 00 50 6D 41 63 42 53 02 69 38 49 01 53 A1 51 18 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 A0 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 95 06 AE 61 62 11 53 95 07 8E 64 62 53 11 65 61 53 91 61 62 10 53 95 66 53 90 61 62 11 53 95 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52
-hoistSharedHelpers+hoistProcs: steps=159 | 51 93 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 34 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 11 65 61 53 79 61 62 10 53 83 66 53 78 61 62 11 53 83 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52 62 50 41 42 69 53 02 38 49 11 5E 6B 51 93 01 0B 53 35 01 0B 40 04 42 04 41 69 53 02 37 5E 88 53 56 60 36 40 11 5E 88 61 4D 62 43 5B 76 58 74 60 5C 91 00 50 6D 41 63 42 53 02 69 38 49 01 53 35 51 93
-canonicalizeIfChains: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-freeResidualDispatchScratch: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-aliasXReuse: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-coalesceCopies: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-freeResidualDispatchScratch+canonicalizeIfChains: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-repeatedUnaryUpdateArgTemp: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-xParamValueFunction: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-xParamValueFunction+repeatedUnaryUpdateArgTemp: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-xParamValueFunction+repeatedUnaryUpdateArgTemp+coalesceCopies: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-shareRandomCell: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-shareRandomCell+hoistSharedHelpers: steps=159 | 51 18 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 62 50 41 42 69 53 02 38 49 11 5E 32 51 18 01 0B 53 A1 01 0B 40 04 42 04 41 69 53 02 37 5E 61 53 7A 60 36 40 11 5E 61 61 4D 62 43 5B 43 58 41 60 5C 70 00 50 6D 41 63 42 53 02 69 38 49 01 53 A1 51 18 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 A0 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 95 06 AE 61 62 11 53 95 07 8E 64 62 53 11 65 61 53 91 61 62 10 53 95 66 53 90 61 62 11 53 95 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52
-tailBranchInversion: steps=155 | 62 50 41 42 69 53 8B 38 49 11 57 00 01 0B 53 81 01 0B 40 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=157 | 51 18 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 62 50 41 42 69 53 02 38 49 11 57 18 01 0B 53 99 01 0B 40 04 42 04 41 69 53 02 37 5E 59 53 78 60 36 40 11 5E 59 61 4D 62 43 5B 41 58 39 60 5C 68 00 50 6D 41 63 42 53 02 69 38 49 01 53 99 51 18 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 98 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 93 06 AE 61 62 11 53 93 07 8E 64 62 53 11 65 61 53 8F 61 62 10 53 93 66 53 8E 61 62 11 53 93 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52
-guardedPrologueGadgets: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=159 | 51 93 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 34 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 11 65 61 53 79 61 62 10 53 83 66 53 78 61 62 11 53 83 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52 62 50 41 42 69 53 02 38 49 11 5E 6B 51 93 01 0B 53 35 01 0B 40 04 42 04 41 69 53 02 37 5E 88 53 56 60 36 40 11 5E 88 61 4D 62 43 5B 76 58 74 60 5C 91 00 50 6D 41 63 42 53 02 69 38 49 01 53 35 51 93
-sharedBitMaskHelperCalls: steps=157 | 62 50 41 42 69 53 8D 38 49 11 5E 14 51 00 01 0B 53 83 01 0B 40 04 42 04 41 69 53 8D 37 5E 43 53 A4 60 36 40 11 5E 43 61 4D 62 43 5B 25 58 23 60 5C 52 00 50 6D 41 63 42 53 8D 69 38 49 01 53 83 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 82 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 96 65 61 53 7F 61 62 10 53 83 66 53 7E 61 62 11 53 83 67 14 53 96 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
-sharedBitMaskHelperCalls+hoistSharedHelpers: steps=159 | 51 18 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 62 50 41 42 69 53 02 38 49 11 5E 32 51 18 01 0B 53 A1 01 0B 40 04 42 04 41 69 53 02 37 5E 61 53 7A 60 36 40 11 5E 61 61 4D 62 43 5B 43 58 41 60 5C 70 00 50 6D 41 63 42 53 02 69 38 49 01 53 A1 51 18 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 A0 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 95 06 AE 61 62 11 53 95 07 8E 64 62 53 11 65 61 53 91 61 62 10 53 95 66 53 90 61 62 11 53 95 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52"
+"primary: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+aggressiveTerminalDirect: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+invertBranchOrder: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+aggressiveTerminalDirect+invertBranchOrder: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+hoistSharedHelpers: steps=157 | 51 18 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 62 50 41 42 69 53 02 38 49 11 5E 32 51 18 01 0B 40 53 99 04 42 04 41 69 53 02 37 5E 59 53 78 60 36 40 11 5E 59 61 4D 62 43 5B 41 58 39 60 5C 68 00 50 6D 41 63 42 53 02 69 38 49 01 53 99 51 18 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 98 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 93 06 AE 61 62 11 53 93 07 8E 64 62 53 11 65 61 53 8F 61 62 10 53 93 66 53 8E 61 62 11 53 93 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52
+hoistSharedHelpers+hoistProcs: steps=157 | 51 93 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 34 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 11 65 61 53 79 61 62 10 53 83 66 53 78 61 62 11 53 83 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52 62 50 41 42 69 53 02 38 49 11 5E 6B 51 93 01 0B 40 53 35 04 42 04 41 69 53 02 37 5E 86 53 56 60 36 40 11 5E 86 61 4D 62 43 5B 74 58 72 60 5C 8F 00 50 6D 41 63 42 53 02 69 38 49 01 53 35 51 93
+canonicalizeIfChains: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+freeResidualDispatchScratch: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+aliasXReuse: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+coalesceCopies: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+freeResidualDispatchScratch+canonicalizeIfChains: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+repeatedUnaryUpdateArgTemp: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+xParamValueFunction: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+xParamValueFunction+repeatedUnaryUpdateArgTemp: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+xParamValueFunction+repeatedUnaryUpdateArgTemp+coalesceCopies: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+shareRandomCell: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+shareRandomCell+hoistSharedHelpers: steps=157 | 51 18 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 62 50 41 42 69 53 02 38 49 11 5E 32 51 18 01 0B 40 53 99 04 42 04 41 69 53 02 37 5E 59 53 78 60 36 40 11 5E 59 61 4D 62 43 5B 41 58 39 60 5C 68 00 50 6D 41 63 42 53 02 69 38 49 01 53 99 51 18 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 98 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 93 06 AE 61 62 11 53 93 07 8E 64 62 53 11 65 61 53 8F 61 62 10 53 93 66 53 8E 61 62 11 53 93 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52
+tailBranchInversion: steps=153 | 62 50 41 42 69 53 89 38 49 11 57 00 01 0B 40 53 79 04 42 04 41 69 53 89 37 5E 39 53 A0 60 36 40 11 5E 39 61 4D 62 43 5B 21 58 19 60 5C 48 00 50 6D 41 63 42 53 89 69 38 49 01 53 79 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 78 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 7F 06 AE 61 62 11 53 7F 07 8E 64 62 53 92 65 61 53 7B 61 62 10 53 7F 66 53 7A 61 62 11 53 7F 67 14 53 92 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion: steps=155 | 51 18 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 62 50 41 42 69 53 02 38 49 11 57 18 01 0B 40 53 97 04 42 04 41 69 53 02 37 5E 57 53 76 60 36 40 11 5E 57 61 4D 62 43 5B 39 58 37 60 5C 66 00 50 6D 41 63 42 53 02 69 38 49 01 53 97 51 18 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 96 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 91 06 AE 61 62 11 53 91 07 8E 64 62 53 11 65 61 53 8D 61 62 10 53 91 66 53 8C 61 62 11 53 91 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52
+guardedPrologueGadgets: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+guardedPrologueGadgets+hoistSharedHelpers+hoistProcs: steps=157 | 51 93 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 34 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 83 06 AE 61 62 11 53 83 07 8E 64 62 53 11 65 61 53 79 61 62 10 53 83 66 53 78 61 62 11 53 83 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52 62 50 41 42 69 53 02 38 49 11 5E 6B 51 93 01 0B 40 53 35 04 42 04 41 69 53 02 37 5E 86 53 56 60 36 40 11 5E 86 61 4D 62 43 5B 74 58 72 60 5C 8F 00 50 6D 41 63 42 53 02 69 38 49 01 53 35 51 93
+sharedBitMaskHelperCalls: steps=155 | 62 50 41 42 69 53 8B 38 49 11 5E 14 51 00 01 0B 40 53 81 04 42 04 41 69 53 8B 37 5E 41 53 A2 60 36 40 11 5E 41 61 4D 62 43 5B 23 58 21 60 5C 50 00 50 6D 41 63 42 53 8B 69 38 49 01 53 81 51 00 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 80 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 81 06 AE 61 62 11 53 81 07 8E 64 62 53 94 65 61 53 7D 61 62 10 53 81 66 53 7C 61 62 11 53 81 67 14 53 94 10 52 03 10 04 13 35 04 12 01 10 52 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52
+sharedBitMaskHelperCalls+hoistSharedHelpers: steps=157 | 51 18 61 15 62 6C 12 15 34 10 52 15 13 35 6B 11 22 52 62 50 41 42 69 53 02 38 49 11 5E 32 51 18 01 0B 40 53 99 04 42 04 41 69 53 02 37 5E 59 53 78 60 36 40 11 5E 59 61 4D 62 43 5B 41 58 39 60 5C 68 00 50 6D 41 63 42 53 02 69 38 49 01 53 99 51 18 4D 14 15 68 12 DD 10 BD 6A 37 0E 35 57 98 25 50 52 48 62 04 AE 61 05 AE 61 62 10 53 93 06 AE 61 62 11 53 93 07 8E 64 62 53 11 65 61 53 8F 61 62 10 53 93 66 53 8E 61 62 11 53 93 67 14 53 11 10 52 03 10 04 13 35 04 12 01 10 52"
 `;
 
 exports[`golden listing > lowering variants are stable for examples/raja-yoga.mkpro 1`] = `
@@ -7129,7 +7129,7 @@ Cell Roles:
 exports[`golden listing > selected output is stable for examples/pending-optimizer/tic-tac-toe-4x4.mkpro 1`] = `
 "## Listing
 Setup Block:
-  \`R9=0; R4=44444.4; R5=44444.4; R6=44444.4; R7=44444.4; Ra=88888834; Rc=0.22600029; Rb=0.41200076; Re=62\`
+  \`R9=0; R4=44444.4; R5=44444.4; R6=44444.4; R7=44444.4; Ra=88888834; Rc=0.22600029; Rb=0.41200076; Re=60\`
 
 # Setup Listing
  Step | Code | Command                 | Comment
@@ -7147,7 +7147,7 @@ Setup Block:
    10 |  4C  | X→П c                   | setup Rc
    11 |   -  | 0.41200076              |
    12 |  4B  | X→П b                   | setup Rb
-   13 |   -  | 62                      |
+   13 |   -  | 60                      |
    14 |  4E  | X→П e                   | setup Re
 
 # Main Listing
@@ -7159,181 +7159,180 @@ Setup Block:
    03 | 42    | X→П 2                   | set y
    04 | 69    | П→X 9                   | recall occupied
    05 | 53    | ПП                      | expr cell_mask(x, y)
-   06 | 87    | >87                     | expr cell_mask(x, y)
+   06 | 85    | >85                     | expr cell_mask(x, y)
    07 | 38    | К ∨                     | bit_or test-and-set value
    08 | 49    | X→П 9                   | bit_or test-and-set occupied
    09 | 11    | −                       | bit_or test-and-set changed
    10 | 7B    | К x≠0 b                 | direct tail branch for bit_or test-and-set occupied; preloaded Rb=0.41200076 indirect-target=0 indirect flow
    11 | 01 0B | -1                      | negative number
-   13 | 53    | ПП                      | proc call mark_lines_and_check
-   14 | 97    | 97                      | proc call mark_lines_and_check
-   15 | 01 0B | -1                      | negative number
-   17 | 40    | X→П 0                   | set best_score
+   13 | 40    | X→П 0                   | set best_score
+   14 | 53    | ПП                      | proc call mark_lines_and_check
+   15 | 95    | 95                      | proc call mark_lines_and_check
+   16 | 04    | 4                       |
+   17 | 42    | X→П 2                   | set y
    18 | 04    | 4                       |
-   19 | 42    | X→П 2                   | set y
-   20 | 04    | 4                       |
-   21 | 41    | X→П 1                   | set x
-   22 | 69    | П→X 9                   | recall occupied
-   23 | 53    | ПП                      | expr cell_mask(x, y)
-   24 | 87    | >87                     | expr cell_mask(x, y)
-   25 | 37    | К ∧                     | bit_and()
-   26 | 5E    | F x=0                   | false branch for ==
-   27 | 40    | 40                      | false branch for ==
-   28 | 53    | ПП                      | proc call candidate_score
-   29 | 72    | 72                      | proc call candidate_score
-   30 | 60    | П→X 0                   | recall best_score
-   31 | 36    | К max                   | max-assignment update
-   32 | 40    | X→П 0                   | set best_score
-   33 | 11    | −                       | max-assignment equality compare
-   34 | 5E    | F x=0                   | false branch for max assignment equality
-   35 | 40    | 40                      | false branch for max assignment equality
-   36 | 61    | П→X 1                   | recall x
-   37 | 4D    | X→П d                   | set slot
-   38 | 62    | П→X 2                   | recall y
-   39 | 43    | X→П 3                   | set best_y
-   40 | 5B    | F L1                    | counted while x
-   41 | 22    | 22                      | counted while x
-   42 | 58    | F L2                    | counted while y
-   43 | 20    | 20                      | counted while y
-   44 | 60    | П→X 0                   | recall best_score
-   45 | 5C    | F x<0                   | false branch for <
-   46 | 49    | 49                      | false branch for <
-   47 | 00    | 0                       | halt
-   48 | 50    | С/П                     | halt
-   49 | 6D    | П→X d                   | recall slot
-   50 | 41    | X→П 1                   | set x
-   51 | 63    | П→X 3                   | recall best_y
-   52 | 42    | X→П 2                   | set y
-   53 | 53    | ПП                      | expr cell_mask(x, y)
-   54 | 87    | >87                     | expr cell_mask(x, y)
-   55 | 69    | П→X 9                   | recall occupied
-   56 | 38    | К ∨                     | bit_or()
-   57 | 49    | X→П 9                   | set occupied
-   58 | 01    | 1                       |
-   59 | 53    | ПП                      | proc call mark_lines_and_check
-   60 | 97    | 97                      | proc call mark_lines_and_check
-   61 | 8B    | К БП b                  | loop back; preloaded Rb=0.41200076 indirect-target=0 indirect flow
-   62 | 03    | 3                       |
-   63 | 10    | +                       | x-param expr +
-   64 | 04    | 4                       |
-   65 | 13    | ÷                       | x-param expr /
-   66 | 35    | К {x}                   | x-param frac()
-   67 | 04    | 4                       |
-   68 | 12    | ×                       | x-param expr *
-   69 | 01    | 1                       |
-   70 | 10    | +                       | x-param expr +
-   71 | 52    | В/О                     | implicit return from proc
-   72 | 64    | П→X 4                   | recall lines_4
-   73 | 62    | П→X 2                   | recall y
-   74 | 53    | ПП                      | packed_score helper
-   75 | 90    | >90                     | packed_score helper
-   76 | 65    | П→X 5                   | recall lines_5
-   77 | 61    | П→X 1                   | recall x
-   78 | 53    | ПП                      | proc call return suffix gadget
-   79 | 93    | 93                      | return suffix gadget target
-   80 | 61    | П→X 1                   | recall x
-   81 | 62    | П→X 2                   | recall y
-   82 | 10    | +                       | expr +
-   83 | AE    | К ПП e                  | proc call normalize; preloaded Re=62 indirect-target=62 indirect flow
-   84 | 66    | П→X 6                   | recall lines_6
-   85 | 53    | ПП                      | proc call return suffix gadget
-   86 | 92    | 92                      | return suffix gadget target
-   87 | 61    | П→X 1                   | recall x
-   88 | 62    | П→X 2                   | recall y
-   89 | 11    | −                       | expr -
-   90 | AE    | К ПП e                  | proc call normalize; preloaded Re=62 indirect-target=62 indirect flow
-   91 | 67    | П→X 7                   | recall lines_7
-   92 | 14    | X↔Y                     | packed_score returned-index order
-   93 | 53    | ПП                      | packed_score helper
-   94 | 90    | >90                     | packed_score helper
-   95 | 10    | +                       | packed_score stack accumulator
-   96 | 52    | В/О                     | implicit return from proc
-   97 | 48    | X→П 8                   | set mark_score from X parameter
-   98 | 62    | П→X 2                   | recall y
-   99 | 04    | 4                       |
-   A0 | 53    | ПП                      | proc call mark_one
-   A1 | 76    | >76                     | proc call mark_one
-   A2 | 61    | П→X 1                   | recall x
-   A3 | 05    | 5                       |
-   A4 | 53    | ПП                      | proc call mark_one
-  >69 | 76    | >76                     | proc call mark_one
-  >6A | 61    | П→X 1                   | recall x
-  >6B | 62    | П→X 2                   | recall y
-  >6C | 10    | +                       | expr +
-  >6D | AE    | К ПП e                  | proc call normalize; preloaded Re=62 indirect-target=62 indirect flow
-  >6E | 06    | 6                       |
-  >6F | 53    | ПП                      | proc call mark_one
-  >70 | 76    | >76                     | proc call mark_one
-  >71 | 61    | П→X 1                   | recall x
-  >72 | 62    | П→X 2                   | recall y
-  >73 | 11    | −                       | expr -
-  >74 | AE    | К ПП e                  | proc call normalize; preloaded Re=62 indirect-target=62 indirect flow
-  >75 | 07    | 7                       |
-  >76 | 4D    | X→П d                   | set slot from X parameter
-  >77 | 14    | X↔Y                     | stack-carried packed digit index
-  >78 | 15    | F 10ˣ                   | stack-carried packed digit pow10
-  >79 | 68    | П→X 8                   | recall mark_score
-  >7A | 12    | ×                       | stack-carried packed digit delta
-  >7B | DD    | К П→X d                 | indexed packed digit update base
-  >7C | 10    | +                       | indexed packed digit update
-  >7D | BD    | К X→П d                 | indexed set lines; indirect-memory-targets=4,5,6,7
-  >7E | 6A    | П→X a                   | preload const 88888834
-  >7F | 37    | К ∧                     | updated packed fractional report mask
-  >80 | 0E    | В↑                      | updated packed fractional report keep
-  >81 | 35    | К {x}                   | updated packed fractional report predicate
-  >82 | 57    | F x≠0                   | false branch for packed fractional report !=
-  >83 | 86    | >86                     | false branch for packed fractional report !=
-  >84 | 25    | F reverse               | updated packed fractional report restore
-  >85 | 50    | С/П                     | halt
-  >86 | 52    | В/О                     | implicit return from proc
-  >87 | 61    | П→X 1                   | recall x
-  >88 | 15    | F 10ˣ                   | pow10()
-  >89 | 62    | П→X 2                   | recall y
-  >8A | 6C    | П→X c                   | preload const 0.22600029
-  >8B | 12    | ×                       | expr *
-  >8C | 15    | F 10ˣ                   | pow10()
-  >8D | 34    | К [x]                   | int()
-  >8E | 10    | +                       | expr +
-  >8F | 52    | В/О                     | expression helper return
-  >90 | 15    | F 10ˣ                   | packed_score helper pow10
-  >91 | 13    | ÷                       | packed_score helper divide
-  >92 | 35    | К {x}                   | packed_score helper frac
-  >93 | 6B    | П→X b                   | preload const 0.41200076
-  >94 | 11    | −                       | packed_score helper center
-  >95 | 22    | F x²                    | packed_score helper square
-  >96 | 52    | В/О                     | packed_score helper return
+   19 | 41    | X→П 1                   | set x
+   20 | 69    | П→X 9                   | recall occupied
+   21 | 53    | ПП                      | expr cell_mask(x, y)
+   22 | 85    | >85                     | expr cell_mask(x, y)
+   23 | 37    | К ∧                     | bit_and()
+   24 | 5E    | F x=0                   | false branch for ==
+   25 | 38    | 38                      | false branch for ==
+   26 | 53    | ПП                      | proc call candidate_score
+   27 | 70    | 70                      | proc call candidate_score
+   28 | 60    | П→X 0                   | recall best_score
+   29 | 36    | К max                   | max-assignment update
+   30 | 40    | X→П 0                   | set best_score
+   31 | 11    | −                       | max-assignment equality compare
+   32 | 5E    | F x=0                   | false branch for max assignment equality
+   33 | 38    | 38                      | false branch for max assignment equality
+   34 | 61    | П→X 1                   | recall x
+   35 | 4D    | X→П d                   | set slot
+   36 | 62    | П→X 2                   | recall y
+   37 | 43    | X→П 3                   | set best_y
+   38 | 5B    | F L1                    | counted while x
+   39 | 20    | 20                      | counted while x
+   40 | 58    | F L2                    | counted while y
+   41 | 18    | 18                      | counted while y
+   42 | 60    | П→X 0                   | recall best_score
+   43 | 5C    | F x<0                   | false branch for <
+   44 | 47    | 47                      | false branch for <
+   45 | 00    | 0                       | halt
+   46 | 50    | С/П                     | halt
+   47 | 6D    | П→X d                   | recall slot
+   48 | 41    | X→П 1                   | set x
+   49 | 63    | П→X 3                   | recall best_y
+   50 | 42    | X→П 2                   | set y
+   51 | 53    | ПП                      | expr cell_mask(x, y)
+   52 | 85    | >85                     | expr cell_mask(x, y)
+   53 | 69    | П→X 9                   | recall occupied
+   54 | 38    | К ∨                     | bit_or()
+   55 | 49    | X→П 9                   | set occupied
+   56 | 01    | 1                       |
+   57 | 53    | ПП                      | proc call mark_lines_and_check
+   58 | 95    | 95                      | proc call mark_lines_and_check
+   59 | 8B    | К БП b                  | loop back; preloaded Rb=0.41200076 indirect-target=0 indirect flow
+   60 | 03    | 3                       |
+   61 | 10    | +                       | x-param expr +
+   62 | 04    | 4                       |
+   63 | 13    | ÷                       | x-param expr /
+   64 | 35    | К {x}                   | x-param frac()
+   65 | 04    | 4                       |
+   66 | 12    | ×                       | x-param expr *
+   67 | 01    | 1                       |
+   68 | 10    | +                       | x-param expr +
+   69 | 52    | В/О                     | implicit return from proc
+   70 | 64    | П→X 4                   | recall lines_4
+   71 | 62    | П→X 2                   | recall y
+   72 | 53    | ПП                      | packed_score helper
+   73 | 8E    | >8E                     | packed_score helper
+   74 | 65    | П→X 5                   | recall lines_5
+   75 | 61    | П→X 1                   | recall x
+   76 | 53    | ПП                      | proc call return suffix gadget
+   77 | 91    | 91                      | return suffix gadget target
+   78 | 61    | П→X 1                   | recall x
+   79 | 62    | П→X 2                   | recall y
+   80 | 10    | +                       | expr +
+   81 | AE    | К ПП e                  | proc call normalize; preloaded Re=60 indirect-target=60 indirect flow
+   82 | 66    | П→X 6                   | recall lines_6
+   83 | 53    | ПП                      | proc call return suffix gadget
+   84 | 90    | 90                      | return suffix gadget target
+   85 | 61    | П→X 1                   | recall x
+   86 | 62    | П→X 2                   | recall y
+   87 | 11    | −                       | expr -
+   88 | AE    | К ПП e                  | proc call normalize; preloaded Re=60 indirect-target=60 indirect flow
+   89 | 67    | П→X 7                   | recall lines_7
+   90 | 14    | X↔Y                     | packed_score returned-index order
+   91 | 53    | ПП                      | packed_score helper
+   92 | 8E    | >8E                     | packed_score helper
+   93 | 10    | +                       | packed_score stack accumulator
+   94 | 52    | В/О                     | implicit return from proc
+   95 | 48    | X→П 8                   | set mark_score from X parameter
+   96 | 62    | П→X 2                   | recall y
+   97 | 04    | 4                       |
+   98 | 53    | ПП                      | proc call mark_one
+   99 | 74    | >74                     | proc call mark_one
+   A0 | 61    | П→X 1                   | recall x
+   A1 | 05    | 5                       |
+   A2 | 53    | ПП                      | proc call mark_one
+   A3 | 74    | >74                     | proc call mark_one
+   A4 | 61    | П→X 1                   | recall x
+  >69 | 62    | П→X 2                   | recall y
+  >6A | 10    | +                       | expr +
+  >6B | AE    | К ПП e                  | proc call normalize; preloaded Re=60 indirect-target=60 indirect flow
+  >6C | 06    | 6                       |
+  >6D | 53    | ПП                      | proc call mark_one
+  >6E | 74    | >74                     | proc call mark_one
+  >6F | 61    | П→X 1                   | recall x
+  >70 | 62    | П→X 2                   | recall y
+  >71 | 11    | −                       | expr -
+  >72 | AE    | К ПП e                  | proc call normalize; preloaded Re=60 indirect-target=60 indirect flow
+  >73 | 07    | 7                       |
+  >74 | 4D    | X→П d                   | set slot from X parameter
+  >75 | 14    | X↔Y                     | stack-carried packed digit index
+  >76 | 15    | F 10ˣ                   | stack-carried packed digit pow10
+  >77 | 68    | П→X 8                   | recall mark_score
+  >78 | 12    | ×                       | stack-carried packed digit delta
+  >79 | DD    | К П→X d                 | indexed packed digit update base
+  >7A | 10    | +                       | indexed packed digit update
+  >7B | BD    | К X→П d                 | indexed set lines; indirect-memory-targets=4,5,6,7
+  >7C | 6A    | П→X a                   | preload const 88888834
+  >7D | 37    | К ∧                     | updated packed fractional report mask
+  >7E | 0E    | В↑                      | updated packed fractional report keep
+  >7F | 35    | К {x}                   | updated packed fractional report predicate
+  >80 | 57    | F x≠0                   | false branch for packed fractional report !=
+  >81 | 84    | >84                     | false branch for packed fractional report !=
+  >82 | 25    | F reverse               | updated packed fractional report restore
+  >83 | 50    | С/П                     | halt
+  >84 | 52    | В/О                     | implicit return from proc
+  >85 | 61    | П→X 1                   | recall x
+  >86 | 15    | F 10ˣ                   | pow10()
+  >87 | 62    | П→X 2                   | recall y
+  >88 | 6C    | П→X c                   | preload const 0.22600029
+  >89 | 12    | ×                       | expr *
+  >8A | 15    | F 10ˣ                   | pow10()
+  >8B | 34    | К [x]                   | int()
+  >8C | 10    | +                       | expr +
+  >8D | 52    | В/О                     | expression helper return
+  >8E | 15    | F 10ˣ                   | packed_score helper pow10
+  >8F | 13    | ÷                       | packed_score helper divide
+  >90 | 35    | К {x}                   | packed_score helper frac
+  >91 | 6B    | П→X b                   | preload const 0.41200076
+  >92 | 11    | −                       | packed_score helper center
+  >93 | 22    | F x²                    | packed_score helper square
+  >94 | 52    | В/О                     | packed_score helper return
 
 ## Hex
-00: 62 50 41 42 69 53 87 38
-08: 49 11 7B 01 0B 53 97 01
-16: 0B 40 04 42 04 41 69 53
-24: 87 37 5E 40 53 72 60 36
-32: 40 11 5E 40 61 4D 62 43
-40: 5B 22 58 20 60 5C 49 00
-48: 50 6D 41 63 42 53 87 69
-56: 38 49 01 53 97 8B 03 10
-64: 04 13 35 04 12 01 10 52
-72: 64 62 53 90 65 61 53 93
-80: 61 62 10 AE 66 53 92 61
-88: 62 11 AE 67 14 53 90 10
-96: 52 48 62 04 53 76 61 05
-A4: 53 76 61 62 10 AE 06 53
->70: 76 61 62 11 AE 07 4D 14
->78: 15 68 12 DD 10 BD 6A 37
->80: 0E 35 57 86 25 50 52 61
->88: 15 62 6C 12 15 34 10 52
->90: 15 13 35 6B 11 22 52
+00: 62 50 41 42 69 53 85 38
+08: 49 11 7B 01 0B 40 53 95
+16: 04 42 04 41 69 53 85 37
+24: 5E 38 53 70 60 36 40 11
+32: 5E 38 61 4D 62 43 5B 20
+40: 58 18 60 5C 47 00 50 6D
+48: 41 63 42 53 85 69 38 49
+56: 01 53 95 8B 03 10 04 13
+64: 35 04 12 01 10 52 64 62
+72: 53 8E 65 61 53 91 61 62
+80: 10 AE 66 53 90 61 62 11
+88: AE 67 14 53 8E 10 52 48
+96: 62 04 53 74 61 05 53 74
+A4: 61 62 10 AE 06 53 74 61
+>70: 62 11 AE 07 4D 14 15 68
+>78: 12 DD 10 BD 6A 37 0E 35
+>80: 57 84 25 50 52 61 15 62
+>88: 6C 12 15 34 10 52 15 13
+>90: 35 6B 11 22 52
 
 ## Explain
 MK-Pro compile report
-Steps: 151/999999
+Steps: 149/999999
 Delivery: hex
 Optimizer: exact maximum
-Reference: anvarov_tic_tac_toe_4x4; span=105, entries=105, gaps=none, compiled=151, delta=46, parity=larger
+Reference: anvarov_tic_tac_toe_4x4; span=105, entries=105, gaps=none, compiled=149, delta=44, parity=larger
 Machine: mk61
 Optimizer rules: automatic=yes; active=12, considered=0, candidates=48, planned=0
-Budget: official=151, extra=0, physical=151
-Intent IR: lowered=yes, v2=yes; intent=149, effects=151, cells=151
+Budget: official=149, extra=0, physical=149
+Intent IR: lowered=yes, v2=yes; intent=149, effects=149, cells=149
 
 Preloads:
   occupied -> R9: 0 (outside program cells)
@@ -7344,10 +7343,10 @@ Preloads:
   Ra: 88888834 (outside program cells)
   Rc: 0.22600029 (outside program cells)
   Rb: 0.41200076 (outside program cells)
-  Re: 62 (outside program cells)
+  Re: 60 (outside program cells)
 
 Setup Block:
-  \`R9=0; R4=44444.4; R5=44444.4; R6=44444.4; R7=44444.4; Ra=88888834; Rc=0.22600029; Rb=0.41200076; Re=62\`
+  \`R9=0; R4=44444.4; R5=44444.4; R6=44444.4; R7=44444.4; Ra=88888834; Rc=0.22600029; Rb=0.41200076; Re=60\`
 
 Registers:
   best_score: R0
@@ -7365,26 +7364,26 @@ Registers:
 Labels:
    main: 00
   __loop_0: 00
-  __counted_while_3: 20
-  __counted_while_4: 22
-  __max_assign_false_7: 40
-  __if_false_5: 40
-  __if_false_8: 49
-  __bit_or_test_set_end_2: 61
-  normalize: 62
-  candidate_score: 72
-  __return_suffix_gadget_0: 92
-  __return_suffix_gadget_1: 93
-  mark_lines_and_check: 97
-  mark_one: >76
-  __packed_frac_report_false_9: >86
-  __expr_0: >87
-  __packed_score: >90
+  __counted_while_3: 18
+  __counted_while_4: 20
+  __max_assign_false_7: 38
+  __if_false_5: 38
+  __if_false_8: 47
+  __bit_or_test_set_end_2: 59
+  normalize: 60
+  candidate_score: 70
+  __return_suffix_gadget_0: 90
+  __return_suffix_gadget_1: 91
+  mark_lines_and_check: 95
+  mark_one: >74
+  __packed_frac_report_false_9: >84
+  __expr_0: >85
+  __packed_score: >8E
 
 Optimizations:
   - constant-indexed-state-resolution: Resolved 4 constant indexed state accesses before pattern matching.
   - x-param-state-elision: Removed 3 register-backed parameter fields consumed directly from X.
-  - expression-constant-folder: Folded 4 constant expression node(s) before code generation.
+  - expression-constant-folder: Folded 3 constant expression node(s) before code generation.
   - indexed-packed-report-temp-inline: Inlined 1 packed report temp before state liveness so indexed packed report branches can reuse the updated cell in X.
   - intent-domain-lowering: Lowered 10 state fields and 7 rules through the generic intent pipeline.
   - auto-preload-initial-state: Moved initial state into setup/preload values so official program cells stay focused on turn logic.
@@ -7395,7 +7394,7 @@ Optimizations:
   - expression-helper-call: Reused shared helper for cell_mask(x, y).
   - single-use-rule-inline: Inlined single-use rule occupied_cell at line 42.
   - proc-call-lowering: Compiled call to rule mark_lines_and_check as ПП/В/О subroutine.
-  - x-param-proc-call: Passed mark_value to rule mark_lines_and_check through X at line 46.
+  - x-param-proc-call: Passed mark_value to rule mark_lines_and_check through the value already in X at line 47.
   - expression-helper-call: Reused shared helper for cell_mask(x, y).
   - zero-condition-test: Tested == 0 without materializing a zero literal at line 81.
   - proc-call-lowering: Compiled call to rule candidate_score as ПП/В/О subroutine.
@@ -7407,10 +7406,10 @@ Optimizations:
   - single-use-rule-inline: Inlined single-use rule draw at line 95.
   - expression-helper-call: Reused shared helper for cell_mask(x, y).
   - stack-only-state-field: Kept line in X at line 100 instead of storing a proved stack-only state field.
-  - single-use-rule-inline: Inlined single-use rule choose_calculator_move at line 47.
+  - single-use-rule-inline: Inlined single-use rule choose_calculator_move at line 48.
   - stack-current-x-scheduling: Reused line already derivable from X for bit_or().
   - proc-call-lowering: Compiled call to rule mark_lines_and_check as ПП/В/О subroutine.
-  - x-param-proc-call: Passed mark_value to rule mark_lines_and_check through X at line 49.
+  - x-param-proc-call: Passed mark_value to rule mark_lines_and_check through X at line 50.
   - bit-or-test-and-set-branch: Combined occupied membership test, bit_or update, and occupied branch at line 41.
   - x-param-proc-entry: Compiled rule normalize to return stack-only line from raw_line already in X.
   - packed-score-stack-helper-call: Reused shared packed_score stack helper for packed-line scoring.
@@ -7423,23 +7422,23 @@ Optimizations:
   - proc-return-x-reuse: Tracked line in X after returning from rule normalize.
   - x-param-packed-score-accumulate: Kept score on the stack while normalize produced line for packed_score() at line 108.
   - proc-call-lowering: Compiled call to rule mark_one as ПП/В/О subroutine.
-  - x-param-y-stack-proc-call: Passed next_slot in X and kept line in Y for mark_one at line 65.
+  - x-param-y-stack-proc-call: Passed next_slot in X and kept line in Y for mark_one at line 66.
   - proc-call-lowering: Compiled call to rule mark_one as ПП/В/О subroutine.
-  - x-param-y-stack-proc-call: Passed next_slot in X and kept line in Y for mark_one at line 67.
+  - x-param-y-stack-proc-call: Passed next_slot in X and kept line in Y for mark_one at line 68.
   - proc-call-lowering: Compiled call to rule normalize as ПП/В/О subroutine.
   - proc-return-x-reuse: Tracked line in X after returning from rule normalize.
-  - x-param-proc-call: Passed raw_line to rule normalize through X at line 68.
+  - x-param-proc-call: Passed raw_line to rule normalize through X at line 69.
   - proc-call-lowering: Compiled call to rule mark_one as ПП/В/О subroutine.
-  - x-param-y-stack-proc-call: Passed next_slot in X while forwarding current line in Y for mark_one at line 69.
+  - x-param-y-stack-proc-call: Passed next_slot in X while forwarding current line in Y for mark_one at line 70.
   - proc-call-lowering: Compiled call to rule normalize as ПП/В/О subroutine.
   - proc-return-x-reuse: Tracked line in X after returning from rule normalize.
-  - x-param-proc-call: Passed raw_line to rule normalize through X at line 70.
+  - x-param-proc-call: Passed raw_line to rule normalize through X at line 71.
   - proc-call-lowering: Compiled call to rule mark_one as ПП/В/О subroutine.
-  - x-param-y-stack-proc-call: Passed next_slot in X while forwarding current line in Y for mark_one at line 71.
+  - x-param-y-stack-proc-call: Passed next_slot in X while forwarding current line in Y for mark_one at line 72.
   - x-param-proc-entry: Compiled rule mark_lines_and_check to copy mark_value directly from X.
-  - indexed-packed-y-stack-pow10-delta: Used line carried in Y as the pow10 index for lines[slot] at line 55.
+  - indexed-packed-y-stack-pow10-delta: Used line carried in Y as the pow10 index for lines[slot] at line 56.
   - preloaded-constant: Used preloaded Ra for constant 88888834.
-  - indexed-packed-fractional-report-branch: Reused lines[slot] left in X after a packed update for fractional frac(bit_and(lines[slot], 88888834)) != 0 at line 57.
+  - indexed-packed-fractional-report-branch: Reused lines[slot] left in X after a packed update for fractional frac(bit_and(lines[slot], 88888834)) != 0 at line 58.
   - x-param-proc-entry: Compiled rule mark_one to copy next_slot directly from X.
   - preloaded-constant: Used preloaded Rc for constant 0.22600029.
   - packed-grid-primitive-lowering: Lowered cell_mask() to reusable 4x4 grid/packed-line arithmetic.
@@ -7453,7 +7452,7 @@ Optimizations:
   - jump-thread: Threaded 1 jump(s) through trampoline labels to the final target.
   - preloaded-indirect-flow: Activated post-layout: replaced 6 direct branch/call(s) with proven preloaded indirect flow.
   - constants-dual-use: Reused existing setup constant preload(s) as immutable indirect-flow selector(s) for 2 branch/call site(s).
-  - dual-use-constant-tail-branch-reverse-proc-layout: Combined dual-use constant indirect-flow selectors with tail-branch inversion with emitted procedures in reverse source order (151 vs 157 cells).
+  - dual-use-constant-tail-branch-reverse-proc-layout: Combined dual-use constant indirect-flow selectors with tail-branch inversion with emitted procedures in reverse source order (149 vs 155 cells).
 
 Candidates:
   * display __inline_show_34_0/decimal-pack: 2 steps; selected decimal-pack for screen __inline_show_34_0
@@ -7498,17 +7497,17 @@ Rejected Candidates:
 
 Cell Roles:
   00: 62 exec, display-byte - display byte role allowed
-  06: 87 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  14: 97 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  24: 87 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  27: 40 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  29: 72 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  35: 40 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  41: 22 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  43: 20 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  46: 49 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  54: 87 address, constant, overlay - address can be reused as constant; code/data overlay allowed
-  60: 97 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
+  06: 85 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  15: 95 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  22: 85 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  25: 38 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  27: 70 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  33: 38 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  39: 20 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  41: 18 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  44: 47 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  52: 85 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  58: 95 address, constant, overlay - address can be reused as constant; code/data overlay allowed"
 `;
 
 exports[`golden listing > selected output is stable for examples/raja-yoga.mkpro 1`] = `

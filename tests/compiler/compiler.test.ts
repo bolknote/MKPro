@@ -2372,6 +2372,38 @@ program XParamRule {
     expect(result.steps.some((step) => step.comment === "set delta")).toBe(false);
   });
 
+  it("reuses the current X value for identifier-shaped X parameters", () => {
+    const result = compileOk(`
+program XParamCurrentXIdentifier {
+  state {
+    carrier: packed = 0
+    copied: packed = 0
+    sink: packed = 0
+  }
+
+  loop {
+    carrier = -1
+    consume(carrier)
+    consume(1)
+    sink = copied + carrier
+    halt(sink)
+  }
+
+  fn consume(value) {
+    copied = value
+    copied += 1
+    copied += 2
+    copied += 3
+  }
+}
+`);
+
+    expect(result.report.optimizations.some((item) =>
+      item.name === "x-param-proc-call" && item.detail.includes("already in X")
+    )).toBe(true);
+    expect(result.steps.some((step) => step.comment === "recall carrier" && step.address < 3)).toBe(false);
+  });
+
   it("passes expression-shaped first assignments through X parameters", () => {
     const result = compileOk(`
 program XParamExpressionRule {

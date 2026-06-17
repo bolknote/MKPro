@@ -43,7 +43,8 @@ program TicTacToe4x4 {
     }
     else {
       occupied = bit_or(occupied, line)
-      mark_lines_and_check(-1)
+      best_score = -1
+      mark_lines_and_check(best_score)
       choose_calculator_move()
       occupied = bit_or(occupied, line)
       mark_lines_and_check(1)
@@ -72,7 +73,6 @@ program TicTacToe4x4 {
   }
 
   fn choose_calculator_move() {
-    best_score = -1
     y = 4
 
     while y >= 1 {

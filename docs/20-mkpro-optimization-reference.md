@@ -541,7 +541,9 @@ shared baselines in `tests/compiler/example-baselines.ts`.
   does not need a storage register. Single-use is scoped to the candidate
   procedure body; unrelated procedures may reuse the same parameter name without
   disabling the lowering.
-- `x-param-proc-call` — passes parameters through X with fewer instructions.
+- `x-param-proc-call` — passes parameters through X with fewer instructions;
+  identifier arguments already proved live in X are forwarded without an extra
+  recall.
 - `x-param-return-decay` — prepares a return path through X for safe reuse afterward.
 - `x-param-return-decay-call` — applies the same X-return pattern at call sites.
 - `x-param-stack-stop-risk-read` — compiles a single-argument x-param helper proc shaped as `show(param); return wrap*( param (op) g(read()) )` so it consumes its argument from X and returns through direct `В/О`, reusing the same generalized stack-stop fusion prepared by `show-read-stack-stop-risk-lowering` (any X-transform intrinsic, binary op, single-digit constant, and outer wrap chain — not only `int(param * (1 + sin(read())))`).

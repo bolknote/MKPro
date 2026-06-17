@@ -1077,11 +1077,16 @@ export function compileXParamProcCall(ctx: LoweringCtx,
     if (lowering === undefined || assign.target !== lowering.param) return false;
     if (!expressionPureForSubstitution(assign.expr)) return false;
 
-    compileExpression(ctx, assign.expr);
+    const reusedCurrentX =
+      assign.expr.kind === "identifier" &&
+      ctx.xHolds(assign.expr.name);
+    if (!reusedCurrentX) compileExpression(ctx, assign.expr);
     compileBlockCall(ctx, call.block, call.line);
     ctx.optimizations.push({
       name: "x-param-proc-call",
-      detail: `Passed ${assign.target} to rule ${call.block} through X at line ${assign.line}.`,
+      detail: reusedCurrentX
+        ? `Passed ${assign.target} to rule ${call.block} through the value already in X at line ${assign.line}.`
+        : `Passed ${assign.target} to rule ${call.block} through X at line ${assign.line}.`,
     });
     return true;
 }
