@@ -8371,7 +8371,12 @@ export class EmitContext {
     call: Extract<StatementAst, { kind: "call" }>,
     scoreAssign: Extract<StatementAst, { kind: "assign" }>,
   ): boolean {
-    return this.compileXParamProcPackedScoreAccumulationTail(paramAssign, call, scoreAssign, true);
+    return this.compileXParamProcPackedScoreAccumulationTail(
+      paramAssign,
+      call,
+      scoreAssign,
+      !this.stackOnlyStateFields.has(scoreAssign.target),
+    );
   }
 
   compileXParamYStackProcCallRun(statements: readonly StatementAst[], index: number): number {
@@ -14250,6 +14255,18 @@ function isStackOnlyStateField(
         currentProc !== undefined &&
         statement.kind === "assign" &&
         statement.target === name &&
+        expressionPureForSubstitution(statement.expr) &&
+        !expressionReferencesIdentifier(statement.expr, name) &&
+        allProcReturnConsumersAreStackOnly(ast, currentProc, name) &&
+        followingXParamPackedScoreAccumulatorRun(ast, statements, index + 1, name, xParamProcs)
+      ) {
+        covered = true;
+        continue;
+      }
+      if (
+        currentProc !== undefined &&
+        statement.kind === "assign" &&
+        statement.target === name &&
         index === statements.length - 1 &&
         expressionPureForSubstitution(statement.expr) &&
         !expressionReferencesIdentifier(statement.expr, name) &&
@@ -14337,6 +14354,9 @@ function stackOnlyCoveredRun(
     return stackOnlyCallReturnConsumerRun(ast, statements, index, name, statement.block);
   }
 
+  const packedAccumulatorRun = stackOnlyXParamPackedScoreAccumulatorRun(ast, statements, index, name, xParamProcs);
+  if (packedAccumulatorRun > 0) return packedAccumulatorRun;
+
   if (statement?.kind === "assign" && next?.kind === "call" && returnOnlyProcs.has(next.block)) {
     const returnLowering = xParamProcs.get(next.block);
     if (returnLowering === undefined || statement.target !== returnLowering.param) return 0;
@@ -14351,6 +14371,50 @@ function stackOnlyCoveredRun(
     return 2;
   }
 
+  return 0;
+}
+
+function followingXParamPackedScoreAccumulatorRun(
+  ast: ProgramAst,
+  statements: readonly StatementAst[],
+  start: number,
+  name: string,
+  xParamProcs: ReadonlyMap<string, XParamProcLowering>,
+): boolean {
+  for (let index = start; index < statements.length; index += 1) {
+    if (stackOnlyXParamPackedScoreAccumulatorRun(ast, statements, index, name, xParamProcs) > 0) return true;
+  }
+  return false;
+}
+
+function stackOnlyXParamPackedScoreAccumulatorRun(
+  ast: ProgramAst,
+  statements: readonly StatementAst[],
+  index: number,
+  name: string,
+  xParamProcs: ReadonlyMap<string, XParamProcLowering>,
+): number {
+  const statement = statements[index];
+  const next = statements[index + 1];
+  const third = statements[index + 2];
+  if (statement?.kind !== "assign" || next?.kind !== "call" || third?.kind !== "assign") return 0;
+
+  const lowering = xParamProcs.get(next.block);
+  const proc = ast.procs.find((candidate) => candidate.name === next.block);
+  const returnX = proc === undefined ? undefined : procReturnXVariableFromAst(ast, proc);
+  const accumulator = returnX === undefined ? undefined : packedScoreAccumulator(third, returnX);
+  if (
+    lowering !== undefined &&
+    statement.target === lowering.param &&
+    expressionPureForSubstitution(statement.expr) &&
+    simpleBinaryPreservesPreviousXAsY(statement.expr) &&
+    xParamLoweringPreservesCallerY(lowering) &&
+    accumulator !== undefined &&
+    third.target === name &&
+    !expressionReferencesIdentifier(accumulator.line, name)
+  ) {
+    return 3;
+  }
   return 0;
 }
 
@@ -14395,6 +14459,20 @@ function stackOnlyCallReturnConsumerRun(
   if (proc === undefined || procReturnXVariableFromAst(ast, proc) !== name) return 0;
   const next = statements[index + 1];
   if (next?.kind === "assign" && isBitOrUpdate(next.expr, next.target, name)) return 2;
+  const third = statements[index + 2];
+  if (next?.kind === "assign" && third?.kind === "if") {
+    const candidate = maxAssignCandidate(next);
+    const returned = { kind: "identifier", name } satisfies ExpressionAst;
+    if (
+      candidate !== undefined &&
+      expressionEquals(candidate, returned) &&
+      third.elseBody === undefined &&
+      conditionComparesExpressionWithIdentifier(third.condition, returned, next.target, "==") &&
+      !statementsReadIdentifier(third.thenBody, name)
+    ) {
+      return 3;
+    }
+  }
   return 0;
 }
 

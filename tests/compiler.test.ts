@@ -92,10 +92,10 @@ describe("MK-Pro compiler", () => {
     expect(game).toContain("fn candidate_score()");
     expect(game).toContain("mark_lines_and_check(-1)");
     expect(game).toContain("mark_lines_and_check(1)");
-    expect(game).toContain("fn mark_lines_and_check(mark_score)");
-    expect(game).toContain("score = mark_score");
+    expect(game).toContain("fn mark_lines_and_check(mark_value)");
+    expect(game).toContain("mark_score = mark_value");
     expect(game).toContain("fn mark_one(next_slot)");
-    expect(game).toContain("lines[slot] = packed_add(lines[slot], line, score)");
+    expect(game).toContain("lines[slot] = packed_add(lines[slot], line, mark_score)");
     expect(game).toContain("report = bit_and(lines[slot], 88888834)");
     expect(game).toContain("if frac(report) != 0");
     expect(game).toContain("halt(report)");

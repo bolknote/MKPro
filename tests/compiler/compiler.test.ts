@@ -1693,16 +1693,21 @@ program Packed4FractionalBitReportTemp {
     expect(result.steps.some((step) => step.comment === "recall report")).toBe(false);
   });
 
-  it("keeps packed line indices as stack-only state across helper calls", () => {
+  it("keeps packed line indices and candidate scores as stack-only state across helper calls", () => {
     const source = readFileSync("examples/pending-optimizer/tic-tac-toe-4x4.mkpro", "utf8");
     const result = compileOk(source, { budget: 999, analysis: true });
     const optimizationNames = result.report.optimizations.map((item) => item.name);
 
     expect(result.report.registers.line).toBeUndefined();
+    expect(result.report.registers.score).toBeUndefined();
+    expect(result.report.registers.mark_score).toBeDefined();
     expect(result.report.preloads.some((item) => item.value === "88888834")).toBe(true);
     expect(optimizationNames).toContain("stack-only-state-field");
     expect(optimizationNames).toContain("x-param-y-stack-proc-call");
     expect(optimizationNames).toContain("indexed-packed-y-stack-pow10-delta");
+    expect(result.report.optimizations.some((item) =>
+      item.name === "stack-only-state-field" && item.detail.includes("score")
+    )).toBe(true);
     expect(result.report.optimizations.some((item) =>
       item.name === "x-param-proc-entry" && item.detail.includes("stack-only line")
     )).toBe(true);
