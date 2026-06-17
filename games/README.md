@@ -5,4 +5,4 @@ Unified index: [manifest.tsv](./manifest.tsv)
 
 Columns: `program`, `description`, `title`, `author`, `real_name`, `source_url`
 
-Total programs: 461.
+Total programs: 462.
