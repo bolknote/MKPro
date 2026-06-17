@@ -31,6 +31,9 @@ passes the main+setup load check.
 passes the main+setup load check after strict-mode rescue candidate probing
 learned to rank over-window intermediates.
 
+`cave-highlevel-baseline.mkpro` moved back to the top-level examples at 105
+cells and passes the main+setup load check.
+
 `giants-country.mkpro` moved back to the top-level examples at 105 cells and
 passes the main+setup load check.
 
@@ -42,7 +45,6 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `cave-highlevel-baseline.mkpro` | 133 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
 | `tic-tac-toe-4x4.mkpro` | 317 | 105 | source port is complete; remaining blocker is optimizer/lowering size for packed line helpers, bit masks, and nested move search |
 
 Prototype notes:
@@ -66,6 +68,20 @@ Prototype notes:
   schedules fractional uses of the same selector before the destructive indirect
   access, matching the original listing's reliance on selector side effects
   without losing the coordinate tail too early.
+- `cave-highlevel-baseline.mkpro` now keeps food, dynamite, and treasure in one
+  floor-indexed resource bank. The cache reward selects `resources[floor]` once,
+  computes the original `10, 1, 1` floor bonus as `pow10(int(1 / floor))`, passes
+  the updated stake through the stack-stop robber helper, and reuses the dynamic
+  indexed store value as the next loop prompt instead of recalling the same bank
+  element again.
+- Its movement fallback also spells the documented post-`4`/`6` vertical keys as
+  `sign(6 - command)`, letting the residual dispatch avoid the extra unit adjust
+  while preserving the visible keypad UI.
+- Its movement test now follows the source listing's passability-mask shape:
+  it checks the fractional part of `bit_and(passages[int(blocked)], blocked)`
+  and only commits the blocked coordinate when that fractional membership is
+  nonzero. The generated setup also coalesces duplicate same-register preloads,
+  so the high-level baseline now fits the 105-cell window with setup loading.
 - `cave-treasure.mkpro` now keeps food, dynamite, and treasure in one
   floor-indexed resource bank. Cache rewards use `resources[pos.floor]` and the
   source-level `(4 - pos.floor)^2` bonus sequence (`9`, `4`, `1`), relying on

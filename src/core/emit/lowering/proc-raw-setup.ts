@@ -171,15 +171,27 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
       for (const action of setupNumericPreloadActions(numericSegment)) {
         emitSetupNumericPreloadAction(ctx, numericSegment, action);
         const targets = setupNumericActionTargetIndexes(action);
+        const storedRegisters: RegisterName[] = [];
+        const seenRegisters = new Set<RegisterName>();
         for (const targetIndex of targets) {
           const preload = numericSegment[targetIndex]!;
+          if (seenRegisters.has(preload.register)) continue;
+          seenRegisters.add(preload.register);
+          storedRegisters.push(preload.register);
           ctx.emitOp(0x40 + registerIndex(preload.register), `X->П ${preload.register}`, `setup R${preload.register}`, undefined, true);
         }
-        if (targets.length > 1) {
-          const registers = targets.map((targetIndex) => `R${numericSegment[targetIndex]!.register}`).join(", ");
+        if (storedRegisters.length > 1) {
+          const registers = storedRegisters.map((register) => `R${register}`).join(", ");
           ctx.optimizations.push({
             name: "duplicate-preload-store-reuse",
             detail: `Loaded setup constant ${normalizeConstantLiteral(numericSegment[action.targetIndex]!.value)} once and stored it into ${registers}.`,
+          });
+        }
+        if (storedRegisters.length < targets.length) {
+          const register = numericSegment[action.targetIndex]!.register;
+          ctx.optimizations.push({
+            name: "duplicate-preload-register-elision",
+            detail: `Skipped ${targets.length - storedRegisters.length} duplicate setup store(s) to R${register} after the same constant was already stored there.`,
           });
         }
       }

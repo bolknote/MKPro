@@ -81,6 +81,10 @@ function numericFlowTarget(op: IrOp): number | undefined {
   }
 }
 
+function returnActsAsAddressOneJump(op: IrOp): boolean {
+  return op.kind === "return" && op.meta.comment === "optimized БП 01";
+}
+
 /**
  * Build the successor edge lists for a linear op sequence.
  *
@@ -156,7 +160,11 @@ export function buildCfgEdges(ops: readonly IrOp[], options: CfgOptions = {}): C
         break;
       }
       case "return":
-        for (const target of callReturns) successors[index]!.push({ target, kind: "normal" });
+        if (returnActsAsAddressOneJump(op)) {
+          jumpTo(1);
+        } else {
+          for (const target of callReturns) successors[index]!.push({ target, kind: "normal" });
+        }
         break;
     }
   }

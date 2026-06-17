@@ -198,7 +198,8 @@ implementation and tuning, many of those names fall into broader families:
 - **Setup, preloads, constants, and startup trade-offs** — balances shorter
   main code against setup cost and available registers. Includes
   `constant-synthesis`, `preloaded-constant`, `auto-preload-initial-state`,
-  `duplicate-preload-store-reuse`, `startup-aware-constant-preloads`, and
+  `duplicate-preload-store-reuse`, `duplicate-preload-register-elision`,
+  `startup-aware-constant-preloads`, and
   constant-demotion rescue candidates.
 
 When adding a new reported name, prefer documenting it as a leaf under one of
@@ -222,6 +223,7 @@ These transformations run on source constructs before machine lowering:
 - `expression-constant-folder` — precomputes constant expression subtrees.
 - `entered-current-x` — consumes the currently keyboard-entered X value for the `entered()` builtin without emitting a second stop, clearing tracked X aliases because the value is already live in X.
 - `current-x-unary-derivation` — when a single-argument X-transform intrinsic (`abs`, `sign`, `frac`, `sqr`, etc.) consumes a value already proved live in `X`, emits only the transform opcode instead of recalling the argument first.
+- `current-x-indexed-reuse` — after a dynamic indexed recall or store leaves `bank[i]` in `X`, an immediately following read of the exact same indexed expression reuses `X` instead of emitting another `К П→X selector`. The fact is expression-exact and is cleared by X-clobbering operations and control-flow boundaries.
 - `show-read-fusion` — merges `show(...)` with a following `read`-based assignment/input path into one calculator `С/П`: `show(...); x = read()` or `show(...); x = int(read())` / `frac(int(read()))` forms share the same input stop and avoid emitting a second `С/П`.
 - `running-display-preview` — lowers `preview(expr)` as expression preparation only, leaving the value visible without inserting a calculator `С/П`.
 - `show-read-decrement-underflow-fusion` — merges `show -> input -> decrement -> if (counter < 0) ...` into one compact sequence, keeping input in `Y` across the decrement-underflow check.
@@ -232,7 +234,12 @@ These transformations run on source constructs before machine lowering:
 - `loop-carried-prompt-x` — for loops shaped as `show(screen); key = read()` where every non-terminal branch assigns the next `screen`, removes the register-backed prompt state and leaves the next visible value in `X` for the loop-back stop. If the prompt starts from `stack.X` / `stack.Y`, an allocated sibling field initialized from the same stack slot can seed the first prompt.
 - `loop-carried-prompt-input-branch` — after a loop-carried prompt stop, branches directly on the read key with no extra store when the branch condition consumes only that input.
 - `loop-carried-prompt-input-dispatch` — after a loop-carried prompt stop, dispatches directly on the read key with no intermediate variable, while preserving the prompt flow across loop back-edge.
-- `loop-carried-prompt-decrement-underflow` — after a loop-carried prompt stop, handles `resource--; if resource < 0 ...` patterns by checking underflow in-line. It keeps the input value in `Y`, emits `F x<0` branch flow, and restores `X/Y` state only where required for the next prompt consumer.
+- `loop-carried-prompt-decrement-underflow` — after a loop-carried prompt stop, handles scalar or constant-indexed `resource--; if resource < 0 ...` patterns by checking underflow in-line. It keeps the input value in `Y`, emits `F x<0` branch flow, and restores `X/Y` state only where required for the next prompt consumer.
+- `modulo-false-branch-exclusion` — when the false path of `frac(x / n) == 0`
+  reaches a numeric residual dispatch, records the finite excluded values
+  `0`, `n`, and `-n`. Integer-domain dispatch defaults such as
+  `sign(n - x)` can then skip the adjacent residual `+/- 1` adjustment when
+  the excluded boundary is exactly the missing value.
 - `show-read-guarded-transfer` — rewrites `show; x=input; decrementTarget -= x; if decrementTarget < 0 { halt } ; incrementTarget += x; if incrementTarget < 0 { halt }` into one stack-based sequence that keeps the read value on the stack across both guarded updates.
 - `comparison-guarded-update-selector` — speculative whole-program candidate
   that forces `abs`/`sign` comparison masks for guarded `+=`/`-=` updates, then
@@ -2355,6 +2362,7 @@ Setup generation is separate from main program layout when needed:
 - `generated-setup-program` indicates that a setup routine was emitted.
 - `preloaded-constant` and `constant-synthesis` entries describe synthetic constants.
 - `duplicate-preload-store-reuse` — setup preload planning computed one numeric literal once and emitted `X->П` into multiple registers when values were identical in the same preload action.
+- `duplicate-preload-register-elision` — when two setup preload entries resolve to the same executable numeric value and the same physical register (for example a literal and an address-form alias), the preload planner still counts both entries as covered but emits only one `X->П r` store.
 - `intent-state-lowering` — moves declared state initialization into generated setup by emitting setup `store` operations and records that state-related initialization was lowered out of the main path.
 - `auto-preload-initial-state` and `intent-state-lowering` can push selected state to setup only.
 - `raw-block-contract` — records and applies the input/output/clobber/preserve contract for raw `core` blocks in helper emission.

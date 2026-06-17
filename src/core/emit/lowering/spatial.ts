@@ -320,6 +320,7 @@ export function emitBitSetCollectionWithScratch(ctx: LoweringCtx,
     compileExpression(ctx, collection);
     ctx.emitRecall(scratch, "reuse cell bit mask", set.line);
     ctx.emitOp(0x38, "К ∨", "bit_set with reused mask", set.line);
+    if (ctx.emitLoopCarriedPromptValue(set.target, set.line)) return;
     ctx.emitStore(set.target, `set ${set.target}`, set.line);
 }
 

@@ -8,10 +8,10 @@ Generated with `npm run examples:size`.
 
 ## Snapshot
 
-- Top-level examples: 29/29 fit in the 105-cell MK-61 window; 29/29 pass the headless load check.
-- Referenced top-level examples: 22/22 are no larger than the original MK-61 listing.
-- Tightest runnable examples: `cave-treasure.mkpro` (105), `giants-country.mkpro` (105), `labyrinth777.mkpro` (105).
-- Pending optimizer: 2 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (133).
+- Top-level examples: 30/30 fit in the 105-cell MK-61 window; 30/30 pass the headless load check.
+- Referenced top-level examples: 23/23 are no larger than the original MK-61 listing.
+- Tightest runnable examples: `cave-highlevel-baseline.mkpro` (105), `giants-country.mkpro` (105), `labyrinth777.mkpro` (105).
+- Pending optimizer: 1 programs still exceed the MK-61 window; nearest is `pending-optimizer/tic-tac-toe-4x4.mkpro` (317).
 
 ## Measurements
 
@@ -22,8 +22,9 @@ Generated with `npm run examples:size`.
 | `99-bottles.mkpro` | 52 | 53 | -1 | ok: <= reference | main+setup load ok |
 | `alaram.mkpro` | 75 | 105 | -30 | ok: <= reference | main+setup load ok |
 | `basic.mkpro` | 8 | - | - | ok: no reference | load ok |
+| `cave-highlevel-baseline.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
 | `cave-sketch.mkpro` | 47 | 105 | -58 | ok: <= reference | main+setup load ok |
-| `cave-treasure.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
+| `cave-treasure.mkpro` | 104 | 105 | -1 | ok: <= reference | main+setup load ok |
 | `clock.mkpro` | 43 | 63 | -20 | ok: <= reference | main+setup load ok |
 | `dangerous-loading.mkpro` | 84 | 103 | -19 | ok: <= reference | load ok |
 | `dungeon.mkpro` | 82 | 105 | -23 | ok: <= reference | load ok |
@@ -48,5 +49,4 @@ Generated with `npm run examples:size`.
 | `tiny-game.mkpro` | 23 | - | - | ok: no reference | load ok |
 | `treasure-hunter-2.mkpro` | 100 | 105 | -5 | ok: <= reference | main+setup load ok |
 | `wumpus.mkpro` | 101 | - | - | ok: no reference | main+setup load ok |
-| `pending-optimizer/cave-highlevel-baseline.mkpro` | 133 | 105 | +28 | pending optimizer | not loaded: main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 317 | 105 | +212 | pending optimizer | not loaded: main >105 |

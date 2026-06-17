@@ -13,8 +13,9 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
   "99-bottles": 52,
   alaram: 75,
   basic: 8,
+  "cave-highlevel-baseline": 105,
   "cave-sketch": 47,
-  "cave-treasure": 105,
+  "cave-treasure": 104,
   clock: 40,
   "dangerous-loading": 86,
   dungeon: 84,
@@ -48,6 +49,5 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
 // baselines just like top-level examples. Growth is reserved for semantic or
 // machine-safety fixes.
 export const PENDING_BASELINE: Record<string, number> = {
-  "cave-highlevel-baseline": 133,
   "tic-tac-toe-4x4": 317,
 };

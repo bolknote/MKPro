@@ -95,6 +95,13 @@ export function compileExpression(ctx: LoweringCtx, expr: ExpressionAst): void {
         return;
       }
       case "indexed":
+        if (ctx.xHoldsExpression(expr)) {
+          ctx.optimizations.push({
+            name: "current-x-indexed-reuse",
+            detail: `Reused ${expressionToIntentText(expr)} already in X.`,
+          });
+          return;
+        }
         ctx.emitIndexedRecall(expr);
         return;
       case "unary":

@@ -1760,6 +1760,25 @@ program IndexedStoreGuard {
     expect(result.report.optimizations.some((item) => item.name === "indexed-assign-zero-domain-guard")).toBe(true);
   });
 
+  it("reuses a dynamic indexed store value for the immediately following read", () => {
+    const result = compileOk(`
+program IndexedStoreReadReuse {
+  state {
+    cells: packed[1..2] = [5, 0]
+    index: counter 1..2 = 1
+    prompt: packed = 0
+  }
+
+  cells[index] = cells[index] + 1
+  prompt = cells[index]
+  halt(prompt)
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "current-x-indexed-reuse")).toBe(true);
+    expect(result.steps.filter((step) => step.comment?.startsWith("indexed recall cells"))).toHaveLength(1);
+  });
+
   // After unifying the indexed guard onto the shared planDomainErrorGuard table,
   // an indexed `== 0` guard fuses through the equality trap `F 1/x` (0x23) — a
   // capability the old bespoke indexed table (only `<`/`<=`) could not express.
@@ -2202,6 +2221,71 @@ program LoopPromptGuardDispatch {
     expect(result.report.optimizations.some((item) => item.name === "loop-carried-prompt-decrement-underflow")).toBe(true);
     expect(result.report.registers.screen).toBeUndefined();
     expect(result.steps.some((step) => step.comment === "read key")).toBe(false);
+  });
+
+  it("keeps loop prompt input across an indexed decrement guard before dispatch", () => {
+    const result = compileOk(`
+program LoopPromptIndexedGuardDispatch {
+  state {
+    screen: packed = 0
+    key: counter 0..9 = 0
+    resources: packed[1..2] = [3, 0]
+    pos: packed = 1
+  }
+
+  loop {
+    show(screen)
+    key = read()
+    resources[1] -= 1
+    if resources[1] < 0 {
+      loop {
+      }
+    }
+    match key {
+      1 => move()
+      otherwise => halt(0)
+    }
+  }
+
+  fn move() {
+    pos += 1
+    screen = pos
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "loop-carried-prompt-decrement-underflow")).toBe(true);
+    expect(result.report.registers.screen).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "read key")).toBe(false);
+  });
+
+  it("uses modulo false-branch exclusions for residual dispatch sign domains", () => {
+    const result = compileOk(`
+program ResidualModuloDispatch {
+  state {
+    key: counter -10..10 = 0
+  }
+
+  fn move(dir) {
+    halt(dir)
+  }
+
+  key = read()
+  if frac(key / 5) == 0 {
+    halt(sign(key))
+  }
+  else {
+    match key {
+      4 => halt(4)
+      6 => halt(6)
+      otherwise => move(sign(5 - key))
+    }
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "dispatch-default-residual-sign-domain")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "dispatch default residual adjust")).toBe(false);
   });
 
   it("shares repeated packed display bodies through a normal helper", () => {
@@ -3861,8 +3945,8 @@ program AffineIndexedGroupState {
     expect(result.report.optimizations.some((item) => item.name === "affine-indexed-selector-reuse")).toBe(true);
     expect(result.report.registers.__bank_selector_line_robots).toBeUndefined();
     expect(result.steps.some((step) => step.comment === "indexed selector line.robots")).toBe(false);
-    expect(result.steps.some((step) => step.mnemonic === `К П->X ${physical}` && step.comment === "indexed recall line.robots")).toBe(true);
-    expect(result.steps.some((step) => step.mnemonic === `К X->П ${physical}` && step.comment === "indexed set line.robots")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === `К П->X ${physical}` && step.comment?.startsWith("indexed recall line.robots"))).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === `К X->П ${physical}` && step.comment?.startsWith("indexed set line.robots"))).toBe(true);
   });
 
   it("uses two-digit indirect-memory aliases as indexed bank selectors", () => {
@@ -3890,8 +3974,8 @@ program IndirectMemoryAliasIndexedState {
     expect(result.report.machineFeaturesUsed.some((item) => item.id === "indirect-memory")).toBe(true);
     expect(result.report.registers.__bank_selector_slots).toBeUndefined();
     expect(result.steps.some((step) => step.comment === "indexed selector slots")).toBe(false);
-    expect(result.steps.some((step) => step.mnemonic === `К П->X ${physical}` && step.comment === "indexed recall slots")).toBe(true);
-    expect(result.steps.some((step) => step.mnemonic === `К X->П ${physical}` && step.comment === "indexed set slots")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === `К П->X ${physical}` && step.comment?.startsWith("indexed recall slots"))).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === `К X->П ${physical}` && step.comment?.startsWith("indexed set slots"))).toBe(true);
     expect(runCompiledDisplay(result)).toBe("2,");
   });
 
@@ -3918,8 +4002,8 @@ program NegativeIndirectMemoryAliasIndexedState {
     expect(result.report.proofs.find((item) => item.id === "indirect-memory-alias-selector")?.detail).toMatch(/negative transformed selector values/u);
     expect(result.report.registers.__bank_selector_slots).toBeUndefined();
     expect(result.steps.some((step) => step.comment === "indexed selector slots")).toBe(false);
-    expect(result.steps.some((step) => step.mnemonic === `К П->X ${pos}` && step.comment === "indexed recall slots")).toBe(true);
-    expect(result.steps.some((step) => step.mnemonic === `К X->П ${pos}` && step.comment === "indexed set slots")).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === `К П->X ${pos}` && step.comment?.startsWith("indexed recall slots"))).toBe(true);
+    expect(result.steps.some((step) => step.mnemonic === `К X->П ${pos}` && step.comment?.startsWith("indexed set slots"))).toBe(true);
     expect(runCompiledDisplay(result)).toBe("2,");
   });
 
@@ -3943,8 +4027,8 @@ program IndexedGroupState {
 }
 `, { budget: 999, analysis: true });
 
-    expect(result.steps.some((step) => step.comment === "indexed set line.robots")).toBe(true);
-    expect(result.steps.some((step) => step.comment === "indexed set line.front")).toBe(true);
+    expect(result.steps.some((step) => step.comment?.startsWith("indexed set line.robots"))).toBe(true);
+    expect(result.steps.some((step) => step.comment?.startsWith("indexed set line.front"))).toBe(true);
     expect(result.steps.some((step) => step.mnemonic?.startsWith("К X->П"))).toBe(true);
     expect(result.steps.some((step) => step.mnemonic?.startsWith("К П->X"))).toBe(true);
   });

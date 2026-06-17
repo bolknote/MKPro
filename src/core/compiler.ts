@@ -6649,6 +6649,7 @@ export class EmitContext {
   // currentYVariable so the scheduler can keep the parked value in Y instead of
   // recalling it from a register, and reject expressions that re-reference it.
   private parkedYVariable: string | undefined;
+  private currentXExpression: ExpressionAst | undefined;
   readonly bankSelectorCache = new Map<string, BankSelectorCacheEntry>();
   private pendingIndexedSelectorIntegerPart: string | undefined;
   // Read-only program analysis is computed once and injected; the lowering code
@@ -6749,6 +6750,7 @@ export class EmitContext {
   }
   set currentXVariable(value: string | undefined) {
     this.emitter.currentXVariable = value;
+    this.currentXExpression = undefined;
   }
   get currentYVariable(): string | undefined {
     return this.parkedYVariable;
@@ -7360,7 +7362,7 @@ export class EmitContext {
     const branch = body[1];
     const consumer = body[2];
     if (
-      decrement?.kind === "assign" &&
+      (decrement?.kind === "assign" || decrement?.kind === "indexed_assign") &&
       branch?.kind === "if" &&
       (consumer?.kind === "dispatch" || consumer?.kind === "if") &&
       this.compileLoopPromptReadDecrementUnderflow(prompt, decrement, branch, consumer)
@@ -7374,7 +7376,7 @@ export class EmitContext {
 
   compileLoopPromptReadDecrementUnderflow(
     prompt: LoopCarriedPrompt,
-    decrement: Extract<StatementAst, { kind: "assign" }>,
+    decrement: Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
     branch: Extract<StatementAst, { kind: "if" }>,
     consumer: Extract<StatementAst, { kind: "dispatch" | "if" }>,
   ): boolean {
@@ -7382,21 +7384,22 @@ export class EmitContext {
     if (!this.inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer)) return false;
 
     const okLabel = this.freshLabel("decrement_ok");
-    this.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+    const targetText = this.assignableTargetText(decrement.target);
+    this.emitAssignableRecall(decrement.target, `decrement/test ${targetText}`, decrement.line);
     this.emitNumberOrPreload("1");
-    this.emitOp(0x11, "-", `decrement/test ${decrement.target}`, decrement.line);
-    this.emitJump(0x5c, "F x<0", okLabel, `decrement underflow ${decrement.target}`, branch.line);
+    this.emitOp(0x11, "-", `decrement/test ${targetText}`, decrement.line);
+    this.emitJump(0x5c, "F x<0", okLabel, `decrement underflow ${targetText}`, branch.line);
     this.compileStatements(branch.thenBody);
     this.emitLabel(okLabel);
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
     this.currentXKnownZero = false;
-    this.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
+    this.emitAssignableStore(decrement.target, decrement.line);
     this.emitOp(0x14, "X↔Y", `restore read ${prompt.input}`, prompt.inputLine);
     this.markCurrentX(prompt.input);
     this.optimizations.push({
       name: "loop-carried-prompt-decrement-underflow",
-      detail: `Kept loop prompt input ${prompt.input} in Y while checking ${decrement.target} at lines ${prompt.inputLine}/${branch.line}.`,
+      detail: `Kept loop prompt input ${prompt.input} in Y while checking ${targetText} at lines ${prompt.inputLine}/${branch.line}.`,
     });
     return true;
   }
@@ -7409,12 +7412,18 @@ export class EmitContext {
     } else if (this.currentXVariable !== statement.target || !expressionEquals(statement.expr, { kind: "identifier", name: statement.target })) {
       compileExpression(this, statement.expr);
     }
-    this.currentXVariable = statement.target;
-    this.currentXAliases = new Set([statement.target]);
-    this.scaledCoordVariables.delete(statement.target);
+    this.emitLoopCarriedPromptValue(statement.target, statement.line);
+    return true;
+  }
+
+  emitLoopCarriedPromptValue(target: string, line?: number): boolean {
+    if (!this.loopPromptInitials.has(target)) return false;
+    this.currentXVariable = target;
+    this.currentXAliases = new Set([target]);
+    this.scaledCoordVariables.delete(target);
     this.optimizations.push({
       name: "loop-carried-prompt-x",
-      detail: `Left prompt ${statement.target} in X at line ${statement.line} instead of storing it.`,
+      detail: `Left prompt ${target} in X at line ${line ?? "?"} instead of storing it.`,
     });
     return true;
   }
@@ -7750,7 +7759,10 @@ export class EmitContext {
 
     if (consumer.kind === "assign") {
       if (!this.stackTempValueDeadAfterConsumer(temp.target, consumer.target, statements.slice(index + 2), 1)) return 0;
-      return compileConsumer(consumer.expr, () => this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line))
+      return compileConsumer(consumer.expr, () => {
+        if (this.emitLoopCarriedPromptValue(consumer.target, consumer.line)) return;
+        this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
+      })
         ? 2
         : 0;
     }
@@ -7826,6 +7838,9 @@ export class EmitContext {
   ): boolean {
     if (overwrittenByConsumer === temp) return true;
     if (statementsReadIdentifierBeforeWrite(tail, temp)) return false;
+    if (!temp.startsWith(INTERNAL_NAME_PREFIX) && (this.readCounts.get(temp) ?? 0) !== consumerReads) {
+      return false;
+    }
     if (this.stackTempValueHasVisibleProgramRead(temp) && (this.readCounts.get(temp) ?? 0) !== consumerReads) {
       return false;
     }
@@ -8215,15 +8230,15 @@ export class EmitContext {
 
   inputFeedsGuardedDecrementConsumer(
     input: Extract<StatementAst, { kind: "input" }>,
-    decrement: Extract<StatementAst, { kind: "assign" }>,
+    decrement: Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
     branch: Extract<StatementAst, { kind: "if" }>,
     consumer: Extract<StatementAst, { kind: "dispatch" | "if" }>,
   ): boolean {
-    if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
+    if (!this.isUnitAssignableDecrement(decrement)) return false;
     if (branch.elseBody !== undefined) return false;
-    if (!decrementUnderflowCondition(branch.condition, decrement.target)) return false;
+    if (!this.conditionIsNegativeTargetGuard(branch.condition, decrement.target)) return false;
     if (!this.statementsTerminate(branch.thenBody)) return false;
-    if (this.allocation.registers[decrement.target] === undefined) return false;
+    if (!this.assignableTargetHasStorage(decrement.target)) return false;
     return consumer.kind === "dispatch"
       ? this.inputFeedsOnlyFollowingDispatch(input, consumer)
       : this.inputFeedsOnlyFollowingCondition(input, consumer);
@@ -8312,6 +8327,28 @@ export class EmitContext {
     if (expr.kind !== "binary" || expr.op !== op) return false;
     if (!expressionEquals(expr.left, this.assignableTargetExpression(statement.target))) return false;
     return expr.right.kind === "identifier" && expr.right.name === temp;
+  }
+
+  private isUnitAssignableDecrement(
+    statement: Extract<StatementAst, { kind: "assign" | "indexed_assign" }>,
+  ): boolean {
+    const expr = statement.expr;
+    return expr.kind === "binary" &&
+      expr.op === "-" &&
+      expressionEquals(expr.left, this.assignableTargetExpression(statement.target)) &&
+      expr.right.kind === "number" &&
+      Number(expr.right.raw) === 1;
+  }
+
+  private assignableTargetHasStorage(target: string | Extract<ExpressionAst, { kind: "indexed" }>): boolean {
+    if (typeof target === "string") return this.allocation.registers[target] !== undefined;
+    const constantIndex = numericIndexValue(target.index);
+    if (constantIndex !== undefined) {
+      const resolved = findStateBankMember(this.ast, target);
+      const element = resolved === undefined ? undefined : stateBankElementForIndex(resolved.member, constantIndex);
+      return element !== undefined && this.allocation.registers[element.name] !== undefined;
+    }
+    return findStateBankMember(this.ast, target) !== undefined;
   }
 
   private compileRepeatedXParamSelfAssignment(
@@ -10100,6 +10137,7 @@ export class EmitContext {
   }
 
   emitNumber(raw: string): void {
+    this.currentXExpression = undefined;
     this.emitter.emitNumber(raw);
   }
 
@@ -10377,6 +10415,7 @@ export class EmitContext {
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
     this.currentXKnownZero = false;
+    this.currentXExpression = expr;
   }
 
   emitIndexedStore(expr: Extract<ExpressionAst, { kind: "indexed" }>, sourceLine?: number): void {
@@ -10406,6 +10445,7 @@ export class EmitContext {
     );
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
+    this.currentXExpression = expr;
   }
 
   prepareIndexedSelector(
@@ -10434,6 +10474,7 @@ export class EmitContext {
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
     this.currentXKnownZero = false;
+    this.currentXExpression = expr;
   }
 
   emitPreparedIndexedStore(
@@ -10451,6 +10492,7 @@ export class EmitContext {
     );
     this.currentXVariable = undefined;
     this.currentXAliases.clear();
+    this.currentXExpression = expr;
   }
 
   private ensureIndexedSelector(
@@ -10745,6 +10787,10 @@ export class EmitContext {
     return this.loweringOptions.aliasXReuse === true && this.currentXAliases.has(name);
   }
 
+  xHoldsExpression(expr: ExpressionAst): boolean {
+    return this.currentXExpression !== undefined && expressionEquals(this.currentXExpression, expr);
+  }
+
   emitJump(
     opcode: number,
     mnemonic: string,
@@ -10752,6 +10798,7 @@ export class EmitContext {
     comment?: string,
     sourceLine?: number,
   ): void {
+    this.currentXExpression = undefined;
     this.emitter.emitJump(opcode, mnemonic, target, comment, sourceLine);
     if (opcode === 0x53) this.bankSelectorCache.clear();
   }
@@ -10769,6 +10816,7 @@ export class EmitContext {
     comment?: string,
     sourceLine?: number,
   ): void {
+    this.currentXExpression = undefined;
     this.emitter.emitFormalAddress(opcode, comment, sourceLine);
   }
 
@@ -10779,20 +10827,24 @@ export class EmitContext {
     sourceLine?: number,
     raw = false,
   ): void {
+    this.currentXExpression = undefined;
     this.emitter.emitOp(opcode, mnemonic, comment, sourceLine, raw);
   }
 
   emitLabel(name: string): void {
+    this.currentXExpression = undefined;
     this.emitter.emitLabel(name);
     this.bankSelectorCache.clear();
   }
 
   emitProcedureLabel(name: string): void {
+    this.currentXExpression = undefined;
     this.emitter.emitLabel(name, { procedureBoundary: "start", procedureName: name });
     this.bankSelectorCache.clear();
   }
 
   emitProcedureEndLabel(name: string): void {
+    this.currentXExpression = undefined;
     this.emitter.emitLabel(`\0proc_end_${name}`, {
       procedureBoundary: "end",
       procedureName: name,

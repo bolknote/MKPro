@@ -592,7 +592,11 @@ function falseBranchExcludedNumericValues(
     if (condition.op !== "==") return undefined;
     const direct = identifierEqualsNumericCondition(condition.left, condition.right);
     if (direct !== undefined) return direct;
-    return identifierEqualsNumericCondition(condition.right, condition.left);
+    const reverse = identifierEqualsNumericCondition(condition.right, condition.left);
+    if (reverse !== undefined) return reverse;
+    const modulo = fracDivisionEqualsZeroCondition(condition.left, condition.right);
+    if (modulo !== undefined) return modulo;
+    return fracDivisionEqualsZeroCondition(condition.right, condition.left);
 }
 
 function identifierEqualsNumericCondition(
@@ -614,6 +618,23 @@ function identifierEqualsNumericCondition(
         : { name: arg.name, values: [value, -value] };
     }
     return undefined;
+}
+
+function fracDivisionEqualsZeroCondition(
+    exprSide: ExpressionAst,
+    zeroSide: ExpressionAst,
+  ): { name: string; values: readonly number[] } | undefined {
+    if (!isZeroExpression(zeroSide)) return undefined;
+    if (exprSide.kind !== "call" || exprSide.callee.toLowerCase() !== "frac" || exprSide.args.length !== 1) {
+      return undefined;
+    }
+    const divided = exprSide.args[0]!;
+    if (divided.kind !== "binary" || divided.op !== "/") return undefined;
+    if (divided.left.kind !== "identifier") return undefined;
+    const divisor = numericLiteralValue(divided.right);
+    if (divisor === undefined || !Number.isInteger(divisor) || divisor === 0) return undefined;
+    const abs = Math.abs(divisor);
+    return { name: divided.left.name, values: [0, abs, -abs] };
 }
 
 function displayIsSingleResidualExpression(
@@ -915,6 +936,7 @@ export function compileMembershipClearReuse(ctx: LoweringCtx,
     if (membership === undefined) return false;
     if (!isBitClearAssignment(clear, membership)) return false;
     if (clear.kind === "indexed_assign" && membership.mode !== "mask") return false;
+    if (compileMembershipClearStoreDeltaBranch(ctx, statement, clear, tail, membership, line)) return true;
     const preparedSelector = prepareMembershipClearSelector(ctx, clear, membership, line);
     if (clear.kind === "indexed_assign" && numericIndexValue(clear.target.index) === undefined && preparedSelector === undefined) {
       return false;
@@ -947,6 +969,72 @@ export function compileMembershipClearReuse(ctx: LoweringCtx,
       detail: `Reused the successful membership mask when clearing ${membershipSetTargetText(clear)} at line ${clear.line}.`,
     });
     return true;
+}
+
+function compileMembershipClearStoreDeltaBranch(
+    ctx: LoweringCtx,
+    statement: Extract<StatementAst, { kind: "if" }>,
+    clear: MembershipSetStatement,
+    tail: StatementAst[],
+    membership: BitMembershipCondition,
+    line: number,
+  ): boolean {
+    if (membership.mode !== "mask" || clear.kind !== "assign") return false;
+    if (membership.collection.kind !== "identifier" || clear.target !== membership.collection.name) return false;
+    if (!membershipMaskPreservesY(membership.mask)) return false;
+    const falseLabel = ctx.freshLabel("if_false");
+    const endLabel = ctx.freshLabel("if_end");
+
+    ctx.emitRecall(membership.collection.name, `membership clear source ${membership.collection.name}`, line);
+    emitYPreservingMembershipMask(ctx, membership.mask, line);
+    ctx.emitOp(0x3a, "К ИНВ", "membership clear mask complement", line);
+    ctx.emitOp(0x37, "К ∧", "clear membership bit before test", line);
+    ctx.emitStore(clear.target, `set ${clear.target}`, clear.line);
+    ctx.emitOp(0x11, "-", "membership clear delta test", line);
+    ctx.emitJump(0x57, "F x≠0", falseLabel, "false branch for !=", line);
+    ctx.compileStatements(tail);
+    if (statement.elseBody) {
+      ctx.emitJump(0x51, "БП", endLabel, "if end", line);
+      ctx.emitLabel(falseLabel);
+      ctx.currentXKnownZero = true;
+      ctx.compileStatements(statement.elseBody);
+      ctx.emitLabel(endLabel);
+    } else {
+      ctx.emitLabel(falseLabel);
+    }
+    ctx.optimizations.push({
+      name: "membership-clear-delta-branch",
+      detail: `Cleared ${clear.target} before branching and used the old value in Y to test membership at line ${line}.`,
+    });
+    return true;
+}
+
+function membershipMaskPreservesY(mask: ExpressionAst): boolean {
+    return mask.kind === "identifier" ||
+      mask.kind === "call" &&
+        mask.callee.toLowerCase() === "frac" &&
+        mask.args.length === 1 &&
+        mask.args[0]?.kind === "identifier";
+}
+
+function emitYPreservingMembershipMask(
+    ctx: LoweringCtx,
+    mask: ExpressionAst,
+    line: number,
+  ): void {
+    if (mask.kind === "identifier") {
+      ctx.emitRecall(mask.name, `membership clear mask ${mask.name}`, line);
+      return;
+    }
+    if (
+      mask.kind === "call" &&
+      mask.callee.toLowerCase() === "frac" &&
+      mask.args.length === 1 &&
+      mask.args[0]?.kind === "identifier"
+    ) {
+      ctx.emitRecall(mask.args[0].name, `membership clear mask ${mask.args[0].name}`, line);
+      ctx.emitOp(0x35, "К {x}", "membership clear mask frac", line);
+    }
 }
 
 function prepareMembershipClearSelector(
@@ -1291,6 +1379,7 @@ function emitMembershipSetStore(
     preparedSelector?: PreparedIndexedSelector,
   ): void {
     if (set.kind === "assign") {
+      if (ctx.emitLoopCarriedPromptValue(set.target, set.line)) return;
       ctx.emitStore(set.target, `set ${set.target}`, set.line);
       return;
     }

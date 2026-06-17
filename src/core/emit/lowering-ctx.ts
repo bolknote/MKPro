@@ -19,6 +19,7 @@ export type LoweringCtx = Pick<
   | "collapseTextPrefixDisplay"
   | "compileStatement"
   | "compileStatements"
+  | "emitLoopCarriedPromptValue"
   | "compileWithinProcedure"
   | "armValueInY"
   | "clearArmedValueInY"
@@ -137,6 +138,7 @@ export type LoweringCtx = Pick<
   | "variableLeadingMantissaMaskDisplayTemplate"
   | "restoreBankSelectorCacheAfterCall"
   | "xHolds"
+  | "xHoldsExpression"
   | "xParamProcs"
   | "zeroAddressLabels"
 >;
