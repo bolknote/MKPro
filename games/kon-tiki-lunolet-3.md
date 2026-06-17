@@ -1,13 +1,15 @@
-# Лунолёт 3
+# Kon-Tiki: Lunolet-3
 
-- Source: [Semico MK games](http://mk.semico.ru/mkpr_r9.htm)
-- Program: [lunolyot-3.txt](lunolyot-3.txt)
+- Source: [Web Archive — Техника - молодежи, 1985 №9, «Путь к Земле»](https://web.archive.org/web/20110926113753id_/http://epizodsspace.no-ip.org/bibl/tm/1985/9/put.html)
+- Program: [kon-tiki-lunolet-3.txt](kon-tiki-lunolet-3.txt)
+- Series: Kon-Tiki / Путь к Земле
+- Additional source: [Semico MK games](http://mk.semico.ru/mkpr_r9.htm)
 - Original files: [`lun3.mkp`](http://mk.semico.ru/prog/mk/lunolet/lun3.mkp), [`lun3.mkd`](http://mk.semico.ru/prog/mk/lunolet/lun3.mkd)
 
 ## Description
 
-Третья игра серии «Лунолёт», опубликованная в «Технике - молодёжи» за
-1985-09. Листинг восстановлен из Semico `lun3.mkp`; завершающие байты `FF`
+Третья игра серии Kon-Tiki / «Путь к Земле», опубликованная в «Технике - молодежи» за
+1985-09. Листинг совпадает с Semico `lun3.mkp`; завершающие байты `FF`
 сняты как заполнитель файла МК-152/161. Начальные регистры декодированы из
 `lun3.mkd`.
 

@@ -136,9 +136,9 @@ lovkach-video.txt	lovkach-video.md	lovkach-video	Сергей Чурсанов	�
 lunolet-1.txt	lunolet-1.md	Lunolet-1	illi4		https://habr.com/ru/articles/125484/
 lunolet-3.txt	lunolet-3.md	Lunolet-3	illi4		https://habr.com/ru/articles/125484/
 lunolet-d.txt	lunolet-d.md	Lunolet-D	illi4		https://habr.com/ru/articles/125484/
-lunolyot-1-semico.txt	lunolyot-1-semico.md	lunolyot 1			http://mk.semico.ru/prog/mk/lunolet/lun1.mkp
+kon-tiki-lunolet-1.txt	kon-tiki-lunolet-1.md	Kon-Tiki: Lunolet-1	Михаил Пухов		https://web.archive.org/web/20110924184548id_/http://epizodsspace.no-ip.org/bibl/tm/1985/6/istinn-prav.html
 lunolyot-2.txt	lunolyot-2.md	lunolyot 2			http://mk.semico.ru/prog/mk/lunolet/lun2.mkp
-lunolyot-3.txt	lunolyot-3.md	lunolyot 3			http://mk.semico.ru/prog/mk/lunolet/lun3.mkp
+kon-tiki-lunolet-3.txt	kon-tiki-lunolet-3.md	Kon-Tiki: Lunolet-3	Михаил Пухов		https://web.archive.org/web/20110926113753id_/http://epizodsspace.no-ip.org/bibl/tm/1985/9/put.html
 lunolyot-1.txt	lunolyot-1.md	lunolyot-1			https://sergeanvarov.github.io/russian/mk61/games/%D0%BB%D1%83%D0%BD%D0%BE%D0%BB%D1%91%D1%82-1/%D0%BB%D1%83%D0%BD%D0%BE%D0%BB%D1%91%D1%82-1.html
 lunolyot-d.txt	lunolyot-d.md	lunolyot-d	Dariy Akselrod		Tekhnika Molodezhi No. 6, 1987 (KEI), mirrored at https://monatkodenis.blogspot.com/2014/01/blog-post.html
 m-skiy-treugolnik.txt	m-skiy-treugolnik.md	m-skiy treugolnik	Владимир Трофимчук	Евгений Кузниченко	https://lordbss.narod.ru/pmk68.html
@@ -204,7 +204,7 @@ perekhvatchik.txt	perekhvatchik.md	perekhvatchik	Сергей Чурсанов	�
 pervoprokhodets.txt	pervoprokhodets.md	pervoprokhodets	Игорь Вершинин	Евгений Кузниченко	https://lordbss.narod.ru/pmk166.html
 peshchera-syurprizov.txt	peshchera-syurprizov.md	peshchera syurprizov	Игорь Вершинин	Евгений Кузниченко	https://lordbss.narod.ru/pmk196.html
 pi-cho.txt	pi-cho.md	pi-cho	А. В. Раков		Техника-молодежи, 1988-07
-planet-constructor-pk-1.txt	planet-constructor-pk-1.md	Planet Constructor	Mikhail Pukhov		https://epizodsspace.airbase.ru/bibl/tehnika_-_molodyoji/1985/7/put.html
+kon-tiki-pk-1.txt	kon-tiki-pk-1.md	Kon-Tiki: PK-1	Михаил Пухов		https://web.archive.org/web/20110924184553id_/http://epizodsspace.no-ip.org/bibl/tm/1985/7/put.html
 planet-z.txt	planet-z.md	Planet Z	Сергей Устюгов	Евгений Кузниченко	https://lordbss.narod.ru/pmk103.html
 playboy.txt	playboy.md	Playboy	Евгений Кузниченко	Евгений Кузниченко	https://lordbss.narod.ru/pmk177.html
 pobeg-iz-sistemy-x.txt	pobeg-iz-sistemy-x.md	pobeg iz sistemy X	А. Лотохов		https://lordbss.narod.ru/pmk115.html
@@ -389,7 +389,7 @@ fourteen-pawns.txt	fourteen-pawns.md	Fourteen Pawns	st		https://pmk.arbinada.com
 saturn5-first-stage.txt	saturn5-first-stage.md	Saturn V First Stage (MK61)	darth.righter		https://pmk.arbinada.com/category/01619.html
 vostok-1-carrier.txt	vostok-1-carrier.md	Vostok-1 Carrier Vehicle	darth.righter		https://pmk.arbinada.com/category/01621.html
 vostok-1-atmosphere.txt	vostok-1-atmosphere.md	Vostok-1 Atmosphere Program	darth.righter		https://pmk.arbinada.com/category/01621.html
-apollo11-launch-kei.txt	apollo11-launch-kei.md	Apollo 11 Launch from Earth (Atmosfera-1 KEI)	darth.righter		https://pmk.arbinada.com/category/01617.html
+kon-tiki-atmosphere-1.txt	kon-tiki-atmosphere-1.md	Kon-Tiki: Atmosphere-1	Михаил Пухов		https://web.archive.org/web/20150804231516id_/http://epizodsspace.no-ip.org/bibl/tm/1986/3/put.html
 vybory.txt	vybory.md	Выборы	Виктор Распопов		http://arbinada.ddns.net/pmk-files/magazines/%D0%9F%D0%B8%D0%BE%D0%BD%D0%B5%D1%80%D0%B8%D1%8F%201990-91%20%D0%9F%D0%9C%D0%9A.zip
 bastion.txt	bastion.md	Бастион	Владимир Сивицкий		http://arbinada.ddns.net/pmk-files/magazines/%D0%9F%D0%B8%D0%BE%D0%BD%D0%B5%D1%80%D0%B8%D1%8F%201990-91%20%D0%9F%D0%9C%D0%9A.zip
 opasnyy-reys.txt	opasnyy-reys.md	Опасный рейс	автор неизвестен		http://arbinada.ddns.net/pmk-files/magazines/%D0%9D%D0%B0%D1%83%D0%BA%D0%B0%20%D0%B8%20%D0%B6%D0%B8%D0%B7%D0%BD%D1%8C%20%D0%9F%D0%9C%D0%9A.zip
@@ -441,3 +441,22 @@ shakhmaty-korol-kon-slon.txt	shakhmaty-korol-kon-slon.md	Король, конь 
 shakhmaty-ferz-protiv-korolya-1.txt	shakhmaty-ferz-protiv-korolya-1.md	Белый ферзь и король против черного короля - 1			https://xvadim.github.io/xbasoft/pmk/queen_human.zip
 shakhmaty-ferz-protiv-korolya-2.txt	shakhmaty-ferz-protiv-korolya-2.md	Белый ферзь и король против черного короля - 2			https://xvadim.github.io/xbasoft/pmk/queen_pmc.zip
 shakhmaty-ladya-protiv-korolya.txt	shakhmaty-ladya-protiv-korolya.md	Белая ладья и король против черного короля			https://xvadim.github.io/xbasoft/pmk/rook.zip
+kon-tiki-lunolet-2-original.txt	kon-tiki-lunolet-2-original.md	Kon-Tiki: Lunolet-2 (TM original)	Михаил Пухов		https://web.archive.org/web/20110926100633id_/http://epizodsspace.no-ip.org/bibl/tm/1985/8/put.html
+kon-tiki-mascon.txt	kon-tiki-mascon.md	Kon-Tiki: Mascon	Михаил Пухов		https://web.archive.org/web/20110926113753id_/http://epizodsspace.no-ip.org/bibl/tm/1985/9/put.html
+kon-tiki-peak.txt	kon-tiki-peak.md	Kon-Tiki: Peak	Михаил Пухов		https://web.archive.org/web/20110926113753id_/http://epizodsspace.no-ip.org/bibl/tm/1985/9/put.html
+kon-tiki-os-1.txt	kon-tiki-os-1.md	Kon-Tiki: OS-1	Михаил Пухов		https://web.archive.org/web/20110924184544id_/http://epizodsspace.no-ip.org/bibl/tm/1985/10/put.html
+kon-tiki-lunolet-1m.txt	kon-tiki-lunolet-1m.md	Kon-Tiki: Lunolet-1M	Михаил Пухов		https://web.archive.org/web/20110924184544id_/http://epizodsspace.no-ip.org/bibl/tm/1985/10/put.html
+kon-tiki-mesto-pod-solntsem.txt	kon-tiki-mesto-pod-solntsem.md	Kon-Tiki: Mesto pod Solntsem	Михаил Пухов		https://web.archive.org/web/20110924184544id_/http://epizodsspace.no-ip.org/bibl/tm/1985/10/put.html
+kon-tiki-os-2.txt	kon-tiki-os-2.md	Kon-Tiki: OS-2	Михаил Пухов		https://web.archive.org/web/20110926093055id_/http://epizodsspace.no-ip.org/bibl/tm/1985/11/put.html
+kon-tiki-os-2-buffer.txt	kon-tiki-os-2-buffer.md	Kon-Tiki: OS-2 Buffer	Михаил Пухов		https://web.archive.org/web/20110926093055id_/http://epizodsspace.no-ip.org/bibl/tm/1985/11/put.html
+kon-tiki-os-3.txt	kon-tiki-os-3.md	Kon-Tiki: OS-3	Михаил Пухов		https://web.archive.org/web/20110926093055id_/http://epizodsspace.no-ip.org/bibl/tm/1985/11/put.html
+kon-tiki-multfilm.txt	kon-tiki-multfilm.md	Kon-Tiki: Multfilm	Михаил Пухов		https://web.archive.org/web/20110926111029id_/http://epizodsspace.no-ip.org/bibl/tm/1985/12/put.html
+kon-tiki-lunolet-4.txt	kon-tiki-lunolet-4.md	Kon-Tiki: Lunolet-4	Михаил Пухов		https://web.archive.org/web/20110926111035id_/http://epizodsspace.no-ip.org/bibl/tm/1986/1/put.html
+kon-tiki-kepler.txt	kon-tiki-kepler.md	Kon-Tiki: Kepler	Михаил Пухов		https://web.archive.org/web/20150804231514id_/http://epizodsspace.no-ip.org/bibl/tm/1986/2/put.html
+kon-tiki-atmosphere-2.txt	kon-tiki-atmosphere-2.md	Kon-Tiki: Atmosphere-2	Михаил Пухов		https://web.archive.org/web/20150804231521id_/http://epizodsspace.no-ip.org/bibl/tm/1986/4/put.html
+kon-tiki-mr-2.txt	kon-tiki-mr-2.md	Kon-Tiki: MR-2	Михаил Пухов		https://web.archive.org/web/20150804232121id_/http://epizodsspace.no-ip.org/bibl/tm/1987/2/polet.html
+kon-tiki-atmosphere-3.txt	kon-tiki-atmosphere-3.md	Kon-Tiki: Atmosphere-3	Михаил Пухов		https://web.archive.org/web/20120614121037id_/http://epizodsspace.no-ip.org/bibl/tm/1987/3/na-kryl.html
+kon-tiki-atmosphere-4.txt	kon-tiki-atmosphere-4.md	Kon-Tiki: Atmosphere-4	Михаил Пухов		https://web.archive.org/web/20120614121037id_/http://epizodsspace.no-ip.org/bibl/tm/1987/3/na-kryl.html
+kon-tiki-gravilet.txt	kon-tiki-gravilet.md	Kon-Tiki: Gravilet	Михаил Пухов		https://web.archive.org/web/20120614093658id_/http://epizodsspace.no-ip.org/bibl/tm/1987/5/nad-pulsarom.html
+kon-tiki-gravilet-mod.txt	kon-tiki-gravilet-mod.md	Kon-Tiki: Gravilet Modified	Михаил Пухов		https://web.archive.org/web/20120614093658id_/http://epizodsspace.no-ip.org/bibl/tm/1987/5/nad-pulsarom.html
+kon-tiki-lunolet-d-original.txt	kon-tiki-lunolet-d-original.md	Kon-Tiki: Lunolet-D (TM original)	Михаил Пухов		https://web.archive.org/web/20120614121053id_/http://epizodsspace.no-ip.org/bibl/tm/1987/6/bez_ostanova.html

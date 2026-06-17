@@ -1,7 +1,8 @@
-# Planet Constructor (PK-1)
+# Kon-Tiki: PK-1
 
-- Source: [Tekhnika Molodyzhi, 1985 №7, «Мягкой посадки!»](https://epizodsspace.airbase.ru/bibl/tehnika_-_molodyoji/1985/7/put.html)
-- Program: [planet-constructor-pk-1.txt](planet-constructor-pk-1.txt)
+- Source: [Web Archive — Техника - молодежи, 1985 №7, «Мягкой посадки!»](https://web.archive.org/web/20110924184553id_/http://epizodsspace.no-ip.org/bibl/tm/1985/7/put.html)
+- Program: [kon-tiki-pk-1.txt](kon-tiki-pk-1.txt)
+- Series: Kon-Tiki / Путь к Земле
 
 ## Description
 
@@ -10,4 +11,3 @@ In the issue text it is used by the landing games and the `Guess Gravity` activi
 custom test worlds with user-selected planets.
 
 The listing is restored from the published command sequence in the source article.
-
