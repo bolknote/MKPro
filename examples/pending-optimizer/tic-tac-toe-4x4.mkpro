@@ -40,12 +40,10 @@ program TicTacToe4x4 {
     }
     else {
       occupied += line
-      score = 0
-      mark_lines_and_check()
+      mark_lines_and_check(0)
       choose_calculator_move()
       occupied += cell_mask(x, y)
-      score = 8
-      mark_lines_and_check()
+      mark_lines_and_check(8)
     }
   }
 
@@ -57,7 +55,8 @@ program TicTacToe4x4 {
     }
   }
 
-  fn mark_lines_and_check() {
+  fn mark_lines_and_check(mark_score) {
+    score = mark_score
     line = y
     mark_one(1)
     line = x

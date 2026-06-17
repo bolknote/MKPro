@@ -45,7 +45,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 195 | 105 | source port uses original-style R1/R2 counted search loops, R4..R7 line banks, source-shaped packed occupied masks, reuses the player move mask for absence check/add, additive occupied updates after absence checks, shared indirect line update/check flow, score-derived line deltas, and zero-fallback diagonal normalization; remaining blocker is optimizer/lowering size for packed line helpers |
+| `tic-tac-toe-4x4.mkpro` | 194 | 105 | source port uses original-style R1/R2 counted search loops, R4..R7 line banks, source-shaped packed occupied masks, reuses the player move mask for absence check/add, passes the player/calculator mark score into the shared line checker, additive occupied updates after absence checks, shared indirect line update/check flow, score-derived line deltas, and zero-fallback diagonal normalization; remaining blocker is optimizer/lowering size for packed line helpers |
 
 Prototype notes:
 
