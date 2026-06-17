@@ -8,10 +8,10 @@ Generated with `npm run examples:size`.
 
 ## Snapshot
 
-- Top-level examples: 28/28 fit in the 105-cell MK-61 window; 28/28 pass the headless load check.
-- Referenced top-level examples: 21/21 are no larger than the original MK-61 listing.
-- Tightest runnable examples: `cave-treasure.mkpro` (105), `labyrinth777.mkpro` (105), `fox-hunt-100.mkpro` (104).
-- Pending optimizer: 3 programs still exceed the MK-61 window; nearest is `pending-optimizer/giants-country.mkpro` (114).
+- Top-level examples: 29/29 fit in the 105-cell MK-61 window; 29/29 pass the headless load check.
+- Referenced top-level examples: 22/22 are no larger than the original MK-61 listing.
+- Tightest runnable examples: `cave-treasure.mkpro` (105), `giants-country.mkpro` (105), `labyrinth777.mkpro` (105).
+- Pending optimizer: 2 programs still exceed the MK-61 window; nearest is `pending-optimizer/cave-highlevel-baseline.mkpro` (133).
 
 ## Measurements
 
@@ -32,6 +32,7 @@ Generated with `npm run examples:size`.
 | `fox-hunt-mk61.mkpro` | 65 | 92 | -27 | ok: <= reference | main+setup load ok |
 | `functions-demo.mkpro` | 25 | - | - | ok: no reference | load ok |
 | `game-100-pig.mkpro` | 103 | 103 | 0 | ok: <= reference | main+setup load ok |
+| `giants-country.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 23 | - | - | ok: no reference | load ok |
 | `jack-pot.mkpro` | 99 | 104 | -5 | ok: <= reference | main+setup load ok |
 | `labyrinth777.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
@@ -48,5 +49,4 @@ Generated with `npm run examples:size`.
 | `treasure-hunter-2.mkpro` | 100 | 105 | -5 | ok: <= reference | main+setup load ok |
 | `wumpus.mkpro` | 101 | - | - | ok: no reference | main+setup load ok |
 | `pending-optimizer/cave-highlevel-baseline.mkpro` | 133 | 105 | +28 | pending optimizer | not loaded: main >105 |
-| `pending-optimizer/giants-country.mkpro` | 114 | 105 | +9 | pending optimizer | setup load ok; main >105 |
 | `pending-optimizer/tic-tac-toe-4x4.mkpro` | 317 | 105 | +212 | pending optimizer | not loaded: main >105 |

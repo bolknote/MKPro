@@ -31,6 +31,9 @@ passes the main+setup load check.
 passes the main+setup load check after strict-mode rescue candidate probing
 learned to rank over-window intermediates.
 
+`giants-country.mkpro` moved back to the top-level examples at 105 cells and
+passes the main+setup load check.
+
 Current `--analysis` sizes, measured against the local reference listings:
 
 Strict `mk-pro compile` mode is not guaranteed for every pending file yet.
@@ -40,7 +43,6 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
 | `cave-highlevel-baseline.mkpro` | 133 | 105 | source-faithful fixed wall/cache setup plus direct fractional indirect wall-bank selectors; remaining resource pressure, movement decoder, and cave flow lowerers |
-| `giants-country.mkpro` | 114 | 105 | source port is complete; remaining blocker is optimizer/layout size pressure in the main cave loop and indirect floor/encounter flow |
 | `tic-tac-toe-4x4.mkpro` | 317 | 105 | source port is complete; remaining blocker is optimizer/lowering size for packed line helpers, bit masks, and nested move search |
 
 Prototype notes:
