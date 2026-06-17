@@ -49,5 +49,5 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
 // baselines just like top-level examples. Growth is reserved for semantic or
 // machine-safety fixes.
 export const PENDING_BASELINE: Record<string, number> = {
-  "tic-tac-toe-4x4": 188,
+  "tic-tac-toe-4x4": 183,
 };

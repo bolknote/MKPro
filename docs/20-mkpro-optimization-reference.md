@@ -381,6 +381,10 @@ Machine-level variants around branches:
   direct `ПП` calls, and is adopted only when the final program shrinks.
   `multi-entry-straight-line-helper` reuses suffixes of an already-selected
   helper by adding internal entry labels instead of allocating another helper.
+  It can also promote a unique longer body into an anchored helper when enough
+  external repeated suffixes enter that body to pay for the extra call/return
+  overhead. This models MK-61 programs that deliberately call into the middle of
+  an arithmetic tail without requiring source-specific procedure names.
   Candidate boundaries are X2-context aware: a body may contain digit-entry,
   `.`, `/-/`, or `ВП` only when each restore is preceded by its required
   context inside the shared body, and extraction refuses starts/ends that would

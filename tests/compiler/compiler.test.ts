@@ -2178,6 +2178,36 @@ program XParamExpressionRule {
     expect(result.steps.some((step) => step.comment === "set line from X parameter expression")).toBe(true);
   });
 
+  it("passes indexed first assignments through X parameters", () => {
+    const result = compileOk(`
+program XParamIndexedRule {
+  state {
+    slots: packed[1..3] = [1, 2, 3]
+    first: counter 1..3 = 1
+    second: counter 1..3 = 2
+  }
+
+  loop {
+    bump(first)
+    bump(second)
+    halt(slots[2])
+  }
+
+  fn bump(pos) {
+    slots[pos] = slots[pos] + 1
+  }
+}
+`, { budget: 999, analysis: true });
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames).toContain("x-param-proc-call");
+    expect(optimizationNames).toContain("x-param-indexed-entry");
+    expect(optimizationNames).toContain("current-x-indexed-selector");
+    expect(result.report.registers.pos).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "recall pos")).toBe(false);
+    expect(result.steps.some((step) => step.comment?.startsWith("indexed set slots"))).toBe(true);
+  });
+
   it("keeps loop prompt state in X when every path assigns the next prompt", () => {
     const result = compileOk(`
 program LoopPromptX {

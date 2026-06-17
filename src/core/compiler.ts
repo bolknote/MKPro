@@ -10619,7 +10619,14 @@ export class EmitContext {
     }
 
     if (affineIndex !== undefined && affineIndex.integerPart !== true) {
-      this.emitRecall(affineIndex.name, `indexed selector ${affineIndex.name}`, sourceLine);
+      if (this.xHolds(affineIndex.name)) {
+        this.optimizations.push({
+          name: "current-x-indexed-selector",
+          detail: `Reused ${affineIndex.name} already in X while preparing ${bankMemberKey(expr.base, expr.field)} selector at line ${sourceLine}.`,
+        });
+      } else {
+        this.emitRecall(affineIndex.name, `indexed selector ${affineIndex.name}`, sourceLine);
+      }
     } else {
       compileExpression(this, expr.index);
     }
@@ -13429,18 +13436,22 @@ function collectXParamProcLowerings(
     const params = proc.params ?? v2Rules.get(proc.name)?.params ?? [];
     if (params.length !== 1) continue;
     const param = params[0]!;
-    if ((readCounts.get(param) ?? 0) !== 1) continue;
     const first = proc.body[0];
-    if (first?.kind !== "assign") continue;
-    const matched = matchXParamFirstAssignment(first, param);
-    if (matched === undefined) continue;
+    const indexed = first?.kind === "indexed_assign" && matchXParamFirstIndexedAssignment(first, param);
+    if (indexed !== true && (readCounts.get(param) ?? 0) !== 1) continue;
+    const matched = first?.kind === "assign" ? matchXParamFirstAssignment(first, param) : undefined;
+    if (matched === undefined && indexed !== true) continue;
     if (statementsReadIdentifier(proc.body.slice(1), param)) continue;
     if (!allProcCallsHaveImmediateParamAssignment(ast, proc.name, param)) continue;
-    result.set(proc.name, matched.kind === "add"
-      ? { param, first, kind: "add", other: matched.other }
-      : matched.kind === "copy"
-        ? { param, first, kind: "copy" }
-        : { param, first, kind: "expr" });
+    if (first.kind === "indexed_assign") {
+      result.set(proc.name, { param, first, kind: "indexed" });
+    } else {
+      result.set(proc.name, matched!.kind === "add"
+        ? { param, first, kind: "add", other: matched!.other }
+        : matched!.kind === "copy"
+          ? { param, first, kind: "copy" }
+          : { param, first, kind: "expr" });
+    }
   }
   return result;
 }
@@ -13460,6 +13471,13 @@ function matchXParamFirstAssignment(
     }
   }
   return expressionCanConsumeIdentifierFromX(expr, param) ? { kind: "expr" } : undefined;
+}
+
+function matchXParamFirstIndexedAssignment(
+  statement: Extract<StatementAst, { kind: "indexed_assign" }>,
+  param: string,
+): boolean {
+  return expressionCanConsumeIdentifierFromX(statement.target.index, param);
 }
 
 function allProcCallsHaveImmediateParamAssignment(ast: ProgramAst, procName: string, param: string): boolean {

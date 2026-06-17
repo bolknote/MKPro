@@ -165,7 +165,7 @@ function collectCandidates(ops: readonly IrOp[], allowDirectCalls: boolean): Can
 
   return [...byKey.entries()]
     .map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0]!.cells }))
-    .filter((candidate) => candidate.occurrences.length >= 2);
+    .filter((candidate) => candidate.occurrences.length >= 1);
 }
 
 function generatedBodyIndexes(ops: readonly IrOp[], allowDirectCalls: boolean): Set<number> {
@@ -239,7 +239,9 @@ function selectHelpers(candidates: readonly Candidate[], ops: readonly IrOp[]): 
   const protectedIndexes = new Set<number>();
   const selected: SelectedHelper[] = [];
 
-  const ordered = candidates.filter((candidate) => candidate.cells >= MIN_BODY_CELLS).sort((left, right) => {
+  const ordered = candidates.filter((candidate) =>
+    candidate.cells >= MIN_BODY_CELLS && candidate.occurrences.length >= 2
+  ).sort((left, right) => {
     const leftSavings = netSavings(left.occurrences.length, left.cells);
     const rightSavings = netSavings(right.occurrences.length, right.cells);
     return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
@@ -265,6 +267,7 @@ function selectHelpers(candidates: readonly Candidate[], ops: readonly IrOp[]): 
   }
 
   selectInternalEntries(selected, candidates, labels, protectedIndexes);
+  selectAnchoredInternalEntryHelpers(selected, candidates, ops, labels, protectedIndexes);
   return selected;
 }
 
@@ -323,6 +326,99 @@ function selectInternalEntries(
       markRange(protectedIndexes, replacement.start, replacement.end);
     }
   }
+}
+
+interface AnchoredInternalEntryCandidate {
+  readonly bodyCandidate: Candidate;
+  readonly anchor: Occurrence;
+  readonly offset: number;
+  readonly key: string;
+  readonly cells: number;
+  readonly replacements: Occurrence[];
+  readonly savings: number;
+}
+
+function selectAnchoredInternalEntryHelpers(
+  selected: SelectedHelper[],
+  candidates: readonly Candidate[],
+  ops: readonly IrOp[],
+  labels: LabelAllocator,
+  protectedIndexes: Set<number>,
+): void {
+  const candidateByKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
+  const entryCandidates: AnchoredInternalEntryCandidate[] = [];
+
+  for (const bodyCandidate of candidates) {
+    if (bodyCandidate.cells < MIN_BODY_CELLS) continue;
+    for (const anchor of bodyCandidate.occurrences) {
+      if (rangeIntersects(protectedIndexes, anchor.start, anchor.end)) continue;
+      const body = ops.slice(anchor.start, anchor.end + 1);
+      const parts = body.map(opKey);
+      const suffixCells = body.map(cellsPerOp);
+      for (let offset = 1; offset < body.length; offset += 1) {
+        const cells = suffixCells.slice(offset).reduce((sum, count) => sum + count, 0);
+        if (cells < MIN_ENTRY_CELLS) continue;
+        const key = parts.slice(offset).join("\n");
+        const suffixCandidate = candidateByKey.get(key);
+        if (suffixCandidate === undefined) continue;
+        const replacements = suffixCandidate.occurrences.filter((occurrence) =>
+          !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end) &&
+          !rangesOverlap(anchor.start, anchor.end, occurrence.start, occurrence.end)
+        );
+        if (replacements.length === 0) continue;
+        const savings = replacements.length * (cells - 2) - 3;
+        if (savings <= 0) continue;
+        entryCandidates.push({
+          bodyCandidate,
+          anchor,
+          offset,
+          key,
+          cells,
+          replacements,
+          savings,
+        });
+      }
+    }
+  }
+
+  const ordered = entryCandidates.sort((left, right) =>
+    right.savings - left.savings ||
+    right.cells - left.cells ||
+    right.bodyCandidate.cells - left.bodyCandidate.cells ||
+    left.key.localeCompare(right.key)
+  );
+
+  for (const candidate of ordered) {
+    if (rangeIntersects(protectedIndexes, candidate.anchor.start, candidate.anchor.end)) continue;
+    const replacements = candidate.replacements.filter((occurrence) =>
+      !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
+    );
+    if (replacements.length === 0) continue;
+    const savings = replacements.length * (candidate.cells - 2) - 3;
+    if (savings <= 0) continue;
+
+    const helper: SelectedHelper = {
+      label: labels.next(),
+      body: ops.slice(candidate.anchor.start, candidate.anchor.end + 1),
+      occurrences: [candidate.anchor],
+      cells: candidate.bodyCandidate.cells,
+      entries: [{
+        label: labels.next(),
+        offset: candidate.offset,
+        replacements,
+        cells: candidate.cells,
+      }],
+    };
+    selected.push(helper);
+    markRange(protectedIndexes, candidate.anchor.start, candidate.anchor.end);
+    for (const replacement of replacements) {
+      markRange(protectedIndexes, replacement.start, replacement.end);
+    }
+  }
+}
+
+function rangesOverlap(leftStart: number, leftEnd: number, rightStart: number, rightEnd: number): boolean {
+  return leftStart <= rightEnd && rightStart <= leftEnd;
 }
 
 function helperCall(label: string, source: IrOp, entry = false): IrOp {
@@ -454,4 +550,3 @@ function opKey(op: IrOp): string {
       return op.kind;
   }
 }
-

@@ -110,6 +110,11 @@ export type XParamProcLowering =
       param: string;
       first: Extract<StatementAst, { kind: "assign" }>;
       kind: "expr";
+    }
+  | {
+      param: string;
+      first: Extract<StatementAst, { kind: "indexed_assign" }>;
+      kind: "indexed";
     };
 
 export interface XParamReturnDecay {

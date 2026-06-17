@@ -18,7 +18,7 @@ program TicTacToe4x4 {
     best_score: packed = -99999999
     score: packed = 0
     line: packed = 0
-    slot: counter 0..5 = 0
+    slot: counter 0..7 = 0
   }
 
   fn draw() {
@@ -48,9 +48,9 @@ program TicTacToe4x4 {
   }
 
   fn mark_one(next_slot) {
-    slot = next_slot
-    lines[slot] = packed_add(lines[slot], line, sign(score - 4))
-    if packed_digit(lines[slot], line) == score {
+    slot = next_slot + 3
+    lines[slot - 3] = packed_add(lines[slot - 3], line, sign(score - 4))
+    if packed_digit(lines[slot - 3], line) == score {
       halt(score)
     }
   }

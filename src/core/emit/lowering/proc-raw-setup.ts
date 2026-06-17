@@ -1072,6 +1072,18 @@ export function compileXParamProcCall(ctx: LoweringCtx,
 }
 
 export function compileXParamProcBody(ctx: LoweringCtx, proc: ProgramAst["procs"][number], lowering: XParamProcLowering): void {
+    if (lowering.kind === "indexed") {
+      ctx.currentXVariable = lowering.param;
+      ctx.currentXAliases = new Set([lowering.param]);
+      ctx.currentXKnownZero = false;
+      ctx.compileStatement(lowering.first);
+      ctx.compileStatements(proc.body.slice(1));
+      ctx.optimizations.push({
+        name: "x-param-indexed-entry",
+        detail: `Compiled rule ${proc.name} to consume ${lowering.param} as an indexed selector directly from X.`,
+      });
+      return;
+    }
     if (lowering.kind === "copy") {
       ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter`, lowering.first.line);
       ctx.compileStatements(proc.body.slice(1));
