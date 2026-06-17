@@ -14,7 +14,7 @@ program TicTacToe4x4 {
     x: counter 0..5 = 0
     y: counter 0..5 = 0
 
-    best_cell: coord(grid) = 11
+    best_y: counter 0..5 = 1
     best_score: packed = -1
     score: packed = 0
     line: packed = 0
@@ -38,11 +38,11 @@ program TicTacToe4x4 {
       occupied_cell()
     }
     else {
-      occupied = bit_or(occupied, cell_mask(x, y))
+      occupied += cell_mask(x, y)
       score = 0
       mark_lines_and_check()
       choose_calculator_move()
-      occupied = bit_or(occupied, cell_mask(x, y))
+      occupied += cell_mask(x, y)
       score = 8
       mark_lines_and_check()
     }
@@ -78,7 +78,8 @@ program TicTacToe4x4 {
           candidate_score()
           if score > best_score {
             best_score = score
-            best_cell = y * 10 + x
+            slot = x
+            best_y = y
           }
         }
         x--
@@ -90,8 +91,8 @@ program TicTacToe4x4 {
       draw()
     }
 
-    y = int(best_cell / 10)
-    x = best_cell - y * 10
+    x = slot
+    y = best_y
   }
 
   fn candidate_score() {
@@ -106,14 +107,14 @@ program TicTacToe4x4 {
   fn normalize_sum() {
     line = frac(int(x + y) / 4) * 4
     if line == 0 {
-      line += 4
+      line = 4
     }
   }
 
   fn normalize_diff() {
     line = frac(int(x - y) / 4) * 4
     if line == 0 {
-      line += 4
+      line = 4
     }
   }
 }

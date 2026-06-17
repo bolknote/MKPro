@@ -11,7 +11,7 @@ Generated with `npm run examples:size`.
 - Top-level examples: 30/30 fit in the 105-cell MK-61 window; 30/30 pass the headless load check.
 - Referenced top-level examples: 23/23 are no larger than the original MK-61 listing.
 - Tightest runnable examples: `cave-highlevel-baseline.mkpro` (105), `giants-country.mkpro` (105), `labyrinth777.mkpro` (105).
-- Pending optimizer: 1 programs still exceed the MK-61 window; nearest is `pending-optimizer/tic-tac-toe-4x4.mkpro` (211).
+- Pending optimizer: 1 programs still exceed the MK-61 window; nearest is `pending-optimizer/tic-tac-toe-4x4.mkpro` (196).
 
 ## Measurements
 
@@ -49,4 +49,4 @@ Generated with `npm run examples:size`.
 | `tiny-game.mkpro` | 23 | - | - | ok: no reference | load ok |
 | `treasure-hunter-2.mkpro` | 100 | 105 | -5 | ok: <= reference | main+setup load ok |
 | `wumpus.mkpro` | 101 | - | - | ok: no reference | main+setup load ok |
-| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 211 | 105 | +106 | pending optimizer | not loaded: main >105 |
+| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 196 | 105 | +91 | pending optimizer | not loaded: main >105 |
