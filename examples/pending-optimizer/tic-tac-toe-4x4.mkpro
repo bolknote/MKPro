@@ -105,9 +105,6 @@ program TicTacToe4x4 {
   }
 
   fn normalize(raw_line) {
-    line = frac(int(raw_line) / 4) * 4
-    if line == 0 {
-      line = 4
-    }
+    line = frac((raw_line + 3) / 4) * 4 + 1
   }
 }

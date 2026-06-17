@@ -101,11 +101,11 @@ describe("MK-Pro compiler", () => {
     expect(game).toContain("normalize(x + y)");
     expect(game).toContain("normalize(x - y)");
     expect(game).toContain("fn normalize(raw_line)");
+    expect(game).toContain("line = frac((raw_line + 3) / 4) * 4 + 1");
     expect(game).toContain("line = cell_mask(x, y)");
     expect(game).toContain("occupied += line");
     expect(game).toContain("occupied += cell_mask(x, y)");
     expect(game).toContain("slot = x");
-    expect(game).toContain("line = 4");
     expect(game).toContain("while y >= 1");
     expect(game).toContain("while x >= 1");
     expect(game).not.toMatch(/\bcore\s*\{/u);
