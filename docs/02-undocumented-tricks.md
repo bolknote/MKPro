@@ -49,11 +49,18 @@ If an invalid argument is acceptable as a stop condition, an error can replace a
 | `X = 0` | `F 1/x` |
 | `X <= 0` | `F lg` |
 | `X < 0` | `F sqrt` |
-| `X > 1` | `F sin^-1` or `F cos^-1` |
+| `abs(X) > 1` | `F sin^-1` or `F cos^-1` |
 | `X >= 100` | `F 10^x` |
 | fractional angle part `>= 0.6` | `К °->′"` |
 
-This is a code-golf technique. It is compact, but it turns a program condition into a runtime error state.
+The inverse sine/cosine trap can stand in for `X > 1` only when the value is
+already known to be non-negative. The `Р`/`Г`/`ГРД` switch changes the successful
+result, but not the `abs(X) > 1` error boundary. `F tg^-1` is not useful as an
+ordinary error trap: finite arguments compute a saturated angle instead of
+raising `ЕГГ0Г`.
+
+This is a code-golf technique. It is compact, but it turns a program condition
+into a runtime error state.
 
 ### Call the Tail of a Subroutine
 

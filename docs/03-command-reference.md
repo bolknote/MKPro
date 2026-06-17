@@ -28,9 +28,9 @@ This reference uses the traditional MK-61 notation:
 | `16` | `F e^x` | Exponential | Argument overflow is checked immediately. |
 | `17` | `F lg` | Decimal logarithm | Requires `X > 0`. |
 | `18` | `F ln` | Natural logarithm | Requires `X > 0`. |
-| `19` | `F sin^-1` | Arcsine | Requires `abs(X) <= 1`; may produce non-normalized zero in degree/grad modes for `X = 0`. |
-| `1A` | `F cos^-1` | Arccosine | Requires `abs(X) <= 1`; arccos of `1` can produce non-normalized zero in degree/grad modes. |
-| `1B` | `F tg^-1` | Arctangent | Very large arguments approach the angular maximum. |
+| `19` | `F sin^-1` | Arcsine | Requires `abs(X) <= 1` in every angle mode; may produce non-normalized zero in degree/grad modes for `X = 0`. |
+| `1A` | `F cos^-1` | Arccosine | Requires `abs(X) <= 1` in every angle mode; arccos of `1` can produce non-normalized zero in degree/grad modes. |
+| `1B` | `F tg^-1` | Arctangent | Very large arguments approach the angular maximum for the selected angle mode. |
 | `1C` | `F sin` | Sine | Argument range is checked immediately. |
 | `1D` | `F cos` | Cosine | Argument range is checked immediately. |
 | `1E` | `F tg` | Tangent | Argument range is checked immediately; singularities error. |
@@ -138,7 +138,7 @@ Commands that fail due to an invalid argument, range check, or explicit error co
 
 The explicit `ЕГГ0Г` opcodes (`27`, `28`, `29`, `2B`..`2E`, `3C`) are not useful for arithmetic, but they are useful as one-cell traps. Emulator probes show they stop with `ЕГГ0Г`, leave `X` intact, copy `X` to `X1`, and pause with the program counter at `addr + 2`. If the user resumes execution with `С/П`, the cell immediately after the trap is skipped. Their ROM words are not identical, so treat them as behavior-equivalent traps rather than byte-identical aliases.
 
-Ordinary domain-checking commands can also be used as conditional traps when their success result is acceptable or unreachable. Examples include `F 1/x` for zero, `F sqrt` for negative values, `F lg` for nonpositive values, `F sin^-1` for `abs(X) > 1`, `F 10^x` for large exponents, and `К °->′"` for fractional parts `>= 0.6`.
+Ordinary domain-checking commands can also be used as conditional traps when their success result is acceptable or unreachable. Examples include `F 1/x` for zero, `F sqrt` for negative values, `F lg` for nonpositive values, `F sin^-1` or `F cos^-1` for `abs(X) > 1`, `F 10^x` for large exponents, and `К °->′"` for fractional parts `>= 0.6`. The inverse sine/cosine error boundary is independent of the `Р`/`Г`/`ГРД` angle switch; only the successful angle result changes. `F tg^-1` is not a useful finite-input error trap because large values saturate toward the mode's angular maximum instead of raising `ЕГГ0Г`.
 
 ## Approximate Execution Times
 
