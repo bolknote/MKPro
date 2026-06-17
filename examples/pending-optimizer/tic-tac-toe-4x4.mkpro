@@ -15,7 +15,7 @@ program TicTacToe4x4 {
     y: counter 0..5
 
     best_y: counter 0..5
-    best_score: packed = -99999999
+    best_score: packed
     score: packed
     line: packed
     slot: counter 0..7
