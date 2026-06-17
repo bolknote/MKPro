@@ -31,6 +31,8 @@ program TicTacToe4x4 {
 
   loop {
     show(y)
+    // Source UI is X ПП Y С/П: ПП executes only the first entered() store,
+    // then С/П resumes at the second one with the new X value.
     x = entered()
     y = entered()
     line = cell_mask(x, y)

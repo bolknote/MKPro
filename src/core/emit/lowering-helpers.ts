@@ -1906,8 +1906,8 @@ export function packedGridExpressionMacro(name: string, args: ExpressionAst[]): 
       );
     case "packed_add":
       return addExpressions(
-        args[0]!,
         multiplyExpressions(args[2]!, pow10Expression(args[1]!)),
+        args[0]!,
       );
     case "digit_set":
       return digitSetExpression(args[0]!, args[1]!, args[2]!);

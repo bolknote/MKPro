@@ -1723,6 +1723,55 @@ program EnteredPair {
     expect(calc.displayText()).toBe("23,");
   });
 
+  it("keeps arbitrary entered() runs driven by manual continuation keys", () => {
+    const result = compileOk(`
+program EnteredTriple {
+  state {
+    a: packed = 0
+    b: packed = 0
+    c: packed = 0
+  }
+  loop {
+    show(0)
+    a = entered()
+    b = entered()
+    c = entered()
+    halt(a * 100 + b * 10 + c)
+  }
+}
+`);
+    const { MK61 } = require("../emulator/mk61.cjs") as {
+      MK61: new (options?: { extended?: boolean }) => {
+        inputNumber: (value: string, options?: { clear?: boolean }) => void;
+        loadProgram: (codes: number[]) => { diagnostics: string[] };
+        press: (key: string) => void;
+        pressSequence: (keys: string[]) => void;
+        runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+        setRegister: (register: string, value: string) => void;
+        displayText: () => string;
+      };
+    };
+    const calc = new MK61({ extended: true });
+    for (const preload of result.report.preloads) {
+      calc.setRegister(preload.register, preload.value);
+    }
+    expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
+
+    calc.pressSequence(["В/О", "С/П"]);
+    expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
+    calc.inputNumber("2", { clear: true });
+    calc.press("ПП");
+    expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 4 }).stopped).toBe(true);
+    calc.inputNumber("3", { clear: true });
+    calc.press("ПП");
+    expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 4 }).stopped).toBe(true);
+    calc.inputNumber("4", { clear: true });
+    calc.press("С/П");
+    expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
+
+    expect(calc.displayText()).toBe("234,");
+  });
+
   it("reuses a successful cell membership mask when clearing that cell", () => {
     const result = compileOk(`
 program ClearAfterHit {
