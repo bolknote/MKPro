@@ -45,7 +45,7 @@ numbers can be lower than what `bin/mk-pro.mjs compile` accepts.
 
 | File | Current | Reference | Main blocker |
 | --- | ---: | ---: | --- |
-| `tic-tac-toe-4x4.mkpro` | 317 | 105 | source port is complete; remaining blocker is optimizer/lowering size for packed line helpers, bit masks, and nested move search |
+| `tic-tac-toe-4x4.mkpro` | 302 | 105 | source port uses original-style R1/R2 counted search loops and R4..R7 line banks; remaining blocker is optimizer/lowering size for packed line helpers and bit masks |
 
 Prototype notes:
 

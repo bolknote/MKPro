@@ -1486,6 +1486,27 @@ program Packed4AddShape {
     expect(runCompiledDisplay(result)).toBe("44434,4");
   });
 
+  it("places source-shaped packed-grid line banks at R4 through R7", () => {
+    const result = compileOk(`
+program PackedGridLineBankRegisters {
+  state {
+    lines: packed[1..4] = [44444.4, 44444.4, 44444.4, 44444.4]
+    x: counter 1..4 = 1
+    value: packed = 0
+  }
+  loop {
+    value = packed_digit(lines[1], x) + packed_digit(lines[2], x) + packed_digit(lines[3], x) + packed_digit(lines[4], x)
+    halt(value)
+  }
+}
+`);
+
+    expect(result.report.registers.lines_1).toBe("4");
+    expect(result.report.registers.lines_2).toBe("5");
+    expect(result.report.registers.lines_3).toBe("6");
+    expect(result.report.registers.lines_4).toBe("7");
+  });
+
   it("keeps entered() values volatile across manual continuation keys", () => {
     const result = compileOk(`
 program EnteredPair {

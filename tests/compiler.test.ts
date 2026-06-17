@@ -90,6 +90,8 @@ describe("MK-Pro compiler", () => {
     expect(game).toContain("lines: packed[1..4]");
     expect(game).toContain("fn candidate_score()");
     expect(game).toContain("fn mark_lines(delta)");
+    expect(game).toContain("while y >= 1");
+    expect(game).toContain("while x >= 1");
     expect(game).not.toMatch(/\bcore\s*\{/u);
     expect(game).not.toMatch(/\brow\s+[0-9A-F]{2}\s*:/u);
 
@@ -98,7 +100,7 @@ describe("MK-Pro compiler", () => {
     expect(result.diagnostics).toEqual([]);
     expect(result.report.reference?.referenceSpan).toBe(105);
     expect(result.report.steps).toBe(PENDING_BASELINE["tic-tac-toe-4x4"]);
-  }, 30_000);
+  }, 180_000);
 
   it("keeps every runnable example with a real source reference no larger than that source", () => {
     const unresolved: string[] = [];

@@ -205,6 +205,7 @@ import type {
   ResolvedStep,
   SetupProgramReport,
   StateAst,
+  StateBankAst,
   StateBankMemberAst,
   StateFieldAst,
   StateFieldType,
@@ -12349,6 +12350,7 @@ function applyStateBankRegisterHints(
   hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
 ): void {
   const used = new Set<RegisterName>([...hints.values()].map((hint) => hint.register));
+  const packedGridLineBanks = collectPackedGridLineBankNames(ast);
   let cursor = 1; // Keep R0 available for compact loop counters.
   const nextFreeRegister = (): RegisterName | undefined => {
     while (cursor < REGISTER_ORDER.length) {
@@ -12361,7 +12363,8 @@ function applyStateBankRegisterHints(
   for (const bank of ast.banks ?? []) {
     for (const member of bank.members) {
       for (const element of member.elements.sort((left, right) => left.index - right.index)) {
-        const direct = element.index > 0 ? REGISTER_ORDER[element.index] : undefined;
+        const packedGridLine = packedGridLineRegister(bank, member, element.index, packedGridLineBanks);
+        const direct = packedGridLine ?? (element.index > 0 ? REGISTER_ORDER[element.index] : undefined);
         const register = direct !== undefined && !used.has(direct)
           ? direct
           : nextFreeRegister();
@@ -12371,6 +12374,115 @@ function applyStateBankRegisterHints(
       }
     }
   }
+}
+
+function packedGridLineRegister(
+  bank: StateBankAst,
+  member: StateBankMemberAst,
+  index: number,
+  packedGridLineBanks: ReadonlySet<string>,
+): RegisterName | undefined {
+  const key = bankMemberKey(bank.name, member.name);
+  if (!packedGridLineBanks.has(key)) return undefined;
+  if (member.type !== "packed") return undefined;
+  if (bank.min !== 1 || bank.max !== 4) return undefined;
+  if (member.elements.length !== 4) return undefined;
+  if (!member.elements.every((element) => element.index >= 1 && element.index <= 4)) return undefined;
+  return REGISTER_ORDER[index + 3];
+}
+
+function collectPackedGridLineBankNames(ast: ProgramAst): Set<string> {
+  const names = new Set<string>();
+  const recordLineBank = (expr: ExpressionAst | undefined): void => {
+    if (expr?.kind === "indexed") {
+      names.add(bankMemberKey(expr.base, expr.field));
+      return;
+    }
+    if (expr?.kind !== "identifier") return;
+    const key = stateBankKeyForElementName(ast, expr.name);
+    if (key !== undefined) names.add(key);
+  };
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "unary") {
+      visitExpr(expr.expr);
+      return;
+    }
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+      return;
+    }
+    if (expr.kind === "indexed") {
+      visitExpr(expr.index);
+      return;
+    }
+    if (expr.kind !== "call") return;
+    const name = expr.callee.toLowerCase();
+    if (name === "packed_add" || name === "packed_digit" || name === "packed_score") {
+      recordLineBank(expr.args[0]);
+    }
+    for (const arg of expr.args) visitExpr(arg);
+  };
+  const visitCondition = (condition: ConditionAst): void => {
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+  const visitStatements = (statements: StatementAst[]): void => {
+    for (const statement of statements) {
+      switch (statement.kind) {
+        case "pause":
+        case "preview":
+        case "halt":
+          visitExpr(statement.expr);
+          break;
+        case "assign":
+        case "return_value":
+          visitExpr(statement.expr);
+          break;
+        case "indexed_assign":
+          visitExpr(statement.target.index);
+          visitExpr(statement.expr);
+          break;
+        case "if":
+        case "while":
+          visitCondition(statement.condition);
+          visitStatements(statement.kind === "if" ? statement.thenBody : statement.body);
+          if (statement.kind === "if" && statement.elseBody !== undefined) visitStatements(statement.elseBody);
+          break;
+        case "loop":
+          visitStatements(statement.body);
+          break;
+        case "dispatch":
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody !== undefined) visitStatements(statement.defaultBody);
+          break;
+        case "call":
+        case "core":
+        case "input":
+        case "coord_list_remove":
+        case "decimal_series":
+          break;
+      }
+    }
+  };
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+  return names;
+}
+
+function stateBankKeyForElementName(ast: ProgramAst, name: string): string | undefined {
+  for (const bank of ast.banks ?? []) {
+    for (const member of bank.members) {
+      if (member.elements.some((element) => element.name === name)) {
+        return bankMemberKey(bank.name, member.name);
+      }
+    }
+  }
+  return undefined;
 }
 
 function preincrementIndexedStoreShape(

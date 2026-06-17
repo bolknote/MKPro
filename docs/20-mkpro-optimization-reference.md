@@ -592,6 +592,12 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `bit-mask-helper-call` — routes repeated `bit_mask` construction through existing helper labels instead of recompiling.
 - `bit-mask-quotient-reuse` — reuses previously computed quotients/parts for mask generation.
 - `grid-cell-mask-cse` — removes repeated 4x4 packed grid cell-mask calculations for adjacent membership/set operations.
+- `packed-grid-line-bank-registers` — when a `packed[1..4]` state bank is
+  proved to feed packed-grid line helpers (`packed_add`, `packed_digit`, or
+  `packed_score`), allocator places the four elements at `R4..R7`. This keeps
+  `R1/R2` available for counted search loops while matching the original
+  Anvarov-style four-line register layout without adding user-visible register
+  hints.
 - `indexed-packed-pow10-delta` — updates a dynamically indexed packed digit bank by a `pow10(...)` term without recompiling the whole self-update expression.
 
 ## 9) Display lowering strategy (largest semantic-sensitive area)
