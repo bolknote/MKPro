@@ -33,12 +33,13 @@ program TicTacToe4x4 {
     show(y)
     x = entered()
     y = entered()
+    line = cell_mask(x, y)
 
-    if bit_and(occupied, cell_mask(x, y)) != 0 {
+    if bit_and(occupied, line) != 0 {
       occupied_cell()
     }
     else {
-      occupied += cell_mask(x, y)
+      occupied += line
       score = 0
       mark_lines_and_check()
       choose_calculator_move()
