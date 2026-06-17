@@ -15,7 +15,7 @@ program TicTacToe4x4 {
     y: counter 0..5 = 0
 
     best_y: counter 0..5 = 1
-    best_score: packed = -1
+    best_score: packed = -99999999
     score: packed = 0
     line: packed = 0
     slot: counter 0..5 = 0
@@ -26,7 +26,7 @@ program TicTacToe4x4 {
   }
 
   fn occupied_cell() {
-    show(-99999999)
+    show(best_score)
   }
 
   loop {
@@ -96,12 +96,12 @@ program TicTacToe4x4 {
   }
 
   fn candidate_score() {
-    score = sqr(packed_digit(lines[1], y) - 4)
-    score += sqr(packed_digit(lines[2], x) - 4)
+    score = packed_score(lines[1], y)
+    score += packed_score(lines[2], x)
     normalize(x + y)
-    score += sqr(packed_digit(lines[3], line) - 4)
+    score += packed_score(lines[3], line)
     normalize(x - y)
-    score += sqr(packed_digit(lines[4], line) - 4)
+    score += packed_score(lines[4], line)
   }
 
   fn normalize(raw_line) {
