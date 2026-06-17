@@ -10,7 +10,7 @@ Generated with `npm run examples:size`.
 
 - Top-level examples: 30/30 fit in the 105-cell MK-61 window; 30/30 pass the headless load check.
 - Referenced top-level examples: 23/23 are no larger than the original MK-61 listing.
-- Tightest runnable examples: `cave-highlevel-baseline.mkpro` (105), `giants-country.mkpro` (105), `labyrinth777.mkpro` (105).
+- Tightest runnable examples: `giants-country.mkpro` (105), `labyrinth777.mkpro` (105).
 - Pending optimizer: 1 programs still exceed the MK-61 window; nearest is `pending-optimizer/tic-tac-toe-4x4.mkpro` (183).
 
 ## Measurements
@@ -22,7 +22,7 @@ Generated with `npm run examples:size`.
 | `99-bottles.mkpro` | 52 | 53 | -1 | ok: <= reference | main+setup load ok |
 | `alaram.mkpro` | 75 | 105 | -30 | ok: <= reference | main+setup load ok |
 | `basic.mkpro` | 8 | - | - | ok: no reference | load ok |
-| `cave-highlevel-baseline.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
+| `cave-highlevel-baseline.mkpro` | 104 | 105 | -1 | ok: <= reference | main+setup load ok |
 | `cave-sketch.mkpro` | 47 | 105 | -58 | ok: <= reference | main+setup load ok |
 | `cave-treasure.mkpro` | 104 | 105 | -1 | ok: <= reference | main+setup load ok |
 | `clock.mkpro` | 43 | 63 | -20 | ok: <= reference | main+setup load ok |

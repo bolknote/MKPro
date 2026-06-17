@@ -13,7 +13,7 @@ export const EXAMPLE_BASELINE: Record<string, number> = {
   "99-bottles": 52,
   alaram: 75,
   basic: 8,
-  "cave-highlevel-baseline": 105,
+  "cave-highlevel-baseline": 104,
   "cave-sketch": 47,
   "cave-treasure": 104,
   clock: 40,

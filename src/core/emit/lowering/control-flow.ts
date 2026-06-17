@@ -71,6 +71,7 @@ import {
   nearAnyHelperKey,
   normalizeZeroComparison,
   numericLiteralValue,
+  numericRangeForExpression,
   optimizeDispatchDefaultCases,
   programHasLineCountForMask,
   residualAdjustmentCost,
@@ -79,6 +80,7 @@ import {
   spatialHitScratchName,
   statementListsEqual,
   subtractExpressions,
+  isKnownIntegerValuedExpression,
 } from "../lowering-helpers.ts";
 import {
   getOpcode,
@@ -266,12 +268,13 @@ export function statementsAreDomainErrorTrap(ctx: LoweringCtx, statements: reado
 // Plan how to lower a comparison guard whose taken branch is a pure domain-error
 // trap into a single self-trapping opcode. Each opcode raises ЕГГОГ exactly on
 // its mathematical domain (proved on hardware in tests/emulator/trap-opcodes.test.ts):
+//   `F sin^-1` traps iff abs(X) > 1
 //   `F √`   traps iff X < 0
 //   `F lg`  traps iff X <= 0
 //   `F 1/x` traps iff X == 0   (division by zero)
-// The plan computes the comparison difference D = first - second into X so the
-// trap fires iff the guard condition is true; otherwise execution falls through
-// into the false path. A single operand means no subtraction is needed:
+// The usual plan computes the comparison difference D = first - second into X so
+// the trap fires iff the guard condition is true; otherwise execution falls
+// through into the false path. A single operand means no subtraction is needed:
 //   a <  b  <=>  a - b <  0   (√)
 //   a <= b  <=>  a - b <= 0   (lg)
 //   a >  b  <=>  b - a <  0   (√)
@@ -285,7 +288,7 @@ export interface DomainErrorGuardPlan {
 }
 
 // Shared tail for every store-then-domain-trap fusion: emit the self-trapping
-// opcode (F sqrt / F lg / F 1/x) on the value already in X and then invalidate
+// opcode (F sqrt / F lg / F 1/x / F sin^-1) on the value already in X and then invalidate
 // tracked X state, because the trap consumed the taken branch and X holds
 // garbage on the fall-through (false) path. Every domain-guard site funnels its
 // opcode through here so the "emit trap + reset" mechanic lives in one place.
@@ -303,7 +306,10 @@ export function emitDomainTrapOnX(
     ctx.scaledCoordVariables.clear();
 }
 
-export function planDomainErrorGuard(condition: ConditionAst): DomainErrorGuardPlan | undefined {
+export function planDomainErrorGuard(condition: ConditionAst, ast?: ProgramAst): DomainErrorGuardPlan | undefined {
+    const arcPlan = ast === undefined ? undefined : planArcDomainErrorGuard(condition, ast);
+    if (arcPlan !== undefined) return arcPlan;
+
     const SQRT_OPCODE = 0x21;
     const SQRT_MNEMONIC = "F sqrt";
     const LG_OPCODE = 0x17;
@@ -340,6 +346,79 @@ export function planDomainErrorGuard(condition: ConditionAst): DomainErrorGuardP
     return { first: a, second: b, trapOpcode, trapMnemonic };
 }
 
+function planArcDomainErrorGuard(condition: ConditionAst, ast: ProgramAst): DomainErrorGuardPlan | undefined {
+    const ASIN_OPCODE = 0x19;
+    const ASIN_MNEMONIC = "F sin^-1";
+
+    const upper = arcUpperDomainExpression(condition, ast);
+    if (upper !== undefined) return { first: upper, trapOpcode: ASIN_OPCODE, trapMnemonic: ASIN_MNEMONIC };
+
+    const lower = arcLowerDomainExpression(condition, ast);
+    if (lower !== undefined) return { first: lower, trapOpcode: ASIN_OPCODE, trapMnemonic: ASIN_MNEMONIC };
+
+    return undefined;
+}
+
+function arcUpperDomainExpression(condition: ConditionAst, ast: ProgramAst): ExpressionAst | undefined {
+    const left = numericLiteralValue(condition.left);
+    const right = numericLiteralValue(condition.right);
+    switch (condition.op) {
+      case ">":
+        if (right === 1 && rangeCannotTrapBelowMinusOne(condition.left, ast)) return condition.left;
+        return undefined;
+      case "<":
+        if (left === 1 && rangeCannotTrapBelowMinusOne(condition.right, ast)) return condition.right;
+        return undefined;
+      case ">=":
+        if (right === 2 && isKnownIntegerValuedExpression(condition.left, ast) && rangeCannotTrapBelowMinusOne(condition.left, ast)) {
+          return condition.left;
+        }
+        return undefined;
+      case "<=":
+        if (left === 2 && isKnownIntegerValuedExpression(condition.right, ast) && rangeCannotTrapBelowMinusOne(condition.right, ast)) {
+          return condition.right;
+        }
+        return undefined;
+      default:
+        return undefined;
+    }
+}
+
+function arcLowerDomainExpression(condition: ConditionAst, ast: ProgramAst): ExpressionAst | undefined {
+    const left = numericLiteralValue(condition.left);
+    const right = numericLiteralValue(condition.right);
+    switch (condition.op) {
+      case "<":
+        if (right === -1 && rangeCannotTrapAboveOne(condition.left, ast)) return condition.left;
+        return undefined;
+      case ">":
+        if (left === -1 && rangeCannotTrapAboveOne(condition.right, ast)) return condition.right;
+        return undefined;
+      case "<=":
+        if (right === -2 && isKnownIntegerValuedExpression(condition.left, ast) && rangeCannotTrapAboveOne(condition.left, ast)) {
+          return condition.left;
+        }
+        return undefined;
+      case ">=":
+        if (left === -2 && isKnownIntegerValuedExpression(condition.right, ast) && rangeCannotTrapAboveOne(condition.right, ast)) {
+          return condition.right;
+        }
+        return undefined;
+      default:
+        return undefined;
+    }
+}
+
+function rangeCannotTrapBelowMinusOne(expr: ExpressionAst, ast: ProgramAst): boolean {
+    const range = numericRangeForExpression(expr, ast);
+    return range?.min !== undefined && range.min >= -1;
+}
+
+function rangeCannotTrapAboveOne(expr: ExpressionAst, ast: ProgramAst): boolean {
+    const range = numericRangeForExpression(expr, ast);
+    return range?.max !== undefined && range.max <= 1;
+}
+
 // Replace a terminal-trap guard with a self-trapping domain opcode. Speculative
 // (gated by loweringOptions.domainErrorGuards): emitting `F √` / `F lg` / `F 1/x`
 // collapses the compare + conditional branch + shared trap into one cell, and
@@ -351,7 +430,7 @@ export function compileDomainErrorGuard(ctx: LoweringCtx,
   ): boolean {
     if (ctx.loweringOptions.domainErrorGuards !== true) return false;
     if (!statementsAreDomainErrorTrap(ctx, statement.thenBody)) return false;
-    const plan = planDomainErrorGuard(statement.condition);
+    const plan = planDomainErrorGuard(statement.condition, ctx.ast);
     if (plan === undefined) return false;
 
     // Mirror compileCondition's X reuse: a bare identifier already sitting in X
@@ -378,24 +457,23 @@ export function compileDomainErrorGuard(ctx: LoweringCtx,
 }
 
 // Always-on generalization of the unit-decrement domain guards: when an
-// assignment `target = <expr>` is immediately followed by `if target <op> 0 {
-// trap }` (op in {<, <=, ==}) whose taken branch is a pure ЕГГОГ trap, the store
-// already leaves the freshly written value in X, so the comparison + branch +
-// shared trap collapse into a single self-trapping opcode on X. This covers the
-// non-unit cases the dedicated decrement peepholes reject — `x -= expr`,
-// `x = a - b`, etc. — without building a branch at all. Unlike the speculative
-// `domainErrorGuards` variant (which rewrites any guard, possibly perturbing
-// global layout), this fires only on the local store+test adjacency where it is
-// a strict local win, so it is safe to run unconditionally.
+// assignment `target = <expr>` is immediately followed by a pure ЕГГОГ trap
+// guarded by the same target, the store already leaves the freshly written value
+// in X, so the comparison + branch + shared trap collapse into a single
+// self-trapping opcode on X. This covers the non-unit cases the dedicated
+// decrement peepholes reject — `x -= expr`, `x = a - b`, etc. — without building
+// a branch at all. Unlike the speculative `domainErrorGuards` variant (which
+// rewrites any guard, possibly perturbing global layout), this fires only on the
+// local store+test adjacency where it is a strict local win, so it is safe to run
+// unconditionally.
 export function compileAssignThenDomainTrap(ctx: LoweringCtx,
     assign: Extract<StatementAst, { kind: "assign" }>,
     branch: Extract<StatementAst, { kind: "if" }>,
   ): boolean {
     if (!statementsAreDomainErrorTrap(ctx, branch.thenBody)) return false;
-    const plan = planDomainErrorGuard(branch.condition);
-    // Restrict to the "assigned scalar compared to zero" shape: a single operand
-    // (no difference to recompute) that is exactly the just-stored variable, so
-    // the trap reuses X with zero extra cells.
+    const plan = planDomainErrorGuard(branch.condition, ctx.ast);
+    // Restrict to a single-operand trap that is exactly the just-stored scalar,
+    // so the trap reuses X with zero extra cells.
     if (plan === undefined || plan.second !== undefined) return false;
     if (plan.first.kind !== "identifier" || plan.first.name !== assign.target) return false;
     if (ctx.allocation.registers[assign.target] === undefined) return false;
@@ -410,7 +488,7 @@ export function compileAssignThenDomainTrap(ctx: LoweringCtx,
     if (branch.elseBody !== undefined) ctx.compileStatements(branch.elseBody);
     ctx.optimizations.push({
       name: "assign-zero-domain-guard",
-      detail: `Fused ${assign.target} store and "${branch.condition.op} 0" terminal-error branch through ${plan.trapMnemonic}.`,
+      detail: `Fused ${assign.target} store and terminal-error branch through ${plan.trapMnemonic}.`,
     });
     return true;
 }

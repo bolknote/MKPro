@@ -1199,7 +1199,7 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     add(
       { domainErrorGuards: true },
       "domain-error-guards",
-      "Replaced terminal-error guards with self-trapping domain opcodes (F √ / F lg)",
+      "Replaced terminal-error guards with self-trapping domain opcodes (F √ / F lg / F sin^-1)",
     );
     add(
       { domainErrorGuards: true, unrollCountedLoops: true },
@@ -7841,10 +7841,7 @@ export class EmitContext {
     consumerReads: number,
   ): boolean {
     if (overwrittenByConsumer === temp) return true;
-    if (statementsReadIdentifierBeforeWrite(tail, temp)) return false;
-    if (!temp.startsWith(INTERNAL_NAME_PREFIX) && (this.readCounts.get(temp) ?? 0) !== consumerReads) {
-      return false;
-    }
+    if (statementsReadIdentifierBeforeWrite(tail, temp, this.ast)) return false;
     if (this.stackTempValueHasVisibleProgramRead(temp) && (this.readCounts.get(temp) ?? 0) !== consumerReads) {
       return false;
     }
@@ -8153,10 +8150,11 @@ export class EmitContext {
   ): boolean {
     if (!statementsAreDomainErrorTrap(this, branch.thenBody)) return false;
     // Route through the same opcode table as scalar guards: a single operand
-    // (compare-to-zero) that is exactly the indexed target, which `К X->П i`
-    // leaves in X. Sharing `planDomainErrorGuard` also gives indexed stores the
-    // `== 0` equality trap (`F 1/x`) the bespoke table used to omit.
-    const plan = planDomainErrorGuard(branch.condition);
+    // (compare-to-zero for indexed targets) that is exactly the indexed target,
+    // which `К X->П i` leaves in X. Sharing `planDomainErrorGuard` also gives
+    // indexed stores the `== 0` equality trap (`F 1/x`) the bespoke table used
+    // to omit.
+    const plan = planDomainErrorGuard(branch.condition, this.ast);
     if (plan === undefined || plan.second !== undefined) return false;
     if (!expressionEquals(plan.first, assign.target)) return false;
 
@@ -13435,18 +13433,19 @@ function collectXParamProcLowerings(
     if (params.length !== 1) continue;
     const param = params[0]!;
     const first = proc.body[0];
-    const indexed = first?.kind === "indexed_assign" && matchXParamFirstIndexedAssignment(first, param);
+    if (first === undefined) continue;
+    const indexed = first.kind === "indexed_assign" && matchXParamFirstIndexedAssignment(first, param);
     if (indexed !== true && countIdentifierReadsInStatements(proc.body, param) !== 1) continue;
-    const matched = first?.kind === "assign" ? matchXParamFirstAssignment(first, param) : undefined;
+    const matched = first.kind === "assign" ? matchXParamFirstAssignment(first, param) : undefined;
     if (matched === undefined && indexed !== true) continue;
     if (statementsReadIdentifier(proc.body.slice(1), param)) continue;
     if (!allProcCallsHaveImmediateParamAssignment(ast, proc.name, param)) continue;
-    if (first.kind === "indexed_assign") {
+    if (first.kind === "indexed_assign" && indexed === true) {
       result.set(proc.name, { param, first, kind: "indexed" });
-    } else {
-      result.set(proc.name, matched!.kind === "add"
-        ? { param, first, kind: "add", other: matched!.other }
-        : matched!.kind === "copy"
+    } else if (first.kind === "assign" && matched !== undefined) {
+      result.set(proc.name, matched.kind === "add"
+        ? { param, first, kind: "add", other: matched.other }
+        : matched.kind === "copy"
           ? { param, first, kind: "copy" }
           : { param, first, kind: "expr" });
     }
@@ -13565,12 +13564,48 @@ function flattenAdditionTerms(expr: ExpressionAst): ExpressionAst[] {
   return [expr];
 }
 
-function statementsReadIdentifierBeforeWrite(statements: readonly StatementAst[], name: string): boolean {
+type IdentifierFirstAccess = "read" | "write" | "none";
+
+function statementsReadIdentifierBeforeWrite(
+  statements: readonly StatementAst[],
+  name: string,
+  ast?: ProgramAst,
+): boolean {
+  return firstIdentifierAccess(statements, name, ast, new Set()) === "read";
+}
+
+function firstIdentifierAccess(
+  statements: readonly StatementAst[],
+  name: string,
+  ast: ProgramAst | undefined,
+  seenProcs: Set<string>,
+): IdentifierFirstAccess {
   for (const statement of statements) {
-    if (statementReadsIdentifier(statement, name)) return true;
-    if (statementWritesIdentifier(statement, name)) return false;
+    const access = statementFirstIdentifierAccess(statement, name, ast, seenProcs);
+    if (access !== "none") return access;
   }
-  return false;
+  return "none";
+}
+
+function statementFirstIdentifierAccess(
+  statement: StatementAst,
+  name: string,
+  ast: ProgramAst | undefined,
+  seenProcs: Set<string>,
+): IdentifierFirstAccess {
+  if (statement.kind === "call" && ast !== undefined) {
+    const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+    if (proc === undefined) return "none";
+    const key = `${name}\0${proc.name}`;
+    if (seenProcs.has(key)) return "none";
+    seenProcs.add(key);
+    const access = firstIdentifierAccess(proc.body, name, ast, seenProcs);
+    seenProcs.delete(key);
+    return access;
+  }
+  if (statementReadsIdentifier(statement, name)) return "read";
+  if (statementWritesIdentifier(statement, name)) return "write";
+  return "none";
 }
 
 function statementsReadIdentifierAsVisibleValue(ast: ProgramAst, name: string): boolean {

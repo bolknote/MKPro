@@ -3816,6 +3816,90 @@ program DeadTrapProcAfterGuards {
     expect(result.steps.some((step) => step.mnemonic === "К ÷")).toBe(false);
   });
 
+  it("uses an inverse trig domain trap for a ranged greater-than-one terminal guard", () => {
+    const result = compileLoweringVariantForTest(`
+program RangedArcDomainGuard {
+  state {
+    y: counter 0..5 = 0
+    result: counter 0..9 = 0
+  }
+
+  loop {
+    if y > 1 { halt("ЕГГОГ") }
+    result = 7
+    halt(result)
+  }
+}
+`, { budget: 999, analysis: true }, { domainErrorGuards: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "domain-error-guard")).toBe(true);
+    expect(result.steps.some((step) => step.opcode === 0x19 && step.comment === "domain-error guard trap")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "domain guard difference")).toBe(false);
+  });
+
+  it("uses the integer range proof for a ranged greater-or-equal-two terminal guard", () => {
+    const result = compileLoweringVariantForTest(`
+program RangedArcDomainGuard {
+  state {
+    y: counter 0..5 = 0
+    result: counter 0..9 = 0
+  }
+
+  loop {
+    if y >= 2 { halt("ЕГГОГ") }
+    result = 7
+    halt(result)
+  }
+}
+`, { budget: 999, analysis: true }, { domainErrorGuards: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "domain-error-guard")).toBe(true);
+    expect(result.steps.some((step) => step.opcode === 0x19 && step.comment === "domain-error guard trap")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "domain guard difference")).toBe(false);
+  });
+
+  it("uses an inverse trig domain trap for a ranged less-than-minus-one terminal guard", () => {
+    const result = compileLoweringVariantForTest(`
+program RangedArcDomainGuard {
+  state {
+    y: counter -5..0 = 0
+    result: counter 0..9 = 0
+  }
+
+  loop {
+    if y < -1 { halt("ЕГГОГ") }
+    result = 7
+    halt(result)
+  }
+}
+`, { budget: 999, analysis: true }, { domainErrorGuards: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "domain-error-guard")).toBe(true);
+    expect(result.steps.some((step) => step.opcode === 0x19 && step.comment === "domain-error guard trap")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "domain guard difference")).toBe(false);
+  });
+
+  it("does not use an inverse trig trap without a range excluding the opposite side", () => {
+    const result = compileLoweringVariantForTest(`
+program UnrangedArcDomainGuard {
+  state {
+    x: packed = 0
+    result: counter 0..9 = 0
+  }
+
+  loop {
+    if x > 1 { halt("ЕГГОГ") }
+    result = 7
+    halt(result)
+  }
+}
+`, { budget: 999, analysis: true }, { domainErrorGuards: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "domain-error-guard")).toBe(true);
+    expect(result.steps.some((step) => step.opcode === 0x19 && step.comment === "domain-error guard trap")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "domain guard difference")).toBe(true);
+  });
+
   it("keeps a read key on stack while checking resource underflow before dispatch", () => {
     const result = compileOk(`
 program ReadKeyResourceUnderflow {
@@ -4626,6 +4710,61 @@ program BranchStateStackTemp {
       item.name === "stack-current-x-scheduling" &&
       item.detail.includes("single-use temp pos")
     )).toBe(false);
+  });
+
+  it("keeps an indexed stack temp when a later proc overwrites it before reading", () => {
+    const result = compileLoweringVariantForTest(`
+program StackTempProcOverwrite {
+  state {
+    cells: packed[1..2] = [1, 2]
+    index: counter 1..2 = 1
+    tmp: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    tmp = 3
+    cells[index] = cells[index] + tmp
+    reset_tmp()
+    halt(cells[index] + out)
+  }
+
+  fn reset_tmp() {
+    tmp = 0
+    out = tmp
+  }
+}
+`, { budget: 999, analysis: true }, { stackResidentTemps: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "stack-resident-indexed-temp")).toBe(true);
+  });
+
+  it("stores an indexed stack temp when a later proc reads it before writing", () => {
+    const result = compileLoweringVariantForTest(`
+program StackTempProcReadBeforeWrite {
+  state {
+    cells: packed[1..2] = [1, 2]
+    index: counter 1..2 = 1
+    tmp: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    tmp = 3
+    cells[index] = cells[index] + tmp
+    use_tmp()
+    halt(cells[index] + out)
+  }
+
+  fn use_tmp() {
+    out = tmp
+    tmp = 0
+  }
+}
+`, { budget: 999, analysis: true }, { stackResidentTemps: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "stack-resident-indexed-temp")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "set tmp")).toBe(true);
   });
 
   it("decrements a one-reachable counter through the indirect pre-decrement, not F Lx", () => {
