@@ -83,6 +83,39 @@ function referencesAnyTemp(expr: import("../types.ts").ExpressionAst, temps: rea
   return temps.some((temp) => countIdentifierReads(expr, temp) > 0);
 }
 
+function canCompileStackResidentExpression(
+  expr: import("../types.ts").ExpressionAst,
+  temps: readonly string[],
+): boolean {
+  switch (expr.kind) {
+    case "identifier":
+      return true;
+    case "number":
+    case "string":
+      return true;
+    case "indexed":
+      return !referencesAnyTemp(expr.index, temps);
+    case "unary":
+      return canCompileStackResidentExpression(expr.expr, temps);
+    case "binary":
+      return canCompileStackResidentExpression(expr.left, temps) &&
+        canCompileStackResidentExpression(expr.right, temps);
+    case "call": {
+      const name = expr.callee.toLowerCase();
+      const unary = STACK_TEMP_UNARY_CALL_OPCODES[name];
+      if (unary !== undefined && expr.args.length === 1) {
+        return canCompileStackResidentExpression(expr.args[0]!, temps);
+      }
+      const binary = STACK_TEMP_BINARY_CALL_OPCODES[name];
+      if (binary !== undefined && expr.args.length === 2) {
+        return canCompileStackResidentExpression(expr.args[0]!, temps) &&
+          canCompileStackResidentExpression(expr.args[1]!, temps);
+      }
+      return !referencesAnyTemp(expr, temps);
+    }
+  }
+}
+
 function compileStackResidentExpression(
   ctx: LoweringCtx,
   expr: import("../types.ts").ExpressionAst,
@@ -292,6 +325,8 @@ export function compileMultiStackResidentTemps(
   ) {
     return 0;
   }
+  const tempNames = site.temps.map((segment) => segment.assign.target);
+  if (!canCompileStackResidentExpression(consumer.expr, tempNames)) return 0;
 
   emitStackResidentFusion(ctx, site);
   return site.consumerIndex - start + 1;

@@ -388,6 +388,9 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
       });
       return;
     }
+    if (name === "packed_score" && compilePackedScoreStackHelperCall(ctx, expr)) {
+      return;
+    }
     const macro = packedGridExpressionMacro(name, expr.args);
     if (macro !== undefined) {
       compileExpression(ctx, macro);
@@ -652,8 +655,24 @@ function expressionContainsValidRandom(expr: ExpressionAst): boolean {
     case "call":
       return (expr.callee.toLowerCase() === "random" && expr.args.length <= 2) ||
         expr.args.some(expressionContainsValidRandom);
+    }
   }
-}
+
+export function compilePackedScoreStackHelperCall(
+    ctx: LoweringCtx,
+    expr: Extract<ExpressionAst, { kind: "call" }>,
+  ): boolean {
+    const helper = ctx.sharedPackedScoreStackHelper(undefined);
+    if (helper === undefined) return false;
+    compileExpression(ctx, expr.args[0]!);
+    compileExpression(ctx, expr.args[1]!);
+    ctx.emitJump(0x53, "ПП", helper.label, "packed_score helper");
+    ctx.optimizations.push({
+      name: "packed-score-stack-helper-call",
+      detail: "Reused shared packed_score stack helper for packed-line scoring.",
+    });
+    return true;
+  }
 
 function compileCommutativeCallWithCurrentX(
   ctx: LoweringCtx,

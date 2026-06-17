@@ -53,10 +53,12 @@ import {
   comparisonSelectorExpression,
   conditionCompileCost,
   conditionEquals,
+  conditionToText,
   coordListHasCall,
   coordListHasConditionCall,
   coordListItemInfo,
   coordListLineCountCall,
+  countExpressionCalls,
   countIdentifierReads,
   countIdentifierReadsInCondition,
   countStatements,
@@ -1006,6 +1008,12 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     "sizeRescue",
   );
   add(
+    { dualUseConstantIndirectFlow: true, tailBranchInversion: true },
+    "dual-use-constant-tail-branch-layout",
+    "Combined dual-use constant indirect-flow selectors with tail-branch inversion after full layout",
+    "sizeRescue",
+  );
+  add(
     { indirectUnderflowDecrement: true },
     "indirect-underflow-decrement",
     "Used R0..R3 indirect pre-decrement for terminal underflow guards when full-program layout wins",
@@ -1318,6 +1326,8 @@ function enumerateExpansionCandidateSpecs(ctx: CandidateEnumerationContext): Can
   const semanticBundles: Array<{ options: LoweringOptions; name: string; detail: string }> = [
     { options: { stackResidentTemps: true }, name: "stack-resident-temps", detail: "stack-resident temporaries" },
     { options: { sharedBitMaskHelperCalls: true }, name: "shared-bit-mask-helper", detail: "shared bit_mask helper calls" },
+    { options: { dualUseConstantIndirectFlow: true }, name: "dual-use-constant-indirect-flow", detail: "dual-use constant indirect-flow selectors" },
+    { options: { dualUseConstantIndirectFlow: true, tailBranchInversion: true }, name: "dual-use-constant-tail-branch", detail: "dual-use constant indirect-flow selectors with tail-branch inversion" },
   ];
 
   for (const bundle of semanticBundles) {
@@ -2455,6 +2465,7 @@ function compileMKProOnce(
   inlineDisplayStringValues(ast, optimizations);
   trimDisplayEdgeWhitespace(ast, optimizations);
   fuseTailCopyAssignments(ast, optimizations);
+  inlineIndexedBitReportBranchTemps(ast, optimizations);
   eliminateUnobservedState(ast, optimizations, {
     preserveDispatchCaseOrder: loweringOptions.preserveDispatchCaseOrder === true,
   });
@@ -4493,6 +4504,158 @@ function fuseTailCopyAssignments(ast: ProgramAst, optimizations: AppliedOptimiza
     name: "tail-copy-assignment-fusion",
     detail: `Fused ${fused} tail copy assignment${fused === 1 ? "" : "s"} before state liveness.`,
   });
+}
+
+function inlineIndexedBitReportBranchTemps(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let inlined = 0;
+
+  const rewriteStatement = (statement: StatementAst): StatementAst => {
+    if (statement.kind === "loop" || statement.kind === "while") {
+      return { ...statement, body: rewriteStatements(statement.body) };
+    }
+    if (statement.kind === "if") {
+      const rewritten: Extract<StatementAst, { kind: "if" }> = {
+        ...statement,
+        thenBody: rewriteStatements(statement.thenBody),
+      };
+      if (statement.elseBody !== undefined) rewritten.elseBody = rewriteStatements(statement.elseBody);
+      return rewritten;
+    }
+    if (statement.kind === "dispatch") {
+      return {
+        ...statement,
+        cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: rewriteStatements(dispatchCase.body) })),
+        ...(statement.defaultBody === undefined ? {} : { defaultBody: rewriteStatements(statement.defaultBody) }),
+      };
+    }
+    return statement;
+  };
+
+  const rewriteStatements = (statements: StatementAst[]): StatementAst[] => {
+    const result: StatementAst[] = [];
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const report = statements[index + 1];
+      const branch = statements[index + 2];
+      if (statement.kind === "indexed_assign" && report?.kind === "assign" && branch?.kind === "if") {
+        const rewritten = inlineIndexedBitReportBranchTemp(ast, statement, report, branch);
+        if (rewritten !== undefined) {
+          result.push(rewriteStatement(statement), rewritten);
+          inlined += 1;
+          index += 2;
+          continue;
+        }
+      }
+      result.push(rewriteStatement(statement));
+    }
+    return result;
+  };
+
+  for (const entry of ast.entries) entry.body = rewriteStatements(entry.body);
+  for (const proc of ast.procs) proc.body = rewriteStatements(proc.body);
+
+  if (inlined === 0) return;
+  optimizations.push({
+    name: "indexed-packed-report-temp-inline",
+    detail: `Inlined ${inlined} packed report temp${inlined === 1 ? "" : "s"} before state liveness so indexed packed report branches can reuse the updated cell in X.`,
+  });
+}
+
+function inlineIndexedBitReportBranchTemp(
+  ast: ProgramAst,
+  assign: Extract<StatementAst, { kind: "indexed_assign" }>,
+  temp: Extract<StatementAst, { kind: "assign" }>,
+  branch: Extract<StatementAst, { kind: "if" }>,
+): Extract<StatementAst, { kind: "if" }> | undefined {
+  if (indexedPow10DeltaUpdate(assign) === undefined) return undefined;
+  if (numericIndexValue(assign.target.index) !== undefined) return undefined;
+  if (!expressionPureForSubstitution(assign.target.index)) return undefined;
+  if (branch.elseBody !== undefined) return undefined;
+  if (branch.thenBody.length !== 1) return undefined;
+  const halt = branch.thenBody[0];
+  if (halt?.kind !== "halt" || halt.literal !== undefined) return undefined;
+
+  const report = bitAndReportForTarget(temp.expr, assign.target);
+  if (report === undefined || !isSimpleStackLoad(report.mask)) return undefined;
+  if (!expressionEquals(halt.expr, { kind: "identifier", name: temp.target })) return undefined;
+  if (countIdentifierReadsInStatement(branch, temp.target) !== 2) return undefined;
+  if (countIdentifierReadsInProgram(ast, temp.target) !== 2) return undefined;
+
+  const fractional = fractionalTempReportCondition(branch.condition, temp.target);
+  if (fractional !== undefined) {
+    const condition = fractional.side === "left"
+      ? {
+        ...branch.condition,
+        left: { kind: "call" as const, callee: "frac", args: [structuredClone(report.expr)] },
+        right: structuredClone(fractional.other),
+      }
+      : {
+        ...branch.condition,
+        left: structuredClone(fractional.other),
+        right: { kind: "call" as const, callee: "frac", args: [structuredClone(report.expr)] },
+      };
+    return {
+      ...branch,
+      condition,
+      thenBody: [{ ...halt, expr: structuredClone(report.expr) }],
+    };
+  }
+
+  const plain = plainTempReportCondition(branch.condition, temp.target);
+  if (plain === undefined) return undefined;
+  if (!isSimpleStackLoad(plain.neutral) || numericLiteralValue(plain.neutral) === undefined) return undefined;
+  const condition = plain.side === "left"
+    ? {
+      ...branch.condition,
+      left: structuredClone(report.expr),
+      right: structuredClone(plain.neutral),
+    }
+    : {
+      ...branch.condition,
+      left: structuredClone(plain.neutral),
+      right: structuredClone(report.expr),
+    };
+  return {
+    ...branch,
+    condition,
+    thenBody: [{ ...halt, expr: structuredClone(report.expr) }],
+  };
+}
+
+function fractionalTempReportCondition(
+  condition: ConditionAst,
+  temp: string,
+): { side: "left" | "right"; other: ExpressionAst } | undefined {
+  if (condition.op !== "!=") return undefined;
+  if (isFracOfIdentifier(condition.left, temp) && isZeroExpression(condition.right)) {
+    return { side: "left", other: condition.right };
+  }
+  if (isFracOfIdentifier(condition.right, temp) && isZeroExpression(condition.left)) {
+    return { side: "right", other: condition.left };
+  }
+  return undefined;
+}
+
+function plainTempReportCondition(
+  condition: ConditionAst,
+  temp: string,
+): { side: "left" | "right"; neutral: ExpressionAst } | undefined {
+  if (condition.op !== "!=") return undefined;
+  if (condition.left.kind === "identifier" && condition.left.name === temp) {
+    return { side: "left", neutral: condition.right };
+  }
+  if (condition.right.kind === "identifier" && condition.right.name === temp) {
+    return { side: "right", neutral: condition.left };
+  }
+  return undefined;
+}
+
+function isFracOfIdentifier(expr: ExpressionAst, name: string): boolean {
+  return expr.kind === "call" &&
+    expr.callee.toLowerCase() === "frac" &&
+    expr.args.length === 1 &&
+    expr.args[0]?.kind === "identifier" &&
+    expr.args[0].name === name;
 }
 
 function countIdentifierReadsInProgram(ast: ProgramAst, name: string): number {
@@ -6725,6 +6888,9 @@ export class EmitContext {
   get randomCellHelpers() {
     return this.helpers.randomCellHelpers;
   }
+  get packedScoreStackHelper() {
+    return this.helpers.packedScoreStackHelper;
+  }
   get nearAnyHelpers() {
     return this.helpers.nearAnyHelpers;
   }
@@ -6999,6 +7165,10 @@ export class EmitContext {
         index += 1;
         continue;
       }
+      if (statement.kind === "assign" && next?.kind === "if" && compileBitOrTestAndSetBranch(this, statement, next)) {
+        index += 1;
+        continue;
+      }
       if (statement.kind === "assign" && next?.kind === "if" && this.compileMaxAssignEqualityBranch(statement, next)) {
         index += 1;
         continue;
@@ -7012,6 +7182,10 @@ export class EmitContext {
         continue;
       }
       if (statement.kind === "indexed_assign" && next?.kind === "if" && this.compileIndexedAssignThenDomainTrap(statement, next)) {
+        index += 1;
+        continue;
+      }
+      if (statement.kind === "indexed_assign" && next?.kind === "if" && this.compileIndexedPow10DeltaBitReportBranch(statement, next)) {
         index += 1;
         continue;
       }
@@ -8188,6 +8362,53 @@ export class EmitContext {
     this.optimizations.push({
       name: "indexed-packed-pow10-delta",
       detail: `Updated ${bankMemberKey(statement.target.base, statement.target.field)}[${expressionToIntentText(statement.target.index)}] by ${delta.op} pow10-shaped term at line ${statement.line}.`,
+    });
+    return true;
+  }
+
+  compileIndexedPow10DeltaBitReportBranch(
+    assign: Extract<StatementAst, { kind: "indexed_assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    const fractional = indexedPow10DeltaFractionalBitReportBranch(assign, branch);
+    if (fractional !== undefined) {
+      if (!this.compileIndexedPow10Delta(assign)) return false;
+
+      compileExpression(this, fractional.mask);
+      this.emitOp(0x37, "К ∧", "updated packed fractional report mask", branch.line);
+      this.emitOp(0x0e, "В↑", "updated packed fractional report keep", branch.line);
+      this.emitOp(0x35, "К {x}", "updated packed fractional report predicate", branch.line);
+
+      const falseLabel = this.freshLabel("packed_frac_report_false");
+      this.emitJump(0x57, "F x≠0", falseLabel, "false branch for packed fractional report !=", branch.line);
+      this.emitOp(0x25, "F reverse", "updated packed fractional report restore", branch.line);
+      this.emitOp(0x50, "С/П", "halt", branch.thenBody[0]?.line ?? branch.line);
+      this.emitLabel(falseLabel);
+      this.optimizations.push({
+        name: "indexed-packed-fractional-report-branch",
+        detail: `Reused ${expressionToIntentText(assign.target)} left in X after a packed update for fractional ${conditionToText(branch.condition)} at line ${branch.line}.`,
+      });
+      return true;
+    }
+
+    const report = indexedPow10DeltaBitReportBranch(assign, branch);
+    if (report === undefined) return false;
+    if (!this.compileIndexedPow10Delta(assign)) return false;
+
+    compileExpression(this, report.mask);
+    this.emitOp(0x37, "К ∧", "updated packed report mask", branch.line);
+    compileExpression(this, report.neutral);
+    this.emitOp(0x11, "-", "updated packed report compare", branch.line);
+
+    const falseLabel = this.freshLabel("packed_report_false");
+    this.emitJump(0x57, "F x≠0", falseLabel, "false branch for packed report !=", branch.line);
+    compileExpression(this, report.neutral);
+    this.emitOp(0x10, "+", "updated packed report restore", branch.line);
+    this.emitOp(0x50, "С/П", "halt", branch.thenBody[0]?.line ?? branch.line);
+    this.emitLabel(falseLabel);
+    this.optimizations.push({
+      name: "indexed-packed-bit-report-branch",
+      detail: `Reused ${expressionToIntentText(assign.target)} left in X after a packed update for ${conditionToText(branch.condition)} at line ${branch.line}.`,
     });
     return true;
   }
@@ -10039,6 +10260,17 @@ export class EmitContext {
       label: `__expr_${this.expressionHelpers.size}`,
     };
     this.expressionHelpers.set(key, helper);
+    return helper;
+  }
+
+  sharedPackedScoreStackHelper(line: number | undefined): { label: string; line?: number } | undefined {
+    if (countExpressionCalls(this.ast, "packed_score") < 3) return undefined;
+    if (this.helpers.packedScoreStackHelper !== undefined) return this.helpers.packedScoreStackHelper;
+    const helper = {
+      label: "__packed_score",
+      ...(line === undefined ? {} : { line }),
+    };
+    this.helpers.packedScoreStackHelper = helper;
     return helper;
   }
 
@@ -12538,10 +12770,167 @@ function indexedPow10DeltaUpdate(
   statement: Extract<StatementAst, { kind: "indexed_assign" }>,
 ): { op: "+" | "-"; term: ExpressionAst } | undefined {
   const expr = statement.expr;
+  if (expr.kind === "call" && expr.callee.toLowerCase() === "packed_add" && expr.args.length === 3) {
+    if (!expressionEquals(expr.args[0]!, statement.target)) return undefined;
+    return {
+      op: "+",
+      term: multiplyExpressions(expr.args[2]!, {
+        kind: "call",
+        callee: "pow10",
+        args: [expr.args[1]!],
+      }),
+    };
+  }
   if (expr.kind !== "binary" || (expr.op !== "+" && expr.op !== "-")) return undefined;
   if (!expressionEquals(expr.left, statement.target)) return undefined;
   if (!isPow10Term(expr.right)) return undefined;
   return { op: expr.op, term: expr.right };
+}
+
+function indexedPow10DeltaBitReportBranch(
+  assign: Extract<StatementAst, { kind: "indexed_assign" }>,
+  branch: Extract<StatementAst, { kind: "if" }>,
+): { mask: ExpressionAst; neutral: ExpressionAst } | undefined {
+  if (indexedPow10DeltaUpdate(assign) === undefined) return undefined;
+  if (branch.elseBody !== undefined) return undefined;
+  if (branch.thenBody.length !== 1) return undefined;
+  const halt = branch.thenBody[0];
+  if (halt?.kind !== "halt" || halt.literal !== undefined) return undefined;
+  if (branch.condition.op !== "!=") return undefined;
+
+  const left = bitAndReportForTarget(branch.condition.left, assign.target);
+  const right = bitAndReportForTarget(branch.condition.right, assign.target);
+  const report = left === undefined
+    ? (right === undefined ? undefined : { report: right, neutral: branch.condition.left })
+    : { report: left, neutral: branch.condition.right };
+  if (report === undefined) return undefined;
+  if (!expressionEquals(halt.expr, report.report.expr)) return undefined;
+  if (!isSimpleStackLoad(report.report.mask) || !isSimpleStackLoad(report.neutral)) return undefined;
+  if (numericLiteralValue(report.neutral) === undefined) return undefined;
+  return { mask: report.report.mask, neutral: report.neutral };
+}
+
+function indexedPow10DeltaFractionalBitReportBranch(
+  assign: Extract<StatementAst, { kind: "indexed_assign" }>,
+  branch: Extract<StatementAst, { kind: "if" }>,
+): { mask: ExpressionAst } | undefined {
+  if (indexedPow10DeltaUpdate(assign) === undefined) return undefined;
+  if (branch.elseBody !== undefined) return undefined;
+  if (branch.thenBody.length !== 1) return undefined;
+  const halt = branch.thenBody[0];
+  if (halt?.kind !== "halt" || halt.literal !== undefined) return undefined;
+  if (branch.condition.op !== "!=") return undefined;
+
+  const left = fractionalBitAndReportForTarget(branch.condition.left, assign.target);
+  const right = fractionalBitAndReportForTarget(branch.condition.right, assign.target);
+  const report = left === undefined
+    ? (right === undefined ? undefined : (isZeroExpression(branch.condition.left) ? right : undefined))
+    : (isZeroExpression(branch.condition.right) ? left : undefined);
+  if (report === undefined) return undefined;
+  if (!expressionEquals(halt.expr, report.expr)) return undefined;
+  if (!isSimpleStackLoad(report.mask)) return undefined;
+  return { mask: report.mask };
+}
+
+function fractionalBitAndReportForTarget(
+  expr: ExpressionAst,
+  target: Extract<ExpressionAst, { kind: "indexed" }>,
+): { expr: ExpressionAst; mask: ExpressionAst } | undefined {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "frac" || expr.args.length !== 1) return undefined;
+  return bitAndReportForTarget(expr.args[0]!, target);
+}
+
+function bitAndReportForTarget(
+  expr: ExpressionAst,
+  target: Extract<ExpressionAst, { kind: "indexed" }>,
+): { expr: ExpressionAst; mask: ExpressionAst } | undefined {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_and" || expr.args.length !== 2) return undefined;
+  const [left, right] = expr.args;
+  if (left !== undefined && right !== undefined && expressionEquals(left, target)) {
+    return { expr, mask: right };
+  }
+  if (left !== undefined && right !== undefined && expressionEquals(right, target)) {
+    return { expr, mask: left };
+  }
+  return undefined;
+}
+
+function compileBitOrTestAndSetBranch(
+  ctx: EmitContext,
+  assign: Extract<StatementAst, { kind: "assign" }>,
+  branch: Extract<StatementAst, { kind: "if" }>,
+): boolean {
+  const match = bitOrTestAndSetBranch(assign, branch, ctx.ast);
+  if (match === undefined) return false;
+
+  compileExpression(ctx, { kind: "identifier", name: match.collection });
+  compileExpression(ctx, assign.expr);
+  ctx.emitOp(0x38, "К ∨", "bit_or test-and-set value", assign.line);
+  ctx.emitStore(match.collection, `bit_or test-and-set ${match.collection}`, match.update.line);
+  ctx.emitOp(0x11, "-", "bit_or test-and-set changed", branch.line);
+
+  const changedLabel = ctx.freshLabel("bit_or_test_set_changed");
+  const endLabel = ctx.freshLabel("bit_or_test_set_end");
+  ctx.emitJump(0x5e, "F x=0", changedLabel, "false branch for bit_or test-and-set occupied", branch.line);
+  ctx.compileStatements(branch.thenBody);
+  ctx.emitJump(0x51, "БП", endLabel, "if end", branch.line);
+  ctx.emitLabel(changedLabel);
+  ctx.compileStatements(match.elseTail);
+  ctx.emitLabel(endLabel);
+  ctx.optimizations.push({
+    name: "bit-or-test-and-set-branch",
+    detail: `Combined ${match.collection} membership test, bit_or update, and occupied branch at line ${branch.line}.`,
+  });
+  return true;
+}
+
+function bitOrTestAndSetBranch(
+  assign: Extract<StatementAst, { kind: "assign" }>,
+  branch: Extract<StatementAst, { kind: "if" }>,
+  ast: ProgramAst,
+): { collection: string; update: Extract<StatementAst, { kind: "assign" }>; elseTail: StatementAst[] } | undefined {
+  if (!expressionIsDeterministic(assign.expr)) return undefined;
+  if (branch.condition.op !== "!=") return undefined;
+  if (branch.elseBody === undefined || branch.elseBody.length === 0) return undefined;
+  const condition = bitAndMembershipForTemp(branch.condition.left, branch.condition.right, assign.target) ??
+    bitAndMembershipForTemp(branch.condition.right, branch.condition.left, assign.target);
+  if (condition === undefined) return undefined;
+  if (condition.collection === assign.target) return undefined;
+  const update = branch.elseBody[0];
+  if (update?.kind !== "assign" || update.target !== condition.collection) return undefined;
+  if (!isBitOrUpdate(update.expr, condition.collection, assign.target)) return undefined;
+  if (statementsReadIdentifierBeforeWrite(branch.thenBody, assign.target, ast)) return undefined;
+  const elseTail = branch.elseBody.slice(1);
+  if (statementsReadIdentifierBeforeWrite(elseTail, assign.target, ast)) return undefined;
+  return { collection: condition.collection, update, elseTail };
+}
+
+function bitAndMembershipForTemp(
+  expr: ExpressionAst,
+  zero: ExpressionAst,
+  temp: string,
+): { collection: string } | undefined {
+  if (!isZeroExpression(zero)) return undefined;
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_and" || expr.args.length !== 2) return undefined;
+  const [left, right] = expr.args;
+  if (left?.kind === "identifier" && right?.kind === "identifier" && right.name === temp) {
+    return { collection: left.name };
+  }
+  if (left?.kind === "identifier" && left.name === temp && right?.kind === "identifier") {
+    return { collection: right.name };
+  }
+  return undefined;
+}
+
+function isBitOrUpdate(expr: ExpressionAst, collection: string, temp: string): boolean {
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_or" || expr.args.length !== 2) return false;
+  const [left, right] = expr.args;
+  return identifierExpressionName(left) === collection && identifierExpressionName(right) === temp ||
+    identifierExpressionName(left) === temp && identifierExpressionName(right) === collection;
+}
+
+function identifierExpressionName(expr: ExpressionAst | undefined): string | undefined {
+  return expr?.kind === "identifier" ? expr.name : undefined;
 }
 
 function maxAssignCandidate(

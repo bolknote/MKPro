@@ -855,6 +855,21 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
         detail: `Emitted shared helper for ${expressionToIntentText(helper.expr)}.`,
       });
     }
+    if (ctx.packedScoreStackHelper !== undefined) {
+      const helper = ctx.packedScoreStackHelper;
+      ctx.emitLabel(helper.label);
+      ctx.emitOp(0x15, "F 10ˣ", "packed_score helper pow10", helper.line);
+      ctx.emitOp(0x13, "/", "packed_score helper divide", helper.line);
+      ctx.emitOp(0x35, "К {x}", "packed_score helper frac", helper.line);
+      ctx.emitNumberOrPreload("0.41200076");
+      ctx.emitOp(0x11, "-", "packed_score helper center", helper.line);
+      ctx.emitOp(0x22, "F x²", "packed_score helper square", helper.line);
+      ctx.emitOp(0x52, "В/О", "packed_score helper return", helper.line);
+      ctx.optimizations.push({
+        name: "packed-score-stack-helper",
+        detail: "Emitted shared stack helper for packed_score(value, index).",
+      });
+    }
     for (const helper of ctx.nearAnyHelpers.values()) {
       ctx.emitLabel(helper.label);
       compileExpression(ctx, helper.value);

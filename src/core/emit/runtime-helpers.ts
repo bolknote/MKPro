@@ -22,6 +22,11 @@ interface ExpressionHelper {
   line?: number;
 }
 
+interface PackedScoreStackHelper {
+  label: string;
+  line?: number;
+}
+
 interface NearAnyHelper {
   value: ExpressionAst;
   radius: ExpressionAst;
@@ -81,6 +86,7 @@ export class RuntimeHelperRegistry {
   readonly showSequenceHelpers = new Map<string, ShowSequenceHelper>();
   readonly expressionHelpers = new Map<string, ExpressionHelper>();
   readonly randomCellHelpers = new Map<string, ExpressionHelper>();
+  packedScoreStackHelper: PackedScoreStackHelper | undefined;
   readonly nearAnyHelpers = new Map<string, NearAnyHelper>();
   readonly lineCountHelpers = new Map<string, LineCountHelper>();
   readonly spatialBitMaskHelpers = new Map<string, SpatialBitMaskHelper>();

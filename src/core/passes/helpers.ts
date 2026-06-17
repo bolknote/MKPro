@@ -14846,7 +14846,12 @@ function stackDifferenceCanReachConsumer(
         case "plain": {
           const effect = analyzeX2StackEffect(op);
           if (effect.stackEffect === "unknown" || effect.stackExposes) return true;
-          if (effect.stackEffect === "barrier") return false;
+          if (effect.stackEffect === "barrier") {
+            // Context-sensitive entry commands can overwrite X while leaving
+            // deeper stack slots intact. A removed lift whose only difference
+            // is already below X may still be consumed by a later binary op.
+            return depth !== 1;
+          }
           if (effect.stackShifts) {
             depth = shiftDifference(depth);
             break;
