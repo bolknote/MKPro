@@ -18,6 +18,7 @@ program TicTacToe4x4 {
     best_score: packed = -1
     score: packed = 0
     line: packed = 0
+    slot: counter 0..5 = 0
   }
 
   fn draw() {
@@ -26,14 +27,6 @@ program TicTacToe4x4 {
 
   fn occupied_cell() {
     show(-99999999)
-  }
-
-  fn human_won() {
-    halt(0)
-  }
-
-  fn calculator_won() {
-    halt(8)
   }
 
   loop {
@@ -47,42 +40,31 @@ program TicTacToe4x4 {
     else {
       occupied = bit_or(occupied, cell_mask(x, y))
       score = 0
-      mark_lines_and_check(-1)
+      mark_lines_and_check()
       choose_calculator_move()
       occupied = bit_or(occupied, cell_mask(x, y))
       score = 8
-      mark_lines_and_check(1)
+      mark_lines_and_check()
     }
   }
 
-  fn mark_lines_and_check(delta) {
-    lines[1] = packed_add(lines[1], y, delta)
-    if packed_digit(lines[1], y) == score {
-      finish_win()
+  fn mark_one(next_slot) {
+    slot = next_slot
+    lines[slot] = packed_add(lines[slot], line, sign(score - 4))
+    if packed_digit(lines[slot], line) == score {
+      halt(score)
     }
-    lines[2] = packed_add(lines[2], x, delta)
-    if packed_digit(lines[2], x) == score {
-      finish_win()
-    }
+  }
+
+  fn mark_lines_and_check() {
+    line = y
+    mark_one(1)
+    line = x
+    mark_one(2)
     normalize_sum()
-    lines[3] = packed_add(lines[3], line, delta)
-    if packed_digit(lines[3], line) == score {
-      finish_win()
-    }
+    mark_one(3)
     normalize_diff()
-    lines[4] = packed_add(lines[4], line, delta)
-    if packed_digit(lines[4], line) == score {
-      finish_win()
-    }
-  }
-
-  fn finish_win() {
-    if score == 0 {
-      human_won()
-    }
-    else {
-      calculator_won()
-    }
+    mark_one(4)
   }
 
   fn choose_calculator_move() {
@@ -123,14 +105,14 @@ program TicTacToe4x4 {
 
   fn normalize_sum() {
     line = frac(int(x + y) / 4) * 4
-    if line <= 0 {
+    if line == 0 {
       line += 4
     }
   }
 
   fn normalize_diff() {
     line = frac(int(x - y) / 4) * 4
-    if line <= 0 {
+    if line == 0 {
       line += 4
     }
   }

@@ -90,7 +90,9 @@ describe("MK-Pro compiler", () => {
     expect(game).toContain("cell_mask(x, y)");
     expect(game).toContain("lines: packed[1..4]");
     expect(game).toContain("fn candidate_score()");
-    expect(game).toContain("fn mark_lines_and_check(delta)");
+    expect(game).toContain("fn mark_lines_and_check()");
+    expect(game).toContain("fn mark_one(next_slot)");
+    expect(game).toContain("sign(score - 4)");
     expect(game).toContain("while y >= 1");
     expect(game).toContain("while x >= 1");
     expect(game).not.toMatch(/\bcore\s*\{/u);
