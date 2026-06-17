@@ -1128,6 +1128,33 @@ program ConstantMaxZeroFold {
     expect(result.report.optimizations.some((item) => item.name === "expression-constant-folder")).toBe(true);
   });
 
+  it("reuses the max candidate for a following equality branch", () => {
+    const result = compileOk(`
+program MaxAssignEqualityBranch {
+  state {
+    best: packed = -1
+    score: packed = 0
+    cell: counter 0..9 = 3
+    chosen: counter 0..9 = 0
+  }
+  loop {
+    score = read()
+    best = max(score, best)
+    if score == best {
+      chosen = cell
+    }
+    halt(chosen + best)
+  }
+}
+`, { budget: 999, analysis: true });
+    const maxIndex = result.steps.findIndex((step) => step.opcode === 0x36);
+
+    expect(result.report.optimizations.some((item) => item.name === "max-assign-equality-branch")).toBe(true);
+    expect(maxIndex).toBeGreaterThanOrEqual(0);
+    expect(result.steps[maxIndex + 1]?.comment).toContain("set best");
+    expect(result.steps[maxIndex + 2]?.opcode).toBe(0x11);
+  });
+
   it("lowers MK-61 primitive functions from V2 formulas", () => {
     const result = compileOk(`
 program FormulaPrimitives {

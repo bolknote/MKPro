@@ -96,6 +96,11 @@ describe("MK-Pro compiler", () => {
     expect(game).toContain("score = mark_score");
     expect(game).toContain("fn mark_one(next_slot)");
     expect(game).toContain("sign(score - 4)");
+    expect(game).toContain("best_score = max(score, best_score)");
+    expect(game).toContain("if score == best_score");
+    expect(game).toContain("normalize(x + y)");
+    expect(game).toContain("normalize(x - y)");
+    expect(game).toContain("fn normalize(raw_line)");
     expect(game).toContain("line = cell_mask(x, y)");
     expect(game).toContain("occupied += line");
     expect(game).toContain("occupied += cell_mask(x, y)");

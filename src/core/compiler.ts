@@ -7000,6 +7000,10 @@ export class EmitContext {
         index += 1;
         continue;
       }
+      if (statement.kind === "assign" && next?.kind === "if" && this.compileMaxAssignEqualityBranch(statement, next)) {
+        index += 1;
+        continue;
+      }
       if (statement.kind === "assign" && next?.kind === "if" && compileAssignThenDomainTrap(this, statement, next)) {
         index += 1;
         continue;
@@ -8110,6 +8114,36 @@ export class EmitContext {
     this.optimizations.push({
       name: "assign-zero-fallback-store",
       detail: `Deferred storing ${assign.target} until after its zero fallback at lines ${assign.line}/${branch.line}.`,
+    });
+    return true;
+  }
+
+  compileMaxAssignEqualityBranch(
+    assign: Extract<StatementAst, { kind: "assign" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    if (branch.elseBody !== undefined) return false;
+    const candidate = maxAssignCandidate(assign);
+    if (candidate === undefined) return false;
+    if (!expressionPureForSubstitution(candidate)) return false;
+    if (expressionReferencesIdentifier(candidate, assign.target)) return false;
+    if (!conditionComparesExpressionWithIdentifier(branch.condition, candidate, assign.target, "==")) return false;
+
+    if (!(candidate.kind === "identifier" && this.xHolds(candidate.name))) {
+      compileExpression(this, candidate);
+    }
+    compileExpression(this, { kind: "identifier", name: assign.target });
+    this.emitOp(0x36, "К max", "max-assignment update", assign.line);
+    this.emitStore(assign.target, `set ${assign.target}`, assign.line);
+    this.emitOp(0x11, "−", "max-assignment equality compare", branch.line);
+
+    const falseLabel = this.freshLabel("max_assign_false");
+    this.emitJump(0x5e, "F x=0", falseLabel, "false branch for max assignment equality", branch.line);
+    this.compileStatements(branch.thenBody);
+    this.emitLabel(falseLabel);
+    this.optimizations.push({
+      name: "max-assign-equality-branch",
+      detail: `Reused the candidate left on Y by max(${expressionToIntentText(candidate)}, ${assign.target}) for the following equality branch at line ${branch.line}.`,
     });
     return true;
   }
@@ -12504,6 +12538,34 @@ function indexedPow10DeltaUpdate(
   if (!expressionEquals(expr.left, statement.target)) return undefined;
   if (!isPow10Term(expr.right)) return undefined;
   return { op: expr.op, term: expr.right };
+}
+
+function maxAssignCandidate(
+  statement: Extract<StatementAst, { kind: "assign" }>,
+): ExpressionAst | undefined {
+  const expr = statement.expr;
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "max" || expr.args.length !== 2) return undefined;
+  const target = { kind: "identifier", name: statement.target } satisfies ExpressionAst;
+  if (expressionEquals(expr.args[0]!, target)) return expr.args[1]!;
+  if (expressionEquals(expr.args[1]!, target)) return expr.args[0]!;
+  return undefined;
+}
+
+function conditionComparesExpressionWithIdentifier(
+  condition: ConditionAst,
+  expr: ExpressionAst,
+  name: string,
+  op: ConditionAst["op"],
+): boolean {
+  if (condition.op !== op) return false;
+  const identifier = { kind: "identifier", name } satisfies ExpressionAst;
+  return (
+    expressionEquals(condition.left, expr) &&
+    expressionEquals(condition.right, identifier)
+  ) || (
+    expressionEquals(condition.left, identifier) &&
+    expressionEquals(condition.right, expr)
+  );
 }
 
 function isPow10Term(expr: ExpressionAst): boolean {

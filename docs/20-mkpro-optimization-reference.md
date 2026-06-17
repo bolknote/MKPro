@@ -357,6 +357,7 @@ The control-flow family is where the largest byte savings are found.
 - `remainder-zero-test-lowering` — lowers `%` comparisons to zero into quotient/fraction checks with one direct zero test.
 - `residual-elseif-compare` — fuses deterministic `if/else if` compare chains into one base compare plus residual adjustment.
 - `condition-current-x-reuse` — if one compare operand is already in X and the other is a simple stack load, emits compare directly without reloading.
+- `max-assign-equality-branch` — fuses `target = max(candidate, target)` followed by `if candidate == target` by using the candidate that `К max` leaves in Y after storing the new target value. The candidate must be pure and independent of `target`, preserving the MK-61 `К max` zero-ordering semantics.
 - `negative-zero-threshold-flow` — emits preloaded threshold-flow test through negative-zero selector machinery for tighter `>= / <` checks.
 - `assign-zero-domain-guard` — when a scalar assignment is directly followed by a terminal error check (for example `x <op> 0`), fuses the assignment and trap branch into one domain-guard opcode using the same register value in X.
 - `error-stop` — uses the dedicated one-cell `ЕГГ0Г` error-stop path for literal terminal halts when supported, bypassing generic literal-stop lowering.

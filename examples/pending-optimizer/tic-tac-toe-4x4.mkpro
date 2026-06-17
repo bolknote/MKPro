@@ -61,9 +61,9 @@ program TicTacToe4x4 {
     mark_one(1)
     line = x
     mark_one(2)
-    normalize_sum()
+    normalize(x + y)
     mark_one(3)
-    normalize_diff()
+    normalize(x - y)
     mark_one(4)
   }
 
@@ -76,8 +76,8 @@ program TicTacToe4x4 {
       while x >= 1 {
         unless bit_and(occupied, cell_mask(x, y)) {
           candidate_score()
-          if score > best_score {
-            best_score = score
+          best_score = max(score, best_score)
+          if score == best_score {
             slot = x
             best_y = y
           }
@@ -98,21 +98,14 @@ program TicTacToe4x4 {
   fn candidate_score() {
     score = sqr(packed_digit(lines[1], y) - 4)
     score += sqr(packed_digit(lines[2], x) - 4)
-    normalize_sum()
+    normalize(x + y)
     score += sqr(packed_digit(lines[3], line) - 4)
-    normalize_diff()
+    normalize(x - y)
     score += sqr(packed_digit(lines[4], line) - 4)
   }
 
-  fn normalize_sum() {
-    line = frac(int(x + y) / 4) * 4
-    if line == 0 {
-      line = 4
-    }
-  }
-
-  fn normalize_diff() {
-    line = frac(int(x - y) / 4) * 4
+  fn normalize(raw_line) {
+    line = frac(int(raw_line) / 4) * 4
     if line == 0 {
       line = 4
     }
