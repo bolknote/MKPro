@@ -438,10 +438,11 @@ This axis model is realized by a declarative candidate composition engine in
   at fixed positions.
 - `enumerateExpansionCandidateSpecs` fills the remaining matrix holes by crossing
   the size-reducing bundles that were never combined with a placement strategy
-  (currently `stack-resident-temps` and `shared-bit-mask-helper`) with the
-  proc-layout modifiers. It runs only in the rescue regime — when the standard
-  search still leaves the program over the 105-cell window — so in-budget
-  programs never pay for the broader search and stay byte-identical.
+  (currently `stack-resident-temps`, `shared-bit-mask-helper`, and the dual-use
+  constant indirect-flow selector bundle, with/without tail-branch inversion)
+  with the proc-layout modifiers. It runs only in the rescue regime — when the
+  standard search still leaves the program over the 105-cell window — so
+  in-budget programs never pay for the broader search and stay byte-identical.
 - In strict mode, candidate probes that fail solely because the intermediate
   layout is over the official window may be recompiled internally as analysis
   probes. This keeps over-window intermediates rankable, so a later rescue
@@ -463,6 +464,8 @@ shared baselines in `tests/compiler/example-baselines.ts`.
 - `hoisted-proc-indirect-layout` — additionally hoists ordinary procedures before re-layout for tighter call/jump sequences.
 - `if-chain-dispatch-canonicalization` — rechecks constant if/else-if dispatch shape under a full-layout candidate pass.
 - `free-residual-dispatch-scratch` — frees residual dispatch scratch in a candidate pass.
+- `dual-use-constant-indirect-flow` — lets existing setup constant preloads double as immutable indirect-flow selectors in a candidate pass.
+- `dual-use-constant-tail-branch-layout` — combines dual-use constant indirect-flow selectors with tail-branch inversion before layout scoring.
 - `alias-x-reuse` — tests value reuse of X at scalar sites for cleaner candidate control-flow.
 - `coalesce-copies` — enables copy coalescing candidate before final layout scoring.
 - `parametric-sibling-proc` — synthesizes one-parameter sibling helpers and reruns full layout around them.
@@ -506,6 +509,8 @@ shared baselines in `tests/compiler/example-baselines.ts`.
 - `size-asc-proc-layout` — procedure reordering from smallest to largest.
 - `size-desc-proc-layout` — procedure reordering from largest to smallest.
 - `reverse-proc-layout` — procedure reordering in reverse source order.
+- `dual-use-constant-indirect-flow-<layout>` — generated for each proc-layout candidate (`call-count`, `size-*`, `reverse`) combining dual-use constant indirect-flow selectors with that procedure order.
+- `dual-use-constant-tail-branch-<layout>` — same as above, with tail-branch inversion included in the candidate.
 - `call-count-proc-layout-hoisted` — same as above plus front-hoisted procs/shared helpers.
 - `size-asc-proc-layout-hoisted` — size-ascending procedure order with front-hoisted procs/shared helpers.
 - `size-desc-proc-layout-hoisted` — size-descending procedure order with front-hoisted procs/shared helpers.
@@ -665,6 +670,10 @@ Display rewrites are separated into strategy selection + body lowering.
 
 - `small-set-primitive-lowering` — replaces small multi-way boolean/state sets with dense arithmetic chains.
 - `packed-grid-primitive-lowering` — maps packed grid and digit helper operations into bit masks and add/sub-style forms. The square-board helpers are width-parametric: the coordinate wrap (`grid_norm` / `positiveGridNorm`, i.e. `% width`) and the right-diagonal fold (`+ width`) derive exactly from the board width and default to the shipped 4-wide grid. The fractional cell-mask packing constant (`10^x + floor(10^(y * K_width))`) is hardware-fitted per width — its digits encode each row's collision-free nibble offsets — so it lives in a verified width-keyed table (`cellMaskRowConstant`) with only the on-hardware-verified `width: 4` entry. Ordinary membership/update operations for exact `board(1..4, 1..4)` `cells(...)` collections are lowered through this verified `cell_mask(x, y)` family instead of the generic zero-based `bit_mask(index)` helper; other board shapes stay on their existing paths unless their packed mask constants are separately verified. Other widths derive their structural macros automatically but require a verified fractional constant before they can lower (`cell_mask` refuses to fabricate one), the same honest limit as the decimal-series emitter.
+- `packed-score-stack-helper` — when `packed_score(value, index)` appears at least three times, lowering emits one shared stack helper for the packed-line scoring kernel. Call sites load `value` and `index`, then call the helper, which performs `10^index`, division, fractional extraction, centering around `0.41200076`, and squaring. This shares the arithmetic across different line/index arguments without depending on a specific game or procedure layout.
+- `indexed-packed-bit-report-branch` — fuses an indexed packed digit update followed by a terminal `bit_and(updated, mask) != neutral` report. The indexed store leaves the updated packed value in X, so the branch can apply the mask directly, compare to the neutral marker, and reconstruct the report from the residual instead of recalling the same indexed cell through a helper.
+- `indexed-packed-fractional-report-branch` — same packed-update/report fusion for source-shaped predicates of the form `frac(bit_and(updated, mask)) != 0`. The branch tests the fractional marker with `К{x}` while keeping the full masked report on the stack, then restores it with `F reverse` for the terminal display. This matches compact MK listings that use the fractional part as the win predicate while still showing the full packed report.
+- `bit-or-test-and-set-branch` — fuses `temp = mask; if bit_and(set, temp) != 0 { ... } else { set = bit_or(set, temp); ... }` into the original MK-style test-and-set shape. The compiler computes `new = bit_or(set, mask)`, stores it immediately, and compares old/new through the stack, avoiding the temporary spill and the second set update. It fires only for explicit `bit_or` updates and pure mask expressions, so arithmetic `+=` updates keep their decimal-carry semantics.
 - `reciprocal-division-lowering` — lowers `1 / x`-form divisions into `F 1/x` after evaluating the right side once.
 - `arithmetic-if-update` — turns conditional updates into arithmetic form instead of branching, including comparison-mask trial forms such as `1 - sign(abs(x - c))` in the speculative whole-program variant.
 - `arithmetic-if-conditional-move` — replaces conditional `move`/copy with arithmetic form.

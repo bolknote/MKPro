@@ -706,7 +706,10 @@ avoid the MK-61 `К [x]` opcode immediately after `К СЧ`.
 `entered()` consumes the current keyboard-entered X value without emitting a new
 `С/П`. Use it only immediately after an existing stop when a published MK-61 UI
 expects the player to continue with calculator control keys and the program then
-stores the value already sitting in X. Ordinary turn input should still use
+stores the value already sitting in X. Consecutive `entered()` assignments model
+the general manual-step idiom: `a = entered(); b = entered(); c = entered()`
+is entered as `A ПП B ПП C С/П`, with each `ПП` executing one more store and
+the final `С/П` continuing the program. Ordinary turn input should still use
 `read()`, which emits or fuses the visible input stop.
 
 If source saves a random seed, updates the same seed with `random()`, and then

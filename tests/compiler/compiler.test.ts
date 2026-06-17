@@ -1504,6 +1504,33 @@ program SourceShaped4x4Cells {
     expect(result.steps.some((step) => step.comment?.includes("bit_mask helper"))).toBe(false);
   });
 
+  it("combines bit_or test-and-set branches without spilling the mask temp", () => {
+    const result = compileOk(`
+program BitOrTestAndSet {
+  state {
+    occupied: packed = 0
+    mask: packed = 0
+    source: packed = 1
+    warning: packed = 9
+  }
+  loop {
+    mask = source
+    if bit_and(occupied, mask) != 0 {
+      halt(warning)
+    }
+    else {
+      occupied = bit_or(occupied, mask)
+      halt(occupied)
+    }
+  }
+}
+`, { analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "bit-or-test-and-set-branch")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set mask")).toBe(false);
+    expect(result.steps.some((step) => step.comment === "bit_or test-and-set occupied")).toBe(true);
+  });
+
   it("scores packed 4-line tails without extracting the integer digit", () => {
     const result = compileOk(`
 program Packed4ScoreShape {
@@ -1520,6 +1547,27 @@ program Packed4ScoreShape {
     expect(runCompiledDisplay(result)).toBe("7,839608 -04");
   });
 
+  it("shares repeated packed_score kernels through a stack helper", () => {
+    const result = compileOk(`
+program PackedScoreStackHelper {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    value: packed = 0
+  }
+  loop {
+    value = packed_score(a, 1) + packed_score(b, 2) + packed_score(c, 3)
+    halt(value)
+  }
+}
+`, { analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "packed-score-stack-helper")).toBe(true);
+    expect(result.report.optimizations.filter((item) => item.name === "packed-score-stack-helper-call")).toHaveLength(3);
+    expect(result.steps.filter((step) => step.hex === "53" && step.comment === "packed_score helper")).toHaveLength(3);
+  });
+
   it("adds packed 4-line digits at the reserved-source position", () => {
     const result = compileOk(`
 program Packed4AddShape {
@@ -1534,6 +1582,53 @@ program Packed4AddShape {
 `);
 
     expect(runCompiledDisplay(result)).toBe("44434,4");
+  });
+
+  it("reuses indexed packed updates for source-shaped bit report branches", () => {
+    const result = compileOk(`
+program Packed4BitReportBranch {
+  state {
+    lines: packed[1..4] = [44447.4, 44444.4, 44444.4, 44444.4]
+    slot: counter 0..7 = 4
+    line: packed = 1
+  }
+  loop {
+    lines[slot - 3] = packed_add(lines[slot - 3], line, 1)
+    if bit_and(lines[slot - 3], 88888834) != 8 {
+      halt(bit_and(lines[slot - 3], 88888834))
+    }
+    halt(0)
+  }
+}
+`, { analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "indexed-packed-bit-report-branch")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "updated packed report mask")).toBe(true);
+    expect(result.steps.some((step) => step.comment?.includes("expr bit_and(lines"))).toBe(false);
+  });
+
+  it("reuses indexed packed updates for fractional bit report branches", () => {
+    const result = compileOk(`
+program Packed4FractionalBitReportBranch {
+  state {
+    lines: packed[1..4] = [44438.4, 44444.4, 44444.4, 44444.4]
+    slot: counter 0..7 = 4
+    line: packed = 1
+  }
+  loop {
+    lines[slot - 3] = packed_add(lines[slot - 3], line, 1)
+    if frac(bit_and(lines[slot - 3], 88888834)) != 0 {
+      halt(bit_and(lines[slot - 3], 88888834))
+    }
+    halt(0)
+  }
+}
+`, { analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "indexed-packed-fractional-report-branch")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "updated packed fractional report predicate")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "updated packed fractional report restore")).toBe(true);
+    expect(result.steps.some((step) => step.comment?.includes("expr bit_and(lines"))).toBe(false);
   });
 
   it("places source-shaped packed-grid line banks at R4 through R7", () => {
@@ -1599,6 +1694,55 @@ program EnteredPair {
     expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
 
     expect(calc.displayText()).toBe("23,");
+  });
+
+  it("keeps arbitrary entered() runs driven by manual continuation keys", () => {
+    const result = compileOk(`
+program EnteredTriple {
+  state {
+    a: packed = 0
+    b: packed = 0
+    c: packed = 0
+  }
+  loop {
+    show(0)
+    a = entered()
+    b = entered()
+    c = entered()
+    halt(a * 100 + b * 10 + c)
+  }
+}
+`);
+    const { MK61 } = require("../emulator/mk61.cjs") as {
+      MK61: new (options?: { extended?: boolean }) => {
+        inputNumber: (value: string, options?: { clear?: boolean }) => void;
+        loadProgram: (codes: number[]) => { diagnostics: string[] };
+        press: (key: string) => void;
+        pressSequence: (keys: string[]) => void;
+        runUntilStable: (options: { maxFrames: number; stableFrames: number }) => { stopped: boolean };
+        setRegister: (register: string, value: string) => void;
+        displayText: () => string;
+      };
+    };
+    const calc = new MK61({ extended: true });
+    for (const preload of result.report.preloads) {
+      calc.setRegister(preload.register, preload.value);
+    }
+    expect(calc.loadProgram(result.steps.map((step) => step.opcode)).diagnostics).toEqual([]);
+
+    calc.pressSequence(["В/О", "С/П"]);
+    expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
+    calc.inputNumber("2", { clear: true });
+    calc.press("ПП");
+    expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 4 }).stopped).toBe(true);
+    calc.inputNumber("3", { clear: true });
+    calc.press("ПП");
+    expect(calc.runUntilStable({ maxFrames: 200, stableFrames: 4 }).stopped).toBe(true);
+    calc.inputNumber("4", { clear: true });
+    calc.press("С/П");
+    expect(calc.runUntilStable({ maxFrames: 1200, stableFrames: 8 }).stopped).toBe(true);
+
+    expect(calc.displayText()).toBe("234,");
   });
 
   it("reuses a successful cell membership mask when clearing that cell", () => {
@@ -4710,6 +4854,37 @@ program BranchStateStackTemp {
       item.name === "stack-current-x-scheduling" &&
       item.detail.includes("single-use temp pos")
     )).toBe(false);
+  });
+
+  it("does not route stack-resident temps through shared expression helpers", () => {
+    const result = compileLoweringVariantForTest(`
+program StackResidentSharedHelperConsumer {
+  state {
+    x: packed = 2
+    y: packed = 3
+    selected_x: packed = 0
+    selected_y: packed = 0
+    line: packed = 0
+    first: packed = 0
+  }
+
+  loop {
+    first = cell_mask(selected_x, selected_y)
+    selected_x = x
+    selected_y = y
+    line = cell_mask(selected_x, selected_y)
+    halt(line + first)
+  }
+}
+`, { budget: 999, analysis: true }, { stackResidentTemps: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "expression-helper-call")).toBe(true);
+    expect(result.report.optimizations.some((item) =>
+      item.name === "stack-resident-temps" &&
+      item.detail.includes("selected_x, selected_y")
+    )).toBe(false);
+    expect(result.steps.some((step) => step.comment === "set selected_x")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set selected_y")).toBe(true);
   });
 
   it("keeps an indexed stack temp when a later proc overwrites it before reading", () => {
