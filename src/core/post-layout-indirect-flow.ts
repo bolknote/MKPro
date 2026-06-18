@@ -1291,6 +1291,14 @@ interface ExistingSelectorFlowRewrite {
   sourceLine?: number;
 }
 
+interface EmptyStackTailCallRewrite {
+  callIndex: number;
+  loopBackIndex: number;
+  mnemonic: string;
+  comment: string;
+  sourceLine?: number;
+}
+
 function indirectJumpMachineOp(register: RegisterName, comment: string, sourceLine?: number): MachineItem {
   return {
     kind: "op",
@@ -1403,6 +1411,86 @@ function applyExistingSelectorFlowRewrite(
       result.push({
         kind: "op",
         opcode: rewrite.opcode,
+        mnemonic: rewrite.mnemonic,
+        comment: rewrite.comment,
+        ...(rewrite.sourceLine === undefined ? {} : { sourceLine: rewrite.sourceLine }),
+      });
+      continue;
+    }
+    result.push(items[index]!);
+  }
+  return result;
+}
+
+function firstProcedureStartAddress(items: readonly MachineItem[]): number | undefined {
+  let address = 0;
+  for (const item of items) {
+    if (item.kind === "label") {
+      if (item.procedureBoundary === "start") return address;
+      continue;
+    }
+    address += 1;
+  }
+  return undefined;
+}
+
+function knownMachineIndirectJumpTarget(op: MachineItem, preloads: readonly PreloadReport[]): number | undefined {
+  if (op.kind !== "op") return undefined;
+  const register = registerFromIndirectOpcode(op.opcode);
+  if (register === undefined || op.opcode - registerIndex(register) !== 0x80) return undefined;
+  const commentTarget = /\bindirect-target=(\d+)\b/u.exec(op.comment ?? "")?.[1];
+  if (commentTarget !== undefined) {
+    const target = Number(commentTarget);
+    if (Number.isInteger(target)) return target;
+  }
+  const selectorValue = preloadValueForRegister(preloads, register);
+  return selectorValue === undefined
+    ? undefined
+    : evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget;
+}
+
+function findEmptyStackTailCallRewrite(
+  items: readonly MachineItem[],
+  preloads: readonly PreloadReport[],
+): EmptyStackTailCallRewrite | undefined {
+  const cells = machineCells(items);
+  const firstProc = firstProcedureStartAddress(items);
+  if (firstProc === undefined) return undefined;
+
+  for (let index = 0; index < cells.length - 2; index += 1) {
+    const call = cells[index]!;
+    const address = cells[index + 1]!;
+    const loopBack = cells[index + 2]!;
+    if (call.address >= firstProc) break;
+    if (call.item.kind !== "op" || call.item.opcode !== 0x53) continue;
+    if (address.item.kind !== "address") continue;
+    if (knownMachineIndirectJumpTarget(loopBack.item, preloads) !== 0) continue;
+
+    return {
+      callIndex: call.itemIndex,
+      loopBackIndex: loopBack.itemIndex,
+      mnemonic: "БП",
+      comment: [
+        call.item.comment?.replace(/^proc call/u, "empty-stack tail call") ?? "empty-stack tail call",
+        "empty-return-stack loop head",
+      ].filter(Boolean).join("; "),
+      ...(call.item.sourceLine === undefined ? {} : { sourceLine: call.item.sourceLine }),
+    };
+  }
+  return undefined;
+}
+
+function applyEmptyStackTailCallRewrite(
+  items: readonly MachineItem[],
+  rewrite: EmptyStackTailCallRewrite,
+): MachineItem[] {
+  const result: MachineItem[] = [];
+  for (let index = 0; index < items.length; index += 1) {
+    if (index === rewrite.loopBackIndex) continue;
+    if (index === rewrite.callIndex) {
+      result.push({
+        kind: "op",
+        opcode: 0x51,
         mnemonic: rewrite.mnemonic,
         comment: rewrite.comment,
         ...(rewrite.sourceLine === undefined ? {} : { sourceLine: rewrite.sourceLine }),
@@ -1670,8 +1758,21 @@ export function optimizePostLayoutStopTailReuse(
   let currentPreloads: PreloadReport[] = [...preloads];
   let stopTailApplied = 0;
   let existingSelectorApplied = 0;
+  let emptyStackTailCallApplied = 0;
 
   for (let round = 0; round < MAX_REWRITES; round += 1) {
+    const emptyStackTailCall = findEmptyStackTailCallRewrite(current, currentPreloads);
+    if (emptyStackTailCall !== undefined) {
+      const candidate = applyEmptyStackTailCallRewrite(current, emptyStackTailCall);
+      if (cellCount(candidate) >= cellCount(current)) break;
+      const retargeted = retargetSelectorPreloadsAfterMachineDeletion(current, candidate, currentPreloads);
+      if (retargeted === undefined) break;
+      current = retargeted.items;
+      currentPreloads = retargeted.preloads;
+      emptyStackTailCallApplied += 1;
+      continue;
+    }
+
     const existingSelectorRewrite = findExistingSelectorFlowRewrite(current, currentPreloads);
     if (existingSelectorRewrite !== undefined) {
       const candidate = applyExistingSelectorFlowRewrite(current, existingSelectorRewrite);
@@ -1707,11 +1808,17 @@ export function optimizePostLayoutStopTailReuse(
     stopTailApplied += 1;
   }
 
-  const applied = stopTailApplied + existingSelectorApplied;
+  const applied = stopTailApplied + existingSelectorApplied + emptyStackTailCallApplied;
   if (applied === 0) {
     return { items: [...items], preloads: [...preloads], optimizations: [], applied: 0 };
   }
   const optimizations: AppliedOptimization[] = [];
+  if (emptyStackTailCallApplied > 0) {
+    optimizations.push({
+      name: "post-layout-empty-stack-tail-call",
+      detail: `Replaced ${emptyStackTailCallApplied} terminal main-loop call${emptyStackTailCallApplied === 1 ? "" : "s"} with direct jump(s) whose final В/О returns through the empty stack to the loop head.`,
+    });
+  }
   if (stopTailApplied > 0) {
     optimizations.push({
       name: "post-layout-stop-tail-reuse",

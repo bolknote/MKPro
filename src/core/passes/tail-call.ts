@@ -1,5 +1,12 @@
 import type { IrMeta, IrOp } from "../types.ts";
-import { hasRewriteBarrier, type IrPass, type IrPassFn } from "./helpers.ts";
+import {
+  calculateLabelAddresses,
+  hasRewriteBarrier,
+  knownIndirectFlowTarget,
+  targetAddress,
+  type IrPass,
+  type IrPassFn,
+} from "./helpers.ts";
 
 interface TailJumpTarget {
   continuation: string | number;
@@ -12,11 +19,16 @@ const run: IrPassFn = (ops) => {
   const returnContinuations = collectReturnContinuations(ops, tailJumpTargets);
   const returnLabels = collectReturnLabels(ops);
   const normalizeContinuation = buildContinuationNormalizer(ops);
+  const labelAddresses = calculateLabelAddresses(ops);
+  const returnTargets = collectReturnTargets(ops);
   const result: IrOp[] = [];
   let applied = 0;
+  let emptyStackApplied = 0;
+  let seenProcedureStart = false;
   for (let index = 0; index < ops.length; index += 1) {
     const op = ops[index]!;
     if (op.kind === "label") {
+      if (op.procedureBoundary === "start") seenProcedureStart = true;
       result.push(op);
       continue;
     }
@@ -98,6 +110,31 @@ const run: IrPassFn = (ops) => {
         continue;
       }
       if (
+        !seenProcedureStart &&
+        typeof op.target === "string" &&
+        returnTargets.has(op.target) &&
+        next !== undefined &&
+        loopBackTargetsHead(next, normalizeContinuation, labelAddresses) &&
+        !hasRewriteBarrier(op) &&
+        !hasRewriteBarrier(next)
+      ) {
+        result.push({
+          kind: "jump",
+          target: op.target,
+          opcode: 0x51,
+          meta: {
+            ...op.meta,
+            mnemonic: "БП",
+            comment: op.meta.comment?.replace(/^proc call/u, "empty-stack tail call") ?? "empty-stack tail call",
+          },
+          targetMeta: { ...op.targetMeta },
+        });
+        index += 1;
+        applied += 1;
+        emptyStackApplied += 1;
+        continue;
+      }
+      if (
         target !== undefined &&
         next?.kind === "label" &&
         sameTarget(normalizeContinuation(next.name), target.continuation)
@@ -126,9 +163,7 @@ const run: IrPassFn = (ops) => {
     applied,
     optimizations: [{
       name: "tail-call-lowering",
-      detail: tailJumpCount === 0
-        ? `Replaced ${applied} subroutine tail call${applied === 1 ? "" : "s"} with direct jump(s).`
-        : `Replaced ${applied} subroutine tail operation${applied === 1 ? "" : "s"} with direct jump continuation${tailJumpCount === 1 ? "" : "s"}.`,
+      detail: tailCallDetail(applied, tailJumpCount, emptyStackApplied),
     }],
   };
 };
@@ -214,6 +249,32 @@ function collectReturnLabels(ops: readonly IrOp[]): Set<string> {
   return result;
 }
 
+function collectReturnTargets(ops: readonly IrOp[]): Set<string> {
+  const callTargets = new Set<string>();
+  for (const op of ops) {
+    if (op.kind === "call" && typeof op.target === "string") callTargets.add(op.target);
+    if (op.kind === "label" && op.procedureBoundary === "start") callTargets.add(op.name);
+  }
+  const regions = collectCallableRegions(ops, callTargets);
+  const result = new Set<string>();
+  for (const [target, region] of regions) {
+    if (blockHasReturn(ops, region.start, region.end)) result.add(target);
+  }
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [target, region] of regions) {
+      if (result.has(target)) continue;
+      const tail = terminalTailTarget(ops, region.start, region.end);
+      if (tail !== undefined && result.has(tail)) {
+        result.add(target);
+        changed = true;
+      }
+    }
+  }
+  return result;
+}
+
 function nextExecutableIndex(ops: readonly IrOp[], start: number): number | undefined {
   for (let index = start; index < ops.length; index += 1) {
     if (ops[index]?.kind !== "label") return index;
@@ -232,6 +293,15 @@ function blockHasReturn(ops: readonly IrOp[], start: number, end: number): boole
   return false;
 }
 
+function terminalTailTarget(ops: readonly IrOp[], start: number, end: number): string | undefined {
+  for (let index = end - 1; index >= start; index -= 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") continue;
+    return op.kind === "jump" && typeof op.target === "string" ? op.target : undefined;
+  }
+  return undefined;
+}
+
 function callContinuation(ops: readonly IrOp[], index: number): string | number | undefined {
   const next = ops[index + 1];
   if (next?.kind === "jump") return next.target;
@@ -241,6 +311,23 @@ function callContinuation(ops: readonly IrOp[], index: number): string | number 
 
 function sameTarget(left: string | number, right: string | number): boolean {
   return left === right;
+}
+
+function tailCallDetail(applied: number, tailJumpCount: number, emptyStackApplied: number): string {
+  const base = tailJumpCount === 0
+    ? `Replaced ${applied} subroutine tail call${applied === 1 ? "" : "s"} with direct jump(s).`
+    : `Replaced ${applied} subroutine tail operation${applied === 1 ? "" : "s"} with direct jump continuation${tailJumpCount === 1 ? "" : "s"}.`;
+  if (emptyStackApplied === 0) return base;
+  return `${base} ${emptyStackApplied} site${emptyStackApplied === 1 ? "" : "s"} use empty-return-stack В/О as the loop-head continuation.`;
+}
+
+function loopBackTargetsHead(
+  op: IrOp,
+  normalizeContinuation: (target: string | number) => string | number,
+  labelAddresses: ReadonlyMap<string, number>,
+): boolean {
+  if (op.kind === "jump") return targetAddress(normalizeContinuation(op.target), labelAddresses) === 0;
+  return knownIndirectFlowTarget(op) === 0 && op.kind === "indirect-jump";
 }
 
 function buildContinuationNormalizer(ops: readonly IrOp[]): (target: string | number) => string | number {

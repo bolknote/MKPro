@@ -26086,6 +26086,63 @@ describe("ir passes on synthetic programs", () => {
     expect(result.applied).toBe(0);
   });
 
+  it("tail-call-lowering uses empty-stack return for terminal main-loop calls", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("finish_turn"),
+      plain(0x01, "1"),
+      call("finish_turn"),
+      jump("main"),
+      procStart("finish_turn"),
+      plain(0x02, "2"),
+      ret(),
+    ];
+    const result = tailCallLowering.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.detail).toContain("empty-return-stack");
+    expect(result.ops.filter((op) => op.kind === "call")).toHaveLength(1);
+    expect(result.ops.filter((op) => op.kind === "jump")).toHaveLength(1);
+    expect(result.ops.find((op) => op.kind === "jump")).toMatchObject({ target: "finish_turn" });
+  });
+
+  it("tail-call-lowering accepts proved indirect loop backs for empty-stack returns", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("finish_turn"),
+      knownTargetIndirectJump("b", 0),
+      procStart("finish_turn"),
+      plain(0x02, "2"),
+      ret(),
+    ];
+    const result = tailCallLowering.run(program, ctx);
+
+    expect(result.applied).toBe(1);
+    expect(result.ops.some((op) => op.kind === "indirect-jump")).toBe(false);
+    expect(result.ops.find((op) => op.kind === "jump")).toMatchObject({ target: "finish_turn" });
+  });
+
+  it("tail-call-lowering proves empty-stack returns through terminal tail jumps", () => {
+    const program: IrOp[] = [
+      label("main"),
+      call("finish_turn"),
+      plain(0x01, "1"),
+      call("finish_turn"),
+      jump("main"),
+      procStart("finish_turn"),
+      plain(0x02, "2"),
+      jump("shared_return"),
+      procStart("shared_return"),
+      plain(0x03, "3"),
+      ret(),
+    ];
+    const result = tailCallLowering.run(program, ctx);
+
+    expect(result.applied).toBeGreaterThanOrEqual(1);
+    expect(result.optimizations[0]?.detail).toContain("empty-return-stack");
+    expect(result.ops.find((op) => op.kind === "jump")).toMatchObject({ target: "finish_turn" });
+  });
+
   it("tail-call-lowering turns call plus return jump into a direct tail jump", () => {
     const program: IrOp[] = [
       label("main"),

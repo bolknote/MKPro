@@ -17,7 +17,6 @@ program TicTacToe4x4 {
     best_y: counter 0..5
     best_score: packed
     score: packed
-    mark_score: packed
     line: packed
     slot: counter 0..7
   }
@@ -44,24 +43,24 @@ program TicTacToe4x4 {
     else {
       occupied = bit_or(occupied, line)
       best_score = -1
-      mark_lines_and_check(best_score)
+      mark_lines_and_check()
       choose_calculator_move()
       occupied = bit_or(occupied, line)
-      mark_lines_and_check(1)
+      best_score = 1
+      mark_lines_and_check()
     }
   }
 
   fn mark_one(next_slot) {
     slot = next_slot
-    lines[slot] = packed_add(lines[slot], line, mark_score)
+    lines[slot] = packed_add(lines[slot], line, best_score)
     report = bit_and(lines[slot], 88888834)
     if frac(report) != 0 {
       halt(report)
     }
   }
 
-  fn mark_lines_and_check(mark_value) {
-    mark_score = mark_value
+  fn mark_lines_and_check() {
     line = y
     mark_one(4)
     line = x

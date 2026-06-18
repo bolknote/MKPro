@@ -924,6 +924,18 @@ const PROC_LAYOUT_MODIFIERS: ReadonlyArray<{ options: LoweringOptions; name: str
   { options: { procLayoutStrategy: "reverse" }, name: "reverse-proc-layout", detail: "Emitted procedures in reverse source order" },
 ];
 
+// Demoting a setup preload is much more expensive than a plain layout attempt:
+// each base is first probed, then recompiled once per suppressible constant and
+// as a short suppression chain. Keep this provider on the layouts that can make
+// a newly-freed selector register profitable without exploding analysis tests.
+const DEMOTE_PROC_LAYOUT_MODIFIERS: ReadonlyArray<{ options: LoweringOptions; name: string; detail: string }> =
+  PROC_LAYOUT_MODIFIERS.filter((layout) =>
+    layout.options.orderProcsByCallCount === true ||
+    layout.options.procLayoutStrategy === "size-asc"
+  );
+
+const MAX_DEMOTED_INDIRECT_FLOW_VALUES = 4;
+
 function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): CandidateSpec[] {
   const { source, primaryOverflows } = ctx;
   const specs: CandidateSpec[] = [];
@@ -1413,6 +1425,11 @@ function demoteConstantIndirectFlowCandidates(
     {},
     { indirectUnderflowDecrement: true },
     { dualUseConstantIndirectFlow: true },
+    { dualUseConstantIndirectFlow: true, tailBranchInversion: true },
+    ...DEMOTE_PROC_LAYOUT_MODIFIERS.flatMap((layout) => [
+      { dualUseConstantIndirectFlow: true, ...layout.options },
+      { dualUseConstantIndirectFlow: true, tailBranchInversion: true, ...layout.options },
+    ]),
     { indirectUnderflowDecrement: true, dualUseConstantIndirectFlow: true },
     { shareRandomCell: true, hoistSharedHelpers: true },
     { freeResidualDispatchScratch: true },
@@ -1457,9 +1474,8 @@ function demoteConstantIndirectFlowCandidates(
     } catch {
       continue;
     }
-    for (const preload of probe.report.preloads ?? []) {
-      const value = demotableIndirectFlowPreloadValue(preload);
-      if (value === undefined) continue;
+    const demotableValues = demotableIndirectFlowPreloadValues(probe);
+    for (const value of demotableValues) {
       const key = `${JSON.stringify(base)}|${value}`;
       if (triedDemotions.has(key)) continue;
       triedDemotions.add(key);
@@ -1480,14 +1496,8 @@ function demoteConstantIndirectFlowCandidates(
       } catch {
         break;
       }
-      const next = (chainProbe.report.preloads ?? [])
-        .map(demotableIndirectFlowPreloadValue)
-        .filter((value): value is string => value !== undefined && !suppressed.has(value))
-        .sort((left, right) =>
-          estimateNumberCost(left) - estimateNumberCost(right) ||
-          left.length - right.length ||
-          left.localeCompare(right)
-        )[0];
+      const next = demotableIndirectFlowPreloadValues(chainProbe)
+        .filter((value) => !suppressed.has(value))[0];
       if (next === undefined) break;
       suppressed.add(next);
       const values = [...suppressed];
@@ -1501,6 +1511,21 @@ function demoteConstantIndirectFlowCandidates(
       );
     }
   }
+}
+
+function demotableIndirectFlowPreloadValues(result: CompileResult): string[] {
+  const values = new Set<string>();
+  for (const preload of result.report.preloads ?? []) {
+    const value = demotableIndirectFlowPreloadValue(preload);
+    if (value !== undefined) values.add(value);
+  }
+  return [...values]
+    .sort((left, right) =>
+      estimateNumberCost(left) - estimateNumberCost(right) ||
+      left.length - right.length ||
+      left.localeCompare(right)
+    )
+    .slice(0, MAX_DEMOTED_INDIRECT_FLOW_VALUES);
 }
 
 function demotableIndirectFlowPreloadValue(preload: PreloadReport): string | undefined {
@@ -8432,7 +8457,7 @@ export class EmitContext {
     const plan = this.xParamPackedScoreAccumulationPlan(paramAssign, call, scoreAssign);
     if (plan === undefined) return false;
 
-    compileSimpleBinaryPreservingPreviousX(this, paramAssign.expr, paramAssign.line);
+    compileExpressionPreservingPreviousXAsY(this, paramAssign.expr, paramAssign.line);
     compileBlockCall(this, call.block, call.line);
     compileExpression(this, plan.line);
     this.emitOp(0x14, "X↔Y", "packed_score returned-index order", scoreAssign.line);
@@ -8460,7 +8485,7 @@ export class EmitContext {
     const lowering = this.xParamProcs.get(call.block);
     if (lowering === undefined || paramAssign.target !== lowering.param) return undefined;
     if (!expressionPureForSubstitution(paramAssign.expr)) return undefined;
-    if (!simpleBinaryPreservesPreviousXAsY(paramAssign.expr)) return undefined;
+    if (!expressionPreservesPreviousXAsY(paramAssign.expr)) return undefined;
     if (!xParamLoweringPreservesCallerY(lowering)) return undefined;
 
     const proc = this.ast.procs.find((candidate) => candidate.name === call.block);
@@ -13216,21 +13241,59 @@ function packedScoreCallWithIndex(expr: ExpressionAst, indexName: string): { lin
     : undefined;
 }
 
-function simpleBinaryPreservesPreviousXAsY(expr: ExpressionAst): expr is Extract<ExpressionAst, { kind: "binary" }> {
-  return expr.kind === "binary" &&
-    isSimpleStackLoad(expr.left) &&
-    isSimpleStackLoad(expr.right) &&
-    (expr.op === "+" || expr.op === "-" || expr.op === "*" || expr.op === "/");
+function expressionPreservesPreviousXAsY(expr: ExpressionAst): boolean {
+  if (isSimpleStackLoad(expr)) return true;
+  switch (expr.kind) {
+    case "unary":
+      return expr.op === "-" && expressionPreservesPreviousXAsY(expr.expr);
+    case "binary":
+      return (expr.op === "+" || expr.op === "-" || expr.op === "*" || expr.op === "/") &&
+        expressionPreservesPreviousXAsY(expr.left) &&
+        expressionPreservesPreviousXAsY(expr.right);
+    case "call":
+      return expr.args.length === 1 &&
+        STACK_TEMP_UNARY_CALL_OPCODES[expr.callee.toLowerCase()] !== undefined &&
+        expressionPreservesPreviousXAsY(expr.args[0]!);
+    case "number":
+    case "identifier":
+    case "indexed":
+    case "string":
+      return false;
+  }
 }
 
-function compileSimpleBinaryPreservingPreviousX(
+function compileExpressionPreservingPreviousXAsY(
   ctx: EmitContext,
-  expr: Extract<ExpressionAst, { kind: "binary" }>,
+  expr: ExpressionAst,
   line?: number,
 ): void {
-  compileExpression(ctx, expr.left);
-  compileExpression(ctx, expr.right);
-  ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+  if (isSimpleStackLoad(expr)) {
+    compileExpression(ctx, expr);
+    return;
+  }
+  switch (expr.kind) {
+    case "unary":
+      compileExpressionPreservingPreviousXAsY(ctx, expr.expr, line);
+      ctx.emitOp(0x0b, "/-/", "stack-preserving unary minus", line);
+      return;
+    case "binary":
+      compileExpressionPreservingPreviousXAsY(ctx, expr.left, line);
+      compileExpressionPreservingPreviousXAsY(ctx, expr.right, line);
+      ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+      return;
+    case "call": {
+      compileExpressionPreservingPreviousXAsY(ctx, expr.args[0]!, line);
+      const opcode = STACK_TEMP_UNARY_CALL_OPCODES[expr.callee.toLowerCase()]!;
+      ctx.emitOp(opcode[0], opcode[1], `${expr.callee}()`, line);
+      return;
+    }
+    case "number":
+    case "identifier":
+    case "indexed":
+    case "string":
+      compileExpression(ctx, expr);
+      return;
+  }
 }
 
 function xParamLoweringPreservesCallerY(lowering: XParamProcLowering): boolean {
@@ -14206,6 +14269,7 @@ function isStackOnlyStateField(
 ): boolean {
   const returnOnlyProcs = stackOnlyReturnProcsForTarget(ast, name, xParamProcs);
   let covered = false;
+  let coveredWrite = false;
 
   const visitStatements = (statements: readonly StatementAst[], currentProc?: string): boolean => {
     for (let index = 0; index < statements.length; index += 1) {
@@ -14213,12 +14277,16 @@ function isStackOnlyStateField(
       const coveredRun = stackOnlyCoveredRun(ast, statements, index, name, xParamProcs, yStackProcs, returnOnlyProcs);
       if (coveredRun > 0) {
         covered = true;
+        if (stackOnlyCoveredRunWritesTarget(statements, index, coveredRun, name, returnOnlyProcs)) {
+          coveredWrite = true;
+        }
         index += coveredRun - 1;
         continue;
       }
 
       if (statement.kind === "call" && returnOnlyProcs.has(statement.block)) {
         covered = true;
+        coveredWrite = true;
         continue;
       }
 
@@ -14249,6 +14317,7 @@ function isStackOnlyStateField(
 
       if (currentProc !== undefined && returnOnlyProcs.has(currentProc) && stackOnlyReturnAssignment(statement, name, xParamProcs.get(currentProc))) {
         covered = true;
+        coveredWrite = true;
         continue;
       }
       if (
@@ -14261,6 +14330,7 @@ function isStackOnlyStateField(
         followingXParamPackedScoreAccumulatorRun(ast, statements, index + 1, name, xParamProcs)
       ) {
         covered = true;
+        coveredWrite = true;
         continue;
       }
       if (
@@ -14273,6 +14343,7 @@ function isStackOnlyStateField(
         allProcReturnConsumersAreStackOnly(ast, currentProc, name)
       ) {
         covered = true;
+        coveredWrite = true;
         continue;
       }
       if (statementReadsIdentifier(statement, name) || statementWritesIdentifier(statement, name)) return false;
@@ -14286,7 +14357,22 @@ function isStackOnlyStateField(
   for (const proc of ast.procs) {
     if (!visitStatements(proc.body, proc.name)) return false;
   }
-  return covered;
+  return covered && coveredWrite;
+}
+
+function stackOnlyCoveredRunWritesTarget(
+  statements: readonly StatementAst[],
+  index: number,
+  count: number,
+  name: string,
+  returnOnlyProcs: ReadonlySet<string>,
+): boolean {
+  for (let offset = 0; offset < count; offset += 1) {
+    const statement = statements[index + offset];
+    if (statement?.kind === "assign" && statement.target === name) return true;
+    if (statement?.kind === "call" && returnOnlyProcs.has(statement.block)) return true;
+  }
+  return false;
 }
 
 function stackOnlyReturnProcsForTarget(
@@ -14407,7 +14493,7 @@ function stackOnlyXParamPackedScoreAccumulatorRun(
     lowering !== undefined &&
     statement.target === lowering.param &&
     expressionPureForSubstitution(statement.expr) &&
-    simpleBinaryPreservesPreviousXAsY(statement.expr) &&
+    expressionPreservesPreviousXAsY(statement.expr) &&
     xParamLoweringPreservesCallerY(lowering) &&
     accumulator !== undefined &&
     third.target === name &&

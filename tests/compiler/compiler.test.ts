@@ -1603,6 +1603,41 @@ program PackedScoreXParamAccumulator {
     expect(result.steps.filter((step) => step.comment === "packed_score stack accumulator")).toHaveLength(2);
   });
 
+  it("accumulates packed_score after affine X-parameter index expressions", () => {
+    const result = compileOk(`
+program PackedScoreAffineXParamAccumulator {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    x: counter 0..5 = 2
+    y: counter 0..5 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+
+  loop {
+    score = packed_score(a, y) + packed_score(b, x)
+    normalize(x + y - 1)
+    score += packed_score(c, line)
+    normalize(x - y + 3)
+    score += packed_score(d, line)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac(raw_line / 4) * 4 + 1
+  }
+}
+`, { analysis: true });
+
+    expect(result.report.registers.line).toBeUndefined();
+    expect(result.report.optimizations.filter((item) => item.name === "x-param-packed-score-accumulate")).toHaveLength(2);
+    expect(result.steps.filter((step) => step.comment === "packed_score returned-index order")).toHaveLength(2);
+    expect(result.steps.filter((step) => step.comment === "packed_score stack accumulator")).toHaveLength(2);
+  });
+
   it("adds packed 4-line digits at the reserved-source position", () => {
     const result = compileOk(`
 program Packed4AddShape {
@@ -1689,6 +1724,7 @@ program Packed4FractionalBitReportTemp {
     expect(result.report.optimizations.some((item) => item.name === "indexed-packed-report-temp-inline")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "indexed-packed-fractional-report-branch")).toBe(true);
     expect(result.report.registers.report).toBeUndefined();
+    expect(result.report.registers.line).toBeDefined();
     expect(result.steps.some((step) => step.comment === "set report")).toBe(false);
     expect(result.steps.some((step) => step.comment === "recall report")).toBe(false);
   });
@@ -1700,11 +1736,14 @@ program Packed4FractionalBitReportTemp {
 
     expect(result.report.registers.line).toBeUndefined();
     expect(result.report.registers.score).toBeUndefined();
-    expect(result.report.registers.mark_score).toBeDefined();
+    expect(result.report.registers.mark_score).toBeUndefined();
+    expect(result.report.registers.best_score).toBeDefined();
     expect(result.report.preloads.some((item) => item.value === "88888834")).toBe(true);
     expect(optimizationNames).toContain("stack-only-state-field");
     expect(optimizationNames).toContain("x-param-y-stack-proc-call");
     expect(optimizationNames).toContain("indexed-packed-y-stack-pow10-delta");
+    expect(optimizationNames).toContain("post-layout-empty-stack-tail-call");
+    expect(result.steps).toHaveLength(146);
     expect(result.report.optimizations.some((item) =>
       item.name === "stack-only-state-field" && item.detail.includes("score")
     )).toBe(true);
