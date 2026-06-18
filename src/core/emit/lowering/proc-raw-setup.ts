@@ -96,6 +96,7 @@ import {
   getOpcode,
 } from "../../opcodes.ts";
 import {
+  bankMemberKey,
   findStateBankMember,
 } from "../../state-banks.ts";
 import type {
@@ -622,10 +623,18 @@ function emitSetupNumericPreloadAction(
 
 export function compileProcedures(ctx: LoweringCtx): void {
     const order = procEmissionOrder(ctx);
-    const packedLineFamilyConsumedUpdateProcs = ctx.loweringOptions.packedLineFamilyUpdateCheckTail === true
+    const packedLineFamilyConsumedUpdateProcs = (
+      ctx.loweringOptions.packedLineFamilyUpdateCheckTail === true ||
+      ctx.loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true
+    )
       ? new Set(
         order
-          .map((proc) => packedLineFamilyUpdateCheckMarkerProc(ctx, proc)?.updateProc)
+          .map((proc) => {
+            if (ctx.loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true) {
+              return packedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx, proc)?.updateProc;
+            }
+            return packedLineFamilyUpdateCheckMarkerProc(ctx, proc)?.updateProc;
+          })
           .filter((name): name is string => name !== undefined),
       )
       : new Set<string>();
@@ -665,6 +674,11 @@ export function compileProcedures(ctx: LoweringCtx): void {
             name: "show-read-stack-stop-risk-lowering",
             detail: `Reused displayed ${xParamStackStopRisk.param} as the parked Y value for ${proc.name}.`,
           });
+        } else if (
+          ctx.loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true &&
+          compilePackedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx, proc)
+        ) {
+          emittedExplicitReturn = true;
         } else if (
           ctx.loweringOptions.packedLineFamilyUpdateCheckTail === true &&
           compilePackedLineFamilyUpdateCheckMarkerProc(ctx, proc)
@@ -725,6 +739,55 @@ interface PackedLineFamilyUpdateCheckMarkerProc {
   readonly steps: readonly PackedLineFamilyUpdateCheckStep[];
 }
 
+interface PackedLineFamilyUpdateCheckMatchOptions {
+  readonly allowMutatingSelector?: boolean;
+}
+
+function compilePackedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx: LoweringCtx, proc: ProcAst): boolean {
+    const match = packedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx, proc);
+    if (match === undefined) return false;
+
+    const firstSlot = match.steps[0]?.slot;
+    if (firstSlot === undefined) return false;
+    ctx.emitStore(match.deltaName, `set ${match.deltaName} from X parameter`, match.first.line);
+    ctx.emitNumberOrPreload(String(firstSlot + 1));
+    ctx.emitStore(match.selector, `packed-line mutating selector start ${firstSlot + 1}`, match.first.line);
+
+    const tailLabel = ctx.freshLabel("packed_line_family_mutating_update_check_tail");
+    for (let index = 0; index < match.steps.length; index += 1) {
+      const step = match.steps[index]!;
+      compilePackedLineFamilyMutatingSelectorUpdateCheckStep(ctx, match, step);
+      if (index === match.steps.length - 1) {
+        ctx.emitLabel(tailLabel);
+      } else {
+        ctx.emitJump(0x53, "ПП", tailLabel, "packed-line mutating shared update/check tail", step.sourceLine);
+        ctx.currentYVariable = undefined;
+      }
+    }
+
+    emitPackedLineFamilyMutatingSelectorUpdateCheckTail(ctx, match);
+    ctx.optimizations.push({
+      name: "packed-line-family-mutating-selector-update-check-tail",
+      detail: `Lowered ${proc.name} and ${match.updateProc} as a descending R${match.selectorRegister} mutating-selector packed-line update/check tail for slots ${match.steps.map((step) => step.slot).join(",")}.`,
+    });
+    return true;
+}
+
+function packedLineFamilyMutatingSelectorUpdateCheckMarkerProc(
+  ctx: LoweringCtx,
+  proc: ProcAst,
+): PackedLineFamilyUpdateCheckMarkerProc | undefined {
+    const match = packedLineFamilyUpdateCheckMarkerProc(ctx, proc, { allowMutatingSelector: true });
+    if (match === undefined) return undefined;
+    if (!isPredecrementIndirectRegister(match.selectorRegister)) return undefined;
+    if (!packedLineFamilyUpdateCheckStepsDescendByOne(match.steps)) return undefined;
+    if (!match.steps.every((step) => expressionPreservesPreviousXAsYForPackedLine(step.lineExpr))) return undefined;
+    if (!match.steps.every((step) => step.normalizer === undefined || xParamProcPreservesCallerY(ctx, step.normalizer))) {
+      return undefined;
+    }
+    return match;
+}
+
 function compilePackedLineFamilyUpdateCheckMarkerProc(ctx: LoweringCtx, proc: ProcAst): boolean {
     const match = packedLineFamilyUpdateCheckMarkerProc(ctx, proc);
     if (match === undefined) return false;
@@ -748,6 +811,18 @@ function compilePackedLineFamilyUpdateCheckMarkerProc(ctx: LoweringCtx, proc: Pr
       detail: `Lowered ${proc.name} and ${match.updateProc} as a local shared packed-line update/check tail for slots ${match.steps.map((step) => step.slot).join(",")}.`,
     });
     return true;
+}
+
+function compilePackedLineFamilyMutatingSelectorUpdateCheckStep(
+  ctx: LoweringCtx,
+  match: PackedLineFamilyUpdateCheckMarkerProc,
+  step: PackedLineFamilyUpdateCheckStep,
+): void {
+    compileExpression(ctx, packedLineFamilyUpdateStepLineValue(match, step));
+    compileExpressionPreservingPreviousXAsY(ctx, step.lineExpr, step.sourceLine);
+    if (step.normalizer !== undefined) {
+      compileBlockCall(ctx, step.normalizer, step.sourceLine ?? match.update.line);
+    }
 }
 
 function compilePackedLineFamilyUpdateCheckStep(
@@ -798,15 +873,49 @@ function emitPackedLineFamilyUpdateCheckTail(
     ctx.currentYVariable = undefined;
 }
 
+function emitPackedLineFamilyMutatingSelectorUpdateCheckTail(
+  ctx: LoweringCtx,
+  match: Pick<
+    PackedLineFamilyUpdateCheckMarkerProc,
+    "selectorRegister" | "update" | "factor" | "op" | "mask" | "branch" | "haltLine"
+  >,
+): void {
+    ctx.emitOp(0x15, "F 10ˣ", "stack-carried packed digit pow10", match.update.line);
+    compileExpression(ctx, match.factor);
+    ctx.emitOp(0x12, "×", "stack-carried packed digit delta", match.update.line);
+    ctx.emitOp(binaryOpcode(match.op), match.op, "mutating-selector packed digit update", match.update.line);
+    ctx.emitOp(
+      0xb0 + registerIndex(match.selectorRegister),
+      `К X->П ${match.selectorRegister}`,
+      `predecrement indexed set ${bankMemberKey(match.update.target.base, match.update.target.field)}`,
+      match.update.line,
+    );
+
+    compileExpression(ctx, match.mask);
+    ctx.emitOp(0x37, "К ∧", "updated packed fractional report mask", match.branch.line);
+    ctx.emitOp(0x35, "К {x}", "updated packed fractional report predicate", match.branch.line);
+
+    const haltLabel = ctx.freshLabel("packed_frac_report_x2_halt");
+    ctx.emitJump(0x5e, "F x=0", haltLabel, "true branch for packed fractional report !=", match.branch.line);
+    ctx.emitOp(0x52, "В/О", "packed fractional report return", match.branch.line);
+    ctx.emitLabel(haltLabel);
+    ctx.emitOp(0x0a, ".", "updated packed fractional report X2 restore", match.branch.line);
+    ctx.emitOp(0x50, "С/П", "halt", match.haltLine);
+    ctx.currentYVariable = undefined;
+}
+
 function packedLineFamilyUpdateCheckMarkerProc(
   ctx: LoweringCtx,
   proc: ProcAst,
+  options: PackedLineFamilyUpdateCheckMatchOptions = {},
 ): PackedLineFamilyUpdateCheckMarkerProc | undefined {
     const first = proc.body[0];
     if (first?.kind !== "assign" || first.expr.kind !== "identifier") return undefined;
 
     const candidates = ctx.ast.procs.flatMap((candidate) => {
-      const update = xParamIndexedFractionalReportTailProc(ctx, candidate);
+      const update = xParamIndexedFractionalReportTailProc(ctx, candidate, {
+        allowMutatingSelector: options.allowMutatingSelector === true,
+      });
       if (update === undefined || update.factor.kind !== "identifier") return [];
       if (first.target !== update.factor.name) return [];
       return [{ proc: candidate, update }];
@@ -831,6 +940,93 @@ function packedLineFamilyUpdateCheckMarkerProc(
       };
     }
     return undefined;
+}
+
+function packedLineFamilyUpdateCheckStepsDescendByOne(
+  steps: readonly PackedLineFamilyUpdateCheckStep[],
+): boolean {
+    if (steps.length < 2) return false;
+    for (let index = 1; index < steps.length; index += 1) {
+      if (steps[index - 1]!.slot - steps[index]!.slot !== 1) return false;
+    }
+    return true;
+}
+
+function packedLineFamilyUpdateStepLineValue(
+  match: PackedLineFamilyUpdateCheckMarkerProc,
+  step: PackedLineFamilyUpdateCheckStep,
+): ExpressionAst {
+    return {
+      ...match.update.target,
+      index: numberExpression(step.slot),
+    };
+}
+
+function xParamProcPreservesCallerY(ctx: LoweringCtx, procName: string): boolean {
+    const lowering = ctx.xParamProcs.get(procName);
+    if (lowering === undefined) return false;
+    if (lowering.kind === "copy" || lowering.kind === "add") return true;
+    if (lowering.kind !== "expr") return false;
+    return expressionPreservesPreviousXAsYForPackedLine(lowering.first.expr);
+}
+
+function expressionPreservesPreviousXAsYForPackedLine(expr: ExpressionAst): boolean {
+    if (isSimpleStackLoad(expr)) return true;
+    switch (expr.kind) {
+      case "unary":
+        return expr.op === "-" && expressionPreservesPreviousXAsYForPackedLine(expr.expr);
+      case "binary":
+        return (expr.op === "+" || expr.op === "-" || expr.op === "*" || expr.op === "/") &&
+          expressionPreservesPreviousXAsYForPackedLine(expr.left) &&
+          expressionPreservesPreviousXAsYForPackedLine(expr.right);
+      case "call":
+        return expr.args.length === 1 &&
+          X_TRANSFORM_UNARY_OPCODES[expr.callee.toLowerCase()] !== undefined &&
+          expressionPreservesPreviousXAsYForPackedLine(expr.args[0]!);
+      case "number":
+      case "identifier":
+      case "indexed":
+      case "string":
+        return false;
+    }
+}
+
+function compileExpressionPreservingPreviousXAsY(
+  ctx: LoweringCtx,
+  expr: ExpressionAst,
+  line?: number,
+): void {
+    if (isSimpleStackLoad(expr)) {
+      compileExpression(ctx, expr);
+      return;
+    }
+    switch (expr.kind) {
+      case "unary":
+        compileExpressionPreservingPreviousXAsY(ctx, expr.expr, line);
+        ctx.emitOp(0x0b, "/-/", "stack-preserving unary minus", line);
+        return;
+      case "binary":
+        compileExpressionPreservingPreviousXAsY(ctx, expr.left, line);
+        compileExpressionPreservingPreviousXAsY(ctx, expr.right, line);
+        ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+        return;
+      case "call": {
+        compileExpressionPreservingPreviousXAsY(ctx, expr.args[0]!, line);
+        const opcode = X_TRANSFORM_UNARY_OPCODES[expr.callee.toLowerCase()];
+        if (opcode === undefined) {
+          compileExpression(ctx, expr);
+          return;
+        }
+        ctx.emitOp(opcode[0], opcode[1], `${expr.callee}()`, line);
+        return;
+      }
+      case "number":
+      case "identifier":
+      case "indexed":
+      case "string":
+        compileExpression(ctx, expr);
+        return;
+    }
 }
 
 function packedLineFamilyUpdateCheckMarkerSteps(
@@ -1011,6 +1207,7 @@ function compileXParamIndexedFractionalReportTailProc(ctx: LoweringCtx, proc: Pr
 function xParamIndexedFractionalReportTailProc(
     ctx: LoweringCtx,
     proc: ProcAst,
+    options: PackedLineFamilyUpdateCheckMatchOptions = {},
   ): XParamIndexedFractionalReportTailProc | undefined {
     const lowering = ctx.xParamProcs.get(proc.name);
     if (lowering?.kind !== "copy") return undefined;
@@ -1022,7 +1219,9 @@ function xParamIndexedFractionalReportTailProc(
     if (first !== lowering.first || update?.kind !== "indexed_assign") return undefined;
 
     const selector = lowering.first.target;
-    const selectorRegister = directPhysicalIndexedSelectorRegister(ctx, update.target, selector);
+    const selectorRegister = options.allowMutatingSelector === true
+      ? physicalIndexedSelectorRegister(ctx, update.target, selector)
+      : directPhysicalIndexedSelectorRegister(ctx, update.target, selector);
     if (selectorRegister === undefined) return undefined;
 
     const delta = indexedPackedPow10DeltaUpdate(update);
@@ -1052,9 +1251,19 @@ function directPhysicalIndexedSelectorRegister(
     target: Extract<ExpressionAst, { kind: "indexed" }>,
     selector: string,
   ): RegisterName | undefined {
+    const selectorRegister = physicalIndexedSelectorRegister(ctx, target, selector);
+    if (selectorRegister === undefined || registerIndex(selectorRegister) < 7) return undefined;
+    return selectorRegister;
+}
+
+function physicalIndexedSelectorRegister(
+    ctx: LoweringCtx,
+    target: Extract<ExpressionAst, { kind: "indexed" }>,
+    selector: string,
+  ): RegisterName | undefined {
     if (target.index.kind !== "identifier" || target.index.name !== selector) return undefined;
     const selectorRegister = ctx.allocation.registers[selector];
-    if (selectorRegister === undefined || registerIndex(selectorRegister) < 7) return undefined;
+    if (selectorRegister === undefined) return undefined;
     const resolved = findStateBankMember(ctx.ast, target);
     if (resolved === undefined) return undefined;
     for (const element of resolved.member.elements) {

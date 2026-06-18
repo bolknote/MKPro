@@ -467,6 +467,11 @@ interface LoweringOptions {
   // stepping stone toward the MK-61 mutating-selector packed-line idiom; by
   // itself it is layout-sensitive and selected only when the full program wins.
   packedLineFamilyUpdateCheckTail?: boolean;
+  // Emit a descending packed-line marker/update pair through an R0..R3
+  // pre-decrement selector. This models the hand-written MK-61 idiom where the
+  // selector starts one past the bank and each indirect store both writes the
+  // updated packed line and advances to the next lower bank cell.
+  packedLineFamilyMutatingSelectorUpdateCheckTail?: boolean;
   // Exact fixed-width counter set for the packed-stripe candidate. Used by the
   // top-level variant search to try every compatible subset independently.
   packCounterStripeNames?: readonly string[];
@@ -1171,6 +1176,12 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     { packedLineFamilyUpdateCheckTail: true },
     "packed-line-family-update-check-tail",
     "Tried a local shared packed-line update/check tail for source-shaped packed line families",
+    "sizeRescue",
+  );
+  add(
+    { packedLineFamilyMutatingSelectorUpdateCheckTail: true },
+    "packed-line-family-mutating-selector-update-check-tail",
+    "Tried a descending R0..R3 mutating-selector packed-line update/check tail for source-shaped packed line families",
     "sizeRescue",
   );
   add(
@@ -2827,6 +2838,7 @@ function compileMKProOnce(
     loweringOptions.xParamValueFunctions === true,
     loweringOptions.comparisonGuardedUpdateSelectors === true,
     loweringOptions.preserveDispatchCaseOrder === true,
+    loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true,
     opts.strictAllocation === true,
   );
   const context = new EmitContext(
@@ -13495,6 +13507,7 @@ function allocateRegisters(
   xParamValueFunctions = false,
   comparisonGuardedUpdateSelectors = false,
   preserveDispatchCaseOrder = false,
+  packedLineFamilyMutatingSelectorUpdateCheckTail = false,
   strictAllocation = false,
 ): RegisterAllocation {
   const declared = new Set<string>();
@@ -13529,6 +13542,9 @@ function allocateRegisters(
     }
   }
   applyStateBankRegisterHints(ast, variables, hints);
+  if (packedLineFamilyMutatingSelectorUpdateCheckTail) {
+    applyPackedLineFamilyMutatingSelectorHints(ast, variables, hints);
+  }
   collectStateBankSelectorVariables(ast, variables, hints);
   applyPackedGridRegisterHints(ast, variables, hints);
   applyCoordListRegisterHints(variables, hints);
@@ -13536,7 +13552,11 @@ function allocateRegisters(
   let flPreferenceIndex = 0;
   for (const variable of collectUnitDecrementTargets(ast)) {
     if (!variables.has(variable) || hints.has(variable)) continue;
-    const register = flPreferenceOrder[flPreferenceIndex];
+    let register = flPreferenceOrder[flPreferenceIndex];
+    while (register !== undefined && hintedRegisters().has(register)) {
+      flPreferenceIndex += 1;
+      register = flPreferenceOrder[flPreferenceIndex];
+    }
     if (register === undefined) break;
     hints.set(variable, { mode: "prefer", register });
     flPreferenceIndex += 1;
@@ -13731,6 +13751,48 @@ function applyStateBankRegisterHints(
       }
     }
   }
+}
+
+function applyPackedLineFamilyMutatingSelectorHints(
+  ast: ProgramAst,
+  variables: ReadonlySet<string>,
+  hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
+): void {
+  const selectors = collectPackedLineFamilyMutatingSelectors(ast);
+  if (selectors.size === 0) return;
+  const preferred: RegisterName[] = ["3", "0", "1", "2"];
+  const used = new Set<RegisterName>([...hints.values()].map((hint) => hint.register));
+  for (const selector of selectors) {
+    if (!variables.has(selector) || hints.has(selector)) continue;
+    const register = preferred.find((candidate) => !used.has(candidate));
+    if (register === undefined) return;
+    hints.set(selector, { mode: "prefer", register });
+    used.add(register);
+  }
+}
+
+function collectPackedLineFamilyMutatingSelectors(ast: ProgramAst): Set<string> {
+  const selectors = new Set<string>();
+  const updates = ast.procs.flatMap((proc) => {
+    const match = packedLineFamilyUpdateProc(ast, proc);
+    return match === undefined ? [] : [match];
+  });
+  for (const update of updates) {
+    for (const proc of ast.procs) {
+      const marker = packedLineFamilyMarkerProc(ast, proc, update);
+      if (marker === undefined || !slotsAreStrictlyDescendingByOne(marker.slots)) continue;
+      selectors.add(update.selector);
+    }
+  }
+  return selectors;
+}
+
+function slotsAreStrictlyDescendingByOne(slots: readonly number[]): boolean {
+  if (slots.length < 2) return false;
+  for (let index = 1; index < slots.length; index += 1) {
+    if (slots[index - 1]! - slots[index]! !== 1) return false;
+  }
+  return true;
 }
 
 function packedGridLineRegister(
