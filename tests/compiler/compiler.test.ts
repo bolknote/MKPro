@@ -1801,6 +1801,49 @@ program Packed4FractionalBitReportTemp {
     expect(result.report.optimizations.some((item) =>
       item.name === "x-param-proc-entry" && item.detail.includes("stack-only line")
     )).toBe(true);
+    const layoutCandidate = result.report.rejectedCandidates.find((item) =>
+      item.variant === "packed-line-family-layout" &&
+      item.site === "packed-line-family lines"
+    );
+    expect(layoutCandidate?.reason).toContain(
+      "recognized full update/check walker mark_lines_and_check -> mark_one for slots 7,6,5,4 and score walker candidate_score through normalize",
+    );
+  });
+
+  it("detects packed line family full layouts structurally without source names", () => {
+    let source = readFileSync("examples/pending-optimizer/tic-tac-toe-4x4.mkpro", "utf8");
+    const replacements: Array<[string, string]> = [
+      ["mark_one", "touch_slot"],
+      ["mark_lines_and_check", "touch_all_slots"],
+      ["candidate_score", "measure_slots"],
+      ["normalize", "wrap_slot"],
+      ["lines", "rows_bank"],
+      ["slot", "selector_cell"],
+      ["line", "line_cell"],
+      ["best_score", "chosen_score"],
+      ["score", "candidate_total"],
+      ["best_y", "chosen_y"],
+    ];
+    for (const [from, to] of replacements) {
+      source = source.replace(new RegExp(`\\b${from}\\b`, "gu"), to);
+    }
+
+    const result = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      dualUseConstantIndirectFlow: true,
+      tailBranchInversion: true,
+      procLayoutStrategy: "size-asc",
+      suppressConstantPreloads: new Set(["-1"]),
+      fractionalConstantSelectors: [{ value: "0.22600029", target: 36 }],
+    });
+    const layoutCandidate = result.report.rejectedCandidates.find((item) =>
+      item.variant === "packed-line-family-layout" &&
+      item.site === "packed-line-family rows_bank"
+    );
+
+    expect(result.steps).toHaveLength(137);
+    expect(layoutCandidate?.reason).toContain(
+      "recognized full update/check walker touch_all_slots -> touch_slot for slots 7,6,5,4 and score walker measure_slots through wrap_slot",
+    );
   });
 
   it("can enter X-parameter Y-stack procedures after the stored-parameter prologue", () => {

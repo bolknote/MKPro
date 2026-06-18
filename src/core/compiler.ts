@@ -6423,6 +6423,11 @@ interface PackedLineFamilyLayoutOpportunity {
   readonly key: string;
   readonly scoredElements: number;
   readonly hasFractionalReportCheck: boolean;
+  readonly updateProc?: string;
+  readonly markerProc?: string;
+  readonly scoreProc?: string;
+  readonly normalizerProc?: string;
+  readonly updateSlots?: readonly number[];
 }
 
 function appendPackedLineFamilyLayoutCandidates(
@@ -6441,16 +6446,45 @@ function appendPackedLineFamilyLayoutCandidates(
       variant: "packed-line-family-layout",
       steps: 999999,
       selected: false,
-      reason: `detected a packed line bank with ${opportunity.scoredElements} scored elements and ` +
-        `${opportunity.hasFractionalReportCheck ? "a fractional report-checked update" : "an update"}; ` +
-        "score-tail sharing is implemented, but no full shared update/check and score walker is implemented yet",
+      reason: packedLineFamilyLayoutReason(opportunity),
     });
   }
+}
+
+function packedLineFamilyLayoutReason(opportunity: PackedLineFamilyLayoutOpportunity): string {
+  const base = `detected a packed line bank with ${opportunity.scoredElements} scored elements and ` +
+    `${opportunity.hasFractionalReportCheck ? "a fractional report-checked update" : "an update"}`;
+  if (
+    opportunity.updateProc === undefined ||
+    opportunity.markerProc === undefined ||
+    opportunity.scoreProc === undefined
+  ) {
+    return `${base}; score-tail sharing is implemented, but no full shared update/check and score walker is implemented yet`;
+  }
+  const slots = opportunity.updateSlots?.join(",") ?? "?";
+  const normalizer = opportunity.normalizerProc === undefined ? "" : ` through ${opportunity.normalizerProc}`;
+  return `${base}; recognized full update/check walker ${opportunity.markerProc} -> ${opportunity.updateProc} ` +
+    `for slots ${slots} and score walker ${opportunity.scoreProc}${normalizer}; ` +
+    "shared multi-entry update/check plus score emission is not implemented yet";
 }
 
 function collectPackedLineFamilyLayoutOpportunities(ast: ProgramAst): PackedLineFamilyLayoutOpportunity[] {
   const updates = new Map<string, { hasFractionalReportCheck: boolean }>();
   const scores = new Map<string, Set<number>>();
+  const updateProcs = ast.procs.flatMap((proc) => {
+    const match = packedLineFamilyUpdateProc(ast, proc);
+    return match === undefined ? [] : [match];
+  });
+  const scoreProcs = ast.procs.flatMap((proc) => {
+    const match = packedLineFamilyScoreWalkerProc(ast, proc);
+    return match === undefined ? [] : [match];
+  });
+  const markerProcs = ast.procs.flatMap((proc) =>
+    updateProcs.flatMap((update) => {
+      const match = packedLineFamilyMarkerProc(ast, proc, update);
+      return match === undefined ? [] : [match];
+    })
+  );
 
   const recordScore = (expr: ExpressionAst): void => {
     const element = packedBankElementForExpression(ast, expr);
@@ -6542,13 +6576,256 @@ function collectPackedLineFamilyLayoutOpportunities(ast: ProgramAst): PackedLine
   for (const [key, update] of updates) {
     const scoredElements = scores.get(key)?.size ?? 0;
     if (scoredElements < 4) continue;
+    const marker = markerProcs.find((candidate) => candidate.key === key);
+    const scorer = scoreProcs.find((candidate) => candidate.key === key);
     opportunities.push({
       key,
       scoredElements,
       hasFractionalReportCheck: update.hasFractionalReportCheck,
+      ...(marker === undefined ? {} : {
+        updateProc: marker.updateProc,
+        markerProc: marker.procName,
+        normalizerProc: marker.normalizerProc,
+        updateSlots: marker.slots,
+      }),
+      ...(scorer === undefined ? {} : { scoreProc: scorer.procName }),
     });
   }
   return opportunities;
+}
+
+interface PackedLineFamilyUpdateProc {
+  readonly procName: string;
+  readonly key: string;
+  readonly param: string;
+  readonly selector: string;
+  readonly line: string;
+  readonly delta: string;
+  readonly hasFractionalReportCheck: boolean;
+}
+
+interface PackedLineFamilyMarkerProc {
+  readonly procName: string;
+  readonly key: string;
+  readonly updateProc: string;
+  readonly normalizerProc?: string;
+  readonly slots: readonly number[];
+}
+
+interface PackedLineFamilyScoreWalkerProc {
+  readonly procName: string;
+  readonly key: string;
+  readonly scoredElements: readonly number[];
+}
+
+function packedLineFamilyUpdateProc(
+  ast: ProgramAst,
+  proc: ProcAst,
+): PackedLineFamilyUpdateProc | undefined {
+  const first = proc.body[0];
+  const update = proc.body[1];
+  const branch = proc.body[2];
+  if (
+    first?.kind !== "assign" ||
+    update?.kind !== "indexed_assign" ||
+    branch?.kind !== "if" ||
+    proc.body.length !== 3
+  ) {
+    return undefined;
+  }
+  if (first.expr.kind !== "identifier") return undefined;
+  const param = first.expr.name;
+  const selector = first.target;
+  if (update.target.index.kind !== "identifier" || update.target.index.name !== selector) return undefined;
+
+  const target = packedBankElementForExpression(ast, update.target);
+  if (target === undefined) return undefined;
+  const delta = indexedPow10DeltaUpdate(update);
+  if (delta === undefined) return undefined;
+  const parts = packedPow10DeltaParts(delta.term);
+  if (parts === undefined) return undefined;
+  if (parts.index.kind !== "identifier" || parts.factor.kind !== "identifier") return undefined;
+
+  return {
+    procName: proc.name,
+    key: target.key,
+    param,
+    selector,
+    line: parts.index.name,
+    delta: parts.factor.name,
+    hasFractionalReportCheck: indexedPow10DeltaFractionalBitReportBranch(update, branch) !== undefined,
+  };
+}
+
+function packedLineFamilyMarkerProc(
+  ast: ProgramAst,
+  proc: ProcAst,
+  update: PackedLineFamilyUpdateProc,
+): PackedLineFamilyMarkerProc | undefined {
+  const first = proc.body[0];
+  if (first?.kind !== "assign" || first.expr.kind !== "identifier" || first.target !== update.delta) {
+    return undefined;
+  }
+
+  const slots: number[] = [];
+  let cursor = 1;
+  let normalizerProc: string | undefined;
+  while (cursor < proc.body.length) {
+    const direct = packedLineFamilyDirectMarkerStep(proc.body, cursor, update);
+    if (direct !== undefined) {
+      slots.push(direct.slot);
+      cursor += direct.consumed;
+      continue;
+    }
+    const normalized = packedLineFamilyNormalizedMarkerStep(ast, proc.body, cursor, update);
+    if (normalized !== undefined) {
+      slots.push(normalized.slot);
+      normalizerProc = normalized.normalizerProc;
+      cursor += normalized.consumed;
+      continue;
+    }
+    return undefined;
+  }
+  if (slots.length < 4 || new Set(slots).size < 4) return undefined;
+  return {
+    procName: proc.name,
+    key: update.key,
+    updateProc: update.procName,
+    ...(normalizerProc === undefined ? {} : { normalizerProc }),
+    slots,
+  };
+}
+
+function packedLineFamilyDirectMarkerStep(
+  statements: readonly StatementAst[],
+  cursor: number,
+  update: PackedLineFamilyUpdateProc,
+): { slot: number; consumed: number } | undefined {
+  const lineAssign = statements[cursor];
+  const paramAssign = statements[cursor + 1];
+  const call = statements[cursor + 2];
+  if (
+    lineAssign?.kind !== "assign" ||
+    lineAssign.target !== update.line ||
+    paramAssign?.kind !== "assign" ||
+    paramAssign.target !== update.param ||
+    call?.kind !== "call" ||
+    call.block !== update.procName
+  ) {
+    return undefined;
+  }
+  const slot = numericLiteralValue(paramAssign.expr);
+  return slot === undefined ? undefined : { slot, consumed: 3 };
+}
+
+function packedLineFamilyNormalizedMarkerStep(
+  ast: ProgramAst,
+  statements: readonly StatementAst[],
+  cursor: number,
+  update: PackedLineFamilyUpdateProc,
+): { slot: number; normalizerProc: string; consumed: number } | undefined {
+  const rawAssign = statements[cursor];
+  const normalizerCall = statements[cursor + 1];
+  const paramAssign = statements[cursor + 2];
+  const updateCall = statements[cursor + 3];
+  if (
+    rawAssign?.kind !== "assign" ||
+    normalizerCall?.kind !== "call" ||
+    paramAssign?.kind !== "assign" ||
+    paramAssign.target !== update.param ||
+    updateCall?.kind !== "call" ||
+    updateCall.block !== update.procName
+  ) {
+    return undefined;
+  }
+  const normalizer = ast.procs.find((candidate) => candidate.name === normalizerCall.block);
+  if (!procAssignsTargetFromParam(normalizer, update.line, rawAssign.target)) return undefined;
+  const slot = numericLiteralValue(paramAssign.expr);
+  return slot === undefined ? undefined : {
+    slot,
+    normalizerProc: normalizerCall.block,
+    consumed: 4,
+  };
+}
+
+function procAssignsTargetFromParam(
+  proc: ProcAst | undefined,
+  target: string,
+  param: string,
+): boolean {
+  if (proc === undefined) return false;
+  return proc.body.some((statement) =>
+    statement.kind === "assign" &&
+    statement.target === target &&
+    expressionReferencesIdentifier(statement.expr, param)
+  );
+}
+
+function packedLineFamilyScoreWalkerProc(
+  ast: ProgramAst,
+  proc: ProcAst,
+): PackedLineFamilyScoreWalkerProc | undefined {
+  const elements = new Map<string, Set<number>>();
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "call") {
+      if (expr.callee.toLowerCase() === "packed_score" && expr.args.length === 2) {
+        const element = packedBankElementForExpression(ast, expr.args[0]!);
+        if (element?.index !== undefined) {
+          const indexes = elements.get(element.key) ?? new Set<number>();
+          indexes.add(element.index);
+          elements.set(element.key, indexes);
+        }
+      }
+      for (const arg of expr.args) visitExpr(arg);
+      return;
+    }
+    if (expr.kind === "unary") {
+      visitExpr(expr.expr);
+      return;
+    }
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+      return;
+    }
+    if (expr.kind === "indexed") visitExpr(expr.index);
+  };
+  for (const statement of proc.body) {
+    if (statement.kind === "assign" || statement.kind === "return_value") visitExpr(statement.expr);
+    if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
+  }
+  const best = [...elements.entries()]
+    .filter(([, indexes]) => indexes.size >= 4)
+    .sort((left, right) => right[1].size - left[1].size)[0];
+  return best === undefined ? undefined : {
+    procName: proc.name,
+    key: best[0],
+    scoredElements: [...best[1]].sort((left, right) => left - right),
+  };
+}
+
+function packedPow10DeltaParts(
+  expr: ExpressionAst,
+): { index: ExpressionAst; factor: ExpressionAst } | undefined {
+  const pow10 = pow10Argument(expr);
+  if (pow10 !== undefined) return {
+    index: pow10,
+    factor: { kind: "number", raw: "1" },
+  };
+  if (expr.kind !== "binary" || expr.op !== "*") return undefined;
+  const left = pow10Argument(expr.left);
+  if (left !== undefined) return { index: left, factor: expr.right };
+  const right = pow10Argument(expr.right);
+  if (right !== undefined) return { index: right, factor: expr.left };
+  return undefined;
+}
+
+function pow10Argument(expr: ExpressionAst): ExpressionAst | undefined {
+  return expr.kind === "call" &&
+    expr.callee.toLowerCase() === "pow10" &&
+    expr.args.length === 1
+      ? expr.args[0]
+      : undefined;
 }
 
 function packedBankElementForExpression(
