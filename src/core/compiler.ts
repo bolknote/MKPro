@@ -462,6 +462,11 @@ interface LoweringOptions {
   // parked value in X, and enter after the normal store/swap prologue. Purely
   // layout-sensitive, so full-program candidate selection must approve it.
   xParamYStackStoredEntry?: boolean;
+  // Emit a structural packed-line marker/update pair as one local shared
+  // update/check tail and suppress the generic update procedure. This is a
+  // stepping stone toward the MK-61 mutating-selector packed-line idiom; by
+  // itself it is layout-sensitive and selected only when the full program wins.
+  packedLineFamilyUpdateCheckTail?: boolean;
   // Exact fixed-width counter set for the packed-stripe candidate. Used by the
   // top-level variant search to try every compatible subset independently.
   packCounterStripeNames?: readonly string[];
@@ -1161,6 +1166,12 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     { sharedStraightLineCallBodies: true },
     "shared-call-body-helper",
     "Shared repeated straight-line bodies that contain direct subroutine calls",
+  );
+  add(
+    { packedLineFamilyUpdateCheckTail: true },
+    "packed-line-family-update-check-tail",
+    "Tried a local shared packed-line update/check tail for source-shaped packed line families",
+    "sizeRescue",
   );
   add(
     { tailBranchInversion: true },

@@ -622,8 +622,16 @@ function emitSetupNumericPreloadAction(
 
 export function compileProcedures(ctx: LoweringCtx): void {
     const order = procEmissionOrder(ctx);
+    const packedLineFamilyConsumedUpdateProcs = ctx.loweringOptions.packedLineFamilyUpdateCheckTail === true
+      ? new Set(
+        order
+          .map((proc) => packedLineFamilyUpdateCheckMarkerProc(ctx, proc)?.updateProc)
+          .filter((name): name is string => name !== undefined),
+      )
+      : new Set<string>();
     for (const proc of order) {
       if (ctx.inlineProcNames.has(proc.name)) continue;
+      if (packedLineFamilyConsumedUpdateProcs.has(proc.name)) continue;
       const skipSingleUseXParamStackStopRisk =
         matchXParamStackStopRiskRead(ctx.ast, proc) !== undefined &&
         countExpressionCalls(ctx.ast, proc.name) === 1;
@@ -657,6 +665,11 @@ export function compileProcedures(ctx: LoweringCtx): void {
             name: "show-read-stack-stop-risk-lowering",
             detail: `Reused displayed ${xParamStackStopRisk.param} as the parked Y value for ${proc.name}.`,
           });
+        } else if (
+          ctx.loweringOptions.packedLineFamilyUpdateCheckTail === true &&
+          compilePackedLineFamilyUpdateCheckMarkerProc(ctx, proc)
+        ) {
+          emittedExplicitReturn = true;
         } else if (compileXParamIndexedFractionalReportTailProc(ctx, proc)) {
           emittedExplicitReturn = true;
         } else if (compilePackedLineFamilyScoreProc(ctx, proc)) {
@@ -677,6 +690,7 @@ export function compileProcedures(ctx: LoweringCtx): void {
 }
 
 interface XParamIndexedFractionalReportTailProc {
+  readonly param: string;
   readonly selector: string;
   readonly selectorRegister: RegisterName;
   readonly yName: string;
@@ -688,16 +702,77 @@ interface XParamIndexedFractionalReportTailProc {
   readonly haltLine: number | undefined;
 }
 
-function compileXParamIndexedFractionalReportTailProc(ctx: LoweringCtx, proc: ProcAst): boolean {
-    const match = xParamIndexedFractionalReportTailProc(ctx, proc);
+interface PackedLineFamilyUpdateCheckStep {
+  readonly lineExpr: ExpressionAst;
+  readonly slot: number;
+  readonly sourceLine: number | undefined;
+  readonly normalizer?: string;
+}
+
+interface PackedLineFamilyUpdateCheckMarkerProc {
+  readonly updateProc: string;
+  readonly selector: string;
+  readonly selectorRegister: RegisterName;
+  readonly yName: string;
+  readonly deltaName: string;
+  readonly update: Extract<StatementAst, { kind: "indexed_assign" }>;
+  readonly factor: ExpressionAst;
+  readonly op: "+" | "-";
+  readonly mask: ExpressionAst;
+  readonly branch: Extract<StatementAst, { kind: "if" }>;
+  readonly haltLine: number | undefined;
+  readonly first: Extract<StatementAst, { kind: "assign" }>;
+  readonly steps: readonly PackedLineFamilyUpdateCheckStep[];
+}
+
+function compilePackedLineFamilyUpdateCheckMarkerProc(ctx: LoweringCtx, proc: ProcAst): boolean {
+    const match = packedLineFamilyUpdateCheckMarkerProc(ctx, proc);
     if (match === undefined) return false;
 
-    ctx.emitStore(match.selector, `set ${match.selector} from X parameter`, proc.body[0]?.line);
-    ctx.emitOp(0x14, "X↔Y", "stack-carried packed digit index", match.update.line);
-    if (ctx.loweringOptions.xParamYStackStoredEntry === true) {
-      ctx.markCurrentX(match.yName);
-      ctx.emitLabel(xParamYStackStoredEntryLabel(proc.name));
+    ctx.emitStore(match.deltaName, `set ${match.deltaName} from X parameter`, match.first.line);
+    const tailLabel = ctx.freshLabel("packed_line_family_update_check_tail");
+    for (let index = 0; index < match.steps.length; index += 1) {
+      const step = match.steps[index]!;
+      compilePackedLineFamilyUpdateCheckStep(ctx, match, step);
+      if (index === match.steps.length - 1) {
+        ctx.emitLabel(tailLabel);
+      } else {
+        ctx.emitJump(0x53, "ПП", tailLabel, "packed-line shared update/check tail", step.sourceLine);
+        ctx.currentYVariable = undefined;
+      }
     }
+
+    emitPackedLineFamilyUpdateCheckTail(ctx, match);
+    ctx.optimizations.push({
+      name: "packed-line-family-update-check-tail",
+      detail: `Lowered ${proc.name} and ${match.updateProc} as a local shared packed-line update/check tail for slots ${match.steps.map((step) => step.slot).join(",")}.`,
+    });
+    return true;
+}
+
+function compilePackedLineFamilyUpdateCheckStep(
+  ctx: LoweringCtx,
+  match: PackedLineFamilyUpdateCheckMarkerProc,
+  step: PackedLineFamilyUpdateCheckStep,
+): void {
+    compileExpression(ctx, step.lineExpr);
+    if (step.normalizer !== undefined) {
+      compileBlockCall(ctx, step.normalizer, step.sourceLine ?? match.update.line);
+    }
+    ctx.markCurrentX(match.yName);
+    ctx.emitNumberOrPreload(String(step.slot));
+    ctx.currentYVariable = match.yName;
+}
+
+function emitPackedLineFamilyUpdateCheckTail(
+  ctx: LoweringCtx,
+  match: Pick<
+    PackedLineFamilyUpdateCheckMarkerProc,
+    "selector" | "selectorRegister" | "update" | "factor" | "op" | "mask" | "branch" | "haltLine"
+  >,
+): void {
+    ctx.emitStore(match.selector, `set ${match.selector} from X parameter`, match.update.line);
+    ctx.emitOp(0x14, "X↔Y", "stack-carried packed digit index", match.update.line);
     ctx.emitOp(0x15, "F 10ˣ", "stack-carried packed digit pow10", match.update.line);
     compileExpression(ctx, match.factor);
     ctx.emitOp(0x12, "×", "stack-carried packed digit delta", match.update.line);
@@ -720,6 +795,196 @@ function compileXParamIndexedFractionalReportTailProc(ctx: LoweringCtx, proc: Pr
     ctx.emitLabel(haltLabel);
     ctx.emitOp(0x0a, ".", "updated packed fractional report X2 restore", match.branch.line);
     ctx.emitOp(0x50, "С/П", "halt", match.haltLine);
+    ctx.currentYVariable = undefined;
+}
+
+function packedLineFamilyUpdateCheckMarkerProc(
+  ctx: LoweringCtx,
+  proc: ProcAst,
+): PackedLineFamilyUpdateCheckMarkerProc | undefined {
+    const first = proc.body[0];
+    if (first?.kind !== "assign" || first.expr.kind !== "identifier") return undefined;
+
+    const candidates = ctx.ast.procs.flatMap((candidate) => {
+      const update = xParamIndexedFractionalReportTailProc(ctx, candidate);
+      if (update === undefined || update.factor.kind !== "identifier") return [];
+      if (first.target !== update.factor.name) return [];
+      return [{ proc: candidate, update }];
+    });
+    for (const candidate of candidates) {
+      const steps = packedLineFamilyUpdateCheckMarkerSteps(ctx, proc.body.slice(1), candidate.proc.name, candidate.update);
+      if (steps === undefined) continue;
+      return {
+        updateProc: candidate.proc.name,
+        selector: candidate.update.selector,
+        selectorRegister: candidate.update.selectorRegister,
+        yName: candidate.update.yName,
+        deltaName: first.target,
+        update: candidate.update.update,
+        factor: candidate.update.factor,
+        op: candidate.update.op,
+        mask: candidate.update.mask,
+        branch: candidate.update.branch,
+        haltLine: candidate.update.haltLine,
+        first,
+        steps,
+      };
+    }
+    return undefined;
+}
+
+function packedLineFamilyUpdateCheckMarkerSteps(
+  ctx: LoweringCtx,
+  statements: readonly StatementAst[],
+  updateProc: string,
+  update: XParamIndexedFractionalReportTailProc,
+): PackedLineFamilyUpdateCheckStep[] | undefined {
+    const steps: PackedLineFamilyUpdateCheckStep[] = [];
+    let cursor = 0;
+    let normalizer: string | undefined;
+    while (cursor < statements.length) {
+      const direct = packedLineFamilyUpdateCheckDirectStep(statements, cursor, updateProc, update);
+      if (direct !== undefined) {
+        steps.push(direct.step);
+        cursor += direct.consumed;
+        continue;
+      }
+
+      const normalized = packedLineFamilyUpdateCheckNormalizedStep(ctx, statements, cursor, updateProc, update);
+      if (normalized !== undefined) {
+        if (normalizer !== undefined && normalizer !== normalized.normalizer) return undefined;
+        normalizer = normalized.normalizer;
+        steps.push(normalized.step);
+        cursor += normalized.consumed;
+        continue;
+      }
+      return undefined;
+    }
+
+    if (steps.length < 4 || new Set(steps.map((step) => step.slot)).size < 4) return undefined;
+    if (!steps.every((step) => packedLineFamilyUpdateSlotMatchesBank(ctx, update.update.target, step.slot))) {
+      return undefined;
+    }
+    return steps;
+}
+
+function packedLineFamilyUpdateCheckDirectStep(
+  statements: readonly StatementAst[],
+  cursor: number,
+  updateProc: string,
+  update: XParamIndexedFractionalReportTailProc,
+): { step: PackedLineFamilyUpdateCheckStep; consumed: number } | undefined {
+    const lineAssign = statements[cursor];
+    const paramAssign = statements[cursor + 1];
+    const call = statements[cursor + 2];
+    if (
+      lineAssign?.kind !== "assign" ||
+      lineAssign.target !== update.yName ||
+      paramAssign?.kind !== "assign" ||
+      paramAssign.target !== update.param ||
+      call?.kind !== "call" ||
+      call.block !== updateProc
+    ) {
+      return undefined;
+    }
+    const slot = numericLiteralValue(paramAssign.expr);
+    if (slot === undefined) return undefined;
+    return {
+      step: { lineExpr: lineAssign.expr, slot, sourceLine: lineAssign.line },
+      consumed: 3,
+    };
+}
+
+function packedLineFamilyUpdateCheckNormalizedStep(
+  ctx: LoweringCtx,
+  statements: readonly StatementAst[],
+  cursor: number,
+  updateProc: string,
+  update: XParamIndexedFractionalReportTailProc,
+): { step: PackedLineFamilyUpdateCheckStep; normalizer: string; consumed: number } | undefined {
+    const rawAssign = statements[cursor];
+    const normalizerCall = statements[cursor + 1];
+    const paramAssign = statements[cursor + 2];
+    const call = statements[cursor + 3];
+    if (
+      rawAssign?.kind !== "assign" ||
+      normalizerCall?.kind !== "call" ||
+      paramAssign?.kind !== "assign" ||
+      paramAssign.target !== update.param ||
+      call?.kind !== "call" ||
+      call.block !== updateProc
+    ) {
+      return undefined;
+    }
+    const normalizer = ctx.ast.procs.find((candidate) => candidate.name === normalizerCall.block);
+    if (!procAssignsTargetFromParam(normalizer, update.yName, rawAssign.target)) return undefined;
+    const slot = numericLiteralValue(paramAssign.expr);
+    if (slot === undefined) return undefined;
+    return {
+      step: {
+        lineExpr: rawAssign.expr,
+        slot,
+        sourceLine: rawAssign.line,
+        normalizer: normalizerCall.block,
+      },
+      normalizer: normalizerCall.block,
+      consumed: 4,
+    };
+}
+
+function procAssignsTargetFromParam(proc: ProcAst | undefined, target: string, param: string): boolean {
+    if (proc === undefined) return false;
+    return proc.body.some((statement) =>
+      statement.kind === "assign" &&
+      statement.target === target &&
+      expressionReferencesIdentifier(statement.expr, param)
+    );
+}
+
+function packedLineFamilyUpdateSlotMatchesBank(
+  ctx: LoweringCtx,
+  target: Extract<ExpressionAst, { kind: "indexed" }>,
+  slot: number,
+): boolean {
+    const resolved = findStateBankMember(ctx.ast, target);
+    if (resolved === undefined) return false;
+    return resolved.member.elements.some((element) => element.index === slot);
+}
+
+function compileXParamIndexedFractionalReportTailProc(ctx: LoweringCtx, proc: ProcAst): boolean {
+    const match = xParamIndexedFractionalReportTailProc(ctx, proc);
+    if (match === undefined) return false;
+
+    if (ctx.loweringOptions.xParamYStackStoredEntry === true) {
+      ctx.emitStore(match.selector, `set ${match.selector} from X parameter`, proc.body[0]?.line);
+      ctx.emitOp(0x14, "X↔Y", "stack-carried packed digit index", match.update.line);
+      ctx.markCurrentX(match.yName);
+      ctx.emitLabel(xParamYStackStoredEntryLabel(proc.name));
+      ctx.emitOp(0x15, "F 10ˣ", "stack-carried packed digit pow10", match.update.line);
+      compileExpression(ctx, match.factor);
+      ctx.emitOp(0x12, "×", "stack-carried packed digit delta", match.update.line);
+      ctx.emitOp(
+        0xd0 + registerIndex(match.selectorRegister),
+        `К П->X ${match.selectorRegister}`,
+        "indexed packed digit update base",
+        match.update.line,
+      );
+      ctx.emitOp(binaryOpcode(match.op), match.op, "indexed packed digit update", match.update.line);
+      ctx.emitPreparedIndexedStore(match.update.target, match.selectorRegister, match.update.line);
+
+      compileExpression(ctx, match.mask);
+      ctx.emitOp(0x37, "К ∧", "updated packed fractional report mask", match.branch.line);
+      ctx.emitOp(0x35, "К {x}", "updated packed fractional report predicate", match.branch.line);
+
+      const haltLabel = ctx.freshLabel("packed_frac_report_x2_halt");
+      ctx.emitJump(0x5e, "F x=0", haltLabel, "true branch for packed fractional report !=", match.branch.line);
+      ctx.emitOp(0x52, "В/О", "packed fractional report return", match.branch.line);
+      ctx.emitLabel(haltLabel);
+      ctx.emitOp(0x0a, ".", "updated packed fractional report X2 restore", match.branch.line);
+      ctx.emitOp(0x50, "С/П", "halt", match.haltLine);
+    } else {
+      emitPackedLineFamilyUpdateCheckTail(ctx, match);
+    }
 
     ctx.currentYVariable = undefined;
     ctx.optimizations.push({
@@ -769,6 +1034,7 @@ function xParamIndexedFractionalReportTailProc(
     if (report === undefined) return undefined;
 
     return {
+      param: lowering.param,
       selector,
       selectorRegister,
       yName: yStack.yName,

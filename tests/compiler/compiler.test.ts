@@ -1856,6 +1856,31 @@ program Packed4FractionalBitReportTemp {
     );
   });
 
+  it("can force the structural packed line update/check tail candidate", () => {
+    let source = readFileSync("examples/pending-optimizer/tic-tac-toe-4x4.mkpro", "utf8");
+    const replacements: Array<[string, string]> = [
+      ["mark_one", "touch_slot"],
+      ["mark_lines_and_check", "touch_all_slots"],
+      ["normalize", "wrap_slot"],
+      ["lines", "rows_bank"],
+      ["slot", "selector_cell"],
+      ["line", "line_cell"],
+      ["best_score", "chosen_score"],
+    ];
+    for (const [from, to] of replacements) {
+      source = source.replace(new RegExp(`\\b${from}\\b`, "gu"), to);
+    }
+
+    const result = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      packedLineFamilyUpdateCheckTail: true,
+    });
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames).toContain("packed-line-family-update-check-tail");
+    expect(result.steps.some((step) => step.comment?.includes("packed-line shared update/check tail"))).toBe(true);
+    expect(result.steps.some((step) => step.comment?.includes("proc call touch_slot"))).toBe(false);
+  });
+
   it("can enter X-parameter Y-stack procedures after the stored-parameter prologue", () => {
     const result = compileLoweringVariantForTest(`
 program XParamYStackStoredEntry {
