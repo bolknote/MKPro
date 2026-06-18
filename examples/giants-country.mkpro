@@ -94,8 +94,8 @@ program GiantsCountry {
           reward_ladder()
         }
         else {
-          strength += 4 - tile
           score += tile - 2
+          strength += 4 - tile
           if tile == 7 {
             strength--
             score++

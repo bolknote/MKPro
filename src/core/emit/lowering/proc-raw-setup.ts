@@ -22,6 +22,7 @@ import {
 import {
   compileBitMaskWithQuotientScratch,
   emitBitMaskFromCurrentXWithQuotientScratch,
+  emitCompactBitMaskFromCurrentXWithQuotientScratch,
   emitSpatialLineCountLoopBody,
   emitSpatialLineProgressionHelperBody,
   emitSpatialSumLoopHelperBody,
@@ -2194,8 +2195,12 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
     }
     for (const helper of ctx.spatialBitMaskHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.emitOp(0x0e, "В↑", "bit_mask helper argument lift", helper.line);
-      emitBitMaskFromCurrentXWithQuotientScratch(ctx, helper.scratch, helper.line);
+      if (ctx.loweringOptions.compactBitMaskHelperBody === true) {
+        emitCompactBitMaskFromCurrentXWithQuotientScratch(ctx, helper.scratch, helper.line);
+      } else {
+        ctx.emitOp(0x0e, "В↑", "bit_mask helper argument lift", helper.line);
+        emitBitMaskFromCurrentXWithQuotientScratch(ctx, helper.scratch, helper.line);
+      }
       ctx.emitOp(0x52, "В/О", "bit_mask return", helper.line);
       ctx.optimizations.push({
         name: "bit-mask-helper",

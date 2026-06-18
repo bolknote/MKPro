@@ -121,6 +121,57 @@ export function compileBitSetMaskReuse(ctx: LoweringCtx,
     return true;
 }
 
+export function compileBitOrMaskSetReuse(ctx: LoweringCtx,
+    first: Extract<StatementAst, { kind: "assign" }>,
+    second: Extract<StatementAst, { kind: "assign" }>,
+  ): boolean {
+    const firstSet = matchBitOrMaskSetAssignment(first);
+    const secondSet = matchBitOrMaskSetAssignment(second);
+    if (firstSet === undefined || secondSet === undefined) return false;
+    if (!expressionEquals(firstSet.mask, secondSet.mask)) return false;
+
+    const scratch = bitMaskScratchName(first);
+    if (!ctx.allocation.registers[scratch]) return false;
+
+    compileExpression(ctx, firstSet.mask);
+    ctx.emitStore(scratch, "cell bit mask scratch", first.line);
+    emitCommutativeMaskOpWithScratch(ctx, firstSet.collection, scratch, {
+      opcode: 0x38,
+      mnemonic: "К ∨",
+      opComment: "bit_set with reused mask",
+      recallComment: "reuse cell bit mask",
+      optimization: "mask-stack-op-reuse",
+      detail: `Kept ${scratch} on the stack for the first bit_set at line ${first.line}.`,
+      line: first.line,
+    });
+    ctx.emitStore(first.target, `set ${first.target}`, first.line);
+    compileExpression(ctx, secondSet.collection);
+    ctx.emitRecall(scratch, "reuse cell bit mask", second.line);
+    ctx.emitOp(0x38, "К ∨", "bit_set with reused mask", second.line);
+    ctx.emitStore(second.target, `set ${second.target}`, second.line);
+    ctx.optimizations.push({
+      name: "bit-set-mask-cse",
+      detail: `Computed a set-mask expression once for adjacent set updates at lines ${first.line}/${second.line}.`,
+    });
+    return true;
+}
+
+function matchBitOrMaskSetAssignment(
+    statement: Extract<StatementAst, { kind: "assign" }>,
+  ): { collection: ExpressionAst; mask: ExpressionAst } | undefined {
+    const expr = statement.expr;
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_or" || expr.args.length !== 2) return undefined;
+    const left = expr.args[0]!;
+    const right = expr.args[1]!;
+    if (left.kind === "identifier" && left.name === statement.target) {
+      return { collection: left, mask: right };
+    }
+    if (right.kind === "identifier" && right.name === statement.target) {
+      return { collection: right, mask: left };
+    }
+    return undefined;
+}
+
 export function compileSingleBitMaskOpCopyReuse(ctx: LoweringCtx,
     first: Extract<StatementAst, { kind: "assign" }>,
     second: Extract<StatementAst, { kind: "assign" }>,
@@ -302,6 +353,36 @@ export function emitBitMaskFromCurrentXWithQuotientScratch(
     ctx.emitOp(0x0e, "В↑", "bit mask anchor lift", line);
     ctx.emitStackNumberOrPreload("8");
     ctx.emitOp(0x10, "+", "bit mask anchor", line);
+}
+
+export function emitCompactBitMaskFromCurrentXWithQuotientScratch(
+    ctx: LoweringCtx,
+    scratch: string,
+    line: number | undefined,
+  ): void {
+    ctx.emitNumber("4");
+    ctx.emitOp(0x13, "/", "bit mask quotient", line);
+    ctx.emitStore(scratch, "bit mask quotient", line);
+    ctx.emitOp(0x35, "К {x}", "bit mask remainder fraction", line);
+    ctx.emitNumber("4");
+    ctx.emitOp(0x12, "*", "bit mask remainder scale", line);
+    ctx.emitNumber("2");
+    ctx.emitOp(0x24, "F x^y", "bit mask power", line);
+    ctx.emitNumber("0.5");
+    ctx.emitOp(0x10, "+", "bit mask round bias", line);
+    ctx.emitOp(0x34, "К [x]", "bit mask round", line);
+    ctx.emitRecall(scratch, "bit mask quotient", line);
+    ctx.emitOp(0x34, "К [x]", "bit mask digit index", line);
+    ctx.emitNumber("1");
+    ctx.emitOp(0x10, "+", "bit mask decade index", line);
+    ctx.emitOp(0x15, "F 10^x", "bit mask decade", line);
+    ctx.emitOp(0x13, "/", "bit mask fractional place", line);
+    ctx.emitNumber("8");
+    ctx.emitOp(0x10, "+", "bit mask anchor", line);
+    ctx.optimizations.push({
+      name: "compact-bit-mask-helper-body",
+      detail: "Used number-entry stack lift in the shared bit_mask helper instead of explicit В↑ separators.",
+    });
 }
 
 export function emitBitSetWithScratch(ctx: LoweringCtx, 

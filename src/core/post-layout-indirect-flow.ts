@@ -518,6 +518,34 @@ function canOverlayExecutableCellAt(
   return items[index + 1]?.kind === "address";
 }
 
+function isNumberEntryOpcode(opcode: number): boolean {
+  return (opcode >= 0x00 && opcode <= 0x09) || opcode === 0x0a || opcode === 0x0b || opcode === 0x0c;
+}
+
+function nextExecutableOpcode(items: readonly MachineItem[], start: number): number | undefined {
+  for (let index = start; index < items.length; index += 1) {
+    const item = items[index];
+    if (item?.kind === "label") continue;
+    return overlayExecutableAt(items, index)?.opcode;
+  }
+  return undefined;
+}
+
+function canMoveOverlayOpcodeTo(
+  sourceItems: readonly MachineItem[],
+  sourceIndex: number,
+  targetItems: readonly MachineItem[],
+  targetIndex: number,
+  opcode: number,
+): boolean {
+  if (!isNumberEntryOpcode(opcode)) return true;
+  const sourceNextOpcode = nextExecutableOpcode(sourceItems, sourceIndex + 1);
+  const targetNextOpcode = nextExecutableOpcode(targetItems, targetIndex + 1);
+  return targetNextOpcode === undefined ||
+    !isNumberEntryOpcode(targetNextOpcode) ||
+    (sourceNextOpcode !== undefined && isNumberEntryOpcode(sourceNextOpcode));
+}
+
 function overlaidMnemonic(items: readonly MachineItem[], index: number): string {
   return overlayExecutableAt(items, index)?.mnemonic ?? "unknown";
 }
@@ -722,6 +750,8 @@ function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: Machin
       address,
       ...items.slice(labelsEnd + 1),
     ];
+    const provisionalAddressIndex = index + 1 + labels.length;
+    if (!canMoveOverlayOpcodeTo(items, labelsEnd, provisional, provisionalAddressIndex, executableOpcode)) continue;
     const candidateAddress = chooseOverlayAddressItem(provisional, address, executableOpcode, overlaid);
     if (candidateAddress === undefined) continue;
     const candidate = [
@@ -740,7 +770,7 @@ function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: Machin
     const branch = items[index];
     const address = items[index + 1];
     if (branch?.kind !== "op" || address?.kind !== "address") continue;
-    if (!ADDRESS_TAKING_OPCODES.has(branch.opcode)) continue;
+    if (branch.opcode !== 0x51) continue;
 
     for (let labelsStart = index + 3; labelsStart < items.length - 1; labelsStart += 1) {
       if (items[labelsStart]?.kind !== "label") continue;
@@ -766,6 +796,8 @@ function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: Machin
         ...items.slice(index + 2, labelsStart),
         ...items.slice(labelsEnd + 1),
       ];
+      const provisionalAddressIndex = index + 1 + labels.length;
+      if (!canMoveOverlayOpcodeTo(items, labelsEnd, provisional, provisionalAddressIndex, executableOpcode)) continue;
       const candidateAddress = chooseOverlayAddressItem(provisional, address, executableOpcode, overlaid);
       if (candidateAddress === undefined) continue;
       const candidate = [
@@ -1905,14 +1937,18 @@ export function optimizePostLayoutStopTailReuse(
     }
 
     const rewrite = findStopTailReuseRewrite(current, currentPreloads);
-    if (rewrite === undefined) break;
-    const candidate = applyStopTailReuseRewrite(current, rewrite);
-    if (cellCount(candidate) >= cellCount(current)) break;
-    const retargeted = retargetSelectorPreloadsAfterMachineDeletion(current, candidate, currentPreloads);
-    if (retargeted === undefined) break;
-    current = retargeted.items;
-    currentPreloads = retargeted.preloads;
-    stopTailApplied += 1;
+    if (rewrite !== undefined) {
+      const candidate = applyStopTailReuseRewrite(current, rewrite);
+      if (cellCount(candidate) >= cellCount(current)) break;
+      const retargeted = retargetSelectorPreloadsAfterMachineDeletion(current, candidate, currentPreloads);
+      if (retargeted === undefined) break;
+      current = retargeted.items;
+      currentPreloads = retargeted.preloads;
+      stopTailApplied += 1;
+      continue;
+    }
+
+    break;
   }
 
   const applied = stopTailApplied + existingSelectorApplied + emptyStackTailCallApplied;

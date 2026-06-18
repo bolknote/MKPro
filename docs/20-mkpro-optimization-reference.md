@@ -523,7 +523,28 @@ shared baselines in `tests/compiler/example-baselines.ts`.
 - `show-read-guarded-transfer-<layout>` — generated for each proc-layout candidate (`call-count`, `size-*`, `reverse`) combining guarded read/decrement/increment fusion with that proc ordering.
 - `inline-floor-packed-row-expression` — computes floor-packed display rows inline to reduce hidden display pressure.
 - `inline-floor-hoisted-proc-tail-layout` — combines inline floor-row lowering with helper/proc hoisting and tail-branch inversion.
-- `reclaim-coalesced-preloads` — compiles with forced coalesce-induced register sharing to free constants for preload allocation.
+- `dead-source-residual-temp-reuse` — reuses a dead source field as the storage
+  for a derived residual temp when the later suffix can be proved to read only
+  that residual value.
+- `dead-source-residual-tail-branch` — combines dead-source residual temp reuse
+  with tail-branch inversion.
+- `compact-bit-mask-helper-body` — uses the compact historical shared
+  `bit_mask` helper body that relies on number-entry stack lift instead of an
+  explicit argument lift.
+- `compact-bit-mask-helper-tail-branch` — combines the compact bit-mask helper
+  body with tail-branch inversion.
+- `aggressive-post-layout-indirect-flow` — runs the proven post-layout
+  indirect-flow/dark-entry pass even when the primary program already fits,
+  keeping the result only if whole-program selection shrinks it.
+- `aggressive-post-layout-branch-order`, `aggressive-post-layout-tail-branch`,
+  `aggressive-post-layout-shared-call-body`, and
+  `aggressive-post-layout-dual-use-constant` — bounded combinations of the
+  aggressive post-layout pass with existing layout/value candidates.
+- `reclaim-coalesced-preloads` — compiles with forced coalesce-induced register
+  sharing to free constants for preload allocation. Its probe bases include
+  source-relevant compact bit-mask and dead-source residual variants, so the
+  reclaimed-preload result does not depend on whether those variants happened
+  to be selected earlier as standalone candidates.
 - `demote-constant-indirect-flow` — recompiles with selective setup-enterable
   numeric constant inlining to free registers for post-layout indirect-flow
   rescue; probe bases include existing-constant dual-use selectors when that

@@ -14850,7 +14850,8 @@ function stackDifferenceCanReachConsumer(
             // Context-sensitive entry commands can overwrite X while leaving
             // deeper stack slots intact. A removed lift whose only difference
             // is already below X may still be consumed by a later binary op.
-            return depth !== 1;
+            if (depth === 1) return false;
+            break;
           }
           if (effect.stackShifts) {
             depth = shiftDifference(depth);

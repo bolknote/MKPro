@@ -195,6 +195,110 @@ program TailForward {
     expect(result.steps.filter((step) => step.hex === "53").length).toBe(1);
   });
 
+  it("allows five nested hardware return-stack frames", () => {
+    const result = compileOk(`
+program FiveDeep {
+  state {
+    result: counter 0..999 = 0
+  }
+  fn f1(n) {
+    return f2(n) + 1
+  }
+  fn f2(n) {
+    return f3(n) + 1
+  }
+  fn f3(n) {
+    return f4(n) + 1
+  }
+  fn f4(n) {
+    return f5(n) + 1
+  }
+  fn f5(n) {
+    return n
+  }
+  loop {
+    x = read()
+    result = f1(x)
+    halt(result)
+  }
+}
+`);
+    expect(result.diagnostics.some((diagnostic) => diagnostic.code === "RETURN_STACK_DEPTH_EXCEEDED")).toBe(false);
+  });
+
+  it("rejects six nested hardware return-stack frames", () => {
+    expect(() =>
+      compileMKPro(`
+program SixDeep {
+  state {
+    result: counter 0..999 = 0
+  }
+  fn f1(n) {
+    return f2(n) + 1
+  }
+  fn f2(n) {
+    return f3(n) + 2
+  }
+  fn f3(n) {
+    return f4(n) + 3
+  }
+  fn f4(n) {
+    return f5(n) + 4
+  }
+  fn f5(n) {
+    return f6(n) + 5
+  }
+  fn f6(n) {
+    return random(9)
+  }
+  loop {
+    x = read()
+    result = f1(x)
+    halt(result)
+  }
+}
+`, { budget: 999 })
+    ).toThrow(/return stack holds at most 5 nested ПП frame\(s\).*depth 6/u);
+  });
+
+  it("does not count function tail-call chains as nested return frames", () => {
+    const result = compileOk(`
+program TailChain {
+  state {
+    result: counter 0..999 = 0
+  }
+  fn f1(n) {
+    return f2(n)
+  }
+  fn f2(n) {
+    return f3(n)
+  }
+  fn f3(n) {
+    return f4(n)
+  }
+  fn f4(n) {
+    return f5(n)
+  }
+  fn f5(n) {
+    return f6(n)
+  }
+  fn f6(n) {
+    return f7(n)
+  }
+  fn f7(n) {
+    return n
+  }
+  loop {
+    x = read()
+    result = f1(x)
+    halt(result)
+  }
+}
+`);
+    expect(result.report.optimizations.some((opt) => opt.name === "function-tail-call")).toBe(true);
+    expect(result.diagnostics.some((diagnostic) => diagnostic.code === "RETURN_STACK_DEPTH_EXCEEDED")).toBe(false);
+  });
+
   it("rejects direct recursion outside tail position", () => {
     expect(() =>
       compileMKPro(`

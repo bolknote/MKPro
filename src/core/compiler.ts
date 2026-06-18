@@ -7,6 +7,7 @@ import { propagateValuesInterprocedurally } from "./value-propagation.ts";
 import { normalizeV2ExpressionText, parseExpression, parseProgram } from "./parser.ts";
 import { runIrPasses } from "./passes/index.ts";
 import { computeNonOverlappingRegisterMapping } from "./passes/register-coalesce.ts";
+import { cellsPerOp, knownIndirectFlowTarget } from "./passes/helpers.ts";
 import { raiseMachineToIr } from "./ir.ts";
 import {
   optimizePostLayoutAddressCodeOverlay,
@@ -22,7 +23,7 @@ import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
 import { compileExpression, compileStackStopRiskTail, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
 import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitDomainTrapOnX, emitKnownOneIndirectLoopBack, indirectPredecrementUnderflowRegister, planDomainErrorGuard, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
-import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileSingleBitMaskOpCopyReuse, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
+import { compileBitOrMaskSetReuse, compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileSingleBitMaskOpCopyReuse, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountFormattedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
 import { compileBlockCall, compileDecimalSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileOneBasedModuloNormalization, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall, xParamYStackStoredEntryLabel } from "./emit/lowering/proc-raw-setup.ts";
 import { compileMultiStackResidentTemps } from "./emit/stack-residency-lowering.ts";
@@ -196,6 +197,7 @@ import type {
   MachineFeatureUseReport,
   MachineItem,
   MachineOp,
+  IrOp,
   OptimizerCapabilityReport,
   OptimizerReport,
   LayoutIrCell,
@@ -224,6 +226,8 @@ const DEFAULT_OPTIONS: CompileOptions = {
   budget: 105,
   analysis: false,
 };
+
+const MK61_RETURN_STACK_LIMIT = 5;
 
 interface NodeFsModule {
   existsSync(path: string): boolean;
@@ -401,6 +405,17 @@ interface LoweringOptions {
   // create legal middle-entry branch targets for fractional/preloaded selector
   // packing, so it is tried only as a whole-program candidate.
   conditionalBranchTrampoline?: boolean;
+  // Reuse a dead source state field as the storage for a derived residual temp
+  // (`tmp = f(source)` -> `source = f(source)`) when every later read can be
+  // proved to want that residual value. This is semantic-preserving but can
+  // reshuffle allocation/layout, so it is selected only as a whole-program
+  // candidate.
+  deadSourceResidualTempReuse?: boolean;
+  // Run the proven post-layout indirect-flow/dark-entry pass even for programs
+  // that already fit in 105 cells. The pass is still strictly shrinking in main
+  // program cells; whole-program candidate selection keeps it only when the
+  // final layout wins.
+  aggressivePostLayoutIndirectFlow?: boolean;
   // Share a repeated random-coordinate expression through one call/return
   // helper even when the static cost model only predicts a marginal (1-2 cell)
   // saving. The default threshold keeps marginal helpers inline so register
@@ -432,6 +447,11 @@ interface LoweringOptions {
   // a lone spatial hit gets larger, but programs that also compute the mask
   // inline can share the body.
   sharedBitMaskHelperCalls?: boolean;
+  // Use the compact historical shared bit_mask helper body that relies on
+  // number-entry stack lift instead of explicit В↑ separators. It is selected
+  // only as a whole-program candidate because the altered stack shape can
+  // perturb nearby helper sharing and address layout.
+  compactBitMaskHelperBody?: boolean;
   // Collapse signed match pairs like `K => step(1)` / `-K => step(-1)` into
   // an abs/sign guarded default branch. Speculative because the expression work
   // only wins when it replaces enough dispatch arms.
@@ -687,6 +707,51 @@ function sourceHasMultipleProcs(source: string): boolean {
   return (source.match(/\bfn\b/gu) ?? []).length >= 2;
 }
 
+function sourceHasReferenceDeclaration(source: string): boolean {
+  return /^\s*reference\s+\S+/mu.test(source);
+}
+
+function sourceMayUseBitMaskHelper(source: string): boolean {
+  return /\bbit_(?:and|or|xor|not)\s*\(/u.test(source) || /\b(?:not\s+)?in\b/u.test(source);
+}
+
+function sourceHasDeadSourceResidualTempCandidate(source: string): boolean {
+  let ast: ProgramAst;
+  try {
+    ast = parseProgram(source);
+  } catch {
+    return false;
+  }
+  let found = false;
+  const visitStatements = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (found) return;
+      switch (statement.kind) {
+        case "assign":
+          found = residualTempReusePlan(statement) !== undefined;
+          break;
+        case "if":
+          visitStatements(statement.thenBody);
+          if (statement.elseBody !== undefined) visitStatements(statement.elseBody);
+          break;
+        case "while":
+        case "loop":
+          visitStatements(statement.body);
+          break;
+        case "dispatch":
+          for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body);
+          if (statement.defaultBody !== undefined) visitStatements(statement.defaultBody);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+  return found;
+}
+
 // Gate for the `repeated-unary-update-arg-temp` candidates: the canonicalization
 // only does anything when some statement list contains two or more statements
 // that share a routable-unary shape (same structure modulo one X-transform
@@ -852,11 +917,10 @@ export function compileMKPro(
     return { best, selected };
   };
 
-  // Stage 2 coverage expansion + demote run only in the rescue regime, i.e. when
-  // the standard search still leaves the program over the official window. This
-  // matches the demote gate: programs that already fit (<=105) are byte-locked
-  // and untouched, so only genuinely-overflowing programs pay for the broader
-  // bundle x layout matrix, and min-size selection means it can only shrink them.
+  // Stage 2 coverage expansion + demote run only while the selected candidate
+  // still overflows the official window. Source-relevant reclaim bases above
+  // keep compact/reclaim combinations order-independent without forcing every
+  // already-rescued program through the full bundle x layout matrix.
   if (needsSizeRescue && (selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT) {
     for (const spec of enumerateExpansionCandidateSpecs({ source, primaryOverflows })) runSpec(spec);
     demoteConstantIndirectFlowCandidates(source, options, needsSizeRescue, tryCandidate, cachedCompileMKProOnce);
@@ -1025,6 +1089,9 @@ const MAX_DEMOTED_INDIRECT_FLOW_VALUES = 4;
 function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): CandidateSpec[] {
   const { source, primaryOverflows } = ctx;
   const specs: CandidateSpec[] = [];
+  const allowAggressivePostLayout = primaryOverflows || sourceHasReferenceDeclaration(source);
+  const mayUseBitMaskHelper = sourceMayUseBitMaskHelper(source);
+  const mayUseDeadSourceResidual = sourceHasDeadSourceResidualTempCandidate(source);
   const add = (
     options: LoweringOptions,
     name: string,
@@ -1128,6 +1195,62 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     "Combined dual-use constant indirect-flow selectors, tail-branch inversion, and conditional branch trampolines after full layout",
     "sizeRescue",
   );
+  if (allowAggressivePostLayout && mayUseDeadSourceResidual) {
+    add(
+      { deadSourceResidualTempReuse: true },
+      "dead-source-residual-temp-reuse",
+      "Reused dead source registers for residual temporary values when whole-program layout wins",
+    );
+    add(
+      { deadSourceResidualTempReuse: true, tailBranchInversion: true },
+      "dead-source-residual-tail-branch",
+      "Combined dead-source residual temp reuse with tail-branch inversion",
+    );
+  }
+  if (allowAggressivePostLayout) {
+    add(
+      { aggressivePostLayoutIndirectFlow: true },
+      "aggressive-post-layout-indirect-flow",
+      "Tried proven post-layout indirect-flow and dark-entry rewrites even though the primary layout already fit",
+    );
+    add(
+      { aggressivePostLayoutIndirectFlow: true, invertBranchOrder: true },
+      "aggressive-post-layout-branch-order",
+      "Combined proven post-layout indirect-flow with inverted branch-order layout",
+    );
+    add(
+      { aggressivePostLayoutIndirectFlow: true, tailBranchInversion: true },
+      "aggressive-post-layout-tail-branch",
+      "Combined proven post-layout indirect-flow with tail-branch inversion",
+    );
+    if (mayUseDeadSourceResidual) {
+      add(
+        { deadSourceResidualTempReuse: true, aggressivePostLayoutIndirectFlow: true },
+        "dead-source-residual-aggressive-post-layout",
+        "Combined dead-source residual temp reuse with proven post-layout indirect-flow",
+      );
+      add(
+        { deadSourceResidualTempReuse: true, aggressivePostLayoutIndirectFlow: true, tailBranchInversion: true },
+        "dead-source-residual-aggressive-tail-branch",
+        "Combined dead-source residual temp reuse, proven post-layout indirect-flow, and tail-branch inversion",
+      );
+    }
+    add(
+      { aggressivePostLayoutIndirectFlow: true, sharedStraightLineCallBodies: true },
+      "aggressive-post-layout-shared-call-body",
+      "Combined proven post-layout indirect-flow with shared call-body helpers",
+    );
+    add(
+      { aggressivePostLayoutIndirectFlow: true, dualUseConstantIndirectFlow: true },
+      "aggressive-post-layout-dual-use-constant",
+      "Combined proven post-layout indirect-flow with dual-use constant selectors",
+    );
+    add(
+      { aggressivePostLayoutIndirectFlow: true, dualUseConstantIndirectFlow: true, tailBranchInversion: true },
+      "aggressive-post-layout-dual-use-tail-branch",
+      "Combined proven post-layout indirect-flow, dual-use constant selectors, and tail-branch inversion",
+    );
+  }
   add(
     { indirectUnderflowDecrement: true },
     "indirect-underflow-decrement",
@@ -1230,6 +1353,20 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     "shared-bit-mask-helper-hoisted-layout",
     "Selected shared bit_mask helper calls with hoisted helper layout",
   );
+  if (mayUseBitMaskHelper) {
+    add(
+      { compactBitMaskHelperBody: true },
+      "compact-bit-mask-helper-body",
+      "Selected compact shared bit_mask helper body after full layout",
+      "sizeRescue",
+    );
+    add(
+      { compactBitMaskHelperBody: true, tailBranchInversion: true },
+      "compact-bit-mask-helper-tail-branch",
+      "Combined compact shared bit_mask helper body with tail-branch inversion",
+      "sizeRescue",
+    );
+  }
   add(
     { signedAbsMatchPairs: true },
     "signed-abs-match-pair",
@@ -1467,6 +1604,8 @@ function enumerateExpansionCandidateSpecs(ctx: CandidateEnumerationContext): Can
   // bundles that were never combined with a placement strategy. Keep the matrix
   // small (these are full recompiles) and dedupe against the static names.
   if (!sourceHasMultipleProcs(source)) return specs;
+  const mayUseBitMaskHelper = sourceMayUseBitMaskHelper(source);
+  const mayUseDeadSourceResidual = sourceHasDeadSourceResidualTempCandidate(source);
 
   const semanticBundles: Array<{ options: LoweringOptions; name: string; detail: string }> = [
     { options: { stackResidentTemps: true }, name: "stack-resident-temps", detail: "stack-resident temporaries" },
@@ -1476,6 +1615,18 @@ function enumerateExpansionCandidateSpecs(ctx: CandidateEnumerationContext): Can
     { options: { conditionalBranchTrampoline: true }, name: "conditional-branch-trampoline", detail: "conditional branch trampolines" },
     { options: { dualUseConstantIndirectFlow: true, conditionalBranchTrampoline: true }, name: "dual-use-constant-conditional-trampoline", detail: "dual-use constant indirect-flow selectors with conditional branch trampolines" },
     { options: { xParamYStackStoredEntry: true }, name: "x-param-y-stack-stored-entry", detail: "secondary X-parameter/Y-stack procedure entries" },
+    ...(mayUseBitMaskHelper
+      ? [
+          { options: { compactBitMaskHelperBody: true }, name: "compact-bit-mask-helper-body", detail: "compact shared bit_mask helper body" },
+          { options: { compactBitMaskHelperBody: true, tailBranchInversion: true }, name: "compact-bit-mask-helper-tail-branch", detail: "compact shared bit_mask helper body with tail-branch inversion" },
+        ]
+      : []),
+    ...(mayUseDeadSourceResidual
+      ? [
+          { options: { deadSourceResidualTempReuse: true }, name: "dead-source-residual-temp-reuse", detail: "dead-source residual temp reuse" },
+          { options: { deadSourceResidualTempReuse: true, tailBranchInversion: true }, name: "dead-source-residual-tail-branch", detail: "dead-source residual temp reuse with tail-branch inversion" },
+        ]
+      : []),
   ];
 
   for (const bundle of semanticBundles) {
@@ -1505,9 +1656,31 @@ function reclaimCoalescedPreloadCandidates(
   tryCandidate: TryCandidateFn,
   compileOnce: CompileOnceFn = (compileOptions, loweringOptions) => compileMKProOnce(source, compileOptions, loweringOptions),
 ): void {
+  const allowAggressivePostLayout = needsSizeRescue || sourceHasReferenceDeclaration(source);
+  const mayUseBitMaskHelper = sourceMayUseBitMaskHelper(source);
+  const mayUseDeadSourceResidual = sourceHasDeadSourceResidualTempCandidate(source);
   const reclaimBases: LoweringOptions[] = [
     {},
+    ...(allowAggressivePostLayout
+      ? [
+          { aggressivePostLayoutIndirectFlow: true },
+          { aggressivePostLayoutIndirectFlow: true, invertBranchOrder: true },
+          { aggressivePostLayoutIndirectFlow: true, tailBranchInversion: true },
+        ]
+      : []),
     { unrollCountedLoops: true },
+    ...(mayUseBitMaskHelper
+      ? [
+          { compactBitMaskHelperBody: true },
+          { compactBitMaskHelperBody: true, tailBranchInversion: true },
+        ]
+      : []),
+    ...(mayUseDeadSourceResidual
+      ? [
+          { deadSourceResidualTempReuse: true },
+          { deadSourceResidualTempReuse: true, tailBranchInversion: true },
+        ]
+      : []),
     ...(needsSizeRescue
       ? [
           { setupOnlyCountedLoopInit: true },
@@ -1784,8 +1957,7 @@ function demoteConstantIndirectFlowCandidates(
       } catch {
         break;
       }
-      const next = demotableIndirectFlowPreloadValues(chainProbe)
-        .filter((value) => !suppressed.has(value))[0];
+      const next = demotableIndirectFlowPreloadValues(chainProbe, suppressed)[0];
       if (next === undefined) break;
       suppressed.add(next);
       const values = [...suppressed];
@@ -1802,11 +1974,14 @@ function demoteConstantIndirectFlowCandidates(
   }
 }
 
-function demotableIndirectFlowPreloadValues(result: CompileResult): string[] {
+function demotableIndirectFlowPreloadValues(
+  result: CompileResult,
+  suppressed: ReadonlySet<string> = new Set(),
+): string[] {
   const values = new Set<string>();
   for (const preload of result.report.preloads ?? []) {
     const value = demotableIndirectFlowPreloadValue(preload);
-    if (value !== undefined) values.add(value);
+    if (value !== undefined && !suppressed.has(value)) values.add(value);
   }
   return [...values]
     .sort((left, right) =>
@@ -2778,6 +2953,9 @@ function compileMKProOnce(
   inlineDisplayStringValues(ast, optimizations);
   trimDisplayEdgeWhitespace(ast, optimizations);
   fuseTailCopyAssignments(ast, optimizations);
+  if (loweringOptions.deadSourceResidualTempReuse === true) {
+    reuseDeadSourceResidualTemps(ast, optimizations);
+  }
   inlineIndexedBitReportBranchTemps(ast, optimizations);
   eliminateUnobservedState(ast, optimizations, {
     preserveDispatchCaseOrder: loweringOptions.preserveDispatchCaseOrder === true,
@@ -2808,6 +2986,7 @@ function compileMKProOnce(
   validateV2Intent(ast, diagnostics);
   validateReservedInternalNames(ast, diagnostics);
   validateFunctionTailRecursion(ast, diagnostics);
+  validateFunctionReturnStackDepth(ast, diagnostics);
   validateRawMachineHazards(ast, warnings);
   warnHardwareMaxMinZeroOperands(ast, warnings);
   warnShowHaltStyleRule(ast, warnings);
@@ -2891,8 +3070,10 @@ function compileMKProOnce(
     ? { items: context.items, preloads: [] }
     : optimizeItems(context.items, passOptionsWithPreloads, optimizations);
   const referenceMetrics = ast.reference === undefined ? undefined : resolveReferenceMetrics(ast.reference);
-  const indirectFlowRescueAbove = opts.indirectFlowRescueAbove
-    ?? (referenceMetrics === undefined ? undefined : Math.min(referenceMetrics.span, opts.budget));
+  const indirectFlowRescueAbove = loweringOptions.aggressivePostLayoutIndirectFlow === true
+    ? 0
+    : (opts.indirectFlowRescueAbove
+      ?? (referenceMetrics === undefined ? undefined : Math.min(referenceMetrics.span, opts.budget)));
   const postLayoutFlow = exactDecimalSeries
     ? { items: optimizedResult.items, optimizations: [], preloads: [] }
     : optimizePostLayoutIndirectFlow(
@@ -2918,6 +3099,7 @@ function compileMKProOnce(
     ? { items: postLayoutStopTail.items, optimizations: [], preloads: [] }
     : optimizePostLayoutAddressCodeOverlay(postLayoutStopTail.items);
   const optimized = postLayoutOverlay.items;
+  validateHardwareReturnStackDepth(optimized, diagnostics);
   optimizations.push(
     ...postLayoutFlow.optimizations,
     ...postLayoutR0Flow.optimizations,
@@ -4365,11 +4547,33 @@ function loopCarriedPromptNames(ast: ProgramAst): ReadonlySet<string> {
 function xParamProcParamNames(ast: ProgramAst): ReadonlySet<string> {
   const procCallCounts = collectProcCallCounts(ast);
   const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
+  const lowerings = collectXParamProcLowerings(ast, inlineProcNames);
+  const ownersByParam = procParamOwnersByName(ast);
+  const loweringOwnersByParam = new Map<string, Set<string>>();
+  for (const [procName, lowering] of lowerings) {
+    const owners = loweringOwnersByParam.get(lowering.param) ?? new Set<string>();
+    owners.add(procName);
+    loweringOwnersByParam.set(lowering.param, owners);
+  }
   const names = new Set<string>();
-  for (const [procName, lowering] of collectXParamProcLowerings(ast, inlineProcNames)) {
-    if (!identifierReadOutsideProc(ast, procName, lowering.param)) names.add(lowering.param);
+  for (const [param, loweringOwners] of loweringOwnersByParam) {
+    const allOwners = ownersByParam.get(param) ?? new Set<string>();
+    if ([...allOwners].some((owner) => !loweringOwners.has(owner))) continue;
+    if (!identifierReadOutsideProcs(ast, loweringOwners, param)) names.add(param);
   }
   return names;
+}
+
+function procParamOwnersByName(ast: ProgramAst): Map<string, Set<string>> {
+  const owners = new Map<string, Set<string>>();
+  for (const proc of ast.procs) {
+    for (const param of proc.params ?? []) {
+      const names = owners.get(param) ?? new Set<string>();
+      names.add(proc.name);
+      owners.set(param, names);
+    }
+  }
+  return owners;
 }
 
 function xParamValueFunctionParamNamesForAllocation(ast: ProgramAst): ReadonlySet<string> {
@@ -4742,6 +4946,10 @@ function statementsCallAnyProc(
 }
 
 function identifierReadOutsideProc(ast: ProgramAst, procName: string, name: string): boolean {
+  return identifierReadOutsideProcs(ast, new Set([procName]), name);
+}
+
+function identifierReadOutsideProcs(ast: ProgramAst, procNames: ReadonlySet<string>, name: string): boolean {
   const visitExpr = (expr: ExpressionAst): boolean => expressionReferencesIdentifier(expr, name);
   const visitCondition = (condition: ConditionAst): boolean => visitExpr(condition.left) || visitExpr(condition.right);
   const visitStatements = (statements: readonly StatementAst[]): boolean => {
@@ -4766,7 +4974,7 @@ function identifierReadOutsideProc(ast: ProgramAst, procName: string, name: stri
     return false;
   };
   if (ast.entries.some((entry) => visitStatements(entry.body))) return true;
-  return ast.procs.some((proc) => proc.name !== procName && visitStatements(proc.body));
+  return ast.procs.some((proc) => !procNames.has(proc.name) && visitStatements(proc.body));
 }
 
 function fuseTailCopyAssignments(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
@@ -4846,6 +5054,380 @@ function fuseTailCopyAssignments(ast: ProgramAst, optimizations: AppliedOptimiza
     name: "tail-copy-assignment-fusion",
     detail: `Fused ${fused} tail copy assignment${fused === 1 ? "" : "s"} before state liveness.`,
   });
+}
+
+type ResidualAvailability = "all" | "none" | "mixed";
+
+interface ResidualTempRewriteState {
+  readonly ast: ProgramAst;
+  readonly target: string;
+  readonly source: string;
+  readonly residual: ExpressionAst;
+  targetAvailable: ResidualAvailability;
+  sourceAvailable: ResidualAvailability;
+  rewrites: number;
+  failed: boolean;
+}
+
+function reuseDeadSourceResidualTemps(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
+  let reused = 0;
+
+  const rewriteBlock = (statements: StatementAst[]): StatementAst[] => {
+    let rewritten = statements.map(rewriteChildren);
+    for (let index = 0; index < rewritten.length; index += 1) {
+      const assignment = rewritten[index];
+      if (assignment?.kind !== "assign") continue;
+      const plan = residualTempReusePlan(assignment);
+      if (plan === undefined) continue;
+      const state: ResidualTempRewriteState = {
+        ast,
+        target: assignment.target,
+        source: plan.source,
+        residual: assignment.expr,
+        targetAvailable: "all",
+        sourceAvailable: "all",
+        rewrites: 0,
+        failed: false,
+      };
+      const suffix = rewriteResidualTempSuffix(rewritten.slice(index + 1), state);
+      if (state.failed || state.rewrites === 0) continue;
+      rewritten = [
+        ...rewritten.slice(0, index),
+        { ...assignment, target: plan.source, expr: structuredClone(assignment.expr) },
+        ...suffix,
+      ];
+      reused += 1;
+    }
+    return rewritten;
+  };
+
+  const rewriteChildren = (statement: StatementAst): StatementAst => {
+    switch (statement.kind) {
+      case "if":
+        return {
+          ...statement,
+          thenBody: rewriteBlock(statement.thenBody),
+          ...(statement.elseBody === undefined ? {} : { elseBody: rewriteBlock(statement.elseBody) }),
+        };
+      case "while":
+      case "loop":
+        return { ...statement, body: rewriteBlock(statement.body) };
+      case "dispatch":
+        return {
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({
+            ...dispatchCase,
+            body: rewriteBlock(dispatchCase.body),
+          })),
+          ...(statement.defaultBody === undefined ? {} : { defaultBody: rewriteBlock(statement.defaultBody) }),
+        };
+      default:
+        return statement;
+    }
+  };
+
+  for (const entry of ast.entries) entry.body = rewriteBlock(entry.body);
+  for (const proc of ast.procs) proc.body = rewriteBlock(proc.body);
+
+  if (reused === 0) return;
+  optimizations.push({
+    name: "dead-source-residual-temp-reuse",
+    detail: `Reused ${reused} dead source register${reused === 1 ? "" : "s"} for residual temporary values before allocation.`,
+  });
+}
+
+function residualTempReusePlan(
+  assignment: Extract<StatementAst, { kind: "assign" }>,
+): { source: string } | undefined {
+  if (!expressionPureForSubstitution(assignment.expr)) return undefined;
+  if (expressionReferencesIdentifier(assignment.expr, assignment.target)) return undefined;
+  const identifiers = expressionIdentifierNames(assignment.expr);
+  if (identifiers.size !== 1) return undefined;
+  const source = [...identifiers][0]!;
+  if (source === assignment.target) return undefined;
+  return { source };
+}
+
+function rewriteResidualTempSuffix(
+  statements: readonly StatementAst[],
+  state: ResidualTempRewriteState,
+): StatementAst[] {
+  return statements.map((statement) => rewriteResidualTempStatement(statement, state));
+}
+
+function rewriteResidualTempStatement(
+  statement: StatementAst,
+  state: ResidualTempRewriteState,
+): StatementAst {
+  if (state.failed) return statement;
+  switch (statement.kind) {
+    case "assign": {
+      const expr = rewriteResidualTempExpression(statement.expr, state);
+      const rewritten = expr === statement.expr ? statement : { ...statement, expr };
+      applyResidualTempWrite(state, statement.target);
+      return rewritten;
+    }
+    case "indexed_assign": {
+      const target = rewriteResidualTempIndexedTarget(statement.target, state);
+      const expr = rewriteResidualTempExpression(statement.expr, state);
+      applyResidualTempIndexedWrite(state, statement.target.base);
+      return target === statement.target && expr === statement.expr ? statement : { ...statement, target, expr };
+    }
+    case "coord_list_remove": {
+      const item = rewriteResidualTempExpression(statement.item, state);
+      return item === statement.item ? statement : { ...statement, item };
+    }
+    case "pause":
+    case "preview":
+    case "return_value": {
+      const expr = rewriteResidualTempExpression(statement.expr, state);
+      return expr === statement.expr ? statement : { ...statement, expr };
+    }
+    case "halt": {
+      rejectResidualTempDisplayReads(statement.displaySources ?? displaySourcesForStatement(state.ast, statement), state);
+      const expr = rewriteResidualTempExpression(statement.expr, state);
+      return expr === statement.expr ? statement : { ...statement, expr };
+    }
+    case "input":
+      applyResidualTempWrite(state, statement.target);
+      return statement;
+    case "show":
+      rejectResidualTempDisplayReads(displaySourcesForStatement(state.ast, statement), state);
+      return statement;
+    case "call":
+      rejectResidualTempCallReads(statement.block, state);
+      applyResidualTempCallWrites(statement.block, state);
+      return statement;
+    case "core":
+      const inputs = statement.inputs?.map((input) => ({
+        ...input,
+        expr: rewriteResidualTempExpression(input.expr, state),
+      }));
+      for (const output of statement.outputs ?? []) applyResidualTempWrite(state, output.target);
+      for (const clobber of statement.clobbers ?? []) applyResidualTempWrite(state, clobber);
+      return inputs === undefined ? statement : { ...statement, inputs };
+    case "if": {
+      const condition = rewriteResidualTempCondition(statement.condition, state);
+      const thenState = cloneResidualTempState(state);
+      const thenBody = rewriteResidualTempSuffix(statement.thenBody, thenState);
+      const elseState = cloneResidualTempState(state);
+      const elseBody = statement.elseBody === undefined
+        ? undefined
+        : rewriteResidualTempSuffix(statement.elseBody, elseState);
+      mergeResidualTempState(state, thenState, elseState);
+      return {
+        ...statement,
+        condition,
+        thenBody,
+        ...(elseBody === undefined ? {} : { elseBody }),
+      };
+    }
+    case "while": {
+      const condition = rewriteResidualTempCondition(statement.condition, state);
+      rejectResidualTempStatementReads(statement, state);
+      state.targetAvailable = "mixed";
+      state.sourceAvailable = "mixed";
+      return { ...statement, condition };
+    }
+    case "loop":
+      rejectResidualTempStatementReads(statement, state);
+      state.targetAvailable = "mixed";
+      state.sourceAvailable = "mixed";
+      return statement;
+    case "dispatch": {
+      const expr = rewriteResidualTempExpression(statement.expr, state);
+      const cases = statement.cases.map((dispatchCase) => {
+        const caseState = cloneResidualTempState(state);
+        const value = rewriteResidualTempExpression(dispatchCase.value, caseState);
+        const body = rewriteResidualTempSuffix(dispatchCase.body, caseState);
+        return { value: { ...dispatchCase, value, body }, state: caseState };
+      });
+      const defaultState = cloneResidualTempState(state);
+      const defaultBody = statement.defaultBody === undefined
+        ? undefined
+        : rewriteResidualTempSuffix(statement.defaultBody, defaultState);
+      mergeResidualTempStates(state, [...cases.map((entry) => entry.state), defaultState]);
+      return {
+        ...statement,
+        expr,
+        cases: cases.map((entry) => entry.value),
+        ...(defaultBody === undefined ? {} : { defaultBody }),
+      };
+    }
+    case "decimal_series":
+      return statement;
+  }
+}
+
+function rewriteResidualTempExpression(
+  expr: ExpressionAst,
+  state: ResidualTempRewriteState,
+): ExpressionAst {
+  if (state.failed) return expr;
+  if (state.sourceAvailable === "all" && expressionEquals(expr, state.residual)) {
+    state.rewrites += 1;
+    return { kind: "identifier", name: state.source };
+  }
+  switch (expr.kind) {
+    case "number":
+    case "string":
+      return expr;
+    case "identifier":
+      if (expr.name === state.source) {
+        if (state.sourceAvailable !== "none") state.failed = true;
+        return expr;
+      }
+      if (expr.name === state.target) {
+        if (state.targetAvailable === "all") {
+          state.rewrites += 1;
+          return { kind: "identifier", name: state.source };
+        }
+        if (state.targetAvailable === "mixed") state.failed = true;
+      }
+      return expr;
+    case "indexed": {
+      const index = rewriteResidualTempExpression(expr.index, state);
+      return index === expr.index ? expr : { ...expr, index };
+    }
+    case "unary": {
+      const inner = rewriteResidualTempExpression(expr.expr, state);
+      return inner === expr.expr ? expr : { ...expr, expr: inner };
+    }
+    case "binary": {
+      const left = rewriteResidualTempExpression(expr.left, state);
+      const right = rewriteResidualTempExpression(expr.right, state);
+      return left === expr.left && right === expr.right ? expr : { ...expr, left, right };
+    }
+    case "call": {
+      const args = expr.args.map((arg) => rewriteResidualTempExpression(arg, state));
+      return args.every((arg, index) => arg === expr.args[index]) ? expr : { ...expr, args };
+    }
+  }
+}
+
+function rewriteResidualTempIndexedTarget(
+  target: Extract<ExpressionAst, { kind: "indexed" }>,
+  state: ResidualTempRewriteState,
+): Extract<ExpressionAst, { kind: "indexed" }> {
+  const index = rewriteResidualTempExpression(target.index, state);
+  return index === target.index ? target : { ...target, index };
+}
+
+function rewriteResidualTempCondition(
+  condition: ConditionAst,
+  state: ResidualTempRewriteState,
+): ConditionAst {
+  const left = rewriteResidualTempExpression(condition.left, state);
+  const right = rewriteResidualTempExpression(condition.right, state);
+  return left === condition.left && right === condition.right ? condition : { ...condition, left, right };
+}
+
+function applyResidualTempWrite(state: ResidualTempRewriteState, name: string): void {
+  if (name === state.target) state.targetAvailable = "none";
+  if (name === state.source) {
+    state.sourceAvailable = "none";
+    if (state.targetAvailable === "all") state.targetAvailable = "mixed";
+  }
+}
+
+function applyResidualTempIndexedWrite(state: ResidualTempRewriteState, base: string): void {
+  applyResidualTempWrite(state, base);
+}
+
+function cloneResidualTempState(state: ResidualTempRewriteState): ResidualTempRewriteState {
+  return { ...state };
+}
+
+function mergeResidualTempState(
+  base: ResidualTempRewriteState,
+  thenState: ResidualTempRewriteState,
+  elseState: ResidualTempRewriteState,
+): void {
+  mergeResidualTempStates(base, [thenState, elseState]);
+}
+
+function mergeResidualTempStates(
+  base: ResidualTempRewriteState,
+  states: readonly ResidualTempRewriteState[],
+): void {
+  base.failed = base.failed || states.some((state) => state.failed);
+  base.rewrites += states.reduce((sum, state) => sum + state.rewrites, 0);
+  base.targetAvailable = mergeResidualAvailability(states.map((state) => state.targetAvailable));
+  base.sourceAvailable = mergeResidualAvailability(states.map((state) => state.sourceAvailable));
+}
+
+function mergeResidualAvailability(values: readonly ResidualAvailability[]): ResidualAvailability {
+  if (values.length === 0) return "none";
+  const first = values[0]!;
+  return values.every((value) => value === first) ? first : "mixed";
+}
+
+function rejectResidualTempStatementReads(statement: StatementAst, state: ResidualTempRewriteState): void {
+  if (state.sourceAvailable !== "none" && statementMayReadIdentifierDeep(statement, state.source, state.ast)) {
+    state.failed = true;
+  }
+  if (state.targetAvailable !== "none" && statementMayReadIdentifierDeep(statement, state.target, state.ast)) {
+    state.failed = true;
+  }
+}
+
+function rejectResidualTempDisplayReads(sources: readonly string[], state: ResidualTempRewriteState): void {
+  if (state.sourceAvailable !== "none" && sources.includes(state.source)) state.failed = true;
+  if (state.targetAvailable !== "none" && sources.includes(state.target)) state.failed = true;
+}
+
+function rejectResidualTempCallReads(block: string, state: ResidualTempRewriteState): void {
+  if (state.sourceAvailable !== "none" && procMayReadIdentifier(state.ast, block, state.source, new Set())) {
+    state.failed = true;
+  }
+  if (state.targetAvailable !== "none" && procMayReadIdentifier(state.ast, block, state.target, new Set())) {
+    state.failed = true;
+  }
+}
+
+function applyResidualTempCallWrites(block: string, state: ResidualTempRewriteState): void {
+  if (procMayWriteIdentifier(state.ast, block, state.target, new Set())) applyResidualTempWrite(state, state.target);
+  if (procMayWriteIdentifier(state.ast, block, state.source, new Set())) applyResidualTempWrite(state, state.source);
+}
+
+function displaySourcesForStatement(
+  ast: ProgramAst,
+  statement: Extract<StatementAst, { kind: "show" | "halt" }>,
+): readonly string[] {
+  if (statement.kind === "halt" && statement.displaySources !== undefined) return statement.displaySources;
+  const displayName = statement.kind === "show" ? statement.display : statement.display;
+  if (displayName === undefined) return [];
+  return ast.displays.find((display) => display.name === displayName)?.sources ?? [];
+}
+
+function expressionIdentifierNames(expr: ExpressionAst): Set<string> {
+  const names = new Set<string>();
+  const visit = (candidate: ExpressionAst): void => {
+    switch (candidate.kind) {
+      case "identifier":
+        names.add(candidate.name);
+        break;
+      case "indexed":
+        names.add(candidate.base);
+        visit(candidate.index);
+        break;
+      case "unary":
+        visit(candidate.expr);
+        break;
+      case "binary":
+        visit(candidate.left);
+        visit(candidate.right);
+        break;
+      case "call":
+        for (const arg of candidate.args) visit(arg);
+        break;
+      case "number":
+      case "string":
+        break;
+    }
+  };
+  visit(expr);
+  return names;
 }
 
 function inlineIndexedBitReportBranchTemps(ast: ProgramAst, optimizations: AppliedOptimization[]): void {
@@ -7944,6 +8526,26 @@ export class EmitContext {
           index += countedWhile - 1;
           continue;
         }
+        if (next?.kind === "assign" && compileGridCellMaskReuse(this, statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (next?.kind === "assign" && compileBitSetMaskReuse(this, statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (next?.kind === "assign" && compileBitOrMaskSetReuse(this, statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (
+          this.loweringOptions.singleBitMaskOpCopyReuse === true &&
+          next?.kind === "assign" &&
+          compileSingleBitMaskOpCopyReuse(this, statement, next)
+        ) {
+          index += 1;
+          continue;
+        }
         const reused = compileRepeatedAssignmentValue(this, statements, index);
         if (reused > 1) {
           index += reused - 1;
@@ -8010,23 +8612,6 @@ export class EmitContext {
         continue;
       }
       if (statement.kind === "while" && this.compileSetupInitializedUnitDecrementWhile(statement)) {
-        continue;
-      }
-      if (statement.kind === "assign" && next?.kind === "assign" && compileGridCellMaskReuse(this, statement, next)) {
-        index += 1;
-        continue;
-      }
-      if (statement.kind === "assign" && next?.kind === "assign" && compileBitSetMaskReuse(this, statement, next)) {
-        index += 1;
-        continue;
-      }
-      if (
-        this.loweringOptions.singleBitMaskOpCopyReuse === true &&
-        statement.kind === "assign" &&
-        next?.kind === "assign" &&
-        compileSingleBitMaskOpCopyReuse(this, statement, next)
-      ) {
-        index += 1;
         continue;
       }
       if (statement.kind === "assign" && next?.kind === "assign" && compileIntFracSharedTail(this, statement, next)) {
@@ -8144,6 +8729,7 @@ export class EmitContext {
       ) {
         const branch = statements[index + 2] as Extract<StatementAst, { kind: "if" }>;
         compileShow(this, statement.display, statement.line);
+        this.markInputEntryOpen();
         this.markCurrentX(next.target);
         compileIf(this, branch, branch.line);
         this.optimizations.push({
@@ -8161,6 +8747,7 @@ export class EmitContext {
       ) {
         const dispatch = statements[index + 2] as Extract<StatementAst, { kind: "dispatch" }>;
         compileShow(this, statement.display, statement.line);
+        this.markInputEntryOpen();
         this.markCurrentX(next.target);
         this.compileStatement(dispatch);
         this.optimizations.push({
@@ -8203,6 +8790,7 @@ export class EmitContext {
         this.inputFeedsOnlyFollowingCondition(statement, next)
       ) {
         this.emitOp(0x50, "С/П", `read ${statement.target}`, statement.line);
+        this.markInputEntryOpen();
         this.markCurrentX(statement.target);
         compileIf(this, next, next.line);
         this.optimizations.push({
@@ -8218,6 +8806,7 @@ export class EmitContext {
         this.inputFeedsOnlyFollowingDispatch(statement, next)
       ) {
         this.emitOp(0x50, "С/П", `read ${statement.target}`, statement.line);
+        this.markInputEntryOpen();
         this.markCurrentX(statement.target);
         this.compileStatement(next);
         this.optimizations.push({
@@ -11480,6 +12069,10 @@ export class EmitContext {
     this.emitter.emitNumber(raw);
   }
 
+  markInputEntryOpen(): void {
+    this.emitter.machineEntryOpen = true;
+  }
+
   emitZero(comment?: string, sourceLine?: number): void {
     if (this.currentXKnownZero) {
       this.optimizations.push({
@@ -12672,6 +13265,166 @@ function collectFunctionProcNames(ast: ProgramAst): Set<string> {
   return new Set(ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => proc.name));
 }
 
+interface ReturnStackTargetIndexes {
+  readonly labels: Map<string, number>;
+  readonly addresses: Map<number, number>;
+}
+
+type ReturnStackIssue =
+  | { readonly kind: "overflow"; readonly op: Extract<IrOp, { kind: "call" | "indirect-call" }>; readonly depth: number }
+  | { readonly kind: "unknown-indirect-call"; readonly op: Extract<IrOp, { kind: "indirect-call" }>; readonly depth: number }
+  | { readonly kind: "unresolved-call-target"; readonly op: Extract<IrOp, { kind: "call" | "indirect-call" }>; readonly depth: number };
+
+function validateHardwareReturnStackDepth(items: readonly MachineItem[], diagnostics: Diagnostic[]): void {
+  const issue = findHardwareReturnStackIssue(raiseMachineToIr(items));
+  if (issue === undefined) return;
+  diagnostics.push(buildDiagnostic(
+    "warning",
+    returnStackIssueMessage(issue),
+    issue.op.meta.sourceLine,
+    issue.kind === "overflow" ? "RETURN_STACK_DEPTH_EXCEEDED" : "RETURN_STACK_DEPTH_UNPROVED",
+  ));
+}
+
+function findHardwareReturnStackIssue(ops: readonly IrOp[]): ReturnStackIssue | undefined {
+  if (ops.length === 0) return undefined;
+  const targets = returnStackTargetIndexes(ops);
+  const visited = new Set<string>();
+  const pending: Array<{ index: number; returnStack: readonly number[] }> = [{ index: 0, returnStack: [] }];
+  let firstWarning: ReturnStackIssue | undefined;
+
+  const enqueue = (index: number | undefined, returnStack: readonly number[]): void => {
+    if (index === undefined || index < 0 || index >= ops.length) return;
+    pending.push({ index, returnStack });
+  };
+
+  while (pending.length > 0) {
+    const state = pending.pop()!;
+    const key = `${state.index}:${state.returnStack.join(",")}`;
+    if (visited.has(key)) continue;
+    visited.add(key);
+
+    const op = ops[state.index]!;
+    const next = state.index + 1;
+    switch (op.kind) {
+      case "label":
+      case "store":
+      case "recall":
+      case "indirect-store":
+      case "indirect-recall":
+      case "plain":
+      case "orphan-address":
+      case "stop":
+        enqueue(next, state.returnStack);
+        break;
+      case "jump":
+        enqueue(returnStackTargetIndex(targets, op.target), state.returnStack);
+        break;
+      case "cjump":
+      case "loop":
+        enqueue(returnStackTargetIndex(targets, op.target), state.returnStack);
+        enqueue(next, state.returnStack);
+        break;
+      case "call": {
+        const issue = returnStackCallIssue(op, returnStackTargetIndex(targets, op.target), state.returnStack);
+        if (issue?.kind === "overflow") return issue;
+        if (issue !== undefined) {
+          firstWarning ??= issue;
+          break;
+        }
+        enqueue(returnStackTargetIndex(targets, op.target), [next, ...state.returnStack]);
+        break;
+      }
+      case "indirect-jump": {
+        const target = knownIndirectFlowTarget(op);
+        enqueue(target === undefined ? undefined : targets.addresses.get(target), state.returnStack);
+        break;
+      }
+      case "indirect-call": {
+        const target = knownIndirectFlowTarget(op);
+        const targetIndex = target === undefined ? undefined : targets.addresses.get(target);
+        const issue = returnStackCallIssue(op, targetIndex, state.returnStack, target === undefined);
+        if (issue?.kind === "overflow") return issue;
+        if (issue !== undefined) {
+          firstWarning ??= issue;
+          break;
+        }
+        enqueue(targetIndex, [next, ...state.returnStack]);
+        break;
+      }
+      case "indirect-cjump": {
+        const target = knownIndirectFlowTarget(op);
+        enqueue(target === undefined ? undefined : targets.addresses.get(target), state.returnStack);
+        enqueue(next, state.returnStack);
+        break;
+      }
+      case "return":
+        if (op.meta.comment === "optimized БП 01") {
+          enqueue(targets.addresses.get(1), state.returnStack);
+        } else if (state.returnStack.length === 0) {
+          enqueue(targets.addresses.get(0), []);
+        } else {
+          enqueue(state.returnStack[0], state.returnStack.slice(1));
+        }
+        break;
+    }
+  }
+
+  return firstWarning;
+}
+
+function returnStackCallIssue(
+  op: Extract<IrOp, { kind: "call" | "indirect-call" }>,
+  targetIndex: number | undefined,
+  returnStack: readonly number[],
+  unknownIndirectTarget = false,
+): ReturnStackIssue | undefined {
+  const depth = returnStack.length + 1;
+  if (depth > MK61_RETURN_STACK_LIMIT) return { kind: "overflow", op, depth };
+  if (unknownIndirectTarget && op.kind === "indirect-call") {
+    return { kind: "unknown-indirect-call", op, depth };
+  }
+  if (targetIndex === undefined) return { kind: "unresolved-call-target", op, depth };
+  return undefined;
+}
+
+function returnStackTargetIndexes(ops: readonly IrOp[]): ReturnStackTargetIndexes {
+  const labels = new Map<string, number>();
+  const addresses = new Map<number, number>();
+  let address = 0;
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index]!;
+    if (op.kind === "label") {
+      labels.set(op.name, index);
+      continue;
+    }
+    addresses.set(address, index);
+    address += cellsPerOp(op);
+  }
+  return { labels, addresses };
+}
+
+function returnStackTargetIndex(indexes: ReturnStackTargetIndexes, target: string | number): number | undefined {
+  return typeof target === "string" ? indexes.labels.get(target) : indexes.addresses.get(target);
+}
+
+function returnStackIssueMessage(issue: ReturnStackIssue): string {
+  const call = describeReturnStackCall(issue.op);
+  if (issue.kind === "overflow") {
+    return `MK-61 return stack holds at most ${MK61_RETURN_STACK_LIMIT} nested ПП frame(s); ${call} can execute at depth ${issue.depth}. Make the nested call tail-position, inline one helper, or split the call chain.`;
+  }
+  if (issue.kind === "unknown-indirect-call") {
+    return `Cannot prove MK-61 return stack depth through ${call}: the indirect call target is not statically known. Keep raw indirect subroutine calls within the ${MK61_RETURN_STACK_LIMIT}-frame hardware limit or use a proved indirect target.`;
+  }
+  return `Cannot prove MK-61 return stack depth through ${call}: the call target is not resolved in the generated program.`;
+}
+
+function describeReturnStackCall(op: Extract<IrOp, { kind: "call" | "indirect-call" }>): string {
+  const suffix = op.meta.comment === undefined ? "" : ` (${op.meta.comment})`;
+  if (op.kind === "call") return `${op.meta.mnemonic} ${String(op.target)}${suffix}`;
+  return `${op.meta.mnemonic}${suffix}`;
+}
+
 type FunctionEdgeMap = Map<string, Map<string, number | undefined>>;
 
 function validateFunctionTailRecursion(ast: ProgramAst, diagnostics: Diagnostic[]): void {
@@ -12694,6 +13447,139 @@ function validateFunctionTailRecursion(ast: ProgramAst, diagnostics: Diagnostic[
       ));
     }
   }
+}
+
+function validateFunctionReturnStackDepth(ast: ProgramAst, diagnostics: Diagnostic[]): void {
+  const functions = collectFunctionProcNames(ast);
+  if (functions.size === 0) return;
+  const { tail, nonTail } = collectFunctionCallEdges(ast, functions);
+  const memo = new Map<string, number>();
+  const visiting = new Set<string>();
+
+  const additionalDepth = (name: string): number => {
+    const cached = memo.get(name);
+    if (cached !== undefined) return cached;
+    if (visiting.has(name)) return 0;
+    visiting.add(name);
+    let best = 0;
+    for (const target of nonTail.get(name)?.keys() ?? []) {
+      best = Math.max(best, 1 + additionalDepth(target));
+    }
+    for (const target of tail.get(name)?.keys() ?? []) {
+      best = Math.max(best, additionalDepth(target));
+    }
+    visiting.delete(name);
+    memo.set(name, best);
+    return best;
+  };
+
+  const reported = new Set<string>();
+  for (const root of collectFunctionRootCalls(ast, functions)) {
+    const depth = 1 + additionalDepth(root.target);
+    if (depth <= MK61_RETURN_STACK_LIMIT) continue;
+    const key = `${root.target}:${root.line ?? "?"}:${depth}`;
+    if (reported.has(key)) continue;
+    reported.add(key);
+    diagnostics.push(buildDiagnostic(
+      "error",
+      `MK-61 return stack holds at most ${MK61_RETURN_STACK_LIMIT} nested ПП frame(s); function call '${root.target}' can execute at depth ${depth}. Make one nested call tail-position, inline one helper, or split the call chain.`,
+      root.line,
+      "RETURN_STACK_DEPTH_EXCEEDED",
+    ));
+  }
+}
+
+function collectFunctionRootCalls(
+  ast: ProgramAst,
+  functions: ReadonlySet<string>,
+): Array<{ target: string; line?: number }> {
+  const roots: Array<{ target: string; line?: number }> = [];
+
+  const add = (target: string, line?: number): void => {
+    if (functions.has(target)) roots.push({ target, line });
+  };
+
+  const visitExpr = (expr: ExpressionAst, line?: number): void => {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return;
+      case "indexed":
+        visitExpr(expr.index, line);
+        return;
+      case "unary":
+        visitExpr(expr.expr, line);
+        return;
+      case "binary":
+        visitExpr(expr.left, line);
+        visitExpr(expr.right, line);
+        return;
+      case "call":
+        add(expr.callee, line);
+        for (const arg of expr.args) visitExpr(arg, line);
+        return;
+    }
+  };
+
+  const visitCondition = (condition: ConditionAst, line?: number): void => {
+    visitExpr(condition.left, line);
+    visitExpr(condition.right, line);
+  };
+
+  const visitStatements = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      switch (statement.kind) {
+        case "assign":
+        case "preview":
+        case "pause":
+        case "halt":
+        case "return_value":
+          visitExpr(statement.expr, statement.line);
+          break;
+        case "indexed_assign":
+          visitExpr(statement.target.index, statement.line);
+          visitExpr(statement.expr, statement.line);
+          break;
+        case "if":
+          visitCondition(statement.condition, statement.line);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody !== undefined) visitStatements(statement.elseBody);
+          break;
+        case "while":
+          visitCondition(statement.condition, statement.line);
+          visitStatements(statement.body);
+          break;
+        case "loop":
+          visitStatements(statement.body);
+          break;
+        case "dispatch":
+          visitExpr(statement.expr, statement.line);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value, dispatchCase.line);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody !== undefined) visitStatements(statement.defaultBody);
+          break;
+        case "call":
+          add(statement.block, statement.line);
+          break;
+        case "core":
+          for (const input of statement.inputs ?? []) visitExpr(input.expr, input.line);
+          break;
+        case "input":
+        case "show":
+        case "decimal_series":
+          break;
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) {
+    if (!functions.has(proc.name)) visitStatements(proc.body);
+  }
+  return roots;
 }
 
 function collectFunctionCallEdges(
@@ -13558,6 +14444,7 @@ function allocateRegisters(
   collectStateBankSelectorVariables(ast, variables, hints);
   applyPackedGridRegisterHints(ast, variables, hints);
   applyCoordListRegisterHints(variables, hints);
+  const hintedRegisters = (): Set<RegisterName> => new Set([...hints.values()].map((hint) => hint.register));
   const flPreferenceOrder: RegisterName[] = ["2", "3", "1", "0"];
   let flPreferenceIndex = 0;
   for (const variable of collectUnitDecrementTargets(ast)) {
@@ -13572,7 +14459,6 @@ function allocateRegisters(
     flPreferenceIndex += 1;
   }
   const preincrementIndexedPointers = collectPreincrementIndexedStorePointers(ast);
-  const hintedRegisters = (): Set<RegisterName> => new Set([...hints.values()].map((hint) => hint.register));
   for (const variable of collectUnitIncrementTargets(ast)) {
     if (!variables.has(variable) || hints.has(variable)) continue;
     const incrementPreferenceOrder: RegisterName[] = preincrementIndexedPointers.has(variable)
@@ -15711,6 +16597,103 @@ function countIdentifierReadsInStatement(statement: StatementAst, name: string):
   }
 }
 
+function statementMayReadIdentifierDeep(
+  statement: StatementAst,
+  name: string,
+  ast: ProgramAst,
+  seenProcs = new Set<string>(),
+): boolean {
+  switch (statement.kind) {
+    case "show":
+      return displaySourcesForStatement(ast, statement).includes(name);
+    case "halt":
+      return statementReadsIdentifier(statement, name) || displaySourcesForStatement(ast, statement).includes(name);
+    case "call":
+      return procMayReadIdentifier(ast, statement.block, name, seenProcs);
+    case "if":
+      return expressionReferencesIdentifier(statement.condition.left, name) ||
+        expressionReferencesIdentifier(statement.condition.right, name) ||
+        statement.thenBody.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs)) ||
+        (statement.elseBody?.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs)) ?? false);
+    case "while":
+      return expressionReferencesIdentifier(statement.condition.left, name) ||
+        expressionReferencesIdentifier(statement.condition.right, name) ||
+        statement.body.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs));
+    case "loop":
+      return statement.body.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs));
+    case "dispatch":
+      return expressionReferencesIdentifier(statement.expr, name) ||
+        statement.cases.some((dispatchCase) =>
+          expressionReferencesIdentifier(dispatchCase.value, name) ||
+            dispatchCase.body.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs))
+        ) ||
+        (statement.defaultBody?.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs)) ?? false);
+    default:
+      return statementReadsIdentifier(statement, name);
+  }
+}
+
+function procMayReadIdentifier(
+  ast: ProgramAst,
+  procName: string,
+  name: string,
+  seen: Set<string>,
+): boolean {
+  if (seen.has(procName)) return false;
+  seen.add(procName);
+  const proc = ast.procs.find((candidate) => candidate.name === procName);
+  const result = proc?.body.some((statement) => statementMayReadIdentifierDeep(statement, name, ast, seen)) ?? false;
+  seen.delete(procName);
+  return result;
+}
+
+function procMayWriteIdentifier(
+  ast: ProgramAst,
+  procName: string,
+  name: string,
+  seen: Set<string>,
+): boolean {
+  if (seen.has(procName)) return false;
+  seen.add(procName);
+  const proc = ast.procs.find((candidate) => candidate.name === procName);
+  const result = proc?.body.some((statement) => statementMayWriteIdentifierDeep(statement, name, ast, seen)) ?? false;
+  seen.delete(procName);
+  return result;
+}
+
+function statementMayWriteIdentifierDeep(
+  statement: StatementAst,
+  name: string,
+  ast: ProgramAst,
+  seenProcs: Set<string>,
+): boolean {
+  switch (statement.kind) {
+    case "assign":
+    case "input":
+      return statement.target === name;
+    case "indexed_assign":
+      return statement.target.base === name;
+    case "core":
+      return statement.outputs?.some((output) => output.target === name) === true ||
+        statement.clobbers?.includes(name) === true;
+    case "call":
+      return procMayWriteIdentifier(ast, statement.block, name, seenProcs);
+    case "if":
+      return statement.thenBody.some((child) => statementMayWriteIdentifierDeep(child, name, ast, seenProcs)) ||
+        (statement.elseBody?.some((child) => statementMayWriteIdentifierDeep(child, name, ast, seenProcs)) ?? false);
+    case "while":
+    case "loop":
+      return statement.body.some((child) => statementMayWriteIdentifierDeep(child, name, ast, seenProcs));
+    case "dispatch":
+      return statement.cases.some((dispatchCase) =>
+        dispatchCase.body.some((child) => statementMayWriteIdentifierDeep(child, name, ast, seenProcs))
+      ) ||
+        (statement.defaultBody?.some((child) => statementMayWriteIdentifierDeep(child, name, ast, seenProcs)) ?? false);
+    default:
+      return false;
+  }
+}
+
 function flattenAdditionTerms(expr: ExpressionAst): ExpressionAst[] {
   if (expr.kind === "binary" && expr.op === "+") {
     return [...flattenAdditionTerms(expr.left), ...flattenAdditionTerms(expr.right)];
@@ -17632,11 +18615,27 @@ function isReusableBitSetPair(
   first: Extract<StatementAst, { kind: "assign" }>,
   second: Extract<StatementAst, { kind: "assign" }>,
 ): boolean {
-  const firstSet = matchBitSetAssignment(first);
-  const secondSet = matchBitSetAssignment(second);
+  const firstSet = matchPlainReusableBitSetAssignment(first);
+  const secondSet = matchPlainReusableBitSetAssignment(second);
   return firstSet !== undefined &&
     secondSet !== undefined &&
     expressionEquals(firstSet.item, secondSet.item);
+}
+
+function matchPlainReusableBitSetAssignment(
+  statement: Extract<StatementAst, { kind: "assign" }>,
+): { collection: ExpressionAst; item: ExpressionAst } | undefined {
+  const bitSet = matchBitSetAssignment(statement);
+  if (bitSet !== undefined) return bitSet;
+
+  const expr = statement.expr;
+  if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_or" || expr.args.length !== 2) return undefined;
+  const target = assignableTargetExpression(statement.target);
+  const left = expr.args[0]!;
+  const right = expr.args[1]!;
+  if (expressionEquals(left, target)) return { collection: left, item: right };
+  if (expressionEquals(right, target)) return { collection: right, item: left };
+  return undefined;
 }
 
 function isReusableMembershipSet(statement: Extract<StatementAst, { kind: "if" }>): boolean {

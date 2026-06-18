@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { compileMKPro } from "../../src/core/index.ts";
+import { compileLoweringVariantForTest } from "../../src/core/compiler.ts";
 
 function compileOk(source: string) {
   return compileMKPro(source, { analysis: true, budget: 999 });
 }
 
 describe("bit_mask quotient reuse", () => {
-  it("reuses the index/4 quotient while computing a shared bit mask", () => {
+  it("reuses one computed cell mask across adjacent set updates", () => {
     const result = compileOk(`
 program AdjacentSetUpdates {
   grid: board(1..4, 1..4)
@@ -25,16 +26,17 @@ program AdjacentSetUpdates {
 
     const names = result.report.optimizations.map((item) => item.name);
     expect(names).toContain("bit-set-mask-cse");
-    expect(names).toContain("bit-mask-quotient-reuse");
     expect(names).toContain("mask-stack-op-reuse");
-    expect(result.steps.filter((step) => step.opcode === 0x13 && step.comment === "bit mask quotient")).toHaveLength(1);
-    expect(result.steps.filter((step) => step.opcode === 0x13 && step.comment === "bit mask fractional place")).toHaveLength(1);
-    expect(result.steps.map((step) => step.comment)).toContain("bit mask quotient");
     const comments = result.steps.map((step) => step.comment ?? "");
     const scratchIndex = comments.indexOf("cell bit mask scratch");
     const firstSetIndex = comments.indexOf("bit_set with reused mask");
     expect(firstSetIndex).toBeGreaterThan(scratchIndex);
     expect(comments.slice(scratchIndex + 1, firstSetIndex)).not.toContain("reuse cell bit mask");
+    expect(result.steps.filter((step) =>
+      step.opcode === 0x53 && step.comment?.startsWith("expr cell_mask(")
+    )).toHaveLength(1);
+    expect(comments.filter((comment) => comment === "bit_set with reused mask")).toHaveLength(2);
+    expect(comments.filter((comment) => comment === "reuse cell bit mask")).toHaveLength(1);
   });
 
   it("shares one bit_mask helper across independent teleport membership checks", () => {
@@ -58,7 +60,7 @@ program SharedBitMaskHelper {
     halt(score)
   }
 }
-`, { analysis: true, budget: 999999 });
+`, { analysis: true, budget: 999999, indirectFlowRescueAbove: 999999 });
     const names = result.report.optimizations.map((item) => item.name);
 
     expect(result.report.steps).toBe(43);
@@ -68,7 +70,7 @@ program SharedBitMaskHelper {
   });
 
   it("reuses one scratch register for repeated independent bit clears", () => {
-    const result = compileMKPro(`
+    const result = compileLoweringVariantForTest(`
 program RepeatedBitClearScratch {
   grid: board(1..7, 1..4)
   state {
@@ -102,7 +104,7 @@ program RepeatedBitClearScratch {
     halt(plans + answer + memory + a + b + c + d + e + f + g + h + i)
   }
 }
-`, { analysis: true, budget: 999999 });
+`, { analysis: true, budget: 999999, indirectFlowRescueAbove: 999999 }, {});
     const names = result.report.optimizations.map((item) => item.name);
 
     expect(names.filter((name) => name === "single-bit-mask-op")).toHaveLength(4);

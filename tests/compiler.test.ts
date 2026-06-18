@@ -78,7 +78,7 @@ describe("MK-Pro compiler", () => {
     const result = compileMKPro(game, { budget: 999, analysis: true });
 
     expect(result.diagnostics).toEqual([]);
-    expect(result.report.steps).toBe(100);
+    expect(result.report.steps).toBe(99);
     expect(result.report.steps).toBeLessThanOrEqual(105);
   }, 30_000);
 
@@ -167,7 +167,7 @@ describe("MK-Pro compiler", () => {
     expect(reference).not.toMatch(/\brecipe\b/iu);
     expect(reference).not.toMatch(/core\s+exact/iu);
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
-    expect(result.report.steps).toBe(105);
+    expect(result.report.steps).toBe(104);
   }, 120_000);
 
   it("compiles human-centered MK-Pro without source implementation switches", () => {
@@ -176,7 +176,7 @@ describe("MK-Pro compiler", () => {
     expect(result.report.ir.v2).toBe(true);
     expect(result.report.machine).toBe("mk61");
     expect(result.report.steps).toBeLessThanOrEqual(105);
-    expect(result.report.steps).toBe(23);
+    expect(result.report.steps).toBe(27);
     expect(result.report.candidates.some((candidate) => candidate.variant === "dark-indirect-table")).toBe(true);
     expect(result.report.machineFeaturesUsed.some((feature) => feature.id === "code-data-overlay")).toBe(true);
     expect(result.report.proofs.some((proof) => proof.id === "value-ranges")).toBe(true);
@@ -312,7 +312,7 @@ program SimpleRules {
     expect(reference).not.toMatch(/row\s+[0-9A-F]{2}\s*:/iu);
     expect(reference).toMatch(/cave: board\(packed_decimal_zero_run\)/u);
     expect(reference).toMatch(/cells\(cave\) = random\(\)/u);
-    expect(result.report.steps).toBe(105);
+    expect(result.report.steps).toBe(104);
   }, 60_000);
 
   it("ports Bolknote's 99 Bottles demo within the original size", () => {
@@ -414,7 +414,7 @@ program SimpleRules {
   it("compiles the full cave reference through optimizer-owned lowering", () => {
     const result = compileMKPro(source("examples/cave-treasure.mkpro"));
 
-    expect(result.report.steps).toBe(105);
+    expect(result.report.steps).toBe(104);
     expect(result.report.optimizations.some((optimization) => optimization.name === "post-layout-stop-tail-reuse")).toBe(true);
   }, 120_000);
 
