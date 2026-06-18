@@ -2175,12 +2175,17 @@ The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
 27. `address-code-overlay` — a final post-layout verifier moves labels from a
     single-cell op immediately after `БП target` or a proved-terminal
     `ПП target` onto the branch address byte when removing that op proves the
-    address byte will execute as the same opcode. If the ordinary official
-    address byte does not match, the verifier may choose the executable byte as
-    a formal-address alias, but only when that formal byte decodes to the same
-    final target label. The overlaid executable cell may be an ordinary op or an
-    existing numeric/formal address byte; if the overlaid opcode itself takes an
-    address, the following operand byte is kept as that command's operand. Fixed
+    address byte will execute as the same opcode. It can also move a separate
+    referenced label from a later one-cell entry onto any branch/call/conditional
+    address byte, while leaving that branch's ordinary continuation after the
+    operand byte, when static control flow proves the old entry had no linear
+    fallthrough and removing the old cell cannot shift fixed numeric/formal
+    targets. If the ordinary official address byte does not match, the verifier
+    may choose the executable byte as a formal-address alias, but only when that
+    formal byte decodes to the same final target label. The overlaid executable
+    cell may be an ordinary op or an existing numeric/formal address byte; if the
+    overlaid opcode itself takes an address, the following operand byte is kept
+    as that command's operand for immediate-continuation overlays. Fixed
     numeric/formal branch operands are rejected when shrinking would move their
     real target. The same verifier can move the branch target label onto the
     branch's own address byte, allowing that operand byte to be the first

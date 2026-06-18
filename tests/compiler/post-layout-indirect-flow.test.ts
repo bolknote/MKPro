@@ -511,6 +511,50 @@ describe("post-layout indirect flow", () => {
     expect(result.items.some((item) => item.kind === "op" && item.opcode === 0x07)).toBe(false);
   });
 
+  it("overlays a separate labeled one-cell entry onto a returning call address byte", () => {
+    const program: MachineItem[] = [
+      ...call("sub"),
+      digit(),
+      ...jump("after"),
+      { kind: "label", name: "entry" },
+      op(0x07, "7"),
+      digit(),
+      digit(),
+      { kind: "label", name: "sub" },
+      { kind: "op", opcode: 0x52, mnemonic: "В/О" },
+      { kind: "label", name: "after" },
+      halt(),
+      ...jump("entry"),
+    ];
+    const result = optimizePostLayoutAddressCodeOverlay(program);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.items[0]).toMatchObject({ kind: "op", opcode: 0x53 });
+    expect(result.items[1]).toMatchObject({ kind: "label", name: "entry" });
+    expect(result.items[2]).toMatchObject({ kind: "address", target: "sub" });
+    expect(result.items.some((item) => item.kind === "op" && item.opcode === 0x07)).toBe(false);
+  });
+
+  it("keeps a separate labeled entry when ordinary fallthrough reaches it", () => {
+    const program: MachineItem[] = [
+      ...call("sub"),
+      digit(),
+      { kind: "label", name: "entry" },
+      op(0x07, "7"),
+      digit(),
+      digit(),
+      digit(),
+      { kind: "label", name: "sub" },
+      { kind: "op", opcode: 0x52, mnemonic: "В/О" },
+      ...jump("entry"),
+    ];
+    const result = optimizePostLayoutAddressCodeOverlay(program);
+
+    expect(result.applied).toBe(0);
+    expect(result.items).toEqual(program);
+  });
+
   it("does not overlay returning call or conditional continuations onto their address bytes", () => {
     for (const branch of [
       [{ kind: "op", opcode: 0x53, mnemonic: "ПП" } as MachineItem, { kind: "address", target: "target" } as MachineItem],

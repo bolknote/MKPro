@@ -621,6 +621,41 @@ function canOverlayAddressContinuation(
   return false;
 }
 
+function previousNonLabelIndex(items: readonly MachineItem[], before: number): number | undefined {
+  for (let index = before - 1; index >= 0; index -= 1) {
+    if (items[index]?.kind !== "label") return index;
+  }
+  return undefined;
+}
+
+function labelsHaveNoLinearFallthrough(
+  items: readonly MachineItem[],
+  labelsStart: number,
+  targetMayReturn: (target: string | number) => boolean,
+): boolean {
+  const previousIndex = previousNonLabelIndex(items, labelsStart);
+  if (previousIndex === undefined) return false;
+  const previous = items[previousIndex];
+  if (previous?.kind === "op") return previous.opcode === 0x50 || previous.opcode === 0x52;
+  if (previous?.kind !== "address") return false;
+
+  const branchIndex = previousNonLabelIndex(items, previousIndex);
+  const branch = branchIndex === undefined ? undefined : items[branchIndex];
+  if (branch?.kind !== "op") return false;
+  if (branch.opcode === 0x51) return true;
+  if (branch.opcode === 0x53) return !targetMayReturn(previous.target);
+  return false;
+}
+
+function fixedAddressTargetsSurviveRemoval(items: readonly MachineItem[], removedAddress: number): boolean {
+  for (const item of items) {
+    if (item.kind !== "address") continue;
+    const fixedTarget = fixedAddressActualTarget(item);
+    if (fixedTarget !== undefined && fixedTarget >= removedAddress) return false;
+  }
+  return true;
+}
+
 function fixedAddressActualTarget(address: Extract<MachineItem, { kind: "address" }>): number | undefined {
   if (address.formalOpcode !== undefined) return formalAddressInfo(address.formalOpcode).actual;
   return typeof address.target === "number" ? address.target : undefined;
@@ -698,6 +733,52 @@ function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: Machin
     if (addressOpcodeForItem(candidate, candidateAddress) !== executableOpcode) continue;
     if (cellCount(candidate) >= cellCount(items)) continue;
     return { items: candidate, applied: 1 };
+  }
+
+  const referenced = referencedMachineLabels(items);
+  for (let index = 0; index < items.length - 2; index += 1) {
+    const branch = items[index];
+    const address = items[index + 1];
+    if (branch?.kind !== "op" || address?.kind !== "address") continue;
+    if (!ADDRESS_TAKING_OPCODES.has(branch.opcode)) continue;
+
+    for (let labelsStart = index + 3; labelsStart < items.length - 1; labelsStart += 1) {
+      if (items[labelsStart]?.kind !== "label") continue;
+      let labelsEnd = labelsStart;
+      const labels: Extract<MachineItem, { kind: "label" }>[] = [];
+      while (items[labelsEnd]?.kind === "label") {
+        labels.push(items[labelsEnd] as Extract<MachineItem, { kind: "label" }>);
+        labelsEnd += 1;
+      }
+      if (labels.length === 0 || !labels.some((label) => referenced.has(label.name))) continue;
+      if (!labelsHaveNoLinearFallthrough(items, labelsStart, targetMayReturn)) continue;
+      if (!canOverlayExecutableCellAt(items, labelsEnd)) continue;
+      const executableOpcode = overlaidOpcode(items, labelsEnd);
+      if (executableOpcode === undefined || ADDRESS_TAKING_OPCODES.has(executableOpcode)) continue;
+
+      const removedAddress = layout.addressByItemIndex.get(labelsEnd);
+      if (removedAddress === undefined || !fixedAddressTargetsSurviveRemoval(items, removedAddress)) continue;
+      const overlaid = overlaidMnemonic(items, labelsEnd);
+      const provisional = [
+        ...items.slice(0, index + 1),
+        ...labels,
+        address,
+        ...items.slice(index + 2, labelsStart),
+        ...items.slice(labelsEnd + 1),
+      ];
+      const candidateAddress = chooseOverlayAddressItem(provisional, address, executableOpcode, overlaid);
+      if (candidateAddress === undefined) continue;
+      const candidate = [
+        ...items.slice(0, index + 1),
+        ...labels,
+        candidateAddress,
+        ...items.slice(index + 2, labelsStart),
+        ...items.slice(labelsEnd + 1),
+      ];
+      if (addressOpcodeForItem(candidate, candidateAddress) !== executableOpcode) continue;
+      if (cellCount(candidate) >= cellCount(items)) continue;
+      return { items: candidate, applied: 1 };
+    }
   }
 
   return { items: [...items], applied: 0 };
