@@ -1532,6 +1532,43 @@ program BitOrTestAndSet {
     expect(result.steps.some((step) => step.comment === "bit_or test-and-set occupied")).toBe(true);
   });
 
+  it("derives negative x-parameter arguments from bit_or test-and-set success values", () => {
+    const result = compileOk(`
+program BitOrTestAndSetNegativeArg {
+  state {
+    occupied: packed = 0
+    mask: packed = 0
+    source: packed = 1
+    mark: packed = 0
+    other: packed = 0
+    warning: packed = 9
+  }
+  loop {
+    mask = source
+    if bit_and(occupied, mask) != 0 {
+      use_mark(1)
+      halt(warning)
+    }
+    else {
+      occupied = bit_or(occupied, mask)
+      use_mark(-1)
+      halt(mark)
+    }
+  }
+  fn use_mark(value) {
+    mark = value
+    other = source + mark
+    other = other + 1
+    mark = other - source
+  }
+}
+`, { analysis: true });
+
+    expect(result.report.optimizations.some((item) => item.name === "bit-or-test-and-set-negative-arg")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "bit_or test-and-set value = -1")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "preload const -1")).toBe(false);
+  });
+
   it("scores packed 4-line tails without extracting the integer digit", () => {
     const result = compileOk(`
 program Packed4ScoreShape {

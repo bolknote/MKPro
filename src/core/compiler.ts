@@ -13304,13 +13304,35 @@ function compileBitOrTestAndSetBranch(
   ctx.compileStatements(branch.thenBody);
   ctx.emitJump(0x51, "БП", endLabel, "if end", branch.line);
   ctx.emitLabel(changedLabel);
-  ctx.compileStatements(match.elseTail);
+  const consumed = compileBitOrTestAndSetNegativeArgPrefix(ctx, match.elseTail);
+  ctx.compileStatements(match.elseTail.slice(consumed));
   ctx.emitLabel(endLabel);
   ctx.optimizations.push({
     name: "bit-or-test-and-set-branch",
     detail: `Combined ${match.collection} membership test, bit_or update, and occupied branch at line ${branch.line}.`,
   });
   return true;
+}
+
+function compileBitOrTestAndSetNegativeArgPrefix(
+  ctx: EmitContext,
+  tail: readonly StatementAst[],
+): number {
+  const assign = tail[0];
+  const call = tail[1];
+  if (assign?.kind !== "assign" || call?.kind !== "call") return 0;
+  const lowering = ctx.xParamProcs.get(call.block);
+  if (lowering === undefined || assign.target !== lowering.param) return 0;
+  if (!isNumericValue(assign.expr, -1)) return 0;
+
+  ctx.emitOp(0x32, "К ЗН", `bit_or test-and-set ${assign.target} = -1`, assign.line);
+  ctx.markCurrentX(assign.target);
+  compileBlockCall(ctx, call.block, call.line);
+  ctx.optimizations.push({
+    name: "bit-or-test-and-set-negative-arg",
+    detail: `Derived ${assign.target} = -1 from the negative changed value in a bit_or test-and-set success path at line ${assign.line}.`,
+  });
+  return 2;
 }
 
 function bitOrTestAndSetBranch(
