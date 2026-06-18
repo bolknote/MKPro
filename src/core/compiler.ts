@@ -1,5 +1,6 @@
 import { addressToOpcode, formatAddress, getOpcode, registerFromText, registerIndex } from "./opcodes.ts";
 import { formalAddressInfo, formatFormalAddressOpcode } from "./formal-address.ts";
+import { evaluateIndirectAddress } from "./indirect-addressing.ts";
 import { foldProgramConstants } from "./constant-folder.ts";
 import { eliminateInterproceduralDeadStores } from "./interprocedural-dse.ts";
 import { propagateValuesInterprocedurally } from "./value-propagation.ts";
@@ -539,6 +540,18 @@ interface LoweringOptions {
   // bodies that contain direct `ПП` calls. Speculative because it can hide
   // repeated direct call sites from later indirect-call rescue passes.
   sharedStraightLineCallBodies?: boolean;
+  // Let a positive fractional setup constant also carry a direct-flow target in
+  // its integer part. Arithmetic uses recover the original constant with one
+  // `К {x}` after recall, while post-layout indirect-flow can use the same
+  // register as `К БП/К ПП/К x?0 r`. Speculative: each recall grows by one
+  // cell, so whole-program selection keeps only profitable target/fraction
+  // pairings.
+  fractionalConstantSelectors?: readonly FractionalConstantSelectorPlan[];
+}
+
+interface FractionalConstantSelectorPlan {
+  readonly value: string;
+  readonly target: number;
 }
 
 
@@ -794,6 +807,7 @@ export function compileMKPro(
   for (const spec of enumerateStaticCandidateSpecs({ source, primaryOverflows })) runSpec(spec);
 
   reclaimCoalescedPreloadCandidates(source, options, needsSizeRescue, tryCandidate, cachedCompileMKProOnce);
+  fractionalConstantSelectorCandidates(source, options, needsSizeRescue, tryCandidate, cachedCompileMKProOnce);
 
   const OFFICIAL_PROGRAM_LIMIT = 105;
   const selectBest = (): { best: CompileResult | undefined; selected: (typeof candidates)[number] | undefined } => {
@@ -854,6 +868,29 @@ function compileAttemptCacheResult(entry: CompileAttemptCacheEntry): CompileResu
 
 function loweringOptionsCacheKey(options: LoweringOptions): string {
   return stableCompileCacheKey(options);
+}
+
+function fractionalConstantSelectorForValue(
+  options: LoweringOptions,
+  value: string,
+): FractionalConstantSelectorPlan | undefined {
+  return options.fractionalConstantSelectors?.find((plan) => plan.value === value);
+}
+
+function fractionalSelectorPreloadValue(
+  value: string,
+  target: number,
+): string | undefined {
+  if (target <= 0) return undefined;
+  if (!fractionalSelectorCandidateValue(value)) return undefined;
+  const fraction = value.slice(1);
+  return `${target}${fraction}`;
+}
+
+function fractionalSelectorCandidateValue(value: string): boolean {
+  if (!/^0\.\d+$/u.test(value)) return false;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) && numeric > 0 && numeric < 1;
 }
 
 function stableCompileCacheKey(value: unknown): string {
@@ -1400,6 +1437,104 @@ function reclaimCoalescedPreloadCandidates(
       "Pinned coalesce-freed registers before allocation to reclaim them for preloaded constants",
     );
   }
+}
+
+function fractionalConstantSelectorCandidates(
+  source: string,
+  options: Partial<CompileOptions>,
+  needsSizeRescue: boolean,
+  tryCandidate: TryCandidateFn,
+  compileOnce: CompileOnceFn = (compileOptions, loweringOptions) => compileMKProOnce(source, compileOptions, loweringOptions),
+): void {
+  if (!needsSizeRescue) return;
+  const bases: LoweringOptions[] = [
+    {},
+    { dualUseConstantIndirectFlow: true },
+    { dualUseConstantIndirectFlow: true, tailBranchInversion: true },
+    { procLayoutStrategy: "reverse" },
+    { dualUseConstantIndirectFlow: true, tailBranchInversion: true, procLayoutStrategy: "reverse" },
+  ];
+  const tried = new Set<string>();
+  for (const base of bases) {
+    let probe: CompileResult;
+    try {
+      probe = compileOnce({ ...options, analysis: true }, base);
+    } catch {
+      continue;
+    }
+    for (const plan of discoverFractionalConstantSelectorPlans(probe).slice(0, 12)) {
+      const key = `${JSON.stringify(stableCompileCacheValue(base))}|${plan.value}|${plan.target}`;
+      if (tried.has(key)) continue;
+      tried.add(key);
+      tryCandidate(
+        {
+          ...base,
+          dualUseConstantIndirectFlow: true,
+          fractionalConstantSelectors: [plan],
+        },
+        "fractional-constant-selector",
+        `Packed direct-flow target ${plan.target} into fractional constant ${plan.value}`,
+      );
+    }
+  }
+}
+
+function discoverFractionalConstantSelectorPlans(result: CompileResult): FractionalConstantSelectorPlan[] {
+  const targetCounts = directFlowTargetCounts(result.steps);
+  if (targetCounts.size === 0) return [];
+  const plans: Array<FractionalConstantSelectorPlan & { benefit: number }> = [];
+  for (const preload of result.report.preloads) {
+    const value = normalizeConstantLiteral(preload.value);
+    if (!fractionalSelectorCandidateValue(value)) continue;
+    const register = registerFromText(preload.register);
+    const recallCount = fractionalConstantRecallCount(result.steps, register, value);
+    if (recallCount === 0) continue;
+    for (const [target, directCount] of targetCounts.entries()) {
+      const benefit = directCount - recallCount;
+      if (benefit <= 0) continue;
+      const selectorValue = fractionalSelectorPreloadValue(value, target);
+      if (selectorValue === undefined) continue;
+      if (evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget !== target) continue;
+      plans.push({ value, target, benefit });
+    }
+  }
+  return plans.sort((left, right) =>
+    right.benefit - left.benefit ||
+    directFlowTargetRank(result.steps, right.target) - directFlowTargetRank(result.steps, left.target) ||
+    left.value.localeCompare(right.value)
+  ).map(({ value, target }) => ({ value, target }));
+}
+
+function directFlowTargetCounts(steps: readonly ResolvedStep[]): Map<number, number> {
+  const counts = new Map<number, number>();
+  for (let index = 0; index < steps.length - 1; index += 1) {
+    if (!getOpcode(steps[index]!.opcode).takesAddress) continue;
+    const target = formalAddressInfo(steps[index + 1]!.opcode).actual;
+    if (target < 0 || target > 104) continue;
+    counts.set(target, (counts.get(target) ?? 0) + 1);
+    index += 1;
+  }
+  return counts;
+}
+
+function directFlowTargetRank(steps: readonly ResolvedStep[], target: number): number {
+  let rank = 0;
+  for (let index = 0; index < steps.length - 1; index += 1) {
+    if (!getOpcode(steps[index]!.opcode).takesAddress) continue;
+    if (formalAddressInfo(steps[index + 1]!.opcode).actual === target) rank += steps.length - index;
+    index += 1;
+  }
+  return rank;
+}
+
+function fractionalConstantRecallCount(
+  steps: readonly ResolvedStep[],
+  register: RegisterName,
+  value: string,
+): number {
+  const opcode = 0x60 + registerIndex(register);
+  const comment = `preload const ${value}`;
+  return steps.filter((step) => step.opcode === opcode && step.comment === comment).length;
 }
 
 // Probe-driven provider: probe a few likely-winning configs, read back which
@@ -2582,7 +2717,7 @@ function compileMKProOnce(
       ([freeRegister, keepRegister]) => ({ freeRegister, keepRegister }),
     )
     : undefined;
-  const preloadedConstantRegisters = constantPreloadRegisters(allocation);
+  const preloadedConstantRegisters = constantPreloadRegisters(allocation, loweringOptions);
   const passOptions = loweringOptions.tailBranchInversion === true
     ? { ...opts, tailBranchInversion: true }
     : opts;
@@ -2611,9 +2746,14 @@ function compileMKProOnce(
       postLayoutFlow.items,
       [...optimizedResult.preloads, ...postLayoutFlow.preloads],
     );
+  const setupPreloads = buildPreloadReport(ast, allocation, loweringOptions);
+  const retargetableSetupPreloads = fractionalSelectorSetupPreloads(setupPreloads, allocation, loweringOptions);
   const postLayoutStopTail = exactDecimalSeries
     ? { items: postLayoutR0Flow.items, optimizations: [], preloads: postLayoutFlow.preloads }
-    : optimizePostLayoutStopTailReuse(postLayoutR0Flow.items, postLayoutFlow.preloads);
+    : optimizePostLayoutStopTailReuse(postLayoutR0Flow.items, [
+      ...postLayoutFlow.preloads,
+      ...retargetableSetupPreloads,
+    ]);
   const postLayoutOverlay = exactDecimalSeries
     ? { items: postLayoutStopTail.items, optimizations: [], preloads: [] }
     : optimizePostLayoutAddressCodeOverlay(postLayoutStopTail.items);
@@ -2625,7 +2765,9 @@ function compileMKProOnce(
     ...postLayoutOverlay.optimizations,
   );
   const preloads = [
-    ...buildPreloadReport(ast, allocation),
+    ...setupPreloads.filter((preload) =>
+      !postLayoutStopTail.preloads.some((candidate) => candidate.register === preload.register)
+    ),
     ...buildNegativeZeroDegreePreloadReport(allocation, optimizations),
     ...optimizedResult.preloads,
     ...postLayoutStopTail.preloads,
@@ -10656,7 +10798,21 @@ export class EmitContext {
     const normalized = normalizeConstantLiteral(raw);
     const register = this.allocation.constants[normalized];
     if (register !== undefined && !STACK_LITERAL_PRELOAD_ONLY_CONSTANTS.has(normalized)) {
-      this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, `preload const ${normalized}`);
+      const selector = fractionalConstantSelectorForValue(this.loweringOptions, normalized);
+      const selectorValue = selector === undefined
+        ? undefined
+        : fractionalSelectorPreloadValue(normalized, selector.target);
+      const comment = selectorValue === undefined
+        ? `preload const ${normalized}`
+        : `preload const ${selectorValue}; fractional selector source ${normalized}`;
+      this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, comment);
+      if (selector !== undefined && selectorValue !== undefined) {
+        this.emitOp(0x35, "К {x}", `fractional selector const ${normalized}`);
+        this.optimizations.push({
+          name: "fractional-constant-selector-use",
+          detail: `Recovered fractional constant ${normalized} from R${register} carrying target ${selector.target} as ${selectorValue}.`,
+        });
+      }
       this.optimizations.push({
         name: "preloaded-constant",
         detail: `Used preloaded R${register} for constant ${normalized}.`,
@@ -13576,6 +13732,7 @@ function applyPackedGridRegisterHints(
   const preferences: Array<[string, RegisterName]> = [
     ["x", "1"],
     ["y", "2"],
+    ["occupied", "9"],
     ["mask", "9"],
     ["lines", "4"],
   ];
@@ -17625,7 +17782,11 @@ const optimizerCapabilities: Array<{
   },
 ];
 
-function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): PreloadReport[] {
+function buildPreloadReport(
+  ast: ProgramAst,
+  allocation: RegisterAllocation,
+  loweringOptions: LoweringOptions = {},
+): PreloadReport[] {
   const synthetic: PreloadReport[] = [];
   const v2FieldNames = new Set<string>();
   const loweredInitializerListFields = new Set<string>();
@@ -17665,11 +17826,17 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
       });
     }
   }
-  const constants = Object.entries(allocation.constants).map(([value, register]) => ({
-    register,
-    value,
-    countsAgainstProgram: false,
-  }));
+  const constants = Object.entries(allocation.constants).map(([value, register]) => {
+    const selector = fractionalConstantSelectorForValue(loweringOptions, value);
+    const selectorValue = selector === undefined
+      ? undefined
+      : fractionalSelectorPreloadValue(value, selector.target);
+    return {
+      register,
+      value: selectorValue ?? value,
+      countsAgainstProgram: false,
+    };
+  });
   const displayTemplateMasks: PreloadReport[] = [];
   for (const display of ast.displays) {
     if (!displayHasMantissaExponentTemplateShape(display)) continue;
@@ -17684,12 +17851,31 @@ function buildPreloadReport(ast: ProgramAst, allocation: RegisterAllocation): Pr
   return [...synthetic, ...constants, ...displayTemplateMasks];
 }
 
-function constantPreloadRegisters(allocation: RegisterAllocation): Partial<Record<RegisterName, string>> {
+function constantPreloadRegisters(
+  allocation: RegisterAllocation,
+  loweringOptions: LoweringOptions = {},
+): Partial<Record<RegisterName, string>> {
   const result: Partial<Record<RegisterName, string>> = {};
   for (const [value, register] of Object.entries(allocation.constants)) {
-    result[register] = value;
+    const selector = fractionalConstantSelectorForValue(loweringOptions, value);
+    result[register] = selector === undefined
+      ? value
+      : fractionalSelectorPreloadValue(value, selector.target) ?? value;
   }
   return result;
+}
+
+function fractionalSelectorSetupPreloads(
+  preloads: readonly PreloadReport[],
+  allocation: RegisterAllocation,
+  loweringOptions: LoweringOptions,
+): PreloadReport[] {
+  if (loweringOptions.fractionalConstantSelectors === undefined) return [];
+  const registers = new Set<RegisterName>();
+  for (const [value, register] of Object.entries(allocation.constants)) {
+    if (fractionalConstantSelectorForValue(loweringOptions, value) !== undefined) registers.add(register);
+  }
+  return preloads.filter((preload) => registers.has(preload.register as RegisterName));
 }
 
 function indexedMemoryComment(

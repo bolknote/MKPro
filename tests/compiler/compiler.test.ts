@@ -1752,6 +1752,24 @@ program Packed4FractionalBitReportTemp {
     )).toBe(true);
   });
 
+  it("keeps fractional recovery after selector-carrier constant preloads", () => {
+    const source = readFileSync("examples/pending-optimizer/tic-tac-toe-4x4.mkpro", "utf8");
+    const result = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      dualUseConstantIndirectFlow: true,
+      tailBranchInversion: true,
+      procLayoutStrategy: "reverse",
+      fractionalConstantSelectors: [{ value: "0.22600029", target: 36 }],
+    });
+    const recallIndex = result.steps.findIndex((step) =>
+      step.comment?.includes("fractional selector source 0.22600029")
+    );
+
+    expect(result.report.preloads.some((item) => /^\d+\.22600029$/u.test(item.value))).toBe(true);
+    expect(recallIndex).toBeGreaterThanOrEqual(0);
+    expect(result.steps[recallIndex + 1]?.comment).toBe("fractional selector const 0.22600029");
+    expect(result.report.optimizations.some((item) => item.name === "fractional-constant-selector-use")).toBe(true);
+  });
+
   it("places source-shaped packed-grid line banks at R4 through R7", () => {
     const result = compileOk(`
 program PackedGridLineBankRegisters {

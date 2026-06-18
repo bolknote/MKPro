@@ -273,6 +273,27 @@ function selectorForActualTarget(target: number): string | undefined {
   return officialLabel(target);
 }
 
+function retargetedSelectorValue(
+  register: RegisterName,
+  previousValue: string,
+  shiftedTarget: number,
+): string | undefined {
+  const fractional = fractionalSelectorSuffix(previousValue);
+  if (fractional !== undefined) {
+    const candidate = `${shiftedTarget}${fractional}`;
+    if (evaluateIndirectAddress(register, candidate, "flow")?.actualFlowTarget === shiftedTarget) {
+      return candidate;
+    }
+  }
+  return selectorForActualTarget(shiftedTarget);
+}
+
+function fractionalSelectorSuffix(value: string): string | undefined {
+  const match = /^(\d+)(\.\d+)$/u.exec(value.trim());
+  if (match === null || match[1] === "0") return undefined;
+  return match?.[2];
+}
+
 function indirectFlowOp(
   op: DirectBranch,
   register: RegisterName,
@@ -798,7 +819,7 @@ function retargetExistingSelectorsAfterShift(
     if (targetIndex === undefined) return undefined;
     const shiftedTarget = afterAddresses[targetIndex];
     if (shiftedTarget === undefined) return undefined;
-    const selectorValue = selectorForActualTarget(shiftedTarget);
+    const selectorValue = retargetedSelectorValue(register, preload.value, shiftedTarget);
     if (selectorValue === undefined) return undefined;
     const shiftedDecoded = evaluateIndirectAddress(register, selectorValue, "flow");
     if (shiftedDecoded?.actualFlowTarget !== shiftedTarget) return undefined;
@@ -836,6 +857,10 @@ function numericTargetView(
 ): { numeric: IrOp[]; targetLabel: Array<string | undefined> } {
   const numeric: IrOp[] = [];
   const targetLabel: Array<string | undefined> = [];
+  const labelByAddress = new Map<number, string>();
+  for (const [label, address] of labels) {
+    if (!labelByAddress.has(address)) labelByAddress.set(address, label);
+  }
   for (const op of ir) {
     if (isDirectBranch(op) && typeof op.target === "string") {
       const address = labels.get(op.target);
@@ -844,6 +869,11 @@ function numericTargetView(
         targetLabel.push(op.target);
         continue;
       }
+    }
+    if (isDirectBranch(op) && typeof op.target === "number") {
+      targetLabel.push(labelByAddress.get(op.target));
+      numeric.push(op);
+      continue;
     }
     numeric.push(op);
     targetLabel.push(undefined);
@@ -1093,13 +1123,7 @@ function applyForwardRewrite(
   for (const indices of groups.values()) {
     const candidate = validateForwardRewriteGroup(indices, ir, targetLabel, register, items);
     if (candidate === undefined) continue;
-    if (
-      best === undefined ||
-      candidate.converted > best.converted ||
-      (candidate.converted === best.converted && candidate.darkEntry && !best.darkEntry)
-    ) {
-      best = candidate;
-    }
+    best = betterRewrite(best, candidate);
   }
   return best;
 }
@@ -1736,7 +1760,9 @@ function retargetSelectorPreloadsAfterMachineDeletion(
     if (afterItemIndex < 0) return undefined;
     const shiftedTarget = afterAddressByItemIndex.get(afterItemIndex);
     if (shiftedTarget === undefined) return undefined;
-    const selectorValue = shiftedTarget === target ? preload.value : selectorForActualTarget(shiftedTarget);
+    const selectorValue = shiftedTarget === target
+      ? preload.value
+      : retargetedSelectorValue(register, preload.value, shiftedTarget);
     if (selectorValue === undefined) return undefined;
     const shiftedDecoded = evaluateIndirectAddress(register, selectorValue, "flow");
     if (shiftedDecoded?.actualFlowTarget !== shiftedTarget) return undefined;

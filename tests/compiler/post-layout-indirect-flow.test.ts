@@ -29,6 +29,13 @@ function jump(target: string): MachineItem[] {
   ];
 }
 
+function jumpAddress(target: number): MachineItem[] {
+  return [
+    { kind: "op", opcode: 0x51, mnemonic: "БП" },
+    { kind: "address", target },
+  ];
+}
+
 function cjump(target: string): MachineItem[] {
   return [
     { kind: "op", opcode: 0x5e, mnemonic: "F x=0" },
@@ -114,6 +121,23 @@ describe("post-layout indirect flow", () => {
 
     const decoded = evaluateIndirectAddress("7", "B4", "flow");
     expect(decoded?.actualFlowTarget).toBe(2);
+    expect(result.items.some((item) => item.kind === "address")).toBe(false);
+  });
+
+  it("recovers label identity for numeric forward targets before proving shifts", () => {
+    const program: MachineItem[] = [
+      { kind: "label", name: "main" },
+      ...jumpAddress(3),
+      digit(),
+      { kind: "label", name: "target" },
+      halt(),
+    ];
+    const result = optimizePostLayoutIndirectFlow(program, options, 0);
+
+    expect(result.applied).toBe(1);
+    expect(cellCount(result.items)).toBe(cellCount(program) - 1);
+    expect(result.preloads).toEqual([{ register: "7", value: "B4", countsAgainstProgram: false }]);
+    expect(evaluateIndirectAddress("7", "B4", "flow")?.actualFlowTarget).toBe(2);
     expect(result.items.some((item) => item.kind === "address")).toBe(false);
   });
 
