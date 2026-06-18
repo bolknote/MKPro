@@ -60,7 +60,7 @@ describe("setup formatting", () => {
 
     expect(listing).toContain("Setup Block:");
     expect(listing).toContain(
-      "`R0=25; R8=0.5; R1=5000.999; R2=5000.999; R3=5000.999; R4=0; R5=0; R6=0; R7=25000; Re=8.1020088E14; Ra=97; Rb=Е4`",
+      "`R0=25; R8=0.5; R1=5000.999; R2=5000.999; R3=5000.999; R4=0; R5=0; R6=0; R7=25000; Re=8.1020088E14; Rb=60`",
     );
     expect(listing).toContain("# Setup Listing");
     expect(listing).toContain("   00 |   -  | 25");

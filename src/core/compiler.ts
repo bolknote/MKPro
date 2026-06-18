@@ -23,7 +23,7 @@ import { RuntimeHelperRegistry } from "./emit/runtime-helpers.ts";
 import { compileExpression, compileStackStopRiskTail, expressionLeadsWithRead } from "./emit/lowering/expr.ts";
 import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflowBranch, compileDecrementZeroBranch, compileDispatch, compileDoubleBranchRemoval, compileIf, compileLiteralHalt, compileLiteralShowHalt, emitDomainTrapOnX, emitKnownOneIndirectLoopBack, indirectPredecrementUnderflowRegister, planDomainErrorGuard, statementsAreDomainErrorTrap } from "./emit/lowering/control-flow.ts";
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
-import { compileBitOrMaskSetReuse, compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileSingleBitMaskOpCopyReuse, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
+import { compileBitOrMaskSetReuse, compileBitSetMaskReuse, compileSegmentedBitplaneUpdateStatement, compileSingleBitMaskOpAssignment, compileSingleBitMaskOpCopyReuse, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountFormattedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
 import { compileBlockCall, compileDecimalSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileOneBasedModuloNormalization, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall, xParamYStackStoredEntryLabel } from "./emit/lowering/proc-raw-setup.ts";
 import { compileMultiStackResidentTemps } from "./emit/stack-residency-lowering.ts";
@@ -39,6 +39,10 @@ import {
   NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
   PACKED_COUNTER_PREFIX,
   REPEATED_UNARY_UPDATE_ARG_PREFIX,
+  SEGMENTED_BITPLANE_COUNTER,
+  SEGMENTED_BITPLANE_INDEX,
+  SEGMENTED_BITPLANE_SEED,
+  SEGMENTED_BITPLANE_SELECTOR,
   SPATIAL_COUNT_SCRATCH_PREFIX,
   SPATIAL_HIT_SCRATCH_PREFIX,
   GRID4_MASK_SCRATCH_PREFIX,
@@ -95,9 +99,11 @@ import {
   isBitClearAssignment,
   isIdentityAssignment,
   isNumericValue,
+  isPredecrementIndirectRegister,
   isPreincrementIndirectRegister,
   isSimpleStackLoad,
   isPackedGridMacroName,
+  isSegmentedBitplaneBoard,
   isUnitDecrementExpression,
   isUnitIncrementExpression,
   isZeroExpression,
@@ -135,6 +141,9 @@ import {
   shouldUsePreloadedDisplayLiteral,
   signDigitLiteralDisplayProgram,
   signedFirstSpliceDisplayLiteralProgram,
+  segmentedBitplaneCollectionInfo,
+  segmentedBitplaneNames,
+  segmentedBitplaneRandomUniquePlacement,
   spatialCountCounterScratchName,
   spatialCountMaskScratchName,
   spatialCountScratchNames,
@@ -591,6 +600,17 @@ interface LoweringOptions {
   // cell, so whole-program selection keeps only profitable target/fraction
   // pairings.
   fractionalConstantSelectors?: readonly FractionalConstantSelectorPlan[];
+  // Force source fractional constants for the selector plans above into setup
+  // preloads before ordinary constant scoring. This lets the rescue candidate
+  // probe dual-purpose constants that are present in the program but would not
+  // otherwise win a preload register.
+  forceFractionalConstantSelectorPreloads?: readonly string[];
+  // Try a 10x10 segmented-bitplane `line_count` scan: walk flat cells 99..0,
+  // test row/column/diagonal alignment against the queried cell, and only then
+  // probe the selected bitplane. This speculative Anvarov-inspired alternative
+  // to four generic progressions is selected only when the full program shrinks.
+  segmentedBitplanes?: boolean;
+  segmentedLineCountScan?: boolean;
 }
 
 interface FractionalConstantSelectorPlan {
@@ -1367,6 +1387,18 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
       "sizeRescue",
     );
   }
+  if (sourceMayUseSegmentedLineCount(source)) {
+    add(
+      { segmentedBitplanes: true, segmentedLineCountScan: true },
+      "segmented-bitplane-line-count-scan-layout",
+      "Scanned 10x10 segmented bitplanes through one alignment-tested board loop instead of four generic progressions",
+    );
+    add(
+      { segmentedBitplanes: true, segmentedLineCountScan: true, hoistSharedHelpers: true },
+      "segmented-bitplane-line-count-scan-hoisted",
+      "Combined the segmented 10x10 line_count scan with hoisted helpers for cheaper helper calls",
+    );
+  }
   add(
     { signedAbsMatchPairs: true },
     "signed-abs-match-pair",
@@ -1585,6 +1617,12 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
   return specs;
 }
 
+function sourceMayUseSegmentedLineCount(source: string): boolean {
+  return /\bline_count\s*\(/u.test(source) &&
+    /\bcells\s*\(/u.test(source) &&
+    /\bboard\s*\(\s*0\s*\.\.\s*9\s*,\s*0\s*\.\.\s*9\s*\)/u.test(source);
+}
+
 // Stage 2 coverage expansion: systematically cross the size-reducing transform
 // bundles with the pure layout/placement modifiers. The hand-written static set
 // only crossed a couple of bundles (domain-error, show-read) with the proc
@@ -1770,6 +1808,10 @@ function fractionalConstantSelectorCandidatesForBase(
         ...base,
         dualUseConstantIndirectFlow: true,
         fractionalConstantSelectors: [plan],
+        forceFractionalConstantSelectorPreloads: uniqueNormalizedFractionalSelectorValues([
+          ...(base.forceFractionalConstantSelectorPreloads ?? []),
+          plan.value,
+        ]),
       },
       name,
       detail(plan),
@@ -1777,26 +1819,33 @@ function fractionalConstantSelectorCandidatesForBase(
   }
 }
 
+interface FractionalConstantSelectorSource {
+  readonly value: string;
+  readonly registers: readonly RegisterName[];
+  readonly useCount: number;
+}
+
 function discoverFractionalConstantSelectorPlans(result: CompileResult): FractionalConstantSelectorPlan[] {
   const targetStats = directFlowTargetStats(result.steps);
   if (targetStats.size === 0) return [];
   const plans: Array<FractionalConstantSelectorPlan & { benefit: number }> = [];
-  for (const preload of result.report.preloads) {
-    const value = normalizeConstantLiteral(preload.value);
-    if (!fractionalSelectorCandidateValue(value)) continue;
-    const register = registerFromText(preload.register);
-    const recallCount = fractionalConstantRecallCount(result.steps, register, value);
-    if (recallCount === 0) continue;
+  for (const source of fractionalConstantSelectorSources(result)) {
     for (const [target, targetStat] of targetStats.entries()) {
-      const selectorValue = fractionalSelectorPreloadValue(value, target);
+      const selectorValue = fractionalSelectorPreloadValue(source.value, target);
       if (selectorValue === undefined) continue;
-      const needsRecovery = fractionalSelectorNeedsRecovery(value, selectorValue);
+      const needsRecovery = fractionalSelectorNeedsRecovery(source.value, selectorValue);
       const directCount = needsRecovery ? targetStat.count : targetStat.stableWithoutRetargetCount;
-      const recoveryCost = needsRecovery ? recallCount : 0;
+      const recoveryCost = needsRecovery ? source.useCount : 0;
       const benefit = directCount - recoveryCost;
       if (benefit <= 0) continue;
-      if (evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget !== target) continue;
-      plans.push({ value, target, benefit });
+      if (
+        !source.registers.some((register) =>
+          evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget === target
+        )
+      ) {
+        continue;
+      }
+      plans.push({ value: source.value, target, benefit });
     }
   }
   return plans.sort((left, right) =>
@@ -1804,6 +1853,99 @@ function discoverFractionalConstantSelectorPlans(result: CompileResult): Fractio
     directFlowTargetRank(result.steps, right.target) - directFlowTargetRank(result.steps, left.target) ||
     left.value.localeCompare(right.value)
   ).map(({ value, target }) => ({ value, target }));
+}
+
+export function discoverFractionalConstantSelectorPlansForTest(
+  result: CompileResult,
+): FractionalConstantSelectorPlan[] {
+  return discoverFractionalConstantSelectorPlans(result);
+}
+
+function fractionalConstantSelectorSources(result: CompileResult): FractionalConstantSelectorSource[] {
+  const sources = new Map<string, FractionalConstantSelectorSource>();
+  for (const preload of result.report.preloads) {
+    const value = normalizeConstantLiteral(preload.value);
+    if (!fractionalSelectorCandidateValue(value)) continue;
+    const register = registerFromText(preload.register);
+    const recallCount = fractionalConstantRecallCount(result.steps, register, value);
+    if (recallCount === 0) continue;
+    sources.set(value, { value, registers: [register], useCount: recallCount });
+  }
+
+  for (const value of collectPreloadConstantValues(result.ast, false)) {
+    if (!fractionalSelectorCandidateValue(value) || sources.has(value)) continue;
+    const useCount = countRuntimeLiteralUses(result.ast, value);
+    if (useCount === 0) continue;
+    sources.set(value, {
+      value,
+      registers: stableConstantSelectorProbeRegisters(),
+      useCount,
+    });
+  }
+  return [...sources.values()];
+}
+
+function stableConstantSelectorProbeRegisters(): RegisterName[] {
+  return [...REGISTER_ORDER].reverse().filter((register) => registerIndex(register) >= 7);
+}
+
+function countRuntimeLiteralUses(ast: ProgramAst, value: string): number {
+  let count = 0;
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "number") {
+      if (normalizeConstantLiteral(expr.raw) === value) count += 1;
+      return;
+    }
+    if (expr.kind === "unary") {
+      if (expr.op === "-" && expr.expr.kind === "number") {
+        if (normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)) === value) count += 1;
+        return;
+      }
+      visitExpr(expr.expr);
+      return;
+    }
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+      return;
+    }
+    if (expr.kind === "call") {
+      const macro = packedGridExpressionMacro(expr.callee.toLowerCase(), expr.args);
+      if (macro !== undefined) {
+        visitExpr(macro);
+        return;
+      }
+      for (const arg of expr.args) visitExpr(arg);
+    }
+  };
+  const visitStatements = (statements: readonly StatementAst[]): void => {
+    for (const statement of statements) {
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "assign") visitExpr(statement.expr);
+      if (statement.kind === "indexed_assign") {
+        visitExpr(statement.target.index);
+        visitExpr(statement.expr);
+      }
+      if (statement.kind === "if") {
+        visitExpr(statement.condition.left);
+        visitExpr(statement.condition.right);
+        visitStatements(statement.thenBody);
+        if (statement.elseBody !== undefined) visitStatements(statement.elseBody);
+      }
+      if (statement.kind === "loop" || statement.kind === "while") visitStatements(statement.body);
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visitStatements(dispatchCase.body);
+        }
+        if (statement.defaultBody !== undefined) visitStatements(statement.defaultBody);
+      }
+    }
+  };
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+  return count;
 }
 
 interface DirectFlowTargetStats {
@@ -1881,6 +2023,11 @@ function demoteConstantIndirectFlowCandidates(
     { freeResidualDispatchScratch: true },
     { sharedBitMaskHelperCalls: true },
     { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
+    ...(needsSizeRescue
+      ? [
+          { setupOnlyCountedLoopInit: true, hoistProcs: true, aggressiveIndirectCall: true },
+        ]
+      : []),
     ...(sourceHasComparisonGuardedUpdate(source)
       ? [
           { comparisonGuardedUpdateSelectors: true },
@@ -2703,6 +2850,10 @@ function resolveConstantIndexedState(ast: ProgramAst, optimizations: AppliedOpti
         const item = rewriteExpr(statement.item);
         return item === statement.item ? statement : { ...statement, item };
       }
+      case "segmented_bitplane_update": {
+        const item = rewriteExpr(statement.item);
+        return item === statement.item ? statement : { ...statement, item };
+      }
       case "pause":
       case "preview":
       case "halt":
@@ -2901,6 +3052,7 @@ function compileMKProOnce(
   const ast = parseProgram(source, {
     signedAbsMatchPairs: loweringOptions.signedAbsMatchPairs === true,
     synthesizeParametricSiblings: loweringOptions.synthesizeParametricSiblings === true,
+    segmentedBitplanes: loweringOptions.segmentedBitplanes === true,
   });
   const opts: CompileOptions = { ...DEFAULT_OPTIONS, ...options };
   // The copy-coalescing (Form 2) lowering variant reaches the register-coalesce
@@ -2922,10 +3074,16 @@ function compileMKProOnce(
   materializeDisplayExpressions(ast, optimizations, loweringOptions.inlineFloorPackedRowExpressions === true);
   elideXParamReturnStateFields(ast, optimizations);
   const foldedConstants = foldProgramConstants(ast);
-  if (foldedConstants > 0) {
+  if (foldedConstants.applied > 0) {
     optimizations.push({
       name: "expression-constant-folder",
-      detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`,
+      detail: `Folded ${foldedConstants.applied} constant expression node(s) before code generation.`,
+    });
+  }
+  if (foldedConstants.grdAngleAssumptions > 0) {
+    optimizations.push({
+      name: "grd-angle-mode-assumption",
+      detail: `Folded ${foldedConstants.grdAngleAssumptions} ГРД-only trigonometric identity node(s) under requires angle_mode(grd).`,
     });
   }
   if (loweringOptions.setupOnlyCountedLoopInit !== true) {
@@ -2940,10 +3098,16 @@ function compileMKProOnce(
   if (loweringOptions.comparisonGuardedUpdateSelectors === true) {
     canonicalizeComparisonGuardedUpdateCorrections(ast, optimizations);
     const refoldedConstants = foldProgramConstants(ast);
-    if (refoldedConstants > 0) {
+    if (refoldedConstants.applied > 0) {
       optimizations.push({
         name: "expression-constant-folder",
-        detail: `Folded ${refoldedConstants} comparison guarded correction expression node${refoldedConstants === 1 ? "" : "s"} before code generation.`,
+        detail: `Folded ${refoldedConstants.applied} comparison guarded correction expression node${refoldedConstants.applied === 1 ? "" : "s"} before code generation.`,
+      });
+    }
+    if (refoldedConstants.grdAngleAssumptions > 0) {
+      optimizations.push({
+        name: "grd-angle-mode-assumption",
+        detail: `Folded ${refoldedConstants.grdAngleAssumptions} ГРД-only trigonometric identity node(s) under requires angle_mode(grd).`,
       });
     }
   }
@@ -3023,6 +3187,7 @@ function compileMKProOnce(
     loweringOptions.suppressConstantPreloads,
     loweringOptions.sharedBitMaskHelperCalls === true,
     loweringOptions.startupAwareConstantPreloads === true,
+    loweringOptions.forceFractionalConstantSelectorPreloads ?? [],
     loweringOptions.forcedRegisterShares ?? [],
     loweringOptions.xParamValueFunctions === true,
     loweringOptions.comparisonGuardedUpdateSelectors === true,
@@ -3437,6 +3602,8 @@ function packCounterStripes(
           expr: rewriteExpr(statement.expr),
         };
       case "coord_list_remove":
+        return { ...statement, item: rewriteExpr(statement.item) };
+      case "segmented_bitplane_update":
         return { ...statement, item: rewriteExpr(statement.item) };
       case "if":
         return {
@@ -4687,6 +4854,8 @@ function loopPromptHasReadsOutsideHeader(
         return exprReads(statement.target.index) || exprReads(statement.expr);
       case "coord_list_remove":
         return exprReads(statement.item);
+      case "segmented_bitplane_update":
+        return exprReads(statement.item);
       case "while":
         return conditionReads(statement.condition) || statementsRead(statement.body);
       case "if":
@@ -5254,10 +5423,11 @@ function rewriteResidualTempStatement(
         ...(defaultBody === undefined ? {} : { defaultBody }),
       };
     }
-    case "decimal_series":
-      return statement;
-  }
-}
+	    case "decimal_series":
+	      return statement;
+	  }
+	  return statement;
+	}
 
 function rewriteResidualTempExpression(
   expr: ExpressionAst,
@@ -5676,6 +5846,14 @@ function eliminateUnobservedState(
       visitExpr(expr.right, ignored);
     }
     if (expr.kind === "call") {
+      const name = expr.callee.toLowerCase();
+      if (
+        (name === "__seg_bit_has" || name === "line_count") &&
+        expr.args[0]?.kind === "identifier"
+      ) {
+        const segmented = segmentedBitplaneCollectionInfo(ast, expr.args[0].name);
+        for (const plane of segmented?.planes ?? []) addRead(plane);
+      }
       for (const arg of expr.args) visitExpr(arg, ignored);
     }
   };
@@ -5738,6 +5916,13 @@ function eliminateUnobservedState(
     }
   };
 
+  for (const state of ast.states) {
+    for (const field of state.fields) {
+      if (field.initial === undefined) continue;
+      const segmented = segmentedBitplaneRandomUniquePlacement(field.name, field.initial);
+      if (segmented !== undefined) addRead(segmented.countSource);
+    }
+  }
   for (const entry of ast.entries) visitStatements(entry.body);
   for (const proc of ast.procs) visitStatements(proc.body);
   const removable = new Set<string>();
@@ -6196,6 +6381,8 @@ function statementOwnExpressions(statement: StatementAst): ExpressionAst[] {
       return [statement.expr];
     case "indexed_assign":
       return [statement.target.index, statement.expr];
+    case "segmented_bitplane_update":
+      return [statement.item];
     case "if":
     case "while":
       return [statement.condition.left, statement.condition.right];
@@ -8272,6 +8459,9 @@ export class EmitContext {
   get spatialSumLoopHelpers() {
     return this.helpers.spatialSumLoopHelpers;
   }
+  get segmentedBitplaneHitHelpers() {
+    return this.helpers.segmentedBitplaneHitHelpers;
+  }
   get terminalTailHelpers() {
     return this.helpers.terminalTailHelpers;
   }
@@ -8448,6 +8638,406 @@ export class EmitContext {
 
 
 
+  private compileDelayedUnitDecrementUnderflowGuardRun(statements: readonly StatementAst[], index: number): number {
+    if (this.loweringOptions.indirectUnderflowDecrement !== true) return 0;
+    const decrement = statements[index];
+    if (decrement?.kind !== "assign") return 0;
+    if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return 0;
+    if (decrement.target.startsWith(PACKED_COUNTER_PREFIX)) return 0;
+
+    const guardIndex = statements.length - 1;
+    if (index >= guardIndex) return 0;
+
+    const register = this.allocation.registers[decrement.target];
+    if (register === undefined || !isPredecrementIndirectRegister(register)) return 0;
+    const field = this.findStateField(decrement.target);
+    if (field?.type !== "range" || field.min === undefined || field.min < 0) return 0;
+
+    const guard = statements[guardIndex];
+    if (
+      guard?.kind === "if" &&
+      guard.elseBody === undefined &&
+      this.delayedUnitDecrementGuardMatches(decrement.target, guard) &&
+      this.statementsTerminate(guard.thenBody)
+    ) {
+      const middle = statements.slice(index + 1, guardIndex);
+      if (!this.statementsCommuteWithDelayedUnitDecrement(middle, decrement.target, new Set())) return 0;
+
+      this.compileStatements(middle);
+      this.emitDelayedIndirectUnitDecrement(decrement, register, guard);
+      this.compileStatement(guard);
+      return guardIndex - index + 1;
+    }
+
+    const transformed = this.delayedUnitDecrementTailWithGuard(
+      statements.slice(index + 1),
+      decrement,
+      new Set(),
+    );
+    if (transformed === undefined) return 0;
+
+    this.compileStatements(transformed);
+    this.optimizations.push({
+      name: "delayed-indirect-underflow-decrement",
+      detail: `Sank ${decrement.target}-- at line ${decrement.line} into terminal nonpositive branch tails so pre-decrement side effects stay terminal on underflow.`,
+    });
+    return statements.length - index;
+  }
+
+  private compileBranchLocalDelayedUnitDecrementGuard(
+    branch: Extract<StatementAst, { kind: "if" }>,
+    guard: Extract<StatementAst, { kind: "if" }>,
+    beforeCondition?: () => void,
+  ): boolean {
+    if (this.loweringOptions.indirectUnderflowDecrement !== true) return false;
+    const target = this.delayedUnitDecrementGuardTarget(guard);
+    if (target === undefined) return false;
+    if (!this.statementsTerminate(guard.thenBody)) return false;
+    if (this.statementsReadIdentifierDeep(guard.thenBody, target, new Set())) return false;
+
+    const originalThenPlan = this.delayedUnitDecrementBranchPlan(branch.thenBody, target, guard);
+    const originalElsePlan = branch.elseBody === undefined
+      ? undefined
+      : this.delayedUnitDecrementBranchPlan(branch.elseBody, target, guard);
+    if (originalThenPlan === undefined && originalElsePlan === undefined) return false;
+
+    const selected = this.branchOrderStatement(branch, branch.line);
+    const thenPlan = this.delayedUnitDecrementBranchPlan(selected.thenBody, target, guard);
+    const elsePlan = selected.elseBody === undefined
+      ? undefined
+      : this.delayedUnitDecrementBranchPlan(selected.elseBody, target, guard);
+    if (thenPlan === undefined && elsePlan === undefined) return false;
+
+    const falseLabel = this.freshLabel("if_false");
+    const thenTerminates = this.statementsTerminate(selected.thenBody);
+    const endLabel = selected.elseBody !== undefined && !thenTerminates
+      ? this.freshLabel("if_end")
+      : undefined;
+
+    beforeCondition?.();
+    compileCondition(this, selected.condition, falseLabel, branch.line);
+    this.clearCurrentXFacts();
+    this.compileDelayedUnitDecrementBranchBody(thenPlan, selected.thenBody, guard);
+    if (selected.elseBody !== undefined) {
+      if (endLabel !== undefined) this.emitJump(0x51, "БП", endLabel, "if end", branch.line);
+      this.emitLabel(falseLabel);
+      this.clearCurrentXFacts();
+      this.compileDelayedUnitDecrementBranchBody(elsePlan, selected.elseBody, guard);
+      if (endLabel !== undefined) this.emitLabel(endLabel);
+      this.clearCurrentXFacts();
+    } else {
+      this.emitLabel(falseLabel);
+      this.clearCurrentXFacts();
+    }
+    this.compileStatement(guard);
+    this.optimizations.push({
+      name: "delayed-indirect-underflow-decrement",
+      detail: `Sank a branch-local ${target}-- into the shared terminal nonpositive guard at line ${guard.line}.`,
+    });
+    return true;
+  }
+
+  private delayedUnitDecrementBranchPlan(
+    statements: readonly StatementAst[],
+    target: string,
+    guard: Extract<StatementAst, { kind: "if" }>,
+  ): {
+    body: StatementAst[];
+    decrement: Extract<StatementAst, { kind: "assign" }>;
+    register: RegisterName;
+  } | undefined {
+    for (let index = 0; index < statements.length; index += 1) {
+      const decrement = statements[index];
+      if (decrement?.kind !== "assign" || decrement.target !== target) continue;
+      if (!isUnitDecrementExpression(decrement.target, decrement.expr)) continue;
+      if (decrement.target.startsWith(PACKED_COUNTER_PREFIX)) continue;
+      const register = this.allocation.registers[decrement.target];
+      if (register === undefined || !isPredecrementIndirectRegister(register)) continue;
+      const field = this.findStateField(decrement.target);
+      if (field?.type !== "range" || field.min === undefined || field.min < 0) continue;
+      if (!this.delayedUnitDecrementGuardMatches(decrement.target, guard)) continue;
+
+      const suffix = statements.slice(index + 1);
+      if (!this.statementsCommuteWithDelayedUnitDecrement(suffix, decrement.target, new Set())) continue;
+      const body = [...statements.slice(0, index), ...suffix];
+      if (this.statementsMayTerminateBeforeDelayedUnitDecrement(body, new Set())) continue;
+      return { body, decrement, register };
+    }
+    return undefined;
+  }
+
+  private compileDelayedUnitDecrementBranchBody(
+    plan: {
+      body: StatementAst[];
+      decrement: Extract<StatementAst, { kind: "assign" }>;
+      register: RegisterName;
+    } | undefined,
+    fallback: readonly StatementAst[],
+    guard: Extract<StatementAst, { kind: "if" }>,
+  ): void {
+    if (plan === undefined) {
+      this.compileStatements(fallback);
+      return;
+    }
+    this.compileStatements(plan.body);
+    this.emitDelayedIndirectUnitDecrement(plan.decrement, plan.register, guard);
+  }
+
+  private emitDelayedIndirectUnitDecrement(
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    register: RegisterName,
+    guard: Extract<StatementAst, { kind: "if" }>,
+  ): void {
+    this.emitOp(0xd0 + registerIndex(register), `К П->X ${register}`, `delayed predecrement ${decrement.target}`, decrement.line);
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.optimizations.push({
+      name: "delayed-indirect-underflow-decrement",
+      detail: `Delayed ${decrement.target}-- to the terminal nonpositive guard at line ${guard.line}, then used ${getOpcode(0xd0 + registerIndex(register)).name}'s pre-decrement side effect.`,
+    });
+  }
+
+  private delayedUnitDecrementGuardTarget(
+    guard: Extract<StatementAst, { kind: "if" }>,
+  ): string | undefined {
+    if (guard.elseBody !== undefined) return undefined;
+    const normalized = normalizeZeroComparison(guard.condition);
+    return normalized?.expr.kind === "identifier" &&
+      (normalized.op === "<" || normalized.op === "<=")
+      ? normalized.expr.name
+      : undefined;
+  }
+
+  private delayedUnitDecrementGuardMatches(
+    target: string,
+    guard: Extract<StatementAst, { kind: "if" }>,
+  ): boolean {
+    return this.delayedUnitDecrementGuardTarget(guard) === target;
+  }
+
+  private delayedUnitDecrementTailWithGuard(
+    statements: readonly StatementAst[],
+    decrement: Extract<StatementAst, { kind: "assign" }>,
+    seenProcs: Set<string>,
+  ): StatementAst[] | undefined {
+    const last = statements.at(-1);
+    if (last === undefined) return undefined;
+    if (
+      last.kind === "if" &&
+      last.elseBody === undefined &&
+      this.delayedUnitDecrementGuardMatches(decrement.target, last) &&
+      this.statementsTerminate(last.thenBody)
+    ) {
+      const prefix = statements.slice(0, -1);
+      if (!this.statementsCommuteWithDelayedUnitDecrement(prefix, decrement.target, new Set(seenProcs))) {
+        return undefined;
+      }
+      return [...prefix, decrement, last];
+    }
+
+    if (last.kind !== "if" || last.elseBody === undefined) return undefined;
+    if (countIdentifierReadsInCondition(last.condition, decrement.target) !== 0) return undefined;
+    const prefix = statements.slice(0, -1);
+    if (!this.statementsCommuteWithDelayedUnitDecrement(prefix, decrement.target, new Set(seenProcs))) {
+      return undefined;
+    }
+    const thenBody = this.delayedUnitDecrementTailWithGuard(last.thenBody, decrement, new Set(seenProcs));
+    const elseBody = this.delayedUnitDecrementTailWithGuard(last.elseBody, decrement, new Set(seenProcs));
+    if (thenBody === undefined || elseBody === undefined) return undefined;
+    return [
+      ...prefix,
+      {
+        ...last,
+        thenBody,
+        elseBody,
+      },
+    ];
+  }
+
+  private statementsCommuteWithDelayedUnitDecrement(
+    statements: readonly StatementAst[],
+    target: string,
+    seenProcs: Set<string>,
+  ): boolean {
+    return statements.every((statement) =>
+      this.statementCommutesWithDelayedUnitDecrement(statement, target, new Set(seenProcs))
+    );
+  }
+
+  private statementCommutesWithDelayedUnitDecrement(
+    statement: StatementAst,
+    target: string,
+    seenProcs: Set<string>,
+  ): boolean {
+    if (statement.kind === "assign") {
+      if (statement.target !== target) {
+        return !statementReadsIdentifier(statement, target) &&
+          !statementMayWriteIdentifier(this.ast, statement, target, new Set());
+      }
+      return this.expressionIsAffineSelfUpdate(statement.expr, target);
+    }
+
+    if (statement.kind === "if") {
+      return countIdentifierReadsInCondition(statement.condition, target) === 0 &&
+        this.statementsCommuteWithDelayedUnitDecrement(statement.thenBody, target, new Set(seenProcs)) &&
+        (statement.elseBody === undefined ||
+          this.statementsCommuteWithDelayedUnitDecrement(statement.elseBody, target, new Set(seenProcs)));
+    }
+
+    if (statement.kind === "dispatch") {
+      if (expressionReferencesIdentifier(statement.expr, target)) return false;
+      for (const dispatchCase of statement.cases) {
+        if (expressionReferencesIdentifier(dispatchCase.value, target)) return false;
+        if (!this.statementsCommuteWithDelayedUnitDecrement(dispatchCase.body, target, new Set(seenProcs))) {
+          return false;
+        }
+      }
+      return statement.defaultBody === undefined ||
+        this.statementsCommuteWithDelayedUnitDecrement(statement.defaultBody, target, new Set(seenProcs));
+    }
+
+    if (statement.kind === "call") {
+      const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === undefined) {
+        return !statementReadsIdentifier(statement, target) &&
+          !statementMayWriteIdentifier(this.ast, statement, target, new Set());
+      }
+      if (seenProcs.has(proc.name)) return false;
+      const nextSeen = new Set(seenProcs);
+      nextSeen.add(proc.name);
+      return this.statementsCommuteWithDelayedUnitDecrement(proc.body, target, nextSeen);
+    }
+
+    if (statement.kind === "loop" || statement.kind === "while") {
+      return !statementReadsIdentifier(statement, target) &&
+        !statementMayWriteIdentifier(this.ast, statement, target, new Set());
+    }
+
+    return !statementReadsIdentifier(statement, target) &&
+      !statementMayWriteIdentifier(this.ast, statement, target, new Set());
+  }
+
+  private expressionIsAffineSelfUpdate(expr: ExpressionAst, target: string): boolean {
+    let coefficient = 0;
+    let ok = true;
+    const visit = (current: ExpressionAst, sign: 1 | -1): void => {
+      if (!ok) return;
+      if (current.kind === "identifier" && current.name === target) {
+        coefficient += sign;
+        return;
+      }
+      if (!expressionReferencesIdentifier(current, target)) return;
+      if (current.kind === "binary" && (current.op === "+" || current.op === "-")) {
+        visit(current.left, sign);
+        visit(current.right, current.op === "+" ? sign : (sign === 1 ? -1 : 1));
+        return;
+      }
+      ok = false;
+    };
+    visit(expr, 1);
+    return ok && coefficient === 1;
+  }
+
+  private statementsMayTerminateBeforeDelayedUnitDecrement(
+    statements: readonly StatementAst[],
+    seenProcs: Set<string>,
+  ): boolean {
+    return statements.some((statement) =>
+      this.statementMayTerminateBeforeDelayedUnitDecrement(statement, new Set(seenProcs))
+    );
+  }
+
+  private statementMayTerminateBeforeDelayedUnitDecrement(
+    statement: StatementAst,
+    seenProcs: Set<string>,
+  ): boolean {
+    if (
+      statement.kind === "halt" ||
+      statement.kind === "loop" ||
+      statement.kind === "decimal_series" ||
+      statement.kind === "return_value"
+    ) {
+      return true;
+    }
+    if (statement.kind === "if") {
+      return this.statementsMayTerminateBeforeDelayedUnitDecrement(statement.thenBody, new Set(seenProcs)) ||
+        (statement.elseBody !== undefined &&
+          this.statementsMayTerminateBeforeDelayedUnitDecrement(statement.elseBody, new Set(seenProcs)));
+    }
+    if (statement.kind === "dispatch") {
+      return statement.cases.some((dispatchCase) =>
+        this.statementsMayTerminateBeforeDelayedUnitDecrement(dispatchCase.body, new Set(seenProcs))
+      ) ||
+        (statement.defaultBody !== undefined &&
+          this.statementsMayTerminateBeforeDelayedUnitDecrement(statement.defaultBody, new Set(seenProcs)));
+    }
+    if (statement.kind === "while") {
+      return this.statementsMayTerminateBeforeDelayedUnitDecrement(statement.body, new Set(seenProcs));
+    }
+    if (statement.kind === "call") {
+      const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === undefined || seenProcs.has(proc.name)) return true;
+      const nextSeen = new Set(seenProcs);
+      nextSeen.add(proc.name);
+      return this.statementsMayTerminateBeforeDelayedUnitDecrement(proc.body, nextSeen);
+    }
+    return false;
+  }
+
+  private statementsReadIdentifierDeep(
+    statements: readonly StatementAst[],
+    name: string,
+    seenProcs: Set<string>,
+  ): boolean {
+    return statements.some((statement) => this.statementReadsIdentifierDeep(statement, name, new Set(seenProcs)));
+  }
+
+  private statementReadsIdentifierDeep(
+    statement: StatementAst,
+    name: string,
+    seenProcs: Set<string>,
+  ): boolean {
+    if (statement.kind === "if") {
+      return countIdentifierReadsInCondition(statement.condition, name) > 0 ||
+        this.statementsReadIdentifierDeep(statement.thenBody, name, new Set(seenProcs)) ||
+        (statement.elseBody !== undefined &&
+          this.statementsReadIdentifierDeep(statement.elseBody, name, new Set(seenProcs)));
+    }
+    if (statement.kind === "dispatch") {
+      return expressionReferencesIdentifier(statement.expr, name) ||
+        statement.cases.some((dispatchCase) =>
+          expressionReferencesIdentifier(dispatchCase.value, name) ||
+          this.statementsReadIdentifierDeep(dispatchCase.body, name, new Set(seenProcs))
+        ) ||
+        (statement.defaultBody !== undefined &&
+          this.statementsReadIdentifierDeep(statement.defaultBody, name, new Set(seenProcs)));
+    }
+    if (statement.kind === "loop") {
+      return this.statementsReadIdentifierDeep(statement.body, name, new Set(seenProcs));
+    }
+    if (statement.kind === "while") {
+      return countIdentifierReadsInCondition(statement.condition, name) > 0 ||
+        this.statementsReadIdentifierDeep(statement.body, name, new Set(seenProcs));
+    }
+    if (statement.kind === "call") {
+      const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === undefined || seenProcs.has(proc.name)) return true;
+      const nextSeen = new Set(seenProcs);
+      nextSeen.add(proc.name);
+      return this.statementsReadIdentifierDeep(proc.body, name, nextSeen);
+    }
+    return statementReadsIdentifier(statement, name);
+  }
+
+  private clearCurrentXFacts(): void {
+    this.currentXVariable = undefined;
+    this.currentXAliases.clear();
+    this.currentXKnownZero = false;
+    this.currentXExpression = undefined;
+    this.currentXFormattedCoordReportBody = undefined;
+  }
+
   compileStatements(statements: readonly StatementAst[]): void {
     for (let index = 0; index < statements.length; index += 1) {
       const statement = statements[index]!;
@@ -8516,6 +9106,11 @@ export class EmitContext {
         }
       }
       if (statement.kind === "assign") {
+        const delayedDecrement = this.compileDelayedUnitDecrementUnderflowGuardRun(statements, index);
+        if (delayedDecrement > 1) {
+          index += delayedDecrement - 1;
+          continue;
+        }
         const repeatedCountedWhile = this.compileRepeatedValueInitializedUnitDecrementWhileRun(statements, index);
         if (repeatedCountedWhile > 1) {
           index += repeatedCountedWhile - 1;
@@ -8642,6 +9237,10 @@ export class EmitContext {
         index += 1;
         continue;
       }
+      if (statement.kind === "if" && next?.kind === "if" && this.compileBranchLocalDelayedUnitDecrementGuard(statement, next)) {
+        index += 1;
+        continue;
+      }
       if (statement.kind === "pause" && next?.kind === "halt" && expressionEquals(statement.expr, next.expr)) {
         this.compileStatement(next);
         this.optimizations.push({
@@ -8720,6 +9319,27 @@ export class EmitContext {
       ) {
         index += 1;
         continue;
+      }
+      if (
+        statement.kind === "show" &&
+        next?.kind === "input" &&
+        statements[index + 2]?.kind === "if" &&
+        statements[index + 3]?.kind === "if" &&
+        this.inputFeedsOnlyFollowingCondition(next, statements[index + 2] as Extract<StatementAst, { kind: "if" }>)
+      ) {
+        const branch = statements[index + 2] as Extract<StatementAst, { kind: "if" }>;
+        const guard = statements[index + 3] as Extract<StatementAst, { kind: "if" }>;
+        if (this.compileBranchLocalDelayedUnitDecrementGuard(branch, guard, () => {
+          compileShow(this, statement.display, statement.line);
+          this.markCurrentX(next.target);
+        })) {
+          this.optimizations.push({
+            name: "ephemeral-input-branch",
+            detail: `Branched directly on input ${next.target} at line ${next.line} without storing it.`,
+          });
+          index += 3;
+          continue;
+        }
       }
       if (
         statement.kind === "show" &&
@@ -8918,6 +9538,20 @@ export class EmitContext {
   ): boolean {
     const first = body[0];
     if (first === undefined) return false;
+    const second = body[1];
+    if (
+      first.kind === "if" &&
+      second?.kind === "if" &&
+      this.inputFeedsOnlyFollowingCondition(promptInputStatement(prompt), first) &&
+      this.compileBranchLocalDelayedUnitDecrementGuard(first, second)
+    ) {
+      this.compileStatements(body.slice(2));
+      this.optimizations.push({
+        name: "loop-carried-prompt-input-branch",
+        detail: `Branched directly on loop prompt input ${prompt.input} at line ${prompt.inputLine} without storing it.`,
+      });
+      return true;
+    }
     if (first.kind === "if" && this.inputFeedsOnlyFollowingCondition(promptInputStatement(prompt), first)) {
       compileIf(this, first, first.line);
       this.compileStatements(body.slice(1));
@@ -10703,6 +11337,11 @@ export class EmitContext {
         else compileExpression(this, statement.expr);
         this.emitIndexedStore(statement.target, statement.line);
         return;
+      case "segmented_bitplane_update":
+        if (!compileSegmentedBitplaneUpdateStatement(this, statement)) {
+          this.diagnostics.push(buildDiagnostic("error", `Collection ${statement.collection} is not lowered as segmented bitplanes.`, statement.line));
+        }
+        return;
       case "loop": {
         if (this.compileLoopCarriedPrompt(statement)) return;
         const start = this.freshLabel("loop");
@@ -12000,6 +12639,8 @@ export class EmitContext {
   ensureSpatialHitHelper(mask: string, scratch: string): { mask: string; scratch: string; label: string; line?: number } {
     const existing = this.spatialHitHelpers.get(mask);
     if (existing !== undefined) return existing;
+    const bitMaskScratch = this.sharedBitMaskHelperScratch();
+    if (bitMaskScratch !== undefined) this.ensureSpatialBitMaskHelper(bitMaskScratch, undefined);
     const helper = {
       mask,
       scratch,
@@ -12021,6 +12662,21 @@ export class EmitContext {
       ...(line === undefined ? {} : { line }),
     };
     this.spatialBitMaskHelpers.set(scratch, helper);
+    return helper;
+  }
+
+  ensureSegmentedBitplaneHitHelper(
+    collection: string,
+    line: number | undefined,
+  ): { collection: string; label: string; line?: number } {
+    const existing = this.segmentedBitplaneHitHelpers.get(collection);
+    if (existing !== undefined) return existing;
+    const helper = {
+      collection,
+      label: `__seg_bitplane_hit_${collection}`,
+      ...(line === undefined ? {} : { line }),
+    };
+    this.segmentedBitplaneHitHelpers.set(collection, helper);
     return helper;
   }
 
@@ -13495,9 +14151,9 @@ function collectFunctionRootCalls(
 ): Array<{ target: string; line?: number }> {
   const roots: Array<{ target: string; line?: number }> = [];
 
-  const add = (target: string, line?: number): void => {
-    if (functions.has(target)) roots.push({ target, line });
-  };
+	  const add = (target: string, line?: number): void => {
+	    if (functions.has(target)) roots.push({ target, ...(line === undefined ? {} : { line }) });
+	  };
 
   const visitExpr = (expr: ExpressionAst, line?: number): void => {
     switch (expr.kind) {
@@ -14399,6 +15055,7 @@ function allocateRegisters(
   suppressConstantPreloads: ReadonlySet<string> = new Set(),
   sharedBitMaskHelperCalls = false,
   startupAwareConstantPreloads = false,
+  forceFractionalConstantSelectorPreloads: readonly string[] = [],
   forcedRegisterShares: ReadonlyArray<{ freeRegister: RegisterName; keepRegister: RegisterName }> = [],
   xParamValueFunctions = false,
   comparisonGuardedUpdateSelectors = false,
@@ -14420,6 +15077,7 @@ function allocateRegisters(
     }
   }
   for (const binding of collectDomainBindings(ast)) {
+    if (segmentedBitplaneCollectionInfo(ast, binding.name) !== undefined) continue;
     declared.add(binding.name);
     variables.add(binding.name);
     if (binding.storage) hints.set(binding.name, binding.storage);
@@ -14444,6 +15102,7 @@ function allocateRegisters(
   collectStateBankSelectorVariables(ast, variables, hints);
   applyPackedGridRegisterHints(ast, variables, hints);
   applyCoordListRegisterHints(variables, hints);
+  applySegmentedBitplaneRegisterHints(ast, variables, hints);
   const hintedRegisters = (): Set<RegisterName> => new Set([...hints.values()].map((hint) => hint.register));
   const flPreferenceOrder: RegisterName[] = ["2", "3", "1", "0"];
   let flPreferenceIndex = 0;
@@ -14480,11 +15139,13 @@ function allocateRegisters(
   collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch, preserveDispatchCaseOrder);
   collectGridCellScratchVariables(ast, variables);
   collectBitMaskScratchVariables(ast, variables);
+  collectSegmentedBitplaneScratchVariables(ast, variables);
   collectCoordListScratchVariables(ast, variables);
   collectSpatialHitScratchVariables(ast, variables, sharedBitMaskHelperCalls);
   collectSpatialCountScratchVariables(ast, variables);
   collectGuardedUpdateScratchVariables(ast, variables, comparisonGuardedUpdateSelectors);
   collectDisplayTemplateScratchVariables(ast, variables);
+  applySegmentedBitplaneRegisterHints(ast, variables, hints);
   applyCoordListRegisterHints(variables, hints);
   applyCoordListPackedReportRegisterHints(ast, variables, hints);
   applyCoordListCellRegisterHints(ast, variables, hints);
@@ -14556,7 +15217,12 @@ function allocateRegisters(
   }
 
   const constants: Record<string, RegisterName> = {};
-  for (const value of collectPreloadConstantValues(ast, startupAwareConstantPreloads)) {
+  const preloadValues = [
+    ...uniqueNormalizedFractionalSelectorValues(forceFractionalConstantSelectorPreloads),
+    ...collectPreloadConstantValues(ast, startupAwareConstantPreloads),
+  ];
+  for (const value of preloadValues) {
+    if (constants[value] !== undefined) continue;
     if (suppressConstantPreloads.has(value)) continue;
     const register = pickConstantRegister(used);
     if (!register) break;
@@ -15459,6 +16125,54 @@ function applyCoordListRegisterHints(
   }
 }
 
+function applySegmentedBitplaneRegisterHints(
+  ast: ProgramAst,
+  variables: Set<string>,
+  hints: Map<string, { mode: "prefer" | "fixed"; register: RegisterName }>,
+): void {
+  if (ast.v2 === undefined) return;
+  const preferredPlanes: RegisterName[] = ["0", "1", "b", "e"];
+  const used = new Set([...hints.values()].map((hint) => hint.register));
+  for (const field of ast.v2.state) {
+    if (field.type !== "cells" || field.domain === undefined) continue;
+    const board = ast.v2.boards.find((candidate) => candidate.name === field.domain);
+    if (!isSegmentedBitplaneBoard(board)) continue;
+    for (const [index, plane] of segmentedBitplaneNames(field.name).entries()) {
+      if (!variables.has(plane) || hints.has(plane)) continue;
+      const register = preferredPlanes[index]!;
+      if (used.has(register)) continue;
+      hints.set(plane, { mode: "prefer", register });
+      used.add(register);
+    }
+  }
+  if (variables.has(SEGMENTED_BITPLANE_SELECTOR) && !hints.has(SEGMENTED_BITPLANE_SELECTOR) && !used.has("7")) {
+    hints.set(SEGMENTED_BITPLANE_SELECTOR, { mode: "fixed", register: "7" });
+    used.add("7");
+  }
+  const spatialCounter = spatialCountCounterScratchName();
+  if (variables.has(spatialCounter) && !hints.has(spatialCounter) && !used.has("3")) {
+    hints.set(spatialCounter, { mode: "prefer", register: "3" });
+    used.add("3");
+  }
+  const indexPreference = variables.has(spatialCounter) ? "5" : "2";
+  if (
+    variables.has(SEGMENTED_BITPLANE_INDEX) &&
+    !hints.has(SEGMENTED_BITPLANE_INDEX) &&
+    !used.has(indexPreference)
+  ) {
+    hints.set(SEGMENTED_BITPLANE_INDEX, { mode: "prefer", register: indexPreference });
+    used.add(indexPreference);
+  }
+  if (variables.has(SEGMENTED_BITPLANE_COUNTER) && !hints.has(SEGMENTED_BITPLANE_COUNTER) && !used.has("4")) {
+    hints.set(SEGMENTED_BITPLANE_COUNTER, { mode: "prefer", register: "4" });
+    used.add("4");
+  }
+  if (variables.has(SEGMENTED_BITPLANE_SEED) && !hints.has(SEGMENTED_BITPLANE_SEED) && !used.has("8")) {
+    hints.set(SEGMENTED_BITPLANE_SEED, { mode: "prefer", register: "8" });
+    used.add("8");
+  }
+}
+
 function applyCoordListCellRegisterHints(
   ast: ProgramAst,
   variables: Set<string>,
@@ -15691,14 +16405,41 @@ function collectPreloadConstantValues(ast: ProgramAst, startupAwareConstantPrelo
   // so previously-chosen constants are not silently displaced.
   const startupUseCount = (value: string): number => Math.max(weights.get(value) ?? 1, occurrences.get(value) ?? 1);
   const savings = (value: string): number =>
-    (weights.get(value) ?? 1) * (estimateNumberCost(value) - 1) + (bonuses.get(value) ?? 0);
+    (weights.get(value) ?? 1) * (estimateNumberCost(value) - 1) +
+    (bonuses.get(value) ?? 0) +
+    dualUseAddressConstantPreloadBonus(value);
   return [...values]
     .filter((value) => value !== "0" && (value !== "1" || bonuses.has(value)))
     .filter((value) =>
       !startupAwareConstantPreloads ||
+      dualUseAddressConstantPreloadBonus(value) > 0 ||
       !constantIsCheaperInlineForStartup(value, startupUseCount(value))
     )
     .sort((a, b) => savings(b) - savings(a) || estimateNumberCost(b) - estimateNumberCost(a));
+}
+
+export function collectPreloadConstantValuesForTest(
+  ast: ProgramAst,
+  startupAwareConstantPreloads = false,
+): string[] {
+  return collectPreloadConstantValues(ast, startupAwareConstantPreloads);
+}
+
+function uniqueNormalizedFractionalSelectorValues(values: readonly string[]): string[] {
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const value = normalizeConstantLiteral(raw);
+    if (!fractionalSelectorCandidateValue(value) || seen.has(value)) continue;
+    result.push(value);
+    seen.add(value);
+  }
+  return result;
+}
+
+function dualUseAddressConstantPreloadBonus(value: string): number {
+  const target = naturalFractionalSelectorPreloadValue(value)?.target;
+  return target !== undefined && target > 0 && target <= 104 ? 4 : 0;
 }
 
 function constantIsCheaperInlineForStartup(value: string, useCount: number): boolean {
@@ -16570,6 +17311,8 @@ function countIdentifierReadsInStatement(statement: StatementAst, name: string):
       return countIdentifierReads(statement.target.index, name) + countIdentifierReads(statement.expr, name);
     case "coord_list_remove":
       return countIdentifierReads(statement.item, name);
+    case "segmented_bitplane_update":
+      return countIdentifierReads(statement.item, name);
     case "if":
       return countIdentifierReadsInCondition(statement.condition, name) +
         countIdentifierReadsInStatements(statement.thenBody, name) +
@@ -16797,6 +17540,8 @@ function statementReadsIdentifier(statement: StatementAst, name: string): boolea
       return expressionReferencesIdentifier(statement.target.index, name) ||
         expressionReferencesIdentifier(statement.expr, name);
     case "coord_list_remove":
+      return expressionReferencesIdentifier(statement.item, name);
+    case "segmented_bitplane_update":
       return expressionReferencesIdentifier(statement.item, name);
     case "if":
       return expressionReferencesIdentifier(statement.condition.left, name) ||
@@ -17781,6 +18526,30 @@ function collectBitMaskScratchVariables(ast: ProgramAst, variables: Set<string>)
   };
   for (const entry of ast.entries) visit(entry.body);
   for (const proc of ast.procs) visit(proc.body);
+}
+
+function collectSegmentedBitplaneScratchVariables(ast: ProgramAst, variables: Set<string>): void {
+  if (ast.v2 === undefined) return;
+  const segmentedNames = new Set(
+    ast.v2.state
+      .filter((field) => segmentedBitplaneCollectionInfo(ast, field.name) !== undefined)
+      .map((field) => field.name),
+  );
+  if (segmentedNames.size === 0) return;
+  variables.add(SEGMENTED_BITPLANE_INDEX);
+  variables.add(SEGMENTED_BITPLANE_SELECTOR);
+  let randomUniqueSetup = false;
+  for (const state of ast.states) {
+    for (const field of state.fields) {
+      if (field.initial !== undefined && segmentedBitplaneRandomUniquePlacement(field.name, field.initial) !== undefined) {
+        randomUniqueSetup = true;
+      }
+    }
+  }
+  if (randomUniqueSetup) {
+    variables.add(SEGMENTED_BITPLANE_COUNTER);
+    variables.add(SEGMENTED_BITPLANE_SEED);
+  }
 }
 
 function collectCoordListScratchVariables(ast: ProgramAst, variables: Set<string>): void {
@@ -18867,6 +19636,8 @@ function estimateBranchOrderStatementCost(statement: StatementAst, ast: ProgramA
       return estimateExpressionCost(statement.target.index) + estimateExpressionCost(statement.expr) + 1;
     case "coord_list_remove":
       return Number.POSITIVE_INFINITY;
+    case "segmented_bitplane_update":
+      return Number.POSITIVE_INFINITY;
     case "pause":
     case "preview":
     case "return_value":
@@ -19118,6 +19889,14 @@ const optimizerCapabilities: Array<{
     requires: ["negative-zero-threshold-selector"],
     activeWhen: ["dual-constant-sign-digit"],
     detail: "Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface.",
+  },
+  {
+    id: "grd-angle-trig-identities",
+    category: "data",
+    source: "documented",
+    requires: ["grd-angle-mode"],
+    activeWhen: ["grd-angle-mode-assumption"],
+    detail: "Uses identities such as acos(0)=100 and cos(100)=0 only when the source program explicitly requires ГРД angle mode.",
   },
   {
     id: "branch-removal",
@@ -20020,6 +20799,9 @@ function buildMachineFeaturesUsed(
   }
   if (optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) {
     add("negative-zero-degree", "Optimizer selected a preloaded negative-zero exponent threshold selector.", "optimizer");
+  }
+  if (optimizations.some((optimization) => optimization.name === "grd-angle-mode-assumption")) {
+    add("grd-angle-mode", "Optimizer used an identity that is valid only in ГРД angle mode.", "optimizer");
   }
   if (optimizations.some((optimization) => optimization.name === "vp-fraction-restore")) {
     add("x2-restore-boundaries", "Optimizer used ВП as both X2 restoration and fractional/mantissa transform.", "optimizer");

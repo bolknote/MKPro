@@ -24,6 +24,12 @@ export const GRID4_MASK_SCRATCH_PREFIX = "__grid4_mask_";
 
 export const BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
 
+export const SEGMENTED_BITPLANE_PREFIX = "__seg_bitplane_";
+
+export const SEGMENTED_BITPLANE_INDEX = "__seg_bitplane_index";
+
+export const SEGMENTED_BITPLANE_SELECTOR = "__seg_bitplane_selector";
+
 export const REPEATED_UNARY_UPDATE_ARG_PREFIX = "__mkpro_unary_arg_";
 
 export interface XParamValueFunction {
@@ -39,6 +45,10 @@ export const DISPLAY_EXPR_PREFIX = "__display_expr_";
 export const SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
 
 export const SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
+
+export const SEGMENTED_BITPLANE_COUNTER = `${SPATIAL_COUNT_SCRATCH_PREFIX}line`;
+
+export const SEGMENTED_BITPLANE_SEED = `${SPATIAL_COUNT_SCRATCH_PREFIX}offset`;
 
 export const PACKED_COUNTER_PREFIX = "__packed_counter_";
 
@@ -2441,6 +2451,66 @@ export function randomCoordListSetupFields(
     .sort((left, right) => coordListItemInfo(left.name)!.index - coordListItemInfo(right.name)!.index);
 }
 
+export interface SegmentedBitplaneRandomUniquePlacement {
+  collection: string;
+  countSource: string;
+}
+
+export function segmentedBitplaneRandomUniqueInitial(
+  collection: string,
+  countSource: string,
+  planeIndex: number,
+): ExpressionAst {
+  return {
+    kind: "call",
+    callee: "__seg_bitplane_random_unique",
+    args: [
+      { kind: "string", text: collection },
+      { kind: "identifier", name: countSource },
+      numberExpression(planeIndex),
+    ],
+  };
+}
+
+export function segmentedBitplaneRandomUniquePlacement(
+  fieldName: string,
+  expr: ExpressionAst,
+): SegmentedBitplaneRandomUniquePlacement | undefined {
+  const plane = segmentedBitplanePlaneInfo(fieldName);
+  if (plane === undefined) return undefined;
+  if (expr.kind !== "call" || expr.callee !== "__seg_bitplane_random_unique" || expr.args.length !== 3) {
+    return undefined;
+  }
+  const [collection, countSource, planeIndex] = expr.args;
+  if (
+    collection?.kind !== "string" ||
+    collection.text !== plane.collection ||
+    countSource?.kind !== "identifier" ||
+    numericLiteralValue(planeIndex!) !== plane.index
+  ) {
+    return undefined;
+  }
+  return {
+    collection: plane.collection,
+    countSource: countSource.name,
+  };
+}
+
+export function segmentedBitplaneRandomUniqueSetupFields(
+  fields: readonly StateFieldAst[],
+  placement: SegmentedBitplaneRandomUniquePlacement,
+): StateFieldAst[] {
+  return fields
+    .filter((field) => {
+      if (field.initial === undefined) return false;
+      const current = segmentedBitplaneRandomUniquePlacement(field.name, field.initial);
+      return current !== undefined &&
+        current.collection === placement.collection &&
+        current.countSource === placement.countSource;
+    })
+    .sort((left, right) => segmentedBitplanePlaneInfo(left.name)!.index - segmentedBitplanePlaneInfo(right.name)!.index);
+}
+
 // A cell mask is stored as `8.HHHHHHH`: the MK-61 blue logical operations
 // (К∨/К∧/К⊕) force the integer part to 8 and operate nibble-wise on the seven
 // fractional hex digits, so each cell's bit lives in a fixed fractional nibble
@@ -2788,6 +2858,46 @@ export function maxExpressions(expressions: ExpressionAst[]): ExpressionAst {
 
 export function spatialHitScratchName(mask: string): string {
   return `${SPATIAL_HIT_SCRATCH_PREFIX}${mask}`;
+}
+
+export function isSegmentedBitplaneBoard(board: V2BoardAst | undefined): board is V2BoardAst {
+  return board !== undefined &&
+    board.xMin === 0 &&
+    board.xMax === 9 &&
+    board.yMin === 0 &&
+    board.yMax === 9 &&
+    board.width === 10 &&
+    board.height === 10;
+}
+
+export function segmentedBitplaneNames(collection: string): string[] {
+  return [0, 1, 2, 3].map((index) => `${SEGMENTED_BITPLANE_PREFIX}${collection}_${index}`);
+}
+
+function segmentedBitplanePlaneInfo(fieldName: string): { collection: string; index: number } | undefined {
+  if (!fieldName.startsWith(SEGMENTED_BITPLANE_PREFIX)) return undefined;
+  const suffix = fieldName.slice(SEGMENTED_BITPLANE_PREFIX.length);
+  const match = /^(.*)_([0-3])$/u.exec(suffix);
+  if (match === null) return undefined;
+  return { collection: match[1]!, index: Number(match[2]) };
+}
+
+export function segmentedBitplaneCollectionInfo(
+  ast: ProgramAst,
+  collection: string,
+): { board: V2BoardAst; planes: string[] } | undefined {
+  if (ast.v2 === undefined) return undefined;
+  const field = ast.v2.state.find((candidate) => candidate.name === collection && candidate.type === "cells");
+  if (field?.domain === undefined) return undefined;
+  const board = ast.v2.boards.find((candidate) => candidate.name === field.domain);
+  if (!isSegmentedBitplaneBoard(board)) return undefined;
+  const planes = segmentedBitplaneNames(collection);
+  const stateFields = new Set(ast.states.flatMap((state) => state.fields.map((stateField) => stateField.name)));
+  return planes.every((plane) => stateFields.has(plane)) ? { board, planes } : undefined;
+}
+
+export function programRequiresGrdAngleMode(ast: ProgramAst): boolean {
+  return ast.v2?.requirements?.angleMode?.mode === "grd";
 }
 
 export function spatialCountScratchNames(): string[] {
@@ -3590,6 +3700,10 @@ export function statementEquals(left: StatementAst, right: StatementAst): boolea
       return left.list === (right as typeof left).list &&
         expressionEquals(left.item, (right as typeof left).item) &&
         JSON.stringify(left.items) === JSON.stringify((right as typeof left).items);
+    case "segmented_bitplane_update":
+      return left.collection === (right as typeof left).collection &&
+        left.op === (right as typeof left).op &&
+        expressionEquals(left.item, (right as typeof left).item);
     case "loop":
       return statementListsEqual(left.body, (right as typeof left).body);
     case "while":

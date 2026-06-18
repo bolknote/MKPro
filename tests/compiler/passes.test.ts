@@ -26093,8 +26093,8 @@ describe("ir passes on synthetic programs", () => {
   });
 
   it("conditional-branch-trampoline keeps barrier-marked branches unchanged", () => {
-    const blocked: IrOp = {
-      ...cjump("done"),
+    const blocked: Extract<IrOp, { kind: "cjump" }> = {
+      ...(cjump("done") as Extract<IrOp, { kind: "cjump" }>),
       meta: { mnemonic: "F x=0", raw: true },
     };
     const program: IrOp[] = [

@@ -5,6 +5,7 @@ import {
   compileNegativeZeroDegreeSelectorCall,
   compileSpatialCountCall,
   compileSpatialHitCall,
+  compileSegmentedBitplaneHitCall,
 } from "./spatial.ts";
 import {
   NEGATIVE_ZERO_DEGREE_SELECTOR_GE,
@@ -361,6 +362,9 @@ export function compileCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kin
     }
     if (name === "__spatial_hit") {
       if (compileSpatialHitCall(ctx, expr)) return;
+    }
+    if (name === "__seg_bit_has") {
+      if (compileSegmentedBitplaneHitCall(ctx, expr)) return;
     }
     if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
       if (compileNegativeZeroDegreeSelectorCall(ctx, expr)) return;

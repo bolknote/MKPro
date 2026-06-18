@@ -29,10 +29,25 @@ interface LinearForm {
   terms: Map<string, LinearTerm>;
 }
 
+interface ConstantFolderOptions {
+  grdAngleMode?: boolean;
+}
+
+export interface ConstantFoldResult {
+  applied: number;
+  grdAngleAssumptions: number;
+}
+
 class ConstantFolder {
   applied = 0;
+  grdAngleAssumptions = 0;
+  private readonly options: ConstantFolderOptions;
 
-  foldProgram(ast: ProgramAst): number {
+  constructor(options: ConstantFolderOptions = {}) {
+    this.options = options;
+  }
+
+  foldProgram(ast: ProgramAst): ConstantFoldResult {
     for (const state of ast.states) {
       for (const field of state.fields) {
         if (field.initial !== undefined) field.initial = this.foldExpression(field.initial);
@@ -42,7 +57,7 @@ class ConstantFolder {
     for (const entry of ast.entries) this.foldStatements(entry.body);
     for (const proc of ast.procs) this.foldStatements(proc.body);
 
-    return this.applied;
+    return { applied: this.applied, grdAngleAssumptions: this.grdAngleAssumptions };
   }
 
   private foldStatements(statements: StatementAst[]): void {
@@ -137,8 +152,11 @@ class ConstantFolder {
         const args = expr.args.map((arg) => this.foldExpression(arg));
         const changed = args.some((arg, index) => arg !== expr.args[index]);
         const call = changed ? { ...expr, args } : expr;
-        const folded = foldPureConstantCall(expr.callee, args);
-        if (folded !== undefined) return this.folded(folded);
+        const folded = foldPureConstantCall(expr.callee, args, this.options);
+        if (folded !== undefined) {
+          if (folded.usesGrdAngleMode) this.grdAngleAssumptions += 1;
+          return this.folded(folded.expr);
+        }
         return call;
       }
       case "binary": {
@@ -206,8 +224,10 @@ class ConstantFolder {
   }
 }
 
-export function foldProgramConstants(ast: ProgramAst): number {
-  return new ConstantFolder().foldProgram(ast);
+export function foldProgramConstants(ast: ProgramAst): ConstantFoldResult {
+  return new ConstantFolder({
+    grdAngleMode: ast.v2?.requirements?.angleMode?.mode === "grd",
+  }).foldProgram(ast);
 }
 
 /** Fold pure numeric subexpressions on one expression tree (no statement walk). */
@@ -251,11 +271,21 @@ function negateNumberExpression(
 function foldPureConstantCall(
   callee: string,
   args: ExpressionAst[],
-): Extract<ExpressionAst, { kind: "number" }> | undefined {
+  options: ConstantFolderOptions = {},
+): { expr: Extract<ExpressionAst, { kind: "number" }>; usesGrdAngleMode?: boolean } | undefined {
   const name = callee.toLowerCase();
   const decimals = args.map(decimalFromExpression);
   if (decimals.some((value) => value === undefined)) return undefined;
   const values = decimals as DecimalValue[];
+
+  if (options.grdAngleMode === true && values.length === 1) {
+    if (name === "acos" && isDecimalZero(values[0]!)) {
+      return { expr: numberExpression(100), usesGrdAngleMode: true };
+    }
+    if (name === "cos" && compareDecimal(values[0]!, decimal(100)) === 0) {
+      return { expr: numberExpression(0), usesGrdAngleMode: true };
+    }
+  }
 
   const result = (() => {
     switch (name) {
@@ -296,7 +326,8 @@ function foldPureConstantCall(
     }
   })();
 
-  return result === undefined ? undefined : decimalNumberExpression(result);
+  const expr = result === undefined ? undefined : decimalNumberExpression(result);
+  return expr === undefined ? undefined : { expr };
 }
 
 function decimalFromExpression(expr: ExpressionAst): DecimalValue | undefined {

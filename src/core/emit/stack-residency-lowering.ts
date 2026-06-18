@@ -263,6 +263,7 @@ function statementRequiresStackRebuild(statement: StatementAst): boolean {
     case "core":
     case "decimal_series":
     case "coord_list_remove":
+    case "segmented_bitplane_update":
       return true;
   }
 }

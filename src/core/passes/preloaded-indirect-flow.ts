@@ -583,6 +583,12 @@ export function runPreloadedIndirectFlow(
       detail: `Selected ${superDarkApplied} FA..FF one-command indirect dispatch(es) after proving the entry cell falls through to the matching 01..06 continuation jump.`,
     });
   }
+  if (reusedExistingConstants > 0) {
+    optimizations.push({
+      name: "constants-dual-use",
+      detail: `Reused ${reusedExistingConstants} setup constant preload${reusedExistingConstants === 1 ? "" : "s"} as stable indirect-flow selector${reusedExistingConstants === 1 ? "" : "s"}.`,
+    });
+  }
   return {
     ops: result,
     applied,

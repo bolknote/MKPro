@@ -788,6 +788,11 @@ function applyAddressCodeOverlay(items: readonly MachineItem[]): { items: Machin
 
       const removedAddress = layout.addressByItemIndex.get(labelsEnd);
       if (removedAddress === undefined || !fixedAddressTargetsSurviveRemoval(items, removedAddress)) continue;
+      const branchTargetAddress = resolvedMachineTarget(address.target, layout.labels);
+      if (
+        branchTargetAddress === removedAddress &&
+        !canOverlayAddressContinuation(targetMayReturn, branch, address)
+      ) continue;
       const overlaid = overlaidMnemonic(items, labelsEnd);
       const provisional = [
         ...items.slice(0, index + 1),

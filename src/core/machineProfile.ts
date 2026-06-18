@@ -79,6 +79,11 @@ export const MK61_PROFILE: MachineProfile = {
       detail: "Negative-zero exponent values such as 1|-00 can act as constants or threshold sentinels when X2-normalization boundaries are controlled.",
     },
     {
+      id: "grd-angle-mode",
+      source: "machine",
+      detail: "Trigonometric identities that depend on the Р-ГРД-Г switch are valid only when the source program explicitly requires ГРД angle mode.",
+    },
+    {
       id: "extra-cells",
       source: "machine",
       detail: "Extra physical cells are tracked separately from official program cells.",
@@ -144,6 +149,11 @@ export const MK61_PROFILE: MachineProfile = {
       id: "negative-zero-degree-threshold",
       status: "probed",
       detail: "With 1|-00 in Y, multiplying by X and then normalizing through В↑ yields a zero/nonzero threshold at |X|=1.",
+    },
+    {
+      id: "grd-angle-trig-identities",
+      status: "documented",
+      detail: "In ГРД angle mode, cos(100) is zero and acos(0) is 100; optimizer use must be guarded by an explicit angle-mode requirement.",
     },
     {
       id: "step-vs-run-delta",

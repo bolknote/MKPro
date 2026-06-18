@@ -520,7 +520,7 @@ program IndexedFloorPackedRow {
     expect(result.report.registers.rows_1).toBe("1");
     expect(result.report.registers.rows_9).toBe("9");
     expect(Number.parseInt(result.report.registers.floor!, 16)).toBeGreaterThanOrEqual(7);
-    expect(stepComments(result).some((comment) => comment.startsWith("indexed recall rows"))).toBe(true);
+    expect(stepComments(result)).toContainEqual(expect.stringContaining("indexed recall rows"));
     expect(runCompiledResultDisplay(result)).toBe("2,-------");
   });
 

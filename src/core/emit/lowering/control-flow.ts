@@ -22,6 +22,8 @@ import {
   compileBitMaskWithQuotientScratch,
   emitCommutativeMaskOpWithScratch,
   emitBitSetCollectionWithScratch,
+  emitSegmentedBitplaneHitUpdateDispatch,
+  emitSegmentedBitplaneHitFromCurrentX,
 } from "./spatial.ts";
 import type {
   BitMembershipCondition,
@@ -504,6 +506,7 @@ export function compileIf(ctx: LoweringCtx,
     if (compileNestedGuardSharedFailure(ctx, statement, line)) return;
     if (compileResidualGuardedUpdate(ctx, statement, line)) return;
     if (compileDirectTerminalIfBranch(ctx, statement, line)) return;
+    if (compileSegmentedBitplaneHitUpdate(ctx, statement, line)) return;
     if (compileMembershipClearReuse(ctx, statement, line)) return;
     if (compileMembershipSetReuse(ctx, statement, line)) return;
     if (compileLocalTerminalElseTail(ctx, statement, line)) return;
@@ -580,6 +583,86 @@ export function compileIf(ctx: LoweringCtx,
     } else {
       ctx.emitLabel(falseLabel);
     }
+}
+
+function compileSegmentedBitplaneHitUpdate(
+    ctx: LoweringCtx,
+    statement: Extract<StatementAst, { kind: "if" }>,
+    line: number,
+  ): boolean {
+    const matched = matchSegmentedBitplaneHitUpdate(ctx, statement);
+    if (matched === undefined) return false;
+
+    const falseLabel = ctx.freshLabel("if_false");
+    const thenLabel = ctx.freshLabel("segmented_bitplane_then");
+    const thenTerminates = ctx.statementsTerminate(matched.tail);
+    const endLabel = statement.elseBody !== undefined && !thenTerminates
+      ? ctx.freshLabel("if_end")
+      : undefined;
+
+    if (!emitSegmentedBitplaneHitUpdateDispatch(
+      ctx,
+      matched.collection,
+      matched.item,
+      matched.update,
+      falseLabel,
+      thenLabel,
+      line,
+    )) {
+      return false;
+    }
+
+    ctx.emitLabel(thenLabel);
+    ctx.compileStatements(matched.tail);
+    if (statement.elseBody !== undefined) {
+      if (endLabel !== undefined) ctx.emitJump(0x51, "БП", endLabel, "if end", line);
+      ctx.emitLabel(falseLabel);
+      ctx.currentXKnownZero = true;
+      ctx.compileStatements(statement.elseBody);
+      if (endLabel !== undefined) ctx.emitLabel(endLabel);
+    } else {
+      ctx.emitLabel(falseLabel);
+    }
+    return true;
+}
+
+function matchSegmentedBitplaneHitUpdate(
+    ctx: LoweringCtx,
+    statement: Extract<StatementAst, { kind: "if" }>,
+  ): {
+    collection: string;
+    item: ExpressionAst;
+    update: Extract<StatementAst, { kind: "segmented_bitplane_update" }>;
+    tail: StatementAst[];
+  } | undefined {
+    if (statement.condition.op !== "!=" || !isZeroExpression(statement.condition.right)) return undefined;
+    const test = statement.condition.left;
+    if (test.kind !== "call" || test.callee.toLowerCase() !== "__seg_bit_has" || test.args.length !== 2) return undefined;
+    const [collection, item] = test.args;
+    if (collection?.kind !== "identifier" || item === undefined) return undefined;
+    const first = statement.thenBody[0];
+    const update = first?.kind === "segmented_bitplane_update"
+      ? first
+      : first?.kind === "call"
+        ? ctx.ast.procs.find((candidate) => candidate.name === first.block)?.body[0] as
+          | Extract<StatementAst, { kind: "segmented_bitplane_update" }>
+          | undefined
+        : undefined;
+    if (update === undefined) return undefined;
+    if (update.kind !== "segmented_bitplane_update") return undefined;
+    if (update.collection !== collection.name || !expressionEquals(update.item, item)) return undefined;
+    const proc = first?.kind === "call"
+      ? ctx.ast.procs.find((candidate) => candidate.name === first.block)
+      : undefined;
+    const procTail = first?.kind === "call"
+      ? (proc?.body.slice(1) ?? [])
+      : undefined;
+    return {
+      collection: collection.name,
+      item,
+      update,
+      tail: procTail === undefined ? statement.thenBody.slice(1) : [...procTail, ...statement.thenBody.slice(1)],
+    };
 }
 
 function branchResidualExpression(ctx: LoweringCtx, condition: ConditionAst): ExpressionAst | undefined {
@@ -2062,7 +2145,8 @@ export function compileCondition(ctx: LoweringCtx,
     if (compileRemainderZeroCondition(ctx, compiledCondition, falseLabel, line)) return;
     if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
       const bitHasLowering = compileBitHasConditionWithBitMaskHelper(ctx, compiledCondition.left, line)
-        ?? compileBitHasConditionWithSpatialHelper(ctx, compiledCondition.left, line);
+        ?? compileBitHasConditionWithSpatialHelper(ctx, compiledCondition.left, line)
+        ?? compileSegmentedBitplaneConditionWithHelper(ctx, compiledCondition.left, line);
       if (bitHasLowering === undefined) {
         if (!(compiledCondition.left.kind === "identifier" && ctx.xHolds(compiledCondition.left.name))) {
           compileExpression(ctx, compiledCondition.left);
@@ -2246,6 +2330,23 @@ export function compileBitHasConditionWithSpatialHelper(ctx: LoweringCtx,
     return {
       name: "spatial-hit-condition-helper",
       detail: `Tested bit_has() through the shared spatial hit helper at line ${line}.`,
+    };
+}
+
+export function compileSegmentedBitplaneConditionWithHelper(ctx: LoweringCtx,
+    expr: ExpressionAst,
+    line: number,
+  ): { name: string; detail: string } | undefined {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "__seg_bit_has" || expr.args.length !== 2) return undefined;
+    const [collection, index] = expr.args;
+    if (collection?.kind !== "identifier" || index === undefined) return undefined;
+    if (!(index.kind === "identifier" && ctx.xHolds(index.name)) && !ctx.xHoldsExpression(index)) {
+      compileExpression(ctx, index);
+    }
+    if (!emitSegmentedBitplaneHitFromCurrentX(ctx, collection.name, line)) return undefined;
+    return {
+      name: "segmented-bitplane-condition-helper",
+      detail: `Tested ${collection.name} through the shared segmented bitplane helper at line ${line}.`,
     };
 }
 

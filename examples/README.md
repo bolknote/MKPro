@@ -10,7 +10,7 @@ Generated with `npm run examples:size`.
 
 - Top-level examples: 30/30 fit in the 105-cell MK-61 window; 30/30 pass the headless load check.
 - Referenced top-level examples: 23/23 are no larger than the original MK-61 listing.
-- Tightest runnable examples: `giants-country.mkpro` (105), `labyrinth777.mkpro` (105).
+- Tightest runnable examples: `labyrinth777.mkpro` (105), `cave-highlevel-baseline.mkpro` (104), `cave-treasure.mkpro` (104), `giants-country.mkpro` (104).
 - Pending optimizer: 1 programs still exceed the MK-61 window; nearest is `pending-optimizer/tic-tac-toe-4x4.mkpro` (134).
 
 ## Measurements
@@ -33,7 +33,7 @@ Generated with `npm run examples:size`.
 | `fox-hunt-mk61.mkpro` | 60 | 92 | -32 | ok: <= reference | main+setup load ok |
 | `functions-demo.mkpro` | 25 | - | - | ok: no reference | load ok |
 | `game-100-pig.mkpro` | 97 | 103 | -6 | ok: <= reference | main+setup load ok |
-| `giants-country.mkpro` | 105 | 999999 | -999894 | ok: <= reference | main+setup load ok |
+| `giants-country.mkpro` | 104 | 999999 | -999895 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 27 | - | - | ok: no reference | load ok |
 | `jack-pot.mkpro` | 96 | 999999 | -999903 | ok: <= reference | main+setup load ok |
 | `labyrinth777.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
@@ -41,7 +41,7 @@ Generated with `npm run examples:size`.
 | `minesweeper-9x7.mkpro` | 79 | 999999 | -999920 | ok: <= reference | main+setup load ok |
 | `minesweeper-9x9.mkpro` | 79 | 97 | -18 | ok: <= reference | main+setup load ok |
 | `raja-yoga.mkpro` | 77 | 98 | -21 | ok: <= reference | main+setup load ok |
-| `rambo-iii.mkpro` | 104 | 999999 | -999895 | ok: <= reference | load ok |
+| `rambo-iii.mkpro` | 103 | 999999 | -999896 | ok: <= reference | load ok |
 | `river-battle.mkpro` | 95 | - | - | ok: no reference | main+setup load ok |
 | `sea-battle.mkpro` | 66 | 102 | -36 | ok: <= reference | main+setup load ok |
 | `teleport.mkpro` | 96 | 105 | -9 | ok: <= reference | main+setup load ok |
