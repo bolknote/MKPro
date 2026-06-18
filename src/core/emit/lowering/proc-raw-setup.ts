@@ -700,14 +700,11 @@ function compilePackedLineFamilyScoreProc(ctx: LoweringCtx, proc: ProcAst): bool
     const match = packedLineFamilyScoreProc(ctx, proc);
     if (match === undefined) return false;
 
-    const helper = ctx.sharedPackedScoreStackHelper(match.line);
-    if (helper === undefined) return false;
-
-    const emitScore = (term: PackedScoreTerm, accumulate: boolean): void => {
+    const helper = ctx.freshLabel("packed_line_family_score_accumulator");
+    const emitScore = (term: PackedScoreTerm): void => {
       compileExpression(ctx, term.lineValue);
       compileExpression(ctx, term.index);
-      ctx.emitJump(0x53, "ПП", helper.label, "packed_score helper", term.line);
-      if (accumulate) ctx.emitOp(0x10, "+", "packed-line score accumulator", term.line);
+      ctx.emitJump(0x53, "ПП", helper, "packed-line score accumulator helper", term.line);
     };
     const markScoreInX = (): void => {
       ctx.currentXVariable = match.score;
@@ -715,8 +712,10 @@ function compilePackedLineFamilyScoreProc(ctx: LoweringCtx, proc: ProcAst): bool
       ctx.currentXKnownZero = false;
     };
 
-    emitScore(match.first, false);
-    emitScore(match.second, true);
+    ctx.emitZero("packed-line score accumulator", match.line);
+    emitScore(match.first);
+    markScoreInX();
+    emitScore(match.second);
     markScoreInX();
 
     const tail = ctx.freshLabel("packed_line_family_score_tail");
@@ -732,13 +731,21 @@ function compilePackedLineFamilyScoreProc(ctx: LoweringCtx, proc: ProcAst): bool
     compileExpression(ctx, match.shared);
     ctx.emitOp(0x10, "+", "packed-line diagonal index", match.diagonalAdd.rawAssign.line);
     compileBlockCall(ctx, match.normalizer, match.diagonalAdd.rawAssign.line);
-    ctx.emitJump(0x53, "ПП", helper.label, "packed_score helper", match.diagonalAdd.scoreAssign.line);
-    ctx.emitOp(0x10, "+", "packed-line score accumulator", match.diagonalAdd.scoreAssign.line);
+    ctx.emitJump(0x53, "ПП", helper, "packed-line score accumulator helper", match.diagonalAdd.scoreAssign.line);
     markScoreInX();
     ctx.emitOp(0x52, "В/О", "packed-line family score return", match.diagonalSub.scoreAssign.line);
+    ctx.emitLabel(helper);
+    ctx.emitOp(0x15, "F 10ˣ", "packed-line score helper pow10", match.line);
+    ctx.emitOp(0x13, "/", "packed-line score helper divide", match.line);
+    ctx.emitOp(0x35, "К {x}", "packed-line score helper frac", match.line);
+    ctx.emitNumberOrPreload("0.41200076");
+    ctx.emitOp(0x11, "-", "packed-line score helper center", match.line);
+    ctx.emitOp(0x22, "F x²", "packed-line score helper square", match.line);
+    ctx.emitOp(0x10, "+", "packed-line score helper accumulate", match.line);
+    ctx.emitOp(0x52, "В/О", "packed-line score helper return", match.line);
     ctx.optimizations.push({
-      name: "packed-line-family-score-tail",
-      detail: `Shared diagonal scoring for ${expressionToIntentText(match.diagonalAdd.rawAssign.expr)} and ${expressionToIntentText(match.diagonalSub.rawAssign.expr)} in ${proc.name}.`,
+      name: "packed-line-family-score-accumulator",
+      detail: `Accumulated four packed_score() terms through one helper while sharing diagonal scoring for ${expressionToIntentText(match.diagonalAdd.rawAssign.expr)} and ${expressionToIntentText(match.diagonalSub.rawAssign.expr)} in ${proc.name}.`,
     });
     return true;
 }
