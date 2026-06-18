@@ -689,12 +689,15 @@ interface XParamIndexedFractionalReportTailProc {
 }
 
 function compileXParamIndexedFractionalReportTailProc(ctx: LoweringCtx, proc: ProcAst): boolean {
-    if (ctx.loweringOptions.xParamYStackStoredEntry === true) return false;
     const match = xParamIndexedFractionalReportTailProc(ctx, proc);
     if (match === undefined) return false;
 
     ctx.emitStore(match.selector, `set ${match.selector} from X parameter`, proc.body[0]?.line);
     ctx.emitOp(0x14, "X↔Y", "stack-carried packed digit index", match.update.line);
+    if (ctx.loweringOptions.xParamYStackStoredEntry === true) {
+      ctx.markCurrentX(match.yName);
+      ctx.emitLabel(xParamYStackStoredEntryLabel(proc.name));
+    }
     ctx.emitOp(0x15, "F 10ˣ", "stack-carried packed digit pow10", match.update.line);
     compileExpression(ctx, match.factor);
     ctx.emitOp(0x12, "×", "stack-carried packed digit delta", match.update.line);
@@ -720,8 +723,10 @@ function compileXParamIndexedFractionalReportTailProc(ctx: LoweringCtx, proc: Pr
 
     ctx.currentYVariable = undefined;
     ctx.optimizations.push({
-      name: "x-param-proc-entry",
-      detail: `Compiled rule ${proc.name} to copy ${ctx.xParamProcs.get(proc.name)?.param ?? "parameter"} directly from X.`,
+      name: ctx.loweringOptions.xParamYStackStoredEntry === true ? "x-param-y-stack-multi-entry" : "x-param-proc-entry",
+      detail: ctx.loweringOptions.xParamYStackStoredEntry === true
+        ? `Compiled rule ${proc.name} with a secondary entry after its X-parameter store and Y-stack swap.`
+        : `Compiled rule ${proc.name} to copy ${ctx.xParamProcs.get(proc.name)?.param ?? "parameter"} directly from X.`,
     });
     ctx.optimizations.push({
       name: "indexed-packed-y-stack-pow10-delta",

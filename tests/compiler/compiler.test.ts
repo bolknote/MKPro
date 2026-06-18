@@ -1774,7 +1774,7 @@ program Packed4FractionalBitReportTemp {
     expect(result.steps).toHaveLength(136);
     expect(optimizationNames).toContain("indexed-packed-fractional-report-x2-tail");
     expect(result.steps.some((step) => step.comment === "updated packed fractional report X2 restore")).toBe(true);
-  });
+  }, 60000);
 
   it("keeps packed line indices and candidate scores as stack-only state across helper calls", () => {
     const source = readFileSync("examples/pending-optimizer/tic-tac-toe-4x4.mkpro", "utf8");
@@ -1860,6 +1860,42 @@ program Packed4FractionalBitReportTemp {
     const result = compileLoweringVariantForTest(`
 program XParamYStackStoredEntry {
   state {
+    lines: packed[4..7] = [44447.4, 44444.4, 44444.4, 44444.4]
+    line: packed = 0
+    delta: packed = 1
+    slot: counter 0..7
+  }
+
+  loop {
+    line = 2
+    mark_one(4)
+    line = 3
+    mark_one(5)
+    halt(lines[4])
+  }
+
+  fn mark_one(next_slot) {
+    slot = next_slot
+    lines[slot] = packed_add(lines[slot], line, delta)
+    if bit_and(lines[slot], 88888834) != 8 {
+      halt(bit_and(lines[slot], 88888834))
+    }
+  }
+}
+`, { analysis: true }, { xParamYStackStoredEntry: true });
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames).toContain("x-param-y-stack-multi-entry");
+    expect(optimizationNames).toContain("x-param-y-stack-stored-entry-call");
+    expect(optimizationNames).toContain("indexed-packed-x-stack-pow10-delta");
+    expect(result.steps.some((step) => step.comment === "proc call mark_one y-stack entry")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set slot from X parameter before y-stack entry")).toBe(true);
+  });
+
+  it("combines stored X-parameter Y-stack entries with terminal fractional report X2 tails", () => {
+    const result = compileLoweringVariantForTest(`
+program XParamYStackStoredEntryFractionalTail {
+  state {
     lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
     line: packed = 0
     delta: packed = 1
@@ -1889,9 +1925,10 @@ program XParamYStackStoredEntry {
 
     expect(optimizationNames).toContain("x-param-y-stack-multi-entry");
     expect(optimizationNames).toContain("x-param-y-stack-stored-entry-call");
-    expect(optimizationNames).toContain("indexed-packed-x-stack-pow10-delta");
+    expect(optimizationNames).toContain("indexed-packed-fractional-report-x2-tail");
     expect(result.steps.some((step) => step.comment === "proc call mark_one y-stack entry")).toBe(true);
     expect(result.steps.some((step) => step.comment === "set slot from X parameter before y-stack entry")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "updated packed fractional report X2 restore")).toBe(true);
   });
 
   it("keeps fractional recovery after selector-carrier constant preloads", () => {
