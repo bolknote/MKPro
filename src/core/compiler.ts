@@ -889,8 +889,32 @@ function fractionalSelectorPreloadValue(
 ): string | undefined {
   if (target <= 0) return undefined;
   if (!fractionalSelectorCandidateValue(value)) return undefined;
+  const natural = naturalFractionalSelectorPreloadValue(value);
+  if (natural?.target === target) return natural.value;
   const fraction = value.slice(1);
   return `${target}${fraction}`;
+}
+
+function naturalFractionalSelectorPreloadValue(
+  value: string,
+): { value: string; target: number } | undefined {
+  if (!fractionalSelectorCandidateValue(value)) return undefined;
+  const fraction = value.slice(2);
+  const firstSignificant = fraction.search(/[1-9]/u);
+  if (firstSignificant < 0) return undefined;
+  const significant = fraction.slice(firstSignificant);
+  if (/[1-9]/u.test(significant.slice(8))) return undefined;
+  const mantissa = significant.padEnd(8, "0").slice(0, 8);
+  const target = Number.parseInt(mantissa.slice(-2), 10);
+  if (target <= 0) return undefined;
+  return {
+    value: `${mantissa[0]}.${mantissa.slice(1)}E-${firstSignificant + 1}`,
+    target,
+  };
+}
+
+function fractionalSelectorNeedsRecovery(value: string, selectorValue: string): boolean {
+  return naturalFractionalSelectorPreloadValue(value)?.value !== selectorValue;
 }
 
 function fractionalSelectorCandidateValue(value: string): boolean {
@@ -11407,13 +11431,24 @@ export class EmitContext {
         : fractionalSelectorPreloadValue(normalized, selector.target);
       const comment = selectorValue === undefined
         ? `preload const ${normalized}`
-        : `preload const ${selectorValue}; fractional selector source ${normalized}`;
+        : fractionalSelectorNeedsRecovery(normalized, selectorValue)
+          ? `preload const ${selectorValue}; fractional selector source ${normalized}`
+          : `preload const ${selectorValue}; natural fractional selector source ${normalized}`;
       this.emitOp(0x60 + registerIndex(register), `П->X ${register}`, comment);
-      if (selector !== undefined && selectorValue !== undefined) {
+      if (
+        selector !== undefined &&
+        selectorValue !== undefined &&
+        fractionalSelectorNeedsRecovery(normalized, selectorValue)
+      ) {
         this.emitOp(0x35, "К {x}", `fractional selector const ${normalized}`);
         this.optimizations.push({
           name: "fractional-constant-selector-use",
           detail: `Recovered fractional constant ${normalized} from R${register} carrying target ${selector.target} as ${selectorValue}.`,
+        });
+      } else if (selector !== undefined && selectorValue !== undefined) {
+        this.optimizations.push({
+          name: "natural-fractional-constant-selector-use",
+          detail: `Used normalized fractional constant ${selectorValue} from R${register} as ${normalized} while preserving its indirect target ${selector.target}.`,
         });
       }
       this.optimizations.push({

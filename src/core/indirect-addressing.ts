@@ -159,11 +159,23 @@ function transformSelectorValue(
   }
 
   const normalized = value.trim().replace(/^0x/iu, "").replace(",", ".").toLowerCase();
+  const exponentMantissa = stableExponentMantissaSelector(normalized, mutation);
+  if (exponentMantissa !== undefined) return exponentMantissa;
   if (!/^-?[0-9a-f]+(?:\.\d+)?$/iu.test(normalized)) return undefined;
   if (mutation === "stable" && !normalized.startsWith("-") && /[a-f]/iu.test(normalized)) return normalized;
   const decimal = Number(normalized);
   if (!Number.isFinite(decimal)) return undefined;
   return transformDecimalSelectorValue(decimal, mutation);
+}
+
+function stableExponentMantissaSelector(
+  normalized: string,
+  mutation: IndirectSelectorMutation,
+): string | undefined {
+  if (mutation !== "stable") return undefined;
+  const match = /^([1-9])(?:\.([0-9]*))?e-[0-9]{1,2}$/iu.exec(normalized);
+  if (match === null) return undefined;
+  return `${match[1]}${match[2] ?? ""}`.padEnd(8, "0").slice(0, 8);
 }
 
 function isPositiveFractional(value: number | string): boolean {

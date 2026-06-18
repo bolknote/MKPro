@@ -1949,6 +1949,26 @@ program XParamYStackStoredEntryFractionalTail {
     expect(result.report.optimizations.some((item) => item.name === "fractional-constant-selector-use")).toBe(true);
   });
 
+  it("does not recover natural normalized fractional selector preloads", () => {
+    const result = compileLoweringVariantForTest(`
+program NaturalFractionalSelector {
+  loop {
+    halt(0.22600029)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      fractionalConstantSelectors: [{ value: "0.22600029", target: 29 }],
+    });
+    const recallIndex = result.steps.findIndex((step) =>
+      step.comment?.includes("natural fractional selector source 0.22600029")
+    );
+
+    expect(result.report.preloads.some((item) => item.value === "2.2600029E-1")).toBe(true);
+    expect(recallIndex).toBeGreaterThanOrEqual(0);
+    expect(result.steps[recallIndex + 1]?.comment).not.toBe("fractional selector const 0.22600029");
+    expect(result.report.optimizations.some((item) => item.name === "natural-fractional-constant-selector-use")).toBe(true);
+  });
+
   it("places source-shaped packed-grid line banks at R4 through R7", () => {
     const result = compileOk(`
 program PackedGridLineBankRegisters {

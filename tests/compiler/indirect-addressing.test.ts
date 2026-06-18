@@ -36,6 +36,19 @@ describe("indirect address model", () => {
     expect(evaluateIndirectAddress("7", -123, "memory")?.memoryTarget).toBe("d");
   });
 
+  it("uses normalized exponent mantissa tails for stable fractional selectors", () => {
+    const row = evaluateIndirectAddress("c", "2.2600029E-1", "flow");
+    const score = evaluateIndirectAddress("d", "4.1200076E-1", "flow");
+
+    expect(row?.flowTarget).toBe(29);
+    expect(row?.actualFlowTarget).toBe(29);
+    expect(row?.resultValue).toBe("22600029");
+    expect(score?.flowTarget).toBe(76);
+    expect(score?.actualFlowTarget).toBe(76);
+    expect(score?.resultValue).toBe("41200076");
+    expect(evaluateIndirectAddress("d", "4.1200076E-1", "memory")?.memoryTarget).toBe("0");
+  });
+
   it("uses the same two-digit memory target table for hex-like values", () => {
     expect(evaluateIndirectAddress("7", "0a", "memory")?.memoryTarget).toBe("a");
     expect(evaluateIndirectAddress("7", "0f", "memory")?.memoryTarget).toBe("0");
