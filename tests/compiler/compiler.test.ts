@@ -1787,7 +1787,8 @@ program Packed4FractionalBitReportTemp {
     expect(optimizationNames).toContain("indexed-packed-y-stack-pow10-delta");
     expect(optimizationNames).toContain("post-layout-empty-stack-tail-call");
     expect(optimizationNames).toContain("packed-line-family-score-accumulator");
-    expect(result.steps).toHaveLength(138);
+    expect(optimizationNames).toContain("zero-accumulator-proc-entry");
+    expect(result.steps).toHaveLength(137);
     expect(result.report.rejectedCandidates.some((item) =>
       item.variant === "packed-line-family-layout" &&
       item.site === "packed-line-family lines"

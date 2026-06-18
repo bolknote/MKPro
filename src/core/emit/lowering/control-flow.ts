@@ -16,6 +16,7 @@ import {
   compileNegativeZeroThresholdFlow,
   compileBlockCall,
   emitErrorStopOpcode,
+  statementCanEnterPackedLineFamilyScoreZeroEntry,
 } from "./proc-raw-setup.ts";
 import {
   compileBitMaskWithQuotientScratch,
@@ -522,18 +523,23 @@ export function compileIf(ctx: LoweringCtx,
     const falseBranchKnownZero = selected.elseBody === undefined
       ? false
       : inequalityFalseBranchLeavesZero(ctx, selected.condition);
+    const trueFallthroughKnownZero = equalityTrueFallthroughLeavesZero(selected.condition) ||
+      (
+        equalityTrueFallthroughCanFeedZeroAccumulator(ctx, selected.condition) &&
+        statementCanEnterPackedLineFamilyScoreZeroEntry(ctx, selected.thenBody[0])
+      );
     compileCondition(ctx, selected.condition, falseLabel, line);
     if (fallthroughIdentifier !== undefined) {
       ctx.currentXVariable = fallthroughIdentifier;
       ctx.currentXAliases = new Set([fallthroughIdentifier]);
-      ctx.currentXKnownZero = equalityTrueFallthroughLeavesZero(selected.condition);
+      ctx.currentXKnownZero = trueFallthroughKnownZero;
       if (directFallthroughIdentifier !== undefined) {
         ctx.optimizations.push({
           name: "x-preserving-fallthrough-branch",
           detail: `Preserved ${directFallthroughIdentifier} in X across the true branch of the zero-test at line ${line}.`,
         });
       }
-    } else if (equalityTrueFallthroughLeavesZero(selected.condition)) {
+    } else if (trueFallthroughKnownZero) {
       ctx.currentXKnownZero = true;
       ctx.optimizations.push({
         name: "equality-zero-fallthrough",
@@ -767,6 +773,24 @@ function equalityTrueFallthroughLeavesZero(condition: ConditionAst): boolean {
 
 function simpleEqualityOperand(expr: ExpressionAst): boolean {
     return expr.kind === "identifier" || expr.kind === "number";
+}
+
+function equalityTrueFallthroughCanFeedZeroAccumulator(ctx: LoweringCtx, condition: ConditionAst): boolean {
+    const compiled = selectCheaperEquivalentCondition(
+      condition,
+      ctx.ast,
+      new Set(Object.keys(ctx.allocation.constants)),
+    ).condition;
+    if (matchSmallSetCondition(compiled) !== undefined) return false;
+    if (matchNearAnyHelperCondition(compiled) !== undefined) return false;
+
+    const normalized = normalizeZeroComparison(compiled);
+    if (normalized?.op !== "==" || !canTestAgainstZeroDirectly(normalized.op)) return false;
+    if (normalized.expr.kind === "call") {
+      const callee = normalized.expr.callee.toLowerCase();
+      if (callee === "coord_list_has" || callee === "__mkpro_negative_zero_ge") return false;
+    }
+    return expressionIsDeterministic(normalized.expr);
 }
 
 export function compileResidualEqualityElseIf(ctx: LoweringCtx, 

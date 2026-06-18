@@ -712,7 +712,9 @@ function compilePackedLineFamilyScoreProc(ctx: LoweringCtx, proc: ProcAst): bool
       ctx.currentXKnownZero = false;
     };
 
+    ctx.currentXKnownZero = false;
     ctx.emitZero("packed-line score accumulator", match.line);
+    ctx.emitLabel(packedLineFamilyScoreZeroEntryLabel(proc.name));
     emitScore(match.first);
     markScoreInX();
     emitScore(match.second);
@@ -748,6 +750,19 @@ function compilePackedLineFamilyScoreProc(ctx: LoweringCtx, proc: ProcAst): bool
       detail: `Accumulated four packed_score() terms through one helper while sharing diagonal scoring for ${expressionToIntentText(match.diagonalAdd.rawAssign.expr)} and ${expressionToIntentText(match.diagonalSub.rawAssign.expr)} in ${proc.name}.`,
     });
     return true;
+}
+
+function packedLineFamilyScoreZeroEntryLabel(procName: string): string {
+    return `\0packed_line_family_score_zero_entry_${procName}`;
+}
+
+export function statementCanEnterPackedLineFamilyScoreZeroEntry(
+    ctx: LoweringCtx,
+    statement: StatementAst | undefined,
+  ): boolean {
+    if (statement?.kind !== "call") return false;
+    const proc = ctx.ast.procs.find((candidate) => candidate.name === statement.block);
+    return proc !== undefined && packedLineFamilyScoreProc(ctx, proc) !== undefined;
 }
 
 function packedLineFamilyScoreProc(ctx: LoweringCtx, proc: ProcAst): PackedLineFamilyScoreProc | undefined {
@@ -1932,6 +1947,28 @@ export function compileBlockCall(ctx: LoweringCtx, blockName: string, line: numb
         ctx.optimizations.push({
           name: "terminal-rule-tail-call",
           detail: `Compiled terminal rule ${proc.name} as a direct jump instead of a subroutine call.`,
+        });
+        return;
+      }
+      if (ctx.currentXKnownZero && packedLineFamilyScoreProc(ctx, proc) !== undefined) {
+        const bankSelectors = ctx.snapshotBankSelectorCache();
+        ctx.emitJump(
+          0x53,
+          "ПП",
+          packedLineFamilyScoreZeroEntryLabel(proc.name),
+          `proc call ${proc.name} zero-accumulator entry`,
+          line,
+        );
+        ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors);
+        const returnX = ctx.procReturnXVariable(proc);
+        if (returnX !== undefined) {
+          ctx.currentXVariable = returnX;
+          ctx.currentXAliases = new Set([returnX]);
+          ctx.currentXKnownZero = false;
+        }
+        ctx.optimizations.push({
+          name: "zero-accumulator-proc-entry",
+          detail: `Entered ${proc.name} after its zero literal because X already held a proved zero at line ${line}.`,
         });
         return;
       }
