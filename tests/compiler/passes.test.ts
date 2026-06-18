@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { lowerIrToMachine } from "../../src/core/ir.ts";
 import { arithmeticIfPass } from "../../src/core/passes/arithmetic-if.ts";
 import { branchTargetXReuse } from "../../src/core/passes/branch-target-x-reuse.ts";
+import { conditionalBranchTrampoline } from "../../src/core/passes/conditional-branch-trampoline.ts";
 import { deadCodeAfterHalt } from "../../src/core/passes/dead-code-after-halt.ts";
 import { deadProcElimination } from "../../src/core/passes/dead-proc-elimination.ts";
 import { deadStoreElimination } from "../../src/core/passes/dead-store-elimination.ts";
@@ -26047,6 +26048,68 @@ describe("ir passes on synthetic programs", () => {
     const result = jumpToNextThreading.run(program, ctx);
     expect(result.applied).toBe(1);
     expect(result.ops.find((op) => op.kind === "jump")).toBeUndefined();
+  });
+
+  it("conditional-branch-trampoline retargets a branch through a later identical conditional", () => {
+    const program: IrOp[] = [
+      recall("1"),
+      cjump("done"),
+      plain(0x02, "2"),
+      cjump("done"),
+      plain(0x03, "3"),
+      label("done"),
+      halt(),
+    ];
+    const result = conditionalBranchTrampoline.run(program, {
+      options: { ...noopOptions, conditionalBranchTrampoline: true },
+    });
+
+    expect(result.applied).toBe(1);
+    expect(result.optimizations[0]?.name).toBe("conditional-branch-trampoline");
+    expect(result.ops).toContainEqual({
+      kind: "label",
+      name: "__conditional_branch_trampoline_0",
+      hidden: true,
+    });
+    expect(result.ops[1]).toMatchObject({
+      kind: "cjump",
+      target: "__conditional_branch_trampoline_0",
+      condition: "==0",
+    });
+  });
+
+  it("conditional-branch-trampoline is disabled unless the lowering candidate enables it", () => {
+    const program: IrOp[] = [
+      cjump("done"),
+      plain(0x02, "2"),
+      cjump("done"),
+      label("done"),
+      halt(),
+    ];
+    const result = conditionalBranchTrampoline.run(program, ctx);
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
+  });
+
+  it("conditional-branch-trampoline keeps barrier-marked branches unchanged", () => {
+    const blocked: IrOp = {
+      ...cjump("done"),
+      meta: { mnemonic: "F x=0", raw: true },
+    };
+    const program: IrOp[] = [
+      blocked,
+      plain(0x02, "2"),
+      cjump("done"),
+      label("done"),
+      halt(),
+    ];
+    const result = conditionalBranchTrampoline.run(program, {
+      options: { ...noopOptions, conditionalBranchTrampoline: true },
+    });
+
+    expect(result.applied).toBe(0);
+    expect(result.ops).toEqual(program);
   });
 
   it("tail-call-lowering specializes procedures called only with one jump continuation", () => {

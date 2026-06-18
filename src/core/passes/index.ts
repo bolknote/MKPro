@@ -9,6 +9,7 @@ import type {
 } from "../types.ts";
 import { arithmeticIfPass } from "./arithmetic-if.ts";
 import { branchTargetXReuse } from "./branch-target-x-reuse.ts";
+import { conditionalBranchTrampoline } from "./conditional-branch-trampoline.ts";
 import { constantFolding } from "./constant-folding.ts";
 import { cseDisplayBlock } from "./cse-display-block.ts";
 import { deadCodeAfterHalt } from "./dead-code-after-halt.ts";
@@ -47,6 +48,7 @@ const PASS_PIPELINE: ReadonlyArray<IrPass> = [
   redundantPrologueElimination,
   tailCallLowering,
   tailBranchInversion,
+  conditionalBranchTrampoline,
   sharedCallTail,
   returnSuffixGadget,
   sharedTerminalTail,

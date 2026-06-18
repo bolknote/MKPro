@@ -396,6 +396,11 @@ interface LoweringOptions {
   // Invert branches whose then-path collapsed to a tail jump. Speculative
   // variant because the local saving can perturb later layout-sensitive passes.
   tailBranchInversion?: boolean;
+  // Retarget a conditional branch through a later identical conditional with
+  // the same final destination. This does not save cells by itself, but it can
+  // create legal middle-entry branch targets for fractional/preloaded selector
+  // packing, so it is tried only as a whole-program candidate.
+  conditionalBranchTrampoline?: boolean;
   // Share a repeated random-coordinate expression through one call/return
   // helper even when the static cost model only predicts a marginal (1-2 cell)
   // saving. The default threshold keeps marginal helpers inline so register
@@ -1092,6 +1097,24 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     "sizeRescue",
   );
   add(
+    { conditionalBranchTrampoline: true },
+    "conditional-branch-trampoline-layout",
+    "Retargeted repeated condition branches through later identical conditionals to expose cheaper middle-entry layout targets",
+    "sizeRescue",
+  );
+  add(
+    { dualUseConstantIndirectFlow: true, conditionalBranchTrampoline: true },
+    "dual-use-constant-conditional-trampoline-layout",
+    "Combined dual-use constant indirect-flow selectors with conditional branch trampolines after full layout",
+    "sizeRescue",
+  );
+  add(
+    { dualUseConstantIndirectFlow: true, tailBranchInversion: true, conditionalBranchTrampoline: true },
+    "dual-use-constant-tail-conditional-trampoline-layout",
+    "Combined dual-use constant indirect-flow selectors, tail-branch inversion, and conditional branch trampolines after full layout",
+    "sizeRescue",
+  );
+  add(
     { indirectUnderflowDecrement: true },
     "indirect-underflow-decrement",
     "Used R0..R3 indirect pre-decrement for terminal underflow guards when full-program layout wins",
@@ -1143,6 +1166,12 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     { tailBranchInversion: true },
     "late-layout-tail-branch-inversion",
     "Selected tail-branch inversion after full layout",
+  );
+  add(
+    { tailBranchInversion: true, conditionalBranchTrampoline: true },
+    "late-layout-tail-branch-conditional-trampoline",
+    "Selected tail-branch inversion plus conditional branch trampolines after full layout",
+    "sizeRescue",
   );
   add(
     { hoistSharedHelpers: true, canonicalizeIfChains: true, tailBranchInversion: true },
@@ -1412,6 +1441,8 @@ function enumerateExpansionCandidateSpecs(ctx: CandidateEnumerationContext): Can
     { options: { sharedBitMaskHelperCalls: true }, name: "shared-bit-mask-helper", detail: "shared bit_mask helper calls" },
     { options: { dualUseConstantIndirectFlow: true }, name: "dual-use-constant-indirect-flow", detail: "dual-use constant indirect-flow selectors" },
     { options: { dualUseConstantIndirectFlow: true, tailBranchInversion: true }, name: "dual-use-constant-tail-branch", detail: "dual-use constant indirect-flow selectors with tail-branch inversion" },
+    { options: { conditionalBranchTrampoline: true }, name: "conditional-branch-trampoline", detail: "conditional branch trampolines" },
+    { options: { dualUseConstantIndirectFlow: true, conditionalBranchTrampoline: true }, name: "dual-use-constant-conditional-trampoline", detail: "dual-use constant indirect-flow selectors with conditional branch trampolines" },
     { options: { xParamYStackStoredEntry: true }, name: "x-param-y-stack-stored-entry", detail: "secondary X-parameter/Y-stack procedure entries" },
   ];
 
@@ -1488,8 +1519,12 @@ function fractionalConstantSelectorCandidates(
     {},
     { dualUseConstantIndirectFlow: true },
     { dualUseConstantIndirectFlow: true, tailBranchInversion: true },
+    { conditionalBranchTrampoline: true },
+    { dualUseConstantIndirectFlow: true, conditionalBranchTrampoline: true },
+    { dualUseConstantIndirectFlow: true, tailBranchInversion: true, conditionalBranchTrampoline: true },
     { procLayoutStrategy: "reverse" },
     { dualUseConstantIndirectFlow: true, tailBranchInversion: true, procLayoutStrategy: "reverse" },
+    { dualUseConstantIndirectFlow: true, tailBranchInversion: true, conditionalBranchTrampoline: true, procLayoutStrategy: "reverse" },
   ];
   const tried = new Set<string>();
   for (const base of bases) {
@@ -2805,9 +2840,14 @@ function compileMKProOnce(
     )
     : undefined;
   const preloadedConstantRegisters = constantPreloadRegisters(allocation, loweringOptions);
-  const passOptions = loweringOptions.tailBranchInversion === true
-    ? { ...opts, tailBranchInversion: true }
-    : opts;
+  const passOptions =
+    loweringOptions.tailBranchInversion === true || loweringOptions.conditionalBranchTrampoline === true
+      ? {
+        ...opts,
+        ...(loweringOptions.tailBranchInversion === true ? { tailBranchInversion: true } : {}),
+        ...(loweringOptions.conditionalBranchTrampoline === true ? { conditionalBranchTrampoline: true } : {}),
+      }
+      : opts;
   const passOptionsWithPreloads = {
     ...passOptions,
     preloadedConstantRegisters,
@@ -6439,6 +6479,7 @@ function appendOptimizationCandidateReports(
     ["stable-indirect-flow", "stable-register indirect branch/call selected by IR data-flow proof", 1],
     ["preloaded-indirect-flow", "compiler-owned address preload selected for one-cell indirect branch/call", 1],
     ["preloaded-super-dark-flow", "compiler-owned FA..FF preloaded one-command dispatch selected after layout proof", 1],
+    ["conditional-branch-trampoline", "conditional branches retargeted through equivalent later conditionals for middle-entry layout", 0],
     ["indirect-memory-table", "stable selector reused for indirect memory access", 0],
     ["indexed-packed-row-table", "indexed packed row display selected direct indirect-memory access", 0],
     ["r0-fractional-sentinel", "fractional R0 selector side effect reused after liveness proof", 0],

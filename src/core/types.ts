@@ -43,6 +43,11 @@ export interface CompileOptions {
   // already collapsed to a tail jump. Tried as a lowering variant because it
   // can perturb later layout-sensitive passes.
   tailBranchInversion?: boolean;
+  // Speculative IR pass: retarget a conditional branch through a later
+  // identical conditional with the same destination. This preserves behavior
+  // because the later conditional sees the same X value on the taken path, but
+  // it can expose a cheaper middle-entry address for selector/layout packing.
+  conditionalBranchTrampoline?: boolean;
   // Relax the runtime-indirect-call-flow frequency guard to its true break-even
   // (one freed cell per rewritten call vs the one-time literal+store selector
   // setup) instead of the conservative `+2` margin. The default margin avoids
