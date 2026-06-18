@@ -1538,8 +1538,8 @@ function fractionalConstantSelectorCandidatesForBase(
 }
 
 function discoverFractionalConstantSelectorPlans(result: CompileResult): FractionalConstantSelectorPlan[] {
-  const targetCounts = directFlowTargetCounts(result.steps);
-  if (targetCounts.size === 0) return [];
+  const targetStats = directFlowTargetStats(result.steps);
+  if (targetStats.size === 0) return [];
   const plans: Array<FractionalConstantSelectorPlan & { benefit: number }> = [];
   for (const preload of result.report.preloads) {
     const value = normalizeConstantLiteral(preload.value);
@@ -1547,11 +1547,14 @@ function discoverFractionalConstantSelectorPlans(result: CompileResult): Fractio
     const register = registerFromText(preload.register);
     const recallCount = fractionalConstantRecallCount(result.steps, register, value);
     if (recallCount === 0) continue;
-    for (const [target, directCount] of targetCounts.entries()) {
-      const benefit = directCount - recallCount;
-      if (benefit <= 0) continue;
+    for (const [target, targetStat] of targetStats.entries()) {
       const selectorValue = fractionalSelectorPreloadValue(value, target);
       if (selectorValue === undefined) continue;
+      const needsRecovery = fractionalSelectorNeedsRecovery(value, selectorValue);
+      const directCount = needsRecovery ? targetStat.count : targetStat.stableWithoutRetargetCount;
+      const recoveryCost = needsRecovery ? recallCount : 0;
+      const benefit = directCount - recoveryCost;
+      if (benefit <= 0) continue;
       if (evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget !== target) continue;
       plans.push({ value, target, benefit });
     }
@@ -1563,16 +1566,26 @@ function discoverFractionalConstantSelectorPlans(result: CompileResult): Fractio
   ).map(({ value, target }) => ({ value, target }));
 }
 
-function directFlowTargetCounts(steps: readonly ResolvedStep[]): Map<number, number> {
-  const counts = new Map<number, number>();
+interface DirectFlowTargetStats {
+  count: number;
+  stableWithoutRetargetCount: number;
+}
+
+function directFlowTargetStats(steps: readonly ResolvedStep[]): Map<number, DirectFlowTargetStats> {
+  const stats = new Map<number, DirectFlowTargetStats>();
   for (let index = 0; index < steps.length - 1; index += 1) {
     if (!getOpcode(steps[index]!.opcode).takesAddress) continue;
     const target = formalAddressInfo(steps[index + 1]!.opcode).actual;
     if (target < 0 || target > 104) continue;
-    counts.set(target, (counts.get(target) ?? 0) + 1);
+    const current = stats.get(target) ?? { count: 0, stableWithoutRetargetCount: 0 };
+    const addressCell = steps[index + 1]!.address;
+    stats.set(target, {
+      count: current.count + 1,
+      stableWithoutRetargetCount: current.stableWithoutRetargetCount + (addressCell > target ? 1 : 0),
+    });
     index += 1;
   }
-  return counts;
+  return stats;
 }
 
 function directFlowTargetRank(steps: readonly ResolvedStep[], target: number): number {
