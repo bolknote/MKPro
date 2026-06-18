@@ -472,6 +472,10 @@ interface LoweringOptions {
   // selector starts one past the bank and each indirect store both writes the
   // updated packed line and advances to the next lower bank cell.
   packedLineFamilyMutatingSelectorUpdateCheckTail?: boolean;
+  // Same descending packed-line update/check form, but the selector register is
+  // borrowed from a proved-dead R0..R3 owner at the marker call sites instead of
+  // permanently allocating the source selector there.
+  packedLineFamilyBorrowedMutatingSelectorUpdateCheckTail?: boolean;
   // Exact fixed-width counter set for the packed-stripe candidate. Used by the
   // top-level variant search to try every compatible subset independently.
   packCounterStripeNames?: readonly string[];
@@ -1182,6 +1186,12 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     { packedLineFamilyMutatingSelectorUpdateCheckTail: true },
     "packed-line-family-mutating-selector-update-check-tail",
     "Tried a descending R0..R3 mutating-selector packed-line update/check tail for source-shaped packed line families",
+    "sizeRescue",
+  );
+  add(
+    { packedLineFamilyBorrowedMutatingSelectorUpdateCheckTail: true },
+    "packed-line-family-borrowed-mutating-selector-update-check-tail",
+    "Tried borrowing a dead R0..R3 register for descending packed-line update/check tails",
     "sizeRescue",
   );
   add(

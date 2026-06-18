@@ -625,11 +625,15 @@ export function compileProcedures(ctx: LoweringCtx): void {
     const order = procEmissionOrder(ctx);
     const packedLineFamilyConsumedUpdateProcs = (
       ctx.loweringOptions.packedLineFamilyUpdateCheckTail === true ||
-      ctx.loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true
+      ctx.loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true ||
+      ctx.loweringOptions.packedLineFamilyBorrowedMutatingSelectorUpdateCheckTail === true
     )
       ? new Set(
         order
           .map((proc) => {
+            if (ctx.loweringOptions.packedLineFamilyBorrowedMutatingSelectorUpdateCheckTail === true) {
+              return packedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc(ctx, proc)?.match.updateProc;
+            }
             if (ctx.loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true) {
               return packedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx, proc)?.updateProc;
             }
@@ -674,6 +678,11 @@ export function compileProcedures(ctx: LoweringCtx): void {
             name: "show-read-stack-stop-risk-lowering",
             detail: `Reused displayed ${xParamStackStopRisk.param} as the parked Y value for ${proc.name}.`,
           });
+        } else if (
+          ctx.loweringOptions.packedLineFamilyBorrowedMutatingSelectorUpdateCheckTail === true &&
+          compilePackedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc(ctx, proc)
+        ) {
+          emittedExplicitReturn = true;
         } else if (
           ctx.loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true &&
           compilePackedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx, proc)
@@ -741,6 +750,77 @@ interface PackedLineFamilyUpdateCheckMarkerProc {
 
 interface PackedLineFamilyUpdateCheckMatchOptions {
   readonly allowMutatingSelector?: boolean;
+}
+
+interface PackedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc {
+  readonly match: PackedLineFamilyUpdateCheckMarkerProc;
+  readonly selectorRegister: RegisterName;
+  readonly borrowedOwner?: string;
+}
+
+function compilePackedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc(ctx: LoweringCtx, proc: ProcAst): boolean {
+    const borrowed = packedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc(ctx, proc);
+    if (borrowed === undefined) return false;
+    const { match } = borrowed;
+
+    const firstSlot = match.steps[0]?.slot;
+    if (firstSlot === undefined) return false;
+    ctx.emitStore(match.deltaName, `set ${match.deltaName} from X parameter`, match.first.line);
+    ctx.emitNumberOrPreload(String(firstSlot + 1));
+    emitBorrowedSelectorStore(ctx, borrowed, `packed-line borrowed mutating selector start ${firstSlot + 1}`, match.first.line);
+
+    const tailLabel = ctx.freshLabel("packed_line_family_borrowed_mutating_update_check_tail");
+    for (let index = 0; index < match.steps.length; index += 1) {
+      const step = match.steps[index]!;
+      compilePackedLineFamilyMutatingSelectorUpdateCheckStep(ctx, match, step);
+      if (index === match.steps.length - 1) {
+        ctx.emitLabel(tailLabel);
+      } else {
+        ctx.emitJump(0x53, "ПП", tailLabel, "packed-line borrowed mutating shared update/check tail", step.sourceLine);
+        ctx.currentYVariable = undefined;
+      }
+    }
+
+    emitPackedLineFamilyMutatingSelectorUpdateCheckTail(ctx, {
+      ...match,
+      selectorRegister: borrowed.selectorRegister,
+    });
+    ctx.optimizations.push({
+      name: "packed-line-family-borrowed-mutating-selector-update-check-tail",
+      detail: `Borrowed R${borrowed.selectorRegister}${borrowed.borrowedOwner === undefined ? "" : ` (${borrowed.borrowedOwner})`} as a descending mutating selector for ${proc.name} slots ${match.steps.map((step) => step.slot).join(",")}.`,
+    });
+    return true;
+}
+
+function packedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc(
+  ctx: LoweringCtx,
+  proc: ProcAst,
+): PackedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc | undefined {
+    const match = packedLineFamilyUpdateCheckMarkerProc(ctx, proc);
+    if (match === undefined) return undefined;
+    if (!packedLineFamilyUpdateCheckStepsDescendByOne(match.steps)) return undefined;
+    if (!match.steps.every((step) => expressionPreservesPreviousXAsYForPackedLine(step.lineExpr))) return undefined;
+    if (!match.steps.every((step) => step.normalizer === undefined || xParamProcPreservesCallerY(ctx, step.normalizer))) {
+      return undefined;
+    }
+    const borrowed = borrowedPredecrementSelectorRegister(ctx, proc, match);
+    if (borrowed === undefined) return undefined;
+    return { match, ...borrowed };
+}
+
+function emitBorrowedSelectorStore(
+  ctx: LoweringCtx,
+  borrowed: PackedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc,
+  comment: string,
+  line: number | undefined,
+): void {
+    if (borrowed.borrowedOwner !== undefined) {
+      ctx.emitStore(borrowed.borrowedOwner, comment, line);
+      return;
+    }
+    ctx.emitOp(0x40 + registerIndex(borrowed.selectorRegister), `X->П ${borrowed.selectorRegister}`, comment, line);
+    ctx.currentXVariable = undefined;
+    ctx.currentXAliases.clear();
 }
 
 function compilePackedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx: LoweringCtx, proc: ProcAst): boolean {
@@ -1026,6 +1106,269 @@ function compileExpressionPreservingPreviousXAsY(
       case "string":
         compileExpression(ctx, expr);
         return;
+    }
+}
+
+function borrowedPredecrementSelectorRegister(
+  ctx: LoweringCtx,
+  proc: ProcAst,
+  match: PackedLineFamilyUpdateCheckMarkerProc,
+): { selectorRegister: RegisterName; borrowedOwner?: string } | undefined {
+    const ownerByRegister = new Map<RegisterName, string>();
+    for (const [name, register] of Object.entries(ctx.allocation.registers)) {
+      ownerByRegister.set(register, name);
+    }
+    const constantRegisters = new Set(Object.values(ctx.allocation.constants));
+    const preferred: RegisterName[] = ["3", "0", "1", "2"];
+    for (const selectorRegister of preferred) {
+      if (!isPredecrementIndirectRegister(selectorRegister)) continue;
+      if (constantRegisters.has(selectorRegister)) continue;
+      if (ctx.allocation.negativeZeroDegree === selectorRegister) continue;
+      const borrowedOwner = ownerByRegister.get(selectorRegister);
+      if (borrowedOwner !== undefined) {
+        if (packedLineFamilyClusterReadsIdentifier(ctx, proc, match, borrowedOwner)) continue;
+        if (!allCallsToProcCanClobberIdentifier(ctx.ast, proc.name, borrowedOwner)) continue;
+      }
+      return borrowedOwner === undefined ? { selectorRegister } : { selectorRegister, borrowedOwner };
+    }
+    return undefined;
+}
+
+function packedLineFamilyClusterReadsIdentifier(
+  ctx: LoweringCtx,
+  proc: ProcAst,
+  match: PackedLineFamilyUpdateCheckMarkerProc,
+  name: string,
+): boolean {
+    if (statementsReadIdentifierForBorrow(ctx.ast, proc.body, name, new Set())) return true;
+    const updateProc = ctx.ast.procs.find((candidate) => candidate.name === match.updateProc);
+    if (updateProc !== undefined && statementsReadIdentifierForBorrow(ctx.ast, updateProc.body, name, new Set())) {
+      return true;
+    }
+    for (const normalizer of new Set(match.steps.map((step) => step.normalizer).filter((item): item is string => item !== undefined))) {
+      const normalizerProc = ctx.ast.procs.find((candidate) => candidate.name === normalizer);
+      if (normalizerProc !== undefined && statementsReadIdentifierForBorrow(ctx.ast, normalizerProc.body, name, new Set())) {
+        return true;
+      }
+    }
+    return false;
+}
+
+function allCallsToProcCanClobberIdentifier(ast: ProgramAst, procName: string, name: string): boolean {
+    let found = false;
+    let safe = true;
+    const visitStatements = (statements: readonly StatementAst[], continuation: readonly StatementAst[]): void => {
+      if (!safe) return;
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index]!;
+        const rest = [...statements.slice(index + 1), ...continuation];
+        if (statement.kind === "call" && statement.block === procName) {
+          found = true;
+          if (firstIdentifierAccessForBorrow(ast, rest, name, new Set()) === "read") {
+            safe = false;
+            return;
+          }
+        }
+        switch (statement.kind) {
+          case "loop":
+          case "while":
+            visitStatements(statement.body, [...statement.body, ...rest]);
+            break;
+          case "if":
+            visitStatements(statement.thenBody, rest);
+            if (statement.elseBody !== undefined) visitStatements(statement.elseBody, rest);
+            break;
+          case "dispatch":
+            for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body, rest);
+            if (statement.defaultBody !== undefined) visitStatements(statement.defaultBody, rest);
+            break;
+          case "pause":
+          case "preview":
+          case "halt":
+          case "return_value":
+          case "assign":
+          case "indexed_assign":
+          case "coord_list_remove":
+          case "core":
+          case "show":
+          case "input":
+          case "call":
+          case "decimal_series":
+            break;
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body, []);
+    for (const candidate of ast.procs) {
+      if (candidate.name !== procName) visitStatements(candidate.body, []);
+    }
+    return found && safe;
+}
+
+type BorrowIdentifierAccess = "read" | "write" | "none";
+
+function firstIdentifierAccessForBorrow(
+  ast: ProgramAst,
+  statements: readonly StatementAst[],
+  name: string,
+  seenProcs: Set<string>,
+): BorrowIdentifierAccess {
+    for (const statement of statements) {
+      const access = statementFirstIdentifierAccessForBorrow(ast, statement, name, seenProcs);
+      if (access !== "none") return access;
+    }
+    return "none";
+}
+
+function statementFirstIdentifierAccessForBorrow(
+  ast: ProgramAst,
+  statement: StatementAst,
+  name: string,
+  seenProcs: Set<string>,
+): BorrowIdentifierAccess {
+    if (statement.kind === "call") {
+      const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === undefined) return "none";
+      const key = `${name}\0${proc.name}`;
+      if (seenProcs.has(key)) return "none";
+      seenProcs.add(key);
+      const access = firstIdentifierAccessForBorrow(ast, proc.body, name, seenProcs);
+      seenProcs.delete(key);
+      return access;
+    }
+    if (statement.kind === "if") {
+      if (
+        expressionReferencesIdentifier(statement.condition.left, name) ||
+        expressionReferencesIdentifier(statement.condition.right, name)
+      ) return "read";
+      const thenAccess = firstIdentifierAccessForBorrow(ast, statement.thenBody, name, seenProcs);
+      const elseAccess = statement.elseBody === undefined
+        ? "none"
+        : firstIdentifierAccessForBorrow(ast, statement.elseBody, name, seenProcs);
+      if (thenAccess === "read" || elseAccess === "read") return "read";
+      if (thenAccess === "write" || elseAccess === "write") return "write";
+      return "none";
+    }
+    if (statement.kind === "loop" || statement.kind === "while") {
+      if (
+        statement.kind === "while" &&
+        (
+          expressionReferencesIdentifier(statement.condition.left, name) ||
+          expressionReferencesIdentifier(statement.condition.right, name)
+        )
+      ) return "read";
+      const bodyAccess = firstIdentifierAccessForBorrow(ast, statement.body, name, seenProcs);
+      return bodyAccess === "read" ? "read" : bodyAccess === "write" ? "write" : "none";
+    }
+    if (statement.kind === "dispatch") {
+      if (expressionReferencesIdentifier(statement.expr, name)) return "read";
+      let sawWrite = false;
+      for (const dispatchCase of statement.cases) {
+        if (expressionReferencesIdentifier(dispatchCase.value, name)) return "read";
+        const access = firstIdentifierAccessForBorrow(ast, dispatchCase.body, name, seenProcs);
+        if (access === "read") return "read";
+        if (access === "write") sawWrite = true;
+      }
+      if (statement.defaultBody !== undefined) {
+        const access = firstIdentifierAccessForBorrow(ast, statement.defaultBody, name, seenProcs);
+        if (access === "read") return "read";
+        if (access === "write") sawWrite = true;
+      }
+      return sawWrite ? "write" : "none";
+    }
+    if (statementReadsIdentifierForBorrow(ast, statement, name, seenProcs)) return "read";
+    if (statementWritesIdentifierForBorrow(statement, name)) return "write";
+    return "none";
+}
+
+function statementsReadIdentifierForBorrow(
+  ast: ProgramAst,
+  statements: readonly StatementAst[],
+  name: string,
+  seenProcs: Set<string>,
+): boolean {
+    return statements.some((statement) => statementReadsIdentifierForBorrow(ast, statement, name, seenProcs));
+}
+
+function statementReadsIdentifierForBorrow(
+  ast: ProgramAst,
+  statement: StatementAst,
+  name: string,
+  seenProcs: Set<string>,
+): boolean {
+    switch (statement.kind) {
+      case "pause":
+      case "preview":
+      case "return_value":
+        return expressionReferencesIdentifier(statement.expr, name);
+      case "halt":
+        return expressionReferencesIdentifier(statement.expr, name) ||
+          statement.displaySources?.includes(name) === true;
+      case "assign":
+        return expressionReferencesIdentifier(statement.expr, name);
+      case "indexed_assign":
+        return expressionReferencesIdentifier(statement.target.index, name) ||
+          expressionReferencesIdentifier(statement.expr, name);
+      case "coord_list_remove":
+        return expressionReferencesIdentifier(statement.item, name);
+      case "if":
+        return expressionReferencesIdentifier(statement.condition.left, name) ||
+          expressionReferencesIdentifier(statement.condition.right, name) ||
+          statementsReadIdentifierForBorrow(ast, statement.thenBody, name, seenProcs) ||
+          (statement.elseBody !== undefined && statementsReadIdentifierForBorrow(ast, statement.elseBody, name, seenProcs));
+      case "loop":
+        return statementsReadIdentifierForBorrow(ast, statement.body, name, seenProcs);
+      case "while":
+        return expressionReferencesIdentifier(statement.condition.left, name) ||
+          expressionReferencesIdentifier(statement.condition.right, name) ||
+          statementsReadIdentifierForBorrow(ast, statement.body, name, seenProcs);
+      case "dispatch":
+        return expressionReferencesIdentifier(statement.expr, name) ||
+          statement.cases.some((dispatchCase) =>
+            expressionReferencesIdentifier(dispatchCase.value, name) ||
+            statementsReadIdentifierForBorrow(ast, dispatchCase.body, name, seenProcs)
+          ) ||
+          (statement.defaultBody !== undefined &&
+            statementsReadIdentifierForBorrow(ast, statement.defaultBody, name, seenProcs));
+      case "core":
+        return statement.inputs?.some((input) => expressionReferencesIdentifier(input.expr, name)) ?? false;
+      case "call": {
+        const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+        if (proc === undefined) return false;
+        const key = `${name}\0${proc.name}`;
+        if (seenProcs.has(key)) return false;
+        seenProcs.add(key);
+        const result = statementsReadIdentifierForBorrow(ast, proc.body, name, seenProcs);
+        seenProcs.delete(key);
+        return result;
+      }
+      case "show":
+      case "input":
+      case "decimal_series":
+        return false;
+    }
+}
+
+function statementWritesIdentifierForBorrow(statement: StatementAst, name: string): boolean {
+    switch (statement.kind) {
+      case "assign":
+      case "input":
+        return statement.target === name;
+      case "indexed_assign":
+        return statement.target.base === name;
+      case "if":
+        return statement.thenBody.some((child) => statementWritesIdentifierForBorrow(child, name)) &&
+          (statement.elseBody?.some((child) => statementWritesIdentifierForBorrow(child, name)) ?? false);
+      case "loop":
+      case "while":
+        return statement.body.some((child) => statementWritesIdentifierForBorrow(child, name));
+      case "dispatch":
+        return statement.cases.some((dispatchCase) =>
+          dispatchCase.body.some((child) => statementWritesIdentifierForBorrow(child, name))
+        ) &&
+          (statement.defaultBody?.some((child) => statementWritesIdentifierForBorrow(child, name)) ?? false);
+      default:
+        return false;
     }
 }
 
