@@ -998,6 +998,10 @@ export function compileRepeatedAssignmentValue(ctx: LoweringCtx, statements: rea
     }
     const count = end - start;
     if (count <= 1) return 0;
+    for (let index = start; index < end; index += 1) {
+      const assignment = statements[index] as Extract<StatementAst, { kind: "assign" }>;
+      if (ctx.allocation.registers[assignment.target] === undefined) return 0;
+    }
     compileExpression(ctx, first.expr);
     for (let index = start; index < end; index += 1) {
       const assignment = statements[index] as Extract<StatementAst, { kind: "assign" }>;

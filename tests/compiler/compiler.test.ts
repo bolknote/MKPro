@@ -2372,6 +2372,41 @@ program XParamRule {
     expect(result.steps.some((step) => step.comment === "set delta")).toBe(false);
   });
 
+  it("keeps repeated literal reuse from consuming registerless X parameters", () => {
+    const result = compileOk(`
+program RepeatedLiteralXParam {
+  state {
+    best_score: packed = 0
+    mark_score: packed = 0
+    out: packed = 0
+  }
+
+  loop {
+    best_score = -1
+    mark_lines_and_check(-1)
+    best_score = 1
+    mark_lines_and_check(1)
+    out = best_score + mark_score
+    halt(out)
+  }
+
+  fn mark_lines_and_check(mark_value) {
+    mark_score = mark_value
+    mark_score += 1
+    mark_score += 2
+    mark_score += 3
+  }
+}
+`, { budget: 999, analysis: true });
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames).toContain("x-param-proc-call");
+    expect(optimizationNames).toContain("x-param-proc-entry");
+    expect(optimizationNames).not.toContain("repeated-assignment-value-reuse");
+    expect(result.report.registers.mark_value).toBeUndefined();
+    expect(result.steps.some((step) => step.comment === "set mark_value")).toBe(false);
+  });
+
   it("reuses the current X value for identifier-shaped X parameters", () => {
     const result = compileOk(`
 program XParamCurrentXIdentifier {
