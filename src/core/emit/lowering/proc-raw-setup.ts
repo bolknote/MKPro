@@ -66,6 +66,7 @@ import {
   isPredecrementIndirectRegister,
   isPreincrementIndirectRegister,
   isSimpleStackLoad,
+  isZeroExpression,
   isUnitDecrementExpression,
   isUnitIncrementExpression,
   matchIntOrFracCall,
@@ -94,6 +95,9 @@ import {
 import {
   getOpcode,
 } from "../../opcodes.ts";
+import {
+  findStateBankMember,
+} from "../../state-banks.ts";
 import type {
   ConditionAst,
   ProcAst,
@@ -653,6 +657,8 @@ export function compileProcedures(ctx: LoweringCtx): void {
             name: "show-read-stack-stop-risk-lowering",
             detail: `Reused displayed ${xParamStackStopRisk.param} as the parked Y value for ${proc.name}.`,
           });
+        } else if (compileXParamIndexedFractionalReportTailProc(ctx, proc)) {
+          emittedExplicitReturn = true;
         } else if (compilePackedLineFamilyScoreProc(ctx, proc)) {
           // The custom body emits its own shared-tail В/О because one path calls
           // into the middle of the tail and another path falls through to it.
@@ -668,6 +674,265 @@ export function compileProcedures(ctx: LoweringCtx): void {
       });
       ctx.emitProcedureEndLabel(proc.name);
     }
+}
+
+interface XParamIndexedFractionalReportTailProc {
+  readonly selector: string;
+  readonly selectorRegister: RegisterName;
+  readonly yName: string;
+  readonly update: Extract<StatementAst, { kind: "indexed_assign" }>;
+  readonly factor: ExpressionAst;
+  readonly op: "+" | "-";
+  readonly mask: ExpressionAst;
+  readonly branch: Extract<StatementAst, { kind: "if" }>;
+  readonly haltLine: number | undefined;
+}
+
+function compileXParamIndexedFractionalReportTailProc(ctx: LoweringCtx, proc: ProcAst): boolean {
+    if (ctx.loweringOptions.xParamYStackStoredEntry === true) return false;
+    const match = xParamIndexedFractionalReportTailProc(ctx, proc);
+    if (match === undefined) return false;
+
+    ctx.emitStore(match.selector, `set ${match.selector} from X parameter`, proc.body[0]?.line);
+    ctx.emitOp(0x14, "X↔Y", "stack-carried packed digit index", match.update.line);
+    ctx.emitOp(0x15, "F 10ˣ", "stack-carried packed digit pow10", match.update.line);
+    compileExpression(ctx, match.factor);
+    ctx.emitOp(0x12, "×", "stack-carried packed digit delta", match.update.line);
+    ctx.emitOp(
+      0xd0 + registerIndex(match.selectorRegister),
+      `К П->X ${match.selectorRegister}`,
+      "indexed packed digit update base",
+      match.update.line,
+    );
+    ctx.emitOp(binaryOpcode(match.op), match.op, "indexed packed digit update", match.update.line);
+    ctx.emitPreparedIndexedStore(match.update.target, match.selectorRegister, match.update.line);
+
+    compileExpression(ctx, match.mask);
+    ctx.emitOp(0x37, "К ∧", "updated packed fractional report mask", match.branch.line);
+    ctx.emitOp(0x35, "К {x}", "updated packed fractional report predicate", match.branch.line);
+
+    const haltLabel = ctx.freshLabel("packed_frac_report_x2_halt");
+    ctx.emitJump(0x5e, "F x=0", haltLabel, "true branch for packed fractional report !=", match.branch.line);
+    ctx.emitOp(0x52, "В/О", "packed fractional report return", match.branch.line);
+    ctx.emitLabel(haltLabel);
+    ctx.emitOp(0x0a, ".", "updated packed fractional report X2 restore", match.branch.line);
+    ctx.emitOp(0x50, "С/П", "halt", match.haltLine);
+
+    ctx.currentYVariable = undefined;
+    ctx.optimizations.push({
+      name: "x-param-proc-entry",
+      detail: `Compiled rule ${proc.name} to copy ${ctx.xParamProcs.get(proc.name)?.param ?? "parameter"} directly from X.`,
+    });
+    ctx.optimizations.push({
+      name: "indexed-packed-y-stack-pow10-delta",
+      detail: `Used ${match.yName} carried in Y as the pow10 index for ${expressionToIntentText(match.update.target)} at line ${match.update.line}.`,
+    });
+    ctx.optimizations.push({
+      name: "indexed-packed-fractional-report-branch",
+      detail: `Reused ${expressionToIntentText(match.update.target)} left in X after a packed update for fractional ${conditionToText(match.branch.condition)} at line ${match.branch.line}.`,
+    });
+    ctx.optimizations.push({
+      name: "indexed-packed-fractional-report-x2-tail",
+      detail: `Restored the terminal fractional packed report through X2 after branching directly to the halt path at line ${match.branch.line}.`,
+    });
+    return true;
+}
+
+function xParamIndexedFractionalReportTailProc(
+    ctx: LoweringCtx,
+    proc: ProcAst,
+  ): XParamIndexedFractionalReportTailProc | undefined {
+    const lowering = ctx.xParamProcs.get(proc.name);
+    if (lowering?.kind !== "copy") return undefined;
+    const yStack = ctx.xParamYStackProcs.get(proc.name);
+    if (yStack === undefined) return undefined;
+
+    const first = proc.body[0];
+    const update = proc.body[1];
+    if (first !== lowering.first || update?.kind !== "indexed_assign") return undefined;
+
+    const selector = lowering.first.target;
+    const selectorRegister = directPhysicalIndexedSelectorRegister(ctx, update.target, selector);
+    if (selectorRegister === undefined) return undefined;
+
+    const delta = indexedPackedPow10DeltaUpdate(update);
+    if (delta === undefined) return undefined;
+    const yTerm = yStackPow10DeltaTerm(delta.term, yStack.yName);
+    if (yTerm === undefined) return undefined;
+
+    const report = fractionalReportTail(update.target, proc.body.slice(2));
+    if (report === undefined) return undefined;
+
+    return {
+      selector,
+      selectorRegister,
+      yName: yStack.yName,
+      update,
+      factor: yTerm.factor,
+      op: delta.op,
+      mask: report.mask,
+      branch: report.branch,
+      haltLine: report.haltLine,
+    };
+}
+
+function directPhysicalIndexedSelectorRegister(
+    ctx: LoweringCtx,
+    target: Extract<ExpressionAst, { kind: "indexed" }>,
+    selector: string,
+  ): RegisterName | undefined {
+    if (target.index.kind !== "identifier" || target.index.name !== selector) return undefined;
+    const selectorRegister = ctx.allocation.registers[selector];
+    if (selectorRegister === undefined || registerIndex(selectorRegister) < 7) return undefined;
+    const resolved = findStateBankMember(ctx.ast, target);
+    if (resolved === undefined) return undefined;
+    for (const element of resolved.member.elements) {
+      const register = ctx.allocation.registers[element.name];
+      if (register === undefined || registerIndex(register) !== element.index) return undefined;
+    }
+    return selectorRegister;
+}
+
+function indexedPackedPow10DeltaUpdate(
+    statement: Extract<StatementAst, { kind: "indexed_assign" }>,
+  ): { op: "+" | "-"; term: ExpressionAst } | undefined {
+    const expr = statement.expr;
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "packed_add" && expr.args.length === 3) {
+      if (!expressionEquals(expr.args[0]!, statement.target)) return undefined;
+      return {
+        op: "+",
+        term: multiplyExpressions(expr.args[2]!, {
+          kind: "call",
+          callee: "pow10",
+          args: [expr.args[1]!],
+        }),
+      };
+    }
+    if (expr.kind !== "binary" || (expr.op !== "+" && expr.op !== "-")) return undefined;
+    if (!expressionEquals(expr.left, statement.target)) return undefined;
+    if (!isPow10Term(expr.right)) return undefined;
+    return { op: expr.op, term: expr.right };
+}
+
+function yStackPow10DeltaTerm(
+    expr: ExpressionAst,
+    yName: string,
+  ): { factor: ExpressionAst } | undefined {
+    if (isPow10OfIdentifier(expr, yName)) return { factor: numberExpression(1) };
+    if (expr.kind !== "binary" || expr.op !== "*") return undefined;
+    if (isPow10OfIdentifier(expr.left, yName) && isSimpleStackLoad(expr.right)) {
+      return { factor: expr.right };
+    }
+    if (isPow10OfIdentifier(expr.right, yName) && isSimpleStackLoad(expr.left)) {
+      return { factor: expr.left };
+    }
+    return undefined;
+}
+
+function isPow10Term(expr: ExpressionAst): boolean {
+    if (expr.kind !== "call") return false;
+    const name = expr.callee.toLowerCase();
+    if (name === "pow10" && expr.args.length === 1) return true;
+    return name === "pow" && expr.args.length === 2 && numericLiteralValue(expr.args[0]!) === 10;
+}
+
+function isPow10OfIdentifier(expr: ExpressionAst, name: string): boolean {
+    if (expr.kind !== "call") return false;
+    const callee = expr.callee.toLowerCase();
+    if (callee === "pow10" && expr.args.length === 1) {
+      return expr.args[0]?.kind === "identifier" && expr.args[0].name === name;
+    }
+    return callee === "pow" &&
+      expr.args.length === 2 &&
+      numericLiteralValue(expr.args[0]!) === 10 &&
+      expr.args[1]?.kind === "identifier" &&
+      expr.args[1].name === name;
+}
+
+function fractionalReportTail(
+    target: Extract<ExpressionAst, { kind: "indexed" }>,
+    tail: readonly StatementAst[],
+  ): { mask: ExpressionAst; branch: Extract<StatementAst, { kind: "if" }>; haltLine: number | undefined } | undefined {
+    if (tail.length === 1 && tail[0]?.kind === "if") {
+      return fractionalBitReportBranch(target, tail[0]);
+    }
+    if (tail.length !== 2) return undefined;
+    const reportAssign = tail[0];
+    const branch = tail[1];
+    if (reportAssign?.kind !== "assign" || branch?.kind !== "if") return undefined;
+    const report = bitAndReportForTarget(reportAssign.expr, target);
+    if (report === undefined || !isSimpleStackLoad(report.mask)) return undefined;
+    if (!branchIsIdentifierFractionalReportTrap(branch, reportAssign.target)) return undefined;
+    return {
+      mask: report.mask,
+      branch,
+      haltLine: branch.thenBody[0]?.line ?? branch.line,
+    };
+}
+
+function fractionalBitReportBranch(
+    target: Extract<ExpressionAst, { kind: "indexed" }>,
+    branch: Extract<StatementAst, { kind: "if" }>,
+  ): { mask: ExpressionAst; branch: Extract<StatementAst, { kind: "if" }>; haltLine: number | undefined } | undefined {
+    if (branch.elseBody !== undefined || branch.thenBody.length !== 1) return undefined;
+    const halt = branch.thenBody[0];
+    if (halt?.kind !== "halt" || halt.literal !== undefined) return undefined;
+    if (branch.condition.op !== "!=") return undefined;
+
+    const left = fractionalBitAndReportForTarget(branch.condition.left, target);
+    const right = fractionalBitAndReportForTarget(branch.condition.right, target);
+    const report = left === undefined
+      ? (right === undefined ? undefined : (isZeroExpression(branch.condition.left) ? right : undefined))
+      : (isZeroExpression(branch.condition.right) ? left : undefined);
+    if (report === undefined) return undefined;
+    if (!expressionEquals(halt.expr, report.expr) || !isSimpleStackLoad(report.mask)) return undefined;
+    return { mask: report.mask, branch, haltLine: halt.line };
+}
+
+function branchIsIdentifierFractionalReportTrap(
+    branch: Extract<StatementAst, { kind: "if" }>,
+    reportName: string,
+  ): boolean {
+    if (branch.elseBody !== undefined || branch.thenBody.length !== 1) return false;
+    const halt = branch.thenBody[0];
+    if (halt?.kind !== "halt" || halt.literal !== undefined) return false;
+    if (halt.expr.kind !== "identifier" || halt.expr.name !== reportName) return false;
+    if (branch.condition.op !== "!=") return false;
+
+    const left = fractionalIdentifierReport(branch.condition.left, reportName);
+    const right = fractionalIdentifierReport(branch.condition.right, reportName);
+    return left ? isZeroExpression(branch.condition.right) : (right && isZeroExpression(branch.condition.left));
+}
+
+function fractionalIdentifierReport(expr: ExpressionAst, reportName: string): boolean {
+    return expr.kind === "call" &&
+      expr.callee.toLowerCase() === "frac" &&
+      expr.args.length === 1 &&
+      expr.args[0]?.kind === "identifier" &&
+      expr.args[0].name === reportName;
+}
+
+function fractionalBitAndReportForTarget(
+    expr: ExpressionAst,
+    target: Extract<ExpressionAst, { kind: "indexed" }>,
+  ): { expr: ExpressionAst; mask: ExpressionAst } | undefined {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "frac" || expr.args.length !== 1) return undefined;
+    return bitAndReportForTarget(expr.args[0]!, target);
+}
+
+function bitAndReportForTarget(
+    expr: ExpressionAst,
+    target: Extract<ExpressionAst, { kind: "indexed" }>,
+  ): { expr: ExpressionAst; mask: ExpressionAst } | undefined {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_and" || expr.args.length !== 2) return undefined;
+    const [left, right] = expr.args;
+    if (left !== undefined && right !== undefined && expressionEquals(left, target)) {
+      return { expr, mask: right };
+    }
+    if (left !== undefined && right !== undefined && expressionEquals(right, target)) {
+      return { expr, mask: left };
+    }
+    return undefined;
 }
 
 interface PackedLineFamilyScoreProc {

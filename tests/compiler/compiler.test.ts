@@ -1766,6 +1766,16 @@ program Packed4FractionalBitReportTemp {
     expect(result.steps.some((step) => step.comment === "recall report")).toBe(false);
   });
 
+  it("restores terminal X-parameter Y-stack fractional reports through X2", () => {
+    const source = readFileSync("examples/pending-optimizer/tic-tac-toe-4x4.mkpro", "utf8");
+    const result = compileOk(source, { budget: 999, analysis: true });
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(result.steps).toHaveLength(136);
+    expect(optimizationNames).toContain("indexed-packed-fractional-report-x2-tail");
+    expect(result.steps.some((step) => step.comment === "updated packed fractional report X2 restore")).toBe(true);
+  });
+
   it("keeps packed line indices and candidate scores as stack-only state across helper calls", () => {
     const source = readFileSync("examples/pending-optimizer/tic-tac-toe-4x4.mkpro", "utf8");
     const result = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
