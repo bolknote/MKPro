@@ -1743,7 +1743,7 @@ program Packed4FractionalBitReportTemp {
     expect(optimizationNames).toContain("x-param-y-stack-proc-call");
     expect(optimizationNames).toContain("indexed-packed-y-stack-pow10-delta");
     expect(optimizationNames).toContain("post-layout-empty-stack-tail-call");
-    expect(result.steps).toHaveLength(146);
+    expect(result.steps).toHaveLength(145);
     expect(result.report.optimizations.some((item) =>
       item.name === "stack-only-state-field" && item.detail.includes("score")
     )).toBe(true);

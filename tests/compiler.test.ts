@@ -92,9 +92,10 @@ describe("MK-Pro compiler", () => {
     expect(game).toContain("cell_mask(x, y)");
     expect(game).toContain("lines: packed[4..7]");
     expect(game).toContain("fn candidate_score()");
-    expect(game).toContain("best_score = -1");
-    expect(game).toContain("best_score = 1");
-    expect(game).toContain("fn mark_lines_and_check()");
+    expect(game).toContain("mark_lines_and_check(-1)");
+    expect(game).toContain("mark_lines_and_check(1)");
+    expect(game).toContain("fn mark_lines_and_check(mark_sign)");
+    expect(game).toContain("best_score = mark_sign");
     expect(game).toContain("fn mark_one(next_slot)");
     expect(game).toContain("lines[slot] = packed_add(lines[slot], line, best_score)");
     expect(game).toContain("report = bit_and(lines[slot], 88888834)");
