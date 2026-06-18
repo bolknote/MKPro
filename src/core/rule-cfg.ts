@@ -5,6 +5,9 @@ import {
   stateBankElementForIndex,
   stateBankElementNames,
 } from "./state-banks.ts";
+import {
+  segmentedBitplaneCollectionInfo,
+} from "./emit/lowering-helpers.ts";
 
 // A statement-level, interprocedural control-flow graph over the lowered rule
 // bodies (entries + procs + blocks). Rule invocations become real call edges;
@@ -251,6 +254,12 @@ class Builder {
       }
       case "core": {
         const node = this.add({ defs: [], uses: [], barrier: true });
+        return { entry: node, exits: [node] };
+      }
+      case "segmented_bitplane_update": {
+        const planes = segmentedBitplaneCollectionInfo(this.ast, statement.collection)?.planes ?? [];
+        const uses = [...new Set([...this.exprUses(statement.item), ...planes])];
+        const node = this.add({ defs: planes, uses });
         return { entry: node, exits: [node] };
       }
       case "if": {

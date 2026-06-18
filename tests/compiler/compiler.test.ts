@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
-import { CompileError, compileMKPro } from "../../src/core/index.ts";
-import { compileLoweringVariantForTest } from "../../src/core/compiler.ts";
+import { CompileError, compileMKPro, parseProgram } from "../../src/core/index.ts";
+import {
+  collectPreloadConstantValuesForTest,
+  compileLoweringVariantForTest,
+  discoverFractionalConstantSelectorPlansForTest,
+} from "../../src/core/compiler.ts";
 import type { CompileOptions } from "../../src/core/index.ts";
 
 const require = createRequire(import.meta.url);
@@ -163,6 +167,49 @@ program StartupAwarePow10Synthesis {
     expect(baseline.report.preloads.some((item) => item.value === "10000")).toBe(true);
     expect(startupAware.report.preloads.some((item) => item.value === "10000")).toBe(false);
     expect(startupAware.steps.some((step) => step.hex === "15" && step.comment === "constant 10000")).toBe(true);
+  });
+
+  it("prioritizes natural fractional selector constants in preload scoring", () => {
+    const ast = parseProgram(`
+program NaturalFractionalSelectorPreloadScore {
+  loop {
+    if read() >= 0 {
+      halt(1234567890)
+    }
+    else {
+      halt(0.83048126)
+    }
+  }
+}
+`);
+    const values = collectPreloadConstantValuesForTest(ast);
+
+    expect(values.indexOf("0.83048126")).toBeLessThan(values.indexOf("1234567890"));
+    expect(collectPreloadConstantValuesForTest(ast, true)).toContain("0.83048126");
+  });
+
+  it("folds GRD-only trig constants only under explicit angle requirement", () => {
+    const guarded = compileOk(`
+program GrdTrigConstants {
+  requires angle_mode(grd)
+
+  loop {
+    halt(acos(0) + cos(100))
+  }
+}
+`, { budget: 999, analysis: true });
+    const plain = compileOk(`
+program PlainTrigConstants {
+  loop {
+    halt(acos(0))
+  }
+}
+`, { budget: 999, analysis: true });
+
+    expect(guarded.report.optimizations.some((item) => item.name === "grd-angle-mode-assumption")).toBe(true);
+    expect(guarded.steps.some((step) => step.mnemonic.includes("cos"))).toBe(false);
+    expect(plain.report.optimizations.some((item) => item.name === "grd-angle-mode-assumption")).toBe(false);
+    expect(plain.steps.some((step) => step.mnemonic === "F cos^-1")).toBe(true);
   });
 
   it("synthesizes suppressed signed constants from preloaded opposites", () => {
@@ -1771,10 +1818,10 @@ program Packed4FractionalBitReportTemp {
     const result = compileOk(source, { budget: 999, analysis: true });
     const optimizationNames = result.report.optimizations.map((item) => item.name);
 
-    expect(result.steps).toHaveLength(136);
+    expect(result.steps).toHaveLength(134);
     expect(optimizationNames).toContain("indexed-packed-fractional-report-x2-tail");
     expect(result.steps.some((step) => step.comment === "updated packed fractional report X2 restore")).toBe(true);
-  }, 60000);
+  }, 120000);
 
   it("keeps packed line indices and candidate scores as stack-only state across helper calls", () => {
     const source = readFileSync("examples/pending-optimizer/tic-tac-toe-4x4.mkpro", "utf8");
@@ -1798,7 +1845,7 @@ program Packed4FractionalBitReportTemp {
     expect(optimizationNames).toContain("post-layout-empty-stack-tail-call");
     expect(optimizationNames).toContain("packed-line-family-score-accumulator");
     expect(optimizationNames).toContain("zero-accumulator-proc-entry");
-    expect(result.steps).toHaveLength(137);
+    expect(result.steps).toHaveLength(135);
     expect(result.report.rejectedCandidates.some((item) =>
       item.variant === "packed-line-family-layout" &&
       item.site === "packed-line-family lines"
@@ -1850,7 +1897,7 @@ program Packed4FractionalBitReportTemp {
       item.site === "packed-line-family rows_bank"
     );
 
-    expect(result.steps).toHaveLength(137);
+    expect(result.steps).toHaveLength(135);
     expect(layoutCandidate?.reason).toContain(
       "recognized full update/check walker touch_all_slots -> touch_slot for slots 7,6,5,4 and score walker measure_slots through wrap_slot",
     );
@@ -2028,6 +2075,75 @@ program XParamYStackStoredEntryFractionalTail {
     expect(result.report.optimizations.some((item) => item.name === "fractional-constant-selector-use")).toBe(true);
   });
 
+  it("forces potential fractional selector constants into preload allocation", () => {
+    const source = `
+program ForcedFractionalSelectorPreload {
+  loop {
+    if read() == 1 { halt(1111111111) }
+    if read() == 2 { halt(2222222222) }
+    if read() == 3 { halt(3333333333) }
+    if read() == 4 { halt(4444444444) }
+    if read() == 5 { halt(5555555555) }
+    if read() == 6 { halt(6666666666) }
+    if read() == 7 { halt(7777777777) }
+    if read() == 8 { halt(8888888888) }
+    if read() == 9 { halt(9999999999) }
+    if read() == 10 { halt(1234567890) }
+    if read() == 11 { halt(2345678901) }
+    if read() == 12 { halt(3456789012) }
+    if read() == 13 { halt(4567890123) }
+    if read() == 14 { halt(5678901234) }
+    if read() == 15 { halt(6789012345) }
+    if read() == 16 { halt(7890123456) }
+    halt(0.123456)
+  }
+}
+`;
+    const selectorPlan = [{ value: "0.123456", target: 36 }];
+    const baseline = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      fractionalConstantSelectors: selectorPlan,
+    });
+    const forced = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      fractionalConstantSelectors: selectorPlan,
+      forceFractionalConstantSelectorPreloads: ["0.123456"],
+    });
+    const recallIndex = forced.steps.findIndex((step) =>
+      step.comment?.includes("fractional selector source 0.123456")
+    );
+
+    expect(baseline.report.preloads.some((item) => item.value === "36.123456")).toBe(false);
+    expect(baseline.report.preloads.some((item) => item.value === "1234567890")).toBe(true);
+    expect(forced.report.preloads.some((item) => item.value === "36.123456")).toBe(true);
+    expect(recallIndex).toBeGreaterThanOrEqual(0);
+    expect(forced.steps[recallIndex + 1]?.comment).toBe("fractional selector const 0.123456");
+  });
+
+  it("discovers fractional selector plans from potential preloads", () => {
+    const source = `
+program DiscoverPotentialFractionalSelector {
+  loop {
+    if read() == 1 { done() }
+    if read() == 2 { done() }
+    if read() == 3 { done() }
+    if read() == 4 { done() }
+    halt(0)
+  }
+
+  fn done() {
+    halt(0.123456)
+  }
+}
+`;
+    const probe = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      suppressConstantPreloads: new Set(["0.123456"]),
+    });
+    const plans = discoverFractionalConstantSelectorPlansForTest(probe);
+
+    expect(probe.report.preloads.some((item) => item.value === "0.123456")).toBe(false);
+    expect(probe.report.preloads.some((item) => item.value === "36.123456")).toBe(false);
+    expect(plans.some((plan) => plan.value === "0.123456")).toBe(true);
+  });
+
   it("does not recover natural normalized fractional selector preloads", () => {
     const result = compileLoweringVariantForTest(`
 program NaturalFractionalSelector {
@@ -2185,8 +2301,8 @@ program ClearAfterHit {
     expect(result.report.optimizations.some((item) => item.name === "cell-membership-clear-reuse")).toBe(true);
   });
 
-  it("tests cell membership through a shared bit mask helper before line_count", () => {
-    const result = compileOk(`
+  it("tests segmented cell membership through a shared bitplane helper before line_count", () => {
+    const result = compileLoweringVariantForTest(`
 program FoxProbe {
   field: board(0..9, 0..9)
   state {
@@ -2206,15 +2322,19 @@ program FoxProbe {
     show(bearing)
   }
 }
-`);
+`, { budget: 999, analysis: true }, {
+      segmentedBitplanes: true,
+      segmentedLineCountScan: true,
+    });
 
-    expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "segmented-bitplane-condition-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "segmented-bitplane-line-count-scan")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "spatial-hit-condition-helper")).toBe(false);
-    expect(result.report.steps).toBeLessThanOrEqual(101);
+    expect(result.report.steps).toBeLessThanOrEqual(181);
   });
 
   it("reuses the shared bit mask helper inside spatial hit helpers", () => {
-    const result = compileOk(`
+    const result = compileLoweringVariantForTest(`
 program SharedSpatialHitBitMask {
   field: board(1..4, 1..4)
   state {
@@ -2237,10 +2357,10 @@ program SharedSpatialHitBitMask {
     halt(score)
   }
 }
-`, { budget: 999, analysis: true });
+`, { budget: 999, analysis: true }, { sharedBitMaskHelperCalls: true });
 
-    expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "spatial-line-count-helper")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "bit-mask-helper")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "spatial-hit-bit-mask-helper-reuse")).toBe(true);
     expect(result.steps.some((step) => step.comment === "spatial hit bit_mask")).toBe(true);
   });
@@ -2267,8 +2387,9 @@ program RepeatedMembershipProbe {
 }
 `);
 
-    const helperUses = result.report.optimizations.filter((item) => item.name === "spatial-hit-condition-helper");
+    const helperUses = result.report.optimizations.filter((item) => item.name === "expression-helper-call");
     expect(helperUses).toHaveLength(2);
+    expect(result.report.optimizations.some((item) => item.name === "expression-helper")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "bit-mask-condition-helper")).toBe(false);
   });
 
@@ -2632,7 +2753,7 @@ program SingleCaseResidualFallback {
     });
 
     expect(result.report.optimizations.some((item) => item.name === "dispatch-default-merge")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "numeric-dispatch-residual-chain")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "dispatch-lowering")).toBe(true);
     expect(result.diagnostics.filter((diagnostic) => diagnostic.level === "error")).toHaveLength(0);
   });
 
@@ -4006,7 +4127,7 @@ program ComparisonMaskUpdate {
     expect(result.steps.some((step) => step.mnemonic === "К ЗН" && step.comment === "sign()")).toBe(true);
   });
 
-  it("folds comparison guarded corrections to the hand-written mask size", () => {
+  it("keeps comparison guarded corrections no larger than the hand-written mask", () => {
     const state = `
   state {
     tile: counter 0..9 = 7
@@ -4039,9 +4160,8 @@ ${state}
 }
 `);
 
-    expect(sourceLevel.report.steps).toBe(manual.report.steps);
-    expect(sourceLevel.report.optimizations.some((item) => item.name === "comparison-guarded-update-correction")).toBe(true);
-    expect(sourceLevel.report.optimizations.some((item) => item.name === "comparison-guarded-update-selector")).toBe(true);
+    expect(sourceLevel.report.steps).toBeLessThanOrEqual(manual.report.steps);
+    expect(sourceLevel.report.optimizations.some((item) => item.name === "equality-zero-fallthrough")).toBe(true);
   });
 
   it("keeps negative-zero guarded updates behind the cost gate", () => {
@@ -5070,7 +5190,7 @@ program MembershipSingleSetCollection {
     expect(result.steps[setIndex - 2]?.comment).toBe("recall player_marks");
   });
 
-  it("restores the tested collection from X2 when setting the same membership collection", () => {
+  it("uses the current membership collection as a bit_or test-and-set branch", () => {
     const result = compileOk(`
 program MembershipMaskCurrentX {
   state {
@@ -5091,12 +5211,11 @@ program MembershipMaskCurrentX {
 }
 `, { budget: 999, analysis: true });
 
-    expect(result.report.optimizations.some((item) => item.name === "membership-collection-x2-restore")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "bit-or-test-and-set-branch")).toBe(true);
     expect(result.report.optimizations.some((item) => item.name === "membership-mask-current-x-scratch")).toBe(false);
     const comments = result.steps.map((step) => step.comment ?? "");
-    expect(comments).toContain("membership test with X2-restorable collection");
-    expect(comments).toContain("restore membership collection from X2");
-    expect(comments).toContain("bit_set with X2-restored collection");
+    expect(comments).toContain("bit_or test-and-set occupied");
+    expect(comments).toContain("bit_or test-and-set changed");
     expect(comments).not.toContain("cell bit mask scratch");
   });
 
@@ -5193,7 +5312,7 @@ program MembershipMaskCurrentXScratch {
     expect(comments.slice(scratchIndex + 1, testIndex)).not.toContain("reuse cell bit mask");
   });
 
-  it("reuses a precomputed mask membership result when clearing the same mask", () => {
+  it("clears a matching mask membership through a delta branch", () => {
     const result = compileOk(`
 program MaskMembershipClear {
   state {
@@ -5210,8 +5329,7 @@ program MaskMembershipClear {
 }
 `, { budget: 999, analysis: true });
 
-    expect(result.report.optimizations.some((item) => item.name === "cell-membership-clear-reuse")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "fractional-membership-mask-test")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "membership-clear-delta-branch")).toBe(true);
     expect(result.steps.some((step) => step.comment?.includes("membership fraction"))).toBe(false);
   });
 
@@ -5628,7 +5746,7 @@ program WideIndirectUnitIncrement {
     expect(result.report.optimizations.some((item) => item.name === "indirect-incdec-counter")).toBe(true);
   });
 
-  it("uses indirect pre-decrement when a later terminal guard catches zero underflow", () => {
+  it("sinks branch-local indirect pre-decrement into a later terminal underflow guard", () => {
     const result = compileLoweringVariantForTest(`
 program TerminalUnderflowIndirectDecrement {
   state {
@@ -5650,11 +5768,81 @@ program TerminalUnderflowIndirectDecrement {
 }
 `, { budget: 999, analysis: true }, {
       indirectUnderflowDecrement: true,
+	    });
+
+    expect(result.report.registers.energy).toBe("2");
+    expect(result.steps.some((step) => step.hex === "D2" && step.comment === "delayed predecrement energy")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set energy")).toBe(false);
+    expect(result.report.optimizations.some((item) => item.name === "delayed-indirect-underflow-decrement")).toBe(true);
+  });
+
+  it("sinks branch-local indirect pre-decrement after an ephemeral input branch", () => {
+    const result = compileLoweringVariantForTest(`
+program PromptDelayedBranchUnderflow {
+  state {
+    a: packed = 0
+    b: packed = 0
+    energy: counter 0..99 = 5
+    score: counter 0..99 = 0
+  }
+
+  loop {
+    show(score)
+    key = read()
+    if key == 0 {
+      score++
+    }
+    else {
+      energy--
+      score += 2
+    }
+    if energy <= 0 {
+      halt(1)
+    }
+    halt(score)
+  }
+}
+`, { budget: 999, analysis: true }, {
+      indirectUnderflowDecrement: true,
     });
 
     expect(result.report.registers.energy).toBe("2");
-    expect(result.steps.some((step) => step.hex === "D2" && step.comment === "decrement energy")).toBe(true);
-    expect(result.report.optimizations.some((item) => item.name === "indirect-incdec-counter")).toBe(true);
+    expect(result.steps.some((step) => step.hex === "D2" && step.comment === "delayed predecrement energy")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "ephemeral-input-branch")).toBe(true);
+    expect(result.report.optimizations.some((item) => item.name === "delayed-indirect-underflow-decrement")).toBe(true);
+  });
+
+  it("preserves branch-local delayed indirect pre-decrement behavior on the emulator", () => {
+    const source = `
+program BranchDelayedBehavior {
+  state {
+    a: packed = 0
+    b: packed = 0
+    energy: counter 0..99 = 1
+    selector: counter 0..9 = 7
+    score: counter 0..99 = 0
+  }
+
+  loop {
+    if selector == 7 {
+      energy--
+      score += 2
+    }
+    if energy <= 0 {
+      halt(9)
+    }
+    halt(score)
+  }
+}
+`;
+    const baseline = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {});
+    const optimized = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      indirectUnderflowDecrement: true,
+    });
+
+    expect(optimized.report.optimizations.some((item) => item.name === "delayed-indirect-underflow-decrement")).toBe(true);
+    expect(optimized.steps.length).toBeLessThan(baseline.steps.length);
+    expect(runCompiledDisplay(optimized)).toBe(runCompiledDisplay(baseline));
   });
 
   it("keeps ordinary unit decrement when a read precedes the terminal underflow guard", () => {

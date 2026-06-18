@@ -21,7 +21,9 @@ import {
 } from "./expr.ts";
 import {
   compileBitMaskWithQuotientScratch,
+  compileSegmentedBitplaneRandomUniqueSetup,
   emitBitMaskFromCurrentXWithQuotientScratch,
+  emitSegmentedBitplaneHitHelperBody,
   emitSpatialLineCountLoopBody,
   emitSpatialLineProgressionHelperBody,
   emitSpatialSumLoopHelperBody,
@@ -85,6 +87,8 @@ import {
   positiveIntegerPowerOfTenExponent,
   randomCoordListItemPlacement,
   randomCoordListSetupFields,
+  segmentedBitplaneRandomUniquePlacement,
+  segmentedBitplaneRandomUniqueSetupFields,
   selectCheaperEquivalentCondition,
   signedFirstSpliceDisplayLiteralProgram,
   spatialCountMaskScratchName,
@@ -239,6 +243,7 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
     if (usesR0SetupPointer) restoreSetupPointerR0(ctx, preloads);
 
     const initializedCoordLists = new Set<string>();
+    const initializedSegmentedBitplanes = new Set<string>();
     for (const field of fields) {
       if (groupedFieldNames.has(field.name)) continue;
       if (field.initial === undefined) continue;
@@ -248,6 +253,16 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
           const group = randomCoordListSetupFields(fields, coordList);
           compileRandomCoordListSetup(ctx, group, coordList);
           initializedCoordLists.add(coordList.listName);
+        }
+        continue;
+      }
+      const segmented = segmentedBitplaneRandomUniquePlacement(field.name, field.initial);
+      if (segmented !== undefined) {
+        const key = `${segmented.collection}:${segmented.countSource}`;
+        if (!initializedSegmentedBitplanes.has(key)) {
+          const group = segmentedBitplaneRandomUniqueSetupFields(fields, segmented);
+          compileSegmentedBitplaneRandomUniqueSetup(ctx, group, segmented);
+          initializedSegmentedBitplanes.add(key);
         }
         continue;
       }
@@ -263,7 +278,10 @@ export function compileSetupProgramWithPreloads(ctx: LoweringCtx,
         ctx.emitOp(0x40 + registerIndex(register), `X->П ${register}`, "setup formatted report mask", undefined, true);
       }
     }
-    if (fields.some((field) => field.initial !== undefined && randomCoordListItemPlacement(field.name, field.initial) !== undefined)) {
+    if (
+      initializedSegmentedBitplanes.size === 0 &&
+      fields.some((field) => field.initial !== undefined && randomCoordListItemPlacement(field.name, field.initial) !== undefined)
+    ) {
       ctx.emitNumber("7");
     }
     ctx.emitOp(0x50, "С/П", "setup complete");
@@ -279,7 +297,11 @@ function repeatedIndexedSetupGroups(ctx: LoweringCtx, fields: readonly StateFiel
         index += 1;
         continue;
       }
-      if (coordListItemInfo(first.name) !== undefined || randomCoordListItemPlacement(first.name, first.initial) !== undefined) {
+      if (
+        coordListItemInfo(first.name) !== undefined ||
+        randomCoordListItemPlacement(first.name, first.initial) !== undefined ||
+        segmentedBitplaneRandomUniquePlacement(first.name, first.initial) !== undefined
+      ) {
         index += 1;
         continue;
       }
@@ -295,6 +317,7 @@ function repeatedIndexedSetupGroups(ctx: LoweringCtx, fields: readonly StateFiel
         const candidate = fields[cursor]!;
         if (candidate.initial === undefined || candidate.initialStack !== undefined) break;
         if (coordListItemInfo(candidate.name) !== undefined) break;
+        if (segmentedBitplaneRandomUniquePlacement(candidate.name, candidate.initial) !== undefined) break;
         if (!expressionEquals(candidate.initial, first.initial)) break;
         const candidateRegister = ctx.allocation.registers[candidate.name];
         if (candidateRegister === undefined) break;
@@ -1311,6 +1334,8 @@ function statementReadsIdentifierForBorrow(
           expressionReferencesIdentifier(statement.expr, name);
       case "coord_list_remove":
         return expressionReferencesIdentifier(statement.item, name);
+      case "segmented_bitplane_update":
+        return expressionReferencesIdentifier(statement.item, name);
       case "if":
         return expressionReferencesIdentifier(statement.condition.left, name) ||
           expressionReferencesIdentifier(statement.condition.right, name) ||
@@ -1356,6 +1381,8 @@ function statementWritesIdentifierForBorrow(statement: StatementAst, name: strin
         return statement.target === name;
       case "indexed_assign":
         return statement.target.base === name;
+      case "segmented_bitplane_update":
+        return false;
       case "if":
         return statement.thenBody.some((child) => statementWritesIdentifierForBorrow(child, name)) &&
           (statement.elseBody?.some((child) => statementWritesIdentifierForBorrow(child, name)) ?? false);
@@ -2228,6 +2255,11 @@ export function compileRuntimeHelpers(ctx: LoweringCtx): void {
       ctx.emitOp(0x35, "К {x}", "spatial hit membership fraction", helper.line);
       ctx.emitOp(0x32, "К ЗН", "spatial hit to count", helper.line);
       ctx.emitOp(0x52, "В/О", "spatial hit return", helper.line);
+    }
+    for (const helper of ctx.segmentedBitplaneHitHelpers.values()) {
+      ctx.emitLabel(helper.label);
+      emitSegmentedBitplaneHitHelperBody(ctx, helper.collection, helper.line);
+      ctx.emitOp(0x52, "В/О", "segmented bitplane hit return", helper.line);
     }
 }
 

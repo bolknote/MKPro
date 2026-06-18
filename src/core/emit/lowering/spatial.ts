@@ -1,4 +1,4 @@
-import type { ExpressionAst, StatementAst } from "../../types.ts";
+import type { ExpressionAst, RegisterName, StateFieldAst, StatementAst } from "../../types.ts";
 import type { LoweringCtx } from "../lowering-ctx.ts";
 import {
   compileExpression,
@@ -13,10 +13,15 @@ import type {
 import {
   NEGATIVE_ZERO_DEGREE_PRELOAD_VALUE,
   NEGATIVE_ZERO_DEGREE_SELECTOR_GE,
+  SEGMENTED_BITPLANE_COUNTER,
+  SEGMENTED_BITPLANE_INDEX,
+  SEGMENTED_BITPLANE_SEED,
+  SEGMENTED_BITPLANE_SELECTOR,
   addExpressions,
   bitMaskScratchName,
   boardForCellMask,
   cellMaskExpression,
+  countExpressionCalls,
   expressionEquals,
   expressionIsDeterministic,
   expressionReferencesIdentifier,
@@ -29,6 +34,8 @@ import {
   matchSingleBitMaskOpAssignment,
   numericLiteralValue,
   offsetExpressionAst,
+  segmentedBitplaneCollectionInfo,
+  type SegmentedBitplaneRandomUniquePlacement,
   spatialCountExpression,
   spatialCountMaskScratchName,
   spatialCountScratchNames,
@@ -41,10 +48,15 @@ import {
 } from "../lowering-helpers.ts";
 import {
   getOpcode,
+  registerIndex,
 } from "../../opcodes.ts";
 import type {
   V2BoardAst,
 } from "../../types.ts";
+
+type SegmentedBitplaneUpdateStatement = Extract<StatementAst, { kind: "segmented_bitplane_update" }>;
+
+const SEGMENTED_BITPLANE_SELECTOR_VALUES = ["0", "1", "11", "14"] as const;
 
 export function compileGridCellMaskReuse(ctx: LoweringCtx,
     first: Extract<StatementAst, { kind: "assign" }>,
@@ -90,6 +102,39 @@ export function compileBitSetMaskReuse(ctx: LoweringCtx,
     first: Extract<StatementAst, { kind: "assign" }>,
     second: Extract<StatementAst, { kind: "assign" }>,
   ): boolean {
+    const firstMaskSet = matchBitOrMaskAssignment(first);
+    const secondMaskSet = matchBitOrMaskAssignment(second);
+    if (firstMaskSet !== undefined && secondMaskSet !== undefined) {
+      if (!expressionEquals(firstMaskSet.mask, secondMaskSet.mask)) return false;
+      if (expressionReferencesIdentifier(firstMaskSet.mask, first.target)) return false;
+      if (expressionReferencesIdentifier(secondMaskSet.mask, second.target)) return false;
+
+      const scratch = bitMaskScratchName(first);
+      if (!ctx.allocation.registers[scratch]) return false;
+
+      compileExpression(ctx, firstMaskSet.mask);
+      ctx.emitStore(scratch, "cell bit mask scratch", first.line);
+      emitCommutativeMaskOpWithScratch(ctx, firstMaskSet.collection, scratch, {
+        opcode: 0x38,
+        mnemonic: "К ∨",
+        opComment: "bit_set with reused mask",
+        recallComment: "reuse cell bit mask",
+        optimization: "mask-stack-op-reuse",
+        detail: `Kept ${scratch} on the stack for the first bit_set at line ${first.line}.`,
+        line: first.line,
+      });
+      ctx.emitStore(first.target, `set ${first.target}`, first.line);
+      compileExpression(ctx, secondMaskSet.collection);
+      ctx.emitRecall(scratch, "reuse cell bit mask", second.line);
+      ctx.emitOp(0x38, "К ∨", "bit_set with reused mask", second.line);
+      ctx.emitStore(second.target, `set ${second.target}`, second.line);
+      ctx.optimizations.push({
+        name: "bit-set-mask-cse",
+        detail: `Computed a cell mask once for adjacent set updates at lines ${first.line}/${second.line}.`,
+      });
+      return true;
+    }
+
     const firstSet = matchBitSetAssignment(first);
     const secondSet = matchBitSetAssignment(second);
     if (firstSet === undefined || secondSet === undefined) return false;
@@ -119,6 +164,16 @@ export function compileBitSetMaskReuse(ctx: LoweringCtx,
       detail: `Computed bit_mask() once for adjacent set updates at lines ${first.line}/${second.line}.`,
     });
     return true;
+}
+
+function matchBitOrMaskAssignment(
+    statement: Extract<StatementAst, { kind: "assign" }>,
+  ): { collection: ExpressionAst; mask: ExpressionAst } | undefined {
+    const expr = statement.expr;
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_or" || expr.args.length !== 2) return undefined;
+    const [collection, mask] = expr.args;
+    if (collection?.kind !== "identifier" || collection.name !== statement.target || mask === undefined) return undefined;
+    return { collection, mask };
 }
 
 export function compileSingleBitMaskOpCopyReuse(ctx: LoweringCtx,
@@ -420,6 +475,33 @@ export function compileSpatialLineCountLoop(ctx: LoweringCtx, expr: Extract<Expr
     if (mask?.kind !== "identifier" || cell === undefined) return false;
     const board = boardForCellMask(mask, ctx.ast);
     if (board === undefined) return false;
+    const segmented = segmentedBitplaneCollectionInfo(ctx.ast, mask.name);
+    if (segmented !== undefined) {
+      if (
+        ctx.loweringOptions.segmentedLineCountScan === true &&
+        compileSegmentedBitplaneLineCountScan(ctx, mask.name, cell, undefined)
+      ) {
+        return true;
+      }
+      const scratch = spatialCountScratchNames();
+      if (scratch.some((name) => ctx.allocation.registers[name] === undefined)) return false;
+      if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === undefined) return false;
+      if (segmented.planes.some((plane) => ctx.allocation.registers[plane] === undefined)) return false;
+      emitSpatialProgressionCountLoopBody(
+        ctx,
+        mask.name,
+        cell,
+        spatialLineProgressions(board, cell),
+        false,
+        undefined,
+        "line_count",
+      );
+      ctx.optimizations.push({
+        name: "segmented-bitplane-line-count-helper",
+        detail: `Lowered line_count(${mask.name}, ...) through a shared segmented bitplane progression helper.`,
+      });
+      return true;
+    }
     const scratch = spatialCountScratchNames();
     if (scratch.some((name) => ctx.allocation.registers[name] === undefined)) return false;
 
@@ -443,6 +525,103 @@ export function compileSpatialLineCountLoop(ctx: LoweringCtx, expr: Extract<Expr
     }
     emitSpatialLineCountLoopBody(ctx, hitMask, cell, board, undefined);
     return true;
+}
+
+function compileSegmentedBitplaneLineCountScan(
+    ctx: LoweringCtx,
+    collection: string,
+    cell: ExpressionAst,
+    sourceLine: number | undefined,
+  ): boolean {
+    const info = segmentedBitplaneCollectionInfo(ctx.ast, collection);
+    if (info === undefined) return false;
+    if (cell.kind !== "identifier") return false;
+
+    const scratch = spatialCountScratchNames();
+    const total = scratch[0]!;
+    const counter = scratch[3]!;
+    const counterRegister = ctx.allocation.registers[counter];
+    const flCounterOpcode = counterRegister === undefined ? undefined : flOpcode(counterRegister);
+    if (flCounterOpcode === undefined) return false;
+    if (scratch.some((name) => ctx.allocation.registers[name] === undefined)) return false;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === undefined) return false;
+    if (info.planes.some((plane) => ctx.allocation.registers[plane] === undefined)) return false;
+
+    const candidate = { kind: "identifier", name: SEGMENTED_BITPLANE_INDEX } satisfies ExpressionAst;
+    const start = ctx.freshLabel("segmented_line_count_scan");
+    const visible = ctx.freshLabel("segmented_line_count_visible");
+    const next = ctx.freshLabel("segmented_line_count_next");
+
+    ctx.emitZero("line_count scan total", sourceLine);
+    ctx.emitStore(total, "line_count scan total", sourceLine);
+    ctx.emitNumberOrPreload("100");
+    ctx.emitStore(counter, "line_count scan counter", sourceLine);
+
+    ctx.emitLabel(start);
+    ctx.emitRecall(counter, "line_count scan counter", sourceLine);
+    ctx.emitNumberOrPreload("1");
+    ctx.emitOp(0x11, "-", "line_count scan candidate index", sourceLine);
+    ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "line_count scan candidate", sourceLine);
+
+    emitSegmentedLineCountOnesDigit(ctx, candidate, sourceLine, "line_count scan candidate x");
+    emitSegmentedLineCountOnesDigit(ctx, cell, sourceLine, "line_count scan cell x");
+    ctx.emitOp(0x11, "-", "line_count scan dx", sourceLine);
+    ctx.emitJump(0x57, "F x!=0", visible, "line_count scan same column", sourceLine);
+    ctx.emitNumberOrPreload("10");
+    ctx.emitOp(0x12, "*", "line_count scan dx digit", sourceLine);
+
+    emitSegmentedLineCountTensDigit(ctx, candidate, sourceLine, "line_count scan candidate y");
+    emitSegmentedLineCountTensDigit(ctx, cell, sourceLine, "line_count scan cell y");
+    ctx.emitOp(0x11, "-", "line_count scan dy", sourceLine);
+    ctx.emitJump(0x57, "F x!=0", visible, "line_count scan same row", sourceLine);
+    ctx.emitOp(0x31, "К |x|", "line_count scan |dy|", sourceLine);
+    ctx.emitOp(0x14, "<->", "line_count scan dx", sourceLine);
+    ctx.emitOp(0x31, "К |x|", "line_count scan |dx|", sourceLine);
+    ctx.emitOp(0x11, "-", "line_count scan diagonal compare", sourceLine);
+    ctx.emitJump(0x57, "F x!=0", visible, "line_count scan same diagonal", sourceLine);
+    ctx.emitJump(0x51, "БП", next, "line_count scan not visible", sourceLine);
+
+    ctx.emitLabel(visible);
+    ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "line_count scan probe candidate", sourceLine);
+    emitSegmentedBitplaneHitHelperBody(ctx, collection, sourceLine);
+    ctx.emitRecall(total, "line_count scan total", sourceLine);
+    ctx.emitOp(0x10, "+", "line_count scan add hit", sourceLine);
+    ctx.emitStore(total, "line_count scan total", sourceLine);
+
+    ctx.emitLabel(next);
+    ctx.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, "line_count scan loop", sourceLine);
+    ctx.emitRecall(total, "line_count scan result", sourceLine);
+    ctx.optimizations.push({
+      name: "segmented-bitplane-line-count-scan",
+      detail: `Lowered line_count(${collection}, ...) as one 10x10 segmented bitplane scan.`,
+    });
+    return true;
+}
+
+function emitSegmentedLineCountTensDigit(
+    ctx: LoweringCtx,
+    expr: ExpressionAst,
+    sourceLine: number | undefined,
+    comment: string,
+  ): void {
+    compileExpression(ctx, expr);
+    ctx.emitNumberOrPreload("10");
+    ctx.emitOp(0x13, "/", `${comment} /10`, sourceLine);
+    ctx.emitOp(0x34, "К [x]", comment, sourceLine);
+}
+
+function emitSegmentedLineCountOnesDigit(
+    ctx: LoweringCtx,
+    expr: ExpressionAst,
+    sourceLine: number | undefined,
+    comment: string,
+  ): void {
+    compileExpression(ctx, expr);
+    ctx.emitNumberOrPreload("10");
+    ctx.emitOp(0x13, "/", `${comment} /10`, sourceLine);
+    ctx.emitOp(0x35, "К {x}", `${comment} fraction`, sourceLine);
+    ctx.emitNumberOrPreload("10");
+    ctx.emitOp(0x12, "*", comment, sourceLine);
 }
 
 export function emitSpatialLineCountLoopBody(ctx: LoweringCtx, 
@@ -643,7 +822,15 @@ export function emitSpatialSumLoopHelperBody(ctx: LoweringCtx,
     const start = ctx.freshLabel(`${operation}_loop`);
     ctx.emitLabel(start);
     compileExpression(ctx, addExpressions(cell, { kind: "identifier", name: offset }));
-    emitInlineSpatialHitFromCurrentX(ctx, hitMask, sourceLine);
+    if (segmentedBitplaneCollectionInfo(ctx.ast, hitMask) !== undefined) {
+      emitSegmentedBitplaneHitHelperBody(ctx, hitMask, sourceLine);
+      ctx.optimizations.push({
+        name: "segmented-bitplane-sum-helper-inline-hit",
+        detail: `Inlined segmented bitplane hit inside the ${operation} sum-loop helper for ${hitMask}.`,
+      });
+    } else {
+      emitInlineSpatialHitFromCurrentX(ctx, hitMask, sourceLine);
+    }
 
     ctx.emitRecall(offset, `${operation} offset`);
     ctx.emitRecall(step, `${operation} step`);
@@ -721,6 +908,404 @@ export function compileSpatialHitCall(ctx: LoweringCtx, expr: Extract<Expression
     const helper = ctx.ensureSpatialHitHelper(mask.name, scratch);
     compileExpression(ctx, index);
     ctx.emitJump(0x53, "ПП", helper.label, `spatial hit ${mask.name}`, helper.line);
+    return true;
+}
+
+export function compileSegmentedBitplaneUpdateStatement(
+    ctx: LoweringCtx,
+    statement: SegmentedBitplaneUpdateStatement,
+  ): boolean {
+    const info = segmentedBitplaneCollectionInfo(ctx.ast, statement.collection);
+    if (info === undefined) return false;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === undefined) return false;
+    if (info.planes.some((plane) => ctx.allocation.registers[plane] === undefined)) return false;
+
+    const selector = emitSegmentedBitplaneIndirectSelect(ctx, statement.item, statement.line);
+    if (selector !== undefined) {
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane local index", statement.line);
+      emitBitMaskFromCurrentXWithQuotientScratch(ctx, SEGMENTED_BITPLANE_INDEX, statement.line);
+      if (statement.op === "-=") ctx.emitOp(0x3a, "К ИНВ", "segmented bitplane clear mask", statement.line);
+      ctx.emitOp(0xd0 + registerIndex(selector), `К П->X ${selector}`, "segmented bitplane selected plane", statement.line);
+      ctx.emitOp(
+        statement.op === "+=" ? 0x38 : 0x37,
+        statement.op === "+=" ? "К ∨" : "К ∧",
+        statement.op === "+=" ? "segmented bitplane set" : "segmented bitplane clear",
+        statement.line,
+      );
+      ctx.emitOp(0xb0 + registerIndex(selector), `К X->П ${selector}`, "segmented bitplane store selected plane", statement.line);
+      ctx.optimizations.push({
+        name: "segmented-bitplane-update-indirect",
+        detail: `${statement.op === "+=" ? "Set" : "Cleared"} ${statement.collection} with one indirect selected plane at line ${statement.line}.`,
+      });
+      return true;
+    }
+
+    emitSegmentedBitplaneGroupDispatch(ctx, statement.item, statement.line, (group) => {
+      emitSegmentedBitplaneLocalMask(ctx, group, statement.line);
+      if (statement.op === "-=") ctx.emitOp(0x3a, "К ИНВ", "segmented bitplane clear mask", statement.line);
+      ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane update mask", statement.line);
+      ctx.emitRecall(info.planes[group]!, "segmented bitplane update plane", statement.line);
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane update mask", statement.line);
+      ctx.emitOp(
+        statement.op === "+=" ? 0x38 : 0x37,
+        statement.op === "+=" ? "К ∨" : "К ∧",
+        statement.op === "+=" ? "segmented bitplane set" : "segmented bitplane clear",
+        statement.line,
+      );
+      ctx.emitStore(info.planes[group]!, "segmented bitplane update plane", statement.line);
+    });
+    ctx.optimizations.push({
+      name: "segmented-bitplane-update",
+      detail: `${statement.op === "+=" ? "Set" : "Cleared"} ${statement.collection} through four 25-cell bitplanes at line ${statement.line}.`,
+    });
+    return true;
+}
+
+export function compileSegmentedBitplaneRandomUniqueSetup(
+    ctx: LoweringCtx,
+    fields: readonly StateFieldAst[],
+    placement: SegmentedBitplaneRandomUniquePlacement,
+  ): void {
+    const line = fields[0]?.line;
+    const info = segmentedBitplaneCollectionInfo(ctx.ast, placement.collection);
+    const selector = segmentedBitplaneSelectorRegister(ctx);
+    if (
+      info === undefined ||
+      selector === undefined ||
+      ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === undefined ||
+      ctx.allocation.registers[SEGMENTED_BITPLANE_COUNTER] === undefined ||
+      ctx.allocation.registers[SEGMENTED_BITPLANE_SEED] === undefined ||
+      ctx.allocation.registers[placement.countSource] === undefined ||
+      info.planes.some((plane) => ctx.allocation.registers[plane] === undefined) ||
+      fields.length !== info.planes.length
+    ) {
+      ctx.diagnostics.push({
+        level: "error",
+        message: `segmented cells random() setup for ${placement.collection} needs four planes, a count source, selector, index, counter, and seed registers.`,
+        ...(line === undefined ? {} : { line }),
+      });
+      return;
+    }
+
+    ctx.emitZero("segmented bitplane setup zero", line);
+    for (const plane of info.planes) {
+      ctx.emitStore(plane, `setup ${plane}`, line, true);
+    }
+
+    ctx.emitOp(0x3b, "К СЧ", "segmented bitplane random seed", line);
+    ctx.emitStore(SEGMENTED_BITPLANE_SEED, "segmented bitplane random seed", line, true);
+    ctx.emitRecall(placement.countSource, "segmented bitplane random count", line);
+    ctx.emitStore(SEGMENTED_BITPLANE_COUNTER, "segmented bitplane remaining placements", line, true);
+
+    const draw = ctx.freshLabel("seg_bitplane_random_draw");
+    ctx.emitLabel(draw);
+    emitSegmentedBitplaneRandomCandidate(ctx, line);
+
+    const selected = emitSegmentedBitplaneIndirectSelect(ctx, { kind: "identifier", name: SEGMENTED_BITPLANE_INDEX }, line);
+    if (selected === undefined) {
+      ctx.diagnostics.push({
+        level: "error",
+        message: `segmented cells random() setup for ${placement.collection} could not select a plane indirectly.`,
+        ...(line === undefined ? {} : { line }),
+      });
+      return;
+    }
+
+    ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane random local index", line);
+    emitBitMaskFromCurrentXWithQuotientScratch(ctx, SEGMENTED_BITPLANE_INDEX, line);
+    ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane random mask", line, true);
+    ctx.emitOp(0xd0 + registerIndex(selected), `К П->X ${selected}`, "segmented bitplane random selected plane", line);
+    ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane random mask", line);
+    ctx.emitOp(0x37, "К ∧", "segmented bitplane random collision probe", line);
+    ctx.emitOp(0x35, "К {x}", "segmented bitplane random collision fraction", line);
+    ctx.emitJump(0x5e, "F x=0", draw, "segmented bitplane random collision", line);
+
+    ctx.emitOp(0xd0 + registerIndex(selected), `К П->X ${selected}`, "segmented bitplane random selected plane", line);
+    ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane random mask", line);
+    ctx.emitOp(0x38, "К ∨", "segmented bitplane random set", line);
+    ctx.emitOp(0xb0 + registerIndex(selected), `К X->П ${selected}`, "segmented bitplane random store selected plane", line);
+
+    ctx.emitRecall(SEGMENTED_BITPLANE_COUNTER, "segmented bitplane remaining placements", line);
+    ctx.emitNumberOrPreload("1");
+    ctx.emitOp(0x11, "-", "segmented bitplane decrement remaining placements", line);
+    ctx.emitStore(SEGMENTED_BITPLANE_COUNTER, "segmented bitplane remaining placements", line, true);
+    ctx.emitJump(0x5e, "F x=0", draw, "segmented bitplane random next placement", line);
+
+    ctx.emitRecall(placement.countSource, "segmented bitplane setup complete count", line);
+    ctx.emitOp(0x0b, "/-/", "segmented bitplane setup complete display", line);
+    ctx.optimizations.push({
+      name: "segmented-bitplane-random-unique",
+      detail: `Generated unique random setup for ${placement.collection} through four 25-cell bitplanes.`,
+    });
+}
+
+function emitSegmentedBitplaneRandomCandidate(ctx: LoweringCtx, line: number | undefined): void {
+    ctx.emitRecall(SEGMENTED_BITPLANE_SEED, "segmented bitplane random seed", line);
+    ctx.emitNumberOrPreload("37");
+    ctx.emitOp(0x12, "*", "segmented bitplane next random seed", line);
+    ctx.emitOp(0x35, "К {x}", "segmented bitplane random seed fraction", line);
+    ctx.emitStore(SEGMENTED_BITPLANE_SEED, "segmented bitplane random seed", line, true);
+    ctx.emitNumberOrPreload("100");
+    ctx.emitOp(0x12, "*", "segmented bitplane random scaled seed", line);
+    ctx.emitOp(0x34, "К [x]", "segmented bitplane random flat index", line);
+    ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane random candidate", line, true);
+}
+
+export function emitSegmentedBitplaneHitUpdateDispatch(
+    ctx: LoweringCtx,
+    collection: string,
+    item: ExpressionAst,
+    update: SegmentedBitplaneUpdateStatement,
+    falseLabel: string,
+    thenLabel: string,
+    line: number,
+  ): boolean {
+    const info = segmentedBitplaneCollectionInfo(ctx.ast, collection);
+    if (info === undefined) return false;
+    if (update.collection !== collection || !expressionEquals(update.item, item)) return false;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === undefined) return false;
+    if (info.planes.some((plane) => ctx.allocation.registers[plane] === undefined)) return false;
+
+    const selector = emitSegmentedBitplaneIndirectSelect(ctx, item, line);
+    if (selector !== undefined) {
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane local index", line);
+      emitBitMaskFromCurrentXWithQuotientScratch(ctx, SEGMENTED_BITPLANE_INDEX, line);
+      ctx.emitOp(0xd0 + registerIndex(selector), `К П->X ${selector}`, "segmented bitplane selected plane", line);
+      ctx.emitOp(0x37, "К ∧", "segmented bitplane probe", line);
+      ctx.emitOp(0x35, "К {x}", "segmented bitplane hit fraction", line);
+      ctx.emitJump(0x57, "F x≠0", falseLabel, "false branch for segmented hit", line);
+      if (update.op === "-=") {
+        ctx.emitOp(0x3a, "К ИНВ", "segmented bitplane clear matched mask", update.line);
+        ctx.emitOp(0xd0 + registerIndex(selector), `К П->X ${selector}`, "segmented bitplane clear selected plane", update.line);
+        ctx.emitOp(0x37, "К ∧", "segmented bitplane clear matched bit", update.line);
+        ctx.emitOp(0xb0 + registerIndex(selector), `К X->П ${selector}`, "segmented bitplane store selected plane", update.line);
+      }
+      ctx.emitJump(0x51, "БП", thenLabel, "segmented bitplane hit tail", line);
+      ctx.optimizations.push({
+        name: "segmented-bitplane-hit-update-indirect",
+        detail: `Fused ${collection} probe/update through one indirect selected plane at line ${line}.`,
+      });
+      return true;
+    }
+
+    emitSegmentedBitplaneGroupDispatch(ctx, item, line, (group) => {
+      const plane = info.planes[group]!;
+      emitSegmentedBitplaneLocalMask(ctx, group, line);
+      ctx.emitRecall(plane, "segmented bitplane probe plane", line);
+      ctx.emitOp(0x37, "К ∧", "segmented bitplane probe", line);
+      ctx.emitOp(0x35, "К {x}", "segmented bitplane hit fraction", line);
+      ctx.emitJump(0x57, "F x≠0", falseLabel, "false branch for segmented hit", line);
+      if (update.op === "-=") {
+        ctx.emitOp(0x3a, "К ИНВ", "segmented bitplane clear matched mask", update.line);
+        ctx.emitRecall(plane, "segmented bitplane clear plane", update.line);
+        ctx.emitOp(0x37, "К ∧", "segmented bitplane clear matched bit", update.line);
+        ctx.emitStore(plane, "segmented bitplane clear plane", update.line);
+      }
+      ctx.emitJump(0x51, "БП", thenLabel, "segmented bitplane hit tail", line);
+      return true;
+    });
+    ctx.optimizations.push({
+      name: "segmented-bitplane-hit-update",
+      detail: `Fused ${collection} membership probe with ${update.op} update at line ${line}.`,
+    });
+    return true;
+}
+
+function emitSegmentedBitplaneGroupDispatch(
+    ctx: LoweringCtx,
+    item: ExpressionAst,
+    line: number | undefined,
+    emitGroup: (group: number) => boolean | void,
+  ): void {
+    const labels = [0, 1, 2, 3].map((group) => ctx.freshLabel(`seg_bitplane_group_${group}`));
+    const end = ctx.freshLabel("seg_bitplane_group_end");
+    if (!(item.kind === "identifier" && ctx.xHolds(item.name)) && !ctx.xHoldsExpression(item)) {
+      compileExpression(ctx, item);
+    }
+    ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+    for (let group = 0; group < 3; group += 1) {
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+      ctx.emitNumberOrPreload(String((group + 1) * 25));
+      ctx.emitOp(0x11, "-", "segmented bitplane threshold", line);
+      ctx.emitJump(0x5c, "F x<0", labels[group]!, "segmented bitplane select", line);
+    }
+    ctx.emitJump(0x51, "БП", labels[3]!, "segmented bitplane select", line);
+
+    for (let group = 0; group < 4; group += 1) {
+      ctx.emitLabel(labels[group]!);
+      const exitsGroup = emitGroup(group) === true;
+      if (group < 3 && !exitsGroup) ctx.emitJump(0x51, "БП", end, "segmented bitplane group end", line);
+    }
+    ctx.emitLabel(end);
+}
+
+function emitSegmentedBitplaneLocalMask(ctx: LoweringCtx, group: number, line: number | undefined): void {
+    ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+    if (group > 0) {
+      ctx.emitNumberOrPreload(String(group * 25));
+      ctx.emitOp(0x11, "-", "segmented bitplane local index", line);
+    }
+    emitBitMaskFromCurrentXWithQuotientScratch(ctx, SEGMENTED_BITPLANE_INDEX, line);
+}
+
+function segmentedBitplaneSelectorRegister(ctx: LoweringCtx): RegisterName | undefined {
+    const register = ctx.allocation.registers[SEGMENTED_BITPLANE_SELECTOR];
+    return register !== undefined && registerIndex(register) >= 7 ? register : undefined;
+}
+
+function emitSegmentedBitplaneIndirectSelect(
+    ctx: LoweringCtx,
+    item: ExpressionAst,
+    line: number | undefined,
+  ): RegisterName | undefined {
+    const selector = segmentedBitplaneSelectorRegister(ctx);
+    if (selector === undefined) return undefined;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === undefined) return undefined;
+
+    const labels = [0, 1, 2, 3].map((group) => ctx.freshLabel(`seg_bitplane_select_${group}`));
+    const selected = ctx.freshLabel("seg_bitplane_selected");
+    const itemIsStoredIndex = item.kind === "identifier" && item.name === SEGMENTED_BITPLANE_INDEX;
+    if (!(item.kind === "identifier" && ctx.xHolds(item.name)) && !ctx.xHoldsExpression(item)) {
+      compileExpression(ctx, item);
+    }
+    if (!itemIsStoredIndex) {
+      ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+    }
+    for (let group = 0; group < 3; group += 1) {
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+      ctx.emitNumberOrPreload(String((group + 1) * 25));
+      ctx.emitOp(0x11, "-", "segmented bitplane threshold", line);
+      ctx.emitJump(0x5c, "F x<0", labels[group]!, "segmented bitplane indirect select", line);
+    }
+    ctx.emitJump(0x51, "БП", labels[3]!, "segmented bitplane indirect select", line);
+
+    for (let group = 0; group < 4; group += 1) {
+      ctx.emitLabel(labels[group]!);
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+      if (group > 0) {
+        ctx.emitNumberOrPreload(String(group * 25));
+        ctx.emitOp(0x11, "-", "segmented bitplane local index", line);
+      }
+      ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane local index", line);
+      ctx.emitNumberOrPreload(SEGMENTED_BITPLANE_SELECTOR_VALUES[group]!);
+      ctx.emitStore(SEGMENTED_BITPLANE_SELECTOR, "segmented bitplane selector", line);
+      if (group < 3) ctx.emitJump(0x51, "БП", selected, "segmented bitplane selected", line);
+    }
+    ctx.emitLabel(selected);
+    return selector;
+}
+
+export function compileSegmentedBitplaneHitCall(ctx: LoweringCtx, expr: Extract<ExpressionAst, { kind: "call" }>): boolean {
+    if (expr.args.length !== 2) {
+      ctx.diagnostics.push({
+        level: "error",
+        message: "__seg_bit_has() expects two arguments.",
+      });
+      return true;
+    }
+    const [collection, index] = expr.args;
+    if (collection?.kind !== "identifier" || index === undefined) return false;
+    if (segmentedBitplaneCollectionInfo(ctx.ast, collection.name) === undefined) {
+      ctx.diagnostics.push({
+        level: "error",
+        message: `Collection ${collection.name} is not lowered as segmented bitplanes.`,
+      });
+      return true;
+    }
+    if (!(index.kind === "identifier" && ctx.xHolds(index.name)) && !ctx.xHoldsExpression(index)) {
+      compileExpression(ctx, index);
+    }
+    if (emitSegmentedBitplaneHitFromCurrentX(ctx, collection.name, undefined)) return true;
+    ctx.diagnostics.push({
+      level: "error",
+      message: `segmented bitplane hit for ${collection.name} needs four plane registers and ${SEGMENTED_BITPLANE_INDEX}.`,
+    });
+    return true;
+}
+
+export function emitSegmentedBitplaneHitFromCurrentX(
+    ctx: LoweringCtx,
+    collection: string,
+    sourceLine: number | undefined,
+  ): boolean {
+    const info = segmentedBitplaneCollectionInfo(ctx.ast, collection);
+    if (info === undefined) return false;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === undefined) return false;
+    if (info.planes.some((plane) => ctx.allocation.registers[plane] === undefined)) return false;
+
+    const shouldShare =
+      countExpressionCalls(ctx.ast, "__seg_bit_has") > 1 ||
+      countExpressionCalls(ctx.ast, "line_count") > 0;
+    if (!shouldShare) {
+      return emitSegmentedBitplaneHitHelperBody(ctx, collection, sourceLine);
+    }
+
+    const helper = ctx.ensureSegmentedBitplaneHitHelper(collection, sourceLine);
+    ctx.emitJump(0x53, "ПП", helper.label, `segmented bitplane hit ${collection}`, sourceLine);
+    ctx.optimizations.push({
+      name: "segmented-bitplane-hit-helper-call",
+      detail: `Tested ${collection} through a shared 25-cell bitplane selector.`,
+    });
+    return true;
+}
+
+export function emitSegmentedBitplaneHitHelperBody(
+    ctx: LoweringCtx,
+    collection: string,
+    sourceLine: number | undefined,
+  ): boolean {
+    const info = segmentedBitplaneCollectionInfo(ctx.ast, collection);
+    if (info === undefined) return false;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === undefined) return false;
+    if (info.planes.some((plane) => ctx.allocation.registers[plane] === undefined)) return false;
+
+    ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", sourceLine);
+    const selector = emitSegmentedBitplaneIndirectSelect(ctx, { kind: "identifier", name: SEGMENTED_BITPLANE_INDEX }, sourceLine);
+    if (selector !== undefined) {
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane local index", sourceLine);
+      emitBitMaskFromCurrentXWithQuotientScratch(ctx, SEGMENTED_BITPLANE_INDEX, sourceLine);
+      ctx.emitOp(0xd0 + registerIndex(selector), `К П->X ${selector}`, "segmented bitplane selected plane", sourceLine);
+      ctx.emitOp(0x37, "К ∧", "segmented bitplane hit test", sourceLine);
+      ctx.emitOp(0x35, "К {x}", "segmented bitplane hit fraction", sourceLine);
+      ctx.emitOp(0x32, "К ЗН", "segmented bitplane hit to count", sourceLine);
+      ctx.optimizations.push({
+        name: "segmented-bitplane-hit-indirect-helper",
+        detail: `Emitted shared hit helper for ${collection} with one indirect selected plane.`,
+      });
+      return true;
+    }
+
+    const scratch = SEGMENTED_BITPLANE_INDEX;
+    const labels = info.planes.map((_plane, index) => ctx.freshLabel(`seg_bitplane_${index}`));
+    const end = ctx.freshLabel("seg_bitplane_end");
+    ctx.emitStore(scratch, "segmented bitplane index", sourceLine);
+    for (let group = 0; group < 3; group += 1) {
+      ctx.emitRecall(scratch, "segmented bitplane index", sourceLine);
+      ctx.emitNumberOrPreload(String((group + 1) * 25));
+      ctx.emitOp(0x11, "-", "segmented bitplane threshold", sourceLine);
+      ctx.emitJump(0x5c, "F x<0", labels[group]!, "segmented bitplane select", sourceLine);
+    }
+    ctx.emitJump(0x51, "БП", labels[3]!, "segmented bitplane select", sourceLine);
+
+    for (let group = 0; group < 4; group += 1) {
+      ctx.emitLabel(labels[group]!);
+      ctx.emitRecall(scratch, "segmented bitplane index", sourceLine);
+      if (group > 0) {
+        ctx.emitNumberOrPreload(String(group * 25));
+        ctx.emitOp(0x11, "-", "segmented bitplane local index", sourceLine);
+      }
+      emitBitMaskFromCurrentXWithQuotientScratch(ctx, scratch, sourceLine);
+      ctx.emitRecall(info.planes[group]!, "segmented bitplane plane", sourceLine);
+      ctx.emitOp(0x37, "К ∧", "segmented bitplane hit test", sourceLine);
+      ctx.emitOp(0x35, "К {x}", "segmented bitplane hit fraction", sourceLine);
+      ctx.emitOp(0x32, "К ЗН", "segmented bitplane hit to count", sourceLine);
+      if (group < 3) ctx.emitJump(0x51, "БП", end, "segmented bitplane hit end", sourceLine);
+    }
+    ctx.emitLabel(end);
+    ctx.optimizations.push({
+      name: "segmented-bitplane-hit-helper",
+      detail: `Emitted shared hit helper for ${collection} through four 25-cell bitplanes.`,
+    });
     return true;
 }
 

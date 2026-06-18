@@ -555,6 +555,22 @@ describe("post-layout indirect flow", () => {
     expect(result.items).toEqual(program);
   });
 
+  it("keeps a returning call target entry off its own address byte", () => {
+    const program: MachineItem[] = [
+      ...call("entry"),
+      digit(),
+      halt(),
+      { kind: "label", name: "entry" },
+      op(0x07, "7"),
+      digit(),
+      { kind: "op", opcode: 0x52, mnemonic: "В/О" },
+    ];
+    const result = optimizePostLayoutAddressCodeOverlay(program);
+
+    expect(result.applied).toBe(0);
+    expect(result.items).toEqual(program);
+  });
+
   it("does not overlay returning call or conditional continuations onto their address bytes", () => {
     for (const branch of [
       [{ kind: "op", opcode: 0x53, mnemonic: "ПП" } as MachineItem, { kind: "address", target: "target" } as MachineItem],

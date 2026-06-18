@@ -10,8 +10,8 @@ Generated with `npm run examples:size`.
 
 - Top-level examples: 30/30 fit in the 105-cell MK-61 window; 30/30 pass the headless load check.
 - Referenced top-level examples: 23/23 are no larger than the original MK-61 listing.
-- Tightest runnable examples: `giants-country.mkpro` (105), `labyrinth777.mkpro` (105), `cave-highlevel-baseline.mkpro` (104).
-- Pending optimizer: 1 programs still exceed the MK-61 window; nearest is `pending-optimizer/tic-tac-toe-4x4.mkpro` (136).
+- Tightest runnable examples: `fox-hunt-100.mkpro` (105), `labyrinth777.mkpro` (105), `cave-highlevel-baseline.mkpro` (104), `giants-country.mkpro` (104).
+- Pending optimizer: 1 programs still exceed the MK-61 window; nearest is `pending-optimizer/tic-tac-toe-4x4.mkpro` (134).
 
 ## Measurements
 
@@ -29,24 +29,24 @@ Generated with `npm run examples:size`.
 | `dangerous-loading.mkpro` | 86 | 103 | -17 | ok: <= reference | load ok |
 | `dungeon.mkpro` | 84 | 999999 | -999915 | ok: <= reference | load ok |
 | `e-94-digits.mkpro` | 64 | 64 | 0 | ok: <= reference | load ok |
-| `fox-hunt-100.mkpro` | 104 | 105 | -1 | ok: <= reference | main+setup load ok |
+| `fox-hunt-100.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
 | `fox-hunt-mk61.mkpro` | 65 | 92 | -27 | ok: <= reference | main+setup load ok |
 | `functions-demo.mkpro` | 25 | - | - | ok: no reference | load ok |
-| `game-100-pig.mkpro` | 99 | 103 | -4 | ok: <= reference | main+setup load ok |
-| `giants-country.mkpro` | 105 | 999999 | -999894 | ok: <= reference | main+setup load ok |
+| `game-100-pig.mkpro` | 101 | 103 | -2 | ok: <= reference | main+setup load ok |
+| `giants-country.mkpro` | 104 | 999999 | -999895 | ok: <= reference | main+setup load ok |
 | `human.mkpro` | 26 | - | - | ok: no reference | load ok |
 | `jack-pot.mkpro` | 99 | 999999 | -999900 | ok: <= reference | main+setup load ok |
 | `labyrinth777.mkpro` | 105 | 105 | 0 | ok: <= reference | main+setup load ok |
 | `lunar.mkpro` | 47 | 999999 | -999952 | ok: <= reference | load ok |
-| `minesweeper-9x7.mkpro` | 85 | 999999 | -999914 | ok: <= reference | main+setup load ok |
-| `minesweeper-9x9.mkpro` | 85 | 97 | -12 | ok: <= reference | main+setup load ok |
-| `raja-yoga.mkpro` | 85 | 98 | -13 | ok: <= reference | main+setup load ok |
-| `rambo-iii.mkpro` | 104 | 999999 | -999895 | ok: <= reference | load ok |
+| `minesweeper-9x7.mkpro` | 87 | 999999 | -999912 | ok: <= reference | main+setup load ok |
+| `minesweeper-9x9.mkpro` | 87 | 97 | -10 | ok: <= reference | main+setup load ok |
+| `raja-yoga.mkpro` | 84 | 98 | -14 | ok: <= reference | main+setup load ok |
+| `rambo-iii.mkpro` | 103 | 999999 | -999896 | ok: <= reference | load ok |
 | `river-battle.mkpro` | 95 | - | - | ok: no reference | main+setup load ok |
-| `sea-battle.mkpro` | 74 | 102 | -28 | ok: <= reference | main+setup load ok |
+| `sea-battle.mkpro` | 72 | 102 | -30 | ok: <= reference | main+setup load ok |
 | `teleport.mkpro` | 97 | 105 | -8 | ok: <= reference | main+setup load ok |
 | `tic-tac-toe.mkpro` | 100 | - | - | ok: no reference | load ok |
-| `tiny-game.mkpro` | 26 | - | - | ok: no reference | load ok |
+| `tiny-game.mkpro` | 25 | - | - | ok: no reference | load ok |
 | `treasure-hunter-2.mkpro` | 99 | 105 | -6 | ok: <= reference | main+setup load ok |
 | `wumpus.mkpro` | 103 | - | - | ok: no reference | main+setup load ok |
-| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 136 | 105 | +31 | pending optimizer | not loaded: main >105 |
+| `pending-optimizer/tic-tac-toe-4x4.mkpro` | 134 | 105 | +29 | pending optimizer | not loaded: main >105 |

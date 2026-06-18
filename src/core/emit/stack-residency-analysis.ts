@@ -53,6 +53,8 @@ export function statementReadsIdentifier(statement: StatementAst, name: string):
       );
     case "coord_list_remove":
       return expressionReferencesIdentifier(statement.item, name);
+    case "segmented_bitplane_update":
+      return expressionReferencesIdentifier(statement.item, name);
     case "if":
       return (
         expressionReferencesIdentifier(statement.condition.left, name) ||
@@ -133,6 +135,7 @@ export function statementPreservesStackResidency(
     case "core":
     case "decimal_series":
     case "coord_list_remove":
+    case "segmented_bitplane_update":
       return false;
     case "if":
       if (conditionReferencesProtected(statement.condition, protectedTemps)) return false;

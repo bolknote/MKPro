@@ -14805,6 +14805,10 @@ function dropDifference(depth: StackDifferenceDepth): StackDifferenceDepth | und
   return 2;
 }
 
+function plainDisplayEntryBarrier(op: Extract<IrOp, { kind: "plain" }>): boolean {
+  return op.opcode >= 0x00 && op.opcode <= 0x0c;
+}
+
 function stackDifferenceCanReachConsumer(
   ops: readonly IrOp[],
   start: number,
@@ -14850,6 +14854,10 @@ function stackDifferenceCanReachConsumer(
             // Context-sensitive entry commands can overwrite X while leaving
             // deeper stack slots intact. A removed lift whose only difference
             // is already below X may still be consumed by a later binary op.
+            if (plainDisplayEntryBarrier(op)) {
+              if (depth === 1) return false;
+              break;
+            }
             return depth !== 1;
           }
           if (effect.stackShifts) {

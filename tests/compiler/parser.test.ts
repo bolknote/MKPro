@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { programRequiresGrdAngleMode } from "../../src/core/emit/lowering-helpers.ts";
 import { ParseError, parseProgram } from "../../src/core/index.ts";
 
 describe("parser", () => {
@@ -36,6 +37,31 @@ program WithConst {
 }
 `);
     expect(ast.v2?.consts).toEqual([{ kind: "v2_const", name: "LIMIT", expr: "99", line: 3 }]);
+  });
+
+  it("parses explicit GRD angle-mode requirements", () => {
+    const ast = parseProgram(`
+program WithAngleRequirement {
+  requires angle_mode(grd)
+  loop {
+    halt(cos(100))
+  }
+}
+`);
+
+    expect(ast.v2?.requirements?.angleMode).toEqual({ mode: "grd", line: 3 });
+    expect(programRequiresGrdAngleMode(ast)).toBe(true);
+  });
+
+  it("rejects unsupported angle-mode requirements", () => {
+    expect(() => parseProgram(`
+program BadAngleRequirement {
+  requires angle_mode(deg)
+  loop {
+    halt(0)
+  }
+}
+`)).toThrow(/requires angle_mode\(grd\)/u);
   });
 
   it("rejects extra tokens in expressions", () => {

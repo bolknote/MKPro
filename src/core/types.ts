@@ -240,12 +240,17 @@ export interface V2ProgramAst {
   kind: "v2_program";
   name: string;
   consts: V2ConstAst[];
+  requirements?: V2ProgramRequirementsAst;
   state: V2StateFieldAst[];
   boards: V2BoardAst[];
   worlds: V2WorldAst[];
   body: V2StatementAst[];
   rules: V2RuleAst[];
   line: number;
+}
+
+export interface V2ProgramRequirementsAst {
+  angleMode?: { mode: "grd"; line: number };
 }
 
 export interface V2ConstAst {
@@ -481,6 +486,7 @@ export type StatementAst =
   | HaltStatementAst
   | AssignStatementAst
   | IndexedAssignStatementAst
+  | SegmentedBitplaneUpdateStatement
   | CoordListRemoveStatementAst
   | LoopStatementAst
   | WhileStatementAst
@@ -530,6 +536,14 @@ export interface IndexedAssignStatementAst {
   kind: "indexed_assign";
   target: IndexedExpressionAst;
   expr: ExpressionAst;
+  line: number;
+}
+
+export interface SegmentedBitplaneUpdateStatement {
+  kind: "segmented_bitplane_update";
+  collection: string;
+  item: ExpressionAst;
+  op: "+=" | "-=";
   line: number;
 }
 

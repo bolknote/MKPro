@@ -48,6 +48,12 @@ interface SpatialHitHelper {
   line?: number;
 }
 
+interface SegmentedBitplaneHitHelper {
+  collection: string;
+  label: string;
+  line?: number;
+}
+
 interface SpatialBitMaskHelper {
   scratch: string;
   label: string;
@@ -92,6 +98,7 @@ export class RuntimeHelperRegistry {
   readonly spatialBitMaskHelpers = new Map<string, SpatialBitMaskHelper>();
   readonly spatialLineProgressionHelpers = new Map<string, SpatialProgressionHelper>();
   readonly spatialSumLoopHelpers = new Map<string, SpatialProgressionHelper>();
+  readonly segmentedBitplaneHitHelpers = new Map<string, SegmentedBitplaneHitHelper>();
   readonly terminalTailHelpers: TerminalTailHelper[] = [];
 
   // True while the body of an expression / random-coordinate helper is being emitted,

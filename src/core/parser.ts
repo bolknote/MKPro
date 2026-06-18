@@ -37,6 +37,7 @@ import type {
   V2WorldAst,
 } from "./types.ts";
 import { buildV2ConstContext, inlineConstIdentifiers, type V2ConstBinding } from "./v2-const.ts";
+import { isSegmentedBitplaneBoard, segmentedBitplaneNames, segmentedBitplaneRandomUniqueInitial } from "./emit/lowering-helpers.ts";
 
 interface SourceLine {
   text: string;
@@ -54,6 +55,7 @@ const V2_RESERVED_RULE_NAMES = new Set([
   "otherwise",
   "program",
   "read",
+  "requires",
   "return",
   "rule",
   "screen",
@@ -76,6 +78,7 @@ export class ParseError extends Error {
 export interface ParseOptions {
   signedAbsMatchPairs?: boolean;
   synthesizeParametricSiblings?: boolean;
+  segmentedBitplanes?: boolean;
 }
 
 export function parseProgram(source: string, options: ParseOptions = {}): ProgramAst {
@@ -156,6 +159,7 @@ class MKProParser {
     const match = /^program\s+([A-Za-z_][\w]*)\s*\{$/u.exec(header.text);
     if (!match) throw new ParseError("Program must look like 'program Name {'", header.line);
     const consts: V2ConstAst[] = [];
+    const requirements: V2ProgramAst["requirements"] = {};
     const state: V2StateFieldAst[] = [];
     const boards: V2BoardAst[] = [];
     const worlds: V2WorldAst[] = [];
@@ -177,7 +181,13 @@ class MKProParser {
           rules,
           line: header.line,
         };
+        if (Object.keys(requirements).length > 0) program.requirements = requirements;
         return program;
+      }
+      if (line.text.startsWith("requires ")) {
+        this.index += 1;
+        parseV2ProgramRequirement(line, requirements);
+        continue;
       }
       if (line.text.startsWith("const ")) {
         this.index += 1;
@@ -999,6 +1009,7 @@ interface V2LoweringContext {
   stateRanges: Map<string, { min?: number; max?: number }>;
   coordLists: Map<string, { domain: string; count: number; items: string[] }>;
   cellMapNames: Map<string, string>;
+  segmentedCells: Map<string, { domain: string; planes: string[] }>;
   boards: Map<string, V2BoardAst>;
   worlds: Map<string, V2WorldAst>;
 }
@@ -1027,6 +1038,11 @@ function lowerV2Program(v2: V2ProgramAst, options: ParseOptions = {}): LoweredV2
   );
   const coordLists = collectV2CoordLists(v2);
   const cellMapNames = collectV2CellMapNames(v2, stateDomains);
+  const boards = new Map(v2.boards.map((board) => [board.name, board]));
+  const worlds = new Map(v2.worlds.map((world) => [world.name, world]));
+  const segmentedCells = options.segmentedBitplanes === true
+    ? collectSegmentedBitplaneCells(v2, boards)
+    : new Map();
   validateV2Domains(v2);
   validateV2References(v2, { ruleParams });
   validateV2Functions(v2, functionRules);
@@ -1043,8 +1059,9 @@ function lowerV2Program(v2: V2ProgramAst, options: ParseOptions = {}): LoweredV2
     stateRanges: collectV2StateRanges(v2),
     coordLists,
     cellMapNames,
-    boards: new Map(v2.boards.map((board) => [board.name, board])),
-    worlds: new Map(v2.worlds.map((world) => [world.name, world])),
+    segmentedCells,
+    boards,
+    worlds,
   };
   rewriteV2DisplayExpressions(v2, context);
   const inlineScreens = collectV2InlineScreens(v2);
@@ -1163,6 +1180,22 @@ function collectV2CoordLists(v2: V2ProgramAst): V2LoweringContext["coordLists"] 
     });
   }
   return lists;
+}
+
+function collectSegmentedBitplaneCells(
+  v2: V2ProgramAst,
+  boards: ReadonlyMap<string, V2BoardAst>,
+): V2LoweringContext["segmentedCells"] {
+  const segmented: V2LoweringContext["segmentedCells"] = new Map();
+  for (const field of v2.state) {
+    if (field.type !== "cells" || field.domain === undefined) continue;
+    if (!isSegmentedBitplaneBoard(boards.get(field.domain))) continue;
+    segmented.set(field.name, {
+      domain: field.domain,
+      planes: segmentedBitplaneNames(field.name),
+    });
+  }
+  return segmented;
 }
 
 function collectV2RuleParams(v2: V2ProgramAst): V2LoweringContext["ruleParams"] {
@@ -2189,6 +2222,10 @@ function lowerV2State(
       fields.push(...lowerV2CoordListState(field, context));
       continue;
     }
+    if (field.type === "cells" && context.segmentedCells.has(field.name)) {
+      fields.push(...lowerV2SegmentedBitplaneState(v2, field, context));
+      continue;
+    }
     const lowered: StateFieldAst = {
       name: field.name,
       type: lowerV2StateFieldType(field.type),
@@ -2388,6 +2425,45 @@ function lowerV2CoordListState(field: V2StateFieldAst, context: V2LoweringContex
     }
     return lowered;
   });
+}
+
+function lowerV2SegmentedBitplaneState(
+  v2: V2ProgramAst,
+  field: V2StateFieldAst,
+  context: V2LoweringContext,
+): StateFieldAst[] {
+  const segmented = context.segmentedCells.get(field.name);
+  if (segmented === undefined) return [];
+  const initial = field.initial?.trim() ?? "0";
+  if (initial !== "0" && initial !== "random()") {
+    throw new ParseError("segmented cells currently support only '= 0' or '= random()' initializers", field.line);
+  }
+  const randomUniqueCount = initial === "random()"
+    ? segmentedBitplaneRandomUniqueCountSource(v2, field)
+    : undefined;
+  return segmented.planes.map((name) => {
+    const lowered: StateFieldAst = {
+      name,
+      type: "packed",
+      line: field.line,
+    };
+    if (randomUniqueCount !== undefined) {
+      const planeIndex = segmented.planes.indexOf(name);
+      lowered.initial = segmentedBitplaneRandomUniqueInitial(field.name, randomUniqueCount, planeIndex);
+    } else if (initial === "random()") {
+      lowered.initial = lowerV2Expression("int(random() * 9999999) + 1", field.line, context);
+    }
+    return lowered;
+  });
+}
+
+function segmentedBitplaneRandomUniqueCountSource(v2: V2ProgramAst, field: V2StateFieldAst): string | undefined {
+  for (const candidate of v2.state) {
+    if (candidate.name === field.name || candidate.initial === undefined) continue;
+    if (candidate.type !== "counter" && candidate.type !== "packed") continue;
+    if (parseStackSource(candidate.initial, candidate.line) === "Y") return candidate.name;
+  }
+  return undefined;
 }
 
 function collectV2ScratchFields(v2: V2ProgramAst, specializedRules: Set<string>): StateFieldAst[] {
@@ -2812,6 +2888,8 @@ function lowerV2Statement(statement: V2StatementAst, context: V2LoweringContext)
         }];
       }
       if (context.stateTypes.get(statement.target) === "cells") {
+        const segmented = lowerSegmentedBitplaneUpdate(statement, context);
+        if (segmented !== undefined) return segmented;
         return [{
           kind: "assign",
           target: statement.target,
@@ -2922,11 +3000,28 @@ function cellSetUpdateExpression(
     : `bit_and(${collection}, bit_not(${mask}))`;
 }
 
+function lowerSegmentedBitplaneUpdate(
+  statement: Extract<V2StatementAst, { kind: "v2_update" }>,
+  context: V2LoweringContext,
+): StatementAst[] | undefined {
+  const segmented = context.segmentedCells.get(statement.target);
+  if (segmented === undefined) return undefined;
+  const item = lowerV2Expression(statement.expr, statement.line, context);
+  return [{
+    kind: "segmented_bitplane_update",
+    collection: statement.target,
+    item,
+    op: statement.op,
+    line: statement.line,
+  }];
+}
+
 function cellMembershipExpression(
   collection: string,
   item: string,
   context: V2LoweringContext,
 ): string {
+  if (context.segmentedCells.has(collection.trim())) return `__seg_bit_has(${collection}, ${item})`;
   const list = context.coordLists.get(collection.trim());
   if (list !== undefined) return `coord_list_has(${item}, ${list.items.join(", ")})`;
   const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
@@ -3332,6 +3427,8 @@ function estimateLoweredStatementCost(statement: StatementAst): number {
       return 2 + estimateLoweredExpressionCost(statement.target.index) + estimateLoweredExpressionCost(statement.expr);
     case "coord_list_remove":
       return 4 + estimateLoweredExpressionCost(statement.item);
+    case "segmented_bitplane_update":
+      return 24 + estimateLoweredExpressionCost(statement.item);
     case "preview":
       return estimateLoweredExpressionCost(statement.expr);
     case "pause":
@@ -3773,6 +3870,18 @@ function lowerV2Expression(text: string, line: number, context?: V2LoweringConte
     expr = inlineConstIdentifiers(expr, context.consts);
   }
   return context === undefined ? expr : lowerDomainRandomCalls(expr, context, line);
+}
+
+function parseV2ProgramRequirement(line: SourceLine, requirements: V2ProgramAst["requirements"]): void {
+  const match = /^requires\s+angle_mode\(\s*(grd)\s*\)$/iu.exec(line.text);
+  if (match === null) {
+    throw new ParseError("Requirement must look like 'requires angle_mode(grd)'", line.line);
+  }
+  if (requirements === undefined) return;
+  if (requirements.angleMode !== undefined) {
+    throw new ParseError("angle_mode requirement may be declared only once", line.line);
+  }
+  requirements.angleMode = { mode: "grd", line: line.line };
 }
 
 function parseV2ConstLine(line: SourceLine): V2ConstAst {
