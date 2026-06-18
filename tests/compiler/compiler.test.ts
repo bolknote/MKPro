@@ -1458,7 +1458,7 @@ program FormulaHelpers {
     halt(value)
   }
 }
-`, { budget: 999, analysis: true });
+`, { budget: 999, analysis: true, indirectFlowRescueAbove: 999 });
     const opcodes = result.steps.map((step) => step.hex);
 
     for (const opcode of ["15", "24", "34", "35", "37", "38", "39", "3A"]) {
@@ -1635,8 +1635,8 @@ program PackedScoreXParamAccumulator {
 }
 `, { analysis: true });
 
-    expect(result.report.optimizations.filter((item) => item.name === "x-param-packed-score-accumulate")).toHaveLength(2);
-    expect(result.steps.filter((step) => step.comment === "packed_score returned-index order")).toHaveLength(2);
+    expect(result.report.optimizations.filter((item) => item.name === "x-param-packed-score-line-stack-accumulate")).toHaveLength(2);
+    expect(result.steps.filter((step) => step.comment === "packed_score returned-index order")).toHaveLength(0);
     expect(result.steps.filter((step) => step.comment === "packed_score stack accumulator")).toHaveLength(2);
   });
 
@@ -1670,8 +1670,8 @@ program PackedScoreAffineXParamAccumulator {
 `, { analysis: true });
 
     expect(result.report.registers.line).toBeUndefined();
-    expect(result.report.optimizations.filter((item) => item.name === "x-param-packed-score-accumulate")).toHaveLength(2);
-    expect(result.steps.filter((step) => step.comment === "packed_score returned-index order")).toHaveLength(2);
+    expect(result.report.optimizations.filter((item) => item.name === "x-param-packed-score-line-stack-accumulate")).toHaveLength(2);
+    expect(result.steps.filter((step) => step.comment === "packed_score returned-index order")).toHaveLength(0);
     expect(result.steps.filter((step) => step.comment === "packed_score stack accumulator")).toHaveLength(2);
   });
 
@@ -1768,7 +1768,13 @@ program Packed4FractionalBitReportTemp {
 
   it("keeps packed line indices and candidate scores as stack-only state across helper calls", () => {
     const source = readFileSync("examples/pending-optimizer/tic-tac-toe-4x4.mkpro", "utf8");
-    const result = compileOk(source, { budget: 999, analysis: true });
+    const result = compileLoweringVariantForTest(source, { budget: 999, analysis: true }, {
+      dualUseConstantIndirectFlow: true,
+      tailBranchInversion: true,
+      procLayoutStrategy: "size-asc",
+      suppressConstantPreloads: new Set(["-1"]),
+      fractionalConstantSelectors: [{ value: "0.22600029", target: 36 }],
+    });
     const optimizationNames = result.report.optimizations.map((item) => item.name);
 
     expect(result.report.registers.line).toBeUndefined();
@@ -1780,13 +1786,58 @@ program Packed4FractionalBitReportTemp {
     expect(optimizationNames).toContain("x-param-y-stack-proc-call");
     expect(optimizationNames).toContain("indexed-packed-y-stack-pow10-delta");
     expect(optimizationNames).toContain("post-layout-empty-stack-tail-call");
-    expect(result.steps).toHaveLength(145);
-    expect(result.report.optimizations.some((item) =>
-      item.name === "stack-only-state-field" && item.detail.includes("score")
+    expect(optimizationNames).toContain("packed-line-family-score-tail");
+    expect(result.steps).toHaveLength(140);
+    expect(result.report.rejectedCandidates.some((item) =>
+      item.variant === "packed-line-family-layout" &&
+      item.site === "packed-line-family lines"
     )).toBe(true);
+    expect(result.report.optimizer.capabilities.some((item) =>
+      item.id === "packed-line-family-layout" &&
+      item.status === "considered"
+    )).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set score")).toBe(false);
     expect(result.report.optimizations.some((item) =>
       item.name === "x-param-proc-entry" && item.detail.includes("stack-only line")
     )).toBe(true);
+  });
+
+  it("can enter X-parameter Y-stack procedures after the stored-parameter prologue", () => {
+    const result = compileLoweringVariantForTest(`
+program XParamYStackStoredEntry {
+  state {
+    lines: packed[4..7] = [44444.4, 44444.4, 44444.4, 44444.4]
+    line: packed = 0
+    delta: packed = 1
+    report: packed = 0
+    slot: counter 0..7
+  }
+
+  loop {
+    line = 2
+    mark_one(4)
+    line = 3
+    mark_one(5)
+    halt(lines[4])
+  }
+
+  fn mark_one(next_slot) {
+    slot = next_slot
+    lines[slot] = packed_add(lines[slot], line, delta)
+    report = bit_and(lines[slot], 88888834)
+    if frac(report) != 0 {
+      halt(report)
+    }
+  }
+}
+`, { analysis: true }, { xParamYStackStoredEntry: true });
+    const optimizationNames = result.report.optimizations.map((item) => item.name);
+
+    expect(optimizationNames).toContain("x-param-y-stack-multi-entry");
+    expect(optimizationNames).toContain("x-param-y-stack-stored-entry-call");
+    expect(optimizationNames).toContain("indexed-packed-x-stack-pow10-delta");
+    expect(result.steps.some((step) => step.comment === "proc call mark_one y-stack entry")).toBe(true);
+    expect(result.steps.some((step) => step.comment === "set slot from X parameter before y-stack entry")).toBe(true);
   });
 
   it("keeps fractional recovery after selector-carrier constant preloads", () => {

@@ -60,14 +60,14 @@ program TicTacToe4x4 {
 
   fn mark_lines_and_check(mark_sign) {
     best_score = mark_sign
-    line = y
-    mark_one(4)
     line = x
-    mark_one(5)
-    normalize(x + y)
-    mark_one(6)
-    normalize(x - y)
     mark_one(7)
+    line = y
+    mark_one(6)
+    normalize(x + y)
+    mark_one(5)
+    normalize(x - y)
+    mark_one(4)
   }
 
   fn choose_calculator_move() {
@@ -99,11 +99,11 @@ program TicTacToe4x4 {
   }
 
   fn candidate_score() {
-    score = packed_score(lines[4], y) + packed_score(lines[5], x)
+    score = packed_score(lines[7], x) + packed_score(lines[6], y)
     normalize(x + y)
-    score += packed_score(lines[6], line)
+    score += packed_score(lines[5], line)
     normalize(x - y)
-    score += packed_score(lines[7], line)
+    score += packed_score(lines[4], line)
   }
 
   fn normalize(raw_line) {

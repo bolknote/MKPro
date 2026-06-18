@@ -626,6 +626,7 @@ export function compileProcedures(ctx: LoweringCtx): void {
       if (skipSingleUseXParamStackStopRisk) continue;
       ctx.emitProcedureLabel(proc.name);
       ctx.compileWithinProcedure(proc, () => {
+        let emittedExplicitReturn = false;
         const xParam = ctx.xParamProcs.get(proc.name);
         const xParamValue = ctx.loweringOptions.xParamValueFunctions === true
           ? matchXParamValueFunction(proc)
@@ -652,17 +653,186 @@ export function compileProcedures(ctx: LoweringCtx): void {
             name: "show-read-stack-stop-risk-lowering",
             detail: `Reused displayed ${xParamStackStopRisk.param} as the parked Y value for ${proc.name}.`,
           });
+        } else if (compilePackedLineFamilyScoreProc(ctx, proc)) {
+          // The custom body emits its own shared-tail В/О because one path calls
+          // into the middle of the tail and another path falls through to it.
+          emittedExplicitReturn = true;
         } else if (xParam !== undefined) {
           compileXParamProcBody(ctx, proc, xParam);
         } else {
           ctx.compileStatements(proc.body);
         }
-        if (!ctx.statementsTerminate(proc.body)) {
+        if (!ctx.statementsTerminate(proc.body) && !emittedExplicitReturn) {
           ctx.emitOp(0x52, "В/О", "implicit return from proc");
         }
       });
       ctx.emitProcedureEndLabel(proc.name);
     }
+}
+
+interface PackedLineFamilyScoreProc {
+  readonly score: string;
+  readonly normalizer: string;
+  readonly normalizerParam: string;
+  readonly normalizerReturn: string;
+  readonly first: PackedScoreTerm;
+  readonly second: PackedScoreTerm;
+  readonly diagonalAdd: PackedScoreDiagonalTerm;
+  readonly diagonalSub: PackedScoreDiagonalTerm;
+  readonly shared: ExpressionAst;
+  readonly partial: ExpressionAst;
+  readonly line: number;
+}
+
+interface PackedScoreTerm {
+  readonly lineValue: ExpressionAst;
+  readonly index: ExpressionAst;
+  readonly line: number;
+}
+
+interface PackedScoreDiagonalTerm {
+  readonly lineValue: ExpressionAst;
+  readonly rawAssign: Extract<StatementAst, { kind: "assign" }>;
+  readonly scoreAssign: Extract<StatementAst, { kind: "assign" }>;
+}
+
+function compilePackedLineFamilyScoreProc(ctx: LoweringCtx, proc: ProcAst): boolean {
+    const match = packedLineFamilyScoreProc(ctx, proc);
+    if (match === undefined) return false;
+
+    const helper = ctx.sharedPackedScoreStackHelper(match.line);
+    if (helper === undefined) return false;
+
+    const emitScore = (term: PackedScoreTerm, accumulate: boolean): void => {
+      compileExpression(ctx, term.lineValue);
+      compileExpression(ctx, term.index);
+      ctx.emitJump(0x53, "ПП", helper.label, "packed_score helper", term.line);
+      if (accumulate) ctx.emitOp(0x10, "+", "packed-line score accumulator", term.line);
+    };
+    const markScoreInX = (): void => {
+      ctx.currentXVariable = match.score;
+      ctx.currentXAliases = new Set([match.score]);
+      ctx.currentXKnownZero = false;
+    };
+
+    emitScore(match.first, false);
+    emitScore(match.second, true);
+    markScoreInX();
+
+    const tail = ctx.freshLabel("packed_line_family_score_tail");
+    compileExpression(ctx, match.diagonalAdd.lineValue);
+    compileExpression(ctx, match.partial);
+    ctx.emitJump(0x53, "ПП", tail, "packed-line shared diagonal score", match.diagonalAdd.scoreAssign.line);
+    markScoreInX();
+
+    compileExpression(ctx, match.diagonalSub.lineValue);
+    compileExpression(ctx, match.partial);
+    ctx.emitOp(0x0b, "/-/", "packed-line negative diagonal index", match.diagonalSub.rawAssign.line);
+    ctx.emitLabel(tail);
+    compileExpression(ctx, match.shared);
+    ctx.emitOp(0x10, "+", "packed-line diagonal index", match.diagonalAdd.rawAssign.line);
+    compileBlockCall(ctx, match.normalizer, match.diagonalAdd.rawAssign.line);
+    ctx.emitJump(0x53, "ПП", helper.label, "packed_score helper", match.diagonalAdd.scoreAssign.line);
+    ctx.emitOp(0x10, "+", "packed-line score accumulator", match.diagonalAdd.scoreAssign.line);
+    markScoreInX();
+    ctx.emitOp(0x52, "В/О", "packed-line family score return", match.diagonalSub.scoreAssign.line);
+    ctx.optimizations.push({
+      name: "packed-line-family-score-tail",
+      detail: `Shared diagonal scoring for ${expressionToIntentText(match.diagonalAdd.rawAssign.expr)} and ${expressionToIntentText(match.diagonalSub.rawAssign.expr)} in ${proc.name}.`,
+    });
+    return true;
+}
+
+function packedLineFamilyScoreProc(ctx: LoweringCtx, proc: ProcAst): PackedLineFamilyScoreProc | undefined {
+    if (proc.body.length !== 7) return undefined;
+    const [firstAssign, addRaw, addCall, addScore, subRaw, subCall, subScore] = proc.body;
+    if (
+      firstAssign?.kind !== "assign" ||
+      addRaw?.kind !== "assign" ||
+      addCall?.kind !== "call" ||
+      addScore?.kind !== "assign" ||
+      subRaw?.kind !== "assign" ||
+      subCall?.kind !== "call" ||
+      subScore?.kind !== "assign"
+    ) return undefined;
+    if (addCall.block !== subCall.block) return undefined;
+    if (addRaw.target !== subRaw.target) return undefined;
+    const normalizer = ctx.xParamProcs.get(addCall.block);
+    if (normalizer === undefined || normalizer.param !== addRaw.target) return undefined;
+    const normalizerProc = ctx.ast.procs.find((candidate) => candidate.name === addCall.block);
+    if (normalizerProc === undefined) return undefined;
+    const normalizerReturn = ctx.procReturnXVariable(normalizerProc);
+    if (normalizerReturn === undefined) return undefined;
+    if (!ctx.stackOnlyStateFields.has(firstAssign.target)) return undefined;
+
+    const firstPair = packedScorePair(firstAssign.expr);
+    if (firstPair === undefined) return undefined;
+    const addTerm = packedScoreAccumulatorTerm(addScore, firstAssign.target, normalizerReturn);
+    const subTerm = packedScoreAccumulatorTerm(subScore, firstAssign.target, normalizerReturn);
+    if (addTerm === undefined || subTerm === undefined) return undefined;
+    const diagonal = sharedAddSubOperands(addRaw.expr, subRaw.expr);
+    if (diagonal === undefined) return undefined;
+
+    return {
+      score: firstAssign.target,
+      normalizer: addCall.block,
+      normalizerParam: normalizer.param,
+      normalizerReturn,
+      first: { ...firstPair.first, line: firstAssign.line },
+      second: { ...firstPair.second, line: firstAssign.line },
+      diagonalAdd: { lineValue: addTerm.lineValue, rawAssign: addRaw, scoreAssign: addScore },
+      diagonalSub: { lineValue: subTerm.lineValue, rawAssign: subRaw, scoreAssign: subScore },
+      shared: diagonal.shared,
+      partial: diagonal.partial,
+      line: firstAssign.line,
+    };
+}
+
+function packedScorePair(expr: ExpressionAst): { first: Omit<PackedScoreTerm, "line">; second: Omit<PackedScoreTerm, "line"> } | undefined {
+    if (expr.kind !== "binary" || expr.op !== "+") return undefined;
+    const first = packedScoreTerm(expr.left);
+    const second = packedScoreTerm(expr.right);
+    return first !== undefined && second !== undefined ? { first, second } : undefined;
+}
+
+function packedScoreAccumulatorTerm(
+  statement: Extract<StatementAst, { kind: "assign" }>,
+  score: string,
+  indexName: string,
+): { lineValue: ExpressionAst } | undefined {
+    if (statement.target !== score) return undefined;
+    const expr = statement.expr;
+    if (expr.kind !== "binary" || expr.op !== "+") return undefined;
+    const target = { kind: "identifier", name: score } satisfies ExpressionAst;
+    if (expressionEquals(expr.left, target)) return packedScoreTermWithIndex(expr.right, indexName);
+    if (expressionEquals(expr.right, target)) return packedScoreTermWithIndex(expr.left, indexName);
+    return undefined;
+}
+
+function packedScoreTermWithIndex(expr: ExpressionAst, indexName: string): { lineValue: ExpressionAst } | undefined {
+    const term = packedScoreTerm(expr);
+    if (term === undefined) return undefined;
+    return term.index.kind === "identifier" && term.index.name === indexName
+      ? { lineValue: term.lineValue }
+      : undefined;
+}
+
+function packedScoreTerm(expr: ExpressionAst): Omit<PackedScoreTerm, "line"> | undefined {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "packed_score" || expr.args.length !== 2) {
+      return undefined;
+    }
+    const [lineValue, index] = expr.args;
+    return lineValue !== undefined && index !== undefined ? { lineValue, index } : undefined;
+}
+
+function sharedAddSubOperands(
+  add: ExpressionAst,
+  sub: ExpressionAst,
+): { shared: ExpressionAst; partial: ExpressionAst } | undefined {
+    if (add.kind !== "binary" || add.op !== "+" || sub.kind !== "binary" || sub.op !== "-") return undefined;
+    if (!expressionEquals(add.left, sub.left) || !expressionEquals(add.right, sub.right)) return undefined;
+    if (!isSimpleStackLoad(add.left) || !isSimpleStackLoad(add.right)) return undefined;
+    return { shared: add.left, partial: add.right };
 }
 
 function compileXParamValueFunctionBody(
@@ -1111,12 +1281,20 @@ export function compileXParamProcBody(ctx: LoweringCtx, proc: ProgramAst["procs"
     if (lowering.kind === "copy") {
       ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter`, lowering.first.line);
       const yStack = ctx.xParamYStackProcs.get(proc.name);
-      if (yStack !== undefined) ctx.currentYVariable = yStack.yName;
+      if (yStack !== undefined && ctx.loweringOptions.xParamYStackStoredEntry === true) {
+        ctx.emitOp(0x14, "X↔Y", "x-param y-stack entry", lowering.first.line);
+        ctx.markCurrentX(yStack.yName);
+        ctx.emitLabel(xParamYStackStoredEntryLabel(proc.name));
+      } else if (yStack !== undefined) {
+        ctx.currentYVariable = yStack.yName;
+      }
       ctx.compileStatements(proc.body.slice(1));
       if (yStack !== undefined) ctx.currentYVariable = undefined;
       ctx.optimizations.push({
-        name: "x-param-proc-entry",
-        detail: `Compiled rule ${proc.name} to copy ${lowering.param} directly from X.`,
+        name: yStack !== undefined && ctx.loweringOptions.xParamYStackStoredEntry === true ? "x-param-y-stack-multi-entry" : "x-param-proc-entry",
+        detail: yStack !== undefined && ctx.loweringOptions.xParamYStackStoredEntry === true
+          ? `Compiled rule ${proc.name} with a secondary entry after its X-parameter store and Y-stack swap.`
+          : `Compiled rule ${proc.name} to copy ${lowering.param} directly from X.`,
       });
       return;
     }
@@ -1156,6 +1334,10 @@ export function compileXParamProcBody(ctx: LoweringCtx, proc: ProgramAst["procs"
       name: "x-param-proc-entry",
       detail: `Compiled rule ${proc.name} to consume ${lowering.param} directly from X.`,
     });
+}
+
+export function xParamYStackStoredEntryLabel(procName: string): string {
+    return `\0xparam_ystack_entry_${procName}`;
 }
 
 function compileXParamFirstExpression(ctx: LoweringCtx, expr: ExpressionAst, param: string, line: number): boolean {

@@ -24,7 +24,7 @@ import { compileAssignThenDomainTrap, compileCondition, compileDecrementUnderflo
 import { compileShow, compileShowSequenceRead } from "./emit/lowering/display.ts";
 import { compileBitSetMaskReuse, compileSingleBitMaskOpAssignment, compileSingleBitMaskOpCopyReuse, compileGridCellMaskReuse } from "./emit/lowering/spatial.ts";
 import { compileCoordListLineCountAssignment, compileCoordListLineCountFormattedReport, compileCoordListRemove, compileFusedCoordListScan } from "./emit/lowering/coord-list.ts";
-import { compileBlockCall, compileDecimalSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileOneBasedModuloNormalization, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall } from "./emit/lowering/proc-raw-setup.ts";
+import { compileBlockCall, compileDecimalSeries, compileGuardAssignmentSubstitution, compileInitialState, compileIntFracSharedTail, compileOneBasedModuloNormalization, compileProcedures, compileRawStatement, compileRepeatedAssignmentValue, compileRuntimeHelpers, compileSetupProgramWithPreloads, compileStackUnaryDerivedAssignments, compileUnitDecrement, compileUnitIncrement, compileXParamProcCall, xParamYStackStoredEntryLabel } from "./emit/lowering/proc-raw-setup.ts";
 import { compileMultiStackResidentTemps } from "./emit/stack-residency-lowering.ts";
 import {
   BIT_MASK_SCRATCH_PREFIX,
@@ -452,6 +452,11 @@ interface LoweringOptions {
   // using a hidden compiler scratch instead of allocating a user-visible
   // parameter register. Speculative because it adds/repurposes scratch state.
   xParamValueFunctions?: boolean;
+  // Add a secondary entry to X-parameter procedures that consume another value
+  // parked on the stack. Callers may store the X parameter first, produce the
+  // parked value in X, and enter after the normal store/swap prologue. Purely
+  // layout-sensitive, so full-program candidate selection must approve it.
+  xParamYStackStoredEntry?: boolean;
   // Exact fixed-width counter set for the packed-stripe candidate. Used by the
   // top-level variant search to try every compatible subset independently.
   packCounterStripeNames?: readonly string[];
@@ -785,8 +790,9 @@ export function compileMKPro(
       // Optional lowering variants are speculative; keep the current best result.
     }
   };
-  const requestedBudget = { ...DEFAULT_OPTIONS, ...options }.budget;
-  const rescueThreshold = Math.min(requestedBudget, DEFAULT_OPTIONS.budget);
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const requestedBudget = opts.budget;
+  const rescueThreshold = Math.min(requestedBudget, opts.indirectFlowRescueAbove ?? DEFAULT_OPTIONS.budget);
   const needsSizeRescue = primary === undefined || primary.report.steps > rescueThreshold || primary.report.budgetReport.exceeded;
   const canRouteRepeatedUnaryArgs = sourceHasRepeatedRoutableUnaryShape(source);
 
@@ -832,7 +838,7 @@ export function compileMKPro(
   // matches the demote gate: programs that already fit (<=105) are byte-locked
   // and untouched, so only genuinely-overflowing programs pay for the broader
   // bundle x layout matrix, and min-size selection means it can only shrink them.
-  if ((selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT) {
+  if (needsSizeRescue && (selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT) {
     for (const spec of enumerateExpansionCandidateSpecs({ source, primaryOverflows })) runSpec(spec);
     demoteConstantIndirectFlowCandidates(source, options, needsSizeRescue, tryCandidate, cachedCompileMKProOnce);
   }
@@ -1347,6 +1353,12 @@ function enumerateStaticCandidateSpecs(ctx: CandidateEnumerationContext): Candid
     "inline-floor-hoisted-proc-tail-layout",
     "Combined inline floor-row display expressions with front-hoisted procs and tail-branch inversion",
   );
+  add(
+    { xParamYStackStoredEntry: true },
+    "x-param-y-stack-stored-entry",
+    "Tried secondary entries for X-parameter procedures whose first body update consumes a stack-carried value",
+    "sizeRescue",
+  );
 
   return specs;
 }
@@ -1376,6 +1388,7 @@ function enumerateExpansionCandidateSpecs(ctx: CandidateEnumerationContext): Can
     { options: { sharedBitMaskHelperCalls: true }, name: "shared-bit-mask-helper", detail: "shared bit_mask helper calls" },
     { options: { dualUseConstantIndirectFlow: true }, name: "dual-use-constant-indirect-flow", detail: "dual-use constant indirect-flow selectors" },
     { options: { dualUseConstantIndirectFlow: true, tailBranchInversion: true }, name: "dual-use-constant-tail-branch", detail: "dual-use constant indirect-flow selectors with tail-branch inversion" },
+    { options: { xParamYStackStoredEntry: true }, name: "x-param-y-stack-stored-entry", detail: "secondary X-parameter/Y-stack procedure entries" },
   ];
 
   for (const bundle of semanticBundles) {
@@ -1456,26 +1469,47 @@ function fractionalConstantSelectorCandidates(
   ];
   const tried = new Set<string>();
   for (const base of bases) {
-    let probe: CompileResult;
-    try {
-      probe = compileOnce({ ...options, analysis: true }, base);
-    } catch {
-      continue;
-    }
-    for (const plan of discoverFractionalConstantSelectorPlans(probe).slice(0, 12)) {
-      const key = `${JSON.stringify(stableCompileCacheValue(base))}|${plan.value}|${plan.target}`;
-      if (tried.has(key)) continue;
-      tried.add(key);
-      tryCandidate(
-        {
-          ...base,
-          dualUseConstantIndirectFlow: true,
-          fractionalConstantSelectors: [plan],
-        },
-        "fractional-constant-selector",
-        `Packed direct-flow target ${plan.target} into fractional constant ${plan.value}`,
-      );
-    }
+    fractionalConstantSelectorCandidatesForBase(
+      options,
+      base,
+      tried,
+      tryCandidate,
+      compileOnce,
+      "fractional-constant-selector",
+      (plan) => `Packed direct-flow target ${plan.target} into fractional constant ${plan.value}`,
+    );
+  }
+}
+
+function fractionalConstantSelectorCandidatesForBase(
+  options: Partial<CompileOptions>,
+  base: LoweringOptions,
+  tried: Set<string>,
+  tryCandidate: TryCandidateFn,
+  compileOnce: CompileOnceFn,
+  name: string,
+  detail: (plan: FractionalConstantSelectorPlan) => string,
+  limit = 12,
+): void {
+  let probe: CompileResult;
+  try {
+    probe = compileOnce({ ...options, analysis: true }, base);
+  } catch {
+    return;
+  }
+  for (const plan of discoverFractionalConstantSelectorPlans(probe).slice(0, limit)) {
+    const key = `${JSON.stringify(stableCompileCacheValue(base))}|${plan.value}|${plan.target}`;
+    if (tried.has(key)) continue;
+    tried.add(key);
+    tryCandidate(
+      {
+        ...base,
+        dualUseConstantIndirectFlow: true,
+        fractionalConstantSelectors: [plan],
+      },
+      name,
+      detail(plan),
+    );
   }
 }
 
@@ -1602,6 +1636,7 @@ function demoteConstantIndirectFlowCandidates(
       : []),
   ];
   const triedDemotions = new Set<string>();
+  const triedDemotedFractionalSelectors = new Set<string>();
   for (const base of demoteBases) {
     let probe: CompileResult;
     try {
@@ -1614,11 +1649,25 @@ function demoteConstantIndirectFlowCandidates(
       const key = `${JSON.stringify(base)}|${value}`;
       if (triedDemotions.has(key)) continue;
       triedDemotions.add(key);
+      const demotedBase = { ...base, suppressConstantPreloads: new Set([value]) };
       tryCandidate(
-        { ...base, suppressConstantPreloads: new Set([value]) },
+        demotedBase,
         "demote-constant-indirect-flow",
         `Inlined single-use constant ${value} to free a register for post-layout indirect flow`,
       );
+      if (base.dualUseConstantIndirectFlow === true) {
+        fractionalConstantSelectorCandidatesForBase(
+          options,
+          demotedBase,
+          triedDemotedFractionalSelectors,
+          tryCandidate,
+          compileOnce,
+          "demote-fractional-constant-selector",
+          (plan) =>
+            `Inlined single-use constant ${value} and packed direct-flow target ${plan.target} into fractional constant ${plan.value}`,
+          4,
+        );
+      }
     }
     const suppressed = new Set<string>();
     for (let depth = 0; depth < 6; depth += 1) {
@@ -1639,8 +1688,9 @@ function demoteConstantIndirectFlowCandidates(
       const key = `${JSON.stringify(base)}|chain:${values.join(",")}`;
       if (triedDemotions.has(key)) continue;
       triedDemotions.add(key);
+      const demotedBase = { ...base, suppressConstantPreloads: new Set(values) };
       tryCandidate(
-        { ...base, suppressConstantPreloads: new Set(values) },
+        demotedBase,
         "demote-constant-chain-indirect-flow",
         `Inlined constants ${values.join(", ")} to keep a register free for post-layout indirect flow`,
       );
@@ -2783,6 +2833,7 @@ function compileMKProOnce(
     warnings,
     candidates,
   );
+  appendPackedLineFamilyLayoutCandidates(ast, candidates);
   appendOptimizationCandidateReports(optimizations, candidates);
   const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
   const programPatch = buildProgramPatchReport(steps, opts.delivery);
@@ -6368,6 +6419,164 @@ function appendOptimizationCandidateReports(
   }
 }
 
+interface PackedLineFamilyLayoutOpportunity {
+  readonly key: string;
+  readonly scoredElements: number;
+  readonly hasFractionalReportCheck: boolean;
+}
+
+function appendPackedLineFamilyLayoutCandidates(
+  ast: ProgramAst,
+  candidates: CandidateReport[],
+): void {
+  for (const opportunity of collectPackedLineFamilyLayoutOpportunities(ast)) {
+    if (candidates.some((candidate) =>
+      candidate.site === `packed-line-family ${opportunity.key}` &&
+      candidate.variant === "packed-line-family-layout"
+    )) {
+      continue;
+    }
+    candidates.push({
+      site: `packed-line-family ${opportunity.key}`,
+      variant: "packed-line-family-layout",
+      steps: 999999,
+      selected: false,
+      reason: `detected a packed line bank with ${opportunity.scoredElements} scored elements and ` +
+        `${opportunity.hasFractionalReportCheck ? "a fractional report-checked update" : "an update"}; ` +
+        "score-tail sharing is implemented, but no full shared update/check and score walker is implemented yet",
+    });
+  }
+}
+
+function collectPackedLineFamilyLayoutOpportunities(ast: ProgramAst): PackedLineFamilyLayoutOpportunity[] {
+  const updates = new Map<string, { hasFractionalReportCheck: boolean }>();
+  const scores = new Map<string, Set<number>>();
+
+  const recordScore = (expr: ExpressionAst): void => {
+    const element = packedBankElementForExpression(ast, expr);
+    if (element?.index === undefined) return;
+    const indexes = scores.get(element.key) ?? new Set<number>();
+    indexes.add(element.index);
+    scores.set(element.key, indexes);
+  };
+
+  const visitExpr = (expr: ExpressionAst): void => {
+    if (expr.kind === "call") {
+      if (expr.callee.toLowerCase() === "packed_score" && expr.args.length === 2) {
+        recordScore(expr.args[0]!);
+      }
+      for (const arg of expr.args) visitExpr(arg);
+      return;
+    }
+    if (expr.kind === "unary") {
+      visitExpr(expr.expr);
+      return;
+    }
+    if (expr.kind === "binary") {
+      visitExpr(expr.left);
+      visitExpr(expr.right);
+      return;
+    }
+    if (expr.kind === "indexed") visitExpr(expr.index);
+  };
+
+  const visitCondition = (condition: ConditionAst): void => {
+    visitExpr(condition.left);
+    visitExpr(condition.right);
+  };
+
+  const visitStatements = (statements: readonly StatementAst[]): void => {
+    for (let index = 0; index < statements.length; index += 1) {
+      const statement = statements[index]!;
+      const next = statements[index + 1];
+      if (statement.kind === "indexed_assign") {
+        const update = indexedPow10DeltaUpdate(statement);
+        const target = update === undefined ? undefined : packedBankElementForExpression(ast, statement.target);
+        if (target !== undefined) {
+          const previous = updates.get(target.key);
+          updates.set(target.key, {
+            hasFractionalReportCheck: previous?.hasFractionalReportCheck === true ||
+              (next?.kind === "if" && indexedPow10DeltaFractionalBitReportBranch(statement, next) !== undefined),
+          });
+        }
+        visitExpr(statement.target.index);
+        visitExpr(statement.expr);
+        continue;
+      }
+      if (statement.kind === "assign" || statement.kind === "return_value") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
+      if (statement.kind === "if") {
+        visitCondition(statement.condition);
+        visitStatements(statement.thenBody);
+        if (statement.elseBody !== undefined) visitStatements(statement.elseBody);
+        continue;
+      }
+      if (statement.kind === "while") {
+        visitCondition(statement.condition);
+        visitStatements(statement.body);
+        continue;
+      }
+      if (statement.kind === "loop") {
+        visitStatements(statement.body);
+        continue;
+      }
+      if (statement.kind === "dispatch") {
+        visitExpr(statement.expr);
+        for (const dispatchCase of statement.cases) {
+          visitExpr(dispatchCase.value);
+          visitStatements(dispatchCase.body);
+        }
+        if (statement.defaultBody !== undefined) visitStatements(statement.defaultBody);
+        continue;
+      }
+      if (statement.kind === "core") {
+        for (const input of statement.inputs ?? []) visitExpr(input.expr);
+      }
+    }
+  };
+
+  for (const entry of ast.entries) visitStatements(entry.body);
+  for (const proc of ast.procs) visitStatements(proc.body);
+
+  const opportunities: PackedLineFamilyLayoutOpportunity[] = [];
+  for (const [key, update] of updates) {
+    const scoredElements = scores.get(key)?.size ?? 0;
+    if (scoredElements < 4) continue;
+    opportunities.push({
+      key,
+      scoredElements,
+      hasFractionalReportCheck: update.hasFractionalReportCheck,
+    });
+  }
+  return opportunities;
+}
+
+function packedBankElementForExpression(
+  ast: ProgramAst,
+  expr: ExpressionAst,
+): { key: string; index?: number } | undefined {
+  if (expr.kind === "indexed") {
+    const resolved = findStateBankMember(ast, expr);
+    if (resolved?.member.type !== "packed") return undefined;
+    const key = bankMemberKey(resolved.bank.name, resolved.member.name);
+    const index = numericIndexValue(expr.index);
+    return index === undefined ? { key } : { key, index };
+  }
+  if (expr.kind !== "identifier") return undefined;
+  for (const bank of ast.banks ?? []) {
+    for (const member of bank.members) {
+      if (member.type !== "packed") continue;
+      const element = member.elements.find((candidate) => candidate.name === expr.name);
+      if (element === undefined) continue;
+      return {
+        key: bankMemberKey(bank.name, member.name),
+        index: element.index,
+      };
+    }
+  }
+  return undefined;
+}
+
 interface ReferenceMetrics {
   readonly span: number;
   readonly entries: number;
@@ -7297,7 +7506,7 @@ export class EmitContext {
           continue;
         }
       }
-      if (statement.kind === "assign") {
+      if (statement.kind === "assign" || statement.kind === "call") {
         const xParamYStack = this.compileXParamYStackProcCallRun(statements, index);
         if (xParamYStack > 1) {
           index += xParamYStack - 1;
@@ -8550,13 +8759,38 @@ export class EmitContext {
     const producer = statements[index];
     const paramAssign = statements[index + 1];
     const call = statements[index + 2];
-    if (producer?.kind !== "assign" || paramAssign?.kind !== "assign" || call?.kind !== "call") return 0;
+    if (
+      (producer?.kind !== "assign" && producer?.kind !== "call") ||
+      paramAssign?.kind !== "assign" ||
+      call?.kind !== "call"
+    ) return 0;
     const yStack = this.xParamYStackProcs.get(call.block);
-    if (yStack === undefined || producer.target !== yStack.yName || paramAssign.target !== yStack.xParam) return 0;
+    if (yStack === undefined || paramAssign.target !== yStack.xParam) return 0;
+    if (producer.kind === "assign" && producer.target !== yStack.yName) return 0;
+    if (!isSimpleStackLoad(paramAssign.expr)) return 0;
+
+    const storedEntry = this.loweringOptions.xParamYStackStoredEntry === true
+      ? this.xParamYStackStoredEntry(call.block, paramAssign)
+      : undefined;
+    if (
+      storedEntry !== undefined &&
+      this.canCompileYStackProducerAfterParamStore(producer, yStack.yName, storedEntry.target)
+    ) {
+      compileExpression(this, paramAssign.expr);
+      this.emitStore(storedEntry.target, `set ${storedEntry.target} from X parameter before y-stack entry`, paramAssign.line);
+      this.compileYStackProducerAfterParamStore(producer, yStack.yName);
+      this.compileXParamYStackStoredEntryCall(call.block, call.line);
+      this.optimizations.push({
+        name: "x-param-y-stack-stored-entry-call",
+        detail: `Stored ${paramAssign.target} before producing ${yStack.yName} and entered ${call.block} after its X-parameter prologue at line ${call.line}.`,
+      });
+      return 3;
+    }
+
+    if (producer.kind !== "assign") return 0;
     if (!expressionPureForSubstitution(producer.expr) || expressionReferencesIdentifier(producer.expr, producer.target)) {
       return 0;
     }
-    if (!isSimpleStackLoad(paramAssign.expr)) return 0;
 
     compileExpression(this, producer.expr);
     this.markCurrentX(yStack.yName);
@@ -8569,6 +8803,60 @@ export class EmitContext {
       detail: `Passed ${paramAssign.target} in X and kept ${yStack.yName} in Y for ${call.block} at line ${call.line}.`,
     });
     return 3;
+  }
+
+  private xParamYStackStoredEntry(
+    blockName: string,
+    paramAssign: Extract<StatementAst, { kind: "assign" }>,
+  ): { target: string } | undefined {
+    const lowering = this.xParamProcs.get(blockName);
+    const yStack = this.xParamYStackProcs.get(blockName);
+    if (lowering?.kind !== "copy" || yStack === undefined || paramAssign.target !== yStack.xParam) return undefined;
+    if (!expressionPureForSubstitution(paramAssign.expr) || !isSimpleStackLoad(paramAssign.expr)) return undefined;
+    return { target: lowering.first.target };
+  }
+
+  private canCompileYStackProducerAfterParamStore(
+    producer: Extract<StatementAst, { kind: "assign" | "call" }>,
+    yName: string,
+    storedTarget: string,
+  ): boolean {
+    if (statementFirstIdentifierAccess(producer, storedTarget, this.ast, new Set()) !== "none") return false;
+    if (producer.kind === "assign") {
+      return producer.target === yName &&
+        expressionPureForSubstitution(producer.expr) &&
+        !expressionReferencesIdentifier(producer.expr, yName);
+    }
+    const proc = this.ast.procs.find((candidate) => candidate.name === producer.block);
+    return proc !== undefined && this.procReturnXVariable(proc) === yName;
+  }
+
+  private compileYStackProducerAfterParamStore(
+    producer: Extract<StatementAst, { kind: "assign" | "call" }>,
+    yName: string,
+  ): void {
+    if (producer.kind === "assign") {
+      compileExpression(this, producer.expr);
+      this.markCurrentX(yName);
+      return;
+    }
+    compileBlockCall(this, producer.block, producer.line);
+    if (!this.xHolds(yName)) this.markCurrentX(yName);
+  }
+
+  private compileXParamYStackStoredEntryCall(blockName: string, line: number): void {
+    const bankSelectors = this.snapshotBankSelectorCache();
+    this.emitJump(
+      0x53,
+      "ПП",
+      xParamYStackStoredEntryLabel(blockName),
+      `proc call ${blockName} y-stack entry`,
+      line,
+    );
+    this.restoreBankSelectorCacheAfterCall(blockName, bankSelectors);
+    const proc = this.ast.procs.find((candidate) => candidate.name === blockName);
+    const returnX = proc === undefined ? undefined : this.procReturnXVariable(proc);
+    if (returnX !== undefined) this.markCurrentX(returnX);
   }
 
   compileXParamYStackProcCall(
@@ -8599,10 +8887,17 @@ export class EmitContext {
     const plan = this.xParamPackedScoreAccumulationPlan(paramAssign, call, scoreAssign);
     if (plan === undefined) return false;
 
-    compileExpressionPreservingPreviousXAsY(this, paramAssign.expr, paramAssign.line);
-    compileBlockCall(this, call.block, call.line);
-    compileExpression(this, plan.line);
-    this.emitOp(0x14, "X↔Y", "packed_score returned-index order", scoreAssign.line);
+    const lineFirst = this.canCompilePackedScoreLineFirst(plan.line, scoreAssign);
+    if (lineFirst) {
+      compileExpression(this, plan.line);
+      compileExpressionPreservingPreviousXAsY(this, paramAssign.expr, paramAssign.line);
+      compileBlockCall(this, call.block, call.line);
+    } else {
+      compileExpressionPreservingPreviousXAsY(this, paramAssign.expr, paramAssign.line);
+      compileBlockCall(this, call.block, call.line);
+      compileExpression(this, plan.line);
+      this.emitOp(0x14, "X↔Y", "packed_score returned-index order", scoreAssign.line);
+    }
     this.emitJump(0x53, "ПП", plan.helper.label, "packed_score helper", scoreAssign.line);
     this.emitOp(0x10, "+", "packed_score stack accumulator", scoreAssign.line);
     if (store) {
@@ -8613,10 +8908,19 @@ export class EmitContext {
       this.currentXKnownZero = false;
     }
     this.optimizations.push({
-      name: "x-param-packed-score-accumulate",
-      detail: `Kept ${scoreAssign.target} on the stack while ${call.block} produced ${plan.returnX} for packed_score() at line ${scoreAssign.line}.`,
+      name: lineFirst ? "x-param-packed-score-line-stack-accumulate" : "x-param-packed-score-accumulate",
+      detail: lineFirst
+        ? `Loaded the packed_score line argument before ${call.block} so ${scoreAssign.target} stayed below it on the stack at line ${scoreAssign.line}.`
+        : `Kept ${scoreAssign.target} on the stack while ${call.block} produced ${plan.returnX} for packed_score() at line ${scoreAssign.line}.`,
     });
     return true;
+  }
+
+  private canCompilePackedScoreLineFirst(
+    line: ExpressionAst,
+    scoreAssign: Extract<StatementAst, { kind: "assign" }>,
+  ): boolean {
+    return isSimpleStackLoad(line) && !expressionReferencesIdentifier(line, scoreAssign.target);
   }
 
   private xParamPackedScoreAccumulationPlan(
@@ -8678,7 +8982,29 @@ export class EmitContext {
     const yTerm = this.currentYVariable === undefined
       ? undefined
       : yStackPow10DeltaTerm(delta.term, this.currentYVariable);
+    const xTerm = this.currentXVariable === undefined
+      ? undefined
+      : yStackPow10DeltaTerm(delta.term, this.currentXVariable);
     const directSelector = directIndexedSelectorRegister(this.ast, this.allocation.registers, statement.target);
+    if (xTerm !== undefined && directSelector !== undefined) {
+      const xName = this.currentXVariable!;
+      this.emitOp(0x15, "F 10ˣ", "stack-carried packed digit pow10", statement.line);
+      compileExpression(this, xTerm.factor);
+      this.emitOp(0x12, "×", "stack-carried packed digit delta", statement.line);
+      this.emitOp(
+        0xd0 + registerIndex(directSelector),
+        `К П->X ${directSelector}`,
+        "indexed packed digit update base",
+        statement.line,
+      );
+      this.emitOp(binaryOpcode(delta.op), delta.op, "indexed packed digit update", statement.line);
+      this.emitPreparedIndexedStore(statement.target, directSelector, statement.line);
+      this.optimizations.push({
+        name: "indexed-packed-x-stack-pow10-delta",
+        detail: `Used ${xName} already in X as the pow10 index for ${bankMemberKey(statement.target.base, statement.target.field)}[${expressionToIntentText(statement.target.index)}] at line ${statement.line}.`,
+      });
+      return true;
+    }
     if (yTerm !== undefined && directSelector !== undefined) {
       const yName = this.currentYVariable!;
       this.emitOp(0x14, "X↔Y", "stack-carried packed digit index", statement.line);
@@ -12438,7 +12764,7 @@ function collectPureDisplayProcsByDisplay(ast: ProgramAst): Map<string, Set<stri
   const result = new Map<string, Set<string>>();
   for (const proc of ast.procs) {
     if (proc.body.length !== 1) continue;
-    const only = proc.body[0];
+    const only = proc.body[0]!;
     if (only?.kind !== "show") continue;
     const names = result.get(only.display) ?? new Set<string>();
     names.add(proc.name);
@@ -14564,7 +14890,7 @@ function stackOnlyReturnProcsForTarget(
     const lowering = xParamProcs.get(proc.name);
     if (lowering?.kind !== "expr") continue;
     if (proc.body.length !== 1) continue;
-    const only = proc.body[0];
+    const only = proc.body[0]!;
     if (!stackOnlyReturnAssignment(only, name, lowering)) continue;
     result.add(proc.name);
   }
@@ -17299,6 +17625,14 @@ const optimizerCapabilities: Array<{
     requires: [],
     activeWhen: ["vo-return-body-reorder"],
     detail: "Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.",
+  },
+  {
+    id: "packed-line-family-layout",
+    category: "layout",
+    source: "documented",
+    requires: ["packed-grid-primitive-lowering", "shared-straight-line-helper"],
+    activeWhen: ["packed-line-family-layout"],
+    detail: "Candidate: detect packed line banks that are both updated/checked and scored, share source-shaped diagonal score tails through a local middle-entry layout, and continue toward a full shared update/check plus score walker instead of separate packed_add and packed_score traversals.",
   },
   {
     id: "super-number-deferred-normalization",
