@@ -4223,6 +4223,31 @@ program TerminalLoopScreen {
                         [](const ResolvedStep& step) { return step.comment == "show pos"; }) <= 1,
           "terminal loop screen elision should remove the procedure-tail show(pos)");
 
+  const CompileResult terminal_then_end = compile_source(R"mkpro(
+program TerminalThenEnd {
+  state {
+    flag: flag = 0
+    crash_value: packed = -999
+  }
+
+  loop {
+    if flag == 1 {
+      show(crash_value)
+      halt(-999)
+    }
+    else {
+      halt(1)
+    }
+  }
+}
+)mkpro");
+  require(terminal_then_end.implemented,
+          "native compiler should lower terminal then branch end elision");
+  require(terminal_then_end.diagnostics.empty(),
+          "terminal then branch compile should not report diagnostics");
+  require(has_optimization(terminal_then_end, "terminal-branch-end-elision"),
+          "terminal then branch should report the TS strategy name");
+
   const CompileResult show_read_decrement = compile_source(R"mkpro(
 program ReadKeyResourceUnderflow {
   state {

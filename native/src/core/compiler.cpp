@@ -13579,6 +13579,13 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
       return false;
     if (!then_stops)
       context.emitter.emit_label(end_label, {.hidden = true});
+    if (then_stops) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "terminal-branch-end-elision",
+          .detail = "Omitted unreachable if-end jump after terminal then branch at line " +
+                    std::to_string(selected.line) + ".",
+      });
+    }
     return true;
   }
 
