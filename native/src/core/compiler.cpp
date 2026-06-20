@@ -13335,6 +13335,8 @@ std::optional<double> numeric_self_update_delta(const std::string& target,
 
 struct ResidualGuardedUpdateMatch {
   V2Predicate condition;
+  V2Statement assignment;
+  std::vector<V2Statement> tail;
   std::string target;
   double bound = 0.0;
   double delta = 0.0;
@@ -13356,7 +13358,8 @@ match_residual_guarded_update(const V2Statement& statement) {
   if (!bound.has_value())
     return std::nullopt;
 
-  for (const V2Statement& candidate : statement.then_body) {
+  for (std::size_t index = 0; index < statement.then_body.size(); ++index) {
+    const V2Statement& candidate = statement.then_body.at(index);
     if (candidate.kind != "v2_assign" && candidate.kind != "v2_update")
       return std::nullopt;
     if (!candidate.target.has_value() || !candidate.expr.has_value())
@@ -13373,8 +13376,15 @@ match_residual_guarded_update(const V2Statement& statement) {
     if (!delta.has_value() || *delta == 0.0)
       return std::nullopt;
 
+    std::vector<V2Statement> tail;
+    tail.insert(tail.end(), statement.then_body.begin(),
+                statement.then_body.begin() + static_cast<std::ptrdiff_t>(index));
+    tail.insert(tail.end(), statement.then_body.begin() + static_cast<std::ptrdiff_t>(index + 1U),
+                statement.then_body.end());
     return ResidualGuardedUpdateMatch{
         .condition = condition,
+        .assignment = candidate,
+        .tail = std::move(tail),
         .target = left.name,
         .bound = *bound,
         .delta = *delta,
@@ -13382,6 +13392,54 @@ match_residual_guarded_update(const V2Statement& statement) {
   }
 
   return std::nullopt;
+}
+
+bool residual_guarded_update_saves(LoweringContext& context,
+                                   const ResidualGuardedUpdateMatch& update) {
+  const double correction = update.bound + update.delta;
+  const std::string correction_raw = format_number_literal(correction);
+  const int ordinary_update_cost =
+      guarded_estimate_expression_cost(parse_expression(*update.assignment.expr,
+                                                        update.assignment.line)) +
+      1;
+  const int residual_update_cost =
+      (std::fabs(correction) < 1e-12
+           ? 0
+           : estimate_number_or_preload_cost(context, correction_raw) + 1) +
+      1;
+  return residual_update_cost < ordinary_update_cost;
+}
+
+bool compile_residual_guarded_condition(LoweringContext& context,
+                                        const ResidualGuardedUpdateMatch& update,
+                                        const std::string& false_label, int line) {
+  if (!lower_expression_to_x(context, parse_expression(update.condition.left, line)))
+    return false;
+  if (!lower_expression_to_x(context, parse_expression(update.condition.right, line)))
+    return false;
+  context.emitter.emit_op(0x11, "-", "condition compare", line);
+  const int false_opcode = update.condition.op == "<" ? 0x5c : 0x59;
+  const std::string false_mnemonic = update.condition.op == "<" ? "F x<0" : "F x>=0";
+  context.emitter.emit_jump(false_opcode, false_mnemonic, false_label,
+                            "false branch for " + update.condition.op, line);
+  return true;
+}
+
+void emit_residual_guarded_update(LoweringContext& context,
+                                  const ResidualGuardedUpdateMatch& update) {
+  const double correction = update.bound + update.delta;
+  if (std::fabs(correction) >= 1e-12) {
+    emit_number_or_preload(context, format_number_literal(correction));
+    context.emitter.emit_op(0x10, "+", "residual guarded update " + update.target,
+                            update.assignment.line);
+  }
+  emit_store(context, update.target, "set " + update.target);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "residual-guarded-update",
+      .detail = "Reused " + update.target + " - " + format_number_literal(update.bound) +
+                " while updating " + update.target + " at line " +
+                std::to_string(update.assignment.line) + ".",
+  });
 }
 
 std::optional<Expression>
@@ -13921,6 +13979,100 @@ bool lower_direct_terminal_if_branch(LoweringContext& context, const V2Statement
   return true;
 }
 
+bool lower_residual_guarded_update(LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value())
+    return false;
+  const std::optional<ResidualGuardedUpdateMatch> update =
+      match_residual_guarded_update(statement);
+  if (!update.has_value() || !residual_guarded_update_saves(context, *update))
+    return false;
+
+  const std::string false_label = context.emitter.fresh_label("if_false");
+  const bool then_terminates = direct_terminal_statements_stop(context, update->tail);
+  const std::optional<std::string> end_label =
+      !statement.else_body.empty() && !then_terminates
+          ? std::optional<std::string>{context.emitter.fresh_label("if_end")}
+          : std::nullopt;
+
+  if (!compile_residual_guarded_condition(context, *update, false_label, statement.line))
+    return false;
+  emit_residual_guarded_update(context, *update);
+  if (!lower_statement_block(context, update->tail))
+    return false;
+
+  if (!statement.else_body.empty()) {
+    if (end_label.has_value())
+      context.emitter.emit_jump(0x51, "БП", *end_label, "if end", statement.line);
+    context.emitter.emit_label(false_label, {.hidden = true});
+    const Expression residual =
+        subtract_expression(parse_expression(update->condition.left, statement.line),
+                            parse_expression(update->condition.right, statement.line));
+    if (!statement.else_body.empty() &&
+        display_statement_is_single_expression(statement.else_body.front(), residual)) {
+      mark_branch_residual_reuse(context, residual, statement.line, "false branch");
+    }
+    if (!lower_statement_block(context, statement.else_body))
+      return false;
+    if (end_label.has_value())
+      context.emitter.emit_label(*end_label, {.hidden = true});
+  } else {
+    context.emitter.emit_label(false_label, {.hidden = true});
+  }
+  return true;
+}
+
+bool lower_nested_guard_shared_failure(LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value() ||
+      statement.else_body.empty() || statement.then_body.size() != 1U) {
+    return false;
+  }
+  const V2Statement& inner = statement.then_body.front();
+  if (inner.kind != "v2_if" || !inner.predicate.has_value() || inner.else_body.empty())
+    return false;
+  if (!common_branch_statement_lists_equal(statement.else_body, inner.else_body))
+    return false;
+
+  const std::string failure_label = context.emitter.fresh_label("guard_failure");
+  const bool then_terminates = direct_terminal_statements_stop(context, inner.then_body);
+  const std::optional<std::string> end_label =
+      then_terminates ? std::nullopt
+                      : std::optional<std::string>{context.emitter.fresh_label("guard_end")};
+
+  if (!lower_condition_false_branch(context, *statement.predicate, statement.negated,
+                                    failure_label, statement.line))
+    return false;
+
+  const std::optional<ResidualGuardedUpdateMatch> residual_update =
+      match_residual_guarded_update(inner);
+  if (residual_update.has_value() && residual_guarded_update_saves(context, *residual_update)) {
+    if (!compile_residual_guarded_condition(context, *residual_update, failure_label, inner.line))
+      return false;
+    emit_residual_guarded_update(context, *residual_update);
+    if (!lower_statement_block(context, residual_update->tail))
+      return false;
+  } else {
+    if (!lower_condition_false_branch(context, *inner.predicate, inner.negated, failure_label,
+                                      inner.line))
+      return false;
+    if (!lower_statement_block(context, inner.then_body))
+      return false;
+  }
+
+  if (end_label.has_value())
+    context.emitter.emit_jump(0x51, "БП", *end_label, "guard success end", inner.line);
+  context.emitter.emit_label(failure_label, {.hidden = true});
+  if (!lower_statement_block(context, statement.else_body))
+    return false;
+  if (end_label.has_value())
+    context.emitter.emit_label(*end_label, {.hidden = true});
+  context.optimizations.push_back(OptimizationReport{
+      .name = "nested-guard-shared-failure",
+      .detail = "Shared identical nested failure branch at lines " +
+                std::to_string(statement.line) + "/" + std::to_string(inner.line) + ".",
+  });
+  return true;
+}
+
 bool lower_if_statement(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value())
     return false;
@@ -13929,6 +14081,10 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     return true;
   if (has_errors(context.diagnostics))
     return false;
+  if (lower_nested_guard_shared_failure(context, statement))
+    return true;
+  if (lower_residual_guarded_update(context, statement))
+    return true;
   if (lower_direct_terminal_if_branch(context, statement))
     return true;
 

@@ -4440,6 +4440,107 @@ program EqualityZeroFallthroughReuse {
   require(has_optimization(equality_zero, "known-zero-reuse"),
           "equality zero fallthrough should feed the existing known-zero optimization");
 
+  const CompileResult residual_guarded_update = compile_source(R"mkpro(
+program ResidualGuardedUpdate {
+  state {
+    room: counter 0..6 = 0
+    shown: packed = 0
+  }
+
+  loop {
+    if room < 6 {
+      room++
+      shown = room
+    }
+    else {
+      show(room, shown)
+    }
+    halt(room)
+  }
+}
+)mkpro");
+  require(residual_guarded_update.implemented,
+          "native compiler should reuse comparison residuals for guarded self-updates");
+  require(residual_guarded_update.diagnostics.empty(),
+          "residual guarded update compile should not report diagnostics");
+  require(has_optimization(residual_guarded_update, "residual-guarded-update"),
+          "residual guarded update should report the TS strategy name");
+  require(std::any_of(residual_guarded_update.steps.begin(), residual_guarded_update.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment == "residual guarded update room";
+                      }),
+          "residual guarded update should add the correction before storing room");
+
+  const CompileResult nested_residual_guard = compile_source(R"mkpro(
+program NestedDelayedResidualGuardedUpdate {
+  state {
+    dynamite: counter 0..9 = 4
+    blocked: packed = 7
+    player: packed = 0
+  }
+  loop {
+    if blocked != 0 {
+      if dynamite >= 2 {
+        player = blocked
+        dynamite -= 2
+        show(player)
+      }
+      else {
+        halt(0)
+      }
+    }
+    else {
+      halt(0)
+    }
+  }
+}
+)mkpro");
+  require(nested_residual_guard.implemented,
+          "native compiler should share nested failure branches with residual updates");
+  require(nested_residual_guard.diagnostics.empty(),
+          "nested residual guard compile should not report diagnostics");
+  require(has_optimization(nested_residual_guard, "nested-guard-shared-failure"),
+          "nested residual guard should report the shared-failure strategy name");
+  require(has_optimization(nested_residual_guard, "residual-guarded-update"),
+          "nested residual guard should reuse the delayed self-update residual");
+  require(std::count_if(nested_residual_guard.steps.begin(), nested_residual_guard.steps.end(),
+                        [](const ResolvedStep& step) {
+                          return step.comment == "set dynamite";
+                        }) == 1,
+          "nested residual guard should store dynamite exactly once");
+
+  const CompileResult nested_shared_failure = compile_source(R"mkpro(
+program NestedGuardSharedFailure {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 1
+    score: counter 0..9 = 0
+  }
+
+  loop {
+    if a != 0 {
+      if b != 0 {
+        score = 1
+      }
+      else {
+        show(0)
+      }
+    }
+    else {
+      show(0)
+    }
+    halt(score)
+  }
+}
+)mkpro",
+                                                     branch_x_options);
+  require(nested_shared_failure.implemented,
+          "native compiler should share identical nested failure branches");
+  require(nested_shared_failure.diagnostics.empty(),
+          "nested shared failure compile should not report diagnostics");
+  require(has_optimization(nested_shared_failure, "nested-guard-shared-failure"),
+          "nested shared failure should report the TS strategy name");
+
   const CompileResult show_read_decrement = compile_source(R"mkpro(
 program ReadKeyResourceUnderflow {
   state {
