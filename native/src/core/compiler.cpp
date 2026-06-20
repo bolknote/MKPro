@@ -14192,6 +14192,133 @@ bool lower_int_frac_shared_tail(LoweringContext& context, const V2Statement& fir
   return true;
 }
 
+struct StackUnaryDerivationCall {
+  std::string fn;
+  int opcode = 0;
+  std::string mnemonic;
+  Expression arg;
+};
+
+std::optional<StackUnaryDerivationCall>
+match_stack_unary_derivation_call(const Expression& expression) {
+  if (expression.kind != "call" || expression.args.size() != 1U)
+    return std::nullopt;
+  const std::string fn = lower_ascii(expression.callee);
+  const std::optional<std::pair<int, std::string>> opcode = x_transform_unary_opcode(fn);
+  if (!opcode.has_value())
+    return std::nullopt;
+  return StackUnaryDerivationCall{
+      .fn = fn,
+      .opcode = opcode->first,
+      .mnemonic = opcode->second,
+      .arg = expression.args.front(),
+  };
+}
+
+struct StackUnaryDerivationAssignment {
+  const V2Statement* statement = nullptr;
+  std::string target;
+  StackUnaryDerivationCall call;
+};
+
+bool lower_stack_unary_derived_assignments_run(LoweringContext& context,
+                                               const std::vector<V2Statement>& statements,
+                                               std::size_t start,
+                                               std::size_t& consumed) {
+  consumed = 0;
+  if (start >= statements.size())
+    return false;
+  const V2Statement& first = statements.at(start);
+  if (!scalar_register_assignment(context, first))
+    return false;
+
+  const Expression first_expression = parse_expression(*first.expr, first.line);
+  const std::optional<StackUnaryDerivationCall> first_match =
+      match_stack_unary_derivation_call(first_expression);
+  if (!first_match.has_value() || !expression_pure_for_substitution(first_match->arg))
+    return false;
+
+  std::vector<StackUnaryDerivationAssignment> derivations;
+  std::set<std::string> targets;
+  const std::size_t end = std::min(statements.size(), start + 4U);
+  for (std::size_t index = start; index < end; ++index) {
+    const V2Statement& statement = statements.at(index);
+    if (!scalar_register_assignment(context, statement))
+      break;
+    const std::optional<std::string> target = scalar_assignment_target_name(statement);
+    if (!target.has_value() || targets.contains(*target))
+      break;
+
+    const Expression expression = parse_expression(*statement.expr, statement.line);
+    const std::optional<StackUnaryDerivationCall> call =
+        match_stack_unary_derivation_call(expression);
+    if (!call.has_value() || !expression_equals(call->arg, first_match->arg))
+      break;
+
+    targets.insert(*target);
+    derivations.push_back(StackUnaryDerivationAssignment{
+        .statement = &statement,
+        .target = *target,
+        .call = *call,
+    });
+  }
+
+  if (derivations.size() < 3U)
+    return false;
+  for (const std::string& target : targets) {
+    if (expression_contains_identifier(first_match->arg, target))
+      return false;
+  }
+
+  const int arg_cost = guarded_estimate_expression_cost(first_match->arg);
+  const int normal_cost = static_cast<int>(derivations.size()) * (arg_cost + 2);
+  const int duplicate_cost = static_cast<int>(derivations.size()) - 1;
+  const int restore_cost = 1 + (static_cast<int>(derivations.size()) - 2) * 2;
+  const int shared_cost =
+      arg_cost + duplicate_cost + static_cast<int>(derivations.size()) * 2 + restore_cost;
+  if (shared_cost >= normal_cost)
+    return false;
+
+  if (!lower_expression_to_x(context, first_match->arg))
+    return false;
+  for (std::size_t copy = 1; copy < derivations.size(); ++copy) {
+    context.emitter.emit_op(0x0e, "В↑", "duplicate operand for Z-stack derived tail",
+                            first.line);
+  }
+
+  for (std::size_t index = 0; index < derivations.size(); ++index) {
+    const StackUnaryDerivationAssignment& derivation = derivations.at(index);
+    if (index == 1U) {
+      context.emitter.emit_op(0x14, "X↔Y", "restore shared operand from Y",
+                              derivation.statement->line);
+      clear_current_x_facts(context);
+    } else if (index > 1U) {
+      context.emitter.emit_op(0x25, "F reverse", "rotate shared operand from Z",
+                              derivation.statement->line);
+      context.emitter.emit_op(0x14, "X↔Y", "restore shared operand from stack",
+                              derivation.statement->line);
+      clear_current_x_facts(context);
+    }
+    context.emitter.emit_op(derivation.call.opcode, derivation.call.mnemonic,
+                            derivation.call.fn + "()", derivation.statement->line);
+    clear_current_x_facts(context);
+    emit_store(context, derivation.target, "set " + derivation.target);
+  }
+
+  std::vector<std::string> functions;
+  functions.reserve(derivations.size());
+  for (const StackUnaryDerivationAssignment& derivation : derivations)
+    functions.push_back(derivation.call.fn + "()");
+  context.optimizations.push_back(OptimizationReport{
+      .name = "z-stack-derived-value-reuse",
+      .detail = std::string("Computed ") + expression_to_source(first_match->arg) +
+                " once and derived " + join_strings(functions, "/") + " through " +
+                (derivations.size() == 4U ? "X/Y/Z/T" : "X/Y/Z") + " stack copies.",
+  });
+  consumed = derivations.size();
+  return true;
+}
+
 struct ResidualGuardedUpdateMatch {
   V2Predicate condition;
   V2Statement assignment;
@@ -21554,6 +21681,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (lower_repeated_assignment_value_run(context, statements, index,
                                             repeated_assignment_consumed)) {
       index += repeated_assignment_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    std::size_t stack_unary_consumed = 0;
+    if (lower_stack_unary_derived_assignments_run(context, statements, index,
+                                                  stack_unary_consumed)) {
+      index += stack_unary_consumed - 1U;
       continue;
     }
     if (has_errors(context.diagnostics))

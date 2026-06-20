@@ -3355,6 +3355,48 @@ program IntFracSharedTail {
                       }),
           "int/frac shared tail should restore the saved operand");
 
+  const CompileResult z_stack_derived_tail = compile_source(R"mkpro(
+program StackDerived {
+  state {
+    raw: packed = 0
+    whole: packed = 0
+    part: packed = 0
+    signum: packed = 0
+    magnitude: packed = 0
+  }
+
+  loop {
+    raw = read()
+    whole = int(raw / 10)
+    part = frac(raw / 10)
+    signum = sign(raw / 10)
+    magnitude = abs(raw / 10)
+    halt(whole)
+    halt(part)
+    halt(signum)
+    halt(magnitude)
+  }
+}
+)mkpro");
+  require(z_stack_derived_tail.implemented,
+          "native compiler should share Z-stack unary derivation tails");
+  require(z_stack_derived_tail.diagnostics.empty(),
+          "Z-stack derived tail compile should not report diagnostics");
+  require(has_optimization(z_stack_derived_tail, "z-stack-derived-value-reuse"),
+          "Z-stack derived tail should report the TS strategy name");
+  require(std::count_if(z_stack_derived_tail.steps.begin(), z_stack_derived_tail.steps.end(),
+                        [](const ResolvedStep& step) { return step.opcode == 0x13; }) == 1,
+          "Z-stack derived tail should evaluate the shared division once");
+  require(std::count_if(z_stack_derived_tail.steps.begin(), z_stack_derived_tail.steps.end(),
+                        [](const ResolvedStep& step) { return step.opcode == 0x0e; }) >= 3,
+          "Z-stack derived tail should duplicate the shared operand");
+  require(std::count_if(z_stack_derived_tail.steps.begin(), z_stack_derived_tail.steps.end(),
+                        [](const ResolvedStep& step) { return step.opcode == 0x25; }) >= 2,
+          "Z-stack derived tail should rotate saved operands from Z");
+  require(std::any_of(z_stack_derived_tail.steps.begin(), z_stack_derived_tail.steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x14; }),
+          "Z-stack derived tail should restore saved operands with X/Y swap");
+
   const CompileResult signed_modulo_normalize = compile_source(R"mkpro(
 program SignedModuloNormalize {
   state {
