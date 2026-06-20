@@ -100,6 +100,7 @@ Diagnostic diagnostic(DiagnosticSeverity severity, std::string code, std::string
 }
 
 constexpr int kMk61ReturnStackLimit = 5;
+constexpr int kDisplayHelperMinSavings = 4;
 constexpr std::string_view kRepeatedUnaryUpdateArgPrefix = "__mkpro_unary_arg_";
 
 using FunctionEdgeMap = std::map<std::string, std::map<std::string, int>>;
@@ -5623,6 +5624,43 @@ std::set<std::string> collect_scaled_coord_line_count_targets(LoweringContext& c
                                                               const V2Program& program);
 std::set<std::string> collect_removable_coord_list_names(const V2Program& program);
 
+std::optional<std::string> shareable_literal_display_key(const V2Statement& statement) {
+  if (statement.kind != "v2_show" || !statement.items.has_value())
+    return std::nullopt;
+  const std::optional<std::string> literal =
+      core::emit::collapse_literal_only_display(*statement.items);
+  if (!literal.has_value() || literal->empty())
+    return std::nullopt;
+  const std::optional<DisplayLiteralProgram> program = display_literal_program(*literal);
+  if (!program.has_value() || program->kind == "error")
+    return std::nullopt;
+  return *literal;
+}
+
+void collect_literal_display_use_counts(const std::vector<V2Statement>& statements,
+                                        std::map<std::string, int>& counts) {
+  for (const V2Statement& statement : statements) {
+    if (const std::optional<std::string> key = shareable_literal_display_key(statement))
+      ++counts[*key];
+    collect_literal_display_use_counts(statement.body, counts);
+    collect_literal_display_use_counts(statement.then_body, counts);
+    collect_literal_display_use_counts(statement.else_body, counts);
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr)
+        collect_literal_display_use_counts(std::vector<V2Statement>{*match_case.action}, counts);
+    }
+    if (statement.otherwise != nullptr)
+      collect_literal_display_use_counts(std::vector<V2Statement>{*statement.otherwise}, counts);
+  }
+}
+
+void collect_literal_display_use_counts(LoweringContext& context, const V2Program& program) {
+  context.literal_display_use_counts.clear();
+  collect_literal_display_use_counts(program.body, context.literal_display_use_counts);
+  for (const V2Rule& rule : program.rules)
+    collect_literal_display_use_counts(rule.body, context.literal_display_use_counts);
+}
+
 void index_program_metadata(LoweringContext& context, const V2Program& program) {
   for (const V2StateField& field : program.state)
     context.state_fields[field.name] = &field;
@@ -10651,6 +10689,120 @@ bool lower_sign_digit_literal_display(LoweringContext& context, const std::strin
   return true;
 }
 
+int literal_display_body_cost(const DisplayLiteralProgram& program) {
+  const int sign_cost = program.negative ? 1 : 0;
+  if (program.kind == "kinv")
+    return static_cast<int>(program.digits.size()) + 2 + sign_cost;
+  return static_cast<int>(program.left.size() + program.right.size()) + 3 + sign_cost;
+}
+
+bool should_share_literal_display(const LoweringContext& context, const std::string& literal) {
+  const auto use_count_it = context.literal_display_use_counts.find(literal);
+  if (use_count_it == context.literal_display_use_counts.end() || use_count_it->second < 2)
+    return false;
+  const std::optional<DisplayLiteralProgram> program = display_literal_program(literal);
+  if (!program.has_value() || program->kind == "error")
+    return false;
+  const int uses = use_count_it->second;
+  const int body_cost = literal_display_body_cost(*program);
+  const int helper_cost = uses * 2 + body_cost + 1;
+  const int inline_total = uses * body_cost;
+  return inline_total - helper_cost >= kDisplayHelperMinSavings;
+}
+
+const LiteralDisplayHelperRequest&
+ensure_literal_display_helper(LoweringContext& context, const std::string& literal, int line) {
+  const auto existing = context.literal_display_helper_labels.find(literal);
+  if (existing != context.literal_display_helper_labels.end()) {
+    const auto helper =
+        std::find_if(context.literal_display_helpers.begin(), context.literal_display_helpers.end(),
+                     [&](const LiteralDisplayHelperRequest& candidate) {
+                       return candidate.label == existing->second;
+                     });
+    if (helper != context.literal_display_helpers.end())
+      return *helper;
+  }
+
+  const std::string label =
+      "__display_literal_" + std::to_string(context.literal_display_helpers.size());
+  context.literal_display_helper_labels[literal] = label;
+  context.literal_display_helpers.push_back(LiteralDisplayHelperRequest{
+      .key = literal,
+      .label = label,
+      .literal = literal,
+      .line = line,
+  });
+  return context.literal_display_helpers.back();
+}
+
+bool lower_shared_literal_display_call(LoweringContext& context, const std::string& literal,
+                                       int line) {
+  if (context.emitting_literal_display_helper || !should_share_literal_display(context, literal))
+    return false;
+  const LiteralDisplayHelperRequest& helper = ensure_literal_display_helper(context, literal, line);
+  context.emitter.emit_jump(0x53, "ПП", helper.label, "show literal helper", line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "screen-video-literal-helper-call",
+      .detail = "Reused shared literal video helper for literal screen at line " +
+                std::to_string(line) + ".",
+  });
+  return true;
+}
+
+bool lower_literal_display_body(LoweringContext& context, const std::string& literal, int line) {
+  if (literal.empty()) {
+    context.emitter.emit_op(0x50, "С/П", "show literal", line);
+    report_screen_literal_lowering(context, "screen-empty-literal-lowering",
+                                   "Lowered empty screen literal at line " + std::to_string(line) +
+                                       " as a plain pause.");
+    return true;
+  }
+  if (lower_preloaded_display_literal(context, literal, line))
+    return true;
+  if (const std::optional<DisplayLiteralProgram> program = display_literal_program(literal)) {
+    if (!core::emit::emit_direct_display_literal_program(context.emitter, *program, line))
+      return false;
+    if (program->kind == "error") {
+      report_screen_literal_lowering(
+          context, "screen-error-literal-lowering",
+          "Lowered screen literal at line " + std::to_string(line) +
+              " as a resumable ЕГГ0Г pause with a skipped padding cell.");
+    }
+    return true;
+  }
+  if (const std::optional<std::string> decimal = decimal_display_literal_number(literal)) {
+    context.emitter.emit_number(*decimal);
+    context.emitter.emit_op(0x50, "С/П", "show literal", line);
+    report_screen_literal_lowering(context, "screen-decimal-literal-lowering",
+                                   "Lowered screen literal at line " + std::to_string(line) +
+                                       " as an ordinary decimal display literal.");
+    return true;
+  }
+  if (lower_leading_zero_hex_product_display(context, literal, line))
+    return true;
+  if (lower_zero_digit_tail_display(context, literal, line))
+    return true;
+  if (lower_sign_digit_literal_display(context, literal, line))
+    return true;
+  if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
+          preferred_first_splice_display_literal_program(literal)) {
+    const std::string scratch = "__display_first_literal";
+    if (!ensure_hidden_register(context, scratch))
+      return false;
+    auto display_api = display_emit_api(context);
+    if (!core::emit::emit_first_splice_display_literal_program(display_api, context, *first_splice,
+                                                               scratch, line))
+      return false;
+    context.emitter.emit_op(0x50, "С/П", "show literal", line);
+    report_screen_literal_lowering(
+        context, "screen-text-literal-first-splice",
+        "Lowered screen literal at line " + std::to_string(line) +
+            " by building a literal mantissa and splicing its first digit.");
+    return true;
+  }
+  return false;
+}
+
 bool lower_display_statement(LoweringContext& context, const V2Statement& statement) {
   if (!statement.items.has_value()) {
     context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
@@ -10665,66 +10817,9 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
 
   if (const std::optional<std::string> literal =
           core::emit::collapse_literal_only_display(*statement.items)) {
-    if (literal->empty()) {
-      context.emitter.emit_op(0x50, "С/П", "show literal", statement.line);
-      report_screen_literal_lowering(context, "screen-empty-literal-lowering",
-                                     "Lowered empty screen literal at line " +
-                                         std::to_string(statement.line) + " as a plain pause.");
+    if (lower_shared_literal_display_call(context, *literal, statement.line))
       return true;
-    }
-    if (lower_preloaded_display_literal(context, *literal, statement.line)) {
-      report_screen_video_literal_lowering(context, statement.line);
-      return true;
-    }
-    if (const std::optional<DisplayLiteralProgram> program = display_literal_program(*literal)) {
-      if (!core::emit::emit_direct_display_literal_program(context.emitter, *program,
-                                                           statement.line))
-        return false;
-      if (program->kind == "error") {
-        report_screen_literal_lowering(
-            context, "screen-error-literal-lowering",
-            "Lowered screen literal at line " + std::to_string(statement.line) +
-                " as a resumable ЕГГ0Г pause with a skipped padding cell.");
-      }
-      report_screen_video_literal_lowering(context, statement.line);
-      return true;
-    }
-    if (const std::optional<std::string> decimal = decimal_display_literal_number(*literal)) {
-      context.emitter.emit_number(*decimal);
-      context.emitter.emit_op(0x50, "С/П", "show literal", statement.line);
-      report_screen_literal_lowering(context, "screen-decimal-literal-lowering",
-                                     "Lowered screen literal at line " +
-                                         std::to_string(statement.line) +
-                                         " as an ordinary decimal display literal.");
-      report_screen_video_literal_lowering(context, statement.line);
-      return true;
-    }
-    if (lower_leading_zero_hex_product_display(context, *literal, statement.line)) {
-      report_screen_video_literal_lowering(context, statement.line);
-      return true;
-    }
-    if (lower_zero_digit_tail_display(context, *literal, statement.line)) {
-      report_screen_video_literal_lowering(context, statement.line);
-      return true;
-    }
-    if (lower_sign_digit_literal_display(context, *literal, statement.line)) {
-      report_screen_video_literal_lowering(context, statement.line);
-      return true;
-    }
-    if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
-            preferred_first_splice_display_literal_program(*literal)) {
-      const std::string scratch = "__display_first_literal";
-      if (!ensure_hidden_register(context, scratch))
-        return false;
-      auto display_api = display_emit_api(context);
-      if (!core::emit::emit_first_splice_display_literal_program(
-              display_api, context, *first_splice, scratch, statement.line))
-        return false;
-      context.emitter.emit_op(0x50, "С/П", "show literal", statement.line);
-      report_screen_literal_lowering(
-          context, "screen-text-literal-first-splice",
-          "Lowered screen literal at line " + std::to_string(statement.line) +
-              " by building a literal mantissa and splicing its first digit.");
+    if (lower_literal_display_body(context, *literal, statement.line)) {
       report_screen_video_literal_lowering(context, statement.line);
       return true;
     }
@@ -22354,6 +22449,27 @@ bool lower_terminal_tail_helpers(LoweringContext& context) {
   return true;
 }
 
+bool lower_literal_display_helpers(LoweringContext& context) {
+  for (const LiteralDisplayHelperRequest& helper : context.literal_display_helpers) {
+    context.emitter.emit_label(
+        helper.label,
+        {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
+    const bool previous = context.emitting_literal_display_helper;
+    context.emitting_literal_display_helper = true;
+    const bool lowered = lower_literal_display_body(context, helper.literal, helper.line);
+    context.emitting_literal_display_helper = previous;
+    if (!lowered)
+      return false;
+    context.emitter.emit_op(0x52, "В/О", "display literal return", helper.line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "screen-video-literal-helper",
+        .detail = "Emitted shared literal video helper for literal screen at line " +
+                  std::to_string(helper.line) + ".",
+    });
+  }
+  return true;
+}
+
 bool lower_spatial_hit_helpers(LoweringContext& context) {
   if (!context.spatial_hit_helper_order.empty() && !reserve_bit_mask_helper_preloads(context))
     return false;
@@ -24484,6 +24600,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       if (options.guarded_prologue_gadgets)
         extract_guarded_prologue_gadgets(*ast.v2, context.optimizations);
       index_program_metadata(context, *ast.v2);
+      collect_literal_display_use_counts(context, *ast.v2);
       index_constants(context, *ast.v2);
       const int grd_angle_mode_assumptions =
           fold_grd_angle_mode_constants(*ast.v2, context.constants);
@@ -24563,8 +24680,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           bool emitted_tail = lower_function_rules(context, *ast.v2);
           const std::size_t function_end = context.emitter.items.size();
           if (emitted_tail && lower_terminal_tail_helpers(context) &&
-              lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
-              lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
+              lower_literal_display_helpers(context) && lower_spatial_sum_helpers(context) &&
+              lower_spatial_hit_helpers(context) && lower_bit_mask_helper(context) &&
+              lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
           if (emitted_tail) {

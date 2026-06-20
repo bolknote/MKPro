@@ -325,6 +325,34 @@ program DynamicLineReportWidth {
           "explicit-width dynamic line report compile should not report diagnostics");
   require(has_optimization(dynamic_line_width, "screen-dynamic-line-report-lowering"),
           "explicit-width dynamic line report should report the TS strategy name");
+
+  const CompileResult literal_helper = compile_source(R"mkpro(
+program RepeatedLiteralScreenHelper {
+  loop {
+    show("8-LСГ90")
+    show("8-LСГ90")
+    show("8-LСГ90")
+    show("8-LСГ90")
+  }
+}
+)mkpro");
+  require(literal_helper.implemented, "native compiler should lower repeated literal screens");
+  require(literal_helper.diagnostics.empty(),
+          "repeated literal screen compile should not report diagnostics");
+  require(has_optimization(literal_helper, "screen-video-literal-helper-call"),
+          "repeated literal screen should report the TS helper-call strategy name");
+  require(has_optimization(literal_helper, "screen-video-literal-helper"),
+          "repeated literal screen should emit the shared literal helper body");
+  require(std::any_of(literal_helper.steps.begin(), literal_helper.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x53 && step.comment == "show literal helper";
+                      }),
+          "repeated literal screen should call the shared literal helper");
+  require(std::any_of(literal_helper.steps.begin(), literal_helper.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x52 && step.comment == "display literal return";
+                      }),
+          "repeated literal screen should return from the shared helper");
 }
 
 } // namespace mkpro::tests

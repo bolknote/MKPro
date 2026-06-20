@@ -34,6 +34,13 @@ struct TerminalTailHelperRequest {
   int line = 0;
 };
 
+struct LiteralDisplayHelperRequest {
+  std::string key;
+  std::string label;
+  std::string literal;
+  int line = 0;
+};
+
 struct XParamProcLowering {
   std::string param;
   V2Statement first;
@@ -93,6 +100,9 @@ struct LoweringContext {
   std::map<std::string, std::string> indirect_helper_registers;
   std::vector<SpatialSumHelperRequest> spatial_sum_helpers;
   std::vector<TerminalTailHelperRequest> terminal_tail_helpers;
+  std::map<std::string, int> literal_display_use_counts;
+  std::map<std::string, std::string> literal_display_helper_labels;
+  std::vector<LiteralDisplayHelperRequest> literal_display_helpers;
   std::optional<std::string> spatial_count_counter_override;
   std::optional<std::string> tail_show_target;
   std::set<std::string> transient_show_targets;
@@ -124,6 +134,7 @@ struct LoweringContext {
   bool indirect_underflow_decrement = false;
   bool recall_stored_input_after_decrement = false;
   bool dead_source_residual_temp_reuse = false;
+  bool emitting_literal_display_helper = false;
   bool aggressive_terminal_direct = false;
   bool invert_branch_order = false;
   bool order_procs_by_call_count = false;
