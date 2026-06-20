@@ -5667,7 +5667,7 @@ void collect_literal_display_use_counts(LoweringContext& context, const V2Progra
 }
 
 void collect_expression_use_count(LoweringContext& context, const Expression& expression) {
-  ++context.random_cell_expression_use_counts[expression_to_json(expression)];
+  ++context.expression_use_counts[expression_to_json(expression)];
   if (expression.kind == "indexed" && expression.index != nullptr)
     collect_expression_use_count(context, *expression.index);
   if (expression.kind == "unary" && expression.expr != nullptr)
@@ -5728,7 +5728,7 @@ void collect_expression_use_counts(LoweringContext& context,
 }
 
 void collect_expression_use_counts(LoweringContext& context, const V2Program& program) {
-  context.random_cell_expression_use_counts.clear();
+  context.expression_use_counts.clear();
   collect_expression_use_counts(context, program.body);
   for (const V2Rule& rule : program.rules)
     collect_expression_use_counts(context, rule.body);
@@ -13305,8 +13305,8 @@ bool should_share_random_cell_expression(const LoweringContext& context,
   if (!is_random_cell_expression_shape(context, expression))
     return false;
   const std::string key = expression_to_json(expression);
-  const auto count_it = context.random_cell_expression_use_counts.find(key);
-  if (count_it == context.random_cell_expression_use_counts.end() || count_it->second < 2)
+  const auto count_it = context.expression_use_counts.find(key);
+  if (count_it == context.expression_use_counts.end() || count_it->second < 2)
     return false;
   const int uses = count_it->second;
   const int cost = random_cell_helper_expression_cost(context, expression);
@@ -13345,6 +13345,56 @@ const RandomCellHelperRequest* shared_random_cell_helper(LoweringContext& contex
       !should_share_random_cell_expression(context, expression))
     return nullptr;
   return ensure_random_cell_helper(context, expression);
+}
+
+bool should_share_expression(const LoweringContext& context, const Expression& expression) {
+  if (!expression_pure_for_substitution(expression))
+    return false;
+  if (expression.kind == "number" || expression.kind == "identifier")
+    return false;
+  constexpr int kExpressionHelperMinCost = 8;
+  constexpr int kExpressionHelperMinSavings = 4;
+  const int cost = guarded_estimate_expression_cost(expression);
+  if (cost < kExpressionHelperMinCost)
+    return false;
+  const std::string key = expression_to_json(expression);
+  const auto count_it = context.expression_use_counts.find(key);
+  if (count_it == context.expression_use_counts.end() || count_it->second < 2)
+    return false;
+  const int uses = count_it->second;
+  const int inline_total = uses * cost;
+  const int helper_total = uses * 2 + cost + 1;
+  return inline_total - helper_total >= kExpressionHelperMinSavings;
+}
+
+const ExpressionHelperRequest* ensure_expression_helper(LoweringContext& context,
+                                                        const Expression& expression) {
+  const std::string key = expression_to_json(expression);
+  const auto existing = context.expression_helper_labels.find(key);
+  if (existing != context.expression_helper_labels.end()) {
+    const auto helper =
+        std::find_if(context.expression_helpers.begin(), context.expression_helpers.end(),
+                     [&](const ExpressionHelperRequest& candidate) {
+                       return candidate.label == existing->second;
+                     });
+    if (helper != context.expression_helpers.end())
+      return &*helper;
+  }
+  const std::string label = "__expr_" + std::to_string(context.expression_helpers.size());
+  context.expression_helper_labels[key] = label;
+  context.expression_helpers.push_back(ExpressionHelperRequest{
+      .key = key,
+      .label = label,
+      .expr = expression,
+  });
+  return &context.expression_helpers.back();
+}
+
+const ExpressionHelperRequest* shared_expression_helper(LoweringContext& context,
+                                                        const Expression& expression) {
+  if (context.emitting_expression_helper || !should_share_expression(context, expression))
+    return nullptr;
+  return ensure_expression_helper(context, expression);
 }
 
 bool lower_random_integer_call_to_x(LoweringContext& context, const Expression& expression) {
@@ -13658,6 +13708,18 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
     context.optimizations.push_back(OptimizationReport{
         .name = "random-cell-helper-call",
         .detail = "Reused shared random cell helper for " + expression_to_source(expression) + ".",
+    });
+    return true;
+  }
+
+  if (const ExpressionHelperRequest* helper = shared_expression_helper(context, expression);
+      helper != nullptr) {
+    context.emitter.emit_jump(0x53, "ПП", helper->label,
+                              "expr " + expression_to_source(expression));
+    clear_current_x_facts(context);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "expression-helper-call",
+        .detail = "Reused shared helper for " + expression_to_source(expression) + ".",
     });
     return true;
   }
@@ -23007,6 +23069,26 @@ bool lower_random_cell_helpers(LoweringContext& context) {
   return true;
 }
 
+bool lower_expression_helpers(LoweringContext& context) {
+  for (const ExpressionHelperRequest& helper : context.expression_helpers) {
+    context.emitter.emit_label(
+        helper.label,
+        {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
+    const bool previous = context.emitting_expression_helper;
+    context.emitting_expression_helper = true;
+    const bool lowered = lower_expression_to_x(context, helper.expr);
+    context.emitting_expression_helper = previous;
+    if (!lowered)
+      return false;
+    context.emitter.emit_op(0x52, "В/О", "expression helper return", helper.line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "expression-helper",
+        .detail = "Emitted shared helper for " + expression_to_source(helper.expr) + ".",
+    });
+  }
+  return true;
+}
+
 bool lower_spatial_hit_helpers(LoweringContext& context) {
   if (!context.spatial_hit_helper_order.empty() && !reserve_bit_mask_helper_preloads(context))
     return false;
@@ -25225,8 +25307,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           const std::size_t function_end = context.emitter.items.size();
           if (emitted_tail && lower_terminal_tail_helpers(context) &&
               lower_literal_display_helpers(context) && lower_random_cell_helpers(context) &&
-              lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
-              lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
+              lower_expression_helpers(context) && lower_spatial_sum_helpers(context) &&
+              lower_spatial_hit_helpers(context) && lower_bit_mask_helper(context) &&
+              lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
           if (emitted_tail) {

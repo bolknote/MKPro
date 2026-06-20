@@ -22,6 +22,7 @@ void display_lowering_helpers_match_typescript_contract();
 void duplicate_failure_tail_matches_typescript_contract();
 void emitter_matches_initial_typescript_contract();
 void supported_examples_match_native_oracles();
+void expression_helpers_match_typescript_contract();
 void expression_lowering_helpers_match_typescript_contract();
 void formal_address_matches_typescript_contract();
 void format_primitives_match_typescript_contract();
@@ -109,6 +110,8 @@ int main() {
        mkpro::tests::emitter_matches_initial_typescript_contract},
       {"supported_examples_match_native_oracles",
        mkpro::tests::supported_examples_match_native_oracles},
+      {"expression_helpers_match_typescript_contract",
+       mkpro::tests::expression_helpers_match_typescript_contract},
       {"expression_lowering_helpers_match_typescript_contract",
        mkpro::tests::expression_lowering_helpers_match_typescript_contract},
       {"formal_address_matches_typescript_contract",

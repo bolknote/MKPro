@@ -48,6 +48,13 @@ struct RandomCellHelperRequest {
   int line = 0;
 };
 
+struct ExpressionHelperRequest {
+  std::string key;
+  std::string label;
+  Expression expr;
+  int line = 0;
+};
+
 struct XParamProcLowering {
   std::string param;
   V2Statement first;
@@ -110,9 +117,11 @@ struct LoweringContext {
   std::map<std::string, int> literal_display_use_counts;
   std::map<std::string, std::string> literal_display_helper_labels;
   std::vector<LiteralDisplayHelperRequest> literal_display_helpers;
-  std::map<std::string, int> random_cell_expression_use_counts;
+  std::map<std::string, int> expression_use_counts;
   std::map<std::string, std::string> random_cell_helper_labels;
   std::vector<RandomCellHelperRequest> random_cell_helpers;
+  std::map<std::string, std::string> expression_helper_labels;
+  std::vector<ExpressionHelperRequest> expression_helpers;
   std::optional<std::string> spatial_count_counter_override;
   std::optional<std::string> tail_show_target;
   std::set<std::string> transient_show_targets;
@@ -148,6 +157,7 @@ struct LoweringContext {
   bool single_bit_mask_op_copy_reuse = false;
   bool emitting_literal_display_helper = false;
   bool emitting_random_cell_helper = false;
+  bool emitting_expression_helper = false;
   bool share_random_cell = false;
   bool aggressive_terminal_direct = false;
   bool invert_branch_order = false;

@@ -110,6 +110,7 @@ add_executable(mkpro_tests
   tests/duplicate_failure_tail_test.cpp
   tests/emitter_test.cpp
   tests/example_parity_test.cpp
+  tests/expression_helper_test.cpp
   tests/expression_lowering_test.cpp
   tests/formal_address_test.cpp
   tests/format_test.cpp
