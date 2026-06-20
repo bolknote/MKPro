@@ -1,7 +1,7 @@
 # Cooperative Cafe
 
-- Author: illi4
-- Source: [Habr article](https://habr.com/ru/articles/125484/)
+- Source: *Техника - молодежи*, No. 5, 1988, «Клуб электронных игр», article «Кооперативное кафе»
+- Transcription source: [Habr article by illi4](https://habr.com/ru/articles/125484/)
 - Program: [cooperative-cafe.txt](cooperative-cafe.txt)
 
 ## Description

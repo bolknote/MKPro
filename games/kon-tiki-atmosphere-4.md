@@ -1,6 +1,7 @@
 # Kon-Tiki: Атмосфера-4
 
-- Source: [1987-03-na-kryl](https://web.archive.org/web/20120614121037id_/http://epizodsspace.no-ip.org/bibl/tm/1987/3/na-kryl.html)
+- Source: *Техника - молодежи*, No. 3, 1987, «На крыльях над планетами», program «Атмосфера-4»
+- Transcription source: [1987-03-na-kryl](https://web.archive.org/web/20120614121037id_/http://epizodsspace.no-ip.org/bibl/tm/1987/3/na-kryl.html)
 - Program: [kon-tiki-atmosphere-4.txt](kon-tiki-atmosphere-4.txt)
 - Series: Kon-Tiki / Путь к Земле
 

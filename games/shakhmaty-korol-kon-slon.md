@@ -1,6 +1,7 @@
 # Король, конь и слон против короля
 
-- Source: [xbasoft PMK package](https://xvadim.github.io/xbasoft/pmk/knight_and_bishop.zip)
+- Source: *Техника - молодежи*, No. 12, 1986, «Клуб электронных игр», article «Партия по переписке»
+- Transcription source: [xbasoft PMK package](https://xvadim.github.io/xbasoft/pmk/knight_and_bishop.zip)
 - Program: [shakhmaty-korol-kon-slon.txt](shakhmaty-korol-kon-slon.txt)
 - Decoded from the Android emulator state file inside the package.
 

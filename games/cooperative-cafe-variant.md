@@ -1,6 +1,7 @@
 # Кооперативное кафе
 
-- Source: [xbasoft PMK package](https://xvadim.github.io/xbasoft/pmk/cafe.zip)
+- Source: *Техника - молодежи*, No. 5, 1988, «Клуб электронных игр», article «Кооперативное кафе»
+- Transcription source: [xbasoft PMK package](https://xvadim.github.io/xbasoft/pmk/cafe.zip)
 - Program: [cooperative-cafe-variant.txt](cooperative-cafe-variant.txt)
 - Decoded from the Android emulator state file inside the package.
 

@@ -1,7 +1,8 @@
 # Покер
 
 - Автор: А. Нилин
-- Источник: [Lord_BSS](https://lordbss.narod.ru/pmk157.html)
+- Источник: *Наука и жизнь*, № 6, 1991, «Сыграем в покер!»
+- Транскрипция: [Lord_BSS](https://lordbss.narod.ru/pmk157.html)
 - Программа: [poker.txt](poker.txt)
 
 ## Описание

@@ -1,7 +1,8 @@
 # Wolves and Goat 8x8
 
 - Author: Dmitry Kaykov
-- Source: [Tekhnika-Molodezhi, 1986 №8 (p.44–47)](http://epizodsspace.airbase.ru/bibl/tehnika_-_molodyoji/1986/8/44-47.html)
+- Source: *Техника - молодежи*, No. 8, 1986, «Клуб электронных игр», article «Волки и козлик»
+- Transcription source: [Tekhnika-Molodezhi, 1986 №8 (p.44–47)](http://epizodsspace.airbase.ru/bibl/tehnika_-_molodyoji/1986/8/44-47.html)
 - Program: [volki-i-kozlik-8x8.txt](volki-i-kozlik-8x8.txt)
 - Source note: Original B3-34 listing adapted with MK-61-compatible patch for lines 45–66.
 

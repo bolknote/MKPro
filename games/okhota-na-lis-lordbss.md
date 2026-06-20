@@ -1,7 +1,8 @@
 # Охота на лис
 
 - Автор: Юрий Иванов, Павел Иртюга
-- Источник: [Lord_BSS](https://lordbss.narod.ru/pmk49.html)
+- Источник: *Наука и жизнь*, № 10, 1990, «Охота на лис»
+- Транскрипция: [Lord_BSS](https://lordbss.narod.ru/pmk49.html)
 - Программа: [okhota-na-lis-lordbss.txt](okhota-na-lis-lordbss.txt)
 
 ## Описание

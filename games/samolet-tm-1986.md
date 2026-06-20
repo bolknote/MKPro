@@ -1,7 +1,7 @@
 # Самолет
 
 - Author: Владимир Лозовой
-- Source: *Техника - молодежи*, No. 11, 1986
+- Source: *Техника - молодежи*, No. 11, 1986, «Самолет»
 - Program: [samolet-tm-1986.txt](samolet-tm-1986.txt)
 - Listing restored from DjVu scan with macOS Vision OCR and manual table check.
 

@@ -1,7 +1,8 @@
 # Сокровище
 
 - Автор: Евгений Бредня
-- Источник: [Lord_BSS](https://lordbss.narod.ru/pmk167.html)
+- Источник: *Наука и жизнь*, № 2, 1989, «Пещера»
+- Транскрипция: [Lord_BSS](https://lordbss.narod.ru/pmk167.html)
 - Программа: [sokrovishche.txt](sokrovishche.txt)
 
 ## Описание

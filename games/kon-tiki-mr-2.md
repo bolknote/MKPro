@@ -1,6 +1,7 @@
 # Kon-Tiki: МР-2
 
-- Source: [1987-02-polet](https://web.archive.org/web/20150804232121id_/http://epizodsspace.no-ip.org/bibl/tm/1987/2/polet.html)
+- Source: *Техника - молодежи*, No. 2, 1987, «Космоинформатика: Вот опять уходим мы в полет...», program «МР-2»
+- Transcription source: [1987-02-polet](https://web.archive.org/web/20150804232121id_/http://epizodsspace.no-ip.org/bibl/tm/1987/2/polet.html)
 - Program: [kon-tiki-mr-2.txt](kon-tiki-mr-2.txt)
 - Series: Kon-Tiki / Путь к Земле
 

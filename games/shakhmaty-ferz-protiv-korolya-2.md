@@ -1,6 +1,7 @@
 # Белый ферзь и король против черного короля - 2
 
-- Source: [xbasoft PMK package](https://xvadim.github.io/xbasoft/pmk/queen_pmc.zip)
+- Source: *Техника - молодежи*, No. 9, 1987, «Клуб электронных игр», article «Неприкосновенный король»
+- Transcription source: [xbasoft PMK package](https://xvadim.github.io/xbasoft/pmk/queen_pmc.zip)
 - Program: [shakhmaty-ferz-protiv-korolya-2.txt](shakhmaty-ferz-protiv-korolya-2.txt)
 - Decoded from the Android emulator state file inside the package.
 
