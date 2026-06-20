@@ -225,6 +225,49 @@ program VariableLeadingSpaceLow {
               variable_mask.steps.begin(), variable_mask.steps.end(),
               [](const ResolvedStep& step) { return step.comment == "display mask low branch"; }),
           "variable-leading display should emit the width dispatch branch");
+
+  const CompileResult text_display = compile_source(R"mkpro(
+program GenericBeerTextDisplay {
+  state {
+    level: counter 0..99 = stack.X
+  }
+
+  loop {
+    show("BEEr ", level:02)
+  }
+}
+)mkpro");
+  require(text_display.implemented, "native compiler should lower generic text displays");
+  require(text_display.diagnostics.empty(),
+          "generic text display compile should not report diagnostics");
+  require(has_optimization(text_display, "screen-text-lowering"),
+          "generic text display should report the TS strategy name");
+  require(text_display.registers.find("__text_tens_scratch") == text_display.registers.end(),
+          "generic text display should not allocate the old tens scratch variable");
+  require(text_display.registers.find("__text_ones_scratch") == text_display.registers.end(),
+          "generic text display should not allocate the old ones scratch variable");
+  require(text_display.registers.find("__text_digit_offset") == text_display.registers.end(),
+          "generic text display should not allocate the old digit-offset scratch variable");
+  require(std::any_of(text_display.steps.begin(), text_display.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x60 && step.comment == "text display verse";
+                      }),
+          "generic text display should start from the chosen source register");
+  require(std::any_of(text_display.steps.begin(), text_display.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x41 && step.comment == "text tens scratch";
+                      }),
+          "generic text display should use the TS fixed tens scratch register");
+  require(std::any_of(text_display.steps.begin(), text_display.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0xd8 && step.comment == "text display prefix";
+                      }),
+          "generic text display should use the TS fixed prefix register");
+  require(std::any_of(text_display.steps.begin(), text_display.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x50 && step.comment == "show text";
+                      }),
+          "generic text display should emit the visible text stop");
 }
 
 } // namespace mkpro::tests

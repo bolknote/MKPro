@@ -6346,11 +6346,6 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   }
   if (context.ninety_nine_bottles_shape) {
     bind_register(context, "bottles", 0);
-    bind_register(context, "__text_tens_scratch", 1);
-    bind_register(context, "__text_ones_scratch", 2);
-    bind_register(context, "__text_digit_offset", 7);
-    bind_register(context, "__text_prefix_scratch", 8);
-    bind_register(context, "__text_rendered_ones", 0xa);
   }
   if (context.dungeon_shape) {
     bind_register(context, "plan", 0);
@@ -6567,6 +6562,129 @@ void emit_store(LoweringContext& context, const std::string& name, std::string c
   aliases.insert(name);
   context.emitter.current_x_aliases = std::move(aliases);
   context.emitter.current_x_known_zero = known_zero;
+}
+
+struct TextPrefixDisplay {
+  std::string text;
+  const DisplayItem* source = nullptr;
+};
+
+std::optional<TextPrefixDisplay>
+collapse_text_prefix_display(const std::vector<DisplayItem>& items) {
+  TextPrefixDisplay result;
+  for (const DisplayItem& item : items) {
+    if (item.kind == "literal") {
+      if (result.source != nullptr)
+        return std::nullopt;
+      result.text += item.text;
+      continue;
+    }
+    if (item.kind != "source" || result.source != nullptr)
+      return std::nullopt;
+    result.source = &item;
+  }
+  if (result.source == nullptr || result.text.empty())
+    return std::nullopt;
+  return result;
+}
+
+int current_machine_address(const LoweringContext& context) {
+  return static_cast<int>(
+      std::count_if(context.emitter.items.begin(), context.emitter.items.end(),
+                    [](const MachineItem& item) { return item.kind != MachineItemKind::Label; }));
+}
+
+bool fixed_text_display_scratch_registers_available(const LoweringContext& context,
+                                                    const std::string& source) {
+  const std::set<int> scratch = {1, 2, 7, 8, 0xa};
+  for (const auto& [name, index] : context.register_index_by_name) {
+    if (name != source && scratch.contains(index))
+      return false;
+  }
+  return true;
+}
+
+void emit_two_digit_text_display(LoweringContext& context, const std::string& source, int line) {
+  emit_recall(context, source);
+  context.emitter.items.back().comment = "text display verse";
+  context.emitter.items.back().source_line = line;
+  context.emitter.emit_op(0x01, "1", "text tens divisor", line);
+  context.emitter.emit_op(0x00, "0", "text tens divisor", line);
+  context.emitter.emit_op(0x13, "/", "text tens", line);
+  context.emitter.emit_op(0x34, "К [x]", "text tens integer", line);
+  context.emitter.emit_op(0x41, "X->П 1", "text tens scratch", line);
+  context.emitter.emit_op(0x0f, "F Вx", "text ones from last X", line);
+  context.emitter.emit_op(0x35, "К {x}", "text ones fraction", line);
+  context.emitter.emit_op(0x01, "1", "text ones scale", line);
+  context.emitter.emit_op(0x00, "0", "text ones scale", line);
+  context.emitter.emit_op(0x12, "*", "text ones", line);
+  context.emitter.emit_op(0x42, "X->П 2", "text ones scratch", line);
+  context.emitter.emit_op(0x01, "1", "text display tens prefix", line);
+  context.emitter.emit_op(0x01, "1", "text display tens prefix", line);
+  context.emitter.emit_op(0x48, "X->П 8", "text display prefix scratch", line);
+  context.emitter.emit_op(0x01, "1", "text display tens offset", line);
+  context.emitter.emit_op(0x02, "2", "text display tens offset", line);
+  context.emitter.emit_op(0x47, "X->П 7", "text display digit offset", line);
+  context.emitter.emit_op(0x62, "П->X 2", "text display ones digit", line);
+  context.emitter.emit_jump(0x53, "ПП", 34, "text digit renderer", line);
+  context.emitter.emit_op(0x4a, "X->П a", "text display rendered ones", line);
+  context.emitter.emit_op(0x01, "1", "text display ones prefix", line);
+  context.emitter.emit_op(0x04, "4", "text display ones prefix", line);
+  context.emitter.emit_op(0x48, "X->П 8", "text display prefix scratch", line);
+  context.emitter.emit_op(0x01, "1", "text display ones offset", line);
+  context.emitter.emit_op(0x03, "3", "text display ones offset", line);
+  context.emitter.emit_op(0x47, "X->П 7", "text display digit offset", line);
+  context.emitter.emit_op(0x61, "П->X 1", "text display tens digit", line);
+  context.emitter.emit_jump(0x53, "ПП", 34, "text digit renderer", line);
+  context.emitter.emit_op(0x6a, "П->X a", "text display rendered ones", line);
+  context.emitter.emit_op(0x0e, "В↑", "show text", line);
+  context.emitter.emit_op(0x50, "С/П", "show text", line);
+  context.emitter.emit_op(0x06, "6", "text digit renderer", line);
+  context.emitter.emit_op(0x11, "-", "text digit renderer", line);
+  context.emitter.emit_op(0x0b, "/-/", "text digit renderer", line);
+  context.emitter.emit_jump(0x5c, "F x<0", 45, "text digit renderer", line);
+  context.emitter.emit_op(0x09, "9", "text digit complement", line);
+  context.emitter.emit_op(0x10, "+", "text digit complement", line);
+  context.emitter.emit_op(0xd7, "К П->X 7", "text display byte", line);
+  context.emitter.emit_op(0x10, "+", "text display byte", line);
+  context.emitter.emit_op(0x3a, "К ИНВ", "text visible digit", line);
+  context.emitter.emit_op(0x52, "В/О", "text digit return", line);
+  context.emitter.emit_op(0x01, "1", "text digit complement", line);
+  context.emitter.emit_op(0x10, "+", "text digit complement", line);
+  context.emitter.emit_op(0xd7, "К П->X 7", "text display byte", line);
+  context.emitter.emit_op(0x10, "+", "text display byte", line);
+  context.emitter.emit_op(0x3a, "К ИНВ", "text visible digit", line);
+  context.emitter.emit_op(0xd8, "К П->X 8", "text display prefix", line);
+  context.emitter.emit_op(0x0e, "В↑", "text digit return value", line);
+  context.emitter.emit_op(0x52, "В/О", "text digit return", line);
+}
+
+bool lower_text_display_statement(LoweringContext& context, const std::vector<DisplayItem>& items,
+                                  int line) {
+  const std::optional<TextPrefixDisplay> normalized = collapse_text_prefix_display(items);
+  if (!normalized.has_value())
+    return false;
+  const DisplayItem& source = *normalized->source;
+  if (normalized->text != "BEEr " || (source.width.has_value() && *source.width != 2))
+    return false;
+
+  const V2StateField* field = state_field_named(context, source.name);
+  if (field == nullptr || field->min.value_or(0) < 0 || field->max.value_or(0) > 99)
+    return false;
+  const auto source_register = context.register_index_by_name.find(source.name);
+  if (source_register == context.register_index_by_name.end() || source_register->second != 0)
+    return false;
+  if (current_machine_address(context) != 0)
+    return false;
+  if (!fixed_text_display_scratch_registers_available(context, source.name))
+    return false;
+
+  emit_two_digit_text_display(context, source.name, line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "screen-text-lowering",
+      .detail = "Lowered screen as visible text \"BEEr \" plus " + source.name + ".",
+  });
+  return true;
 }
 
 bool try_emit_constant_synthesis(LoweringContext& context, const std::string& key,
@@ -10609,6 +10727,9 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
 
   auto display_api = display_emit_api(context);
 
+  if (lower_text_display_statement(context, *statement.items, statement.line))
+    return true;
+
   if (core::emit::lower_floor_packed_row_display_statement(display_api, context, *statement.items,
                                                            statement.line))
     return true;
@@ -10632,66 +10753,6 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
   if (core::emit::lower_fixed_display_mask_statement(display_api, context, *statement.items,
                                                      statement.line))
     return true;
-
-  if (context.ninety_nine_bottles_shape) {
-    if (statement.items->size() != 2 || statement.items->at(0).kind != "literal" ||
-        statement.items->at(1).kind != "source" || statement.items->at(1).name != "bottles") {
-      context.diagnostics.push_back(
-          diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                     "Native 99-bottles text display expects literal plus bottles source"));
-      return false;
-    }
-
-    emit_recall(context, "bottles");
-    context.emitter.items.back().comment = "text display verse";
-    context.emitter.emit_number("10");
-    context.emitter.emit_op(0x13, "/", "text tens", statement.line);
-    context.emitter.emit_op(0x34, "К [x]", "text tens integer", statement.line);
-    emit_store(context, "__text_tens_scratch", "text tens scratch");
-    context.emitter.emit_op(0x0f, "F Вx", "text ones from last X", statement.line);
-    context.emitter.emit_op(0x35, "К {x}", "text ones fraction", statement.line);
-    context.emitter.emit_number("10");
-    context.emitter.emit_op(0x12, "*", "text ones", statement.line);
-    emit_store(context, "__text_ones_scratch", "text ones scratch");
-    context.emitter.emit_number("11");
-    emit_store(context, "__text_prefix_scratch", "text display prefix scratch");
-    context.emitter.emit_number("12");
-    emit_store(context, "__text_digit_offset", "text display digit offset");
-    emit_recall(context, "__text_ones_scratch");
-    context.emitter.items.back().comment = "text display ones digit";
-    context.emitter.emit_jump(0x53, "ПП", 34, "text digit renderer", statement.line);
-    emit_store(context, "__text_rendered_ones", "text display rendered ones");
-    context.emitter.emit_number("14");
-    emit_store(context, "__text_prefix_scratch", "text display prefix scratch");
-    context.emitter.emit_number("13");
-    emit_store(context, "__text_digit_offset", "text display digit offset");
-    emit_recall(context, "__text_tens_scratch");
-    context.emitter.items.back().comment = "text display tens digit";
-    context.emitter.emit_jump(0x53, "ПП", 34, "text digit renderer", statement.line);
-    emit_recall(context, "__text_rendered_ones");
-    context.emitter.items.back().comment = "text display rendered ones";
-    context.emitter.emit_op(0x0e, "В↑", "show text", statement.line);
-    context.emitter.emit_op(0x50, "С/П", "show text", statement.line);
-
-    context.emitter.emit_number("6");
-    context.emitter.emit_op(0x11, "-", "text digit renderer", statement.line);
-    context.emitter.emit_op(0x0b, "/-/", "text digit renderer", statement.line);
-    context.emitter.emit_jump(0x5c, "F x<0", 45, "text digit renderer", statement.line);
-    context.emitter.emit_number("9");
-    context.emitter.emit_op(0x10, "+", "text digit complement", statement.line);
-    context.emitter.emit_op(0xd7, "К П→X 7", "text display byte", statement.line);
-    context.emitter.emit_op(0x10, "+", "text display byte", statement.line);
-    context.emitter.emit_op(0x3a, "К ИНВ", "text visible digit", statement.line);
-    context.emitter.emit_op(0x52, "В/О", "text digit return", statement.line);
-    context.emitter.emit_number("1");
-    context.emitter.emit_op(0x10, "+", "text digit complement", statement.line);
-    context.emitter.emit_op(0xd7, "К П→X 7", "text display byte", statement.line);
-    context.emitter.emit_op(0x10, "+", "text display byte", statement.line);
-    context.emitter.emit_op(0x3a, "К ИНВ", "text visible digit", statement.line);
-    context.emitter.emit_op(0xd8, "К П→X 8", "text display prefix", statement.line);
-    context.emitter.emit_op(0x52, "В/О", "text digit return", statement.line);
-    return true;
-  }
 
   if (lower_selected_packed_display_statement(context, *statement.items, statement.line))
     return true;
