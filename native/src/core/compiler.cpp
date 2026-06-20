@@ -1073,8 +1073,7 @@ bool is_x_param_value_function_call(const LoweringContext& context, const Expres
 bool can_reuse_x_param_value_call_temp(const LoweringContext& context,
                                        const Expression& expression) {
   return expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
-         expression.right != nullptr &&
-         is_x_param_value_function_call(context, *expression.left) &&
+         expression.right != nullptr && is_x_param_value_function_call(context, *expression.left) &&
          expression.right->kind == "call" &&
          !is_x_param_value_function_call(context, *expression.right) &&
          x_param_value_scratch_name(context).has_value();
@@ -2201,17 +2200,16 @@ std::optional<LoopHeaderScreen> loop_header_screen(
     const auto pure_it = pure_display_procs_by_display.find(*display);
     return LoopHeaderScreen{
         .display = *display,
-        .pure_display_procs =
-            pure_it == pure_display_procs_by_display.end() ? std::set<std::string>()
-                                                           : pure_it->second,
+        .pure_display_procs = pure_it == pure_display_procs_by_display.end()
+                                  ? std::set<std::string>()
+                                  : pure_it->second,
     };
   }
 
   if (first.kind != "v2_invoke" || !first.name.has_value())
     return std::nullopt;
   const auto proc_it = proc_map.find(*first.name);
-  if (proc_it == proc_map.end() || proc_it->second == nullptr ||
-      proc_it->second->body.size() != 1U)
+  if (proc_it == proc_map.end() || proc_it->second == nullptr || proc_it->second->body.size() != 1U)
     return std::nullopt;
   const std::optional<std::string> display = show_display_key(proc_it->second->body.front());
   if (!display.has_value())
@@ -2222,9 +2220,8 @@ std::optional<LoopHeaderScreen> loop_header_screen(
   const auto pure_it = pure_display_procs_by_display.find(*display);
   return LoopHeaderScreen{
       .display = *display,
-      .pure_display_procs =
-          pure_it == pure_display_procs_by_display.end() ? std::set<std::string>()
-                                                         : pure_it->second,
+      .pure_display_procs = pure_it == pure_display_procs_by_display.end() ? std::set<std::string>()
+                                                                           : pure_it->second,
       .inlined_header = true,
   };
 }
@@ -2329,9 +2326,10 @@ void collect_statement_list_terminal_calls(const std::vector<V2Statement>& state
   collect_statement_terminal_calls(statements.back(), proc_map, terminal_calls);
 }
 
-std::set<std::string> expand_terminal_proc_closure(
-    const std::set<std::string>& initial, const std::map<std::string, V2Rule*>& proc_map,
-    const std::set<std::string>& non_terminal_calls) {
+std::set<std::string>
+expand_terminal_proc_closure(const std::set<std::string>& initial,
+                             const std::map<std::string, V2Rule*>& proc_map,
+                             const std::set<std::string>& non_terminal_calls) {
   std::set<std::string> result;
   std::vector<std::string> queue;
   for (const std::string& name : initial) {
@@ -2398,8 +2396,7 @@ int elide_tail_screen_in_statement_list(std::vector<V2Statement>& statements,
     for (V2MatchCase& match_case : last.cases)
       removed += elide_tail_screen_in_action(match_case.action, match_case.line, display,
                                              pure_display_procs);
-    removed +=
-        elide_tail_screen_in_action(last.otherwise, last.line, display, pure_display_procs);
+    removed += elide_tail_screen_in_action(last.otherwise, last.line, display, pure_display_procs);
   } else if (last.kind == "v2_block") {
     removed += elide_tail_screen_in_statement_list(last.body, display, pure_display_procs);
   }
@@ -2422,10 +2419,9 @@ void visit_terminal_loop_screen_action(
   if (action == nullptr)
     return;
   std::vector<V2Statement> body{*action};
-  visit_terminal_loop_screen_statement_list(body, terminal_display, proc_map,
-                                            pure_display_procs_by_display,
-                                            terminal_calls_by_display, non_terminal_calls, removed,
-                                            inlined_headers);
+  visit_terminal_loop_screen_statement_list(
+      body, terminal_display, proc_map, pure_display_procs_by_display, terminal_calls_by_display,
+      non_terminal_calls, removed, inlined_headers);
   *action = statement_from_rewritten_vector(std::move(body), line);
 }
 
@@ -2451,10 +2447,10 @@ void visit_terminal_loop_screen_statement_list(
                                                        header->pure_display_procs);
       }
       visit_terminal_loop_screen_statement_list(
-          statement.body, header.has_value() ? std::optional<std::string>{header->display}
-                                             : std::nullopt,
-          proc_map, pure_display_procs_by_display, terminal_calls_by_display, non_terminal_calls,
-          removed, inlined_headers);
+          statement.body,
+          header.has_value() ? std::optional<std::string>{header->display} : std::nullopt, proc_map,
+          pure_display_procs_by_display, terminal_calls_by_display, non_terminal_calls, removed,
+          inlined_headers);
     } else if (statement.kind == "v2_if") {
       visit_terminal_loop_screen_statement_list(
           statement.then_body, at_tail ? terminal_display : std::nullopt, proc_map,
@@ -2466,15 +2462,15 @@ void visit_terminal_loop_screen_statement_list(
           inlined_headers);
     } else if (statement.kind == "v2_match") {
       for (V2MatchCase& match_case : statement.cases) {
-        visit_terminal_loop_screen_action(
-            match_case.action, match_case.line, at_tail ? terminal_display : std::nullopt,
-            proc_map, pure_display_procs_by_display, terminal_calls_by_display,
-            non_terminal_calls, removed, inlined_headers);
+        visit_terminal_loop_screen_action(match_case.action, match_case.line,
+                                          at_tail ? terminal_display : std::nullopt, proc_map,
+                                          pure_display_procs_by_display, terminal_calls_by_display,
+                                          non_terminal_calls, removed, inlined_headers);
       }
-      visit_terminal_loop_screen_action(
-          statement.otherwise, statement.line, at_tail ? terminal_display : std::nullopt, proc_map,
-          pure_display_procs_by_display, terminal_calls_by_display, non_terminal_calls, removed,
-          inlined_headers);
+      visit_terminal_loop_screen_action(statement.otherwise, statement.line,
+                                        at_tail ? terminal_display : std::nullopt, proc_map,
+                                        pure_display_procs_by_display, terminal_calls_by_display,
+                                        non_terminal_calls, removed, inlined_headers);
     } else if (statement.kind == "v2_block") {
       visit_terminal_loop_screen_statement_list(
           statement.body, at_tail ? terminal_display : std::nullopt, proc_map,
@@ -2496,18 +2492,15 @@ void elide_terminal_loop_header_shows(V2Program& program,
   int removed = 0;
   int inlined_headers = 0;
 
-  visit_terminal_loop_screen_statement_list(program.body, std::nullopt, proc_map,
-                                            pure_display_procs_by_display,
-                                            terminal_calls_by_display, non_terminal_calls, removed,
-                                            inlined_headers);
+  visit_terminal_loop_screen_statement_list(
+      program.body, std::nullopt, proc_map, pure_display_procs_by_display,
+      terminal_calls_by_display, non_terminal_calls, removed, inlined_headers);
   for (const auto& [unused_name, proc] : proc_map) {
     if (proc != nullptr) {
       std::map<std::string, std::set<std::string>> ignored_terminal_calls;
-      collect_statement_list_calls_by_position(proc->body,
-                                               std::optional<std::string>{
-                                                   "__mkpro_terminal_proc_tail"},
-                                               proc_map, ignored_terminal_calls,
-                                               non_terminal_calls);
+      collect_statement_list_calls_by_position(
+          proc->body, std::optional<std::string>{"__mkpro_terminal_proc_tail"}, proc_map,
+          ignored_terminal_calls, non_terminal_calls);
     }
     (void)unused_name;
   }
@@ -2531,8 +2524,7 @@ void elide_terminal_loop_header_shows(V2Program& program,
   std::vector<std::string> details;
   if (removed > 0) {
     details.push_back("elided " + std::to_string(removed) + " terminal show" +
-                      (removed == 1 ? "" : "s") +
-                      " already provided by the next loop header");
+                      (removed == 1 ? "" : "s") + " already provided by the next loop header");
   }
   if (inlined_headers > 0) {
     details.push_back("inlined " + std::to_string(inlined_headers) +
@@ -5196,8 +5188,7 @@ void collect_locals_from_expression_excluding(LoweringContext& context,
   }
   if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
       expression.right != nullptr && expression.left->kind == "call" &&
-      expression.right->kind == "call" &&
-      !can_reuse_x_param_value_call_temp(context, expression)) {
+      expression.right->kind == "call" && !can_reuse_x_param_value_call_temp(context, expression)) {
     add_register_variable(collection, "__mkpro_call_1");
   }
   if (expression.kind == "identifier") {
@@ -6918,8 +6909,8 @@ std::optional<int> contiguous_register_offset_for_field(const LoweringContext& c
 }
 
 std::optional<IndirectMemorySelectorOffsetChoice>
-state_bank_offset_matches_indirect_memory(const LoweringContext& context,
-                                          const V2StateField& field, int offset) {
+state_bank_offset_matches_indirect_memory(const LoweringContext& context, const V2StateField& field,
+                                          int offset) {
   if (!field.bank.has_value())
     return std::nullopt;
   bool uses_negative_selectors = false;
@@ -7034,9 +7025,10 @@ int indexed_selector_compute_cost(const Expression& index, int offset) {
   return guarded_estimate_expression_cost(index) + selector_offset_cost(offset) + 1;
 }
 
-std::optional<CachedSiblingBankSelector> cached_sibling_bank_selector(
-    const LoweringContext& context, const std::string& selector_name, const std::string& base,
-    const std::string& index_text, const Expression& index, int offset) {
+std::optional<CachedSiblingBankSelector>
+cached_sibling_bank_selector(const LoweringContext& context, const std::string& selector_name,
+                             const std::string& base, const std::string& index_text,
+                             const Expression& index, int offset) {
   std::optional<CachedSiblingBankSelector> best;
   int best_cost = std::numeric_limits<int>::max();
   const int compute_cost = indexed_selector_compute_cost(index, offset);
@@ -7105,8 +7097,9 @@ std::string indexed_memory_comment(const LoweringContext& context, const std::st
   return comment;
 }
 
-std::optional<PreparedIndexedSelector> prepare_indirect_index_selector(
-    LoweringContext& context, const Expression& expression, int source_line) {
+std::optional<PreparedIndexedSelector> prepare_indirect_index_selector(LoweringContext& context,
+                                                                       const Expression& expression,
+                                                                       int source_line) {
   const V2StateField* field = indexed_state_field(context, expression);
   if (field == nullptr || !field->bank.has_value())
     return std::nullopt;
@@ -7116,8 +7109,7 @@ std::optional<PreparedIndexedSelector> prepare_indirect_index_selector(
       core::affine_index_identifier_offset(*expression.index);
   const std::optional<IndirectMemorySelectorOffsetChoice> offset_choice =
       indirect_memory_selector_offset_choice_for_field(
-          context, *field, affine.has_value() ? std::optional<int>{-affine->offset}
-                                              : std::nullopt);
+          context, *field, affine.has_value() ? std::optional<int>{-affine->offset} : std::nullopt);
   if (!offset_choice.has_value())
     return std::nullopt;
   const int offset = offset_choice->offset;
@@ -7149,8 +7141,7 @@ std::optional<PreparedIndexedSelector> prepare_indirect_index_selector(
       if (linear_offset.has_value() && offset != *linear_offset) {
         context.optimizations.push_back(OptimizationReport{
             .name = "indirect-memory-alias-selector",
-            .detail = "Used " + key +
-                      " index values directly as indirect-memory register aliases" +
+            .detail = "Used " + key + " index values directly as indirect-memory register aliases" +
                       alias_selector_scope + " at line " + std::to_string(source_line) + ".",
         });
       }
@@ -7233,9 +7224,8 @@ std::optional<PreparedIndexedSelector> prepare_indirect_index_selector(
     context.optimizations.push_back(OptimizationReport{
         .name = "indirect-memory-alias-selector",
         .detail = "Used offset " + std::to_string(offset) + " instead of " +
-                  std::to_string(*linear_offset) + " for " + key +
-                  " indirect-memory aliases" + alias_selector_scope + " at line " +
-                  std::to_string(source_line) + ".",
+                  std::to_string(*linear_offset) + " for " + key + " indirect-memory aliases" +
+                  alias_selector_scope + " at line " + std::to_string(source_line) + ".",
     });
   }
   if (cacheable)
@@ -7341,9 +7331,9 @@ void emit_prepared_indirect_indexed_recall(LoweringContext& context, const Expre
   const int selector_index = register_index_for(context, prepared.selector);
   const V2StateField* field = indexed_state_field(context, expression);
   const std::string comment =
-      field == nullptr ? "indexed recall " + bank_member_key(expression.base, expression.field)
-                       : indexed_memory_comment(context, "indexed recall", expression, *field,
-                                                prepared);
+      field == nullptr
+          ? "indexed recall " + bank_member_key(expression.base, expression.field)
+          : indexed_memory_comment(context, "indexed recall", expression, *field, prepared);
   context.emitter.emit_op(0xd0 + selector_index,
                           "К П->X " + register_text_for(context, prepared.selector), comment,
                           source_line);
@@ -7359,9 +7349,9 @@ void emit_prepared_indirect_indexed_store(LoweringContext& context, const Expres
   const int selector_index = register_index_for(context, prepared.selector);
   const V2StateField* field = indexed_state_field(context, expression);
   const std::string comment =
-      field == nullptr ? "indexed set " + bank_member_key(expression.base, expression.field)
-                       : indexed_memory_comment(context, "indexed set", expression, *field,
-                                                prepared);
+      field == nullptr
+          ? "indexed set " + bank_member_key(expression.base, expression.field)
+          : indexed_memory_comment(context, "indexed set", expression, *field, prepared);
   context.emitter.emit_op(0xb0 + selector_index,
                           "К X->П " + register_text_for(context, prepared.selector), comment,
                           source_line);
@@ -10230,10 +10220,9 @@ void report_screen_literal_lowering(LoweringContext& context, std::string name,
 }
 
 void report_screen_video_literal_lowering(LoweringContext& context, int line) {
-  report_screen_literal_lowering(
-      context, "screen-video-literal-lowering",
-      "Lowered screen literal at line " + std::to_string(line) +
-          " as a literal calculator video string.");
+  report_screen_literal_lowering(context, "screen-video-literal-lowering",
+                                 "Lowered screen literal at line " + std::to_string(line) +
+                                     " as a literal calculator video string.");
 }
 
 bool lower_display_statement(LoweringContext& context, const V2Statement& statement) {
@@ -10273,10 +10262,10 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
     if (const std::optional<std::string> decimal = decimal_display_literal_number(*literal)) {
       context.emitter.emit_number(*decimal);
       context.emitter.emit_op(0x50, "С/П", "show literal", statement.line);
-      report_screen_literal_lowering(
-          context, "screen-decimal-literal-lowering",
-          "Lowered screen literal at line " + std::to_string(statement.line) +
-              " as an ordinary decimal display literal.");
+      report_screen_literal_lowering(context, "screen-decimal-literal-lowering",
+                                     "Lowered screen literal at line " +
+                                         std::to_string(statement.line) +
+                                         " as an ordinary decimal display literal.");
       report_screen_video_literal_lowering(context, statement.line);
       return true;
     }
@@ -10407,8 +10396,8 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
 void report_terminal_literal_stop(LoweringContext& context, const std::string& literal, int line) {
   context.optimizations.push_back(OptimizationReport{
       .name = "terminal-literal-stop",
-      .detail = "Lowered literal terminal stop \"" + literal + "\" at line " +
-                std::to_string(line) + ".",
+      .detail =
+          "Lowered literal terminal stop \"" + literal + "\" at line " + std::to_string(line) + ".",
   });
 }
 
@@ -10448,8 +10437,8 @@ bool lower_literal_terminal_stop(LoweringContext& context, const std::string& li
     if (!ensure_hidden_register(context, scratch))
       return false;
     auto display_api = display_emit_api(context);
-    if (!core::emit::emit_first_splice_display_literal_program(display_api, context,
-                                                               *first_splice, scratch, line)) {
+    if (!core::emit::emit_first_splice_display_literal_program(display_api, context, *first_splice,
+                                                               scratch, line)) {
       return false;
     }
     context.emitter.emit_op(0x50, "С/П", "show __halt_literal_" + std::to_string(line), line);
@@ -10591,10 +10580,9 @@ std::optional<RawInstruction> parse_raw_instruction(const std::string& raw_text)
   }
 
   static const std::regex direct_memory_regex(R"(^(X(?:->|→)П|П(?:->|→)X)\s+R?(.+)$)",
-                                             std::regex_constants::icase);
+                                              std::regex_constants::icase);
   if (std::regex_match(text, match, direct_memory_regex)) {
-    const std::string op =
-        std::regex_replace(match[1].str(), std::regex("→"), "->");
+    const std::string op = std::regex_replace(match[1].str(), std::regex("→"), "->");
     const std::string reg = register_from_text(match[2].str());
     const int base = op.starts_with("X") ? 0x40 : 0x60;
     return RawInstruction{
@@ -10616,11 +10604,10 @@ std::optional<RawInstruction> parse_raw_instruction(const std::string& raw_text)
   }
 
   static const std::regex compact_indirect_regex(R"(^К(БП|ПП|Пх|хП)(.+)$)",
-                                                std::regex_constants::icase);
+                                                 std::regex_constants::icase);
   if (std::regex_match(text, match, compact_indirect_regex)) {
     const std::string compact_op = match[1].str();
-    const std::string op =
-        compact_op == "Пх" ? "П->X" : compact_op == "хП" ? "X->П" : compact_op;
+    const std::string op = compact_op == "Пх" ? "П->X" : compact_op == "хП" ? "X->П" : compact_op;
     const std::string reg = register_from_text(match[2].str());
     return RawInstruction{
         .opcode = raw_indirect_base(op) + register_index(reg),
@@ -10646,10 +10633,10 @@ std::vector<V2RawInput> ordered_raw_inputs(const std::vector<V2RawInput>& inputs
       return 2;
     return 3;
   };
-  std::stable_sort(result.begin(), result.end(), [&](const V2RawInput& left,
-                                                     const V2RawInput& right) {
-    return slot_order(left.slot) < slot_order(right.slot);
-  });
+  std::stable_sort(result.begin(), result.end(),
+                   [&](const V2RawInput& left, const V2RawInput& right) {
+                     return slot_order(left.slot) < slot_order(right.slot);
+                   });
   return result;
 }
 
@@ -10664,12 +10651,12 @@ std::string format_raw_contract_detail(const V2Statement& statement) {
       input_parts.empty() ? "takes none" : "takes " + join_strings(input_parts, ", ");
   const std::string outputs =
       output_parts.empty() ? "returns none" : "returns " + join_strings(output_parts, ", ");
-  const std::string clobbers =
-      statement.clobbers.empty() ? "clobbers unknown"
-                                 : "clobbers " + join_strings(statement.clobbers, ", ");
-  const std::string preserves =
-      statement.preserves.empty() ? "preserves unknown"
-                                  : "preserves " + join_strings(statement.preserves, ", ");
+  const std::string clobbers = statement.clobbers.empty()
+                                   ? "clobbers unknown"
+                                   : "clobbers " + join_strings(statement.clobbers, ", ");
+  const std::string preserves = statement.preserves.empty()
+                                    ? "preserves unknown"
+                                    : "preserves " + join_strings(statement.preserves, ", ");
   return "Inserted raw MK-61 block at line " + std::to_string(statement.line) + ": " + inputs +
          "; " + outputs + "; " + clobbers + "; " + preserves + ".";
 }
@@ -12372,9 +12359,9 @@ void emit_packed_line_family_update_check_tail(LoweringContext& context,
   if (op.has_value())
     context.emitter.emit_op(op->first, op->second, "indexed packed digit update",
                             update.update_line);
-  emit_prepared_indirect_indexed_store(
-      context, update.target, PreparedIndexedSelector{.selector = update.selector},
-      update.update_line);
+  emit_prepared_indirect_indexed_store(context, update.target,
+                                       PreparedIndexedSelector{.selector = update.selector},
+                                       update.update_line);
 
   (void)lower_expression_to_x(context, update.mask);
   context.emitter.emit_op(0x37, "К ∧", "updated packed fractional report mask", update.branch_line);
@@ -12577,10 +12564,9 @@ bool lower_random_call_to_x(LoweringContext& context, const Expression& expressi
   }
 
   if (expression.args.size() != 1) {
-    context.diagnostics.push_back(
-        diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                   "random() expects zero, one, or two arguments, got " +
-                       std::to_string(expression.args.size())));
+    context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                             "random() expects zero, one, or two arguments, got " +
+                                                 std::to_string(expression.args.size())));
     return false;
   }
 
@@ -13090,8 +13076,8 @@ bool is_known_integer_condition_expression(const LoweringContext& context,
          guarded_is_safe_integer_value(static_cast<double>(*field.max));
 }
 
-std::optional<std::pair<std::string, long long>>
-shifted_integer_boundary(const std::string& op, long long value) {
+std::optional<std::pair<std::string, long long>> shifted_integer_boundary(const std::string& op,
+                                                                          long long value) {
   if (op == "<" && value > std::numeric_limits<long long>::min())
     return std::pair<std::string, long long>{"<=", value - 1};
   if (op == "<=" && value < std::numeric_limits<long long>::max())
@@ -13104,8 +13090,7 @@ shifted_integer_boundary(const std::string& op, long long value) {
 }
 
 std::vector<V2Predicate> equivalent_condition_candidates(const LoweringContext& context,
-                                                         const V2Predicate& predicate,
-                                                         int line) {
+                                                         const V2Predicate& predicate, int line) {
   std::vector<V2Predicate> candidates{predicate};
   const auto add = [&](V2Predicate candidate) {
     if (std::none_of(candidates.begin(), candidates.end(), [&](const V2Predicate& existing) {
@@ -13161,12 +13146,12 @@ std::vector<V2Predicate> equivalent_condition_candidates(const LoweringContext& 
   return candidates;
 }
 
-std::pair<V2Predicate, bool> select_cheaper_equivalent_condition(
-    const LoweringContext& context, const V2Predicate& predicate, int line) {
+std::pair<V2Predicate, bool> select_cheaper_equivalent_condition(const LoweringContext& context,
+                                                                 const V2Predicate& predicate,
+                                                                 int line) {
   V2Predicate best = predicate;
   int best_cost = guarded_condition_compile_cost(predicate, line);
-  for (const V2Predicate& candidate :
-       equivalent_condition_candidates(context, predicate, line)) {
+  for (const V2Predicate& candidate : equivalent_condition_candidates(context, predicate, line)) {
     const int cost = guarded_condition_compile_cost(candidate, line);
     if (cost < best_cost) {
       best = candidate;
@@ -13191,8 +13176,7 @@ std::optional<std::pair<int, std::string>> direct_zero_test_opcode(const std::st
 bool lower_direct_zero_false_branch(LoweringContext& context, const V2Predicate& predicate,
                                     const std::string& false_label, int source_line,
                                     std::optional<std::string> branch_comment) {
-  const std::optional<std::pair<int, std::string>> opcode =
-      direct_zero_test_opcode(predicate.op);
+  const std::optional<std::pair<int, std::string>> opcode = direct_zero_test_opcode(predicate.op);
   if (!opcode.has_value())
     return false;
   const Expression left = parse_expression(predicate.left, source_line);
@@ -13233,8 +13217,7 @@ bool lower_remainder_zero_false_branch(LoweringContext& context, const V2Predica
   context.emitter.emit_op(0x13, "/", "remainder quotient", source_line);
   context.emitter.emit_op(0x35, "К {x}", "remainder zero fractional part", source_line);
 
-  const std::optional<std::pair<int, std::string>> opcode =
-      direct_zero_test_opcode(predicate.op);
+  const std::optional<std::pair<int, std::string>> opcode = direct_zero_test_opcode(predicate.op);
   if (!opcode.has_value())
     return false;
   context.emitter.emit_jump(opcode->first, opcode->second, false_label,
@@ -14080,10 +14063,9 @@ Expression one_based_modulo_expression(const std::string& target, int width) {
   const std::string width_text = std::to_string(width);
   Expression shifted = add_expression(int_expression(identifier_expression(target)),
                                       number_expression(std::to_string(width - 1)));
-  Expression scaled =
-      multiply_expression(frac_expression(divide_expression(std::move(shifted),
-                                                            number_expression(width_text))),
-                          number_expression(width_text));
+  Expression scaled = multiply_expression(
+      frac_expression(divide_expression(std::move(shifted), number_expression(width_text))),
+      number_expression(width_text));
   return add_expression(std::move(scaled), number_expression("1"));
 }
 
@@ -14110,8 +14092,7 @@ std::optional<int> match_one_based_modulo_normalization(LoweringContext& context
   if (!width.has_value() || *width <= 1)
     return std::nullopt;
 
-  const std::optional<double> delta =
-      numeric_self_update_delta(target, branch.then_body.front());
+  const std::optional<double> delta = numeric_self_update_delta(target, branch.then_body.front());
   if (!delta.has_value() || std::fabs(*delta - static_cast<double>(*width)) >= 1e-12)
     return std::nullopt;
 
@@ -14123,9 +14104,8 @@ std::optional<int> match_one_based_modulo_normalization(LoweringContext& context
   const int lowered_cost = guarded_estimate_expression_cost(normalized) + 1;
   const int ordinary_cost = guarded_estimate_expression_cost(assign_expression) + 1 +
                             guarded_condition_compile_cost(predicate, branch.line) +
-                            guarded_estimate_expression_cost(
-                                parse_expression(*branch.then_body.front().expr,
-                                                 branch.then_body.front().line)) +
+                            guarded_estimate_expression_cost(parse_expression(
+                                *branch.then_body.front().expr, branch.then_body.front().line)) +
                             1 + 2;
   if (lowered_cost >= ordinary_cost)
     return std::nullopt;
@@ -14195,13 +14175,11 @@ bool lower_int_frac_shared_tail(LoweringContext& context, const V2Statement& fir
 
   if (!lower_expression_to_x(context, first_call->arg))
     return false;
-  context.emitter.emit_op(0x0e, "В↑", "duplicate operand for shared int/frac tail",
-                          first.line);
+  context.emitter.emit_op(0x0e, "В↑", "duplicate operand for shared int/frac tail", first.line);
   context.emitter.emit_op(0x34, "К [x]", "int()", int_statement.line);
   clear_current_x_facts(context);
   emit_store(context, *int_statement.target, "set " + *int_statement.target);
-  context.emitter.emit_op(0x14, "X↔Y", "restore saved operand for frac()",
-                          frac_statement.line);
+  context.emitter.emit_op(0x14, "X↔Y", "restore saved operand for frac()", frac_statement.line);
   clear_current_x_facts(context);
   context.emitter.emit_op(0x35, "К {x}", "frac()", frac_statement.line);
   clear_current_x_facts(context);
@@ -14279,10 +14257,9 @@ bool residual_guarded_update_saves(LoweringContext& context,
                                    const ResidualGuardedUpdateMatch& update) {
   const double correction = update.bound + update.delta;
   const std::string correction_raw = format_number_literal(correction);
-  const int ordinary_update_cost =
-      guarded_estimate_expression_cost(parse_expression(*update.assignment.expr,
-                                                        update.assignment.line)) +
-      1;
+  const int ordinary_update_cost = guarded_estimate_expression_cost(parse_expression(
+                                       *update.assignment.expr, update.assignment.line)) +
+                                   1;
   const int residual_update_cost =
       (std::fabs(correction) < 1e-12
            ? 0
@@ -14371,9 +14348,9 @@ struct NormalizedZeroComparison {
   std::string op;
 };
 
-std::optional<NormalizedZeroComparison>
-normalize_zero_comparison(LoweringContext& context, const V2Predicate& predicate, bool negated,
-                          int line) {
+std::optional<NormalizedZeroComparison> normalize_zero_comparison(LoweringContext& context,
+                                                                  const V2Predicate& predicate,
+                                                                  bool negated, int line) {
   if (predicate.kind != "v2_compare")
     return std::nullopt;
   try {
@@ -14457,8 +14434,8 @@ bool statement_starts_with_current_x_use(LoweringContext& context, const V2State
   if ((statement->kind == "v2_assign" || statement->kind == "v2_update") &&
       statement->expr.has_value()) {
     try {
-      return branch_expression_can_use_current_x(parse_expression(*statement->expr, statement->line),
-                                                 name);
+      return branch_expression_can_use_current_x(
+          parse_expression(*statement->expr, statement->line), name);
     } catch (const std::exception&) {
       return false;
     }
@@ -14477,8 +14454,7 @@ bool statement_starts_with_current_x_use(LoweringContext& context, const V2State
 
 std::optional<std::string>
 fallthrough_current_x_candidate(LoweringContext& context, const V2Predicate& predicate,
-                                bool negated, const std::vector<V2Statement>& then_body,
-                                int line) {
+                                bool negated, const std::vector<V2Statement>& then_body, int line) {
   const std::optional<NormalizedZeroComparison> normalized =
       normalize_zero_comparison(context, predicate, negated, line);
   if (!normalized.has_value() || !guarded_can_test_against_zero_directly(normalized->op) ||
@@ -14705,8 +14681,7 @@ bool direct_terminal_statements_stop(LoweringContext& context,
 
 bool direct_terminal_statement_stops(LoweringContext& context, const V2Statement& statement,
                                      std::set<std::string>& seen_rules) {
-  if (statement.kind == "v2_stop" || statement.kind == "v2_loop" ||
-      statement.kind == "v2_return") {
+  if (statement.kind == "v2_stop" || statement.kind == "v2_loop" || statement.kind == "v2_return") {
     return true;
   }
   if (statement.kind == "v2_block")
@@ -14721,12 +14696,13 @@ bool direct_terminal_statement_stops(LoweringContext& context, const V2Statement
     std::set<std::string> otherwise_seen = seen_rules;
     if (!direct_terminal_statement_stops(context, *statement.otherwise, otherwise_seen))
       return false;
-    return std::all_of(statement.cases.begin(), statement.cases.end(), [&](const V2MatchCase& item) {
-      if (item.action == nullptr)
-        return false;
-      std::set<std::string> case_seen = seen_rules;
-      return direct_terminal_statement_stops(context, *item.action, case_seen);
-    });
+    return std::all_of(statement.cases.begin(), statement.cases.end(),
+                       [&](const V2MatchCase& item) {
+                         if (item.action == nullptr)
+                           return false;
+                         std::set<std::string> case_seen = seen_rules;
+                         return direct_terminal_statement_stops(context, *item.action, case_seen);
+                       });
   }
   if (statement.kind == "v2_invoke" && statement.name.has_value() && statement.args.empty()) {
     if (seen_rules.contains(*statement.name))
@@ -14746,9 +14722,9 @@ bool direct_terminal_statements_stop(LoweringContext& context,
   return direct_terminal_statements_stop(context, statements, seen_rules);
 }
 
-std::optional<std::string>
-direct_terminal_call_target(LoweringContext& context, const std::vector<V2Statement>& statements,
-                            std::set<std::string>& seen_rules) {
+std::optional<std::string> direct_terminal_call_target(LoweringContext& context,
+                                                       const std::vector<V2Statement>& statements,
+                                                       std::set<std::string>& seen_rules) {
   if (statements.size() != 1U)
     return std::nullopt;
   const V2Statement& statement = statements.front();
@@ -14771,9 +14747,8 @@ direct_terminal_call_target(LoweringContext& context, const std::vector<V2Statem
   return *statement.name;
 }
 
-std::optional<std::string>
-direct_terminal_call_target(LoweringContext& context,
-                            const std::vector<V2Statement>& statements) {
+std::optional<std::string> direct_terminal_call_target(LoweringContext& context,
+                                                       const std::vector<V2Statement>& statements) {
   std::set<std::string> seen_rules;
   return direct_terminal_call_target(context, statements, seen_rules);
 }
@@ -14790,8 +14765,8 @@ bool lower_direct_terminal_if_branch(LoweringContext& context, const V2Statement
   if (!then_target.has_value() && !else_target.has_value())
     return false;
 
-  const int original_cost = estimate_branch_order_condition_cost(
-      context, *statement.predicate, statement.negated, statement.line);
+  const int original_cost = estimate_branch_order_condition_cost(context, *statement.predicate,
+                                                                 statement.negated, statement.line);
   if (original_cost >= branch_order_infinite_cost())
     return false;
 
@@ -14827,12 +14802,13 @@ bool lower_direct_terminal_if_branch(LoweringContext& context, const V2Statement
     });
   }
 
-  std::sort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
-    return left.estimated_cost < right.estimated_cost;
-  });
-  const auto selected_it = std::find_if(candidates.begin(), candidates.end(), [](const Candidate& item) {
-    return item.estimated_cost < item.ordinary_cost;
-  });
+  std::sort(candidates.begin(), candidates.end(),
+            [](const Candidate& left, const Candidate& right) {
+              return left.estimated_cost < right.estimated_cost;
+            });
+  const auto selected_it =
+      std::find_if(candidates.begin(), candidates.end(),
+                   [](const Candidate& item) { return item.estimated_cost < item.ordinary_cost; });
   if (selected_it == candidates.end())
     return false;
 
@@ -14852,8 +14828,8 @@ bool lower_direct_terminal_if_branch(LoweringContext& context, const V2Statement
   context.optimizations.push_back(OptimizationReport{
       .name = "terminal-if-direct-branch",
       .detail = "Branched directly to terminal " + selected_it->target + " for " +
-                std::string(selected_it->branch_when_true ? "true" : "false") +
-                " path at line " + std::to_string(statement.line) + " (" +
+                std::string(selected_it->branch_when_true ? "true" : "false") + " path at line " +
+                std::to_string(statement.line) + " (" +
                 std::to_string(selected_it->estimated_cost) + " vs " +
                 std::to_string(selected_it->ordinary_cost) + " estimated branch cells).",
   });
@@ -14884,7 +14860,8 @@ std::optional<Expression> arithmetic_if_assignment_expression(const LoweringCont
   if (statement.kind != "v2_assign" || !statement.target.has_value() || !statement.expr.has_value())
     return std::nullopt;
   const Expression target_expression = parse_expression(*statement.target, statement.line);
-  if (target_expression.kind != "identifier" || is_cells_state_name(context, target_expression.name) ||
+  if (target_expression.kind != "identifier" ||
+      is_cells_state_name(context, target_expression.name) ||
       is_coord_list_state_name(context, target_expression.name) ||
       is_segmented_cells_name(context, target_expression.name)) {
     return std::nullopt;
@@ -14922,9 +14899,9 @@ ArithmeticIfCandidate arithmetic_if_abs_candidate(std::string target, Expression
   };
 }
 
-ArithmeticIfCandidate arithmetic_if_max_candidate(std::string target, Expression left,
-                                                  Expression right,
-                                                  std::string detail = "Replaced max branch with К max") {
+ArithmeticIfCandidate
+arithmetic_if_max_candidate(std::string target, Expression left, Expression right,
+                            std::string detail = "Replaced max branch with К max") {
   return ArithmeticIfCandidate{
       .target = std::move(target),
       .expression = max_expression(std::move(left), std::move(right)),
@@ -14933,9 +14910,9 @@ ArithmeticIfCandidate arithmetic_if_max_candidate(std::string target, Expression
   };
 }
 
-ArithmeticIfCandidate arithmetic_if_min_candidate(
-    std::string target, const Expression& left, const Expression& right,
-    std::string detail = "Replaced min branch with min-via-max()") {
+ArithmeticIfCandidate
+arithmetic_if_min_candidate(std::string target, const Expression& left, const Expression& right,
+                            std::string detail = "Replaced min branch with min-via-max()") {
   return ArithmeticIfCandidate{
       .target = std::move(target),
       .expression = min_expression(left, right),
@@ -14951,8 +14928,7 @@ bool arithmetic_if_boolean_variable(const LoweringContext& context, const std::s
 }
 
 std::optional<Expression> arithmetic_if_boolean_selector(const LoweringContext& context,
-                                                         const V2Predicate& predicate,
-                                                         int line) {
+                                                         const V2Predicate& predicate, int line) {
   const Expression left = parse_expression(predicate.left, line);
   const Expression right = parse_expression(predicate.right, line);
   std::optional<std::string> variable;
@@ -15012,8 +14988,9 @@ Expression arithmetic_if_sign_toggle_expression(Expression current, Expression s
                           multiply_expression(number_expression("2"), std::move(selector))));
 }
 
-std::optional<ArithmeticIfCandidate> build_arithmetic_if_abs_candidate(
-    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+std::optional<ArithmeticIfCandidate>
+build_arithmetic_if_abs_candidate(const LoweringContext& context, const V2Statement& statement,
+                                  const V2Predicate& predicate) {
   if (!expression_is_numeric_value(context, parse_expression(predicate.right, statement.line), 0.0))
     return std::nullopt;
   const Expression left = parse_expression(predicate.left, statement.line);
@@ -15066,12 +15043,12 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_comparison_boolean_cand
   }
   const std::optional<double> then_value = numeric_literal_value(then_assign->second);
   const std::optional<double> else_value = numeric_literal_value(else_assign->second);
-  const bool then_true_else_false =
-      then_value.has_value() && else_value.has_value() && std::fabs(*then_value - 1.0) < 1e-12 &&
-      std::fabs(*else_value) < 1e-12;
-  const bool then_false_else_true =
-      then_value.has_value() && else_value.has_value() && std::fabs(*then_value) < 1e-12 &&
-      std::fabs(*else_value - 1.0) < 1e-12;
+  const bool then_true_else_false = then_value.has_value() && else_value.has_value() &&
+                                    std::fabs(*then_value - 1.0) < 1e-12 &&
+                                    std::fabs(*else_value) < 1e-12;
+  const bool then_false_else_true = then_value.has_value() && else_value.has_value() &&
+                                    std::fabs(*then_value) < 1e-12 &&
+                                    std::fabs(*else_value - 1.0) < 1e-12;
   if (!then_true_else_false && !then_false_else_true)
     return std::nullopt;
   std::optional<Expression> truth = arithmetic_if_comparison_mask(predicate, statement.line);
@@ -15117,8 +15094,7 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_boolean_algebra_candida
         .detail = "Replaced boolean AND branch with arithmetic expression",
     };
   }
-  if (then_value.has_value() && std::fabs(*then_value - 1.0) < 1e-12 &&
-      other_else.has_value()) {
+  if (then_value.has_value() && std::fabs(*then_value - 1.0) < 1e-12 && other_else.has_value()) {
     return ArithmeticIfCandidate{
         .target = then_assign->first,
         .expression = max_expression(std::move(*selector), *other_else),
@@ -15142,8 +15118,9 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_boolean_algebra_candida
   return std::nullopt;
 }
 
-std::optional<ArithmeticIfCandidate> build_arithmetic_if_max_min_candidate(
-    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+std::optional<ArithmeticIfCandidate>
+build_arithmetic_if_max_min_candidate(const LoweringContext& context, const V2Statement& statement,
+                                      const V2Predicate& predicate) {
   if (statement.else_body.empty())
     return std::nullopt;
   const std::optional<std::pair<std::string, Expression>> then_assign =
@@ -15158,22 +15135,27 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_max_min_candidate(
   const Expression left = parse_expression(predicate.left, statement.line);
   const Expression right = parse_expression(predicate.right, statement.line);
   if (predicate.op == ">" || predicate.op == ">=") {
-    if (expression_equals(then_assign->second, left) && expression_equals(else_assign->second, right))
+    if (expression_equals(then_assign->second, left) &&
+        expression_equals(else_assign->second, right))
       return arithmetic_if_max_candidate(then_assign->first, left, right);
-    if (expression_equals(then_assign->second, right) && expression_equals(else_assign->second, left))
+    if (expression_equals(then_assign->second, right) &&
+        expression_equals(else_assign->second, left))
       return arithmetic_if_min_candidate(then_assign->first, left, right);
   }
   if (predicate.op == "<" || predicate.op == "<=") {
-    if (expression_equals(then_assign->second, right) && expression_equals(else_assign->second, left))
+    if (expression_equals(then_assign->second, right) &&
+        expression_equals(else_assign->second, left))
       return arithmetic_if_max_candidate(then_assign->first, left, right);
-    if (expression_equals(then_assign->second, left) && expression_equals(else_assign->second, right))
+    if (expression_equals(then_assign->second, left) &&
+        expression_equals(else_assign->second, right))
       return arithmetic_if_min_candidate(then_assign->first, left, right);
   }
   return std::nullopt;
 }
 
-std::optional<ArithmeticIfCandidate> build_arithmetic_if_clamp_candidate(
-    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+std::optional<ArithmeticIfCandidate>
+build_arithmetic_if_clamp_candidate(const LoweringContext& context, const V2Statement& statement,
+                                    const V2Predicate& predicate) {
   const std::optional<std::pair<std::string, Expression>> assign =
       single_arithmetic_if_assignment(context, statement.then_body);
   if (!assign.has_value())
@@ -15237,8 +15219,7 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_boolean_update_candidat
     return std::nullopt;
   std::optional<Expression> selector =
       arithmetic_if_boolean_selector(context, predicate, statement.line);
-  const bool uses_comparison =
-      !selector.has_value() && context.comparison_guarded_update_selectors;
+  const bool uses_comparison = !selector.has_value() && context.comparison_guarded_update_selectors;
   if (uses_comparison)
     selector = arithmetic_if_comparison_update_selector(predicate, statement.line);
   if (!selector.has_value())
@@ -15250,20 +15231,19 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_boolean_update_candidat
         .target = assign->first,
         .expression = add_expression(current, multiply_expression(*plus, std::move(*selector))),
         .name = uses_comparison ? "arithmetic-if-comparison-update" : "arithmetic-if-update",
-        .detail = uses_comparison
-                       ? "Replaced conditional addition with comparison-mask arithmetic"
-                       : "Replaced conditional addition with boolean-masked arithmetic",
+        .detail = uses_comparison ? "Replaced conditional addition with comparison-mask arithmetic"
+                                  : "Replaced conditional addition with boolean-masked arithmetic",
     };
   }
   if (std::optional<Expression> minus = match_target_minus_delta(assign->second, assign->first)) {
     return ArithmeticIfCandidate{
         .target = assign->first,
-        .expression = subtract_expression(current,
-                                          multiply_expression(*minus, std::move(*selector))),
+        .expression =
+            subtract_expression(current, multiply_expression(*minus, std::move(*selector))),
         .name = uses_comparison ? "arithmetic-if-comparison-update" : "arithmetic-if-update",
         .detail = uses_comparison
-                       ? "Replaced conditional subtraction with comparison-mask arithmetic"
-                       : "Replaced conditional subtraction with boolean-masked arithmetic",
+                      ? "Replaced conditional subtraction with comparison-mask arithmetic"
+                      : "Replaced conditional subtraction with boolean-masked arithmetic",
     };
   }
   if (uses_comparison)
@@ -15287,8 +15267,9 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_boolean_update_candidat
   };
 }
 
-std::optional<ArithmeticIfCandidate> build_arithmetic_if_select_candidate(
-    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+std::optional<ArithmeticIfCandidate>
+build_arithmetic_if_select_candidate(const LoweringContext& context, const V2Statement& statement,
+                                     const V2Predicate& predicate) {
   if (statement.else_body.empty())
     return std::nullopt;
   const std::optional<std::pair<std::string, Expression>> then_assign =
@@ -15305,16 +15286,16 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_select_candidate(
     return std::nullopt;
   return ArithmeticIfCandidate{
       .target = then_assign->first,
-      .expression = add_expression(multiply_expression(then_assign->second, *selector),
-                                   multiply_expression(else_assign->second,
-                                                       one_minus_expression(std::move(*selector)))),
+      .expression = add_expression(
+          multiply_expression(then_assign->second, *selector),
+          multiply_expression(else_assign->second, one_minus_expression(std::move(*selector)))),
       .name = "arithmetic-if-select",
       .detail = "Replaced boolean if/else with arithmetic selection",
   };
 }
 
-std::optional<ArithmeticIfCandidate> build_arithmetic_if_candidate(
-    const LoweringContext& context, const V2Statement& statement) {
+std::optional<ArithmeticIfCandidate> build_arithmetic_if_candidate(const LoweringContext& context,
+                                                                   const V2Statement& statement) {
   const std::optional<V2Predicate> predicate = arithmetic_if_comparison_predicate(statement);
   if (!predicate.has_value())
     return std::nullopt;
@@ -15359,9 +15340,8 @@ bool lower_arithmetic_if_branch_removal(LoweringContext& context, const V2Statem
   if (ordinary_cost >= branch_order_infinite_cost())
     return false;
   const int selected_cost = guarded_estimate_expression_cost(candidate->expression) + 1;
-  const bool force_comparison_mask =
-      context.comparison_guarded_update_selectors &&
-      candidate->name == "arithmetic-if-comparison-update";
+  const bool force_comparison_mask = context.comparison_guarded_update_selectors &&
+                                     candidate->name == "arithmetic-if-comparison-update";
   if (selected_cost >= ordinary_cost && !force_comparison_mask)
     return false;
 
@@ -15413,18 +15393,15 @@ std::optional<ArithmeticClampBound> arithmetic_clamp_bound(const LoweringContext
 
 bool lower_arithmetic_if_double_clamp(LoweringContext& context, const V2Statement& first,
                                       const V2Statement& second) {
-  const std::optional<ArithmeticClampBound> lower =
-      arithmetic_clamp_bound(context, first, "lower");
+  const std::optional<ArithmeticClampBound> lower = arithmetic_clamp_bound(context, first, "lower");
   const std::optional<ArithmeticClampBound> upper =
       arithmetic_clamp_bound(context, second, "upper");
   if (!lower.has_value() || !upper.has_value() || lower->target != upper->target)
     return false;
-  Expression expression = min_expression(max_expression(identifier_expression(lower->target),
-                                                        lower->bound),
-                                         upper->bound);
-  const int ordinary_cost =
-      estimate_branch_order_statement_cost(context, first) +
-      estimate_branch_order_statement_cost(context, second);
+  Expression expression = min_expression(
+      max_expression(identifier_expression(lower->target), lower->bound), upper->bound);
+  const int ordinary_cost = estimate_branch_order_statement_cost(context, first) +
+                            estimate_branch_order_statement_cost(context, second);
   if (ordinary_cost >= branch_order_infinite_cost())
     return false;
   const int selected_cost = guarded_estimate_expression_cost(expression) + 1;
@@ -15453,8 +15430,7 @@ bool lower_arithmetic_if_double_clamp(LoweringContext& context, const V2Statemen
 bool lower_residual_guarded_update(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value())
     return false;
-  const std::optional<ResidualGuardedUpdateMatch> update =
-      match_residual_guarded_update(statement);
+  const std::optional<ResidualGuardedUpdateMatch> update = match_residual_guarded_update(statement);
   if (!update.has_value() || !residual_guarded_update_saves(context, *update))
     return false;
 
@@ -15509,8 +15485,8 @@ bool lower_nested_guard_shared_failure(LoweringContext& context, const V2Stateme
       then_terminates ? std::nullopt
                       : std::optional<std::string>{context.emitter.fresh_label("guard_end")};
 
-  if (!lower_condition_false_branch(context, *statement.predicate, statement.negated,
-                                    failure_label, statement.line))
+  if (!lower_condition_false_branch(context, *statement.predicate, statement.negated, failure_label,
+                                    statement.line))
     return false;
 
   const std::optional<ResidualGuardedUpdateMatch> residual_update =
@@ -15570,20 +15546,17 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
   const bool reuse_false_branch_residual =
       false_branch_residual.has_value() &&
       display_statement_is_single_expression(selected.else_body.front(), *false_branch_residual);
-  const std::optional<std::string> fallthrough_identifier =
-      fallthrough_current_x_candidate(context, *selected.predicate, selected.negated,
-                                      selected.then_body, selected.line);
+  const std::optional<std::string> fallthrough_identifier = fallthrough_current_x_candidate(
+      context, *selected.predicate, selected.negated, selected.then_body, selected.line);
   const std::optional<std::string> false_branch_identifier =
       has_else ? false_branch_current_x_candidate(context, *selected.predicate, selected.negated,
                                                   selected.else_body, selected.line)
                : std::nullopt;
   const bool false_branch_known_zero =
-      has_else &&
-      inequality_false_branch_leaves_zero(context, *selected.predicate, selected.negated,
-                                          selected.line);
-  const bool true_fallthrough_known_zero =
-      equality_true_fallthrough_leaves_zero(context, *selected.predicate, selected.negated,
-                                            selected.line);
+      has_else && inequality_false_branch_leaves_zero(context, *selected.predicate,
+                                                      selected.negated, selected.line);
+  const bool true_fallthrough_known_zero = equality_true_fallthrough_leaves_zero(
+      context, *selected.predicate, selected.negated, selected.line);
   const std::string false_label = context.emitter.fresh_label(has_else ? "if_else" : "if_end");
   const std::string end_label = has_else ? context.emitter.fresh_label("if_end") : false_label;
   if (!lower_condition_false_branch(context, *selected.predicate, selected.negated, false_label,
@@ -15674,9 +15647,9 @@ struct MaskMembershipCondition {
   Expression mask;
 };
 
-std::optional<MaskMembershipCondition>
-match_mask_membership_condition(LoweringContext& context, const V2Predicate& predicate,
-                                bool negated, int line) {
+std::optional<MaskMembershipCondition> match_mask_membership_condition(LoweringContext& context,
+                                                                       const V2Predicate& predicate,
+                                                                       bool negated, int line) {
   const std::optional<NormalizedZeroComparison> normalized =
       normalize_zero_comparison(context, predicate, negated, line);
   if (!normalized.has_value() || normalized->op != "!=")
@@ -15779,9 +15752,8 @@ bool emit_y_preserving_membership_mask(LoweringContext& context, const Expressio
 bool lower_membership_clear_delta_branch(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value())
     return false;
-  const std::optional<MaskMembershipCondition> membership =
-      match_mask_membership_condition(context, *statement.predicate, statement.negated,
-                                      statement.line);
+  const std::optional<MaskMembershipCondition> membership = match_mask_membership_condition(
+      context, *statement.predicate, statement.negated, statement.line);
   if (!membership.has_value() || !membership_mask_preserves_y(membership->mask))
     return false;
 
@@ -15891,8 +15863,8 @@ bool lower_cells_contains_clear_if(LoweringContext& context, const V2Statement& 
   }
   context.optimizations.push_back(OptimizationReport{
       .name = "cell-membership-clear-reuse",
-      .detail = "Reused the successful membership mask when clearing " + collection +
-                " at line " + std::to_string(clear.line) + ".",
+      .detail = "Reused the successful membership mask when clearing " + collection + " at line " +
+                std::to_string(clear.line) + ".",
   });
   return true;
 }
@@ -16251,6 +16223,17 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
     }
     return lowered;
   }
+  if (statement.args.empty() && rule.params.empty() && statements_always_stop(context, rule.body) &&
+      !statements_contain_return(rule.body)) {
+    context.emitter.emit_jump(0x51, "БП", function_label(rule.name), "terminal rule " + rule.name,
+                              statement.line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "terminal-rule-tail-call",
+        .detail = "Compiled terminal rule " + rule.name +
+                  " as a direct jump instead of a subroutine call.",
+    });
+    return true;
+  }
 
   std::vector<Expression> args;
   args.reserve(statement.args.size());
@@ -16272,6 +16255,12 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
                                 statement.line);
       mark_current_x(context, score_rule->score);
       context.emitter.current_x_known_zero = false;
+      context.optimizations.push_back(OptimizationReport{
+          .name = "zero-accumulator-proc-entry",
+          .detail = "Entered " + rule.name +
+                    " after its zero literal because X already held a proved zero at line " +
+                    std::to_string(statement.line) + ".",
+      });
       return true;
     }
   }
@@ -16537,9 +16526,9 @@ struct CellsSetRunPrefix {
   std::vector<V2Statement> tail;
 };
 
-std::optional<CellsSetRunPrefix> cells_set_run_prefix(
-    const LoweringContext& context, const std::vector<V2Statement>& statements,
-    const Expression& item) {
+std::optional<CellsSetRunPrefix> cells_set_run_prefix(const LoweringContext& context,
+                                                      const std::vector<V2Statement>& statements,
+                                                      const Expression& item) {
   std::vector<CellsSetUpdate> sets;
   std::size_t index = 0;
   while (index < statements.size()) {
@@ -16562,10 +16551,9 @@ std::string bit_mask_scratch_name(const V2Statement& statement) {
   return "__bit_mask_" + std::to_string(statement.line);
 }
 
-bool emit_membership_mask_test_with_scratch(LoweringContext& context,
-                                            const std::string& collection,
-                                            const Expression& item,
-                                            const std::string& scratch, int line) {
+bool emit_membership_mask_test_with_scratch(LoweringContext& context, const std::string& collection,
+                                            const Expression& item, const std::string& scratch,
+                                            int line) {
   if (!hidden_register_available(context, scratch))
     return false;
   if (!ensure_hidden_register(context, scratch))
@@ -16641,8 +16629,7 @@ bool lower_cells_contains_set_reuse_if(LoweringContext& context, const V2Stateme
       statement.negated ? statement.then_body : statement.else_body;
   if (!statement.negated && set_branch.empty())
     return false;
-  const std::optional<CellsSetRunPrefix> set_run =
-      cells_set_run_prefix(context, set_branch, item);
+  const std::optional<CellsSetRunPrefix> set_run = cells_set_run_prefix(context, set_branch, item);
   if (!set_run.has_value())
     return false;
 
@@ -16794,9 +16781,9 @@ bool lower_mask_membership_set_reuse_if(LoweringContext& context, const V2Statem
   if (!set.has_value())
     return false;
 
-  const bool x2_restore =
-      set->target == membership->collection && membership_mask_preserves_y(membership->mask) &&
-      expression_is_deterministic_for_test_and_set(membership->mask);
+  const bool x2_restore = set->target == membership->collection &&
+                          membership_mask_preserves_y(membership->mask) &&
+                          expression_is_deterministic_for_test_and_set(membership->mask);
   if (x2_restore) {
     if (!emit_membership_collection_x2_test(context, *membership, statement.line))
       return false;
@@ -16809,8 +16796,7 @@ bool lower_mask_membership_set_reuse_if(LoweringContext& context, const V2Statem
   const std::string false_label = context.emitter.fresh_label("if_false");
   const bool then_stops = statements_always_stop(context, statement.then_body);
   const std::string end_label = then_stops ? std::string{} : context.emitter.fresh_label("if_end");
-  context.emitter.emit_jump(0x57, "F x!=0", false_label, "false branch for !=",
-                            statement.line);
+  context.emitter.emit_jump(0x57, "F x!=0", false_label, "false branch for !=", statement.line);
   if (!lower_statement_block(context, statement.then_body))
     return false;
   if (!then_stops)
@@ -20647,12 +20633,10 @@ bool can_compile_indexed_stack_temp_expression(const Expression& expression,
   return false;
 }
 
-bool lower_indexed_stack_temp_expression_to_x(LoweringContext& context,
-                                              const Expression& expression, const std::string& temp,
-                                              const Expression& indexed_target,
-                                              const std::optional<PreparedIndexedSelector>&
-                                                  prepared_selector,
-                                              int line) {
+bool lower_indexed_stack_temp_expression_to_x(
+    LoweringContext& context, const Expression& expression, const std::string& temp,
+    const Expression& indexed_target,
+    const std::optional<PreparedIndexedSelector>& prepared_selector, int line) {
   if (expression.kind == "identifier" && expression.name == temp) {
     mark_current_x(context, temp);
     return true;
@@ -21539,7 +21523,8 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
     if (index + 1U < statements.size() &&
-        lower_arithmetic_if_double_clamp(context, statements.at(index), statements.at(index + 1U))) {
+        lower_arithmetic_if_double_clamp(context, statements.at(index),
+                                         statements.at(index + 1U))) {
       ++index;
       continue;
     }

@@ -833,7 +833,7 @@ program XParamValueCallTempReuse {
   }
 }
 )mkpro",
-                                                                 x_param_value_options);
+                                                                     x_param_value_options);
   require(x_param_value_call_temp_reuse.implemented,
           "native compiler should reuse X-param value scratch for nested call temps");
   require(x_param_value_call_temp_reuse.diagnostics.empty(),
@@ -1605,6 +1605,8 @@ program PackedLineStackScore {
           "stack-only packed-line score should not recall score");
   require(has_optimization(packed_line_stack_score, "stack-only-state-field"),
           "stack-only packed-line score should report stack-only-state-field");
+  require(has_optimization(packed_line_stack_score, "zero-accumulator-proc-entry"),
+          "stack-only packed-line score should report zero-accumulator-proc-entry");
   require(packed_line_stack_score.listing.find("max-assignment equality compare") !=
               std::string::npos,
           "stack-only packed-line score should fuse the following max/equality branch");
@@ -2072,10 +2074,8 @@ program CompactMathPrimitives {
           "pow(10, y) should report the TS strategy name");
   require(has_optimization(compact_math_primitives, "min-via-max-lowering"),
           "min() should report the TS strategy name in full compiler lowering");
-  require(std::none_of(compact_math_primitives.steps.begin(),
-                       compact_math_primitives.steps.end(), [](const ResolvedStep& step) {
-                         return step.mnemonic == "F x^y";
-                       }),
+  require(std::none_of(compact_math_primitives.steps.begin(), compact_math_primitives.steps.end(),
+                       [](const ResolvedStep& step) { return step.mnemonic == "F x^y"; }),
           "compact math primitive lowering should not materialize generic pow()");
 
   const CompileResult square_primitive_lowering = compile_source(R"mkpro(
@@ -2103,9 +2103,8 @@ program SquarePrimitiveLowering {
   require(has_optimization(square_primitive_lowering, "pow10-opcode-lowering"),
           "pow(10, y) should report the TS strategy name");
   require(std::none_of(square_primitive_lowering.steps.begin(),
-                       square_primitive_lowering.steps.end(), [](const ResolvedStep& step) {
-                         return step.mnemonic == "F x^y";
-                       }),
+                       square_primitive_lowering.steps.end(),
+                       [](const ResolvedStep& step) { return step.mnemonic == "F x^y"; }),
           "square primitive lowering should not materialize generic pow()");
 
   const CompileResult digit_at_call = compile_source(R"mkpro(
@@ -2182,9 +2181,8 @@ program FormulaHelpers {
   }
 }
 )mkpro",
-                                               formula_helper_options);
-  require(formula_helpers.implemented,
-          "native compiler should lower packed-grid formula helpers");
+                                                       formula_helper_options);
+  require(formula_helpers.implemented, "native compiler should lower packed-grid formula helpers");
   require(formula_helpers.diagnostics.empty(),
           "packed-grid formula helpers should not report diagnostics");
   require(has_optimization(formula_helpers, "packed-grid-primitive-lowering"),
@@ -2819,8 +2817,8 @@ program ArithmeticIfDoubleClamp {
           "arithmetic-if double clamp should report branch-removal");
   require(has_optimization(arithmetic_double_clamp, "arithmetic-if-double-clamp"),
           "arithmetic-if double clamp should report the TS strategy name");
-  require(std::none_of(arithmetic_double_clamp.steps.begin(),
-                       arithmetic_double_clamp.steps.end(), [](const ResolvedStep& step) {
+  require(std::none_of(arithmetic_double_clamp.steps.begin(), arithmetic_double_clamp.steps.end(),
+                       [](const ResolvedStep& step) {
                          return step.comment.has_value() &&
                                 step.comment->find("false branch for") != std::string::npos;
                        }),
@@ -2883,7 +2881,8 @@ program ArithmeticIfComparisonMask {
   require(has_optimization(arithmetic_comparison_mask, "arithmetic-if-comparison-mask"),
           "arithmetic-if comparison mask should report the TS strategy name");
   require(std::none_of(arithmetic_comparison_mask.steps.begin(),
-                       arithmetic_comparison_mask.steps.end(), [](const ResolvedStep& step) {
+                       arithmetic_comparison_mask.steps.end(),
+                       [](const ResolvedStep& step) {
                          return step.comment.has_value() &&
                                 step.comment->find("false branch for ==") != std::string::npos;
                        }),
@@ -2907,8 +2906,7 @@ program ArithmeticIfBooleanAnd {
   }
 }
 )mkpro");
-  require(arithmetic_boolean_and.implemented,
-          "native compiler should lower boolean algebra AND");
+  require(arithmetic_boolean_and.implemented, "native compiler should lower boolean algebra AND");
   require(arithmetic_boolean_and.diagnostics.empty(),
           "arithmetic-if boolean algebra should not report diagnostics");
   require(has_optimization(arithmetic_boolean_and, "branch-removal"),
@@ -2934,8 +2932,7 @@ program ArithmeticIfBooleanOr {
   }
 }
 )mkpro");
-  require(arithmetic_boolean_or.implemented,
-          "native compiler should lower boolean algebra OR");
+  require(arithmetic_boolean_or.implemented, "native compiler should lower boolean algebra OR");
   require(arithmetic_boolean_or.diagnostics.empty(),
           "arithmetic-if boolean OR should not report diagnostics");
   require(has_optimization(arithmetic_boolean_or, "arithmetic-if-boolean-algebra"),
@@ -2959,8 +2956,7 @@ program ArithmeticIfBooleanXor {
   }
 }
 )mkpro");
-  require(arithmetic_boolean_xor.implemented,
-          "native compiler should lower boolean algebra XOR");
+  require(arithmetic_boolean_xor.implemented, "native compiler should lower boolean algebra XOR");
   require(arithmetic_boolean_xor.diagnostics.empty(),
           "arithmetic-if boolean XOR should not report diagnostics");
   require(has_optimization(arithmetic_boolean_xor, "arithmetic-if-boolean-algebra"),
@@ -3054,7 +3050,7 @@ program ArithmeticIfComparisonUpdate {
   }
 }
 )mkpro",
-                                                                 comparison_update_options);
+                                                                    comparison_update_options);
   require(arithmetic_comparison_update.implemented,
           "native compiler should lower comparison guarded arithmetic updates");
   require(arithmetic_comparison_update.diagnostics.empty(),
@@ -3064,7 +3060,8 @@ program ArithmeticIfComparisonUpdate {
   require(has_optimization(arithmetic_comparison_update, "arithmetic-if-comparison-update"),
           "arithmetic-if comparison update should report the TS strategy name");
   require(std::none_of(arithmetic_comparison_update.steps.begin(),
-                       arithmetic_comparison_update.steps.end(), [](const ResolvedStep& step) {
+                       arithmetic_comparison_update.steps.end(),
+                       [](const ResolvedStep& step) {
                          return step.comment.has_value() &&
                                 step.comment->find("false branch for ==") != std::string::npos;
                        }),
@@ -3115,8 +3112,8 @@ program DifferenceZeroNormalize {
           "difference zero normalization should not report diagnostics");
   require(has_optimization(difference_zero_normalize, "comparison-boundary-normalization"),
           "difference zero normalization should report the TS strategy name");
-  require(has_optimization_detail(difference_zero_normalize,
-                                  "comparison-boundary-normalization", "right - left >= 0"),
+  require(has_optimization_detail(difference_zero_normalize, "comparison-boundary-normalization",
+                                  "right - left >= 0"),
           "difference zero normalization should preserve the TS normalized predicate shape");
 
   const CompileResult condition_current_x_reuse = compile_source(R"mkpro(
@@ -3141,10 +3138,8 @@ program ConditionCurrentXReuse {
   require(has_optimization(condition_current_x_reuse, "condition-current-x-reuse"),
           "condition current-X reuse should report the TS strategy name");
   const auto current_x_compare =
-      std::find_if(condition_current_x_reuse.steps.begin(),
-                   condition_current_x_reuse.steps.end(), [](const ResolvedStep& step) {
-                     return step.comment == "condition compare";
-                   });
+      std::find_if(condition_current_x_reuse.steps.begin(), condition_current_x_reuse.steps.end(),
+                   [](const ResolvedStep& step) { return step.comment == "condition compare"; });
   require(current_x_compare != condition_current_x_reuse.steps.end(),
           "condition current-X reuse should still emit a comparison");
   require(current_x_compare == condition_current_x_reuse.steps.begin() ||
@@ -3177,11 +3172,10 @@ program CurrentXNegatedZeroTest {
                                step.comment == "negate line for zero test";
                       }),
           "current-X negated zero test should emit the TS negate step");
-  require(std::none_of(current_x_negated_zero.steps.begin(), current_x_negated_zero.steps.end(),
-                       [](const ResolvedStep& step) {
-                         return step.comment == "condition compare";
-                       }),
-          "current-X negated zero test should avoid materialized-zero comparison");
+  require(
+      std::none_of(current_x_negated_zero.steps.begin(), current_x_negated_zero.steps.end(),
+                   [](const ResolvedStep& step) { return step.comment == "condition compare"; }),
+      "current-X negated zero test should avoid materialized-zero comparison");
 
   const CompileResult negated_zero = compile_source(R"mkpro(
 program NegatedZeroComparison {
@@ -3209,11 +3203,10 @@ program NegatedZeroComparison {
                                step.comment == "negate energy for zero test";
                       }),
           "negated zero test should emit the TS negate step");
-  require(std::none_of(negated_zero.steps.begin(), negated_zero.steps.end(),
-                       [](const ResolvedStep& step) {
-                         return step.comment == "condition compare";
-                       }),
-          "negated zero test should avoid materialized-zero comparison");
+  require(
+      std::none_of(negated_zero.steps.begin(), negated_zero.steps.end(),
+                   [](const ResolvedStep& step) { return step.comment == "condition compare"; }),
+      "negated zero test should avoid materialized-zero comparison");
 
   const CompileResult remainder_lowering = compile_source(R"mkpro(
 program RemainderLowering {
@@ -3233,10 +3226,9 @@ program RemainderLowering {
           "integer remainder lowering should not report diagnostics");
   require(has_optimization(remainder_lowering, "remainder-fraction-lowering"),
           "integer remainder lowering should report the TS strategy name");
-  require(std::any_of(remainder_lowering.steps.begin(), remainder_lowering.steps.end(),
-                      [](const ResolvedStep& step) {
-                        return step.comment == "remainder fractional part";
-                      }),
+  require(std::any_of(
+              remainder_lowering.steps.begin(), remainder_lowering.steps.end(),
+              [](const ResolvedStep& step) { return step.comment == "remainder fractional part"; }),
           "integer remainder lowering should keep the TS fractional remainder step");
 
   const CompileResult remainder_zero_test = compile_source(R"mkpro(
@@ -3264,9 +3256,7 @@ program RemainderZeroTest {
                       }),
           "integer remainder zero test should keep the TS fractional test step");
   require(std::none_of(remainder_zero_test.steps.begin(), remainder_zero_test.steps.end(),
-                       [](const ResolvedStep& step) {
-                         return step.comment == "remainder scale";
-                       }),
+                       [](const ResolvedStep& step) { return step.comment == "remainder scale"; }),
           "integer remainder zero test should skip rescaling the fractional remainder");
 
   const CompileResult one_based_modulo_normalize = compile_source(R"mkpro(
@@ -3290,16 +3280,17 @@ program OneBasedModuloNormalize {
   require(has_optimization(one_based_modulo_normalize, "one-based-modulo-normalization"),
           "one-based modulo normalization should report the TS strategy name");
   require(std::any_of(one_based_modulo_normalize.steps.begin(),
-                      one_based_modulo_normalize.steps.end(), [](const ResolvedStep& step) {
+                      one_based_modulo_normalize.steps.end(),
+                      [](const ResolvedStep& step) {
                         return step.comment == "one-based modulo normalize line";
                       }),
           "one-based modulo normalization should emit the TS store comment");
-  require(std::none_of(one_based_modulo_normalize.steps.begin(),
-                       one_based_modulo_normalize.steps.end(), [](const ResolvedStep& step) {
-                         return step.comment.has_value() &&
-                                step.comment->starts_with("false branch");
-                       }),
-          "one-based modulo normalization should remove the zero-fix branch");
+  require(
+      std::none_of(one_based_modulo_normalize.steps.begin(), one_based_modulo_normalize.steps.end(),
+                   [](const ResolvedStep& step) {
+                     return step.comment.has_value() && step.comment->starts_with("false branch");
+                   }),
+      "one-based modulo normalization should remove the zero-fix branch");
 
   const CompileResult int_frac_shared_tail = compile_source(R"mkpro(
 program IntFracSharedTail {
@@ -3478,7 +3469,7 @@ program IndexedSelectorSiblingReuse {
   }
 }
 )mkpro",
-                                                        indexed_selector_cache_options);
+                                                              indexed_selector_cache_options);
   require(indexed_selector_cache.implemented,
           "native compiler should lower sibling indexed selector cache reuse");
   require(indexed_selector_cache.diagnostics.empty(),
@@ -3569,8 +3560,7 @@ program AffineIndexedSelectorReuse {
           "affine indexed selector reuse should report the TS strategy name");
   require(has_optimization(affine_indexed_selector_reuse, "indirect-memory-alias-selector"),
           "affine indexed selector reuse should report indirect-memory aliasing");
-  require(affine_indexed_selector_reuse.listing.find("indexed selector slots") ==
-              std::string::npos,
+  require(affine_indexed_selector_reuse.listing.find("indexed selector slots") == std::string::npos,
           "affine direct selector reuse should not materialize the hidden selector");
   require(affine_indexed_selector_reuse.listing.find("indirect-memory-targets=0,1,2") !=
               std::string::npos,
@@ -4579,7 +4569,7 @@ program MaskMembershipClear {
   }
 }
 )mkpro",
-                                                         membership_options);
+                                                             membership_options);
   require(mask_membership_clear.implemented,
           "native compiler should lower mask membership clear through a delta branch");
   require(mask_membership_clear.diagnostics.empty(),
@@ -4613,7 +4603,7 @@ program MembershipSingleSetCollection {
   }
 }
 )mkpro",
-                                                       membership_options);
+                                                             membership_options);
   require(membership_single_set.implemented,
           "native compiler should lower failed membership set reuse");
   require(membership_single_set.diagnostics.empty(),
@@ -4624,11 +4614,9 @@ program MembershipSingleSetCollection {
           "failed membership set reuse should reuse the stack-held mask for the membership test");
   require(!has_optimization(membership_single_set, "cell-membership-mask-run-reuse"),
           "single failed membership set should not report the run reuse strategy");
-  const auto single_set_index =
-      std::find_if(membership_single_set.steps.begin(), membership_single_set.steps.end(),
-                   [](const ResolvedStep& step) {
-                     return step.comment == "bit_set with reused mask";
-                   });
+  const auto single_set_index = std::find_if(
+      membership_single_set.steps.begin(), membership_single_set.steps.end(),
+      [](const ResolvedStep& step) { return step.comment == "bit_set with reused mask"; });
   require(single_set_index != membership_single_set.steps.end(),
           "failed membership set should use the reusable mask for bit_set");
   require(single_set_index - membership_single_set.steps.begin() >= 2,
@@ -4659,7 +4647,7 @@ program MembershipMaskRun {
   }
 }
 )mkpro",
-                                                   membership_options);
+                                                           membership_options);
   require(membership_mask_run.implemented,
           "native compiler should lower failed membership mask run reuse");
   require(membership_mask_run.diagnostics.empty(),
@@ -4692,7 +4680,7 @@ program FractionalMembershipMaskX2Set {
   }
 }
 )mkpro",
-                                                        membership_options);
+                                                                membership_options);
   require(fractional_membership_x2.implemented,
           "native compiler should lower fractional membership X2 restore");
   require(fractional_membership_x2.diagnostics.empty(),
@@ -4703,13 +4691,12 @@ program FractionalMembershipMaskX2Set {
           "fractional membership set should skip redundant fractional extraction");
   require(!has_optimization(fractional_membership_x2, "membership-mask-stack-test-reuse"),
           "fractional membership X2 restore should not use the scratch-mask path");
-  require(std::any_of(fractional_membership_x2.steps.begin(),
-                      fractional_membership_x2.steps.end(), [](const ResolvedStep& step) {
-                        return step.comment == "guard X2 restore gap";
-                      }),
-          "fractional membership X2 restore should insert the preserving no-op");
-  require(std::any_of(fractional_membership_x2.steps.begin(),
-                      fractional_membership_x2.steps.end(), [](const ResolvedStep& step) {
+  require(
+      std::any_of(fractional_membership_x2.steps.begin(), fractional_membership_x2.steps.end(),
+                  [](const ResolvedStep& step) { return step.comment == "guard X2 restore gap"; }),
+      "fractional membership X2 restore should insert the preserving no-op");
+  require(std::any_of(fractional_membership_x2.steps.begin(), fractional_membership_x2.steps.end(),
+                      [](const ResolvedStep& step) {
                         return step.comment == "restore membership collection from X2";
                       }),
           "fractional membership X2 restore should restore the collection from X2");
@@ -4734,7 +4721,7 @@ program MembershipMaskCurrentXScratch {
   }
 }
 )mkpro",
-                                                          membership_options);
+                                                                    membership_options);
   require(membership_current_x_scratch.implemented,
           "native compiler should lower current-X membership mask scratch");
   require(membership_current_x_scratch.diagnostics.empty(),
@@ -4745,16 +4732,12 @@ program MembershipMaskCurrentXScratch {
           "current-X membership mask scratch should reuse the stack-held mask for the test");
   require(!has_optimization(membership_current_x_scratch, "membership-collection-x2-restore"),
           "current-X membership mask scratch should not use X2 collection restore");
-  const auto scratch_index =
-      std::find_if(membership_current_x_scratch.steps.begin(),
-                   membership_current_x_scratch.steps.end(), [](const ResolvedStep& step) {
-                     return step.comment == "cell bit mask scratch";
-                   });
-  const auto test_index =
-      std::find_if(membership_current_x_scratch.steps.begin(),
-                   membership_current_x_scratch.steps.end(), [](const ResolvedStep& step) {
-                     return step.comment == "membership test with reused mask";
-                   });
+  const auto scratch_index = std::find_if(
+      membership_current_x_scratch.steps.begin(), membership_current_x_scratch.steps.end(),
+      [](const ResolvedStep& step) { return step.comment == "cell bit mask scratch"; });
+  const auto test_index = std::find_if(
+      membership_current_x_scratch.steps.begin(), membership_current_x_scratch.steps.end(),
+      [](const ResolvedStep& step) { return step.comment == "membership test with reused mask"; });
   require(scratch_index != membership_current_x_scratch.steps.end(),
           "current-X membership mask scratch should store the reusable mask");
   require(scratch_index != membership_current_x_scratch.steps.begin(),
@@ -5288,7 +5271,7 @@ program TerminalLoopScreen {
   }
 }
 )mkpro",
-                                                          terminal_loop_screen_options);
+                                                            terminal_loop_screen_options);
   require(terminal_loop_screen.implemented,
           "native compiler should elide terminal screens repeated by loop headers");
   require(terminal_loop_screen.diagnostics.empty(),
@@ -5362,6 +5345,30 @@ program DirectTerminalBranch {
   require(has_optimization(direct_terminal_branch, "terminal-if-direct-branch"),
           "direct terminal branch should report the TS strategy name");
 
+  const CompileResult terminal_rule_tail_call = compile_source(R"mkpro(
+program TerminalRuleTailCall {
+  loop {
+    fail()
+  }
+
+  fn counted() {
+    fail()
+  }
+
+  fn fail() {
+    halt(9)
+  }
+}
+)mkpro");
+  require(terminal_rule_tail_call.implemented,
+          "native compiler should lower reusable terminal rules as direct jumps");
+  require(terminal_rule_tail_call.diagnostics.empty(),
+          "terminal rule tail-call compile should not report diagnostics");
+  require(has_optimization(terminal_rule_tail_call, "terminal-rule-tail-call"),
+          "terminal rule direct jump should report the TS strategy name");
+  require(terminal_rule_tail_call.listing.find("terminal rule fail") != std::string::npos,
+          "terminal rule tail-call should emit a direct branch to the rule body");
+
   const CompileResult late_layout_terminal_if = compile_source(R"mkpro(
 program LateLayoutIfVariant {
   state {
@@ -5429,7 +5436,7 @@ program FalseBranchXReuse {
   }
 }
 )mkpro",
-                                                   branch_x_options);
+                                                      branch_x_options);
   require(false_branch_x.implemented,
           "native compiler should preserve X facts into false branches");
   require(false_branch_x.diagnostics.empty(),
@@ -5454,7 +5461,7 @@ program FallthroughXReuse {
   }
 }
 )mkpro",
-                                                  branch_x_options);
+                                                     branch_x_options);
   require(fallthrough_x.implemented,
           "native compiler should preserve X facts into fallthrough branches");
   require(fallthrough_x.diagnostics.empty(),
@@ -5481,7 +5488,7 @@ program FalseBranchZeroReuse {
   }
 }
 )mkpro",
-                                                        branch_x_options);
+                                                         branch_x_options);
   require(false_branch_zero.implemented,
           "native compiler should reuse zero on false inequality branches");
   require(false_branch_zero.diagnostics.empty(),
@@ -5506,7 +5513,7 @@ program EqualityZeroFallthroughReuse {
   }
 }
 )mkpro",
-                                                   branch_x_options);
+                                                     branch_x_options);
   require(equality_zero.implemented,
           "native compiler should reuse zero on equality fallthrough branches");
   require(equality_zero.diagnostics.empty(),
@@ -5580,9 +5587,8 @@ program NestedDelayedResidualGuardedUpdate {
   require(has_optimization(nested_residual_guard, "residual-guarded-update"),
           "nested residual guard should reuse the delayed self-update residual");
   require(std::count_if(nested_residual_guard.steps.begin(), nested_residual_guard.steps.end(),
-                        [](const ResolvedStep& step) {
-                          return step.comment == "set dynamite";
-                        }) == 1,
+                        [](const ResolvedStep& step) { return step.comment == "set dynamite"; }) ==
+              1,
           "nested residual guard should store dynamite exactly once");
 
   const CompileResult nested_shared_failure = compile_source(R"mkpro(
@@ -5609,7 +5615,7 @@ program NestedGuardSharedFailure {
   }
 }
 )mkpro",
-                                                     branch_x_options);
+                                                             branch_x_options);
   require(nested_shared_failure.implemented,
           "native compiler should share identical nested failure branches");
   require(nested_shared_failure.diagnostics.empty(),
@@ -6503,12 +6509,14 @@ program LiteralErrorDisplay {
   require(has_optimization(literal_error_display_statement, "screen-video-literal-lowering"),
           "literal error display should report the outer literal-screen lowering strategy");
   require(std::any_of(literal_error_display_statement.steps.begin(),
-                      literal_error_display_statement.steps.end(), [](const ResolvedStep& step) {
+                      literal_error_display_statement.steps.end(),
+                      [](const ResolvedStep& step) {
                         return step.opcode == 0x29 && step.comment == "show literal error";
                       }),
           "literal error display should use the one-cell error opcode");
   require(std::any_of(literal_error_display_statement.steps.begin(),
-                      literal_error_display_statement.steps.end(), [](const ResolvedStep& step) {
+                      literal_error_display_statement.steps.end(),
+                      [](const ResolvedStep& step) {
                         return step.opcode == 0x54 && step.comment == "show literal error padding";
                       }),
           "literal error display should keep the skipped padding cell");
@@ -6586,24 +6594,21 @@ program RawRule {
 }
 )mkpro");
   require(raw_rule.implemented, "native compiler should lower contracted raw blocks");
-  require(raw_rule.diagnostics.empty(), "contracted raw block compile should not report diagnostics");
+  require(raw_rule.diagnostics.empty(),
+          "contracted raw block compile should not report diagnostics");
   require(has_optimization(raw_rule, "raw-block-contract"),
           "contracted raw block should report raw-block-contract");
-  require(std::any_of(raw_rule.steps.begin(), raw_rule.steps.end(), [](const ResolvedStep& step) {
-            return step.opcode == 0x10;
-          }),
+  require(std::any_of(raw_rule.steps.begin(), raw_rule.steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x10; }),
           "contracted raw block should emit raw plus opcode");
-  require(std::any_of(raw_rule.steps.begin(), raw_rule.steps.end(), [](const ResolvedStep& step) {
-            return step.opcode == 0x3a;
-          }),
+  require(std::any_of(raw_rule.steps.begin(), raw_rule.steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x3a; }),
           "contracted raw block should emit raw K INV opcode");
-  require(std::any_of(raw_rule.items.begin(), raw_rule.items.end(), [](const MachineItem& item) {
-            return item.raw && item.opcode == 0x3a;
-          }),
+  require(std::any_of(raw_rule.items.begin(), raw_rule.items.end(),
+                      [](const MachineItem& item) { return item.raw && item.opcode == 0x3a; }),
           "contracted raw block should mark raw opcodes as optimizer barriers");
-  require(std::any_of(raw_rule.steps.begin(), raw_rule.steps.end(), [](const ResolvedStep& step) {
-            return step.comment == "raw returns X";
-          }),
+  require(std::any_of(raw_rule.steps.begin(), raw_rule.steps.end(),
+                      [](const ResolvedStep& step) { return step.comment == "raw returns X"; }),
           "contracted raw block should store declared raw output");
 
   const CompileResult raw_display_5f = compile_source(R"mkpro(
