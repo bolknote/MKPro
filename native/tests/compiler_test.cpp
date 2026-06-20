@@ -6465,6 +6465,8 @@ program LiteralDisplay {
           "native compiler should lower direct literal video display");
   require(literal_display_statement.diagnostics.empty(),
           "literal display compile should not report diagnostics");
+  require(has_optimization(literal_display_statement, "screen-video-literal-lowering"),
+          "direct literal display should report the TS strategy name");
   bool saw_literal_kinv = false;
   bool saw_literal_stop = false;
   for (const ResolvedStep& step : literal_display_statement.steps) {
@@ -6475,6 +6477,38 @@ program LiteralDisplay {
   }
   require(saw_literal_kinv, "direct literal display should use K INV lowering");
   require(saw_literal_stop, "direct literal display should emit a calculator stop");
+
+  const CompileResult literal_error_display_statement = compile_source(R"mkpro(
+program LiteralErrorDisplay {
+  state {
+    score: counter 0..9 = 0
+  }
+
+  loop {
+    show("ЕГГОГ")
+    score = 1
+    halt(score)
+  }
+}
+)mkpro");
+  require(literal_error_display_statement.implemented,
+          "native compiler should lower resumable literal error displays");
+  require(literal_error_display_statement.diagnostics.empty(),
+          "literal error display compile should not report diagnostics");
+  require(has_optimization(literal_error_display_statement, "screen-error-literal-lowering"),
+          "literal error display should report screen-error-literal-lowering");
+  require(has_optimization(literal_error_display_statement, "screen-video-literal-lowering"),
+          "literal error display should report the outer literal-screen lowering strategy");
+  require(std::any_of(literal_error_display_statement.steps.begin(),
+                      literal_error_display_statement.steps.end(), [](const ResolvedStep& step) {
+                        return step.opcode == 0x29 && step.comment == "show literal error";
+                      }),
+          "literal error display should use the one-cell error opcode");
+  require(std::any_of(literal_error_display_statement.steps.begin(),
+                      literal_error_display_statement.steps.end(), [](const ResolvedStep& step) {
+                        return step.opcode == 0x54 && step.comment == "show literal error padding";
+                      }),
+          "literal error display should keep the skipped padding cell");
 
   const CompileResult first_splice_literal_display = compile_source(R"mkpro(
 program FirstSpliceLiteralDisplay {
@@ -6489,6 +6523,10 @@ program FirstSpliceLiteralDisplay {
           "native compiler should lower arbitrary display alphabet literals");
   require(first_splice_literal_display.diagnostics.empty(),
           "first-splice literal display compile should not report diagnostics");
+  require(has_optimization(first_splice_literal_display, "screen-text-literal-first-splice"),
+          "first-splice literal display should report the TS strategy name");
+  require(has_optimization(first_splice_literal_display, "screen-video-literal-lowering"),
+          "first-splice literal display should report the outer literal-screen lowering strategy");
   require(first_splice_literal_display.registers.find("__display_first_literal") !=
               first_splice_literal_display.registers.end(),
           "first-splice literal display should allocate a reusable scratch register");
@@ -6513,6 +6551,10 @@ program DecimalLiteralDisplay {
           "native compiler should lower decimal string display literal");
   require(decimal_literal_display_statement.diagnostics.empty(),
           "decimal literal display compile should not report diagnostics");
+  require(has_optimization(decimal_literal_display_statement, "screen-decimal-literal-lowering"),
+          "decimal literal display should report the TS strategy name");
+  require(has_optimization(decimal_literal_display_statement, "screen-video-literal-lowering"),
+          "decimal literal display should report the outer literal-screen lowering strategy");
   require(decimal_literal_display_statement.listing.find("negative number") != std::string::npos,
           "negative decimal literal display should preserve the sign");
 

@@ -479,7 +479,7 @@ bool emit_direct_display_literal_program(MachineEmitter& emitter,
                                          const DisplayLiteralProgram& program,
                                          int source_line) {
   if (program.kind == "error") {
-    emitter.emit_op(0x50, "С/П", "show literal error", source_line);
+    emitter.emit_op(0x29, "К ÷", "show literal error", source_line, true);
     emitter.emit_op(0x54, "К НОП", "show literal error padding", source_line, true);
     return true;
   }

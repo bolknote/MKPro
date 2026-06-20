@@ -10221,6 +10221,21 @@ core::emit::DisplayEmitApi display_emit_api(LoweringContext& context) {
   };
 }
 
+void report_screen_literal_lowering(LoweringContext& context, std::string name,
+                                    std::string detail) {
+  context.optimizations.push_back(OptimizationReport{
+      .name = std::move(name),
+      .detail = std::move(detail),
+  });
+}
+
+void report_screen_video_literal_lowering(LoweringContext& context, int line) {
+  report_screen_literal_lowering(
+      context, "screen-video-literal-lowering",
+      "Lowered screen literal at line " + std::to_string(line) +
+          " as a literal calculator video string.");
+}
+
 bool lower_display_statement(LoweringContext& context, const V2Statement& statement) {
   if (!statement.items.has_value()) {
     context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
@@ -10237,15 +10252,32 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
           core::emit::collapse_literal_only_display(*statement.items)) {
     if (literal->empty()) {
       context.emitter.emit_op(0x50, "С/П", "show literal", statement.line);
+      report_screen_literal_lowering(context, "screen-empty-literal-lowering",
+                                     "Lowered empty screen literal at line " +
+                                         std::to_string(statement.line) + " as a plain pause.");
       return true;
     }
     if (const std::optional<DisplayLiteralProgram> program = display_literal_program(*literal)) {
-      return core::emit::emit_direct_display_literal_program(context.emitter, *program,
-                                                             statement.line);
+      if (!core::emit::emit_direct_display_literal_program(context.emitter, *program,
+                                                           statement.line))
+        return false;
+      if (program->kind == "error") {
+        report_screen_literal_lowering(
+            context, "screen-error-literal-lowering",
+            "Lowered screen literal at line " + std::to_string(statement.line) +
+                " as a resumable ЕГГ0Г pause with a skipped padding cell.");
+      }
+      report_screen_video_literal_lowering(context, statement.line);
+      return true;
     }
     if (const std::optional<std::string> decimal = decimal_display_literal_number(*literal)) {
       context.emitter.emit_number(*decimal);
       context.emitter.emit_op(0x50, "С/П", "show literal", statement.line);
+      report_screen_literal_lowering(
+          context, "screen-decimal-literal-lowering",
+          "Lowered screen literal at line " + std::to_string(statement.line) +
+              " as an ordinary decimal display literal.");
+      report_screen_video_literal_lowering(context, statement.line);
       return true;
     }
     if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
@@ -10258,6 +10290,11 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
               display_api, context, *first_splice, scratch, statement.line))
         return false;
       context.emitter.emit_op(0x50, "С/П", "show literal", statement.line);
+      report_screen_literal_lowering(
+          context, "screen-text-literal-first-splice",
+          "Lowered screen literal at line " + std::to_string(statement.line) +
+              " by building a literal mantissa and splicing its first digit.");
+      report_screen_video_literal_lowering(context, statement.line);
       return true;
     }
   }
