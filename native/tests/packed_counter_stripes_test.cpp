@@ -36,7 +36,7 @@ void packed_counter_stripes_match_typescript_contract() {
   options.analysis = true;
   options.budget = 999;
 
-  const CompileResult result = compile_source(R"mkpro(
+  const CompileResult display_pair = compile_source(R"mkpro(
 program DotCounterDisplay {
   state {
     floor: counter 1..9 = 9
@@ -54,24 +54,137 @@ program DotCounterDisplay {
   }
 }
 )mkpro",
-                                              options);
+                                                    options);
 
-  require(result.implemented, "packed counter stripe display should compile");
-  require(result.diagnostics.empty(),
+  require(display_pair.implemented, "packed counter stripe display should compile");
+  require(display_pair.diagnostics.empty(),
           "packed counter stripe display should not report diagnostics: " +
-              diagnostics_text(result));
-  require(has_optimization(result, "packed-counter-stripes"),
+              diagnostics_text(display_pair));
+  require(has_optimization(display_pair, "packed-counter-stripes"),
           "literal-separated small counters should be packed into one decimal register");
-  require(!has_optimization(result, "fl-unit-decrement"),
+  require(!has_optimization(display_pair, "fl-unit-decrement"),
           "packed counter stripes should avoid the separate floor decrement strategy");
-  require(result.registers.contains("__packed_counter_0"),
+  require(display_pair.registers.contains("__packed_counter_0"),
           "packed counter stripe should allocate __packed_counter_0");
-  require(!result.registers.contains("floor"), "packed counter stripe should remove floor state");
-  require(!result.registers.contains("room"), "packed counter stripe should remove room state");
-  require(!has_register_prefix(result, "__display_expr_"),
+  require(!display_pair.registers.contains("floor"),
+          "packed counter stripe should remove floor state");
+  require(!display_pair.registers.contains("room"),
+          "packed counter stripe should remove room state");
+  require(!has_register_prefix(display_pair, "__display_expr_"),
           "packed counter stripe display should not allocate display-expression scratch");
-  require(result.listing.find("__packed_counter_0") != std::string::npos,
+  require(display_pair.listing.find("__packed_counter_0") != std::string::npos,
           "listing should reference the packed decimal register");
+
+  CompileOptions forced_floor_row_options = options;
+  forced_floor_row_options.pack_counter_stripes = true;
+  const CompileResult forced_floor_row = compile_source(R"mkpro(
+program PackedFloorRowCounters {
+  state {
+    floor: counter 1..9 = 9
+    room: counter 0..6 = 0
+    row: packed = bit_not(5 / 9)
+  }
+
+  loop {
+    if room < 6 {
+      room++
+    }
+    show(floor, ".", bit_not(row + 2 / pow10(room + 1)))
+  }
+}
+)mkpro",
+                                                        forced_floor_row_options);
+  require(forced_floor_row.implemented,
+          "forced packed floor-row counters should compile: " + diagnostics_text(forced_floor_row));
+  require(forced_floor_row.diagnostics.empty(),
+          "forced packed floor-row counters should not report diagnostics: " +
+              diagnostics_text(forced_floor_row));
+  require(has_optimization(forced_floor_row, "packed-counter-stripes"),
+          "forced floor-row counters should report packed-counter-stripes");
+  require(has_optimization(forced_floor_row, "floor-packed-row-display"),
+          "forced floor-row counters should preserve floor-packed row display lowering");
+  require(forced_floor_row.registers.contains("__packed_counter_0"),
+          "forced floor-row counters should allocate __packed_counter_0");
+  require(!forced_floor_row.registers.contains("floor"),
+          "forced floor-row counters should remove floor state");
+  require(!forced_floor_row.registers.contains("room"),
+          "forced floor-row counters should remove room state");
+
+  CompileOptions multi_options = options;
+  multi_options.pack_counter_stripes = true;
+  multi_options.pack_counter_stripe_names = {"a", "b", "c"};
+  const CompileResult multi = compile_source(R"mkpro(
+program MultiPackedCounters {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+    c: counter 0..9 = 3
+  }
+
+  loop {
+    a++
+    b++
+    c--
+    if b >= 3 {
+      halt(c)
+    }
+    else {
+      halt(0)
+    }
+  }
+}
+)mkpro",
+                                             multi_options);
+  require(multi.implemented, "forced three-counter packing should compile");
+  require(multi.diagnostics.empty(),
+          "forced three-counter packing should not report diagnostics: " + diagnostics_text(multi));
+  require(has_optimization(multi, "packed-counter-stripes"),
+          "forced three-counter packing should report packed-counter-stripes");
+  require(multi.registers.contains("__packed_counter_0"),
+          "forced three-counter packing should allocate __packed_counter_0");
+  require(!multi.registers.contains("a"), "forced three-counter packing should remove a");
+  require(!multi.registers.contains("b"), "forced three-counter packing should remove b");
+  require(!multi.registers.contains("c"), "forced three-counter packing should remove c");
+
+  CompileOptions wide_options = options;
+  wide_options.pack_counter_stripes = true;
+  wide_options.pack_counter_stripe_names = {"score", "lives", "room"};
+  const CompileResult wide = compile_source(R"mkpro(
+program WidePackedCounters {
+  state {
+    score: counter 0..99 = 12
+    lives: counter 0..9 = 3
+    room: counter 0..9 = 4
+  }
+
+  loop {
+    score += 10
+    lives--
+    room++
+    if score >= 22 {
+      halt(room)
+    }
+    else {
+      halt(0)
+    }
+  }
+}
+)mkpro",
+                                            wide_options);
+  require(wide.implemented, "forced fixed-width counter packing should compile");
+  require(wide.diagnostics.empty(),
+          "forced fixed-width counter packing should not report diagnostics: " +
+              diagnostics_text(wide));
+  require(has_optimization(wide, "packed-counter-stripes"),
+          "forced fixed-width counter packing should report packed-counter-stripes");
+  require(wide.registers.contains("__packed_counter_0"),
+          "forced fixed-width counter packing should allocate __packed_counter_0");
+  require(!wide.registers.contains("score"),
+          "forced fixed-width counter packing should remove score");
+  require(!wide.registers.contains("lives"),
+          "forced fixed-width counter packing should remove lives");
+  require(!wide.registers.contains("room"),
+          "forced fixed-width counter packing should remove room");
 }
 
 } // namespace mkpro::tests

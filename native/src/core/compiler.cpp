@@ -32,6 +32,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <regex>
 #include <set>
@@ -24914,9 +24915,40 @@ struct PackedCounterStripePlan {
   std::optional<PackedCounterCompactDisplay> compact_decimal_display;
 };
 
+struct PackedCounterFieldCandidate {
+  const V2StateField* field = nullptr;
+  std::size_t index = 0;
+};
+
+constexpr int kMaxPackedCounterStripeDigits = 8;
+
 bool small_display_counter_field(const V2StateField& field) {
   return field.type == "counter" && field.min.has_value() && field.max.has_value() &&
          *field.min >= 0 && *field.max <= 9 && !field.initial_stack.has_value();
+}
+
+std::optional<int> decimal_counter_width(const V2StateField& field) {
+  if (field.type != "counter" || !field.min.has_value() || !field.max.has_value() ||
+      *field.min < 0 || field.initial_stack.has_value()) {
+    return std::nullopt;
+  }
+  if (*field.max <= 9)
+    return 1;
+  if (*field.max <= 99)
+    return 2;
+  if (*field.max <= 999)
+    return 3;
+  if (*field.max <= 9999)
+    return 4;
+  if (*field.max <= 99999)
+    return 5;
+  if (*field.max <= 999999)
+    return 6;
+  if (*field.max <= 9999999)
+    return 7;
+  if (*field.max <= 99999999)
+    return 8;
+  return std::nullopt;
 }
 
 std::optional<double> packed_counter_initial_value(const V2StateField& field) {
@@ -25068,6 +25100,93 @@ bool packed_counter_usages_ok(const V2Program& program, const std::vector<std::s
     return false;
   return std::all_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
     return packed_counter_statements_usages_ok(rule.body, packed_names);
+  });
+}
+
+void collect_display_source_names_from_statement(const V2Statement& statement,
+                                                 std::set<std::string>& names) {
+  if (statement.items.has_value()) {
+    for (const DisplayItem& item : *statement.items) {
+      if (item.kind == "source")
+        names.insert(item.name);
+    }
+  }
+  for (const V2Statement& child : statement.body)
+    collect_display_source_names_from_statement(child, names);
+  for (const V2Statement& child : statement.then_body)
+    collect_display_source_names_from_statement(child, names);
+  for (const V2Statement& child : statement.else_body)
+    collect_display_source_names_from_statement(child, names);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_display_source_names_from_statement(*match_case.action, names);
+  }
+  if (statement.otherwise != nullptr)
+    collect_display_source_names_from_statement(*statement.otherwise, names);
+}
+
+std::set<std::string> display_source_names(const V2Program& program) {
+  std::set<std::string> names;
+  for (const V2Statement& statement : program.body)
+    collect_display_source_names_from_statement(statement, names);
+  for (const V2Rule& rule : program.rules) {
+    for (const V2Statement& statement : rule.body)
+      collect_display_source_names_from_statement(statement, names);
+  }
+  return names;
+}
+
+bool display_items_use_packed_row_floor(const std::vector<DisplayItem>& items,
+                                        const std::string& name) {
+  for (std::size_t index = 0; index + 2U < items.size(); ++index) {
+    const DisplayItem& left = items.at(index);
+    const DisplayItem& dot = items.at(index + 1U);
+    const DisplayItem& right = items.at(index + 2U);
+    if (left.kind == "source" && !left.expr.has_value() && !left.width.has_value() &&
+        left.name == name && dot.kind == "literal" && dot.text == "." && right.kind == "source" &&
+        right.expr.has_value() && !right.width.has_value()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool statement_uses_packed_row_floor(const V2Statement& statement, const std::string& name) {
+  if (statement.items.has_value() && display_items_use_packed_row_floor(*statement.items, name))
+    return true;
+  if (std::any_of(statement.body.begin(), statement.body.end(), [&](const V2Statement& child) {
+        return statement_uses_packed_row_floor(child, name);
+      })) {
+    return true;
+  }
+  if (std::any_of(
+          statement.then_body.begin(), statement.then_body.end(),
+          [&](const V2Statement& child) { return statement_uses_packed_row_floor(child, name); })) {
+    return true;
+  }
+  if (std::any_of(
+          statement.else_body.begin(), statement.else_body.end(),
+          [&](const V2Statement& child) { return statement_uses_packed_row_floor(child, name); })) {
+    return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr && statement_uses_packed_row_floor(*match_case.action, name))
+      return true;
+  }
+  return statement.otherwise != nullptr &&
+         statement_uses_packed_row_floor(*statement.otherwise, name);
+}
+
+bool field_used_as_packed_row_floor_display(const V2Program& program, const std::string& name) {
+  if (std::any_of(program.body.begin(), program.body.end(), [&](const V2Statement& statement) {
+        return statement_uses_packed_row_floor(statement, name);
+      })) {
+    return true;
+  }
+  return std::any_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
+    return std::any_of(rule.body.begin(), rule.body.end(), [&](const V2Statement& statement) {
+      return statement_uses_packed_row_floor(statement, name);
+    });
   });
 }
 
@@ -25243,6 +25362,218 @@ select_packed_counter_display_stripe_plan(const V2Program& program) {
     }
   }
   return std::nullopt;
+}
+
+std::vector<PackedCounterFieldCandidate>
+order_packed_counter_stripe_fields(const V2Program& program,
+                                   const std::vector<PackedCounterFieldCandidate>& selected) {
+  const auto floor_it = std::find_if(
+      selected.begin(), selected.end(), [&](const PackedCounterFieldCandidate& candidate) {
+        return candidate.field != nullptr &&
+               field_used_as_packed_row_floor_display(program, candidate.field->name);
+      });
+  if (floor_it == selected.begin() || floor_it == selected.end())
+    return selected;
+
+  std::vector<PackedCounterFieldCandidate> ordered{*floor_it};
+  for (auto it = selected.begin(); it != selected.end(); ++it) {
+    if (it != floor_it)
+      ordered.push_back(*it);
+  }
+  return ordered;
+}
+
+std::optional<PackedCounterStripePlan>
+build_packed_counter_storage_stripe_plan(const V2Program& program,
+                                         const std::vector<PackedCounterFieldCandidate>& selected) {
+  if (selected.size() < 2U ||
+      selected.size() > static_cast<std::size_t>(kMaxPackedCounterStripeDigits)) {
+    return std::nullopt;
+  }
+  const std::vector<PackedCounterFieldCandidate> ordered =
+      order_packed_counter_stripe_fields(program, selected);
+
+  std::vector<const V2StateField*> fields;
+  fields.reserve(ordered.size());
+  std::vector<int> widths;
+  widths.reserve(ordered.size());
+  for (const PackedCounterFieldCandidate& candidate : ordered) {
+    if (candidate.field == nullptr)
+      return std::nullopt;
+    const std::optional<int> width = decimal_counter_width(*candidate.field);
+    if (!width.has_value())
+      return std::nullopt;
+    fields.push_back(candidate.field);
+    widths.push_back(*width);
+  }
+
+  const int total_width = std::accumulate(widths.begin(), widths.end(), 0);
+  if (total_width > kMaxPackedCounterStripeDigits)
+    return std::nullopt;
+
+  std::vector<std::string> names;
+  names.reserve(fields.size());
+  for (const V2StateField* field : fields)
+    names.push_back(field->name);
+  if (!packed_counter_usages_ok(program, names))
+    return std::nullopt;
+
+  int remaining_width = total_width;
+  std::vector<PackedCounterStripe> stripes;
+  stripes.reserve(fields.size());
+  for (std::size_t index = 0; index < fields.size(); ++index) {
+    remaining_width -= widths.at(index);
+    stripes.push_back(PackedCounterStripe{
+        .name = fields.at(index)->name,
+        .scale = std::pow(10.0, static_cast<double>(remaining_width)),
+        .width = widths.at(index),
+        .kind = index == 0U ? "major" : "digit",
+    });
+  }
+
+  std::optional<std::string> initial = packed_counter_initial(fields, stripes);
+  if (!initial.has_value())
+    return std::nullopt;
+
+  const auto min_it = std::min_element(
+      ordered.begin(), ordered.end(),
+      [](const PackedCounterFieldCandidate& left, const PackedCounterFieldCandidate& right) {
+        return left.index < right.index;
+      });
+  return PackedCounterStripePlan{
+      .insert_index = min_it == ordered.end() ? 0U : min_it->index,
+      .packed = fresh_packed_counter_name(program),
+      .stripes = std::move(stripes),
+      .initial = *initial,
+  };
+}
+
+void collect_packed_counter_storage_combinations(
+    const V2Program& program, const std::vector<PackedCounterFieldCandidate>& candidates,
+    std::size_t size, std::size_t start, std::vector<PackedCounterFieldCandidate>& prefix,
+    std::vector<PackedCounterStripePlan>& plans) {
+  if (prefix.size() == size) {
+    if (std::optional<PackedCounterStripePlan> plan =
+            build_packed_counter_storage_stripe_plan(program, prefix)) {
+      plans.push_back(std::move(*plan));
+    }
+    return;
+  }
+  const std::size_t remaining = size - prefix.size();
+  for (std::size_t index = start; index <= candidates.size() - remaining; ++index) {
+    prefix.push_back(candidates.at(index));
+    collect_packed_counter_storage_combinations(program, candidates, size, index + 1U, prefix,
+                                                plans);
+    prefix.pop_back();
+  }
+}
+
+std::vector<PackedCounterStripePlan> select_packed_counter_storage_stripe_plans(
+    const V2Program& program, const std::optional<std::vector<std::string>>& requested_names) {
+  std::vector<PackedCounterStripePlan> plans;
+  const std::set<std::string> display_sources = display_source_names(program);
+
+  std::vector<PackedCounterFieldCandidate> candidates;
+  for (std::size_t index = 0; index < program.state.size(); ++index) {
+    const V2StateField& field = program.state.at(index);
+    if (decimal_counter_width(field).has_value() &&
+        (!display_sources.contains(field.name) ||
+         field_used_as_packed_row_floor_display(program, field.name))) {
+      candidates.push_back(PackedCounterFieldCandidate{.field = &field, .index = index});
+    }
+  }
+
+  if (requested_names.has_value()) {
+    std::vector<PackedCounterFieldCandidate> selected;
+    selected.reserve(requested_names->size());
+    for (const std::string& name : *requested_names) {
+      const auto it = std::find_if(
+          candidates.begin(), candidates.end(), [&](const PackedCounterFieldCandidate& candidate) {
+            return candidate.field != nullptr && candidate.field->name == name;
+          });
+      if (it != candidates.end())
+        selected.push_back(*it);
+    }
+    const std::set<std::string> requested(requested_names->begin(), requested_names->end());
+    if (selected.size() == requested.size()) {
+      if (std::optional<PackedCounterStripePlan> plan =
+              build_packed_counter_storage_stripe_plan(program, selected)) {
+        plans.push_back(std::move(*plan));
+      }
+    }
+    return plans;
+  }
+
+  const std::size_t upper =
+      std::min(candidates.size(), static_cast<std::size_t>(kMaxPackedCounterStripeDigits));
+  for (std::size_t size = 2; size <= upper; ++size) {
+    std::vector<PackedCounterFieldCandidate> prefix;
+    collect_packed_counter_storage_combinations(program, candidates, size, 0, prefix, plans);
+  }
+  return plans;
+}
+
+std::optional<PackedCounterStripePlan>
+select_packed_counter_stripe_plan(const V2Program& program, bool include_storage_pairs,
+                                  const std::optional<std::vector<std::string>>& requested_names) {
+  if (requested_names.has_value()) {
+    const std::vector<PackedCounterStripePlan> plans =
+        select_packed_counter_storage_stripe_plans(program, requested_names);
+    return plans.empty() ? std::nullopt : std::optional<PackedCounterStripePlan>{plans.front()};
+  }
+  if (std::optional<PackedCounterStripePlan> display_plan =
+          select_packed_counter_display_stripe_plan(program)) {
+    return display_plan;
+  }
+  if (!include_storage_pairs)
+    return std::nullopt;
+  const std::vector<PackedCounterStripePlan> plans =
+      select_packed_counter_storage_stripe_plans(program, std::nullopt);
+  return plans.empty() ? std::nullopt : std::optional<PackedCounterStripePlan>{plans.front()};
+}
+
+std::string packed_counter_stripe_name_key(const std::vector<std::string>& names) {
+  std::vector<std::string> sorted = names;
+  std::sort(sorted.begin(), sorted.end());
+  return join_strings(sorted, std::string_view{"\0", 1});
+}
+
+std::vector<std::vector<std::string>>
+discover_packed_counter_stripe_variant_names(const std::string& source) {
+  ProgramAst ast;
+  try {
+    ast = parse_program(source);
+  } catch (const std::exception&) {
+    return {};
+  }
+  if (!ast.v2.has_value())
+    return {};
+
+  std::optional<std::string> display_key;
+  if (std::optional<PackedCounterStripePlan> display_plan =
+          select_packed_counter_display_stripe_plan(*ast.v2)) {
+    std::vector<std::string> names;
+    names.reserve(display_plan->stripes.size());
+    for (const PackedCounterStripe& stripe : display_plan->stripes)
+      names.push_back(stripe.name);
+    display_key = packed_counter_stripe_name_key(names);
+  }
+
+  std::set<std::string> seen;
+  std::vector<std::vector<std::string>> result;
+  for (const PackedCounterStripePlan& plan :
+       select_packed_counter_storage_stripe_plans(*ast.v2, std::nullopt)) {
+    std::vector<std::string> names;
+    names.reserve(plan.stripes.size());
+    for (const PackedCounterStripe& stripe : plan.stripes)
+      names.push_back(stripe.name);
+    const std::string key = packed_counter_stripe_name_key(names);
+    if ((display_key.has_value() && key == *display_key) || seen.contains(key))
+      continue;
+    seen.insert(key);
+    result.push_back(std::move(names));
+  }
+  return result;
 }
 
 const PackedCounterStripe* packed_counter_stripe_named(const PackedCounterStripePlan& plan,
@@ -25443,6 +25774,18 @@ DisplayItem rewrite_packed_counter_display_item(DisplayItem item,
   return item;
 }
 
+bool can_rewrite_packed_row_floor_display(const PackedCounterStripePlan& plan,
+                                          const DisplayItem& left, const DisplayItem* dot,
+                                          const DisplayItem* right) {
+  if (dot == nullptr || right == nullptr || left.kind != "source" || left.expr.has_value() ||
+      left.width.has_value() || dot->kind != "literal" || dot->text != "." ||
+      right->kind != "source" || !right->expr.has_value() || right->width.has_value()) {
+    return false;
+  }
+  const PackedCounterStripe* stripe = packed_counter_stripe_named(plan, left.name);
+  return stripe != nullptr && stripe->kind == "major";
+}
+
 std::vector<DisplayItem> rewrite_packed_counter_display_items(const std::vector<DisplayItem>& items,
                                                               const PackedCounterStripePlan& plan) {
   std::vector<DisplayItem> rewritten;
@@ -25456,6 +25799,14 @@ std::vector<DisplayItem> rewrite_packed_counter_display_items(const std::vector<
         dot->text == "." && right->kind == "source" && !right->expr.has_value() &&
         right->name == plan.compact_decimal_display->right) {
       rewritten.push_back(DisplayItem{.kind = "source", .name = plan.packed, .line = left.line});
+      index += 2U;
+      continue;
+    }
+    if (!plan.compact_decimal_display.has_value() &&
+        can_rewrite_packed_row_floor_display(plan, left, dot, right)) {
+      rewritten.push_back(DisplayItem{.kind = "source", .name = plan.packed, .line = left.line});
+      rewritten.push_back(*dot);
+      rewritten.push_back(rewrite_packed_counter_display_item(*right, plan));
       index += 2U;
       continue;
     }
@@ -25510,9 +25861,11 @@ void rewrite_packed_counter_statement(V2Statement& statement, const PackedCounte
     rewrite_packed_counter_statement(*statement.otherwise, plan);
 }
 
-void pack_counter_display_stripes(V2Program& program,
-                                  std::vector<OptimizationReport>& optimizations) {
-  std::optional<PackedCounterStripePlan> plan = select_packed_counter_display_stripe_plan(program);
+void pack_counter_stripes(V2Program& program, std::vector<OptimizationReport>& optimizations,
+                          bool include_storage_pairs,
+                          const std::optional<std::vector<std::string>>& requested_names) {
+  std::optional<PackedCounterStripePlan> plan =
+      select_packed_counter_stripe_plan(program, include_storage_pairs, requested_names);
   if (!plan.has_value())
     return;
 
@@ -25595,19 +25948,21 @@ bool can_inline_floor_packed_row_display_expression(const V2Program& program,
 }
 
 std::vector<V2Statement> materialize_display_expression_statements(
-    const V2Program& program, std::vector<V2Statement> statements, int& materialized,
-    int& residual_elisions, bool inline_floor_packed_row_expressions,
+    const V2Program& program, std::vector<V2Statement> statements,
+    std::vector<V2StateField>& materialized_fields, int& materialized, int& residual_elisions,
+    bool inline_floor_packed_row_expressions,
     const std::optional<Expression>& first_statement_residual_elision = std::nullopt);
 
 void materialize_display_expression_child(const V2Program& program, V2StatementPtr& child,
+                                          std::vector<V2StateField>& materialized_fields,
                                           int& materialized, int& residual_elisions,
                                           bool inline_floor_packed_row_expressions) {
   if (child == nullptr)
     return;
   std::vector<V2Statement> statements{*child};
-  statements = materialize_display_expression_statements(program, std::move(statements),
-                                                         materialized, residual_elisions,
-                                                         inline_floor_packed_row_expressions);
+  statements = materialize_display_expression_statements(
+      program, std::move(statements), materialized_fields, materialized, residual_elisions,
+      inline_floor_packed_row_expressions);
   if (!statements.empty())
     *child = statements.size() == 1U ? std::move(statements.front())
                                      : V2Statement{
@@ -25618,8 +25973,9 @@ void materialize_display_expression_child(const V2Program& program, V2StatementP
 }
 
 std::vector<V2Statement> materialize_display_expression_statements(
-    const V2Program& program, std::vector<V2Statement> statements, int& materialized,
-    int& residual_elisions, bool inline_floor_packed_row_expressions,
+    const V2Program& program, std::vector<V2Statement> statements,
+    std::vector<V2StateField>& materialized_fields, int& materialized, int& residual_elisions,
+    bool inline_floor_packed_row_expressions,
     const std::optional<Expression>& first_statement_residual_elision) {
   std::vector<V2Statement> result;
   result.reserve(statements.size());
@@ -25631,20 +25987,22 @@ std::vector<V2Statement> materialize_display_expression_statements(
 
     const std::optional<Expression> else_residual_elision =
         residual_expression_for_guarded_update_display(statement);
-    statement.body = materialize_display_expression_statements(program, std::move(statement.body),
-                                                               materialized, residual_elisions,
-                                                               inline_floor_packed_row_expressions);
-    statement.then_body = materialize_display_expression_statements(
-        program, std::move(statement.then_body), materialized, residual_elisions,
+    statement.body = materialize_display_expression_statements(
+        program, std::move(statement.body), materialized_fields, materialized, residual_elisions,
         inline_floor_packed_row_expressions);
+    statement.then_body = materialize_display_expression_statements(
+        program, std::move(statement.then_body), materialized_fields, materialized,
+        residual_elisions, inline_floor_packed_row_expressions);
     statement.else_body = materialize_display_expression_statements(
-        program, std::move(statement.else_body), materialized, residual_elisions,
-        inline_floor_packed_row_expressions, else_residual_elision);
+        program, std::move(statement.else_body), materialized_fields, materialized,
+        residual_elisions, inline_floor_packed_row_expressions, else_residual_elision);
     for (V2MatchCase& match_case : statement.cases)
-      materialize_display_expression_child(program, match_case.action, materialized,
-                                           residual_elisions, inline_floor_packed_row_expressions);
-    materialize_display_expression_child(program, statement.otherwise, materialized,
-                                         residual_elisions, inline_floor_packed_row_expressions);
+      materialize_display_expression_child(program, match_case.action, materialized_fields,
+                                           materialized, residual_elisions,
+                                           inline_floor_packed_row_expressions);
+    materialize_display_expression_child(program, statement.otherwise, materialized_fields,
+                                         materialized, residual_elisions,
+                                         inline_floor_packed_row_expressions);
 
     std::vector<V2Statement> assignments;
     if (elide_display_materialization) {
@@ -25665,6 +26023,14 @@ std::vector<V2Statement> materialize_display_expression_statements(
             .expr = expression_to_source(*item.expr),
             .line = item.line,
         });
+        if (can_inline_floor_packed_row_display_expression(program, statement, index)) {
+          materialized_fields.push_back(V2StateField{
+              .name = target,
+              .type = "packed",
+              .initial = std::string("0"),
+              .line = item.line,
+          });
+        }
         item.name = target;
         item.expr.reset();
         ++materialized;
@@ -25681,13 +26047,15 @@ void materialize_display_expressions(V2Program& program,
                                      bool inline_floor_packed_row_expressions) {
   int materialized = 0;
   int residual_elisions = 0;
-  program.body = materialize_display_expression_statements(program, std::move(program.body),
-                                                           materialized, residual_elisions,
-                                                           inline_floor_packed_row_expressions);
+  std::vector<V2StateField> materialized_fields;
+  program.body = materialize_display_expression_statements(
+      program, std::move(program.body), materialized_fields, materialized, residual_elisions,
+      inline_floor_packed_row_expressions);
   for (V2Rule& rule : program.rules)
-    rule.body = materialize_display_expression_statements(program, std::move(rule.body),
-                                                          materialized, residual_elisions,
-                                                          inline_floor_packed_row_expressions);
+    rule.body = materialize_display_expression_statements(
+        program, std::move(rule.body), materialized_fields, materialized, residual_elisions,
+        inline_floor_packed_row_expressions);
+  program.state.insert(program.state.end(), materialized_fields.begin(), materialized_fields.end());
   if (residual_elisions > 0) {
     optimizations.push_back(OptimizationReport{
         .name = "residual-display-materialization-elision",
@@ -26864,7 +27232,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                     "-digit MK-61 program.",
       });
     } else {
-      pack_counter_display_stripes(*ast.v2, context.optimizations);
+      pack_counter_stripes(*ast.v2, context.optimizations, false, std::nullopt);
+      if (options.pack_counter_stripes) {
+        const std::optional<std::vector<std::string>> requested_names =
+            options.pack_counter_stripe_names.empty()
+                ? std::nullopt
+                : std::optional<std::vector<std::string>>{options.pack_counter_stripe_names};
+        pack_counter_stripes(*ast.v2, context.optimizations, true, requested_names);
+      }
       materialize_display_expressions(*ast.v2, context.optimizations,
                                       options.inline_floor_packed_row_expressions);
       elide_x_param_return_state_fields(*ast.v2, context.optimizations);
@@ -27285,12 +27660,15 @@ std::string implemented_candidate_key(const CompileOptions& options) {
       << ";guarded_prologue_gadgets=" << options.guarded_prologue_gadgets
       << ";compact_bit_mask_helper_body=" << options.compact_bit_mask_helper_body
       << ";domain_error_guards=" << options.domain_error_guards
+      << ";pack_counter_stripes=" << options.pack_counter_stripes
       << ";dead_source_residual_temp_reuse=" << options.dead_source_residual_temp_reuse
       << ";hoist_shared_helpers=" << options.hoist_shared_helpers
       << ";hoist_procs=" << options.hoist_procs
       << ";order_procs_by_call_count=" << options.order_procs_by_call_count
       << ";proc_layout_strategy=" << options.proc_layout_strategy
       << ";collect_coalesce_shares=" << options.collect_coalesce_shares;
+  for (const std::string& name : options.pack_counter_stripe_names)
+    out << ";pack_counter_stripe_name=" << name;
   for (const auto& [value, reg] : options.preloaded_constant_registers)
     out << ";preloaded_constant=" << value << ":" << reg;
   for (const std::string& value : options.suppress_constant_preloads)
@@ -27607,6 +27985,17 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       [](CompileOptions& candidate_options) { candidate_options.pack_counter_stripes = true; },
       "packed-counter-stripes",
       "Packed compatible fixed-width counters into one hidden decimal-striped register");
+  for (const std::vector<std::string>& names :
+       discover_packed_counter_stripe_variant_names(source)) {
+    add_candidate(
+        [names](CompileOptions& candidate_options) {
+          candidate_options.pack_counter_stripes = true;
+          candidate_options.pack_counter_stripe_names = names;
+        },
+        "packed-counter-stripes:" + join_strings(names, "+"),
+        "Packed counters " + join_strings(names, ", ") +
+            " into one hidden decimal-striped register");
+  }
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.canonicalize_repeated_unary_update_args = true;
