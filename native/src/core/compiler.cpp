@@ -10463,6 +10463,268 @@ bool lower_literal_terminal_stop(LoweringContext& context, const std::string& li
   return false;
 }
 
+struct RawTarget {
+  IrTarget target;
+  std::optional<int> formal_opcode;
+};
+
+struct RawInstruction {
+  int opcode = 0;
+  std::string mnemonic;
+  std::optional<RawTarget> target;
+  std::optional<std::string> comment;
+};
+
+std::optional<int> parse_hex_byte_text(const std::string& text) {
+  static const std::regex hex_regex(R"(^[0-9A-Fa-f]{2}$)");
+  if (!std::regex_match(text, hex_regex))
+    return std::nullopt;
+  return std::stoi(text, nullptr, 16);
+}
+
+std::string normalize_raw_opcode_text(std::string text) {
+  text = trim_ascii(std::move(text));
+  text = std::regex_replace(text, std::regex(R"(\s+)"), " ");
+  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())) != 0)
+    text.erase(text.begin());
+  while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back())) != 0)
+    text.pop_back();
+  return text;
+}
+
+RawTarget parse_raw_target(const std::string& text) {
+  if (const std::optional<int> formal = parse_formal_address_opcode(text)) {
+    return RawTarget{.target = formal_address_info(*formal).ordinal, .formal_opcode = formal};
+  }
+  return RawTarget{.target = text};
+}
+
+int raw_direct_opcode(std::string text) {
+  text = normalize_raw_opcode_text(std::move(text));
+  text = std::regex_replace(text, std::regex("≠"), "!=");
+  text = std::regex_replace(text, std::regex("≥"), ">=");
+  if (text == "БП")
+    return 0x51;
+  if (text == "ПП")
+    return 0x53;
+  if (text == "F x<0")
+    return 0x5c;
+  if (text == "F x=0")
+    return 0x5e;
+  if (text == "F x!=0")
+    return 0x57;
+  if (text == "F x>=0")
+    return 0x59;
+  if (text == "F L0")
+    return 0x5d;
+  if (text == "F L1")
+    return 0x5b;
+  if (text == "F L2")
+    return 0x58;
+  if (text == "F L3")
+    return 0x5a;
+  throw std::runtime_error("Unknown direct raw opcode " + text);
+}
+
+int raw_indirect_base(std::string text) {
+  text = normalize_raw_opcode_text(std::move(text));
+  text = std::regex_replace(text, std::regex("→"), "->");
+  text = std::regex_replace(text, std::regex("≠"), "!=");
+  text = std::regex_replace(text, std::regex("≥"), ">=");
+  const std::string lower = lower_ascii(text);
+  if (lower == "x!=0")
+    return 0x70;
+  if (lower == "бп")
+    return 0x80;
+  if (lower == "x>=0")
+    return 0x90;
+  if (lower == "пп")
+    return 0xa0;
+  if (lower == "x->п")
+    return 0xb0;
+  if (lower == "x<0")
+    return 0xc0;
+  if (lower == "п->x")
+    return 0xd0;
+  if (lower == "x=0")
+    return 0xe0;
+  throw std::runtime_error("Unknown indirect raw opcode " + text);
+}
+
+std::optional<RawInstruction> parse_raw_instruction(const std::string& raw_text) {
+  const std::string text = trim_ascii(raw_text);
+  if (const std::optional<int> opcode = parse_hex_byte_text(text)) {
+    const OpcodeInfo& info = opcode_by_code(*opcode);
+    return RawInstruction{.opcode = *opcode, .mnemonic = info.name, .comment = "raw hex"};
+  }
+
+  std::smatch match;
+  static const std::regex direct_regex(
+      R"(^(БП|ПП|F\s*x<0|F\s*x=0|F\s*x(?:!=|≠)0|F\s*x(?:>=|≥)0|F\s*L[0-3])\s+([A-Za-z_][A-Za-z0-9_]*|[0-9A-Fa-f]{2})$)",
+      std::regex_constants::icase);
+  if (std::regex_match(text, match, direct_regex)) {
+    const int opcode = raw_direct_opcode(match[1].str());
+    return RawInstruction{
+        .opcode = opcode,
+        .mnemonic = opcode_by_code(opcode).name,
+        .target = parse_raw_target(match[2].str()),
+        .comment = "raw branch",
+    };
+  }
+
+  static const std::regex compact_store_regex(R"(^хП(.+)$)", std::regex_constants::icase);
+  if (std::regex_match(text, match, compact_store_regex)) {
+    const std::string reg = register_from_text(match[1].str());
+    return RawInstruction{
+        .opcode = 0x40 + register_index(reg),
+        .mnemonic = "X->П " + reg,
+    };
+  }
+
+  static const std::regex compact_recall_regex(R"(^Пх(.+)$)", std::regex_constants::icase);
+  if (std::regex_match(text, match, compact_recall_regex)) {
+    const std::string reg = register_from_text(match[1].str());
+    return RawInstruction{
+        .opcode = 0x60 + register_index(reg),
+        .mnemonic = "П->X " + reg,
+    };
+  }
+
+  static const std::regex direct_memory_regex(R"(^(X(?:->|→)П|П(?:->|→)X)\s+R?(.+)$)",
+                                             std::regex_constants::icase);
+  if (std::regex_match(text, match, direct_memory_regex)) {
+    const std::string op =
+        std::regex_replace(match[1].str(), std::regex("→"), "->");
+    const std::string reg = register_from_text(match[2].str());
+    const int base = op.starts_with("X") ? 0x40 : 0x60;
+    return RawInstruction{
+        .opcode = base + register_index(reg),
+        .mnemonic = op + " " + reg,
+    };
+  }
+
+  static const std::regex indirect_regex(
+      R"(^К\s*(БП|ПП|X(?:->|→)П|П(?:->|→)X|x(?:!=|≠)0|x(?:>=|≥)0|x<0|x=0)\s*R?(.+)$)",
+      std::regex_constants::icase);
+  if (std::regex_match(text, match, indirect_regex)) {
+    const std::string op = std::regex_replace(match[1].str(), std::regex("→"), "->");
+    const std::string reg = register_from_text(match[2].str());
+    return RawInstruction{
+        .opcode = raw_indirect_base(op) + register_index(reg),
+        .mnemonic = "К " + op + " " + reg,
+    };
+  }
+
+  static const std::regex compact_indirect_regex(R"(^К(БП|ПП|Пх|хП)(.+)$)",
+                                                std::regex_constants::icase);
+  if (std::regex_match(text, match, compact_indirect_regex)) {
+    const std::string compact_op = match[1].str();
+    const std::string op =
+        compact_op == "Пх" ? "П->X" : compact_op == "хП" ? "X->П" : compact_op;
+    const std::string reg = register_from_text(match[2].str());
+    return RawInstruction{
+        .opcode = raw_indirect_base(op) + register_index(reg),
+        .mnemonic = "К " + op + " " + reg,
+    };
+  }
+
+  if (const OpcodeInfo* found = find_opcode_name(text)) {
+    return RawInstruction{.opcode = found->code, .mnemonic = found->name};
+  }
+
+  return std::nullopt;
+}
+
+std::vector<V2RawInput> ordered_raw_inputs(const std::vector<V2RawInput>& inputs) {
+  std::vector<V2RawInput> result = inputs;
+  const auto slot_order = [](const std::string& slot) {
+    if (slot == "T")
+      return 0;
+    if (slot == "Z")
+      return 1;
+    if (slot == "Y")
+      return 2;
+    return 3;
+  };
+  std::stable_sort(result.begin(), result.end(), [&](const V2RawInput& left,
+                                                     const V2RawInput& right) {
+    return slot_order(left.slot) < slot_order(right.slot);
+  });
+  return result;
+}
+
+std::string format_raw_contract_detail(const V2Statement& statement) {
+  std::vector<std::string> input_parts;
+  for (const V2RawInput& input : ordered_raw_inputs(statement.inputs))
+    input_parts.push_back(input.slot + "=" + input.expr);
+  std::vector<std::string> output_parts;
+  for (const V2RawOutput& output : statement.outputs)
+    output_parts.push_back(output.slot + "->" + output.target);
+  const std::string inputs =
+      input_parts.empty() ? "takes none" : "takes " + join_strings(input_parts, ", ");
+  const std::string outputs =
+      output_parts.empty() ? "returns none" : "returns " + join_strings(output_parts, ", ");
+  const std::string clobbers =
+      statement.clobbers.empty() ? "clobbers unknown"
+                                 : "clobbers " + join_strings(statement.clobbers, ", ");
+  const std::string preserves =
+      statement.preserves.empty() ? "preserves unknown"
+                                  : "preserves " + join_strings(statement.preserves, ", ");
+  return "Inserted raw MK-61 block at line " + std::to_string(statement.line) + ": " + inputs +
+         "; " + outputs + "; " + clobbers + "; " + preserves + ".";
+}
+
+bool lower_raw_statement(LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_raw")
+    return false;
+
+  for (const V2RawInput& input : ordered_raw_inputs(statement.inputs)) {
+    if (!lower_expression_to_x(context, parse_expression(input.expr, input.line)))
+      return false;
+  }
+
+  for (const RawBlockLine& line : statement.lines) {
+    if (line.text.ends_with(":")) {
+      context.emitter.emit_label(line.text.substr(0, line.text.size() - 1U));
+      continue;
+    }
+    const std::optional<RawInstruction> parsed = parse_raw_instruction(line.text);
+    if (!parsed.has_value()) {
+      context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                               "Unknown raw instruction '" + line.text + "'"));
+      return false;
+    }
+    context.emitter.emit_op(parsed->opcode, parsed->mnemonic, parsed->comment, line.line, true);
+    if (parsed->opcode == 0x5f) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "raw-display-5f",
+          .detail = "Raw block uses opcode 5F as a display-state transform at line " +
+                    std::to_string(line.line) + ".",
+      });
+    }
+    if (parsed->target.has_value()) {
+      const std::string comment = parsed->comment.value_or(parsed->mnemonic);
+      if (parsed->target->formal_opcode.has_value()) {
+        context.emitter.emit_formal_address(*parsed->target->formal_opcode, comment, line.line);
+      } else {
+        context.emitter.emit_address(parsed->target->target, comment, line.line);
+      }
+    }
+  }
+
+  for (const V2RawOutput& output : statement.outputs)
+    emit_store(context, output.target, "raw returns " + output.slot);
+
+  if (!statement.inputs.empty() || !statement.outputs.empty() || !statement.clobbers.empty() ||
+      !statement.preserves.empty()) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "raw-block-contract",
+        .detail = format_raw_contract_detail(statement),
+    });
+  }
+  return true;
+}
+
 bool lower_decrement_update(LoweringContext& context, const std::string& target,
                             std::string comment_prefix) {
   emit_recall(context, target);
@@ -17269,6 +17531,10 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
 
   if (statement.kind == "v2_preview") {
     return lower_preview_statement(context, statement);
+  }
+
+  if (statement.kind == "v2_raw") {
+    return lower_raw_statement(context, statement);
   }
 
   if (statement.kind == "v2_stop") {

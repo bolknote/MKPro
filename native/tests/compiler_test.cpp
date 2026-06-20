@@ -6558,6 +6558,120 @@ program DecimalLiteralDisplay {
   require(decimal_literal_display_statement.listing.find("negative number") != std::string::npos,
           "negative decimal literal display should preserve the sign");
 
+  const CompileResult raw_rule = compile_source(R"mkpro(
+program RawRule {
+  state {
+    value: packed = 2
+    result: packed = 0
+  }
+  loop {
+    hack()
+    halt(result)
+  }
+  fn hack() {
+    raw {
+      takes Y = value, X = 3
+      returns X -> result
+      clobbers X, Y, X1
+      preserves state
+      code {
+        +
+        К ИНВ
+      }
+    }
+  }
+}
+)mkpro");
+  require(raw_rule.implemented, "native compiler should lower contracted raw blocks");
+  require(raw_rule.diagnostics.empty(), "contracted raw block compile should not report diagnostics");
+  require(has_optimization(raw_rule, "raw-block-contract"),
+          "contracted raw block should report raw-block-contract");
+  require(std::any_of(raw_rule.steps.begin(), raw_rule.steps.end(), [](const ResolvedStep& step) {
+            return step.opcode == 0x10;
+          }),
+          "contracted raw block should emit raw plus opcode");
+  require(std::any_of(raw_rule.steps.begin(), raw_rule.steps.end(), [](const ResolvedStep& step) {
+            return step.opcode == 0x3a;
+          }),
+          "contracted raw block should emit raw K INV opcode");
+  require(std::any_of(raw_rule.items.begin(), raw_rule.items.end(), [](const MachineItem& item) {
+            return item.raw && item.opcode == 0x3a;
+          }),
+          "contracted raw block should mark raw opcodes as optimizer barriers");
+  require(std::any_of(raw_rule.steps.begin(), raw_rule.steps.end(), [](const ResolvedStep& step) {
+            return step.comment == "raw returns X";
+          }),
+          "contracted raw block should store declared raw output");
+
+  const CompileResult raw_display_5f = compile_source(R"mkpro(
+program RawDisplay5F {
+  state {
+    out: packed = 0
+  }
+  loop {
+    raw {
+      clobbers X
+      preserves state
+      code {
+        5F
+      }
+    }
+    halt(out)
+  }
+}
+)mkpro");
+  require(raw_display_5f.implemented, "native compiler should lower raw hex opcode 5F");
+  require(raw_display_5f.diagnostics.empty(), "raw 5F compile should not report diagnostics");
+  require(has_optimization(raw_display_5f, "raw-display-5f"),
+          "raw 5F should report raw-display-5f");
+  require(std::any_of(raw_display_5f.steps.begin(), raw_display_5f.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x5f && step.comment == "raw hex";
+                      }),
+          "raw 5F should emit opcode 5F as raw hex");
+
+  const CompileResult raw_formal_address = compile_source(R"mkpro(
+program RawFormalAddress {
+  loop {
+    raw {
+      clobbers X
+      preserves state
+      code {
+        БП C5
+      }
+    }
+    halt(0)
+  }
+}
+)mkpro");
+  require(raw_formal_address.implemented,
+          "native compiler should lower raw branches with formal operands");
+  require(raw_formal_address.diagnostics.empty(),
+          "raw formal address compile should not report diagnostics");
+  require(raw_formal_address.steps.size() >= 2, "raw formal branch should emit opcode and operand");
+  require(raw_formal_address.steps.at(0).hex == "51", "raw formal branch should emit BP opcode");
+  require(raw_formal_address.steps.at(1).hex == "C5",
+          "raw formal branch should keep the formal operand byte");
+  require(raw_formal_address.steps.at(1).comment.has_value() &&
+              raw_formal_address.steps.at(1).comment->find("formal C5->13") != std::string::npos,
+          "raw formal branch should annotate the formal address mapping");
+
+  const CompileResult bad_raw_opcode = compile_source(R"mkpro(
+program BadRawOpcode {
+  loop {
+    raw {
+      clobbers X
+      preserves state
+      code {
+        definitely_not_an_opcode
+      }
+    }
+  }
+}
+)mkpro");
+  require(has_error_diagnostic(bad_raw_opcode),
+          "unknown raw instructions should be native compile errors");
+
   const CompileResult const_statement = compile_source(R"mkpro(
 program ConstValues {
   const LIMIT = 3
