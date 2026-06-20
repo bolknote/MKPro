@@ -24116,6 +24116,17 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                       " compile-time const declaration" + (ast.v2->consts.size() == 1 ? "." : "s."),
         });
       }
+      const bool has_initial_state =
+          std::any_of(ast.v2->state.begin(), ast.v2->state.end(), [](const V2StateField& field) {
+            return field.initial.has_value() || field.initial_stack.has_value();
+          });
+      if (has_initial_state) {
+        context.optimizations.push_back(OptimizationReport{
+            .name = "auto-preload-initial-state",
+            .detail = "Moved initial state into setup/preload values so official program cells "
+                      "stay focused on turn logic.",
+        });
+      }
       context.optimizations.push_back(OptimizationReport{
           .name = "intent-domain-lowering",
           .detail = "Lowered " + std::to_string(ast.v2->state.size()) + " state fields and " +

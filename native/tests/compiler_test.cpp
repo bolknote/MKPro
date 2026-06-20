@@ -4357,6 +4357,8 @@ program StackSetup {
   require(stack_setup.implemented, "native compiler should lower stack setup state");
   require(stack_setup.diagnostics.empty(), "stack setup compile should not report diagnostics");
   require(stack_setup.setup_program.has_value(), "stack setup state should expose a setup program");
+  require(has_optimization(stack_setup, "auto-preload-initial-state"),
+          "stack setup state should report the TS auto-preload strategy name");
   require(stack_setup.setup_listing.find("setup from stack.Y") != std::string::npos,
           "setup should move stack.Y into X before storing Y-sourced fields");
   require(stack_setup.setup_listing.find("restore stack.X after stack.Y setup") !=
