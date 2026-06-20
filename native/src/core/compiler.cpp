@@ -19800,6 +19800,94 @@ bool lower_repeated_assignment_counted_loop_reuse_run(LoweringContext& context,
   return false;
 }
 
+bool repeated_assignment_feeds_later_unit_decrement_loop(
+    LoweringContext& context, const std::vector<V2Statement>& statements, std::size_t index) {
+  const V2Statement& initializer = statements.at(index);
+  if (initializer.kind != "v2_assign" || !initializer.target.has_value() ||
+      !initializer.expr.has_value())
+    return false;
+  const Expression target = parse_expression(*initializer.target, initializer.line);
+  if (target.kind != "identifier")
+    return false;
+  const Expression initial_expression = parse_expression(*initializer.expr, initializer.line);
+  const std::optional<int> initial_value = integer_value_of_expression(context, initial_expression);
+  if (!initial_value.has_value() || *initial_value < 1)
+    return false;
+  const auto register_it = context.register_index_by_name.find(target.name);
+  if (register_it == context.register_index_by_name.end() ||
+      !fl_loop_opcode_for_register(register_it->second).has_value())
+    return false;
+
+  for (std::size_t cursor = index + 1U; cursor < statements.size(); ++cursor) {
+    const V2Statement& statement = statements.at(cursor);
+    if (statement.kind == "v2_while") {
+      const std::optional<std::string> counted_target =
+          unit_decrement_counted_while_target(context, statement);
+      return counted_target.has_value() && *counted_target == target.name;
+    }
+    if (!intervening_statement_is_safe_for_counted_loop(context, statement, target.name))
+      return false;
+  }
+  return false;
+}
+
+bool lower_repeated_assignment_value_run(LoweringContext& context,
+                                         const std::vector<V2Statement>& statements,
+                                         std::size_t index, std::size_t& consumed) {
+  consumed = 0;
+  const V2Statement& first = statements.at(index);
+  if (first.kind != "v2_assign" || !first.target.has_value() || !first.expr.has_value())
+    return false;
+  const Expression first_target = parse_expression(*first.target, first.line);
+  if (first_target.kind != "identifier" ||
+      !context.register_index_by_name.contains(first_target.name))
+    return false;
+  const Expression first_expression = parse_expression(*first.expr, first.line);
+  if (!expression_pure_for_substitution(first_expression))
+    return false;
+
+  std::size_t end = index + 1U;
+  for (; end < statements.size(); ++end) {
+    const V2Statement& candidate = statements.at(end);
+    if (candidate.kind != "v2_assign" || !candidate.target.has_value() ||
+        !candidate.expr.has_value())
+      break;
+    const Expression candidate_expression = parse_expression(*candidate.expr, candidate.line);
+    if (!expression_equals(candidate_expression, first_expression))
+      break;
+    if (repeated_assignment_feeds_later_unit_decrement_loop(context, statements, end))
+      break;
+  }
+
+  if (end - index <= 1U)
+    return false;
+
+  std::vector<std::string> targets;
+  targets.reserve(end - index);
+  for (std::size_t store_index = index; store_index < end; ++store_index) {
+    const V2Statement& assignment = statements.at(store_index);
+    if (!assignment.target.has_value())
+      return false;
+    const Expression target = parse_expression(*assignment.target, assignment.line);
+    if (target.kind != "identifier" || !context.register_index_by_name.contains(target.name))
+      return false;
+    targets.push_back(target.name);
+  }
+
+  if (!lower_expression_to_x(context, first_expression))
+    return false;
+  for (const std::string& target : targets) {
+    emit_store(context, target, "set " + target);
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "repeated-assignment-value-reuse",
+      .detail = "Stored one computed value into " + std::to_string(targets.size()) +
+                " consecutive assignment targets at line " + std::to_string(first.line) + ".",
+  });
+  consumed = end - index;
+  return true;
+}
+
 std::optional<std::string> random_update_proc_target(LoweringContext& context,
                                                      const std::string& name) {
   const auto rule_it = context.rules.find(name);
@@ -21397,6 +21485,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     counted_consumed = 0;
     if (lower_initialized_counted_while_run(context, statements, index, counted_consumed)) {
       index += counted_consumed - 1;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    std::size_t repeated_assignment_consumed = 0;
+    if (lower_repeated_assignment_value_run(context, statements, index,
+                                            repeated_assignment_consumed)) {
+      index += repeated_assignment_consumed - 1U;
       continue;
     }
     if (has_errors(context.diagnostics))

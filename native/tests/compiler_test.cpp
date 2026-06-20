@@ -1817,6 +1817,37 @@ program RepeatedInitDoesNotHideCounted {
   require(repeated_init_counted.listing.find("counted while x") != std::string::npos,
           "repeated counted-loop initializer should use an F Lx counted loop back edge");
 
+  const CompileResult repeated_assignment_value = compile_source(R"mkpro(
+program RepeatedAssignmentValue {
+  state {
+    base: packed = 3
+    first: packed = 0
+    second: packed = 0
+    third: packed = 0
+  }
+
+  loop {
+    first = base + 2
+    second = base + 2
+    third = base + 2
+    halt(third)
+  }
+}
+)mkpro");
+  require(repeated_assignment_value.implemented,
+          "native compiler should lower repeated assignment value reuse");
+  require(repeated_assignment_value.diagnostics.empty(),
+          "repeated assignment value compile should not report diagnostics");
+  require(has_optimization(repeated_assignment_value, "repeated-assignment-value-reuse"),
+          "repeated assignment value should report the TS strategy name");
+  const std::size_t base_recalls = static_cast<std::size_t>(std::count_if(
+      repeated_assignment_value.steps.begin(), repeated_assignment_value.steps.end(),
+      [](const ResolvedStep& step) {
+        return step.comment.has_value() && *step.comment == "recall base";
+      }));
+  require(base_recalls == 1U,
+          "repeated assignment value reuse should compute base + 2 only once");
+
   for (const char* condition : {"ticks > 0", "1 <= ticks", "0 < ticks"}) {
     const CompileResult counted_while_alt = compile_source(std::string(R"mkpro(
 program CountedWhileAlt {
