@@ -2902,6 +2902,55 @@ program ArithmeticIfComparisonUpdate {
                        }),
           "arithmetic-if comparison update should not emit the original branch test");
 
+  const CompileResult boundary_normalize = compile_source(R"mkpro(
+program BoundaryNormalize {
+  state {
+    fuel: counter 0..9 = 4
+  }
+  loop {
+    if fuel <= -1 {
+      fuel--
+      show(0)
+    }
+    halt(fuel)
+  }
+}
+)mkpro");
+  require(boundary_normalize.implemented,
+          "native compiler should normalize adjacent integer comparison bounds");
+  require(boundary_normalize.diagnostics.empty(),
+          "boundary normalization should not report diagnostics");
+  require(has_optimization(boundary_normalize, "comparison-boundary-normalization"),
+          "boundary normalization should report the TS strategy name");
+
+  const CompileResult difference_zero_normalize = compile_source(R"mkpro(
+program DifferenceZeroNormalize {
+  state {
+    left: packed = 3
+    right: packed = 5
+    result: packed = 0
+  }
+  loop {
+    if left - right <= 0 {
+      result = 1
+    }
+    else {
+      result = 2
+    }
+    halt(result)
+  }
+}
+)mkpro");
+  require(difference_zero_normalize.implemented,
+          "native compiler should normalize subtraction-against-zero comparisons");
+  require(difference_zero_normalize.diagnostics.empty(),
+          "difference zero normalization should not report diagnostics");
+  require(has_optimization(difference_zero_normalize, "comparison-boundary-normalization"),
+          "difference zero normalization should report the TS strategy name");
+  require(has_optimization_detail(difference_zero_normalize,
+                                  "comparison-boundary-normalization", "right - left >= 0"),
+          "difference zero normalization should preserve the TS normalized predicate shape");
+
   const CompileResult indexed_store_guard = compile_source(R"mkpro(
 program IndexedStoreGuard {
   state {

@@ -12632,6 +12632,125 @@ bool lower_cells_contains_false_branch_with_spatial_hit_helper(
   return true;
 }
 
+std::string swap_comparison_sides_op(const std::string& op) {
+  if (op == "<")
+    return ">";
+  if (op == "<=")
+    return ">=";
+  if (op == ">")
+    return "<";
+  if (op == ">=")
+    return "<=";
+  return op;
+}
+
+std::string condition_text(const V2Predicate& predicate) {
+  return predicate.left + " " + predicate.op + " " + predicate.right;
+}
+
+bool is_known_integer_condition_expression(const LoweringContext& context,
+                                           const Expression& expression) {
+  if (expression.kind != "identifier")
+    return false;
+  const auto field_it = context.state_fields.find(expression.name);
+  if (field_it == context.state_fields.end() || field_it->second == nullptr)
+    return false;
+  const V2StateField& field = *field_it->second;
+  if (field.type == "flag")
+    return true;
+  if (field.type != "counter" && field.type != "range")
+    return false;
+  return field.min.has_value() && field.max.has_value() &&
+         guarded_is_safe_integer_value(static_cast<double>(*field.min)) &&
+         guarded_is_safe_integer_value(static_cast<double>(*field.max));
+}
+
+std::optional<std::pair<std::string, long long>>
+shifted_integer_boundary(const std::string& op, long long value) {
+  if (op == "<" && value > std::numeric_limits<long long>::min())
+    return std::pair<std::string, long long>{"<=", value - 1};
+  if (op == "<=" && value < std::numeric_limits<long long>::max())
+    return std::pair<std::string, long long>{"<", value + 1};
+  if (op == ">" && value < std::numeric_limits<long long>::max())
+    return std::pair<std::string, long long>{">=", value + 1};
+  if (op == ">=" && value > std::numeric_limits<long long>::min())
+    return std::pair<std::string, long long>{">", value - 1};
+  return std::nullopt;
+}
+
+std::vector<V2Predicate> equivalent_condition_candidates(const LoweringContext& context,
+                                                         const V2Predicate& predicate,
+                                                         int line) {
+  std::vector<V2Predicate> candidates{predicate};
+  const auto add = [&](V2Predicate candidate) {
+    if (std::none_of(candidates.begin(), candidates.end(), [&](const V2Predicate& existing) {
+          return common_branch_predicate_equals(existing, candidate, line);
+        })) {
+      candidates.push_back(std::move(candidate));
+    }
+  };
+
+  try {
+    const Expression left = parse_expression(predicate.left, line);
+    const Expression right = parse_expression(predicate.right, line);
+    if (left.kind == "number") {
+      V2Predicate flipped = predicate;
+      flipped.left = predicate.right;
+      flipped.op = swap_comparison_sides_op(predicate.op);
+      flipped.right = predicate.left;
+      add(std::move(flipped));
+    }
+    if (guarded_expression_is_zero(right) && left.kind == "binary" && left.op == "-" &&
+        left.left != nullptr && left.right != nullptr &&
+        common_branch_expression_is_deterministic(*left.left) &&
+        common_branch_expression_is_deterministic(*left.right)) {
+      V2Predicate negated = predicate;
+      negated.left = expression_to_source(subtract_expression(*left.right, *left.left));
+      negated.op = swap_comparison_sides_op(predicate.op);
+      add(std::move(negated));
+    }
+  } catch (const std::exception&) {
+  }
+
+  const std::vector<V2Predicate> current = candidates;
+  for (const V2Predicate& candidate : current) {
+    try {
+      const Expression left = parse_expression(candidate.left, line);
+      const Expression right = parse_expression(candidate.right, line);
+      const std::optional<double> value = numeric_literal_value(right);
+      if (!is_known_integer_condition_expression(context, left) || !value.has_value() ||
+          !guarded_is_safe_integer_value(*value)) {
+        continue;
+      }
+      const std::optional<std::pair<std::string, long long>> shifted =
+          shifted_integer_boundary(candidate.op, static_cast<long long>(std::llround(*value)));
+      if (!shifted.has_value())
+        continue;
+      V2Predicate boundary = candidate;
+      boundary.op = shifted->first;
+      boundary.right = format_number_literal(static_cast<double>(shifted->second));
+      add(std::move(boundary));
+    } catch (const std::exception&) {
+    }
+  }
+  return candidates;
+}
+
+std::pair<V2Predicate, bool> select_cheaper_equivalent_condition(
+    const LoweringContext& context, const V2Predicate& predicate, int line) {
+  V2Predicate best = predicate;
+  int best_cost = guarded_condition_compile_cost(predicate, line);
+  for (const V2Predicate& candidate :
+       equivalent_condition_candidates(context, predicate, line)) {
+    const int cost = guarded_condition_compile_cost(candidate, line);
+    if (cost < best_cost) {
+      best = candidate;
+      best_cost = cost;
+    }
+  }
+  return {best, !common_branch_predicate_equals(best, predicate, line)};
+}
+
 bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& predicate,
                                   bool negated, const std::string& false_label, int source_line,
                                   std::optional<std::string> branch_comment) {
@@ -12688,9 +12807,23 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
     return false;
   }
 
-  const std::string op = negated ? invert_comparison_op(predicate.op) : predicate.op;
-  std::string left_text = predicate.left;
-  std::string right_text = predicate.right;
+  V2Predicate effective_predicate = predicate;
+  if (negated)
+    effective_predicate.op = invert_comparison_op(effective_predicate.op);
+  const auto [selected_predicate, normalized] =
+      select_cheaper_equivalent_condition(context, effective_predicate, source_line);
+  if (normalized) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "comparison-boundary-normalization",
+        .detail = "Normalized " + condition_text(effective_predicate) + " to " +
+                  condition_text(selected_predicate) + " at line " + std::to_string(source_line) +
+                  ".",
+    });
+  }
+
+  const std::string op = selected_predicate.op;
+  std::string left_text = selected_predicate.left;
+  std::string right_text = selected_predicate.right;
   int branch_opcode = 0;
   std::string branch_mnemonic;
 
