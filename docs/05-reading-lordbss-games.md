@@ -91,9 +91,9 @@ Examples:
 - `lunar-landing.txt` / `lunar-landing.md` ("Lunar Landing") is mostly transparent. `R1` is height, `R2`
   fuel, `R3` speed, and the program stops to show height, speed, fuel, then
   accepts fuel burn. `777` means success, `666` means crash.
-- `morskoy-boy-lordbss.txt` / `morskoy-boy-lordbss.md` ("Sea Battle") is still readable from the references, but the
-  output `1`/`-1` only makes sense with the rules on the page: it encodes which
-  half of the compass directions the hidden submarine lies in.
+- `elektronnyy-sopernik.txt` / `elektronnyy-sopernik.md` ("Электронный соперник") is still readable from the references,
+  but the output only makes sense with the rules on the page: it encodes the
+  calculator's reply move in the vertical-checkers position.
 - `minesweeper.txt` / `minesweeper.md` ("Minesweeper") needs the command reference plus the page's
   board model. It uses `К СЧ` for mine placement, indirect register operations
   for board cells, and logical operations for packed state.

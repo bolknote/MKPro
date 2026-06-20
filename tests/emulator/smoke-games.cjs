@@ -52,7 +52,7 @@ console.log(`  speed stop: ${speedStop.stopped ? 'stable' : 'not stable'} after 
 console.log(`  fuel stop: ${fuelStop.stopped ? 'stable' : 'not stable'} after ${fuelStop.frames} frames, display ${JSON.stringify(fuel)}`);
 console.log(`  program counter: ${lunar.programCounter()}`);
 
-const demoPath = path.join(root, 'demo.txt');
+const demoPath = path.join(root, 'treasure-cave-demo.txt');
 const demoText = require('fs').readFileSync(demoPath, 'utf8');
 const demo = new MK61();
 const demoParsed = demo.loadProgram(demoText);

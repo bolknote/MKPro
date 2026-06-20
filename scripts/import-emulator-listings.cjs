@@ -256,7 +256,7 @@ async function fetchText(url) {
 async function main() {
   const manifestRows = [
     'program\tdescription\ttitle\tauthor\tsource_url',
-    'demo.txt\tdemo.md\tTreasure Cave Demo\tSerge Anvarov\thttps://sergeanvarov.github.io/russian/mk61/uf/demo.html',
+    'treasure-cave-demo.txt\ttreasure-cave-demo.md\tTreasure Cave Demo\tSerge Anvarov\thttps://sergeanvarov.github.io/russian/mk61/uf/demo.html',
   ];
 
   for (const entry of CATALOG) {

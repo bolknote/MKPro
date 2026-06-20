@@ -14,4 +14,4 @@
 
 This listing is kept as a separate source variant because its opcode sequence does not match the existing local listing by exact hash or by seven-command page set.
 
-Nearest existing listing during import audit: `games/kladoiskatel-2.txt` (82.9% similarity, edit distance 18).
+Nearest existing listing during import audit: `games/treasure-hunter-2.txt` (82.9% similarity, edit distance 18).

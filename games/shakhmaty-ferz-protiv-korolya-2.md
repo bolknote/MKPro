@@ -14,4 +14,4 @@
 
 This listing is kept as a separate source variant because its opcode sequence does not match the existing local listing by exact hash or by seven-command page set.
 
-Nearest existing listing during import audit: `games/demo.txt` (12.4% similarity, edit distance 92).
+Nearest existing listing during import audit: `games/treasure-cave-demo.txt` (12.4% similarity, edit distance 92).
