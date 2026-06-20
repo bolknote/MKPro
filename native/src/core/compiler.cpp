@@ -24894,6 +24894,668 @@ std::optional<Expression> match_target_minus_delta(const Expression& expression,
   return std::nullopt;
 }
 
+struct PackedCounterStripe {
+  std::string name;
+  double scale = 1.0;
+  int width = 1;
+  std::string kind;
+};
+
+struct PackedCounterCompactDisplay {
+  std::string left;
+  std::string right;
+};
+
+struct PackedCounterStripePlan {
+  std::size_t insert_index = 0;
+  std::string packed;
+  std::vector<PackedCounterStripe> stripes;
+  std::string initial;
+  std::optional<PackedCounterCompactDisplay> compact_decimal_display;
+};
+
+bool small_display_counter_field(const V2StateField& field) {
+  return field.type == "counter" && field.min.has_value() && field.max.has_value() &&
+         *field.min >= 0 && *field.max <= 9 && !field.initial_stack.has_value();
+}
+
+std::optional<double> packed_counter_initial_value(const V2StateField& field) {
+  if (!field.initial.has_value())
+    return 0.0;
+  try {
+    return numeric_literal_value(parse_expression(*field.initial, field.line));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+int packed_counter_read_count(const Expression& expression,
+                              const std::set<std::string>& packed_names) {
+  if (expression.kind == "identifier")
+    return packed_names.contains(expression.name) ? 1 : 0;
+  if (expression.kind == "indexed") {
+    if (packed_names.contains(expression.base))
+      return std::numeric_limits<int>::max();
+    return expression.index == nullptr ? 0
+                                       : packed_counter_read_count(*expression.index, packed_names);
+  }
+
+  int count = 0;
+  if (expression.expr != nullptr)
+    count += packed_counter_read_count(*expression.expr, packed_names);
+  if (expression.left != nullptr)
+    count += packed_counter_read_count(*expression.left, packed_names);
+  if (expression.right != nullptr)
+    count += packed_counter_read_count(*expression.right, packed_names);
+  for (const Expression& arg : expression.args)
+    count += packed_counter_read_count(arg, packed_names);
+  return count;
+}
+
+int packed_counter_text_read_count(const std::string& text, int line,
+                                   const std::set<std::string>& packed_names) {
+  if (text.empty())
+    return 0;
+  try {
+    return packed_counter_read_count(parse_expression(text, line), packed_names);
+  } catch (const std::exception&) {
+    for (const std::string& name : packed_names) {
+      if (text_mentions_identifier(text, name))
+        return 1;
+    }
+    return 0;
+  }
+}
+
+bool packed_counter_text_usage_ok(const std::optional<std::string>& text, int line,
+                                  const std::set<std::string>& packed_names) {
+  return !text.has_value() || packed_counter_text_read_count(*text, line, packed_names) <= 1;
+}
+
+bool packed_counter_predicate_usage_ok(const V2Predicate& predicate, int line,
+                                       const std::set<std::string>& packed_names) {
+  int count = 0;
+  if (predicate.kind == "v2_compare") {
+    count += packed_counter_text_read_count(predicate.left, line, packed_names);
+    count += packed_counter_text_read_count(predicate.right, line, packed_names);
+  } else if (predicate.kind == "v2_contains") {
+    count += packed_counter_text_read_count(predicate.collection, line, packed_names);
+    count += packed_counter_text_read_count(predicate.item, line, packed_names);
+  } else {
+    count += packed_counter_text_read_count(predicate.left, line, packed_names);
+    count += packed_counter_text_read_count(predicate.right, line, packed_names);
+    count += packed_counter_text_read_count(predicate.collection, line, packed_names);
+    count += packed_counter_text_read_count(predicate.item, line, packed_names);
+  }
+  return count <= 1;
+}
+
+bool packed_counter_statement_usages_ok(const V2Statement& statement,
+                                        const std::set<std::string>& packed_names);
+
+bool packed_counter_statements_usages_ok(const std::vector<V2Statement>& statements,
+                                         const std::set<std::string>& packed_names) {
+  return std::all_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
+    return packed_counter_statement_usages_ok(statement, packed_names);
+  });
+}
+
+bool packed_counter_statement_usages_ok(const V2Statement& statement,
+                                        const std::set<std::string>& packed_names) {
+  if ((statement.kind == "v2_assign" || statement.kind == "v2_update") &&
+      statement.target.has_value() && packed_names.contains(*statement.target) &&
+      !numeric_self_update_delta(*statement.target, statement).has_value()) {
+    return false;
+  }
+  if (statement.kind == "v2_read" && statement.target.has_value() &&
+      packed_names.contains(*statement.target)) {
+    return false;
+  }
+  if (statement.kind == "v2_raw") {
+    for (const V2RawInput& input : statement.inputs) {
+      if (packed_counter_text_read_count(input.expr, input.line, packed_names) > 1)
+        return false;
+    }
+    for (const V2RawOutput& output : statement.outputs) {
+      if (packed_names.contains(output.target))
+        return false;
+    }
+    for (const std::string& clobber : statement.clobbers) {
+      if (packed_names.contains(clobber))
+        return false;
+    }
+  }
+  if (!packed_counter_text_usage_ok(statement.target, statement.line, packed_names) ||
+      !packed_counter_text_usage_ok(statement.expr, statement.line, packed_names)) {
+    return false;
+  }
+  for (const std::string& arg : statement.args) {
+    if (packed_counter_text_read_count(arg, statement.line, packed_names) > 1)
+      return false;
+  }
+  if (statement.predicate.has_value() &&
+      !packed_counter_predicate_usage_ok(*statement.predicate, statement.line, packed_names)) {
+    return false;
+  }
+  if (statement.items.has_value()) {
+    for (const DisplayItem& item : *statement.items) {
+      if (item.expr.has_value() && packed_counter_read_count(*item.expr, packed_names) > 1)
+        return false;
+    }
+  }
+  if (!packed_counter_statements_usages_ok(statement.body, packed_names) ||
+      !packed_counter_statements_usages_ok(statement.then_body, packed_names) ||
+      !packed_counter_statements_usages_ok(statement.else_body, packed_names)) {
+    return false;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    for (const std::string& value : match_case.values) {
+      if (packed_counter_text_read_count(value, match_case.line, packed_names) > 1)
+        return false;
+    }
+    if (match_case.action != nullptr &&
+        !packed_counter_statement_usages_ok(*match_case.action, packed_names)) {
+      return false;
+    }
+  }
+  return statement.otherwise == nullptr ||
+         packed_counter_statement_usages_ok(*statement.otherwise, packed_names);
+}
+
+bool packed_counter_usages_ok(const V2Program& program, const std::vector<std::string>& names) {
+  const std::set<std::string> packed_names(names.begin(), names.end());
+  if (!packed_counter_statements_usages_ok(program.body, packed_names))
+    return false;
+  return std::all_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
+    return packed_counter_statements_usages_ok(rule.body, packed_names);
+  });
+}
+
+void collect_packed_counter_used_names_from_statement(const V2Statement& statement,
+                                                      std::set<std::string>& used) {
+  if (statement.target.has_value())
+    used.insert(*statement.target);
+  if (statement.name.has_value())
+    used.insert(*statement.name);
+  for (const std::string& arg : statement.args)
+    used.insert(arg);
+  if (statement.items.has_value()) {
+    for (const DisplayItem& item : *statement.items)
+      used.insert(item.name);
+  }
+  for (const V2Statement& child : statement.body)
+    collect_packed_counter_used_names_from_statement(child, used);
+  for (const V2Statement& child : statement.then_body)
+    collect_packed_counter_used_names_from_statement(child, used);
+  for (const V2Statement& child : statement.else_body)
+    collect_packed_counter_used_names_from_statement(child, used);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_packed_counter_used_names_from_statement(*match_case.action, used);
+  }
+  if (statement.otherwise != nullptr)
+    collect_packed_counter_used_names_from_statement(*statement.otherwise, used);
+}
+
+std::string fresh_packed_counter_name(const V2Program& program) {
+  std::set<std::string> used;
+  for (const V2StateField& field : program.state)
+    used.insert(field.name);
+  for (const V2Rule& rule : program.rules) {
+    used.insert(rule.name);
+    for (const std::string& param : rule.params)
+      used.insert(param);
+    for (const V2Statement& statement : rule.body)
+      collect_packed_counter_used_names_from_statement(statement, used);
+  }
+  for (const V2Statement& statement : program.body)
+    collect_packed_counter_used_names_from_statement(statement, used);
+  for (int index = 0;; ++index) {
+    const std::string candidate = "__packed_counter_" + std::to_string(index);
+    if (!used.contains(candidate))
+      return candidate;
+  }
+}
+
+std::optional<std::string> packed_counter_initial(const std::vector<const V2StateField*>& fields,
+                                                  const std::vector<PackedCounterStripe>& stripes) {
+  double initial = 0.0;
+  for (std::size_t index = 0; index < fields.size(); ++index) {
+    const std::optional<double> value = packed_counter_initial_value(*fields.at(index));
+    if (!value.has_value())
+      return std::nullopt;
+    initial += *value * stripes.at(index).scale;
+  }
+  return format_number_literal(initial);
+}
+
+std::optional<PackedCounterStripePlan>
+select_packed_counter_display_items_plan(const V2Program& program,
+                                         const std::vector<DisplayItem>& items) {
+  for (std::size_t index = 0; index + 2U < items.size(); ++index) {
+    const DisplayItem& left_item = items.at(index);
+    const DisplayItem& dot = items.at(index + 1U);
+    const DisplayItem& right_item = items.at(index + 2U);
+    if (left_item.kind != "source" || left_item.expr.has_value() || left_item.width.has_value() ||
+        dot.kind != "literal" || dot.text != "." || right_item.kind != "source" ||
+        right_item.expr.has_value() || right_item.width.has_value()) {
+      continue;
+    }
+
+    const auto left_it =
+        std::find_if(program.state.begin(), program.state.end(),
+                     [&](const V2StateField& field) { return field.name == left_item.name; });
+    const auto right_it =
+        std::find_if(program.state.begin(), program.state.end(),
+                     [&](const V2StateField& field) { return field.name == right_item.name; });
+    if (left_it == program.state.end() || right_it == program.state.end() ||
+        !small_display_counter_field(*left_it) || !small_display_counter_field(*right_it)) {
+      continue;
+    }
+
+    const std::vector<std::string> names{left_it->name, right_it->name};
+    if (!packed_counter_usages_ok(program, names))
+      continue;
+
+    std::vector<PackedCounterStripe> stripes{
+        PackedCounterStripe{.name = left_it->name, .scale = 1.0, .width = 1, .kind = "major"},
+        PackedCounterStripe{.name = right_it->name, .scale = 0.1, .width = 1, .kind = "digit"},
+    };
+    const std::vector<const V2StateField*> fields{&*left_it, &*right_it};
+    std::optional<std::string> initial = packed_counter_initial(fields, stripes);
+    if (!initial.has_value())
+      continue;
+
+    return PackedCounterStripePlan{
+        .insert_index =
+            static_cast<std::size_t>(std::min(std::distance(program.state.begin(), left_it),
+                                              std::distance(program.state.begin(), right_it))),
+        .packed = fresh_packed_counter_name(program),
+        .stripes = std::move(stripes),
+        .initial = *initial,
+        .compact_decimal_display =
+            PackedCounterCompactDisplay{.left = left_it->name, .right = right_it->name},
+    };
+  }
+  return std::nullopt;
+}
+
+std::optional<PackedCounterStripePlan>
+select_packed_counter_display_stripe_plan_from_statement(const V2Program& program,
+                                                         const V2Statement& statement);
+
+std::optional<PackedCounterStripePlan> select_packed_counter_display_stripe_plan_from_statements(
+    const V2Program& program, const std::vector<V2Statement>& statements) {
+  for (const V2Statement& statement : statements) {
+    if (std::optional<PackedCounterStripePlan> plan =
+            select_packed_counter_display_stripe_plan_from_statement(program, statement)) {
+      return plan;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<PackedCounterStripePlan>
+select_packed_counter_display_stripe_plan_from_statement(const V2Program& program,
+                                                         const V2Statement& statement) {
+  if ((statement.kind == "v2_show" || statement.kind == "v2_stop") && statement.items.has_value()) {
+    if (std::optional<PackedCounterStripePlan> plan =
+            select_packed_counter_display_items_plan(program, *statement.items)) {
+      return plan;
+    }
+  }
+  if (std::optional<PackedCounterStripePlan> plan =
+          select_packed_counter_display_stripe_plan_from_statements(program, statement.body)) {
+    return plan;
+  }
+  if (std::optional<PackedCounterStripePlan> plan =
+          select_packed_counter_display_stripe_plan_from_statements(program, statement.then_body)) {
+    return plan;
+  }
+  if (std::optional<PackedCounterStripePlan> plan =
+          select_packed_counter_display_stripe_plan_from_statements(program, statement.else_body)) {
+    return plan;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr) {
+      if (std::optional<PackedCounterStripePlan> plan =
+              select_packed_counter_display_stripe_plan_from_statement(program,
+                                                                       *match_case.action)) {
+        return plan;
+      }
+    }
+  }
+  if (statement.otherwise != nullptr)
+    return select_packed_counter_display_stripe_plan_from_statement(program, *statement.otherwise);
+  return std::nullopt;
+}
+
+std::optional<PackedCounterStripePlan>
+select_packed_counter_display_stripe_plan(const V2Program& program) {
+  if (std::optional<PackedCounterStripePlan> plan =
+          select_packed_counter_display_stripe_plan_from_statements(program, program.body)) {
+    return plan;
+  }
+  for (const V2Rule& rule : program.rules) {
+    if (std::optional<PackedCounterStripePlan> plan =
+            select_packed_counter_display_stripe_plan_from_statements(program, rule.body)) {
+      return plan;
+    }
+  }
+  return std::nullopt;
+}
+
+const PackedCounterStripe* packed_counter_stripe_named(const PackedCounterStripePlan& plan,
+                                                       const std::string& name) {
+  const auto it =
+      std::find_if(plan.stripes.begin(), plan.stripes.end(),
+                   [&](const PackedCounterStripe& stripe) { return stripe.name == name; });
+  return it == plan.stripes.end() ? nullptr : &*it;
+}
+
+Expression packed_counter_expr(const PackedCounterStripePlan& plan) {
+  return identifier_expression(plan.packed);
+}
+
+Expression packed_counter_stripe_selector_expr(const PackedCounterStripePlan& plan,
+                                               const PackedCounterStripe& stripe) {
+  if (stripe.kind == "major")
+    return packed_counter_expr(plan);
+  const double next_scale = stripe.scale * std::pow(10.0, static_cast<double>(stripe.width));
+  Expression shifted =
+      std::fabs(next_scale - 1.0) < 1e-12
+          ? packed_counter_expr(plan)
+          : divide_expression(packed_counter_expr(plan),
+                              number_expression(format_number_literal(next_scale)));
+  return frac_expression(std::move(shifted));
+}
+
+Expression packed_counter_extract_expr(const PackedCounterStripePlan& plan,
+                                       const PackedCounterStripe& stripe) {
+  if (stripe.kind == "major") {
+    return int_expression(divide_expression(
+        packed_counter_expr(plan), number_expression(format_number_literal(stripe.scale))));
+  }
+  return int_expression(multiply_expression(
+      packed_counter_stripe_selector_expr(plan, stripe),
+      number_expression(format_number_literal(std::pow(10.0, static_cast<double>(stripe.width))))));
+}
+
+Expression rewrite_packed_counter_expr(Expression expression, const PackedCounterStripePlan& plan) {
+  if (expression.kind == "identifier") {
+    if (const PackedCounterStripe* stripe = packed_counter_stripe_named(plan, expression.name))
+      return packed_counter_extract_expr(plan, *stripe);
+    return expression;
+  }
+  if (expression.index != nullptr)
+    expression.index =
+        std::make_shared<Expression>(rewrite_packed_counter_expr(*expression.index, plan));
+  if (expression.expr != nullptr)
+    expression.expr =
+        std::make_shared<Expression>(rewrite_packed_counter_expr(*expression.expr, plan));
+  if (expression.left != nullptr)
+    expression.left =
+        std::make_shared<Expression>(rewrite_packed_counter_expr(*expression.left, plan));
+  if (expression.right != nullptr)
+    expression.right =
+        std::make_shared<Expression>(rewrite_packed_counter_expr(*expression.right, plan));
+  for (Expression& arg : expression.args)
+    arg = rewrite_packed_counter_expr(std::move(arg), plan);
+  return expression;
+}
+
+std::string rewrite_packed_counter_expr_text(const std::string& text, int line,
+                                             const PackedCounterStripePlan& plan) {
+  try {
+    Expression expression = parse_expression(text, line);
+    Expression rewritten = rewrite_packed_counter_expr(expression, plan);
+    if (expression_equals(expression, rewritten))
+      return text;
+    return expression_to_source(rewritten);
+  } catch (const std::exception&) {
+    return text;
+  }
+}
+
+Expression packed_counter_threshold(double value) {
+  return number_expression(format_number_literal(std::round(value * 1e12) / 1e12));
+}
+
+std::optional<V2Predicate> rewrite_packed_counter_comparison(const std::string& source_text,
+                                                             const std::string& op,
+                                                             const std::string& comparand_text,
+                                                             int line,
+                                                             const PackedCounterStripePlan& plan) {
+  Expression source;
+  Expression comparand;
+  try {
+    source = parse_expression(source_text, line);
+    comparand = parse_expression(comparand_text, line);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  if (source.kind != "identifier")
+    return std::nullopt;
+  const PackedCounterStripe* stripe = packed_counter_stripe_named(plan, source.name);
+  if (stripe == nullptr)
+    return std::nullopt;
+  const std::optional<double> value = numeric_literal_value(comparand);
+  if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
+    return std::nullopt;
+
+  const double scale = stripe->scale;
+  const double divisor = std::pow(10.0, static_cast<double>(stripe->width));
+  const auto lower_bound = [&](double candidate) {
+    return stripe->kind == "major" ? candidate * scale : candidate / divisor;
+  };
+  const auto upper_bound = [&](double candidate) {
+    return stripe->kind == "major" ? (candidate + 1.0) * scale : (candidate + 1.0) / divisor;
+  };
+
+  V2Predicate predicate;
+  predicate.kind = "v2_compare";
+  predicate.left = expression_to_source(packed_counter_stripe_selector_expr(plan, *stripe));
+  if (op == "<") {
+    predicate.op = "<";
+    predicate.right = expression_to_source(packed_counter_threshold(lower_bound(*value)));
+    return predicate;
+  }
+  if (op == "<=") {
+    predicate.op = "<";
+    predicate.right = expression_to_source(packed_counter_threshold(upper_bound(*value)));
+    return predicate;
+  }
+  if (op == ">") {
+    predicate.op = ">=";
+    predicate.right = expression_to_source(packed_counter_threshold(upper_bound(*value)));
+    return predicate;
+  }
+  if (op == ">=") {
+    predicate.op = ">=";
+    predicate.right = expression_to_source(packed_counter_threshold(lower_bound(*value)));
+    return predicate;
+  }
+  return std::nullopt;
+}
+
+std::string swapped_comparison_op_for_packed_counter(const std::string& op) {
+  if (op == "<")
+    return ">";
+  if (op == "<=")
+    return ">=";
+  if (op == ">")
+    return "<";
+  if (op == ">=")
+    return "<=";
+  return op;
+}
+
+V2Predicate rewrite_packed_counter_predicate(V2Predicate predicate,
+                                             const PackedCounterStripePlan& plan) {
+  if (predicate.kind == "v2_compare") {
+    if (std::optional<V2Predicate> direct = rewrite_packed_counter_comparison(
+            predicate.left, predicate.op, predicate.right, 0, plan)) {
+      return *direct;
+    }
+    if (std::optional<V2Predicate> swapped = rewrite_packed_counter_comparison(
+            predicate.right, swapped_comparison_op_for_packed_counter(predicate.op), predicate.left,
+            0, plan)) {
+      return *swapped;
+    }
+    predicate.left = rewrite_packed_counter_expr_text(predicate.left, 0, plan);
+    predicate.right = rewrite_packed_counter_expr_text(predicate.right, 0, plan);
+    return predicate;
+  }
+  predicate.collection = rewrite_packed_counter_expr_text(predicate.collection, 0, plan);
+  predicate.item = rewrite_packed_counter_expr_text(predicate.item, 0, plan);
+  return predicate;
+}
+
+Expression packed_counter_update_expr(const PackedCounterStripePlan& plan,
+                                      const PackedCounterStripe& stripe, double delta) {
+  const double scaled = delta * stripe.scale;
+  if (std::fabs(scaled) < 1e-12)
+    return packed_counter_expr(plan);
+  if (scaled > 0.0) {
+    return add_expression(packed_counter_expr(plan),
+                          number_expression(format_number_literal(scaled)));
+  }
+  return subtract_expression(packed_counter_expr(plan),
+                             number_expression(format_number_literal(std::fabs(scaled))));
+}
+
+DisplayItem rewrite_packed_counter_display_item(DisplayItem item,
+                                                const PackedCounterStripePlan& plan) {
+  std::optional<Expression> rewritten;
+  if (item.kind == "source" && !item.expr.has_value()) {
+    if (const PackedCounterStripe* stripe = packed_counter_stripe_named(plan, item.name))
+      rewritten = packed_counter_extract_expr(plan, *stripe);
+  } else if (item.kind == "source" && item.expr.has_value()) {
+    Expression expression = *item.expr;
+    Expression next = rewrite_packed_counter_expr(expression, plan);
+    if (!expression_equals(expression, next))
+      rewritten = std::move(next);
+  }
+  if (!rewritten.has_value())
+    return item;
+  item.name = expression_to_source(*rewritten);
+  item.expr = std::move(rewritten);
+  return item;
+}
+
+std::vector<DisplayItem> rewrite_packed_counter_display_items(const std::vector<DisplayItem>& items,
+                                                              const PackedCounterStripePlan& plan) {
+  std::vector<DisplayItem> rewritten;
+  for (std::size_t index = 0; index < items.size(); ++index) {
+    const DisplayItem& left = items.at(index);
+    const DisplayItem* dot = index + 1U < items.size() ? &items.at(index + 1U) : nullptr;
+    const DisplayItem* right = index + 2U < items.size() ? &items.at(index + 2U) : nullptr;
+    if (plan.compact_decimal_display.has_value() && dot != nullptr && right != nullptr &&
+        left.kind == "source" && !left.expr.has_value() &&
+        left.name == plan.compact_decimal_display->left && dot->kind == "literal" &&
+        dot->text == "." && right->kind == "source" && !right->expr.has_value() &&
+        right->name == plan.compact_decimal_display->right) {
+      rewritten.push_back(DisplayItem{.kind = "source", .name = plan.packed, .line = left.line});
+      index += 2U;
+      continue;
+    }
+    rewritten.push_back(rewrite_packed_counter_display_item(left, plan));
+  }
+  return rewritten;
+}
+
+void rewrite_packed_counter_statement(V2Statement& statement, const PackedCounterStripePlan& plan);
+
+void rewrite_packed_counter_statements(std::vector<V2Statement>& statements,
+                                       const PackedCounterStripePlan& plan) {
+  for (V2Statement& statement : statements)
+    rewrite_packed_counter_statement(statement, plan);
+}
+
+void rewrite_packed_counter_statement(V2Statement& statement, const PackedCounterStripePlan& plan) {
+  if ((statement.kind == "v2_assign" || statement.kind == "v2_update") &&
+      statement.target.has_value()) {
+    if (const PackedCounterStripe* stripe = packed_counter_stripe_named(plan, *statement.target)) {
+      const double delta = numeric_self_update_delta(*statement.target, statement).value_or(0.0);
+      statement.kind = "v2_assign";
+      statement.target = plan.packed;
+      statement.expr = expression_to_source(packed_counter_update_expr(plan, *stripe, delta));
+      statement.op.reset();
+      return;
+    }
+  }
+
+  if (statement.target.has_value())
+    statement.target = rewrite_packed_counter_expr_text(*statement.target, statement.line, plan);
+  if (statement.expr.has_value())
+    statement.expr = rewrite_packed_counter_expr_text(*statement.expr, statement.line, plan);
+  for (std::string& arg : statement.args)
+    arg = rewrite_packed_counter_expr_text(arg, statement.line, plan);
+  if (statement.predicate.has_value())
+    statement.predicate = rewrite_packed_counter_predicate(*statement.predicate, plan);
+  if (statement.items.has_value())
+    statement.items = rewrite_packed_counter_display_items(*statement.items, plan);
+  for (V2RawInput& input : statement.inputs)
+    input.expr = rewrite_packed_counter_expr_text(input.expr, input.line, plan);
+  rewrite_packed_counter_statements(statement.body, plan);
+  rewrite_packed_counter_statements(statement.then_body, plan);
+  rewrite_packed_counter_statements(statement.else_body, plan);
+  for (V2MatchCase& match_case : statement.cases) {
+    for (std::string& value : match_case.values)
+      value = rewrite_packed_counter_expr_text(value, match_case.line, plan);
+    if (match_case.action != nullptr)
+      rewrite_packed_counter_statement(*match_case.action, plan);
+  }
+  if (statement.otherwise != nullptr)
+    rewrite_packed_counter_statement(*statement.otherwise, plan);
+}
+
+void pack_counter_display_stripes(V2Program& program,
+                                  std::vector<OptimizationReport>& optimizations) {
+  std::optional<PackedCounterStripePlan> plan = select_packed_counter_display_stripe_plan(program);
+  if (!plan.has_value())
+    return;
+
+  const std::set<std::string> removed_names = [&] {
+    std::set<std::string> names;
+    for (const PackedCounterStripe& stripe : plan->stripes)
+      names.insert(stripe.name);
+    return names;
+  }();
+
+  V2StateField packed_field;
+  packed_field.name = plan->packed;
+  packed_field.type = "packed";
+  packed_field.initial = plan->initial;
+  packed_field.line =
+      program.state.empty()
+          ? program.line
+          : program.state.at(std::min(plan->insert_index, program.state.size() - 1U)).line;
+
+  std::vector<V2StateField> state;
+  state.reserve(program.state.size() - removed_names.size() + 1U);
+  for (std::size_t index = 0; index < program.state.size(); ++index) {
+    if (index == plan->insert_index)
+      state.push_back(packed_field);
+    if (!removed_names.contains(program.state.at(index).name))
+      state.push_back(std::move(program.state.at(index)));
+  }
+  program.state = std::move(state);
+
+  rewrite_packed_counter_statements(program.body, *plan);
+  for (V2Rule& rule : program.rules)
+    rewrite_packed_counter_statements(rule.body, *plan);
+
+  std::vector<std::string> names;
+  names.reserve(plan->stripes.size());
+  for (const PackedCounterStripe& stripe : plan->stripes)
+    names.push_back(stripe.name);
+  optimizations.push_back(OptimizationReport{
+      .name = "packed-counter-stripes",
+      .detail = "Packed counters " + join_strings(names, ", ") + " into " + plan->packed + ".",
+  });
+}
+
 std::string display_expression_target_name(const V2Statement& statement, std::size_t index) {
   return std::string("__display_expr_") + std::to_string(statement.line) + "_" +
          std::to_string(index);
@@ -26202,6 +26864,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                     "-digit MK-61 program.",
       });
     } else {
+      pack_counter_display_stripes(*ast.v2, context.optimizations);
       materialize_display_expressions(*ast.v2, context.optimizations,
                                       options.inline_floor_packed_row_expressions);
       elide_x_param_return_state_fields(*ast.v2, context.optimizations);

@@ -128,6 +128,7 @@ add_executable(mkpro_tests
   tests/maxmin_zero_lint_test.cpp
   tests/opcodes_test.cpp
   tests/oracle_test.cpp
+  tests/packed_counter_stripes_test.cpp
   tests/packed_display_helper_test.cpp
   tests/packed_score_helper_test.cpp
   tests/parser_test.cpp
