@@ -1,6 +1,7 @@
-# Чёт-нечёт-3
+# Чет-нечет-3
 
 - Source: [xbasoft PMK package](https://xvadim.github.io/xbasoft/pmk/chnch3.zip)
+- Additional source: [Habr article by illi4](https://habr.com/ru/articles/125484/)
 - Program: [chet-nechet-3.txt](chet-nechet-3.txt)
 - Decoded from the Android emulator state file inside the package.
 
@@ -12,6 +13,4 @@
 
 ## Import Note
 
-This listing is kept as a separate source variant because its opcode sequence does not match the existing local listing by exact hash or by seven-command page set.
-
-Nearest existing listing during import audit: `games/odd-even-3.txt` (89.5% similarity, edit distance 11).
+The Habr `odd-even-3` listing was byte-identical to this file. The duplicate file was removed and both sources are recorded here.
