@@ -6362,6 +6362,8 @@ program DecimalPointDisplay {
           "native compiler should lower decimal-point display");
   require(decimal_point_display_statement.diagnostics.empty(),
           "decimal-point display compile should not report diagnostics");
+  require(has_optimization(decimal_point_display_statement, "decimal-point-display"),
+          "decimal-point display should report the TS strategy name");
   require(decimal_point_display_statement.listing.find("decimal-point display fraction") !=
               std::string::npos,
           "decimal-point display should divide the fractional fields");

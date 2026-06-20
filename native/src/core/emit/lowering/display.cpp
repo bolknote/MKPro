@@ -630,6 +630,11 @@ bool lower_decimal_point_display_statement(DisplayEmitApi& api, LoweringContext&
     api.emitter.emit_op(0x13, "/", "decimal-point display", source_line);
   }
   api.emitter.emit_op(0x50, "С/П", "show decimal-point display", source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "decimal-point-display",
+      .detail = "Displayed decimal-point show(...) as a fixed-point number with " +
+                std::to_string(fractional_width) + " fractional digit(s).",
+  });
   return true;
 }
 
