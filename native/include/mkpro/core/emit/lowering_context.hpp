@@ -27,6 +27,13 @@ struct SpatialHitHelperRequest {
   std::string label;
 };
 
+struct TerminalTailHelperRequest {
+  std::string key;
+  std::string label;
+  std::vector<V2Statement> body;
+  int line = 0;
+};
+
 struct XParamProcLowering {
   std::string param;
   V2Statement first;
@@ -85,6 +92,7 @@ struct LoweringContext {
   std::vector<std::string> spatial_hit_helper_order;
   std::map<std::string, std::string> indirect_helper_registers;
   std::vector<SpatialSumHelperRequest> spatial_sum_helpers;
+  std::vector<TerminalTailHelperRequest> terminal_tail_helpers;
   std::optional<std::string> spatial_count_counter_override;
   std::optional<std::string> tail_show_target;
   std::set<std::string> transient_show_targets;

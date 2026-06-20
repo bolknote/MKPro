@@ -14836,6 +14836,63 @@ bool lower_direct_terminal_if_branch(LoweringContext& context, const V2Statement
   return true;
 }
 
+std::string terminal_tail_helper_key(const std::vector<V2Statement>& body) {
+  V2Program program;
+  program.name = "__terminal_tail";
+  program.body = body;
+  return v2_program_to_json(program);
+}
+
+std::optional<std::string> existing_terminal_tail_helper_label(LoweringContext& context,
+                                                               const std::string& key) {
+  const auto helper_it = std::find_if(
+      context.terminal_tail_helpers.begin(), context.terminal_tail_helpers.end(),
+      [&](const TerminalTailHelperRequest& helper) { return helper.key == key; });
+  if (helper_it == context.terminal_tail_helpers.end())
+    return std::nullopt;
+  return helper_it->label;
+}
+
+bool lower_local_terminal_else_tail(LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value() || statement.else_body.empty())
+    return false;
+  if (statements_always_stop(context, statement.then_body) ||
+      !statements_always_stop(context, statement.else_body)) {
+    return false;
+  }
+
+  const std::string key = terminal_tail_helper_key(statement.else_body);
+  std::optional<TerminalTailHelperRequest> new_helper;
+  std::string helper_label;
+  if (std::optional<std::string> existing_label =
+          existing_terminal_tail_helper_label(context, key)) {
+    helper_label = *existing_label;
+  } else {
+    helper_label = context.emitter.fresh_label("terminal_tail");
+    new_helper = TerminalTailHelperRequest{
+        .key = key,
+        .label = helper_label,
+        .body = statement.else_body,
+        .line = statement.line,
+    };
+  }
+
+  if (!lower_condition_false_branch(context, *statement.predicate, statement.negated, helper_label,
+                                    statement.line))
+    return false;
+  if (new_helper.has_value())
+    context.terminal_tail_helpers.push_back(std::move(*new_helper));
+  if (!lower_statement_block(context, statement.then_body))
+    return false;
+
+  context.optimizations.push_back(OptimizationReport{
+      .name = "local-terminal-tail-branch",
+      .detail = "Branched to a local terminal tail for else path at line " +
+                std::to_string(statement.line) + ".",
+  });
+  return true;
+}
+
 struct ArithmeticIfCandidate {
   std::string target;
   Expression expression;
@@ -15538,6 +15595,10 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     return true;
   if (lower_direct_terminal_if_branch(context, statement))
     return true;
+  if (lower_local_terminal_else_tail(context, statement))
+    return true;
+  if (has_errors(context.diagnostics))
+    return false;
 
   const V2Statement selected = branch_order_statement(context, statement);
   const bool has_else = !selected.else_body.empty();
@@ -21650,6 +21711,21 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
   return true;
 }
 
+bool lower_terminal_tail_helpers(LoweringContext& context) {
+  for (std::size_t index = 0; index < context.terminal_tail_helpers.size(); ++index) {
+    const TerminalTailHelperRequest helper = context.terminal_tail_helpers.at(index);
+    context.emitter.emit_label(helper.label, {.hidden = true});
+    if (!lower_statement_block(context, helper.body))
+      return false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "local-terminal-tail",
+        .detail = "Emitted local terminal tail for branch at line " +
+                  std::to_string(helper.line) + ".",
+    });
+  }
+  return true;
+}
+
 bool lower_spatial_hit_helpers(LoweringContext& context) {
   if (!context.spatial_hit_helper_order.empty() && !reserve_bit_mask_helper_preloads(context))
     return false;
@@ -23847,7 +23923,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           const std::size_t main_end = context.emitter.items.size();
           bool emitted_tail = lower_function_rules(context, *ast.v2);
           const std::size_t function_end = context.emitter.items.size();
-          if (emitted_tail && lower_spatial_sum_helpers(context) &&
+          if (emitted_tail && lower_terminal_tail_helpers(context) &&
+              lower_spatial_sum_helpers(context) &&
               lower_spatial_hit_helpers(context) && lower_bit_mask_helper(context) &&
               lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);

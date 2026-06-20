@@ -5376,6 +5376,34 @@ program DirectTerminalBranch {
   require(has_optimization(direct_terminal_branch, "terminal-if-direct-branch"),
           "direct terminal branch should report the TS strategy name");
 
+  const CompileResult local_terminal_tail = compile_source(R"mkpro(
+program LocalTerminalTail {
+  state {
+    score: counter 0..9 = 0
+    fail_value: packed = -999
+  }
+
+  loop {
+    if score < 5 {
+      score = score * 2
+    }
+    else {
+      show(fail_value)
+      halt(-999)
+    }
+    halt(score)
+  }
+}
+)mkpro");
+  require(local_terminal_tail.implemented,
+          "native compiler should branch to local terminal tails");
+  require(local_terminal_tail.diagnostics.empty(),
+          "local terminal tail compile should not report diagnostics");
+  require(has_optimization(local_terminal_tail, "local-terminal-tail-branch"),
+          "local terminal tail branch should report the TS strategy name");
+  require(has_optimization(local_terminal_tail, "local-terminal-tail"),
+          "local terminal tail helper emission should report the TS strategy name");
+
   const CompileResult terminal_rule_tail_call = compile_source(R"mkpro(
 program TerminalRuleTailCall {
   loop {
