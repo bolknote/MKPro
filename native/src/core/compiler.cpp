@@ -9894,20 +9894,58 @@ bool lower_display_item_to_x(LoweringContext& context, const DisplayItem& item,
 struct PackedDisplayField {
   const DisplayItem* item = nullptr;
   int width = 1;
+  bool literal = false;
+  std::string literal_value;
 };
 
+std::optional<PackedDisplayField> decimal_display_literal_field(const DisplayItem& item,
+                                                                bool leading_field) {
+  if (item.kind != "literal" || !is_unsigned_decimal_digits(item.text))
+    return std::nullopt;
+  if (leading_field && item.text.starts_with("0"))
+    return std::nullopt;
+
+  std::size_t first_non_zero = item.text.find_first_not_of('0');
+  const std::string value =
+      first_non_zero == std::string::npos ? "0" : item.text.substr(first_non_zero);
+  return PackedDisplayField{
+      .item = &item,
+      .width = static_cast<int>(item.text.size()),
+      .literal = true,
+      .literal_value = value,
+  };
+}
+
 std::optional<std::vector<PackedDisplayField>>
-numeric_source_display_fields(const LoweringContext& context,
-                              const std::vector<DisplayItem>& items) {
+numeric_display_fields(const LoweringContext& context, const std::vector<DisplayItem>& items) {
   std::vector<PackedDisplayField> fields;
   fields.reserve(items.size());
   for (const DisplayItem& item : items) {
+    if (const std::optional<PackedDisplayField> literal =
+            decimal_display_literal_field(item, fields.empty())) {
+      fields.push_back(*literal);
+      continue;
+    }
     if (item.kind != "source" || item.expr.has_value())
       return std::nullopt;
     fields.push_back(PackedDisplayField{
         .item = &item,
         .width = natural_display_width(context, item),
     });
+  }
+  return fields;
+}
+
+std::optional<std::vector<PackedDisplayField>>
+numeric_source_display_fields(const LoweringContext& context,
+                              const std::vector<DisplayItem>& items) {
+  const std::optional<std::vector<PackedDisplayField>> fields =
+      numeric_display_fields(context, items);
+  if (!fields.has_value())
+    return std::nullopt;
+  if (std::any_of(fields->begin(), fields->end(),
+                  [](const PackedDisplayField& field) { return field.literal; })) {
+    return std::nullopt;
   }
   return fields;
 }
@@ -9948,21 +9986,28 @@ int estimate_decimal_packed_display_cost(const LoweringContext& context,
     }
   }
 
-  const auto field_value_cost = [](const PackedDisplayField& field) {
+  const auto field_value_cost = [&](const PackedDisplayField& field) {
+    if (field.literal)
+      return estimate_number_or_preload_cost(context, field.literal_value);
     return field.item == nullptr ? 1000000 : 1;
   };
   const auto scale_cost = [&](const PackedDisplayField& field) {
     return estimate_number_or_preload_cost(context, display_scale_for_width(field.width));
   };
+  const auto shifted_field_cost = [&](const PackedDisplayField& field) {
+    if (field.literal && field.literal_value == "0")
+      return 1;
+    return field_value_cost(field) + 2;
+  };
 
   if (current_index > 0) {
     int cost = field_value_cost(fields.front());
     for (std::size_t index = 1; index < static_cast<std::size_t>(current_index); ++index)
-      cost += scale_cost(fields.at(index)) + field_value_cost(fields.at(index)) + 2;
+      cost += scale_cost(fields.at(index)) + shifted_field_cost(fields.at(index));
     cost += scale_cost(fields.at(static_cast<std::size_t>(current_index))) + 2;
     for (std::size_t index = static_cast<std::size_t>(current_index + 1); index < fields.size();
          ++index) {
-      cost += scale_cost(fields.at(index)) + field_value_cost(fields.at(index)) + 2;
+      cost += scale_cost(fields.at(index)) + shifted_field_cost(fields.at(index));
     }
     return cost + 1;
   }
@@ -9972,7 +10017,7 @@ int estimate_decimal_packed_display_cost(const LoweringContext& context,
                  ? 0
                  : field_value_cost(fields.front());
   for (std::size_t index = 1; index < fields.size(); ++index)
-    cost += scale_cost(fields.at(index)) + field_value_cost(fields.at(index)) + 2;
+    cost += scale_cost(fields.at(index)) + shifted_field_cost(fields.at(index));
   return cost + 1;
 }
 
@@ -10013,6 +10058,24 @@ std::string select_packed_display_strategy(
   return selected;
 }
 
+bool lower_packed_display_field_to_x(LoweringContext& context, const PackedDisplayField& field,
+                                     std::string comment) {
+  if (field.literal) {
+    context.emitter.emit_number(field.literal_value);
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "display digit literal";
+    return true;
+  }
+  if (field.item == nullptr)
+    return false;
+  return lower_display_item_to_x(context, *field.item, std::move(comment));
+}
+
+bool source_field_matches_current_x(const LoweringContext& context, const PackedDisplayField& field) {
+  return !field.literal && field.item != nullptr && context.emitter.current_x_variable.has_value() &&
+         context.emitter.current_x_variable == field.item->name;
+}
+
 bool lower_packed_display_fields_in_order(LoweringContext& context,
                                           const std::vector<PackedDisplayField>& fields,
                                           int source_line, bool reuse_current_x) {
@@ -10025,7 +10088,7 @@ bool lower_packed_display_fields_in_order(LoweringContext& context,
     const PackedDisplayField& field = fields.at(index);
     if (field.item == nullptr)
       return false;
-    if (index == 0 && reuse_current_x && context.emitter.current_x_variable == field.item->name) {
+    if (index == 0 && reuse_current_x && source_field_matches_current_x(context, field)) {
       context.optimizations.push_back(OptimizationReport{
           .name = "display-current-x-reuse",
           .detail = "Reused " + field.item->name + " already in X as the first display field.",
@@ -10033,15 +10096,17 @@ bool lower_packed_display_fields_in_order(LoweringContext& context,
       continue;
     }
     if (index == 0) {
-      if (!lower_display_item_to_x(context, *field.item, "display source"))
+      if (!lower_packed_display_field_to_x(context, field, "display source"))
         return false;
       continue;
     }
     emit_display_scale(context, display_scale_for_width(field.width), source_line);
     context.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
-    if (!lower_display_item_to_x(context, *field.item, "display source"))
-      return false;
-    context.emitter.emit_op(0x10, "+", "packed display field append", source_line);
+    if (!field.literal || field.literal_value != "0") {
+      if (!lower_packed_display_field_to_x(context, field, "display source"))
+        return false;
+      context.emitter.emit_op(0x10, "+", "packed display field append", source_line);
+    }
   }
   return true;
 }
@@ -10070,16 +10135,18 @@ bool lower_packed_numeric_display_statement(LoweringContext& context,
                                             const std::vector<DisplayItem>& items,
                                             int source_line) {
   const std::optional<std::vector<PackedDisplayField>> parsed_fields =
-      numeric_source_display_fields(context, items);
+      numeric_display_fields(context, items);
   if (!parsed_fields.has_value() || parsed_fields->size() < 2)
     return false;
 
   const std::vector<PackedDisplayField>& fields = *parsed_fields;
+  const bool has_literal_field = std::any_of(fields.begin(), fields.end(), [](const auto& field) {
+    return field.literal;
+  });
   int current_index = -1;
   if (context.emitter.current_x_variable.has_value()) {
     for (std::size_t index = 0; index < fields.size(); ++index) {
-      if (fields.at(index).item != nullptr &&
-          fields.at(index).item->name == *context.emitter.current_x_variable) {
+      if (source_field_matches_current_x(context, fields.at(index))) {
         current_index = static_cast<int>(index);
         break;
       }
@@ -10101,9 +10168,11 @@ bool lower_packed_numeric_display_statement(LoweringContext& context,
         return false;
       emit_display_scale(context, display_scale_for_width(field.width), source_line);
       context.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
-      if (!lower_display_item_to_x(context, *field.item, "display source"))
-        return false;
-      context.emitter.emit_op(0x10, "+", "packed display field append", source_line);
+      if (!field.literal || field.literal_value != "0") {
+        if (!lower_packed_display_field_to_x(context, field, "display source"))
+          return false;
+        context.emitter.emit_op(0x10, "+", "packed display field append", source_line);
+      }
     }
     context.emitter.emit_op(0x50, "С/П", "show", source_line);
     context.optimizations.push_back(OptimizationReport{
@@ -10113,6 +10182,12 @@ bool lower_packed_numeric_display_statement(LoweringContext& context,
         .detail = "Reused " + current.item->name + " already in X as field " +
                   std::to_string(current_index + 1) + " of display.",
     });
+    if (has_literal_field) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "display-decimal-literal-field",
+          .detail = "Packed decimal digit literals directly into show(...).",
+      });
+    }
     report_packed_display_lowering(context);
     return true;
   }
@@ -10120,6 +10195,12 @@ bool lower_packed_numeric_display_statement(LoweringContext& context,
   if (!lower_packed_display_fields_in_order(context, fields, source_line, true))
     return false;
   context.emitter.emit_op(0x50, "С/П", "show", source_line);
+  if (has_literal_field) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "display-decimal-literal-field",
+        .detail = "Packed decimal digit literals directly into show(...).",
+    });
+  }
   report_packed_display_lowering(context);
   return true;
 }

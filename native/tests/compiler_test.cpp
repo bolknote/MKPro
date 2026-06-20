@@ -6235,6 +6235,62 @@ program PackedDisplay {
   require(packed_display_statement.listing.find("expr +") != std::string::npos,
           "display expression field should use generic expression lowering");
 
+  const CompileResult short_decimal_literal_display = compile_source(R"mkpro(
+program ShortDecimalLiteralField {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+  }
+
+  loop {
+    show(a, 0, b)
+    halt(0)
+  }
+}
+)mkpro");
+  require(short_decimal_literal_display.implemented,
+          "native compiler should lower zero decimal literal display fields");
+  require(short_decimal_literal_display.diagnostics.empty(),
+          "zero decimal literal display field should not report diagnostics");
+  require(has_optimization(short_decimal_literal_display, "display-decimal-literal-field"),
+          "zero decimal literal display field should report the TS strategy name");
+  int short_literal_shifts = 0;
+  int short_literal_appends = 0;
+  for (const ResolvedStep& step : short_decimal_literal_display.steps) {
+    if (step.comment == "packed display field shift")
+      ++short_literal_shifts;
+    if (step.comment == "packed display field append")
+      ++short_literal_appends;
+  }
+  require(short_literal_shifts == 2,
+          "zero decimal literal display field should still reserve its decimal position");
+  require(short_literal_appends == 1,
+          "zero decimal literal display field should skip the redundant zero append");
+
+  const CompileResult long_decimal_literal_display = compile_source(R"mkpro(
+program LongDecimalLiteralField {
+  state {
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+  }
+
+  loop {
+    show(a, 012, b)
+    halt(0)
+  }
+}
+)mkpro");
+  require(long_decimal_literal_display.implemented,
+          "native compiler should lower multi-digit decimal literal display fields");
+  require(long_decimal_literal_display.diagnostics.empty(),
+          "multi-digit decimal literal display field should not report diagnostics");
+  require(has_optimization(long_decimal_literal_display, "display-decimal-literal-field"),
+          "multi-digit decimal literal display field should report the TS strategy name");
+  require(long_decimal_literal_display.listing.find("display scale 1000") != std::string::npos,
+          "multi-digit decimal literal display field should preserve literal width");
+  require(long_decimal_literal_display.listing.find("display digit literal") != std::string::npos,
+          "multi-digit decimal literal display field should emit the normalized literal value");
+
   const CompileResult display_current_x_suffix = compile_source(R"mkpro(
 program DisplayCurrentXSuffixReuse {
   state {
