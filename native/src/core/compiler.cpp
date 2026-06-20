@@ -14194,6 +14194,135 @@ std::vector<V2Statement> inline_statement_invokes_once(LoweringContext& context,
   return expanded;
 }
 
+struct MaskMembershipCondition {
+  std::string collection;
+  Expression mask;
+};
+
+std::optional<MaskMembershipCondition>
+match_mask_membership_condition(LoweringContext& context, const V2Predicate& predicate,
+                                bool negated, int line) {
+  const std::optional<NormalizedZeroComparison> normalized =
+      normalize_zero_comparison(context, predicate, negated, line);
+  if (!normalized.has_value() || normalized->op != "!=")
+    return std::nullopt;
+  const Expression& expression = normalized->expression;
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_and" ||
+      expression.args.size() != 2U) {
+    return std::nullopt;
+  }
+
+  const Expression& first = expression.args.at(0);
+  const Expression& second = expression.args.at(1);
+  if (first.kind == "identifier")
+    return MaskMembershipCondition{.collection = first.name, .mask = second};
+  if (second.kind == "identifier")
+    return MaskMembershipCondition{.collection = second.name, .mask = first};
+  return std::nullopt;
+}
+
+bool membership_mask_preserves_y(const Expression& mask) {
+  if (mask.kind == "identifier")
+    return true;
+  return mask.kind == "call" && lower_ascii(mask.callee) == "frac" && mask.args.size() == 1U &&
+         mask.args.front().kind == "identifier";
+}
+
+bool expression_is_bit_not_of(const Expression& expression, const Expression& mask) {
+  return expression.kind == "call" && lower_ascii(expression.callee) == "bit_not" &&
+         expression.args.size() == 1U && expression_equals(expression.args.front(), mask);
+}
+
+bool expression_is_membership_clear(const Expression& expression, const std::string& collection,
+                                    const Expression& mask) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_and" ||
+      expression.args.size() != 2U) {
+    return false;
+  }
+  const auto matches = [&](const Expression& left, const Expression& right) {
+    return left.kind == "identifier" && left.name == collection &&
+           expression_is_bit_not_of(right, mask);
+  };
+  return matches(expression.args.at(0), expression.args.at(1)) ||
+         matches(expression.args.at(1), expression.args.at(0));
+}
+
+bool emit_y_preserving_membership_mask(LoweringContext& context, const Expression& mask, int line) {
+  if (mask.kind == "identifier") {
+    emit_recall(context, mask.name);
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "membership clear mask " + mask.name;
+    return true;
+  }
+  if (mask.kind == "call" && lower_ascii(mask.callee) == "frac" && mask.args.size() == 1U &&
+      mask.args.front().kind == "identifier") {
+    emit_recall(context, mask.args.front().name);
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "membership clear mask " + mask.args.front().name;
+    context.emitter.emit_op(0x35, "К {x}", "membership clear mask frac", line);
+    return true;
+  }
+  return false;
+}
+
+bool lower_membership_clear_delta_branch(LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value())
+    return false;
+  const std::optional<MaskMembershipCondition> membership =
+      match_mask_membership_condition(context, *statement.predicate, statement.negated,
+                                      statement.line);
+  if (!membership.has_value() || !membership_mask_preserves_y(membership->mask))
+    return false;
+
+  std::vector<V2Statement> then_body = inline_statement_invokes_once(context, statement.then_body);
+  if (then_body.empty())
+    return false;
+  const V2Statement& clear = then_body.front();
+  if (clear.kind != "v2_assign" || !clear.target.has_value() || !clear.expr.has_value() ||
+      *clear.target != membership->collection) {
+    return false;
+  }
+  if (!expression_is_membership_clear(parse_expression(*clear.expr, clear.line),
+                                      membership->collection, membership->mask)) {
+    return false;
+  }
+
+  const std::string false_label = context.emitter.fresh_label("if_false");
+  const std::string end_label = context.emitter.fresh_label("if_end");
+
+  emit_recall(context, membership->collection);
+  if (!context.emitter.items.empty())
+    context.emitter.items.back().comment = "membership clear source " + membership->collection;
+  if (!emit_y_preserving_membership_mask(context, membership->mask, statement.line))
+    return false;
+  context.emitter.emit_op(0x3a, "К ИНВ", "membership clear mask complement", statement.line);
+  context.emitter.emit_op(0x37, "К ∧", "clear membership bit before test", statement.line);
+  emit_store(context, membership->collection, "set " + membership->collection);
+  context.emitter.emit_op(0x11, "-", "membership clear delta test", statement.line);
+  context.emitter.emit_jump(0x57, "F x≠0", false_label, "false branch for !=", statement.line);
+
+  std::vector<V2Statement> rest(then_body.begin() + 1, then_body.end());
+  if (!lower_statement_block(context, rest))
+    return false;
+  if (!statement.else_body.empty()) {
+    context.emitter.emit_jump(0x51, "БП", end_label, "if end", statement.line);
+    context.emitter.emit_label(false_label, {.hidden = true});
+    context.emitter.current_x_known_zero = true;
+    if (!lower_statement_block(context, statement.else_body))
+      return false;
+    context.emitter.emit_label(end_label, {.hidden = true});
+  } else {
+    context.emitter.emit_label(false_label, {.hidden = true});
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "membership-clear-delta-branch",
+      .detail = "Cleared " + membership->collection +
+                " before branching and used the old value in Y to test membership at line " +
+                std::to_string(statement.line) + ".",
+  });
+  return true;
+}
+
 bool lower_cells_contains_clear_if(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value() || statement.negated)
     return false;
@@ -15472,6 +15601,10 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
     if (has_errors(context.diagnostics))
       return false;
     if (lower_cells_contains_clear_if(context, statement))
+      return true;
+    if (has_errors(context.diagnostics))
+      return false;
+    if (lower_membership_clear_delta_branch(context, statement))
       return true;
     if (has_errors(context.diagnostics))
       return false;

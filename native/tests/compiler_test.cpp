@@ -3726,6 +3726,38 @@ program CellClearReuse {
   require(cell_clear_reuse.listing.find("call function hit") == std::string::npos,
           "membership-clear reuse should see through the inlined procedure call");
 
+  CompileOptions membership_options;
+  membership_options.budget = 999;
+  membership_options.analysis = true;
+  const CompileResult mask_membership_clear = compile_source(R"mkpro(
+program MaskMembershipClear {
+  state {
+    pos: packed = 1.0000008
+    marks: packed = 0
+  }
+
+  loop {
+    if bit_and(marks, frac(pos)) != 0 {
+      marks = bit_and(marks, bit_not(frac(pos)))
+    }
+    halt(marks)
+  }
+}
+)mkpro",
+                                                         membership_options);
+  require(mask_membership_clear.implemented,
+          "native compiler should lower mask membership clear through a delta branch");
+  require(mask_membership_clear.diagnostics.empty(),
+          "mask membership clear compile should not report diagnostics");
+  require(has_optimization(mask_membership_clear, "membership-clear-delta-branch"),
+          "mask membership clear should report the TS strategy name");
+  require(std::none_of(mask_membership_clear.steps.begin(), mask_membership_clear.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment.has_value() &&
+                                step.comment->find("membership fraction") != std::string::npos;
+                       }),
+          "mask membership clear delta branch should avoid the generic membership fraction path");
+
   const CompileResult tail_display = compile_source(R"mkpro(
 program TailDisplay {
   state {
