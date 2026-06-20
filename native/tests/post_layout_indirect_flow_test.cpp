@@ -356,6 +356,42 @@ void post_layout_indirect_flow_matches_typescript_contract() {
   }
 
   {
+    MachineItem proc = MachineItem::label("finish_turn");
+    proc.procedure_boundary = "start";
+    std::vector<MachineItem> program = {
+        MachineItem::label("main"), MachineItem::op(0x53, "ПП"),
+        MachineItem::address("finish_turn"), MachineItem::op(0x88, "К БП 8"), proc,
+        digit(), MachineItem::op(0x52, "В/О"),
+    };
+    program.at(1).comment = "proc call finish_turn";
+
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_stop_tail_reuse(
+            program, {PreloadReport{
+                         .register_name = "8", .value = "B2", .counts_against_program = false}});
+
+    require(result.applied == 1,
+            "post-layout stop-tail reuse should apply empty-stack tail-call rewrite");
+    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 1,
+            "empty-stack tail-call rewrite should remove the proved loop-back cell");
+    require(!result.optimizations.empty() &&
+                result.optimizations.at(0).name == "post-layout-empty-stack-tail-call",
+            "empty-stack post-layout rewrite should report the TS optimization name");
+    require(result.items.at(1).kind == MachineItemKind::Op && result.items.at(1).opcode == 0x51,
+            "empty-stack post-layout rewrite should replace the call with a direct jump");
+    require(result.items.at(1).comment.has_value() &&
+                result.items.at(1).comment->find("empty-return-stack") != std::string::npos,
+            "empty-stack post-layout rewrite should preserve the proof in the comment");
+    require(result.items.at(2).kind == MachineItemKind::Address &&
+                std::get<std::string>(result.items.at(2).target) == "finish_turn",
+            "empty-stack post-layout rewrite should keep the original procedure target");
+    require(std::none_of(result.items.begin(), result.items.end(), [](const MachineItem& item) {
+              return item.kind == MachineItemKind::Op && item.opcode == 0x88;
+            }),
+            "empty-stack post-layout rewrite should remove the proved loop-back jump");
+  }
+
+  {
     std::vector<MachineItem> program = {
         MachineItem::op(0x00, "0"),
         MachineItem::op(0x0a, "."),

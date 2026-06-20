@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <map>
 #include <optional>
 #include <set>
@@ -54,6 +55,14 @@ struct StopTailReuseRewrite {
   int replace_index = 0;
   int remove_index = 0;
   bool zero_prefixed = false;
+};
+
+struct EmptyStackTailCallRewrite {
+  int call_index = 0;
+  int loop_back_index = 0;
+  std::string mnemonic;
+  std::string comment;
+  std::optional<int> source_line;
 };
 
 struct BranchRewrite {
@@ -951,6 +960,139 @@ std::optional<std::string> preload_value_for_register(const std::vector<PreloadR
   return std::nullopt;
 }
 
+std::optional<int> known_indirect_flow_target_comment(const std::optional<std::string>& comment) {
+  if (!comment.has_value())
+    return std::nullopt;
+  constexpr std::string_view kMarker = "indirect-target=";
+  const std::size_t marker = comment->find(kMarker);
+  if (marker == std::string::npos)
+    return std::nullopt;
+
+  std::size_t cursor = marker + kMarker.size();
+  if (cursor >= comment->size() ||
+      std::isdigit(static_cast<unsigned char>(comment->at(cursor))) == 0) {
+    return std::nullopt;
+  }
+
+  int target = 0;
+  while (cursor < comment->size() &&
+         std::isdigit(static_cast<unsigned char>(comment->at(cursor))) != 0) {
+    target = (target * 10) + (comment->at(cursor) - '0');
+    ++cursor;
+  }
+  if (target < 0 || target > 104)
+    return std::nullopt;
+  return target;
+}
+
+std::optional<int> first_procedure_start_address(const std::vector<MachineItem>& items) {
+  int address = 0;
+  for (const MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label) {
+      if (item.procedure_boundary == "start")
+        return address;
+      continue;
+    }
+    ++address;
+  }
+  return std::nullopt;
+}
+
+std::optional<int> known_machine_indirect_jump_target(
+    const MachineItem& item, const std::vector<PreloadReport>& preloads) {
+  if (item.kind != MachineItemKind::Op)
+    return std::nullopt;
+  const std::optional<std::string> register_name = register_from_indirect_opcode(item.opcode);
+  if (!register_name.has_value() || item.opcode - register_index(*register_name) != 0x80)
+    return std::nullopt;
+
+  if (const std::optional<int> comment_target =
+          known_indirect_flow_target_comment(item.comment)) {
+    return comment_target;
+  }
+
+  const std::optional<std::string> selector_value =
+      preload_value_for_register(preloads, *register_name);
+  if (!selector_value.has_value())
+    return std::nullopt;
+  const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
+      *register_name, *selector_value, IndirectOperationKind::Flow);
+  if (!decoded.has_value())
+    return std::nullopt;
+  return decoded->actual_flow_target;
+}
+
+std::string empty_stack_tail_call_comment(const MachineItem& call) {
+  std::string comment = "empty-stack tail call";
+  if (call.comment.has_value()) {
+    constexpr std::string_view kProcCallPrefix = "proc call";
+    if (call.comment->starts_with(kProcCallPrefix)) {
+      comment = "empty-stack tail call" +
+                call.comment->substr(static_cast<std::size_t>(kProcCallPrefix.size()));
+    } else {
+      comment = *call.comment;
+    }
+  }
+  if (!comment.empty())
+    comment += "; ";
+  comment += "empty-return-stack loop head";
+  return comment;
+}
+
+std::optional<EmptyStackTailCallRewrite>
+find_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
+                                   const std::vector<PreloadReport>& preloads) {
+  const std::vector<MachineCell> cells = machine_cells(items);
+  const std::optional<int> first_proc = first_procedure_start_address(items);
+  if (!first_proc.has_value())
+    return std::nullopt;
+
+  for (std::size_t index = 0; index + 2 < cells.size(); ++index) {
+    const MachineCell& call = cells.at(index);
+    const MachineCell& address = cells.at(index + 1);
+    const MachineCell& loop_back = cells.at(index + 2);
+    if (call.address >= *first_proc)
+      break;
+    if (call.item == nullptr || address.item == nullptr || loop_back.item == nullptr ||
+        call.item->kind != MachineItemKind::Op || call.item->opcode != 0x53 ||
+        address.item->kind != MachineItemKind::Address) {
+      continue;
+    }
+    if (known_machine_indirect_jump_target(*loop_back.item, preloads) != 0)
+      continue;
+
+    return EmptyStackTailCallRewrite{
+        .call_index = call.item_index,
+        .loop_back_index = loop_back.item_index,
+        .mnemonic = "БП",
+        .comment = empty_stack_tail_call_comment(*call.item),
+        .source_line = call.item->source_line,
+    };
+  }
+  return std::nullopt;
+}
+
+std::vector<MachineItem>
+apply_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
+                                    const EmptyStackTailCallRewrite& rewrite) {
+  std::vector<MachineItem> result;
+  result.reserve(items.size() - 1);
+  for (int index = 0; index < static_cast<int>(items.size()); ++index) {
+    if (index == rewrite.loop_back_index)
+      continue;
+    if (index == rewrite.call_index) {
+      MachineItem item = MachineItem::op(0x51, rewrite.mnemonic);
+      item.comment = rewrite.comment;
+      if (rewrite.source_line.has_value())
+        item.source_line = *rewrite.source_line;
+      result.push_back(std::move(item));
+      continue;
+    }
+    result.push_back(items.at(static_cast<std::size_t>(index)));
+  }
+  return result;
+}
+
 std::optional<std::string> retargeted_selector_value(const std::string& register_name,
                                                      const std::string& previous_value,
                                                      int shifted_target) {
@@ -1415,9 +1557,30 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
   std::vector<PreloadReport> current_preloads = preloads;
   int stop_tail_applied = 0;
   int existing_selector_applied = 0;
+  int empty_stack_tail_call_applied = 0;
 
   for (int round = 0; round < kMaxRewrites; ++round) {
     const std::map<int, int> address_by_item = machine_address_by_item_index(current);
+
+    if (const std::optional<EmptyStackTailCallRewrite> rewrite =
+            find_empty_stack_tail_call_rewrite(current, current_preloads)) {
+      const auto removed_it = address_by_item.find(rewrite->loop_back_index);
+      if (removed_it == address_by_item.end())
+        break;
+      std::vector<MachineItem> candidate =
+          apply_empty_stack_tail_call_rewrite(current, *rewrite);
+      if (machine_cell_count(candidate) >= machine_cell_count(current))
+        break;
+      const std::optional<RetargetedMachine> retargeted =
+          retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
+                                                            current_preloads, removed_it->second);
+      if (!retargeted.has_value())
+        break;
+      current = retargeted->items;
+      current_preloads = retargeted->preloads;
+      ++empty_stack_tail_call_applied;
+      continue;
+    }
 
     if (const std::optional<BranchRewrite> rewrite =
             find_existing_selector_flow_rewrite(current, current_preloads)) {
@@ -1479,7 +1642,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
     break;
   }
 
-  const int applied = stop_tail_applied + existing_selector_applied;
+  const int applied = stop_tail_applied + existing_selector_applied + empty_stack_tail_call_applied;
   if (applied == 0) {
     return PostLayoutIndirectFlowResult{
         .items = items,
@@ -1488,6 +1651,16 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
   }
 
   std::vector<passes::AppliedOptimization> optimizations;
+  if (empty_stack_tail_call_applied > 0) {
+    optimizations.push_back(passes::AppliedOptimization{
+        .name = "post-layout-empty-stack-tail-call",
+        .detail = "Replaced " + std::to_string(empty_stack_tail_call_applied) +
+                  " terminal main-loop call" +
+                  (empty_stack_tail_call_applied == 1 ? "" : "s") +
+                  " with direct jump(s) whose final В/О returns through the empty stack to the "
+                  "loop head.",
+    });
+  }
   if (stop_tail_applied > 0) {
     optimizations.push_back(passes::AppliedOptimization{
         .name = "post-layout-stop-tail-reuse",
