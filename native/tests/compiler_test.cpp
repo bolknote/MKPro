@@ -5171,6 +5171,42 @@ program LiteralTerminalDisplay {
                       }),
           "literal terminal display should use the one-cell error stop");
 
+  const CompileResult literal_terminal_video_stop = compile_source(R"mkpro(
+program LiteralTerminalVideoStop {
+  loop {
+    halt("8СГ-Е-78")
+  }
+}
+)mkpro");
+  require(literal_terminal_video_stop.implemented,
+          "native compiler should lower literal terminal video stops");
+  require(literal_terminal_video_stop.diagnostics.empty(),
+          "literal terminal video stop compile should not report diagnostics");
+  require(has_optimization(literal_terminal_video_stop, "terminal-literal-stop"),
+          "literal terminal video stop should report the TS strategy name");
+  require(std::count_if(literal_terminal_video_stop.steps.begin(),
+                        literal_terminal_video_stop.steps.end(),
+                        [](const ResolvedStep& step) { return step.mnemonic == "С/П"; }) == 1,
+          "literal terminal video stop should emit one visible stop");
+
+  const CompileResult first_splice_literal_terminal_stop = compile_source(R"mkpro(
+program FirstSpliceLiteralTerminalStop {
+  loop {
+    halt("Г16ЕL 91")
+  }
+}
+)mkpro");
+  require(first_splice_literal_terminal_stop.implemented,
+          "native compiler should lower first-splice literal terminal stops");
+  require(first_splice_literal_terminal_stop.diagnostics.empty(),
+          "first-splice literal terminal stop compile should not report diagnostics");
+  require(has_optimization(first_splice_literal_terminal_stop, "terminal-literal-stop"),
+          "first-splice literal terminal stop should report the TS strategy name");
+  require(std::count_if(first_splice_literal_terminal_stop.steps.begin(),
+                        first_splice_literal_terminal_stop.steps.end(),
+                        [](const ResolvedStep& step) { return step.mnemonic == "С/П"; }) == 1,
+          "first-splice literal terminal stop should emit one visible stop");
+
   const CompileResult initial_value_terminal_display = compile_source(R"mkpro(
 program InitialValueTerminalDisplay {
   state {

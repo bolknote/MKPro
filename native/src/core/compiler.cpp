@@ -10367,6 +10367,65 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
   return true;
 }
 
+void report_terminal_literal_stop(LoweringContext& context, const std::string& literal, int line) {
+  context.optimizations.push_back(OptimizationReport{
+      .name = "terminal-literal-stop",
+      .detail = "Lowered literal terminal stop \"" + literal + "\" at line " +
+                std::to_string(line) + ".",
+  });
+}
+
+bool lower_literal_terminal_stop(LoweringContext& context, const std::string& literal, int line) {
+  if (literal.empty()) {
+    context.emitter.emit_op(0x50, "С/П", "show __halt_literal_" + std::to_string(line), line);
+    report_terminal_literal_stop(context, literal, line);
+    return true;
+  }
+
+  if (const std::optional<DisplayLiteralProgram> program = display_literal_program(literal)) {
+    if (program->kind == "error") {
+      context.emitter.emit_op(0x29, "К ÷", "halt literal ЕГГ0Г", line);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "error-stop",
+          .detail = "Used one-cell error opcode for literal ЕГГ0Г stop at line " +
+                    std::to_string(line) + ".",
+      });
+      return true;
+    }
+    if (!core::emit::emit_direct_display_literal_program(context.emitter, *program, line))
+      return false;
+    report_terminal_literal_stop(context, literal, line);
+    return true;
+  }
+
+  if (const std::optional<std::string> decimal = decimal_display_literal_number(literal)) {
+    context.emitter.emit_number(*decimal);
+    context.emitter.emit_op(0x50, "С/П", "show __halt_literal_" + std::to_string(line), line);
+    report_terminal_literal_stop(context, literal, line);
+    return true;
+  }
+
+  if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
+          first_splice_display_literal_program(literal)) {
+    const std::string scratch = "__display_first_literal";
+    if (!ensure_hidden_register(context, scratch))
+      return false;
+    auto display_api = display_emit_api(context);
+    if (!core::emit::emit_first_splice_display_literal_program(display_api, context,
+                                                               *first_splice, scratch, line)) {
+      return false;
+    }
+    context.emitter.emit_op(0x50, "С/П", "show __halt_literal_" + std::to_string(line), line);
+    report_terminal_literal_stop(context, literal, line);
+    return true;
+  }
+
+  context.diagnostics.push_back(
+      diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                 "Literal halt \"" + literal + "\" is not lowerable yet."));
+  return false;
+}
+
 bool lower_decrement_update(LoweringContext& context, const std::string& target,
                             std::string comment_prefix) {
   emit_recall(context, target);
@@ -17179,34 +17238,13 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
     if (statement.items.has_value()) {
       const std::optional<std::string> literal =
           core::emit::collapse_literal_only_display(*statement.items);
-      if (literal.has_value()) {
-        const std::optional<DisplayLiteralProgram> program = display_literal_program(*literal);
-        if (program.has_value() && program->kind == "error") {
-          context.emitter.emit_op(0x29, "К ÷", "halt literal ЕГГ0Г", statement.line);
-          context.optimizations.push_back(OptimizationReport{
-              .name = "error-stop",
-              .detail = "Used one-cell error opcode for literal ЕГГ0Г stop at line " +
-                        std::to_string(statement.line) + ".",
-          });
-          return true;
-        }
-      }
+      if (literal.has_value())
+        return lower_literal_terminal_stop(context, *literal, statement.line);
     }
     if (statement.target.has_value()) {
       const Expression expression = parse_expression(*statement.target, statement.line);
-      if (expression.kind == "string") {
-        const std::optional<DisplayLiteralProgram> literal =
-            display_literal_program(expression.text);
-        if (literal.has_value() && literal->kind == "error") {
-          context.emitter.emit_op(0x29, "К ÷", "halt literal ЕГГ0Г", statement.line);
-          context.optimizations.push_back(OptimizationReport{
-              .name = "error-stop",
-              .detail = "Used one-cell error opcode for literal ЕГГ0Г stop at line " +
-                        std::to_string(statement.line) + ".",
-          });
-          return true;
-        }
-      }
+      if (expression.kind == "string")
+        return lower_literal_terminal_stop(context, expression.text, statement.line);
       if (!lower_expression_to_x(context, expression))
         return false;
     }
