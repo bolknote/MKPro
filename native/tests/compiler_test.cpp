@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <string>
 
@@ -3053,6 +3054,67 @@ program RepeatedConstantPreload {
   require(repeated_constant_preload.listing.find("preload const 12345") != std::string::npos,
           "main listing should annotate preloaded constant recalls");
 
+  CompileOptions fractional_selector_options;
+  fractional_selector_options.analysis = true;
+  fractional_selector_options.preloaded_constant_registers["7"] = "36.123456";
+  fractional_selector_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.123456", .target = 36});
+  const CompileResult fractional_selector_preload = compile_source(R"mkpro(
+program FractionalSelectorPreload {
+  loop {
+    halt(0.123456)
+  }
+}
+)mkpro",
+                                                                   fractional_selector_options);
+  require(fractional_selector_preload.implemented,
+          "native compiler should lower fractional selector constant preloads");
+  const auto fractional_recall = std::find_if(
+      fractional_selector_preload.steps.begin(), fractional_selector_preload.steps.end(),
+      [](const ResolvedStep& step) {
+        return step.comment.has_value() &&
+               step.comment->find("fractional selector source 0.123456") != std::string::npos;
+      });
+  require(fractional_recall != fractional_selector_preload.steps.end(),
+          "fractional selector preload should recall the selector carrier");
+  require(std::next(fractional_recall) != fractional_selector_preload.steps.end() &&
+              std::next(fractional_recall)->comment == "fractional selector const 0.123456",
+          "fractional selector preload should recover the original fractional constant");
+  require(has_optimization(fractional_selector_preload, "fractional-constant-selector-use"),
+          "fractional selector recovery should report the TS optimization name");
+
+  CompileOptions natural_fractional_selector_options;
+  natural_fractional_selector_options.analysis = true;
+  natural_fractional_selector_options.preloaded_constant_registers["7"] = "2.2600029E-1";
+  natural_fractional_selector_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.22600029", .target = 29});
+  const CompileResult natural_fractional_selector_preload =
+      compile_source(R"mkpro(
+program NaturalFractionalSelectorPreload {
+  loop {
+    halt(0.22600029)
+  }
+}
+)mkpro",
+                     natural_fractional_selector_options);
+  require(natural_fractional_selector_preload.implemented,
+          "native compiler should lower natural fractional selector constant preloads");
+  const auto natural_recall =
+      std::find_if(natural_fractional_selector_preload.steps.begin(),
+                   natural_fractional_selector_preload.steps.end(), [](const ResolvedStep& step) {
+                     return step.comment.has_value() &&
+                            step.comment->find("natural fractional selector source 0.22600029") !=
+                                std::string::npos;
+                   });
+  require(natural_recall != natural_fractional_selector_preload.steps.end(),
+          "natural fractional selector preload should recall the normalized carrier");
+  require(std::next(natural_recall) == natural_fractional_selector_preload.steps.end() ||
+              std::next(natural_recall)->comment != "fractional selector const 0.22600029",
+          "natural fractional selector preload should not emit recovery");
+  require(has_optimization(natural_fractional_selector_preload,
+                           "natural-fractional-constant-selector-use"),
+          "natural fractional selector use should report the TS optimization name");
+
   const CompileResult known_zero_reuse = compile_source(R"mkpro(
 program KnownZeroReuse {
   state {
@@ -3129,6 +3191,8 @@ program CellsLineCountPreloads {
           "line_count helper should report TS stack-carried hit-count restoration");
   require(cells_line_count_preloads.listing.find("preload const 0.5") != std::string::npos,
           "shared bit-mask helper should use the planned fractional preload");
+  require(has_optimization(cells_line_count_preloads, "preloaded-stack-constant"),
+          "shared bit-mask helper should report stack-only constant preloads");
   require(cells_line_count_preloads.setup_program.has_value(),
           "preloaded line_count programs should expose a setup program");
   require(!cells_line_count_preloads.setup_program->steps.empty(),

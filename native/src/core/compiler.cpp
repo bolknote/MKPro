@@ -6204,16 +6204,140 @@ bool emit_zero(LoweringContext& context, std::optional<std::string> comment,
   return false;
 }
 
+bool is_stack_literal_preload_only_constant(const std::string& key) {
+  return key == "1" || key == "2" || key == "4" || key == "8";
+}
+
+std::optional<FractionalConstantSelectorPlan>
+fractional_constant_selector_for_value(const LoweringContext& context, const std::string& value) {
+  const auto found = std::find_if(context.fractional_constant_selectors.begin(),
+                                  context.fractional_constant_selectors.end(),
+                                  [&](const FractionalConstantSelectorPlan& plan) {
+                                    return normalize_number_key(plan.value) == value;
+                                  });
+  if (found == context.fractional_constant_selectors.end())
+    return std::nullopt;
+  return *found;
+}
+
+bool fractional_selector_candidate_value(const std::string& value) {
+  if (!value.starts_with("0.") || value.size() <= 2)
+    return false;
+  if (!std::all_of(value.begin() + 2, value.end(),
+                   [](char ch) { return std::isdigit(static_cast<unsigned char>(ch)) != 0; })) {
+    return false;
+  }
+  try {
+    const double parsed = std::stod(value);
+    return std::isfinite(parsed) && parsed > 0.0 && parsed < 1.0;
+  } catch (...) {
+    return false;
+  }
+}
+
+std::optional<std::pair<std::string, int>>
+natural_fractional_selector_preload_value(const std::string& value) {
+  if (!fractional_selector_candidate_value(value))
+    return std::nullopt;
+  const std::string fraction = value.substr(2);
+  const auto first_significant = std::find_if(fraction.begin(), fraction.end(),
+                                              [](char ch) { return ch >= '1' && ch <= '9'; });
+  if (first_significant == fraction.end())
+    return std::nullopt;
+  const std::size_t first_index = static_cast<std::size_t>(first_significant - fraction.begin());
+  const std::string significant = fraction.substr(first_index);
+  auto beyond_mantissa = significant.begin();
+  std::advance(beyond_mantissa,
+               static_cast<std::ptrdiff_t>(std::min<std::size_t>(8, significant.size())));
+  if (std::any_of(beyond_mantissa, significant.end(),
+                  [](char ch) { return ch >= '1' && ch <= '9'; })) {
+    return std::nullopt;
+  }
+  std::string mantissa = significant;
+  mantissa.resize(8, '0');
+  mantissa = mantissa.substr(0, 8);
+  const int target = std::stoi(mantissa.substr(6, 2));
+  if (target <= 0)
+    return std::nullopt;
+  return std::pair<std::string, int>{
+      mantissa.substr(0, 1) + "." + mantissa.substr(1) + "E-" + std::to_string(first_index + 1),
+      target,
+  };
+}
+
+std::optional<std::string> fractional_selector_preload_value(const std::string& value, int target) {
+  if (target <= 0 || !fractional_selector_candidate_value(value))
+    return std::nullopt;
+  const std::optional<std::pair<std::string, int>> natural =
+      natural_fractional_selector_preload_value(value);
+  if (natural.has_value() && natural->second == target)
+    return natural->first;
+  return std::to_string(target) + value.substr(1);
+}
+
+bool fractional_selector_needs_recovery(const std::string& value,
+                                        const std::string& selector_value) {
+  const std::optional<std::pair<std::string, int>> natural =
+      natural_fractional_selector_preload_value(value);
+  return !natural.has_value() ||
+         normalize_number_key(natural->first) != normalize_number_key(selector_value);
+}
+
 void emit_number_or_preload(LoweringContext& context, const std::string& value,
                             std::optional<std::string> comment = std::nullopt,
                             std::optional<int> source_line = std::nullopt) {
   const std::string key = normalize_number_key(value);
   if (key == "0" && emit_zero(context, comment, source_line))
     return;
-  const auto preload_it = context.preloaded_numbers.find(key);
+  const std::optional<FractionalConstantSelectorPlan> selector =
+      fractional_constant_selector_for_value(context, key);
+  const std::optional<std::string> selector_value =
+      selector.has_value() ? fractional_selector_preload_value(key, selector->target)
+                           : std::nullopt;
+  const std::string preload_key =
+      selector_value.has_value() ? normalize_number_key(*selector_value) : key;
+  const auto preload_it = context.preloaded_numbers.find(preload_key);
   if (preload_it != context.preloaded_numbers.end()) {
     emit_recall(context, preload_it->second);
-    context.emitter.items.back().comment = comment.value_or("preload const " + key);
+    const bool stack_literal = comment.has_value() &&
+                               comment->starts_with("preload stack const ") &&
+                               is_stack_literal_preload_only_constant(key);
+    if (comment.has_value()) {
+      context.emitter.items.back().comment = *comment;
+    } else if (selector.has_value() && selector_value.has_value()) {
+      context.emitter.items.back().comment =
+          fractional_selector_needs_recovery(key, *selector_value)
+              ? "preload const " + *selector_value + "; fractional selector source " + key
+              : "preload const " + *selector_value + "; natural fractional selector source " + key;
+    } else {
+      context.emitter.items.back().comment = "preload const " + key;
+    }
+    if (selector.has_value() && selector_value.has_value() &&
+        fractional_selector_needs_recovery(key, *selector_value)) {
+      context.emitter.emit_op(0x35, "К {x}", "fractional selector const " + key, source_line);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "fractional-constant-selector-use",
+          .detail = "Recovered fractional constant " + key + " from R" +
+                    register_text_for(context, preload_it->second) + " carrying target " +
+                    std::to_string(selector->target) + " as " + *selector_value + ".",
+      });
+    } else if (selector.has_value() && selector_value.has_value()) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "natural-fractional-constant-selector-use",
+          .detail = "Used normalized fractional constant " + *selector_value + " from R" +
+                    register_text_for(context, preload_it->second) + " as " + key +
+                    " while preserving its indirect target " + std::to_string(selector->target) +
+                    ".",
+      });
+    }
+    if (stack_literal) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "preloaded-stack-constant",
+          .detail = "Used preloaded R" + register_text_for(context, preload_it->second) +
+                    " for stack literal " + key + ".",
+      });
+      return;
+    }
     context.optimizations.push_back(OptimizationReport{
         .name = "preloaded-constant",
         .detail = "Used preloaded R" + register_text_for(context, preload_it->second) +
@@ -7647,6 +7771,14 @@ bool reserve_preloaded_number(LoweringContext& context, const std::string& value
   bind_register(context, name, *index);
   context.preloaded_numbers[key] = name;
   return true;
+}
+
+void reserve_preloaded_number_at(LoweringContext& context, const std::string& register_name,
+                                 const std::string& value) {
+  const std::string key = normalize_number_key(value);
+  const std::string name = preloaded_number_name(key);
+  bind_register(context, name, register_index(register_name));
+  context.preloaded_numbers[key] = name;
 }
 
 bool reserve_bit_mask_helper_preloads(LoweringContext& context) {
@@ -20172,6 +20304,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.invert_branch_order = options.invert_branch_order;
   context.order_procs_by_call_count = options.order_procs_by_call_count;
   context.proc_layout_strategy = options.proc_layout_strategy;
+  context.fractional_constant_selectors = options.fractional_constant_selectors;
+  for (const auto& [register_name, value] : options.preloaded_constant_registers)
+    reserve_preloaded_number_at(context, register_name, value);
   for (const std::string& value : options.suppress_constant_preloads)
     context.suppress_constant_preloads.insert(normalize_number_key(value));
   bool exact_decimal_series = false;
@@ -20592,6 +20727,8 @@ std::string implemented_candidate_key(const CompileOptions& options) {
     out << ";preloaded_constant=" << value << ":" << reg;
   for (const std::string& value : options.suppress_constant_preloads)
     out << ";suppress_constant=" << value;
+  for (const FractionalConstantSelectorPlan& plan : options.fractional_constant_selectors)
+    out << ";fractional_selector=" << normalize_number_key(plan.value) << ":" << plan.target;
   for (const RegisterShare& share : options.forced_register_shares)
     out << ";forced_share=" << share.free_register << ">" << share.keep_register;
   return out.str();

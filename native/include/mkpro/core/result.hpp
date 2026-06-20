@@ -53,6 +53,11 @@ struct RegisterShare {
   std::string keep_register;
 };
 
+struct FractionalConstantSelectorPlan {
+  std::string value;
+  int target = 0;
+};
+
 enum class DeliveryMode {
   Manual,
   Loader,
@@ -126,6 +131,7 @@ struct CompileOptions {
   bool collect_coalesce_shares = false;
   std::map<std::string, std::string> preloaded_constant_registers;
   std::set<std::string> suppress_constant_preloads;
+  std::vector<FractionalConstantSelectorPlan> fractional_constant_selectors;
   std::vector<std::string> pack_counter_stripe_names;
   std::vector<RegisterShare> forced_register_shares;
 };
