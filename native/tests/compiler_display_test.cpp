@@ -90,6 +90,38 @@ program LeadingZeroLiteralDisplay {
                                step.comment->find("first digit") != std::string::npos;
                       }),
           "leading-zero literal setup should build the source display literal first digit");
+
+  const CompileResult zero_tail = compile_source(R"mkpro(
+program ZeroDigitTailScreen {
+  loop {
+    show("2Е")
+  }
+}
+)mkpro");
+  require(zero_tail.implemented, "native compiler should lower zero-digit tail display literals");
+  require(zero_tail.diagnostics.empty(),
+          "zero-digit tail display compile should not report diagnostics");
+  require(has_optimization(zero_tail, "screen-zero-digit-tail-lowering"),
+          "zero-digit tail display should report the TS strategy name");
+  require(has_optimization(zero_tail, "screen-video-literal-lowering"),
+          "zero-digit tail display should report the outer literal-screen lowering strategy");
+  require(std::any_of(zero_tail.steps.begin(), zero_tail.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x54 &&
+                               step.comment == "display zero-digit tail seed";
+                      }),
+          "zero-digit tail display should seed the 0C tail trick");
+  require(std::any_of(zero_tail.steps.begin(), zero_tail.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x6c &&
+                               step.comment == "display zero-digit tail hidden tail";
+                      }),
+          "zero-digit tail display should read the hidden tail from Rc");
+  require(std::any_of(zero_tail.steps.begin(), zero_tail.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x50 && step.comment == "show literal";
+                      }),
+          "zero-digit tail display should emit the calculator stop");
 }
 
 } // namespace mkpro::tests

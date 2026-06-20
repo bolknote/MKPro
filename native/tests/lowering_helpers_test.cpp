@@ -54,6 +54,10 @@ void lowering_helpers_match_typescript_contract() {
   require(leading_zero.has_value(), "leading-zero display literal should use hex product plan");
   require(leading_zero->source_literal == "-" && leading_zero->factor == "18",
           "leading-zero hex product plan should match the TS helper table");
+  const auto zero_tail = core::emit::zero_digit_tail_display_program("2Е");
+  require(zero_tail.has_value(), "zero-digit tail display literal should be planned");
+  require(zero_tail->input == 1,
+          "zero-digit tail display input should be one less than sign digit");
   require(!core::emit::display_literal_mantissa_cells("1.2").has_value(),
           "display mantissa cells should reject explicit decimal points");
   require(core::emit::display_cells_literal({8, 10, 0, 15, 14}) == "8-0_E",

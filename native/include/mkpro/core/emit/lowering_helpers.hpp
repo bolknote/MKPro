@@ -47,6 +47,10 @@ struct LeadingZeroHexProductPlan {
   std::string factor;
 };
 
+struct ZeroDigitTailDisplayProgram {
+  int input = 0;
+};
+
 struct RemainderByConstantMatch {
   Expression value;
   Expression divisor;
@@ -69,6 +73,7 @@ std::optional<DisplayLiteralProgram> display_literal_program(std::string_view te
 std::optional<std::string> decimal_display_literal_number(std::string_view text);
 std::optional<LeadingZeroHexProductPlan>
 leading_zero_hex_product_display_program(std::string_view text);
+std::optional<ZeroDigitTailDisplayProgram> zero_digit_tail_display_program(std::string_view text);
 std::optional<std::vector<int>> display_literal_mantissa_cells(std::string_view text);
 std::string display_cells_literal(const std::vector<int>& cells);
 std::string normalize_display_template_literal(std::string_view text);

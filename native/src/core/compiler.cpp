@@ -85,6 +85,8 @@ using core::emit::spatial_bit_index_expression_for_board;
 using core::emit::spatial_hit_expression;
 using core::emit::subtract_expression;
 using core::emit::unary_expression;
+using core::emit::zero_digit_tail_display_program;
+using core::emit::ZeroDigitTailDisplayProgram;
 
 Diagnostic diagnostic(DiagnosticSeverity severity, std::string code, std::string message) {
   return Diagnostic{
@@ -10352,6 +10354,43 @@ bool lower_leading_zero_hex_product_display(LoweringContext& context, const std:
   return true;
 }
 
+bool fixed_scratch_registers_available(const LoweringContext& context,
+                                       std::initializer_list<int> registers) {
+  return std::all_of(registers.begin(), registers.end(), [&](int scratch) {
+    return std::none_of(context.register_index_by_name.begin(),
+                        context.register_index_by_name.end(),
+                        [&](const auto& entry) { return entry.second == scratch; });
+  });
+}
+
+bool lower_zero_digit_tail_display(LoweringContext& context, const std::string& literal, int line) {
+  const std::optional<ZeroDigitTailDisplayProgram> program =
+      zero_digit_tail_display_program(literal);
+  if (!program.has_value())
+    return false;
+  if (!fixed_scratch_registers_available(context, {0x9, 0x0c}))
+    return false;
+
+  context.emitter.emit_number(std::to_string(program->input));
+  context.emitter.emit_op(0x54, "К НОП", "display zero-digit tail seed", line, true);
+  context.emitter.emit_number("50");
+  context.emitter.emit_op(0x15, "F 10^x", "display zero-digit tail monster", line);
+  context.emitter.emit_op(0x22, "F x^2", "display zero-digit tail monster", line);
+  context.emitter.emit_op(0x22, "F x^2", "display zero-digit tail monster", line);
+  context.emitter.emit_op(0x22, "F x^2", "display zero-digit tail monster", line);
+  context.emitter.emit_op(0x12, "*", "display zero-digit tail monster", line);
+  context.emitter.emit_op(0x49, "X->П 9", "display zero-digit tail scratch", line, true);
+  context.emitter.emit_op(0x69, "П->X 9", "display zero-digit tail scratch", line);
+  context.emitter.emit_op(0x6c, "П->X c", "display zero-digit tail hidden tail", line);
+  context.emitter.emit_op(0x0c, "ВП", "display zero-digit tail restore", line);
+  context.emitter.emit_op(0x07, "7", "display zero-digit tail exponent", line);
+  context.emitter.emit_op(0x50, "С/П", "show literal", line);
+  report_screen_literal_lowering(context, "screen-zero-digit-tail-lowering",
+                                 "Lowered screen literal at line " + std::to_string(line) +
+                                     " through the 0C tail sign-digit display trick.");
+  return true;
+}
+
 bool lower_display_statement(LoweringContext& context, const V2Statement& statement) {
   if (!statement.items.has_value()) {
     context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
@@ -10397,6 +10436,10 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
       return true;
     }
     if (lower_leading_zero_hex_product_display(context, *literal, statement.line)) {
+      report_screen_video_literal_lowering(context, statement.line);
+      return true;
+    }
+    if (lower_zero_digit_tail_display(context, *literal, statement.line)) {
       report_screen_video_literal_lowering(context, statement.line);
       return true;
     }

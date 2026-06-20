@@ -354,6 +354,17 @@ leading_zero_hex_product_display_program(std::string_view text) {
   };
 }
 
+std::optional<ZeroDigitTailDisplayProgram> zero_digit_tail_display_program(std::string_view text) {
+  const std::optional<std::vector<int>> cells = display_literal_cells(text);
+  if (!cells.has_value() || cells->size() != 2U)
+    return std::nullopt;
+  const int sign_digit = cells->at(0);
+  const int tail = cells->at(1);
+  if (sign_digit < 2 || sign_digit > 9 || tail != 14)
+    return std::nullopt;
+  return ZeroDigitTailDisplayProgram{.input = sign_digit - 1};
+}
+
 std::optional<std::vector<int>> display_literal_mantissa_cells(std::string_view text) {
   const std::optional<std::string> normalized = normalize_display_literal_text(text);
   if (!normalized.has_value())
