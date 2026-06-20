@@ -1,0 +1,508 @@
+{
+  "schemaVersion": 1,
+  "generatedBy": "scripts/export-native-oracles.mjs",
+  "compilerHash": "92716d706dc3bedc86ce22550c27bd264eab14a9bbd9d08e2f10889adbf9abf6",
+  "compileOptions": {
+    "budget": 999999,
+    "analysis": true
+  },
+  "exampleCount": 31,
+  "examples": [
+    {
+      "id": "99-bottles",
+      "sourcePath": "examples/99-bottles.mkpro",
+      "sourceSha256": "9036f67eb4711c72f04ac80865c5b52833ba03aea9596047aa8c3ccabe64d1c0",
+      "steps": 52,
+      "artifacts": {
+        "bytes": "99-bottles/bytes.txt",
+        "hex": "99-bottles/hex.txt",
+        "listing": "99-bottles/listing.txt",
+        "keys": "99-bottles/keys.txt",
+        "setup": "99-bottles/setup.txt",
+        "explain": "99-bottles/explain.txt",
+        "report": "99-bottles/report.json",
+        "variants": "99-bottles/variants.txt"
+      }
+    },
+    {
+      "id": "alaram",
+      "sourcePath": "examples/alaram.mkpro",
+      "sourceSha256": "e0de467fdd78f327c35560b8f5d77d5848ceae97d57863b9ce2be4ed28019671",
+      "steps": 66,
+      "artifacts": {
+        "bytes": "alaram/bytes.txt",
+        "hex": "alaram/hex.txt",
+        "listing": "alaram/listing.txt",
+        "keys": "alaram/keys.txt",
+        "setup": "alaram/setup.txt",
+        "explain": "alaram/explain.txt",
+        "report": "alaram/report.json",
+        "variants": "alaram/variants.txt"
+      }
+    },
+    {
+      "id": "basic",
+      "sourcePath": "examples/basic.mkpro",
+      "sourceSha256": "1ec1f9567f4cda4f6fc03618868aa6408a64fd85ed20d41ba3d32ff50132b859",
+      "steps": 8,
+      "artifacts": {
+        "bytes": "basic/bytes.txt",
+        "hex": "basic/hex.txt",
+        "listing": "basic/listing.txt",
+        "keys": "basic/keys.txt",
+        "setup": "basic/setup.txt",
+        "explain": "basic/explain.txt",
+        "report": "basic/report.json",
+        "variants": "basic/variants.txt"
+      }
+    },
+    {
+      "id": "cave-highlevel-baseline",
+      "sourcePath": "examples/cave-highlevel-baseline.mkpro",
+      "sourceSha256": "269f4684b35b117333e52e3a68226dad246916aac5241d5f8f1d5d74df0438cc",
+      "steps": 104,
+      "artifacts": {
+        "bytes": "cave-highlevel-baseline/bytes.txt",
+        "hex": "cave-highlevel-baseline/hex.txt",
+        "listing": "cave-highlevel-baseline/listing.txt",
+        "keys": "cave-highlevel-baseline/keys.txt",
+        "setup": "cave-highlevel-baseline/setup.txt",
+        "explain": "cave-highlevel-baseline/explain.txt",
+        "report": "cave-highlevel-baseline/report.json",
+        "variants": "cave-highlevel-baseline/variants.txt"
+      }
+    },
+    {
+      "id": "cave-sketch",
+      "sourcePath": "examples/cave-sketch.mkpro",
+      "sourceSha256": "1a35dab834b5a20eb4c9ce2090aca71c31df7084cbd9b68394a71644921ff958",
+      "steps": 38,
+      "artifacts": {
+        "bytes": "cave-sketch/bytes.txt",
+        "hex": "cave-sketch/hex.txt",
+        "listing": "cave-sketch/listing.txt",
+        "keys": "cave-sketch/keys.txt",
+        "setup": "cave-sketch/setup.txt",
+        "explain": "cave-sketch/explain.txt",
+        "report": "cave-sketch/report.json",
+        "variants": "cave-sketch/variants.txt"
+      }
+    },
+    {
+      "id": "cave-treasure",
+      "sourcePath": "examples/cave-treasure.mkpro",
+      "sourceSha256": "5940ddfaec18936f51dfb9ede24fe3a172fa22bef65da7cebe05ec80984bec01",
+      "steps": 104,
+      "artifacts": {
+        "bytes": "cave-treasure/bytes.txt",
+        "hex": "cave-treasure/hex.txt",
+        "listing": "cave-treasure/listing.txt",
+        "keys": "cave-treasure/keys.txt",
+        "setup": "cave-treasure/setup.txt",
+        "explain": "cave-treasure/explain.txt",
+        "report": "cave-treasure/report.json",
+        "variants": "cave-treasure/variants.txt"
+      }
+    },
+    {
+      "id": "clock",
+      "sourcePath": "examples/clock.mkpro",
+      "sourceSha256": "7c43b8e90a4e3cc3133259e237564d7be56a612d68b7e9e8989fee56b6f619cc",
+      "steps": 34,
+      "artifacts": {
+        "bytes": "clock/bytes.txt",
+        "hex": "clock/hex.txt",
+        "listing": "clock/listing.txt",
+        "keys": "clock/keys.txt",
+        "setup": "clock/setup.txt",
+        "explain": "clock/explain.txt",
+        "report": "clock/report.json",
+        "variants": "clock/variants.txt"
+      }
+    },
+    {
+      "id": "dangerous-loading",
+      "sourcePath": "examples/dangerous-loading.mkpro",
+      "sourceSha256": "11b8d8242ca9ea49f1aaad973622f98fbf7554e6db1b363e7a954aee7045fb51",
+      "steps": 84,
+      "artifacts": {
+        "bytes": "dangerous-loading/bytes.txt",
+        "hex": "dangerous-loading/hex.txt",
+        "listing": "dangerous-loading/listing.txt",
+        "keys": "dangerous-loading/keys.txt",
+        "setup": "dangerous-loading/setup.txt",
+        "explain": "dangerous-loading/explain.txt",
+        "report": "dangerous-loading/report.json",
+        "variants": "dangerous-loading/variants.txt"
+      }
+    },
+    {
+      "id": "dungeon",
+      "sourcePath": "examples/dungeon.mkpro",
+      "sourceSha256": "eb73d2ca5e43e0fdf8b05f48b756cbdb080e6369f5b69c60ed114f8cd82e3baa",
+      "steps": 75,
+      "artifacts": {
+        "bytes": "dungeon/bytes.txt",
+        "hex": "dungeon/hex.txt",
+        "listing": "dungeon/listing.txt",
+        "keys": "dungeon/keys.txt",
+        "setup": "dungeon/setup.txt",
+        "explain": "dungeon/explain.txt",
+        "report": "dungeon/report.json",
+        "variants": "dungeon/variants.txt"
+      }
+    },
+    {
+      "id": "e-94-digits",
+      "sourcePath": "examples/e-94-digits.mkpro",
+      "sourceSha256": "4333ebb5d21b27ec064f76cd6c68dbc4b788992e0447e9f97334f2baac51f523",
+      "steps": 64,
+      "artifacts": {
+        "bytes": "e-94-digits/bytes.txt",
+        "hex": "e-94-digits/hex.txt",
+        "listing": "e-94-digits/listing.txt",
+        "keys": "e-94-digits/keys.txt",
+        "setup": "e-94-digits/setup.txt",
+        "explain": "e-94-digits/explain.txt",
+        "report": "e-94-digits/report.json",
+        "variants": "e-94-digits/variants.txt"
+      }
+    },
+    {
+      "id": "fox-hunt-100",
+      "sourcePath": "examples/fox-hunt-100.mkpro",
+      "sourceSha256": "76b2cf78a018a41d736c9b5e9d1eee287347927b03756b03548d26ba23427b60",
+      "steps": 103,
+      "artifacts": {
+        "bytes": "fox-hunt-100/bytes.txt",
+        "hex": "fox-hunt-100/hex.txt",
+        "listing": "fox-hunt-100/listing.txt",
+        "keys": "fox-hunt-100/keys.txt",
+        "setup": "fox-hunt-100/setup.txt",
+        "explain": "fox-hunt-100/explain.txt",
+        "report": "fox-hunt-100/report.json",
+        "variants": "fox-hunt-100/variants.txt"
+      }
+    },
+    {
+      "id": "fox-hunt-mk61",
+      "sourcePath": "examples/fox-hunt-mk61.mkpro",
+      "sourceSha256": "f1859e647d42a73a3892694fdaddf85d0d1026f8bc481b7f5208a6b4a648f0fc",
+      "steps": 60,
+      "artifacts": {
+        "bytes": "fox-hunt-mk61/bytes.txt",
+        "hex": "fox-hunt-mk61/hex.txt",
+        "listing": "fox-hunt-mk61/listing.txt",
+        "keys": "fox-hunt-mk61/keys.txt",
+        "setup": "fox-hunt-mk61/setup.txt",
+        "explain": "fox-hunt-mk61/explain.txt",
+        "report": "fox-hunt-mk61/report.json",
+        "variants": "fox-hunt-mk61/variants.txt"
+      }
+    },
+    {
+      "id": "functions-demo",
+      "sourcePath": "examples/functions-demo.mkpro",
+      "sourceSha256": "b7eaeed18c35f230c1709d47a527ddf5928c1a5fd42420fdca21513c5c01148a",
+      "steps": 25,
+      "artifacts": {
+        "bytes": "functions-demo/bytes.txt",
+        "hex": "functions-demo/hex.txt",
+        "listing": "functions-demo/listing.txt",
+        "keys": "functions-demo/keys.txt",
+        "setup": "functions-demo/setup.txt",
+        "explain": "functions-demo/explain.txt",
+        "report": "functions-demo/report.json",
+        "variants": "functions-demo/variants.txt"
+      }
+    },
+    {
+      "id": "game-100-pig",
+      "sourcePath": "examples/game-100-pig.mkpro",
+      "sourceSha256": "019deae991958b4987a8437cc39aa92bb06a4519b5d7a42e8c9c69be4dd70320",
+      "steps": 97,
+      "artifacts": {
+        "bytes": "game-100-pig/bytes.txt",
+        "hex": "game-100-pig/hex.txt",
+        "listing": "game-100-pig/listing.txt",
+        "keys": "game-100-pig/keys.txt",
+        "setup": "game-100-pig/setup.txt",
+        "explain": "game-100-pig/explain.txt",
+        "report": "game-100-pig/report.json",
+        "variants": "game-100-pig/variants.txt"
+      }
+    },
+    {
+      "id": "giants-country",
+      "sourcePath": "examples/giants-country.mkpro",
+      "sourceSha256": "095ad6d215844a7ade90c922fde94e05bceffb9ab76a8760b6312f9fbdd320a3",
+      "steps": 104,
+      "artifacts": {
+        "bytes": "giants-country/bytes.txt",
+        "hex": "giants-country/hex.txt",
+        "listing": "giants-country/listing.txt",
+        "keys": "giants-country/keys.txt",
+        "setup": "giants-country/setup.txt",
+        "explain": "giants-country/explain.txt",
+        "report": "giants-country/report.json",
+        "variants": "giants-country/variants.txt"
+      }
+    },
+    {
+      "id": "human",
+      "sourcePath": "examples/human.mkpro",
+      "sourceSha256": "75618f1a9b49483eae208a2964c34c7350e85658723c316b4b70a957685de1ec",
+      "steps": 27,
+      "artifacts": {
+        "bytes": "human/bytes.txt",
+        "hex": "human/hex.txt",
+        "listing": "human/listing.txt",
+        "keys": "human/keys.txt",
+        "setup": "human/setup.txt",
+        "explain": "human/explain.txt",
+        "report": "human/report.json",
+        "variants": "human/variants.txt"
+      }
+    },
+    {
+      "id": "jack-pot",
+      "sourcePath": "examples/jack-pot.mkpro",
+      "sourceSha256": "a309e7159b37ee01df3c6f83273488df8acf1c22cd0b41f509f401f1e0a7f7f0",
+      "steps": 96,
+      "artifacts": {
+        "bytes": "jack-pot/bytes.txt",
+        "hex": "jack-pot/hex.txt",
+        "listing": "jack-pot/listing.txt",
+        "keys": "jack-pot/keys.txt",
+        "setup": "jack-pot/setup.txt",
+        "explain": "jack-pot/explain.txt",
+        "report": "jack-pot/report.json",
+        "variants": "jack-pot/variants.txt"
+      }
+    },
+    {
+      "id": "labyrinth777",
+      "sourcePath": "examples/labyrinth777.mkpro",
+      "sourceSha256": "6dcd77cf2bc6d1e346381e7326d2fb3f417bcc26eadf08eaa0fa09966fa503da",
+      "steps": 105,
+      "artifacts": {
+        "bytes": "labyrinth777/bytes.txt",
+        "hex": "labyrinth777/hex.txt",
+        "listing": "labyrinth777/listing.txt",
+        "keys": "labyrinth777/keys.txt",
+        "setup": "labyrinth777/setup.txt",
+        "explain": "labyrinth777/explain.txt",
+        "report": "labyrinth777/report.json",
+        "variants": "labyrinth777/variants.txt"
+      }
+    },
+    {
+      "id": "lunar",
+      "sourcePath": "examples/lunar.mkpro",
+      "sourceSha256": "d350f86d4d04b9aaa84a3e47fb075e76c4225dca4361663a1adda20a6ad1f40d",
+      "steps": 44,
+      "artifacts": {
+        "bytes": "lunar/bytes.txt",
+        "hex": "lunar/hex.txt",
+        "listing": "lunar/listing.txt",
+        "keys": "lunar/keys.txt",
+        "setup": "lunar/setup.txt",
+        "explain": "lunar/explain.txt",
+        "report": "lunar/report.json",
+        "variants": "lunar/variants.txt"
+      }
+    },
+    {
+      "id": "minesweeper-9x7",
+      "sourcePath": "examples/minesweeper-9x7.mkpro",
+      "sourceSha256": "12aa7a560c4efe0dcf2e1e9ba6a540a53371974adede33660a2df7284cf28086",
+      "steps": 79,
+      "artifacts": {
+        "bytes": "minesweeper-9x7/bytes.txt",
+        "hex": "minesweeper-9x7/hex.txt",
+        "listing": "minesweeper-9x7/listing.txt",
+        "keys": "minesweeper-9x7/keys.txt",
+        "setup": "minesweeper-9x7/setup.txt",
+        "explain": "minesweeper-9x7/explain.txt",
+        "report": "minesweeper-9x7/report.json",
+        "variants": "minesweeper-9x7/variants.txt"
+      }
+    },
+    {
+      "id": "minesweeper-9x9",
+      "sourcePath": "examples/minesweeper-9x9.mkpro",
+      "sourceSha256": "ab7d666b2e1cf696a6ebee06da11a86eedbf9bfc67eddb66cf6aa7764662250c",
+      "steps": 79,
+      "artifacts": {
+        "bytes": "minesweeper-9x9/bytes.txt",
+        "hex": "minesweeper-9x9/hex.txt",
+        "listing": "minesweeper-9x9/listing.txt",
+        "keys": "minesweeper-9x9/keys.txt",
+        "setup": "minesweeper-9x9/setup.txt",
+        "explain": "minesweeper-9x9/explain.txt",
+        "report": "minesweeper-9x9/report.json",
+        "variants": "minesweeper-9x9/variants.txt"
+      }
+    },
+    {
+      "id": "raja-yoga",
+      "sourcePath": "examples/raja-yoga.mkpro",
+      "sourceSha256": "88e6b554dee68396ce0bace97d5cb111344248f53578e2f48a006f3dad51f773",
+      "steps": 77,
+      "artifacts": {
+        "bytes": "raja-yoga/bytes.txt",
+        "hex": "raja-yoga/hex.txt",
+        "listing": "raja-yoga/listing.txt",
+        "keys": "raja-yoga/keys.txt",
+        "setup": "raja-yoga/setup.txt",
+        "explain": "raja-yoga/explain.txt",
+        "report": "raja-yoga/report.json",
+        "variants": "raja-yoga/variants.txt"
+      }
+    },
+    {
+      "id": "rambo-iii",
+      "sourcePath": "examples/rambo-iii.mkpro",
+      "sourceSha256": "cf815813924fd98698ab8c0fd2a923558adc12aef3a802ea84278070270aab5d",
+      "steps": 103,
+      "artifacts": {
+        "bytes": "rambo-iii/bytes.txt",
+        "hex": "rambo-iii/hex.txt",
+        "listing": "rambo-iii/listing.txt",
+        "keys": "rambo-iii/keys.txt",
+        "setup": "rambo-iii/setup.txt",
+        "explain": "rambo-iii/explain.txt",
+        "report": "rambo-iii/report.json",
+        "variants": "rambo-iii/variants.txt"
+      }
+    },
+    {
+      "id": "river-battle",
+      "sourcePath": "examples/river-battle.mkpro",
+      "sourceSha256": "a5fb97d8debd1a9b37b61f9a298fed72ad801f21b1827d7cc520d8c198b620e1",
+      "steps": 95,
+      "artifacts": {
+        "bytes": "river-battle/bytes.txt",
+        "hex": "river-battle/hex.txt",
+        "listing": "river-battle/listing.txt",
+        "keys": "river-battle/keys.txt",
+        "setup": "river-battle/setup.txt",
+        "explain": "river-battle/explain.txt",
+        "report": "river-battle/report.json",
+        "variants": "river-battle/variants.txt"
+      }
+    },
+    {
+      "id": "sea-battle",
+      "sourcePath": "examples/sea-battle.mkpro",
+      "sourceSha256": "5edb8b5a165828d0ac57ffafcf01c324c081ad130fc75f54df3a7d129c37b3ab",
+      "steps": 66,
+      "artifacts": {
+        "bytes": "sea-battle/bytes.txt",
+        "hex": "sea-battle/hex.txt",
+        "listing": "sea-battle/listing.txt",
+        "keys": "sea-battle/keys.txt",
+        "setup": "sea-battle/setup.txt",
+        "explain": "sea-battle/explain.txt",
+        "report": "sea-battle/report.json",
+        "variants": "sea-battle/variants.txt"
+      }
+    },
+    {
+      "id": "teleport",
+      "sourcePath": "examples/teleport.mkpro",
+      "sourceSha256": "558f4ad61d9fa822396ed82d94a8b100d47762939cb809ee204d2de08e0bd79e",
+      "steps": 96,
+      "artifacts": {
+        "bytes": "teleport/bytes.txt",
+        "hex": "teleport/hex.txt",
+        "listing": "teleport/listing.txt",
+        "keys": "teleport/keys.txt",
+        "setup": "teleport/setup.txt",
+        "explain": "teleport/explain.txt",
+        "report": "teleport/report.json",
+        "variants": "teleport/variants.txt"
+      }
+    },
+    {
+      "id": "tic-tac-toe",
+      "sourcePath": "examples/tic-tac-toe.mkpro",
+      "sourceSha256": "70713dcb611e672fc246ec1bcec5c9c2ad5ecb06de6a8927dbef637bb326d6e4",
+      "steps": 99,
+      "artifacts": {
+        "bytes": "tic-tac-toe/bytes.txt",
+        "hex": "tic-tac-toe/hex.txt",
+        "listing": "tic-tac-toe/listing.txt",
+        "keys": "tic-tac-toe/keys.txt",
+        "setup": "tic-tac-toe/setup.txt",
+        "explain": "tic-tac-toe/explain.txt",
+        "report": "tic-tac-toe/report.json",
+        "variants": "tic-tac-toe/variants.txt"
+      }
+    },
+    {
+      "id": "tiny-game",
+      "sourcePath": "examples/tiny-game.mkpro",
+      "sourceSha256": "1d5b4c11eb9f15efb450cccc9eabd89b0571343202e7f6d04c5b39c6601a828e",
+      "steps": 27,
+      "artifacts": {
+        "bytes": "tiny-game/bytes.txt",
+        "hex": "tiny-game/hex.txt",
+        "listing": "tiny-game/listing.txt",
+        "keys": "tiny-game/keys.txt",
+        "setup": "tiny-game/setup.txt",
+        "explain": "tiny-game/explain.txt",
+        "report": "tiny-game/report.json",
+        "variants": "tiny-game/variants.txt"
+      }
+    },
+    {
+      "id": "treasure-hunter-2",
+      "sourcePath": "examples/treasure-hunter-2.mkpro",
+      "sourceSha256": "aaf550049e17117220cf0f09e1d02028673a58eebc28f2d72877ae698b3ef890",
+      "steps": 99,
+      "artifacts": {
+        "bytes": "treasure-hunter-2/bytes.txt",
+        "hex": "treasure-hunter-2/hex.txt",
+        "listing": "treasure-hunter-2/listing.txt",
+        "keys": "treasure-hunter-2/keys.txt",
+        "setup": "treasure-hunter-2/setup.txt",
+        "explain": "treasure-hunter-2/explain.txt",
+        "report": "treasure-hunter-2/report.json",
+        "variants": "treasure-hunter-2/variants.txt"
+      }
+    },
+    {
+      "id": "wumpus",
+      "sourcePath": "examples/wumpus.mkpro",
+      "sourceSha256": "5e75142987ff1377736ed03639b04d8c4ee2c94e34f38e8abe2b801fb1a53625",
+      "steps": 103,
+      "artifacts": {
+        "bytes": "wumpus/bytes.txt",
+        "hex": "wumpus/hex.txt",
+        "listing": "wumpus/listing.txt",
+        "keys": "wumpus/keys.txt",
+        "setup": "wumpus/setup.txt",
+        "explain": "wumpus/explain.txt",
+        "report": "wumpus/report.json",
+        "variants": "wumpus/variants.txt"
+      }
+    },
+    {
+      "id": "pending-optimizer/tic-tac-toe-4x4",
+      "sourcePath": "examples/pending-optimizer/tic-tac-toe-4x4.mkpro",
+      "sourceSha256": "19feaeeeaec1a25e74b1dd03a8788f7afc1f926529faef773444bcf2e709ed9a",
+      "steps": 134,
+      "artifacts": {
+        "bytes": "pending-optimizer/tic-tac-toe-4x4/bytes.txt",
+        "hex": "pending-optimizer/tic-tac-toe-4x4/hex.txt",
+        "listing": "pending-optimizer/tic-tac-toe-4x4/listing.txt",
+        "keys": "pending-optimizer/tic-tac-toe-4x4/keys.txt",
+        "setup": "pending-optimizer/tic-tac-toe-4x4/setup.txt",
+        "explain": "pending-optimizer/tic-tac-toe-4x4/explain.txt",
+        "report": "pending-optimizer/tic-tac-toe-4x4/report.json",
+        "variants": "pending-optimizer/tic-tac-toe-4x4/variants.txt"
+      }
+    }
+  ]
+}

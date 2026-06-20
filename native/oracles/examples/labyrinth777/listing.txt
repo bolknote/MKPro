@@ -1,0 +1,167 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  09  | 9                       |
+   01 |  43  | X→П 3                   | setup R3
+   02 |  04  | 4                       |
+   03 |  42  | X→П 2                   | setup R2
+   04 |  46  | X→П 6                   | setup R6
+   05 |  45  | X→П 5                   | setup R5
+   06 |  00  | 0                       |
+   07 |  47  | X→П 7                   | setup R7
+   08 |  4A  | X→П a                   | setup Ra
+   09 |  01  | 1                       |
+   10 |  00  | 0                       |
+   11 |  4B  | X→П b                   | setup Rb
+   12 |  09  | 9                       |
+   13 |  0A  | .                       |
+   14 |  05  | 5                       |
+   15 |  05  | 5                       |
+   16 |  05  | 5                       |
+   17 |  05  | 5                       |
+   18 |  05  | 5                       |
+   19 |  05  | 5                       |
+   20 |  05  | 5                       |
+   21 |  4C  | X→П c                   | setup Rc
+   22 |  08  | 8                       |
+   23 |  00  | 0                       |
+   24 |  49  | X→П 9                   | setup R9
+   25 |  08  | 8                       |
+   26 |  06  | 6                       |
+   27 |  4D  | X→П d                   | setup Rd
+   28 |  09  | 9                       |
+   29 |  06  | 6                       |
+   30 |  4E  | X→П e                   | setup Re
+   31 |  3B  | К СЧ                    | random()
+   32 |  48  | X→П 8                   | setup seed
+   33 |  68  | П→X 8                   | recall seed
+   34 |  3B  | К СЧ                    | random()
+   35 |  07  | 7                       |
+   36 |  12  | ×                       | expr *
+   37 |  0E  | В↑                      | random int keep scaled draw
+   38 |  35  | К {x}                   | random int fractional part
+   39 |  11  | −                       | random int floor
+   40 |  01  | 1                       |
+   41 |  10  | +                       | expr +
+   42 |  1C  | F sin                   | sin()
+   43 |  13  | ÷                       | expr /
+   44 |  3B  | К СЧ                    | random()
+   45 |  07  | 7                       |
+   46 |  12  | ×                       | expr *
+   47 |  0E  | В↑                      | random int keep scaled draw
+   48 |  35  | К {x}                   | random int fractional part
+   49 |  11  | −                       | random int floor
+   50 |  01  | 1                       |
+   51 |  10  | +                       | expr +
+   52 |  12  | ×                       | expr *
+   53 |  6C  | П→X c                   | preload const 9.5555555
+   54 |  37  | К ∧                     | bit_and()
+   55 |  44  | X→П 4                   | setup exit_view
+   56 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code  | Command                 | Comment
+------+-------+-------------------------+----------------
+   00 | 66    | П→X 6                   | display __inline_show_34_0 floor
+   01 | 67    | П→X 7                   | display __inline_show_34_0 packed row
+   02 | 14    | ↔                       | display packed row floor merge
+   03 | 25    | F reverse               | display packed row preserve
+   04 | 0C    | ВП                      | display packed row restore
+   05 | 50    | С/П                     | show __inline_show_34_0
+   06 | 05    | 5                       |
+   07 | 11    | −                       | expr -
+   08 | 40    | X→П 0                   | set action
+   09 | AD    | К ПП d                  | proc call generate_row; preloaded Rd=86 indirect-target=86 shifted-forward indirect flow
+   10 | 01    | 1                       |
+   11 | 63    | П→X 3                   | recall energy
+   12 | 10    | +                       | expr +
+   13 | AE    | К ПП e                  | expr digit_at(row_view, room); preloaded Re=96 indirect-target=96 shifted-forward indirect flow
+   14 | 11    | −                       | expr -
+   15 | 43    | X→П 3                   | set energy
+   16 | 5C    | F x<0                   | false branch for <
+   17 | 19    | 19                      | false branch for <
+   18 | 50    | С/П                     | halt
+   19 | 60    | П→X 0                   | recall action
+   20 | 31    | К |x|                   | abs()
+   21 | 5E    | F x=0                   | case mismatch
+   22 | 46    | 46                      | case mismatch
+   23 | AE    | К ПП e                  | expr digit_at(row_view, room); preloaded Re=96 indirect-target=96 shifted-forward indirect flow
+   24 | 04    | 4                       |
+   25 | 11    | −                       | dispatch compare
+   26 | 5E    | F x=0                   | case mismatch
+   27 | 36    | 36                      | case mismatch
+   28 | 62    | П→X 2                   | recall floor
+   29 | 07    | 7                       |
+   30 | 11    | −                       | condition compare
+   31 | C9    | К x<0 9                 | false branch for <; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
+   32 | 08    | 8                       |
+   33 | 10    | +                       | residual guarded update floor
+   34 | 42    | X→П 2                   | set floor
+   35 | 89    | К БП 9                  | dispatch end; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
+   36 | 01    | 1                       |
+   37 | 11    | −                       | dispatch residual compare
+   38 | E9    | К x=0 9                 | case mismatch; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
+   39 | 62    | П→X 2                   | recall floor
+   40 | 01    | 1                       |
+   41 | 11    | −                       | expr -
+   42 | 01    | 1                       |
+   43 | 36    | К max                   | max()
+   44 | 42    | X→П 2                   | arithmetic-if-max floor
+   45 | 89    | К БП 9                  | tail jump inspect_room; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
+   46 | 01    | 1                       |
+   47 | 11    | −                       | dispatch residual compare
+   48 | 5E    | F x=0                   | case mismatch
+   49 | 64    | 64                      | case mismatch
+   50 | 60    | П→X 0                   | recall action
+   51 | 32    | К ЗН                    | sign()
+   52 | 65    | П→X 5                   | recall room
+   53 | 10    | +                       | expr +
+   54 | 01    | 1                       |
+   55 | 36    | К max                   | max()
+   56 | 0B    | /-/                     | unary minus
+   57 | 0E    | В↑                      | separate adjacent number entry
+   58 | 07 0B | -7                      | negative number
+   60 | 36    | К max                   | max()
+   61 | 0B    | /-/                     | unary minus
+   62 | 45    | X→П 5                   | set room
+   63 | 89    | К БП 9                  | tail jump inspect_room; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
+   64 | 02    | 2                       |
+   65 | 11    | −                       | dispatch residual compare
+   66 | E9    | К x=0 9                 | case mismatch; preloaded R9=80 indirect-target=80 shifted-forward indirect flow
+   67 | 60    | П→X 0                   | recall action
+   68 | 32    | К ЗН                    | sign()
+   69 | 66    | П→X 6                   | recall row
+   70 | 10    | +                       | expr +
+   71 | 01    | 1                       |
+   72 | 36    | К max                   | max()
+   73 | 0B    | /-/                     | unary minus
+   74 | 0E    | В↑                      | separate adjacent number entry
+   75 | 07 0B | -7                      | negative number
+   77 | 36    | К max                   | max()
+   78 | 0B    | /-/                     | unary minus
+   79 | 46    | X→П 6                   | set row
+   80 | AD    | К ПП d                  | proc call generate_row; preloaded Rd=86 indirect-target=86 shifted-forward indirect flow
+   81 | 64    | П→X 4                   | recall exit_view
+   82 | 11    | −                       | condition compare
+   83 | EA    | К x=0 a                 | false branch for ==; preloaded Ra=B2 indirect-target=0 indirect flow
+   84 | 50    | С/П                     | halt
+   85 | 8A    | К БП a                  | tail continuation; preloaded Ra=B2 indirect-target=0 indirect flow
+   86 | 68    | П→X 8                   | recall seed
+   87 | 62    | П→X 2                   | recall floor
+   88 | 1C    | F sin                   | sin()
+   89 | 13    | ÷                       | expr /
+   90 | 66    | П→X 6                   | recall row
+   91 | 12    | ×                       | expr *
+   92 | 6C    | П→X c                   | preload const 9.5555555
+   93 | 37    | К ∧                     | bit_and()
+   94 | 47    | X→П 7                   | set row_view
+   95 | 52    | В/О                     | implicit return from proc
+   96 | 67    | П→X 7                   | recall row_view
+   97 | 65    | П→X 5                   | recall room
+   98 | 15    | F 10ˣ                   | pow10()
+   99 | 13    | ÷                       | expr /
+   A0 | 35    | К {x}                   | frac()
+   A1 | 6B    | П→X b                   | preload const 10
+   A2 | 12    | ×                       | expr *
+   A3 | 34    | К [x]                   | int()
+   A4 | 52    | В/О                     | expression helper return

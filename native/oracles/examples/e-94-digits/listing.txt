@@ -1,0 +1,61 @@
+ Step | Code     | Command                 | Comment
+------+----------+-------------------------+----------------
+   00 | 52       | В/О                     | decimal recurrence setup
+   01 | 06 05    | 65                      | decimal recurrence setup
+   03 | 23       | F 1/x                   | decimal recurrence setup
+   04 | 40       | хП0                     | decimal recurrence setup
+   05 | 0D       | Cx                      | decimal recurrence loop entry
+   06 | B0       | К хП0                   | decimal recurrence loop entry
+   07 | 60       | Пх0                     | decimal recurrence loop entry
+   08 | 5E       | F x=0                   | decimal recurrence loop guard
+   09 | 05       | 05                      | decimal recurrence loop guard
+   10 | 0F       | F Вx                    | decimal recurrence scale
+   11 | 07       | 7                       | decimal recurrence scale
+   12 | 15       | F 10ˣ                   | decimal recurrence scale
+   13 | 20       | F π                     | decimal recurrence scale
+   14 | DE       | К Пхe                   | decimal recurrence helper selector
+   15 | 53       | ПП                      | decimal recurrence helper call
+   16 | E1       | E1                      | decimal recurrence helper call; formal E1->29
+   17 | 01       | 1                       | decimal recurrence term
+   18 | 10       | +                       | decimal recurrence term
+   19 | 4E       | хПe                     | decimal recurrence accumulator
+   20 | DE       | К Пхe                   | decimal recurrence accumulator
+   21 | 11       | −                       | decimal recurrence accumulator
+   22 | 5E       | F x=0                   | decimal recurrence carry guard
+   23 | 14       | 14                      | decimal recurrence carry guard
+   24 | 6E       | Пхe                     | decimal recurrence carry
+   25 | 0C 0B 02 | -0E2                    | decimal recurrence carry
+   28 | 34       | К [x]                   | decimal recurrence carry
+   29 | 00       | 0                       | decimal recurrence reference gap
+   30 | 25       | F ↻                     | decimal recurrence carry
+   31 | 10       | +                       | decimal recurrence carry
+   32 | 00       | 0                       | decimal recurrence reference gap
+   33 | 0E       | В↑                      | decimal recurrence carry
+   34 | 0F       | F Вx                    | decimal recurrence carry
+   35 | 00       | 0                       | decimal recurrence reference gap
+   36 | 13       | ÷                       | decimal recurrence division
+   37 | 0F       | F Вx                    | decimal recurrence division
+   38 | 25       | F ↻                     | decimal recurrence division
+   39 | 34       | К [x]                   | decimal recurrence division
+   40 | BE       | К хПe                   | decimal recurrence division
+   41 | 12       | ×                       | decimal recurrence division
+   42 | 11       | −                       | decimal recurrence division
+   43 | 06       | 6                       | decimal recurrence normalization
+   44 | 15       | F 10ˣ                   | decimal recurrence normalization
+   45 | 12       | ×                       | decimal recurrence normalization
+   46 | 6E       | Пхe                     | decimal recurrence accumulator update
+   47 | 0C 02    | 0E2                     | decimal recurrence accumulator update
+   49 | 4E       | хПe                     | decimal recurrence accumulator update
+   50 | 10       | +                       | decimal recurrence accumulator update
+   51 | 32       | К ЗН                    | decimal recurrence accumulator update
+   52 | 11       | −                       | decimal recurrence accumulator update
+   53 | 5E       | F x=0                   | decimal recurrence next term
+   54 | 11       | 11                      | decimal recurrence next term
+   55 | 6E       | Пхe                     | decimal recurrence final mantissa
+   56 | 02 05    | 25                      | decimal recurrence final mantissa
+   58 | 10       | +                       | decimal recurrence final mantissa
+   59 | 4E       | хПe                     | decimal recurrence final mantissa
+   60 | 01       | 1                       | decimal recurrence exponent
+   61 | 16       | F eˣ                    | decimal recurrence exponent
+   62 | 40       | хП0                     | decimal recurrence result
+   63 | 50       | С/П                     | decimal recurrence stop

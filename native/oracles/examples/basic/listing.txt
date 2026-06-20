@@ -1,0 +1,20 @@
+Setup Block:
+  `R0=0`
+
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |   -  | 0                       |
+   01 |  40  | X→П 0                   | setup R0
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  50  | С/П                     | read x
+   01 |  41  | X→П 1                   | read x
+   02 |  50  | С/П                     | read y
+   03 |  61  | П→X 1                   | recall x
+   04 |  10  | +                       | expr +
+   05 |  50  | С/П                     | halt
+   06 |  51  | БП                      | loop back
+   07 |  00  | 00                      | loop back

@@ -1,0 +1,43 @@
+Setup Block:
+  `R4=0; R2=5; Re=10`
+
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |   -  | 0                       |
+   01 |  44  | X→П 4                   | setup R4
+   02 |   -  | 5                       |
+   03 |  42  | X→П 2                   | setup R2
+   04 |   -  | 10                      |
+   05 |  4E  | X→П e                   | setup Re
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  64  | П→X 4                   | display __inline_show_17_0 source
+   01 |  6E  | П→X e                   | preload const 10
+   02 |  12  | ×                       | packed display field shift
+   03 |  62  | П→X 2                   | display __inline_show_17_0 source
+   04 |  10  | +                       | packed display field append
+   05 |  50  | С/П                     | show __inline_show_17_0
+   06 |  0E  | В↑                      | separate adjacent number entry
+   07 |  02  | 2                       |
+   08 |  11  | −                       | dispatch compare
+   09 |  5E  | F x=0                   | case mismatch
+   10 |  14  | 14                      | case mismatch
+   11 |  D4  | К П→X 4                 | increment score
+   12 |  51  | БП                      | dispatch end
+   13 |  00  | 00                      | dispatch end
+   14 |  06  | 6                       |
+   15 |  11  | −                       | dispatch residual compare
+   16 |  5E  | F x=0                   | case mismatch
+   17 |  23  | 23                      | case mismatch
+   18 |  62  | П→X 2                   | recall food
+   19 |  01  | 1                       |
+   20 |  11  | −                       | expr -
+   21 |  42  | X→П 2                   | set food
+   22 |  51  | БП                      | dispatch end
+   23 |  00  | 00                      | dispatch end; address/code overlay for 0
+   24 |  50  | С/П                     | halt
+   25 |  51  | БП                      | loop back
+   26 |  00  | 00                      | loop back

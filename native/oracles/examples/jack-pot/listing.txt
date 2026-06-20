@@ -1,0 +1,165 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  04  | 4                       |
+   01 |  15  | F 10ˣ                   | setup constant 10000
+   02 |  48  | X→П 8                   | setup R8
+   03 |  01  | 1                       |
+   04 |  45  | X→П 5                   | setup R5
+   05 |  00  | 0                       |
+   06 |  46  | X→П 6                   | setup R6
+   07 |  41  | X→П 1                   | setup R1
+   08 |  49  | X→П 9                   | setup R9
+   09 |  02  | 2                       |
+   10 |  15  | F 10ˣ                   | setup constant 100
+   11 |  4C  | X→П c                   | setup Rc
+   12 |  03  | 3                       |
+   13 |  15  | F 10ˣ                   | setup constant 1000
+   14 |  4E  | X→П e                   | setup Re
+   15 |  03  | 3                       |
+   16 |  00  | 0                       |
+   17 |  00  | 0                       |
+   18 |  00  | 0                       |
+   19 |  4D  | X→П d                   | setup Rd
+   20 |  01  | 1                       |
+   21 |  01  | 1                       |
+   22 |  03  | 3                       |
+   23 |  3A  | К ИНВ                   | setup Rb body
+   24 |  4B  | X→П b                   | setup Rb body scratch
+   25 |  01  | 1                       | setup Rb first digit
+   26 |  6B  | П→X b                   | setup Rb body scratch
+   27 |  14  | ↔                       | display sign-digit first-cell splice
+   28 |  54  | К НОП                   | display sign-digit first-cell splice
+   29 |  0C  | ВП                      | display sign-digit first-cell splice
+   30 |  0C  | ВП                      | setup Rb exponent
+   31 |  02  | 2                       | setup Rb exponent
+   32 |  4B  | X→П b                   | setup Rb
+   33 |  01  | 1                       |
+   34 |  02  | 2                       |
+   35 |  06  | 6                       |
+   36 |  06  | 6                       |
+   37 |  00  | 0                       |
+   38 |  02  | 2                       |
+   39 |  04  | 4                       |
+   40 |  0E  | В↑                      | setup Ra body split
+   41 |  09  | 9                       |
+   42 |  08  | 8                       |
+   43 |  08  | 8                       |
+   44 |  09  | 9                       |
+   45 |  00  | 0                       |
+   46 |  08  | 8                       |
+   47 |  09  | 9                       |
+   48 |  39  | К ⊕                     | setup Ra body
+   49 |  4A  | X→П a                   | setup Ra body scratch
+   50 |  01  | 1                       |
+   51 |  03  | 3                       |
+   52 |  3A  | К ИНВ                   | setup Ra first digit
+   53 |  35  | К {x}                   | setup Ra first digit
+   54 |  6A  | П→X a                   | setup Ra body scratch
+   55 |  14  | ↔                       | display sign-digit first-cell splice
+   56 |  54  | К НОП                   | display sign-digit first-cell splice
+   57 |  0C  | ВП                      | display sign-digit first-cell splice
+   58 |  0C  | ВП                      | setup Ra exponent
+   59 |  06  | 6                       | setup Ra exponent
+   60 |  4A  | X→П a                   | setup Ra
+   61 |  00  | 0                       |
+   62 |  47  | X→П 7                   | setup R7
+   63 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code  | Command                 | Comment
+------+-------+-------------------------+----------------
+   00 | 69    | П→X 9                   | recall reels
+   01 | 5E    | F x=0                   | false branch for ==
+   02 | 85    | 85                      | false branch for ==
+   03 | 6B    | П→X b                   | display __inline_show_28_0 literal
+   04 | 50    | С/П                     | show __inline_show_28_0
+   05 | 6C    | П→X c                   | preload const 100
+   06 | 1D    | F cos                   | cos()
+   07 | C7    | К x<0 7                 | false branch for <; preloaded R7=B2 indirect-target=0 indirect flow
+   08 | 68    | П→X 8                   | recall money
+   09 | 6E    | П→X e                   | preload const 1000
+   10 | 11    | −                       | expr -
+   11 | 48    | X→П 8                   | set money
+   12 | 5C    | F x<0                   | false branch for <
+   13 | 17    | 17                      | false branch for <
+   14 | 6A    | П→X a                   | display __inline_show_23_3 literal
+   15 | 50    | С/П                     | show __inline_show_23_3
+   16 | 87    | К БП 7                  | if end; preloaded R7=B2 indirect-target=0 indirect flow
+   17 | 03    | 3                       |
+   18 | 41    | X→П 1                   | set draw_count
+   19 | 01    | 1                       |
+   20 | 45    | X→П 5                   | set slot
+   21 | 00    | 0                       | set reels
+   22 | 49    | X→П 9                   | set reels
+   23 | 00    | 0                       | set digit
+   24 | 46    | X→П 6                   | set digit
+   25 | 5E    | F x=0                   | false branch for ==
+   26 | 37    | 37                      | false branch for ==
+   27 | 3B    | К СЧ                    | random()
+   28 | 01 00 | 10                      |
+   30 | 12    | ×                       | expr *
+   31 | 0E    | В↑                      | random int keep scaled draw
+   32 | 35    | К {x}                   | random int fractional part
+   33 | 11    | −                       | random int floor
+   34 | 46    | X→П 6                   | set digit
+   35 | 51    | БП                      | while loop back
+   36 | 25    | 25                      | while loop back
+   37 | B5    | К X→П 5                 | preincrement indexed set digits
+   38 | 69    | П→X 9                   | recall reels
+   39 | 5E    | F x=0                   | false branch for ==
+   40 | 45    | 45                      | false branch for ==
+   41 | 66    | П→X 6                   | recall digit
+   42 | 49    | X→П 9                   | set reels
+   43 | 51    | БП                      | if end
+   44 | 52    | 52                      | if end
+   45 | 01 00 | 10                      |
+   47 | 69    | П→X 9                   | recall reels
+   48 | 12    | ×                       | expr *
+   49 | 66    | П→X 6                   | recall digit
+   50 | 10    | +                       | expr +
+   51 | 49    | X→П 9                   | set reels
+   52 | 5B    | F L1                    | counted while draw_count
+   53 | 23    | 23                      | counted while draw_count
+   54 | 62    | П→X 2                   | recall digits_2
+   55 | 63    | П→X 3                   | recall digits_3
+   56 | 10    | +                       | expr +
+   57 | 64    | П→X 4                   | recall digits_4
+   58 | 10    | +                       | expr +
+   59 | 05    | 5                       |
+   60 | 13    | ÷                       | expr /
+   61 | 35    | К {x}                   | frac()
+   62 | 5E    | F x=0                   | false branch for ==
+   63 | 68    | 68                      | false branch for ==
+   64 | 6E    | П→X e                   | preload const 1000
+   65 | 68    | П→X 8                   | recall money
+   66 | 10    | +                       | expr +
+   67 | 48    | X→П 8                   | set money
+   68 | 63    | П→X 3                   | recall digits_3
+   69 | 62    | П→X 2                   | recall digits_2
+   70 | 11    | −                       | condition compare
+   71 | E7    | К x=0 7                 | false branch for ==; preloaded R7=B2 indirect-target=0 indirect flow
+   72 | 6D    | П→X d                   | preload const 3000
+   73 | 68    | П→X 8                   | recall money
+   74 | 10    | +                       | expr +
+   75 | 48    | X→П 8                   | set money
+   76 | 64    | П→X 4                   | recall digits_4
+   77 | 63    | П→X 3                   | recall digits_3
+   78 | 11    | −                       | condition compare
+   79 | E7    | К x=0 7                 | false branch for ==; preloaded R7=B2 indirect-target=0 indirect flow
+   80 | 6D    | П→X d                   | preload const 3000
+   81 | 68    | П→X 8                   | recall money
+   82 | 10    | +                       | expr +
+   83 | 48    | X→П 8                   | set money
+   84 | 87    | К БП 7                  | if end; preloaded R7=B2 indirect-target=0 indirect flow
+   85 | 50    | С/П                     | show __inline_show_36_1
+   86 | 6C    | П→X c                   | preload const 100
+   87 | 1D    | F cos                   | cos()
+   88 | 97    | К x≥0 7                 | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
+   89 | 5E    | F x=0                   | false branch for ==
+   90 | 93    | 93                      | false branch for ==
+   91 | 68    | П→X 8                   | display __inline_show_41_2 source
+   92 | 50    | С/П                     | show __inline_show_41_2
+   93 | 00    | 0                       | set reels
+   94 | 49    | X→П 9                   | set reels
+   95 | 87    | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow

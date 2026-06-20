@@ -8,7 +8,7 @@ const tsconfigRootDir = dirname(fileURLToPath(import.meta.url));
 
 export default tseslint.config(
   {
-    ignores: ["node_modules/**", "coverage/**", "dist/**"],
+    ignores: ["node_modules/**", "coverage/**", "dist/**", "build/**"],
   },
   {
     files: ["**/*.{js,cjs,mjs}"],

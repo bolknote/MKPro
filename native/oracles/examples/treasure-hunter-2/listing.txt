@@ -1,0 +1,155 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  09  | 9                       |
+   01 |  4D  | X→П d                   | setup Rd
+   02 |  00  | 0                       |
+   03 |  4A  | X→П a                   | setup Ra
+   04 |  02  | 2                       |
+   05 |  15  | F 10ˣ                   | setup constant 100
+   06 |  4B  | X→П b                   | setup Rb
+   07 |  01  | 1                       |
+   08 |  07  | 7                       |
+   09 |  4C  | X→П c                   | setup Rc
+   10 |  01  | 1                       |
+   11 |  00  | 0                       |
+   12 |  40  | X→П 0                   | setup indexed pointer rows_row_1..rows_row_9
+   13 |  08  | 8                       |
+   14 |  3B  | К СЧ                    | random()
+   15 |  09  | 9                       |
+   16 |  09  | 9                       |
+   17 |  09  | 9                       |
+   18 |  09  | 9                       |
+   19 |  09  | 9                       |
+   20 |  09  | 9                       |
+   21 |  09  | 9                       |
+   22 |  12  | ×                       | expr *
+   23 |  0E  | В↑                      | random int keep scaled draw
+   24 |  35  | К {x}                   | random int fractional part
+   25 |  11  | −                       | random int floor
+   26 |  01  | 1                       |
+   27 |  10  | +                       | expr +
+   28 |  07  | 7                       |
+   29 |  15  | F 10ˣ                   | constant 10000000
+   30 |  13  | ÷                       | expr /
+   31 |  10  | +                       | expr +
+   32 |  08  | 8                       |
+   33 |  0A  | .                       |
+   34 |  05  | 5                       |
+   35 |  05  | 5                       |
+   36 |  05  | 5                       |
+   37 |  05  | 5                       |
+   38 |  05  | 5                       |
+   39 |  05  | 5                       |
+   40 |  05  | 5                       |
+   41 |  37  | К ∧                     | bit_and()
+   42 |  B0  | К X→П 0                 | setup indexed rows_row_1..rows_row_9
+   43 |  60  | П→X 0                   | setup indexed pointer
+   44 |  01  | 1                       |
+   45 |  11  | −                       | setup indexed remaining
+   46 |  5E  | F x=0                   | setup indexed loop rows_row_1..rows_row_9
+   47 |  13  | 13                      | setup indexed loop rows_row_1..rows_row_9
+   48 |  00  | 0                       |
+   49 |  0A  | .                       |
+   50 |  01  | 1                       |
+   51 |  40  | X→П 0                   | restore setup R0
+   52 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code     | Command                 | Comment
+------+----------+-------------------------+----------------
+   00 | 8C       | К БП e                  | skip hoisted shared helpers; preloaded Re=C9 indirect-target=17 shifted-forward indirect flow
+   01 | DD       | К П→X d                 | indexed recall rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
+   02 | 05       | 5                       |
+   03 | 60       | П→X 0                   | recall pos
+   04 | 12       | ×                       | expr *
+   05 | 05       | 5                       |
+   06 | 10       | +                       | expr +
+   07 | 37       | К ∧                     | bit_and()
+   08 | 35       | К {x}                   | frac()
+   09 | 60       | П→X 0                   | recall pos
+   10 | 13       | ÷                       | expr /
+   11 | 52       | В/О                     | expression helper return
+   12 | 6D       | П→X d                   | decrement/test floor
+   13 | 01       | 1                       |
+   14 | 11       | −                       | decrement/test floor
+   15 | 4D       | X→П d                   | set floor
+   16 | 23       | F 1/x                   | decrement zero domain guard trap
+   17 | A8       | К ПП 8                  | expr frac(bit_and(rows[floor].row, 5 * pos + 5)) / pos; preloaded R8=B3 indirect-target=1 indirect flow
+   18 | 79       | К x≠0 9                 | case mismatch; preloaded R9=C4 indirect-target=12 indirect flow
+   19 | 04       | 4                       |
+   20 | 11       | −                       | dispatch residual compare
+   21 | E7       | К x=0 7                 | case mismatch; reused preloaded R7=E2 indirect-target=30 direct flow
+   22 | DD       | К П→X d                 | indexed recall rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
+   23 | 60       | П→X 0                   | recall pos
+   24 | 10       | +                       | expr +
+   25 | BD       | К X→П d                 | indexed set rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
+   26 | 01       | 1                       |
+   27 | 6A       | П→X a                   | recall treasure
+   28 | 10       | +                       | expr +
+   29 | 4A       | X→П a                   | set treasure
+   30 | DD       | К П→X d                 | indexed recall rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
+   31 | 02       | 2                       |
+   32 | 60       | П→X 0                   | recall pos
+   33 | 12       | ×                       | expr *
+   34 | 10       | +                       | expr +
+   35 | 3A       | К ИНВ                   | bit_not()
+   36 | 6D       | П→X d                   | display __inline_show_115_0 floor
+   37 | 14       | ↔                       | display packed row expression merge
+   38 | 0E       | В↑                      | display packed row expression copy
+   39 | 25       | F reverse               | display packed row expression rotate
+   40 | 14       | ↔                       | display packed row floor restore
+   41 | 25       | F reverse               | display packed row preserve
+   42 | 0C       | ВП                      | display packed row restore
+   43 | 50       | С/П                     | show __inline_show_115_0
+   44 | 5E       | F x=0                   | false branch for ==
+   45 | 54       | 54                      | false branch for ==
+   46 | DD       | К П→X d                 | indexed recall rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
+   47 | A8       | К ПП 8                  | expr frac(bit_and(rows[floor].row, 5 * pos + 5)) / pos; preloaded R8=B3 indirect-target=1 indirect flow
+   48 | 60       | П→X 0                   | recall pos
+   49 | 12       | ×                       | expr *
+   50 | 11       | −                       | expr -
+   51 | BD       | К X→П d                 | indexed set rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
+   52 | A9       | К ПП 9                  | proc call descend; preloaded R9=C4 indirect-target=12 indirect flow
+   53 | 87       | К БП 7                  | if end; preloaded R7=E2 indirect-target=30 indirect flow
+   54 | 6B       | П→X b                   | preload const 100
+   55 | 1D       | F cos                   | cos()
+   56 | 5E       | F x=0                   | false branch for ==
+   57 | 69       | 69                      | false branch for ==
+   58 | A8       | К ПП 8                  | expr frac(bit_and(rows[floor].row, 5 * pos + 5)) / pos; preloaded R8=B3 indirect-target=1 indirect flow
+   59 | 57       | F x≠0                   | case mismatch
+   60 | 52       | 52                      | shared terminal tail
+   61 | 01       | 1                       |
+   62 | 11       | −                       | dispatch residual compare
+   63 | E7       | К x=0 7                 | case mismatch; preloaded R7=E2 indirect-target=30 indirect flow
+   64 | 01       | 1                       |
+   65 | 6D       | П→X d                   | recall floor
+   66 | 10       | +                       | expr +
+   67 | 4D       | X→П d                   | set floor
+   68 | 8C       | К БП c                  | tail jump inspect_cell; preloaded Rc=C9 indirect-target=17 indirect flow
+   69 | 6B       | П→X b                   | preload const 100
+   70 | 1D       | F cos                   | cos()
+   71 | 5C       | F x<0                   | false branch for <
+   72 | 79       | 79                      | false branch for <
+   73 | 60       | П→X 0                   | recall pos
+   74 | 01 00    | 10                      |
+   76 | 13       | ÷                       | expr /
+   77 | 40       | X→П 0                   | set pos
+   78 | 8C       | К БП c                  | tail jump inspect_cell; preloaded Rc=C9 indirect-target=17 indirect flow
+   79 | 60       | П→X 0                   | recall pos
+   80 | 00 0A 01 | 0.1                     |
+   83 | 11       | −                       | condition compare
+   84 | 5E       | F x=0                   | false branch for ==
+   85 | 93       | 93                      | false branch for ==
+   86 | 6D       | П→X d                   | recall floor
+   87 | 01       | 1                       |
+   88 | 11       | −                       | condition compare
+   89 | E7       | К x=0 7                 | false branch for ==; preloaded R7=E2 indirect-target=30 indirect flow
+   90 | 6A       | П→X a                   | recall treasure
+   91 | 50       | С/П                     | halt
+   92 | 87       | К БП 7                  | if end; preloaded R7=E2 indirect-target=30 indirect flow
+   93 | 01 00    | 10                      |
+   95 | 60       | П→X 0                   | recall pos
+   96 | 12       | ×                       | expr *
+   97 | 51       | БП                      | shared terminal tail
+   98 | 77       | 77                      | shared terminal tail

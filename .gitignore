@@ -10,6 +10,7 @@ dist/
 dist/*
 !dist/mk-pro-emulator-bridge.user.js
 build/
+build-native/
 coverage/
 *.tsbuildinfo
 
@@ -42,4 +43,3 @@ Thumbs.db
 
 # Downloaded docs
 docs/reference/
-

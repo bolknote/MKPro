@@ -1,0 +1,2983 @@
+{
+  "steps": [
+    {
+      "address": 0,
+      "opcode": 110,
+      "hex": "6E",
+      "mnemonic": "П->X e",
+      "comment": "preload const 11951203"
+    },
+    {
+      "address": 1,
+      "opcode": 58,
+      "hex": "3A",
+      "mnemonic": "К ИНВ",
+      "comment": "display literal video bytes"
+    },
+    {
+      "address": 2,
+      "opcode": 80,
+      "hex": "50",
+      "mnemonic": "С/П",
+      "comment": "show __inline_show_38_0"
+    },
+    {
+      "address": 3,
+      "opcode": 234,
+      "hex": "EA",
+      "mnemonic": "К x=0 a",
+      "comment": "false branch for ==; preloaded Ra=C2 indirect-target=10 shifted-forward indirect flow"
+    },
+    {
+      "address": 4,
+      "opcode": 168,
+      "hex": "A8",
+      "mnemonic": "К ПП 8",
+      "comment": "proc call next_floor; preloaded R8=88 indirect-target=88 shifted-forward indirect flow"
+    },
+    {
+      "address": 5,
+      "opcode": 98,
+      "hex": "62",
+      "mnemonic": "П->X 2",
+      "comment": "recall strength"
+    },
+    {
+      "address": 6,
+      "opcode": 101,
+      "hex": "65",
+      "mnemonic": "П->X 5",
+      "comment": "recall floor"
+    },
+    {
+      "address": 7,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "expr -"
+    },
+    {
+      "address": 8,
+      "opcode": 66,
+      "hex": "42",
+      "mnemonic": "X->П 2",
+      "comment": "set strength"
+    },
+    {
+      "address": 9,
+      "opcode": 140,
+      "hex": "8C",
+      "mnemonic": "К БП c",
+      "comment": "if end; preloaded Rc=82 indirect-target=82 shifted-forward indirect flow"
+    },
+    {
+      "address": 10,
+      "opcode": 96,
+      "hex": "60",
+      "mnemonic": "П->X 0",
+      "comment": "recall plans"
+    },
+    {
+      "address": 11,
+      "opcode": 100,
+      "hex": "64",
+      "mnemonic": "П->X 4",
+      "comment": "recall slot"
+    },
+    {
+      "address": 12,
+      "opcode": 21,
+      "hex": "15",
+      "mnemonic": "F 10^x",
+      "comment": "pow10()"
+    },
+    {
+      "address": 13,
+      "opcode": 19,
+      "hex": "13",
+      "mnemonic": "/",
+      "comment": "expr /"
+    },
+    {
+      "address": 14,
+      "opcode": 53,
+      "hex": "35",
+      "mnemonic": "К {x}",
+      "comment": "frac()"
+    },
+    {
+      "address": 15,
+      "opcode": 109,
+      "hex": "6D",
+      "mnemonic": "П->X d",
+      "comment": "preload const 10"
+    },
+    {
+      "address": 16,
+      "opcode": 18,
+      "hex": "12",
+      "mnemonic": "*",
+      "comment": "expr *"
+    },
+    {
+      "address": 17,
+      "opcode": 52,
+      "hex": "34",
+      "mnemonic": "К [x]",
+      "comment": "int()"
+    },
+    {
+      "address": 18,
+      "opcode": 65,
+      "hex": "41",
+      "mnemonic": "X->П 1",
+      "comment": "set tile"
+    },
+    {
+      "address": 19,
+      "opcode": 8,
+      "hex": "08",
+      "mnemonic": "8"
+    },
+    {
+      "address": 20,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "condition compare"
+    },
+    {
+      "address": 21,
+      "opcode": 235,
+      "hex": "EB",
+      "mnemonic": "К x=0 b",
+      "comment": "false branch for ==; preloaded Rb=E0 indirect-target=28 shifted-forward indirect flow"
+    },
+    {
+      "address": 22,
+      "opcode": 98,
+      "hex": "62",
+      "mnemonic": "П->X 2",
+      "comment": "recall strength"
+    },
+    {
+      "address": 23,
+      "opcode": 7,
+      "hex": "07",
+      "mnemonic": "7"
+    },
+    {
+      "address": 24,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "expr -"
+    },
+    {
+      "address": 25,
+      "opcode": 66,
+      "hex": "42",
+      "mnemonic": "X->П 2",
+      "comment": "set strength"
+    },
+    {
+      "address": 26,
+      "opcode": 81,
+      "hex": "51",
+      "mnemonic": "БП",
+      "comment": "if end"
+    },
+    {
+      "address": 27,
+      "opcode": 129,
+      "hex": "81",
+      "mnemonic": "81",
+      "comment": "if end"
+    },
+    {
+      "address": 28,
+      "opcode": 97,
+      "hex": "61",
+      "mnemonic": "П->X 1",
+      "comment": "recall tile"
+    },
+    {
+      "address": 29,
+      "opcode": 87,
+      "hex": "57",
+      "mnemonic": "F x!=0",
+      "comment": "false branch for !="
+    },
+    {
+      "address": 30,
+      "opcode": 128,
+      "hex": "80",
+      "mnemonic": "80",
+      "comment": "false branch for !="
+    },
+    {
+      "address": 31,
+      "opcode": 99,
+      "hex": "63",
+      "mnemonic": "П->X 3",
+      "comment": "recall warning_pattern"
+    },
+    {
+      "address": 32,
+      "opcode": 97,
+      "hex": "61",
+      "mnemonic": "П->X 1",
+      "comment": "display __inline_show_90_1 source"
+    },
+    {
+      "address": 33,
+      "opcode": 80,
+      "hex": "50",
+      "mnemonic": "С/П",
+      "comment": "show __inline_show_90_1"
+    },
+    {
+      "address": 34,
+      "opcode": 97,
+      "hex": "61",
+      "mnemonic": "П->X 1",
+      "comment": "recall tile"
+    },
+    {
+      "address": 35,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "condition compare"
+    },
+    {
+      "address": 36,
+      "opcode": 94,
+      "hex": "5E",
+      "mnemonic": "F x=0",
+      "comment": "false branch for =="
+    },
+    {
+      "address": 37,
+      "opcode": 117,
+      "hex": "75",
+      "mnemonic": "75",
+      "comment": "false branch for =="
+    },
+    {
+      "address": 38,
+      "opcode": 97,
+      "hex": "61",
+      "mnemonic": "П->X 1",
+      "comment": "recall tile"
+    },
+    {
+      "address": 39,
+      "opcode": 1,
+      "hex": "01",
+      "mnemonic": "1"
+    },
+    {
+      "address": 40,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "condition compare"
+    },
+    {
+      "address": 41,
+      "opcode": 94,
+      "hex": "5E",
+      "mnemonic": "F x=0",
+      "comment": "false branch for =="
+    },
+    {
+      "address": 42,
+      "opcode": 80,
+      "hex": "50",
+      "mnemonic": "50",
+      "comment": "false branch for =="
+    },
+    {
+      "address": 43,
+      "opcode": 168,
+      "hex": "A8",
+      "mnemonic": "К ПП 8",
+      "comment": "proc call next_floor; preloaded R8=88 indirect-target=88 shifted-forward indirect flow"
+    },
+    {
+      "address": 44,
+      "opcode": 98,
+      "hex": "62",
+      "mnemonic": "П->X 2",
+      "comment": "recall strength"
+    },
+    {
+      "address": 45,
+      "opcode": 101,
+      "hex": "65",
+      "mnemonic": "П->X 5",
+      "comment": "recall floor"
+    },
+    {
+      "address": 46,
+      "opcode": 16,
+      "hex": "10",
+      "mnemonic": "+",
+      "comment": "expr +"
+    },
+    {
+      "address": 47,
+      "opcode": 66,
+      "hex": "42",
+      "mnemonic": "X->П 2",
+      "comment": "set strength"
+    },
+    {
+      "address": 48,
+      "opcode": 81,
+      "hex": "51",
+      "mnemonic": "БП",
+      "comment": "if end"
+    },
+    {
+      "address": 49,
+      "opcode": 100,
+      "hex": "64",
+      "mnemonic": "64",
+      "comment": "if end"
+    },
+    {
+      "address": 50,
+      "opcode": 102,
+      "hex": "66",
+      "mnemonic": "П->X 6",
+      "comment": "recall score"
+    },
+    {
+      "address": 51,
+      "opcode": 97,
+      "hex": "61",
+      "mnemonic": "П->X 1",
+      "comment": "recall tile"
+    },
+    {
+      "address": 52,
+      "opcode": 16,
+      "hex": "10",
+      "mnemonic": "+",
+      "comment": "expr +"
+    },
+    {
+      "address": 53,
+      "opcode": 2,
+      "hex": "02",
+      "mnemonic": "2"
+    },
+    {
+      "address": 54,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "expr -"
+    },
+    {
+      "address": 55,
+      "opcode": 70,
+      "hex": "46",
+      "mnemonic": "X->П 6",
+      "comment": "set score"
+    },
+    {
+      "address": 56,
+      "opcode": 4,
+      "hex": "04",
+      "mnemonic": "4"
+    },
+    {
+      "address": 57,
+      "opcode": 98,
+      "hex": "62",
+      "mnemonic": "П->X 2",
+      "comment": "recall strength"
+    },
+    {
+      "address": 58,
+      "opcode": 16,
+      "hex": "10",
+      "mnemonic": "+",
+      "comment": "expr +"
+    },
+    {
+      "address": 59,
+      "opcode": 169,
+      "hex": "A9",
+      "mnemonic": "К ПП 9",
+      "comment": "shared straight-line helper; preloaded R9=97 indirect-target=97 shifted-forward indirect flow"
+    },
+    {
+      "address": 60,
+      "opcode": 94,
+      "hex": "5E",
+      "mnemonic": "F x=0",
+      "comment": "false branch for =="
+    },
+    {
+      "address": 61,
+      "opcode": 100,
+      "hex": "64",
+      "mnemonic": "64",
+      "comment": "false branch for =="
+    },
+    {
+      "address": 62,
+      "opcode": 210,
+      "hex": "D2",
+      "mnemonic": "К П->X 2",
+      "comment": "decrement strength"
+    },
+    {
+      "address": 63,
+      "opcode": 214,
+      "hex": "D6",
+      "mnemonic": "К П->X 6",
+      "comment": "increment score"
+    },
+    {
+      "address": 64,
+      "opcode": 96,
+      "hex": "60",
+      "mnemonic": "П->X 0",
+      "comment": "recall plans"
+    },
+    {
+      "address": 65,
+      "opcode": 97,
+      "hex": "61",
+      "mnemonic": "П->X 1",
+      "comment": "recall tile"
+    },
+    {
+      "address": 66,
+      "opcode": 100,
+      "hex": "64",
+      "mnemonic": "П->X 4",
+      "comment": "recall slot"
+    },
+    {
+      "address": 67,
+      "opcode": 1,
+      "hex": "01",
+      "mnemonic": "1"
+    },
+    {
+      "address": 68,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "expr -"
+    },
+    {
+      "address": 69,
+      "opcode": 21,
+      "hex": "15",
+      "mnemonic": "F 10^x",
+      "comment": "pow10()"
+    },
+    {
+      "address": 70,
+      "opcode": 18,
+      "hex": "12",
+      "mnemonic": "*",
+      "comment": "expr *"
+    },
+    {
+      "address": 71,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "expr -"
+    },
+    {
+      "address": 72,
+      "opcode": 64,
+      "hex": "40",
+      "mnemonic": "X->П 0",
+      "comment": "set plans"
+    },
+    {
+      "address": 73,
+      "opcode": 81,
+      "hex": "51",
+      "mnemonic": "БП",
+      "comment": "if end"
+    },
+    {
+      "address": 74,
+      "opcode": 128,
+      "hex": "80",
+      "mnemonic": "80",
+      "comment": "if end"
+    },
+    {
+      "address": 75,
+      "opcode": 98,
+      "hex": "62",
+      "mnemonic": "П->X 2",
+      "comment": "recall strength"
+    },
+    {
+      "address": 76,
+      "opcode": 169,
+      "hex": "A9",
+      "mnemonic": "К ПП 9",
+      "comment": "shared straight-line helper; preloaded R9=97 indirect-target=97 shifted-forward indirect flow"
+    },
+    {
+      "address": 77,
+      "opcode": 94,
+      "hex": "5E",
+      "mnemonic": "F x=0",
+      "comment": "false branch for =="
+    },
+    {
+      "address": 78,
+      "opcode": 128,
+      "hex": "80",
+      "mnemonic": "80",
+      "comment": "false branch for =="
+    },
+    {
+      "address": 79,
+      "opcode": 210,
+      "hex": "D2",
+      "mnemonic": "К П->X 2",
+      "comment": "decrement strength"
+    },
+    {
+      "address": 80,
+      "opcode": 212,
+      "hex": "D4",
+      "mnemonic": "К П->X 4",
+      "comment": "increment slot"
+    },
+    {
+      "address": 81,
+      "opcode": 210,
+      "hex": "D2",
+      "mnemonic": "К П->X 2",
+      "comment": "delayed predecrement strength"
+    },
+    {
+      "address": 82,
+      "opcode": 98,
+      "hex": "62",
+      "mnemonic": "П->X 2",
+      "comment": "recall strength"
+    },
+    {
+      "address": 83,
+      "opcode": 11,
+      "hex": "0B",
+      "mnemonic": "/-/",
+      "comment": "negate strength for zero test"
+    },
+    {
+      "address": 84,
+      "opcode": 151,
+      "hex": "97",
+      "mnemonic": "К x>=0 7",
+      "comment": "false branch for <=; preloaded R7=B2 indirect-target=0 indirect flow"
+    },
+    {
+      "address": 85,
+      "opcode": 102,
+      "hex": "66",
+      "mnemonic": "П->X 6",
+      "comment": "recall score"
+    },
+    {
+      "address": 86,
+      "opcode": 41,
+      "hex": "29",
+      "mnemonic": "К ÷",
+      "comment": "halt literal ЕГГ0Г"
+    },
+    {
+      "address": 87,
+      "opcode": 135,
+      "hex": "87",
+      "mnemonic": "К БП 7",
+      "comment": "loop back; preloaded R7=B2 indirect-target=0 indirect flow"
+    },
+    {
+      "address": 88,
+      "opcode": 213,
+      "hex": "D5",
+      "mnemonic": "К П->X 5",
+      "comment": "increment floor"
+    },
+    {
+      "address": 89,
+      "opcode": 101,
+      "hex": "65",
+      "mnemonic": "П->X 5",
+      "comment": "recall floor"
+    },
+    {
+      "address": 90,
+      "opcode": 4,
+      "hex": "04",
+      "mnemonic": "4"
+    },
+    {
+      "address": 91,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "condition compare"
+    },
+    {
+      "address": 92,
+      "opcode": 94,
+      "hex": "5E",
+      "mnemonic": "F x=0",
+      "comment": "false branch for =="
+    },
+    {
+      "address": 93,
+      "opcode": 150,
+      "hex": "96",
+      "mnemonic": "96",
+      "comment": "false branch for =="
+    },
+    {
+      "address": 94,
+      "opcode": 1,
+      "hex": "01",
+      "mnemonic": "1"
+    },
+    {
+      "address": 95,
+      "opcode": 69,
+      "hex": "45",
+      "mnemonic": "X->П 5",
+      "comment": "set floor"
+    },
+    {
+      "address": 96,
+      "opcode": 82,
+      "hex": "52",
+      "mnemonic": "В/О",
+      "comment": "implicit return from proc"
+    },
+    {
+      "address": 97,
+      "opcode": 97,
+      "hex": "61",
+      "mnemonic": "П->X 1",
+      "comment": "recall tile"
+    },
+    {
+      "address": 98,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "expr -"
+    },
+    {
+      "address": 99,
+      "opcode": 66,
+      "hex": "42",
+      "mnemonic": "X->П 2",
+      "comment": "set strength"
+    },
+    {
+      "address": 100,
+      "opcode": 97,
+      "hex": "61",
+      "mnemonic": "П->X 1",
+      "comment": "recall tile"
+    },
+    {
+      "address": 101,
+      "opcode": 7,
+      "hex": "07",
+      "mnemonic": "7",
+      "comment": "shared straight-line helper body"
+    },
+    {
+      "address": 102,
+      "opcode": 17,
+      "hex": "11",
+      "mnemonic": "-",
+      "comment": "condition compare"
+    },
+    {
+      "address": 103,
+      "opcode": 82,
+      "hex": "52",
+      "mnemonic": "В/О",
+      "comment": "shared straight-line helper return"
+    }
+  ],
+  "report": {
+    "steps": 104,
+    "budget": 999999,
+    "machine": "mk61",
+    "registers": {
+      "strength": "2",
+      "slot": "4",
+      "floor": "5",
+      "score": "6",
+      "plans": "0",
+      "tile": "1",
+      "warning_pattern": "3"
+    },
+    "labels": {
+      "\u0000main": "00",
+      "__loop_0": "00",
+      "__if_false_1": "10",
+      "__if_false_3": "28",
+      "__if_false_9": "50",
+      "__if_false_11": "64",
+      "__if_end_10": "64",
+      "__if_false_7": "75",
+      "__if_false_13": "80",
+      "__if_end_8": "80",
+      "__if_false_5": "80",
+      "__if_end_4": "81",
+      "__if_end_2": "82",
+      "__if_false_15": "87",
+      "next_floor": "88",
+      "__if_false_16": "96",
+      "__shared_straight_line_helper_0": "97"
+    },
+    "optimizations": [
+      {
+        "name": "expression-constant-folder",
+        "detail": "Folded 5 constant expression node(s) before code generation."
+      },
+      {
+        "name": "dead-state-elimination",
+        "detail": "Removed 2 unobserved state fields before register allocation."
+      },
+      {
+        "name": "common-branch-tail-hoisting",
+        "detail": "Hoisted 2 shared branch tails and simplified 0 conditional shapes."
+      },
+      {
+        "name": "single-use-tail-inline",
+        "detail": "Expanded 3 single-use tail calls only where it exposed a shared branch suffix."
+      },
+      {
+        "name": "intent-domain-lowering",
+        "detail": "Lowered 7 state fields and 7 rules through the generic intent pipeline."
+      },
+      {
+        "name": "dead-proc-elimination",
+        "detail": "Removed 3 unreachable lowered rule proc(s) after high-level match/effect lowering."
+      },
+      {
+        "name": "auto-preload-initial-state",
+        "detail": "Moved initial state into setup/preload values so official program cells stay focused on turn logic."
+      },
+      {
+        "name": "preloaded-constant",
+        "detail": "Used preloaded Re for constant 11951203."
+      },
+      {
+        "name": "screen-video-literal-lowering",
+        "detail": "Lowered screen __inline_show_38_0 as a literal calculator video string."
+      },
+      {
+        "name": "zero-condition-test",
+        "detail": "Tested == 0 without materializing a zero literal at line 41."
+      },
+      {
+        "name": "proc-call-lowering",
+        "detail": "Compiled call to rule next_floor as ПП/В/О subroutine."
+      },
+      {
+        "name": "preloaded-constant",
+        "detail": "Used preloaded Rd for constant 10."
+      },
+      {
+        "name": "packed-grid-primitive-lowering",
+        "detail": "Lowered digit_at() to reusable 4x4 grid/packed-line arithmetic."
+      },
+      {
+        "name": "condition-current-x-reuse",
+        "detail": "Reused the value already in X for equality comparison at line 53."
+      },
+      {
+        "name": "equality-zero-fallthrough",
+        "detail": "Reused the zero left in X by equality comparison at line 53."
+      },
+      {
+        "name": "single-use-rule-inline",
+        "detail": "Inlined single-use rule hit_wall at line 54."
+      },
+      {
+        "name": "zero-condition-test",
+        "detail": "Tested != 0 without materializing a zero literal at line 88."
+      },
+      {
+        "name": "running-display-preview",
+        "detail": "Prepared visible value without a calculator stop at line 89."
+      },
+      {
+        "name": "display-strategy-selection",
+        "detail": "Selected decimal-pack for screen __inline_show_90_1."
+      },
+      {
+        "name": "packed-display-lowering",
+        "detail": "Display __inline_show_90_1 may use display-byte encodings in later layout passes."
+      },
+      {
+        "name": "condition-current-x-reuse",
+        "detail": "Reused the value already in X for equality comparison at line 92."
+      },
+      {
+        "name": "equality-zero-fallthrough",
+        "detail": "Reused the zero left in X by equality comparison at line 92."
+      },
+      {
+        "name": "equality-zero-fallthrough",
+        "detail": "Reused the zero left in X by equality comparison at line 93."
+      },
+      {
+        "name": "proc-call-lowering",
+        "detail": "Compiled call to rule next_floor as ПП/В/О subroutine."
+      },
+      {
+        "name": "equality-zero-fallthrough",
+        "detail": "Reused the zero left in X by equality comparison at line 99."
+      },
+      {
+        "name": "indirect-incdec-counter",
+        "detail": "Decremented strength by using К П->X 2's pre-decrement side effect at line 100."
+      },
+      {
+        "name": "indirect-incdec-counter",
+        "detail": "Incremented score by using К П->X 6's pre-increment side effect at line 101."
+      },
+      {
+        "name": "equality-zero-fallthrough",
+        "detail": "Reused the zero left in X by equality comparison at line 108."
+      },
+      {
+        "name": "indirect-incdec-counter",
+        "detail": "Decremented strength by using К П->X 2's pre-decrement side effect at line 109."
+      },
+      {
+        "name": "ephemeral-input-branch",
+        "detail": "Branched directly on input answer at line 91 without storing it."
+      },
+      {
+        "name": "single-use-rule-inline",
+        "detail": "Inlined single-use rule encounter at line 57."
+      },
+      {
+        "name": "indirect-incdec-counter",
+        "detail": "Incremented slot by using К П->X 4's pre-increment side effect at line 58."
+      },
+      {
+        "name": "delayed-indirect-underflow-decrement",
+        "detail": "Delayed strength-- to the terminal nonpositive guard at line 69, then used К П->X 2's pre-decrement side effect."
+      },
+      {
+        "name": "negated-zero-test",
+        "detail": "Negated strength for strength <= 0 instead of materializing zero at line 69."
+      },
+      {
+        "name": "running-display-preview",
+        "detail": "Prepared visible value without a calculator stop at line 33."
+      },
+      {
+        "name": "error-stop",
+        "detail": "Used one-cell error opcode for literal ЕГГ0Г stop at line 34."
+      },
+      {
+        "name": "single-use-rule-inline",
+        "detail": "Inlined single-use rule exhausted at line 70."
+      },
+      {
+        "name": "delayed-indirect-underflow-decrement",
+        "detail": "Sank a branch-local strength-- into the shared terminal nonpositive guard at line 69."
+      },
+      {
+        "name": "ephemeral-input-branch",
+        "detail": "Branched directly on input action at line 39 without storing it."
+      },
+      {
+        "name": "indirect-incdec-counter",
+        "detail": "Incremented floor by using К П->X 5's pre-increment side effect at line 75."
+      },
+      {
+        "name": "equality-zero-fallthrough",
+        "detail": "Reused the zero left in X by equality comparison at line 76."
+      },
+      {
+        "name": "shared-straight-line-helper",
+        "detail": "Extracted 1 straight-line helper from 2 repeated body occurrences (1 cell saved)."
+      },
+      {
+        "name": "jump-thread",
+        "detail": "Threaded 1 jump(s) through trampoline labels to the final target."
+      },
+      {
+        "name": "preloaded-indirect-flow",
+        "detail": "Activated post-layout: replaced 9 direct branch/call(s) with proven preloaded indirect flow."
+      },
+      {
+        "name": "dark-entry-layout",
+        "detail": "Pointed 3 branch(es) at an executable suffix through a proven dark-entry formal address (beyond the 104-cell window)."
+      },
+      {
+        "name": "generated-setup-program",
+        "detail": "Generated optimized setup program for plans."
+      },
+      {
+        "name": "setup-duplicate-preload-store-reuse",
+        "detail": "Loaded setup constant 1 once and stored it into R4, R5."
+      },
+      {
+        "name": "setup-duplicate-preload-store-reuse",
+        "detail": "Loaded setup constant 0 once and stored it into R6, R1, R7."
+      },
+      {
+        "name": "setup-duplicate-preload-store-reuse",
+        "detail": "Loaded setup constant 10 once and stored it into Rd, Ra."
+      },
+      {
+        "name": "setup-int-random-range-lowering",
+        "detail": "Lowered int(random() * 999999999) without К [x] so the MK-61 random sequence keeps moving."
+      },
+      {
+        "name": "indirect-underflow-decrement",
+        "detail": "Used R0..R3 indirect pre-decrement for terminal underflow guards when full-program layout wins (104 vs 111 cells)."
+      }
+    ],
+    "warnings": [
+      "Reference 'lordbss_pmk198' was not found under games; using budget 999999 as reference size."
+    ],
+    "delivery": "hex",
+    "optimizer": {
+      "automatic": true,
+      "active": 12,
+      "considered": 0,
+      "candidate": 50,
+      "planned": 0,
+      "capabilities": [
+        {
+          "id": "store-recall-peephole",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive ., /-/, or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops or direct call/return continuations.",
+          "requires": []
+        },
+        {
+          "id": "stack-current-x-scheduling",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.",
+          "requires": []
+        },
+        {
+          "id": "tail-call-lowering",
+          "category": "flow",
+          "source": "documented",
+          "status": "active",
+          "detail": "Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.",
+          "requires": []
+        },
+        {
+          "id": "return-zero-jump",
+          "category": "flow",
+          "source": "mk61-delta",
+          "status": "candidate",
+          "detail": "Uses В/О as one-cell БП 01 only when the return stack is known empty.",
+          "requires": []
+        },
+        {
+          "id": "vo-return-body-reorder",
+          "category": "flow",
+          "source": "mk61-delta",
+          "status": "candidate",
+          "detail": "Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.",
+          "requires": []
+        },
+        {
+          "id": "packed-line-family-layout",
+          "category": "layout",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Candidate: detect packed line banks that are both updated/checked and scored, share source-shaped diagonal score tails through a local middle-entry layout, and continue toward a full shared update/check plus score walker instead of separate packed_add and packed_score traversals.",
+          "requires": [
+            "packed-grid-primitive-lowering",
+            "shared-straight-line-helper"
+          ]
+        },
+        {
+          "id": "super-number-deferred-normalization",
+          "category": "data",
+          "source": "undocumented",
+          "status": "candidate",
+          "detail": "Candidate: keep an un-normalized super-number (extra hidden mantissa digits) to defer a range/error check. The reference emulator models only the 8 visible mantissa digits, so the hidden-digit behavior the idiom relies on cannot be reproduced or safely proven, and no language construct produces it.",
+          "requires": []
+        },
+        {
+          "id": "packed-position-type",
+          "category": "data",
+          "source": "undocumented",
+          "status": "candidate",
+          "detail": "Candidate: a language-level packed position type N.0000H carrying an integer position plus packed (hex) fractional sub-coordinates. The dual-use round-trip (К [x] recovers the position, К {x} recovers the packed fraction) is already exploited by constants-dual-use; a dedicated type would only add language surface that no current program consumes.",
+          "requires": [
+            "constants-dual-use"
+          ]
+        },
+        {
+          "id": "coord-list-scaled-decimal",
+          "category": "data",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Stores 10x10 board coordinates as y.x decimal values when all visible uses allow it, so row/column/diagonal scans avoid repeated /10 digit extraction.",
+          "requires": []
+        },
+        {
+          "id": "dual-constant-sign-digit",
+          "category": "data",
+          "source": "undocumented",
+          "status": "candidate",
+          "detail": "Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface.",
+          "requires": [
+            "negative-zero-threshold-selector"
+          ]
+        },
+        {
+          "id": "grd-angle-trig-identities",
+          "category": "data",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Uses identities such as acos(0)=100 and cos(100)=0 only when the source program explicitly requires ГРД angle mode.",
+          "requires": [
+            "grd-angle-mode"
+          ]
+        },
+        {
+          "id": "branch-removal",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates.",
+          "requires": []
+        },
+        {
+          "id": "zero-condition-test",
+          "category": "flow",
+          "source": "documented",
+          "status": "active",
+          "detail": "Uses direct F x?0 tests when one side of a condition is a proved zero, avoiding a zero literal and subtraction.",
+          "requires": []
+        },
+        {
+          "id": "dispatch-compare-chain",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Lowers high-level command dispatch automatically; small proven dispatches may use indirect or super-dark dispatch.",
+          "requires": []
+        },
+        {
+          "id": "arithmetic-if-select",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Replaces simple boolean if/else assignments, stops, and conditional moves with arithmetic selection when shorter.",
+          "requires": []
+        },
+        {
+          "id": "negative-zero-threshold-selector",
+          "category": "flow",
+          "source": "undocumented",
+          "status": "candidate",
+          "detail": "Uses a compiler-owned 1|-00 preload plus В↑ normalization to build a 0/1 selector or flow test for bounded nonnegative threshold branches when that beats ordinary branching.",
+          "requires": [
+            "negative-zero-degree",
+            "x2-register"
+          ]
+        },
+        {
+          "id": "arithmetic-if-update",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Replaces conditional +=/-= and sign toggles guarded by a proved boolean with masked arithmetic.",
+          "requires": []
+        },
+        {
+          "id": "arithmetic-if-extrema",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Replaces simple extrema, sign, clamp, comparison-mask, and boolean-algebra branches when shorter. К max zero-through counts as the extrema selection.",
+          "requires": []
+        },
+        {
+          "id": "indirect-flow",
+          "category": "flow",
+          "source": "documented",
+          "status": "active",
+          "detail": "Candidate rule: replace direct branches/calls with К БП/К ПП/К x?0 when the address value is already live, or when a compiler-owned preload is cheaper.",
+          "requires": []
+        },
+        {
+          "id": "indirect-memory-table",
+          "category": "data",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Uses К П->X/К X->П indirect memory for compact state tables when a stable selector proves the target register.",
+          "requires": [
+            "indirect-memory"
+          ]
+        },
+        {
+          "id": "fl-decrement-branch",
+          "category": "flow",
+          "source": "documented",
+          "status": "active",
+          "detail": "Uses compact counter-side-effect decrement forms: F L0..F L3 for zero branches and R0..R3 indirect pre-decrement for proved unit updates or underflow guards.",
+          "requires": []
+        },
+        {
+          "id": "address-constant-overlay",
+          "category": "layout",
+          "source": "undocumented",
+          "status": "active",
+          "detail": "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; БП overlays and ПП overlays with proved terminal targets are rewritten only after final address proof, including self-target operand execution, existing formal/numeric address bytes used as executable cells, executable bytes reused as formal-address aliases to the same target, address-taking executable bytes whose operand remains next, and fixed-address guards that reject overlays whose real target would shift.",
+          "requires": [
+            "address-constants",
+            "code-data-overlay"
+          ]
+        },
+        {
+          "id": "cyclic-address-layout",
+          "category": "layout",
+          "source": "undocumented",
+          "status": "candidate",
+          "detail": "Uses formal address-space wraparound and side branches only after the layout pass proves the shared-tail target.",
+          "requires": [
+            "dark-entries",
+            "code-data-overlay"
+          ]
+        },
+        {
+          "id": "constants-dual-use",
+          "category": "data",
+          "source": "undocumented",
+          "status": "candidate",
+          "detail": "Reuses one stored value as arithmetic coefficient, rounding adjuster, and address-like dispatch data.",
+          "requires": [
+            "address-constants"
+          ]
+        },
+        {
+          "id": "dark-entry-layout",
+          "category": "layout",
+          "source": "undocumented",
+          "status": "active",
+          "detail": "Exposes shared tails as dark-entry candidates when the layout pass can point at the same executable suffix.",
+          "requires": [
+            "dark-entries"
+          ]
+        },
+        {
+          "id": "super-dark-dispatch",
+          "category": "flow",
+          "source": "undocumented",
+          "status": "candidate",
+          "detail": "Dispatch candidate for indirect К БП R with FA..FF; selected only when layout can place one-command cases at 48..53, tails at 01..06, and prove the selector register contains FA..FF.",
+          "requires": [
+            "super-dark-dispatch",
+            "indirect-flow"
+          ]
+        },
+        {
+          "id": "r0-alias-indirect",
+          "category": "flow",
+          "source": "mk61-delta",
+          "status": "candidate",
+          "detail": "Treats MK-61 *F/R0 aliases as byte/formal-address candidates only; the profile proves they transform R0.",
+          "requires": [
+            "undocumented-opcodes",
+            "r0-t-alias"
+          ]
+        },
+        {
+          "id": "r0-fractional-sentinel",
+          "category": "flow",
+          "source": "mk61-delta",
+          "status": "candidate",
+          "detail": "Fractional R0 side effects: selecting R3, preserving the resulting -99999999 sentinel, carrying the fractional proof through unrelated indirect memory, and replacing proved direct flow to address 99 with one-cell К БП/К ПП/К x?0 0 are sound only when liveness and final layout prove the R0 mutation and fixed 99 target are valid.",
+          "requires": [
+            "r0-fractional-sentinel"
+          ]
+        },
+        {
+          "id": "raw-display-5f",
+          "category": "display",
+          "source": "undocumented",
+          "status": "candidate",
+          "detail": "Raw display-state transform opcode 5F; active when a raw block emits 5F as an intended display mutation (X is left intact).",
+          "requires": [
+            "raw-display-5f"
+          ]
+        },
+        {
+          "id": "x2-display-register",
+          "category": "display",
+          "source": "mk61-delta",
+          "status": "active",
+          "detail": "Display/data candidate for scheduling X2, ВП, '.', sign digits, and display bytes without extra storage; opcode metadata follows the X2 reference split between preserving, X2-syncing/normalizing, and X2-restoring commands.",
+          "requires": [
+            "x2-register",
+            "display-bytes"
+          ]
+        },
+        {
+          "id": "vp-fraction-restore",
+          "category": "stack",
+          "source": "mk61-delta",
+          "status": "candidate",
+          "detail": "Uses compiler-marked ВП cells where they simultaneously restore X2 and provide the needed fractional/mantissa side effect, including X-preserving store/empty/marker/direct-return gaps before redundant К {x}; also removes proved no-op К {x}/К [x]/К |x|/К ЗН cells under the shared X2 exposure guard, collapses redundant ВП ВП, empty-op runs before ВП, proved exponent /-/ /-/ toggles, and VP/X2 restore runs before fresh digits or dead overwrites across transparent return helpers.",
+          "requires": [
+            "x2-register"
+          ]
+        },
+        {
+          "id": "x2-hidden-temp",
+          "category": "stack",
+          "source": "mk61-delta",
+          "status": "candidate",
+          "detail": "Uses the hidden X2 display register as a temporary across ordinary X2-preserving logic: a membership test can keep a deterministic mask in Y, direct scratch recalls and repeated literals can restore a proved X2-resident value through '.' after either a safe restore gap, a CFG-proved immediate X2 sync, or a modeled closed-context /-/ dot source, and the shared ВП restore-gap proof can cross transparent direct/proved-indirect return helpers before deciding that '.' or a literal restore preserves the same mantissa source; restored dots keep hidden reg:r value facts alive for later scratch aliases, direct stores remember proved decimal register contents so later recalls can rehydrate dot-safe decimal and ВП splice facts, no-op restores are removed when value dataflow proves X already contains the hidden X2 value, and safe decimal restore results are removed when a following hard X/X2 overwrite such as Cx makes the restored X dead; a separate mantissa/exponent shape lattice tracks active ВП forms without granting dot-safe value aliases until a closing X2 sync normalizes them; known-fractional masks insert a preserving gap before the restore when К{x} is skipped.",
+          "requires": [
+            "x2-register"
+          ]
+        },
+        {
+          "id": "hex-mantissa-arithmetic",
+          "category": "data",
+          "source": "undocumented",
+          "status": "candidate",
+          "detail": "Represents compact state as hexadecimal mantissa/sign digits when display-boundary proofs hold.",
+          "requires": [
+            "display-bytes"
+          ]
+        },
+        {
+          "id": "fractional-indirect-addressing",
+          "category": "data",
+          "source": "mk61-delta",
+          "status": "candidate",
+          "detail": "Uses indirect addressing truncation/fractional effects as data selection only with range and emulator facts.",
+          "requires": [
+            "indirect-flow"
+          ]
+        },
+        {
+          "id": "kzn-double",
+          "category": "data",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Uses К ЗН as a one-cell numeric transform when equivalent to the needed doubling/sign-digit operation.",
+          "requires": []
+        },
+        {
+          "id": "kor-digit-test",
+          "category": "data",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Uses К∨ as a compact digit/boundary test when bit-level equivalence is proved.",
+          "requires": []
+        },
+        {
+          "id": "kmax-zero-through",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Uses К max as a stack/value transform, including zero-through cases, when it preserves source semantics.",
+          "requires": []
+        },
+        {
+          "id": "error-stop-idiom",
+          "category": "trap",
+          "source": "mk61-delta",
+          "status": "active",
+          "detail": "Use domain-error stops only for explicit trap intent or after verifier proves the failure mode is acceptable.",
+          "requires": [
+            "error-stops"
+          ]
+        },
+        {
+          "id": "step-vs-run-verification",
+          "category": "verification",
+          "source": "mk61-delta",
+          "status": "active",
+          "detail": "Uses mk61 emulator facts for Danilov-era differences between step mode, continuous run, exponent sign changes, Cx, В↑, and П->X as exact-machine preconditions.",
+          "requires": []
+        },
+        {
+          "id": "jump-to-next-threading",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Drops unconditional БП whose only target is the immediately following label after a layout pass collapses the trampoline.",
+          "requires": []
+        },
+        {
+          "id": "duplicate-failure-tail-merge",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Coalesces structurally identical failure tails into a single shared exit, including pause-0 tails and pause-only tails whose displayed value is already in X.",
+          "requires": []
+        },
+        {
+          "id": "return-suffix-gadget",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Shares identical straight-line suffixes ending in В/О, and calls into existing straight-line body plus БП tail-call gadgets when the extra return frame is proven to land on the original continuation.",
+          "requires": []
+        },
+        {
+          "id": "shared-terminal-tail",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Shares identical straight-line suffixes that already end in unconditional terminal flow, replacing duplicates with a jump into the canonical suffix.",
+          "requires": []
+        },
+        {
+          "id": "shared-straight-line-helper",
+          "category": "flow",
+          "source": "documented",
+          "status": "active",
+          "detail": "Extracts repeated non-terminal straight-line opcode bodies into one helper subroutine when the call+return cost is provably lower than keeping all copies inline; direct-call bodies are enabled only as a whole-program candidate, repeated suffixes may enter the same helper through internal labels, and X2-restoring digit/./sign/ВП contexts are kept internal to helper bodies rather than split across call or return boundaries.",
+          "requires": []
+        },
+        {
+          "id": "subroutine-part-shared-tail",
+          "category": "flow",
+          "source": "undocumented",
+          "status": "candidate",
+          "detail": "Computes a shared pure operand once and derives both its integer (К [x]) and fractional (К {x}) parts through a single В↑ / X↔Y stack tail instead of recomputing the operand for each part.",
+          "requires": []
+        },
+        {
+          "id": "z-stack-derived-tail",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Computes a shared pure operand once and keeps extra copies in Y/Z (and T for four outputs), restoring them with X↔Y and F reverse for adjacent unary derivations.",
+          "requires": []
+        },
+        {
+          "id": "stack-resident-temps",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Keeps short-lived single-use temporaries on the X/Y/Z/T stack across the next statement instead of spilling them to numbered registers, including through stack-preserving if/loop/dispatch regions.",
+          "requires": []
+        },
+        {
+          "id": "liveness-analysis",
+          "category": "verification",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Foundational data-flow pass: computes liveIn/liveOut per IR position so dead-store-elimination, register-coalesce and other proof-backed passes can fire.",
+          "requires": []
+        },
+        {
+          "id": "dead-store-elimination",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Removes X->П r writes whose register is never read again before the next write to the same register, using whole-program liveness, while preserving stores observed by number-entry or ВП/X2 restore context.",
+          "requires": []
+        },
+        {
+          "id": "interprocedural-dead-store",
+          "category": "data",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Drops a field assignment when interprocedural liveness over the rule call graph proves the value is always overwritten before it can be observed (shown, branched on, output, or read back).",
+          "requires": []
+        },
+        {
+          "id": "interprocedural-value-propagation",
+          "category": "data",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Replaces a recomputed expression with an equal live variable when an affine-form analysis proves they hold the same value on every path, including merges that need linear-arithmetic reasoning.",
+          "requires": []
+        },
+        {
+          "id": "last-x-reuse",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Drops direct П->X r, and stable indirect К П->X R7..Re with a proved target, when the IR pass can prove X already holds the same value and no intervening op clobbers X (including С/П, jumps, ALU), while preserving recalls that supply the last X2 sync before ., /-/, or ВП restoration, mutate an indirect selector, or lift the stack for a downstream consumer through direct call/return continuations.",
+          "requires": []
+        },
+        {
+          "id": "flow-x-reuse",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Uses forward CFG data-flow to drop direct or stable-indirect proved recalls when every predecessor reaches the point with the same register value already in X, including across direct jumps and both sides of conditional branches, unless the recall is the last X2 sync before ., /-/, or ВП restoration, mutates an indirect selector, or lifts the stack for a downstream consumer through direct call/return continuations.",
+          "requires": []
+        },
+        {
+          "id": "branch-target-x-reuse",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Drops the first direct or stable-indirect proved recall in a unique branch target when the incoming condition already carries the tested register value in X, unless the target recall is needed as a ., /-/, or ВП X2-sync boundary, mutates an indirect selector, or lifts the stack for a downstream consumer through direct call/return continuations.",
+          "requires": []
+        },
+        {
+          "id": "pre-shift-stack-lift",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Removes В↑ before a proved stack-shifting producer (direct/indirect П->X, F pi, or another В↑), possibly through stack-preserving labels/stores/plain ops, when that command already supplies current X in Y and stack-difference analysis proves the extra deeper stack cell cannot be observed; the same proof removes В↑ before a hard X/X2 overwrite such as Cx when the lift's Y value is dead, and removes post-producer В↑ across local stack/X2-preserving gaps or simple return helpers that preserve X, stack, and X2 when the producer already supplied the stack lift plus hidden X2 sync.",
+          "requires": []
+        },
+        {
+          "id": "constant-folding",
+          "category": "data",
+          "source": "documented",
+          "status": "active",
+          "detail": "Folds numeric source-expression subtrees before code generation and eliminates identity arithmetic such as '0 +' and '1 *' from the IR after upstream passes simplify the expression tree.",
+          "requires": []
+        },
+        {
+          "id": "cse-display-block",
+          "category": "data",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Common subexpression elimination for pure recall/ALU blocks ending in В/О; redirects duplicates to a shared exit when profitable.",
+          "requires": []
+        },
+        {
+          "id": "jump-thread",
+          "category": "flow",
+          "source": "documented",
+          "status": "active",
+          "detail": "Threads jump-to-jump chains through trampoline labels to their final target, freeing intermediate cells.",
+          "requires": []
+        },
+        {
+          "id": "dead-code-after-halt",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "CFG analysis from the entry point removes ops that are unreachable through any combination of fall-through and jump edges.",
+          "requires": []
+        },
+        {
+          "id": "register-coalesce",
+          "category": "stack",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Coalesces non-overlapping direct-register live ranges after data-flow proves neither register is externally live, indirect, or a loop counter.",
+          "requires": []
+        },
+        {
+          "id": "arithmetic-if-pass",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "IR-level seat for branchless arithmetic-if rewriting; current size-gated rewriting still happens at the AST select stage and feeds this pass via the candidate ledger.",
+          "requires": []
+        },
+        {
+          "id": "redundant-prologue-elimination",
+          "category": "flow",
+          "source": "documented",
+          "status": "candidate",
+          "detail": "Removes a display/halt prologue that immediately precedes БП to a label whose forward prologue is byte-identical, since the user only ever observes the one display performed by the loop head.",
+          "requires": []
+        }
+      ]
+    },
+    "preloads": [
+      {
+        "register": "4",
+        "value": "1",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "2",
+        "value": "40",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "5",
+        "value": "1",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "6",
+        "value": "0",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "0",
+        "value": "random()",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "1",
+        "value": "0",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "3",
+        "value": "70000008",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "d",
+        "value": "10",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "e",
+        "value": "11951203",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "7",
+        "value": "B2",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "8",
+        "value": "88",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "9",
+        "value": "97",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "a",
+        "value": "C2",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "b",
+        "value": "E0",
+        "countsAgainstProgram": false
+      },
+      {
+        "register": "c",
+        "value": "82",
+        "countsAgainstProgram": false
+      }
+    ],
+    "reference": {
+      "name": "lordbss_pmk198",
+      "referenceSteps": 999999,
+      "referenceSpan": 999999,
+      "referenceEntries": 999999,
+      "referenceGaps": [],
+      "compiledSteps": 104,
+      "delta": -999895,
+      "parity": "smaller"
+    },
+    "cellRoles": [
+      {
+        "address": "00",
+        "hex": "6E",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "01",
+        "hex": "3A",
+        "roles": [
+          "exec",
+          "display-byte"
+        ],
+        "note": "display byte role allowed"
+      },
+      {
+        "address": "02",
+        "hex": "50",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "03",
+        "hex": "EA",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "04",
+        "hex": "A8",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "05",
+        "hex": "62",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "06",
+        "hex": "65",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "07",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "08",
+        "hex": "42",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "09",
+        "hex": "8C",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "10",
+        "hex": "60",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "11",
+        "hex": "64",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "12",
+        "hex": "15",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "13",
+        "hex": "13",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "14",
+        "hex": "35",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "15",
+        "hex": "6D",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "16",
+        "hex": "12",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "17",
+        "hex": "34",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "18",
+        "hex": "41",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "19",
+        "hex": "08",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "20",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "21",
+        "hex": "EB",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "22",
+        "hex": "62",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "23",
+        "hex": "07",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "24",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "25",
+        "hex": "42",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "26",
+        "hex": "51",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "27",
+        "hex": "81",
+        "roles": [
+          "address",
+          "constant",
+          "overlay"
+        ],
+        "note": "address can be reused as constant; code/data overlay allowed"
+      },
+      {
+        "address": "28",
+        "hex": "61",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "29",
+        "hex": "57",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "30",
+        "hex": "80",
+        "roles": [
+          "address",
+          "constant",
+          "overlay"
+        ],
+        "note": "address can be reused as constant; code/data overlay allowed"
+      },
+      {
+        "address": "31",
+        "hex": "63",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "32",
+        "hex": "61",
+        "roles": [
+          "exec",
+          "display-byte"
+        ],
+        "note": "display byte role allowed"
+      },
+      {
+        "address": "33",
+        "hex": "50",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "34",
+        "hex": "61",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "35",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "36",
+        "hex": "5E",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "37",
+        "hex": "75",
+        "roles": [
+          "address",
+          "constant",
+          "overlay"
+        ],
+        "note": "address can be reused as constant; code/data overlay allowed"
+      },
+      {
+        "address": "38",
+        "hex": "61",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "39",
+        "hex": "01",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "40",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "41",
+        "hex": "5E",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "42",
+        "hex": "50",
+        "roles": [
+          "address",
+          "constant",
+          "overlay"
+        ],
+        "note": "address can be reused as constant; code/data overlay allowed"
+      },
+      {
+        "address": "43",
+        "hex": "A8",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "44",
+        "hex": "62",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "45",
+        "hex": "65",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "46",
+        "hex": "10",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "47",
+        "hex": "42",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "48",
+        "hex": "51",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "49",
+        "hex": "64",
+        "roles": [
+          "address",
+          "constant",
+          "overlay"
+        ],
+        "note": "address can be reused as constant; code/data overlay allowed"
+      },
+      {
+        "address": "50",
+        "hex": "66",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "51",
+        "hex": "61",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "52",
+        "hex": "10",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "53",
+        "hex": "02",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "54",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "55",
+        "hex": "46",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "56",
+        "hex": "04",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "57",
+        "hex": "62",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "58",
+        "hex": "10",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "59",
+        "hex": "A9",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "60",
+        "hex": "5E",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "61",
+        "hex": "64",
+        "roles": [
+          "address",
+          "constant",
+          "overlay"
+        ],
+        "note": "address can be reused as constant; code/data overlay allowed"
+      },
+      {
+        "address": "62",
+        "hex": "D2",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "63",
+        "hex": "D6",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "64",
+        "hex": "60",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "65",
+        "hex": "61",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "66",
+        "hex": "64",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "67",
+        "hex": "01",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "68",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "69",
+        "hex": "15",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "70",
+        "hex": "12",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "71",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "72",
+        "hex": "40",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "73",
+        "hex": "51",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "74",
+        "hex": "80",
+        "roles": [
+          "address",
+          "constant",
+          "overlay"
+        ],
+        "note": "address can be reused as constant; code/data overlay allowed"
+      },
+      {
+        "address": "75",
+        "hex": "62",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "76",
+        "hex": "A9",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "77",
+        "hex": "5E",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "78",
+        "hex": "80",
+        "roles": [
+          "address",
+          "constant",
+          "overlay"
+        ],
+        "note": "address can be reused as constant; code/data overlay allowed"
+      },
+      {
+        "address": "79",
+        "hex": "D2",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "80",
+        "hex": "D4",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "81",
+        "hex": "D2",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "82",
+        "hex": "62",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "83",
+        "hex": "0B",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "84",
+        "hex": "97",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "85",
+        "hex": "66",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "86",
+        "hex": "29",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "87",
+        "hex": "87",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "88",
+        "hex": "D5",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "89",
+        "hex": "65",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "90",
+        "hex": "04",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "91",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "92",
+        "hex": "5E",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "93",
+        "hex": "96",
+        "roles": [
+          "address",
+          "constant",
+          "overlay"
+        ],
+        "note": "address can be reused as constant; code/data overlay allowed"
+      },
+      {
+        "address": "94",
+        "hex": "01",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "95",
+        "hex": "45",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "96",
+        "hex": "52",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "97",
+        "hex": "61",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "98",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "99",
+        "hex": "42",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "A0",
+        "hex": "61",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "A1",
+        "hex": "07",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "A2",
+        "hex": "11",
+        "roles": [
+          "exec"
+        ]
+      },
+      {
+        "address": "A3",
+        "hex": "52",
+        "roles": [
+          "exec"
+        ]
+      }
+    ],
+    "candidates": [
+      {
+        "site": "display __inline_show_90_1",
+        "variant": "decimal-pack",
+        "steps": 2,
+        "selected": true,
+        "reason": "selected decimal-pack for screen __inline_show_90_1"
+      },
+      {
+        "site": "display __inline_show_90_1",
+        "variant": "packed-storage-reuse",
+        "steps": 999999,
+        "selected": false,
+        "reason": "display fields are not proved to already occupy their decimal positions"
+      },
+      {
+        "site": "display __inline_show_90_1",
+        "variant": "packed-display-helper",
+        "steps": 2,
+        "selected": false,
+        "reason": "display is not repeated often enough for a shared packed display helper"
+      },
+      {
+        "site": "display __inline_show_90_1",
+        "variant": "display-byte-helper",
+        "steps": 999999,
+        "selected": false,
+        "reason": "display is not repeated often enough for a shared display-byte helper"
+      },
+      {
+        "site": "display __inline_show_90_1",
+        "variant": "display-byte-builder",
+        "steps": 999999,
+        "selected": false,
+        "reason": "display has no literal/X2-sensitive fragments to build"
+      },
+      {
+        "site": "ir-pass",
+        "variant": "preloaded-indirect-flow",
+        "steps": 1,
+        "selected": true,
+        "reason": "compiler-owned address preload selected for one-cell indirect branch/call"
+      }
+    ],
+    "budgetReport": {
+      "used": 104,
+      "limit": 999999,
+      "remaining": 999895,
+      "exceeded": false,
+      "largestBlocks": [
+        "__if_false_3=22",
+        "__if_false_1=18",
+        "__if_false_9=14"
+      ],
+      "officialSteps": 104,
+      "extraCells": 0,
+      "totalPhysicalCells": 104
+    },
+    "machineFeaturesUsed": [
+      {
+        "id": "indirect-flow",
+        "source": "optimizer",
+        "detail": "Optimizer selected register-held branch addresses for one-cell indirect flow.; К БП/К ПП/К x?0 indirect flow commands are available to the optimizer."
+      },
+      {
+        "id": "error-stops",
+        "source": "optimizer",
+        "detail": "Compiler emitted a domain-error pause or explicit trap.; Domain-error stops are available only when the source semantics permits trap-like termination."
+      },
+      {
+        "id": "code-data-overlay",
+        "source": "layout",
+        "detail": "Layout marked address cells as reusable code/data overlay candidates.; Address operands, constants, opcodes, and display bytes may share cells after conflict checks."
+      },
+      {
+        "id": "display-bytes",
+        "source": "layout",
+        "detail": "Display lowering marked cells as packed display-byte candidates.; Packed display bytes, hexadecimal mantissa digits, and sign-digit forms are available."
+      },
+      {
+        "id": "address-constants",
+        "source": "layout",
+        "detail": "Layout marked address cells as reusable constants.; Address cells may double as constants for indirect flow and data transforms."
+      }
+    ],
+    "proofs": [
+      {
+        "id": "return-stack-empty",
+        "status": "proved",
+        "detail": "No ПП opcodes were emitted; empty return stack precondition holds for В/О-as-БП01 rewrites."
+      },
+      {
+        "id": "indirect-addressing-ranges",
+        "status": "proved",
+        "detail": "Indirect selectors are rewritten only after local data-flow proves a stable target, a compiler-owned address preload, or the fractional R0 sentinel shape."
+      },
+      {
+        "id": "value-ranges",
+        "status": "proved",
+        "detail": "Collected source ranges for slot, strength, floor, score, tile."
+      },
+      {
+        "id": "observability",
+        "status": "proved",
+        "detail": "Visible state is limited by display output: tile."
+      },
+      {
+        "id": "display-byte-observable-boundary",
+        "status": "assumed",
+        "detail": "Display-byte candidates are bounded by display output and the exact mk61 profile."
+      }
+    ],
+    "emulatorFacts": [
+      {
+        "id": "return-empty-stack-jumps-to-01",
+        "status": "probed",
+        "detail": "В/О with an empty return stack behaves as one-cell БП 01 in continuous execution."
+      },
+      {
+        "id": "r0-star-f-aliases",
+        "status": "probed",
+        "detail": "*F aliases behave like the corresponding *0 commands, including R0 transformation; they do not preserve R0."
+      },
+      {
+        "id": "super-dark-fa-ff-indirect",
+        "status": "probed",
+        "detail": "Indirect К БП R with R=FA..FF executes one command at 48..53, then continues at 01..06."
+      },
+      {
+        "id": "fa-direct-vs-indirect",
+        "status": "probed",
+        "detail": "Direct БП FA consumes/overwrites the following operand byte, while indirect К БП R leaves 01..06 usable as tail code."
+      },
+      {
+        "id": "r0-fractional-jump-99",
+        "status": "probed",
+        "detail": "К БП 0 with R0 in fractional positive/small states jumps to 99 and leaves R0=-99999999."
+      },
+      {
+        "id": "r0-fractional-selects-r3",
+        "status": "probed",
+        "detail": "К П->X 0 and К X->П 0 with 0<R0<1 access R3 and leave R0=-99999999."
+      },
+      {
+        "id": "x2-restore-boundaries",
+        "status": "probed",
+        "detail": "ВП, '.', '/-/', and digit-entry X2 restoration boundaries are modeled as display-state boundaries."
+      },
+      {
+        "id": "negative-zero-degree-threshold",
+        "status": "probed",
+        "detail": "With 1|-00 in Y, multiplying by X and then normalizing through В↑ yields a zero/nonzero threshold at |X|=1."
+      },
+      {
+        "id": "grd-angle-trig-identities",
+        "status": "documented",
+        "detail": "In ГРД angle mode, cos(100) is zero and acos(0) is 100; optimizer use must be guarded by an explicit angle-mode requirement."
+      },
+      {
+        "id": "step-vs-run-delta",
+        "status": "probed",
+        "detail": "Continuous-run behavior is the default profile; step-only divergences are explicit exact-machine facts."
+      },
+      {
+        "id": "raw-display-5f",
+        "status": "probed",
+        "detail": "Opcode 5F leaves internal X intact but mutates display/raw state; it is usable only as an explicit display-state trick."
+      }
+    ],
+    "rejectedCandidates": [
+      {
+        "site": "display __inline_show_90_1",
+        "variant": "packed-storage-reuse",
+        "reason": "display fields are not proved to already occupy their decimal positions",
+        "steps": 999999
+      },
+      {
+        "site": "display __inline_show_90_1",
+        "variant": "packed-display-helper",
+        "reason": "display is not repeated often enough for a shared packed display helper",
+        "steps": 2
+      },
+      {
+        "site": "display __inline_show_90_1",
+        "variant": "display-byte-helper",
+        "reason": "display is not repeated often enough for a shared display-byte helper",
+        "steps": 999999
+      },
+      {
+        "site": "display __inline_show_90_1",
+        "variant": "display-byte-builder",
+        "reason": "display has no literal/X2-sensitive fragments to build",
+        "steps": 999999
+      }
+    ],
+    "hotBlocks": [
+      {
+        "name": "__if_false_3",
+        "estimatedCells": 22
+      },
+      {
+        "name": "__if_false_1",
+        "estimatedCells": 18
+      },
+      {
+        "name": "__if_false_9",
+        "estimatedCells": 14
+      }
+    ],
+    "setupProgram": {
+      "steps": [
+        {
+          "address": 0,
+          "opcode": 1,
+          "hex": "01",
+          "mnemonic": "1"
+        },
+        {
+          "address": 1,
+          "opcode": 68,
+          "hex": "44",
+          "mnemonic": "X->П 4",
+          "comment": "setup R4"
+        },
+        {
+          "address": 2,
+          "opcode": 69,
+          "hex": "45",
+          "mnemonic": "X->П 5",
+          "comment": "setup R5"
+        },
+        {
+          "address": 3,
+          "opcode": 4,
+          "hex": "04",
+          "mnemonic": "4"
+        },
+        {
+          "address": 4,
+          "opcode": 0,
+          "hex": "00",
+          "mnemonic": "0"
+        },
+        {
+          "address": 5,
+          "opcode": 66,
+          "hex": "42",
+          "mnemonic": "X->П 2",
+          "comment": "setup R2"
+        },
+        {
+          "address": 6,
+          "opcode": 0,
+          "hex": "00",
+          "mnemonic": "0"
+        },
+        {
+          "address": 7,
+          "opcode": 70,
+          "hex": "46",
+          "mnemonic": "X->П 6",
+          "comment": "setup R6"
+        },
+        {
+          "address": 8,
+          "opcode": 65,
+          "hex": "41",
+          "mnemonic": "X->П 1",
+          "comment": "setup R1"
+        },
+        {
+          "address": 9,
+          "opcode": 71,
+          "hex": "47",
+          "mnemonic": "X->П 7",
+          "comment": "setup R7"
+        },
+        {
+          "address": 10,
+          "opcode": 7,
+          "hex": "07",
+          "mnemonic": "7"
+        },
+        {
+          "address": 11,
+          "opcode": 0,
+          "hex": "00",
+          "mnemonic": "0"
+        },
+        {
+          "address": 12,
+          "opcode": 0,
+          "hex": "00",
+          "mnemonic": "0"
+        },
+        {
+          "address": 13,
+          "opcode": 0,
+          "hex": "00",
+          "mnemonic": "0"
+        },
+        {
+          "address": 14,
+          "opcode": 0,
+          "hex": "00",
+          "mnemonic": "0"
+        },
+        {
+          "address": 15,
+          "opcode": 0,
+          "hex": "00",
+          "mnemonic": "0"
+        },
+        {
+          "address": 16,
+          "opcode": 0,
+          "hex": "00",
+          "mnemonic": "0"
+        },
+        {
+          "address": 17,
+          "opcode": 8,
+          "hex": "08",
+          "mnemonic": "8"
+        },
+        {
+          "address": 18,
+          "opcode": 67,
+          "hex": "43",
+          "mnemonic": "X->П 3",
+          "comment": "setup R3"
+        },
+        {
+          "address": 19,
+          "opcode": 1,
+          "hex": "01",
+          "mnemonic": "1"
+        },
+        {
+          "address": 20,
+          "opcode": 0,
+          "hex": "00",
+          "mnemonic": "0"
+        },
+        {
+          "address": 21,
+          "opcode": 77,
+          "hex": "4D",
+          "mnemonic": "X->П d",
+          "comment": "setup Rd"
+        },
+        {
+          "address": 22,
+          "opcode": 74,
+          "hex": "4A",
+          "mnemonic": "X->П a",
+          "comment": "setup Ra"
+        },
+        {
+          "address": 23,
+          "opcode": 1,
+          "hex": "01",
+          "mnemonic": "1"
+        },
+        {
+          "address": 24,
+          "opcode": 1,
+          "hex": "01",
+          "mnemonic": "1"
+        },
+        {
+          "address": 25,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 26,
+          "opcode": 5,
+          "hex": "05",
+          "mnemonic": "5"
+        },
+        {
+          "address": 27,
+          "opcode": 1,
+          "hex": "01",
+          "mnemonic": "1"
+        },
+        {
+          "address": 28,
+          "opcode": 2,
+          "hex": "02",
+          "mnemonic": "2"
+        },
+        {
+          "address": 29,
+          "opcode": 0,
+          "hex": "00",
+          "mnemonic": "0"
+        },
+        {
+          "address": 30,
+          "opcode": 3,
+          "hex": "03",
+          "mnemonic": "3"
+        },
+        {
+          "address": 31,
+          "opcode": 78,
+          "hex": "4E",
+          "mnemonic": "X->П e",
+          "comment": "setup Re"
+        },
+        {
+          "address": 32,
+          "opcode": 8,
+          "hex": "08",
+          "mnemonic": "8"
+        },
+        {
+          "address": 33,
+          "opcode": 8,
+          "hex": "08",
+          "mnemonic": "8"
+        },
+        {
+          "address": 34,
+          "opcode": 72,
+          "hex": "48",
+          "mnemonic": "X->П 8",
+          "comment": "setup R8"
+        },
+        {
+          "address": 35,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 36,
+          "opcode": 7,
+          "hex": "07",
+          "mnemonic": "7"
+        },
+        {
+          "address": 37,
+          "opcode": 73,
+          "hex": "49",
+          "mnemonic": "X->П 9",
+          "comment": "setup R9"
+        },
+        {
+          "address": 38,
+          "opcode": 2,
+          "hex": "02",
+          "mnemonic": "2"
+        },
+        {
+          "address": 39,
+          "opcode": 8,
+          "hex": "08",
+          "mnemonic": "8"
+        },
+        {
+          "address": 40,
+          "opcode": 75,
+          "hex": "4B",
+          "mnemonic": "X->П b",
+          "comment": "setup Rb"
+        },
+        {
+          "address": 41,
+          "opcode": 8,
+          "hex": "08",
+          "mnemonic": "8"
+        },
+        {
+          "address": 42,
+          "opcode": 2,
+          "hex": "02",
+          "mnemonic": "2"
+        },
+        {
+          "address": 43,
+          "opcode": 76,
+          "hex": "4C",
+          "mnemonic": "X->П c",
+          "comment": "setup Rc"
+        },
+        {
+          "address": 44,
+          "opcode": 59,
+          "hex": "3B",
+          "mnemonic": "К СЧ",
+          "comment": "random()"
+        },
+        {
+          "address": 45,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 46,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 47,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 48,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 49,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 50,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 51,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 52,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 53,
+          "opcode": 9,
+          "hex": "09",
+          "mnemonic": "9"
+        },
+        {
+          "address": 54,
+          "opcode": 18,
+          "hex": "12",
+          "mnemonic": "*",
+          "comment": "expr *"
+        },
+        {
+          "address": 55,
+          "opcode": 14,
+          "hex": "0E",
+          "mnemonic": "В↑",
+          "comment": "random int keep scaled draw"
+        },
+        {
+          "address": 56,
+          "opcode": 53,
+          "hex": "35",
+          "mnemonic": "К {x}",
+          "comment": "random int fractional part"
+        },
+        {
+          "address": 57,
+          "opcode": 17,
+          "hex": "11",
+          "mnemonic": "-",
+          "comment": "random int floor"
+        },
+        {
+          "address": 58,
+          "opcode": 1,
+          "hex": "01",
+          "mnemonic": "1"
+        },
+        {
+          "address": 59,
+          "opcode": 16,
+          "hex": "10",
+          "mnemonic": "+",
+          "comment": "expr +"
+        },
+        {
+          "address": 60,
+          "opcode": 64,
+          "hex": "40",
+          "mnemonic": "X->П 0",
+          "comment": "setup plans"
+        },
+        {
+          "address": 61,
+          "opcode": 80,
+          "hex": "50",
+          "mnemonic": "С/П",
+          "comment": "setup complete"
+        }
+      ],
+      "reason": "initializes plans"
+    },
+    "ir": {
+      "lowered": true,
+      "v2": true,
+      "intentNodes": 109,
+      "effectOps": 104,
+      "layoutCells": 104
+    }
+  },
+  "diagnostics": []
+}

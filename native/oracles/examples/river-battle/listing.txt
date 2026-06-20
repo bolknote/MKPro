@@ -1,0 +1,168 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  07  | 7                       |
+   01 |  43  | X→П 3                   | setup R3
+   02 |  00  | 0                       |
+   03 |  45  | X→П 5                   | setup R5
+   04 |  4C  | X→П c                   | setup Rc
+   05 |  05  | 5                       |
+   06 |  05  | 5                       |
+   07 |  44  | X→П 4                   | setup R4
+   08 |  01  | 1                       |
+   09 |  00  | 0                       |
+   10 |  4D  | X→П d                   | setup Rd
+   11 |  00  | 0                       |
+   12 |  0A  | .                       |
+   13 |  01  | 1                       |
+   14 |  4E  | X→П e                   | setup Re
+   15 |  3B  | К СЧ                    | random coord seed
+   16 |  4B  | X→П b                   | random coord seed
+   17 |  05  | 5                       |
+   18 |  42  | X→П 2                   | random coord remaining
+   19 |  6B  | П→X b                   | random coord seed
+   20 |  03  | 3                       |
+   21 |  07  | 7                       |
+   22 |  12  | ×                       | random coord next seed
+   23 |  35  | К {x}                   | random coord seed fraction
+   24 |  4B  | X→П b                   | random coord seed
+   25 |  6D  | П→X d                   | preload const 10
+   26 |  12  | ×                       | random coord scaled seed
+   27 |  34  | К [x]                   | random coord flat index
+   28 |  40  | X→П 0                   | random coord flat index
+   29 |  60  | П→X 0                   | recall __coord_list_current
+   30 |  6D  | П→X d                   | preload const 10
+   31 |  13  | ÷                       | expr /
+   32 |  34  | К [x]                   | int()
+   33 |  41  | X→П 1                   | random coord row
+   34 |  60  | П→X 0                   | recall __coord_list_current
+   35 |  6D  | П→X d                   | preload const 10
+   36 |  61  | П→X 1                   | recall __coord_list_dx
+   37 |  12  | ×                       | expr *
+   38 |  11  | −                       | expr -
+   39 |  6D  | П→X d                   | preload const 10
+   40 |  01  | 1                       |
+   41 |  61  | П→X 1                   | recall __coord_list_dx
+   42 |  10  | +                       | expr +
+   43 |  12  | ×                       | expr *
+   44 |  10  | +                       | expr +
+   45 |  40  | X→П 0                   | random coord candidate
+   46 |  05  | 5                       |
+   47 |  62  | П→X 2                   | random coord remaining
+   48 |  11  | −                       | random coord previous count
+   49 |  41  | X→П 1                   | random coord previous count
+   50 |  06  | 6                       |
+   51 |  46  | X→П 6                   | random coord pointer
+   52 |  61  | П→X 1                   | random coord previous count
+   53 |  57  | F x≠0                   | random coord first item
+   54 |  62  | 62                      | random coord first item
+   55 |  60  | П→X 0                   | random coord candidate
+   56 |  D6  | К П→X 6                 | random coord previous
+   57 |  11  | −                       | random coord uniqueness
+   58 |  57  | F x≠0                   | random coord collision
+   59 |  19  | 19                      | random coord collision
+   60 |  5B  | F L1                    | random coord previous loop
+   61 |  55  | 55                      | random coord previous loop
+   62 |  60  | П→X 0                   | random coord candidate
+   63 |  B6  | К X→П 6                 | random coord store
+   64 |  58  | F L2                    | random coord outer loop
+   65 |  19  | 19                      | random coord outer loop
+   66 |  07  | 7                       |
+   67 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code  | Command                 | Comment
+------+-------+-------------------------+----------------
+   00 | 63    | П→X 3                   | display __inline_show_34_0 source
+   01 | 6D    | П→X d                   | preload const 10
+   02 | 12    | ×                       | packed display field shift
+   03 | 6C    | П→X c                   | display __inline_show_34_0 source
+   04 | 10    | +                       | packed display field append
+   05 | 50    | С/П                     | show __inline_show_34_0
+   06 | 45    | X→П 5                   | read shot
+   07 | 63    | П→X 3                   | recall shells
+   08 | 01    | 1                       |
+   09 | 11    | −                       | expr -
+   10 | 43    | X→П 3                   | set shells
+   11 | 0B    | /-/                     | negate shells for zero test
+   12 | 59    | F x≥0                   | false branch for <=
+   13 | 16    | 16                      | false branch for <=
+   14 | 51    | БП                      | terminal rule lost
+   15 | 92    | 92                      | terminal rule lost
+   16 | 06    | 6                       |
+   17 | 46    | X→П 6                   | coord_list pointer
+   18 | 05    | 5                       |
+   19 | 42    | X→П 2                   | coord_list counter
+   20 | 65    | П→X 5                   | recall shot
+   21 | D6    | К П→X 6                 | coord_list candidate
+   22 | 11    | −                       | coord_list hit compare
+   23 | 57    | F x≠0                   | coord_list hit
+   24 | 29    | 29                      | coord_list hit
+   25 | 58    | F L2                    | coord_list has loop
+   26 | 20    | 20                      | coord_list has loop
+   27 | 51    | БП                      | coord_list miss
+   28 | 63    | 63                      | coord_list miss
+   29 | 06    | 6                       |
+   30 | 46    | X→П 6                   | coord_list pointer
+   31 | 05    | 5                       |
+   32 | 42    | X→П 2                   | coord_list counter
+   33 | 65    | П→X 5                   | recall shot
+   34 | D6    | К П→X 6                 | coord_list remove candidate
+   35 | 11    | −                       | coord_list remove compare
+   36 | 57    | F x≠0                   | coord_list remove hit
+   37 | 42    | 42                      | coord_list remove hit
+   38 | 58    | F L2                    | coord_list remove loop
+   39 | 33    | 33                      | coord_list remove loop
+   40 | 51    | БП                      | coord_list remove miss
+   41 | 49    | 49                      | coord_list remove miss
+   42 | 66    | П→X 6                   | coord_list remove pointer
+   43 | 01    | 1                       |
+   44 | 11    | −                       | coord_list remove current pointer
+   45 | 46    | X→П 6                   | coord_list remove current pointer
+   46 | 01 0B | -1                      | negative number
+   48 | B6    | К X→П 6                 | coord_list remove current
+   49 | 64    | П→X 4                   | recall __packed_counter_0
+   50 | 6D    | П→X d                   | preload const 10
+   51 | 11    | −                       | expr -
+   52 | 44    | X→П 4                   | set __packed_counter_0
+   53 | 6D    | П→X d                   | preload const 10
+   54 | 11    | −                       | condition compare
+   55 | 5C    | F x<0                   | false branch for <
+   56 | 59    | 59                      | false branch for <
+   57 | 09    | 9                       |
+   58 | 50    | С/П                     | halt
+   59 | 01    | 1                       |
+   60 | 4C    | X→П c                   | set report
+   61 | 51    | БП                      | if end
+   62 | 65    | 65                      | if end
+   63 | 00    | 0                       | set report
+   64 | 4C    | X→П c                   | set report
+   65 | 63    | П→X 3                   | recall shells
+   66 | 0B    | /-/                     | negate shells for zero test
+   67 | 59    | F x≥0                   | false branch for <=
+   68 | 71    | 71                      | false branch for <=
+   69 | 51    | БП                      | terminal rule lost
+   70 | 92    | 92                      | terminal rule lost
+   71 | 3B    | К СЧ                    | random()
+   72 | 6D    | П→X d                   | preload const 10
+   73 | 12    | ×                       | expr *
+   74 | 0E    | В↑                      | random int keep scaled draw
+   75 | 35    | К {x}                   | random int fractional part
+   76 | 11    | −                       | random int floor
+   77 | 50    | С/П                     | show __inline_show_68_1
+   78 | 0B    | /-/                     | negate response for zero test
+   79 | 5C    | F x<0                   | false branch for >
+   80 | 00    | 00                      | false branch for >
+   81 | 64    | П→X 4                   | recall __packed_counter_0
+   82 | 01    | 1                       |
+   83 | 11    | −                       | expr -
+   84 | 44    | X→П 4                   | set __packed_counter_0
+   85 | 6D    | П→X d                   | preload const 10
+   86 | 13    | ÷                       | expr /
+   87 | 35    | К {x}                   | frac()
+   88 | 6E    | П→X e                   | preload const 0.1
+   89 | 11    | −                       | condition compare
+   90 | 5C    | F x<0                   | false branch for <
+   91 | 00    | 00                      | false branch for <
+   92 | 07 0B | -7                      | negative number
+   94 | 50    | С/П                     | halt

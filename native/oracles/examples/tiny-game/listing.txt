@@ -1,0 +1,43 @@
+Setup Block:
+  `R0=80000078; R2=8; Re=10`
+
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |   -  | 80000078                |
+   01 |  40  | X→П 0                   | setup R0
+   02 |   -  | 8                       |
+   03 |  42  | X→П 2                   | setup R2
+   04 |   -  | 10                      |
+   05 |  4E  | X→П e                   | setup Re
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  60  | П→X 0                   | display __inline_show_21_0 source
+   01 |  6E  | П→X e                   | preload const 10
+   02 |  12  | ×                       | packed display field shift
+   03 |  62  | П→X 2                   | display __inline_show_21_0 source
+   04 |  10  | +                       | packed display field append
+   05 |  50  | С/П                     | show __inline_show_21_0
+   06 |  0E  | В↑                      | separate adjacent number entry
+   07 |  04  | 4                       |
+   08 |  11  | −                       | dispatch compare
+   09 |  5E  | F x=0                   | case mismatch
+   10 |  17  | 17                      | case mismatch
+   11 |  62  | П→X 2                   | recall charge
+   12 |  01  | 1                       |
+   13 |  11  | −                       | expr -
+   14 |  42  | X→П 2                   | set charge
+   15 |  51  | БП                      | dispatch end
+   16 |  00  | 00                      | dispatch end
+   17 |  02  | 2                       |
+   18 |  11  | −                       | dispatch residual compare
+   19 |  5E  | F x=0                   | case mismatch
+   20 |  23  | 23                      | case mismatch
+   21 |  06  | 6                       |
+   22 |  50  | С/П                     | halt
+   23 |  00  | 0                       | halt
+   24 |  50  | С/П                     | halt
+   25 |  51  | БП                      | loop back
+   26 |  00  | 00                      | loop back

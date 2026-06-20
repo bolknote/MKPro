@@ -1,0 +1,109 @@
+Setup Block:
+  `R2=8; R3=2; R0=42134124; R4=0; R1=0; Re=10; R7=51; R8=L2; R9=67; Ra=_1; Rb=С9; Rc=Е5; Rd=_3`
+
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |   -  | 8                       |
+   01 |  42  | X→П 2                   | setup R2
+   02 |   -  | 2                       |
+   03 |  43  | X→П 3                   | setup R3
+   04 |   -  | 42134124                |
+   05 |  40  | X→П 0                   | setup R0
+   06 |   -  | 0                       |
+   07 |  44  | X→П 4                   | setup R4
+   08 |  41  | X→П 1                   | setup R1
+   09 |  48  | X→П 8                   | setup R8
+   10 |   -  | 10                      |
+   11 |  4E  | X→П e                   | setup Re
+   12 |   -  | 51                      |
+   13 |  47  | X→П 7                   | setup R7
+   14 |   -  | 67                      |
+   15 |  49  | X→П 9                   | setup R9
+   16 |   -  | 39                      |
+   17 |  4A  | X→П a                   | setup Ra
+   18 |   -  | 17                      |
+   19 |  4B  | X→П b                   | setup Rb
+   20 |   -  | 33                      |
+   21 |  4C  | X→П c                   | setup Rc
+   22 |   -  | 41                      |
+   23 |  4D  | X→П d                   | setup Rd
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  62  | П→X 2                   | display __inline_show_30_0 source
+   01 |  6E  | П→X e                   | preload const 10
+   02 |  12  | ×                       | packed display field shift
+   03 |  63  | П→X 3                   | display __inline_show_30_0 source
+   04 |  10  | +                       | packed display field append
+   05 |  50  | С/П                     | show __inline_show_30_0
+   06 |  60  | П→X 0                   | display __inline_show_31_1 source
+   07 |  50  | С/П                     | show __inline_show_31_1
+   08 |  0E  | В↑                      | separate adjacent number entry
+   09 |  04  | 4                       |
+   10 |  11  | −                       | dispatch compare
+   11 |  EB  | К x=0 b                 | case mismatch; preloaded Rb=C9 indirect-target=17 shifted-forward indirect flow
+   12 |  62  | П→X 2                   | recall pos
+   13 |  01  | 1                       |
+   14 |  11  | −                       | expr -
+   15 |  42  | X→П 2                   | set pos
+   16 |  87  | К БП 7                  | tail jump check_room; preloaded R7=51 indirect-target=51 shifted-forward indirect flow
+   17 |  02  | 2                       |
+   18 |  11  | −                       | dispatch residual compare
+   19 |  EC  | К x=0 c                 | case mismatch; preloaded Rc=E5 indirect-target=33 shifted-forward indirect flow
+   20 |  01  | 1                       |
+   21 |  62  | П→X 2                   | recall pos
+   22 |  10  | +                       | expr +
+   23 |  42  | X→П 2                   | set pos
+   24 |  07  | 7                       |
+   25 |  11  | −                       | condition compare
+   26 |  97  | К x≥0 7                 | false branch for >=; preloaded R7=51 indirect-target=51 shifted-forward indirect flow
+   27 |  02  | 2                       |
+   28 |  42  | X→П 2                   | set pos
+   29 |  3B  | К СЧ                    | random()
+   30 |  40  | X→П 0                   | set plan
+   31 |  50  | С/П                     | show __inline_show_31_1
+   32 |  87  | К БП 7                  | tail jump check_room; preloaded R7=51 indirect-target=51 shifted-forward indirect flow
+   33 |  02  | 2                       |
+   34 |  11  | −                       | dispatch residual compare
+   35 |  ED  | К x=0 d                 | case mismatch; preloaded Rd=F3 indirect-target=41 shifted-forward indirect flow
+   36 |  01  | 1                       |
+   37 |  63  | П→X 3                   | recall height
+   38 |  10  | +                       | expr +
+   39 |  43  | X→П 3                   | set height
+   40 |  87  | К БП 7                  | tail jump check_room; preloaded R7=51 indirect-target=51 shifted-forward indirect flow
+   41 |  06  | 6                       |
+   42 |  10  | +                       | dispatch residual compare
+   43 |  5E  | F x=0                   | case mismatch
+   44 |  49  | 49                      | case mismatch
+   45 |  63  | П→X 3                   | recall height
+   46 |  01  | 1                       |
+   47 |  11  | −                       | expr -
+   48 |  8A  | К БП a                  | shared terminal tail; preloaded Ra=F1 indirect-target=39 indirect flow
+   49 |  A9  | К ПП 9                  | proc call bump; preloaded R9=67 indirect-target=67 shifted-forward indirect flow
+   50 |  88  | К БП 8                  | loop back; preloaded R8=B2 indirect-target=0 indirect flow
+   51 |  62  | П→X 2                   | recall pos
+   52 |  0B  | /-/                     | negate pos for zero test
+   53 |  59  | F x≥0                   | false branch for <=
+   54 |  56  | 56                      | false branch for <=
+   55 |  A9  | К ПП 9                  | proc call bump; preloaded R9=67 indirect-target=67 shifted-forward indirect flow
+   56 |  60  | П→X 0                   | recall plan
+   57 |  62  | П→X 2                   | recall pos
+   58 |  15  | F 10ˣ                   | pow10()
+   59 |  13  | ÷                       | expr /
+   60 |  35  | К {x}                   | frac()
+   61 |  6E  | П→X e                   | preload const 10
+   62 |  12  | ×                       | expr *
+   63 |  34  | К [x]                   | int()
+   64 |  63  | П→X 3                   | recall height
+   65 |  11  | −                       | condition compare
+   66 |  E8  | К x=0 8                 | false branch for ==; preloaded R8=B2 indirect-target=0 indirect flow
+   67 |  D4  | К П→X 4                 | increment mistakes
+   68 |  64  | П→X 4                   | recall mistakes
+   69 |  03  | 3                       |
+   70 |  11  | −                       | condition compare
+   71 |  59  | F x≥0                   | false branch for >=
+   72 |  74  | 74                      | false branch for >=
+   73 |  29  | К ÷                     | halt literal ЕГГ0Г
+   74 |  52  | В/О                     | implicit return from proc

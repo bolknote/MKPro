@@ -1,0 +1,131 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  04  | 4                       |
+   01 |  40  | X→П 0                   | setup R0
+   02 |  01  | 1                       |
+   03 |  46  | X→П 6                   | setup R6
+   04 |  45  | X→П 5                   | setup R5
+   05 |  47  | X→П 7                   | setup R7
+   06 |  00  | 0                       |
+   07 |  41  | X→П 1                   | setup R1
+   08 |  44  | X→П 4                   | setup R4
+   09 |  01  | 1                       |
+   10 |  00  | 0                       |
+   11 |  4C  | X→П c                   | setup Rc
+   12 |  09  | 9                       |
+   13 |  09  | 9                       |
+   14 |  4B  | X→П b                   | setup Rb
+   15 |  08  | 8                       |
+   16 |  08  | 8                       |
+   17 |  08  | 8                       |
+   18 |  4D  | X→П d                   | setup Rd
+   19 |  09  | 9                       |
+   20 |  09  | 9                       |
+   21 |  09  | 9                       |
+   22 |  0B  | /-/                     | negative number
+   23 |  4E  | X→П e                   | setup Re
+   24 |  03  | 3                       |
+   25 |  48  | X→П 8                   | setup R8
+   26 |  06  | 6                       |
+   27 |  07  | 7                       |
+   28 |  4A  | X→П a                   | setup Ra
+   29 |  3B  | К СЧ                    | random()
+   30 |  07  | 7                       |
+   31 |  12  | ×                       | expr *
+   32 |  0E  | В↑                      | random int keep scaled draw
+   33 |  35  | К {x}                   | random int fractional part
+   34 |  11  | −                       | random int floor
+   35 |  01  | 1                       |
+   36 |  10  | +                       | expr +
+   37 |  42  | X→П 2                   | setup goal
+   38 |  3B  | К СЧ                    | random()
+   39 |  6E  | П→X e                   | constant 999 base -999
+   40 |  0B  | /-/                     | constant 999
+   41 |  12  | ×                       | expr *
+   42 |  0E  | В↑                      | random int keep scaled draw
+   43 |  35  | К {x}                   | random int fractional part
+   44 |  11  | −                       | random int floor
+   45 |  43  | X→П 3                   | setup obstacles
+   46 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  88  | К БП 9                  | empty-stack tail call await_effort; preloaded R9=B5 indirect-target=3 shifted-forward indirect flow
+   01 |  6E  | П→X e                   | preload const -999
+   02 |  50  | С/П                     | halt
+   03 |  65  | П→X 5                   | display __inline_show_34_0 source
+   04 |  6C  | П→X c                   | preload const 10
+   05 |  12  | ×                       | packed display field shift
+   06 |  60  | П→X 0                   | display __inline_show_34_0 source
+   07 |  10  | +                       | packed display field append
+   08 |  6C  | П→X c                   | preload const 10
+   09 |  12  | ×                       | packed display field shift
+   10 |  62  | П→X 2                   | display __inline_show_34_0 source
+   11 |  10  | +                       | packed display field append
+   12 |  6C  | П→X c                   | preload const 10
+   13 |  12  | ×                       | packed display field shift
+   14 |  66  | П→X 6                   | display __inline_show_34_0 source
+   15 |  10  | +                       | packed display field append
+   16 |  50  | С/П                     | show __inline_show_34_0
+   17 |  41  | X→П 1                   | read effort
+   18 |  D4  | К П→X 4                 | increment steps
+   19 |  64  | П→X 4                   | recall steps
+   20 |  6B  | П→X b                   | preload const 99
+   21 |  11  | −                       | condition compare
+   22 |  C7  | К x<0 7                 | false branch for <; preloaded R7=B3 indirect-target=1 indirect flow
+   23 |  03  | 3                       |
+   24 |  61  | П→X 1                   | recall effort
+   25 |  31  | К |x|                   | abs()
+   26 |  11  | −                       | condition compare
+   27 |  98  | К x≥0 8                 | direct tail branch for >; preloaded R8=B5 indirect-target=3 indirect flow
+   28 |  60  | П→X 0                   | recall adept
+   29 |  61  | П→X 1                   | recall effort
+   30 |  10  | +                       | expr +
+   31 |  40  | X→П 0                   | set adept
+   32 |  01  | 1                       |
+   33 |  66  | П→X 6                   | recall old_age
+   34 |  10  | +                       | expr +
+   35 |  46  | X→П 6                   | set old_age
+   36 |  63  | П→X 3                   | recall obstacles
+   37 |  3B  | К СЧ                    | random()
+   38 |  07  | 7                       |
+   39 |  12  | ×                       | expr *
+   40 |  0E  | В↑                      | random int keep scaled draw
+   41 |  35  | К {x}                   | random int fractional part
+   42 |  11  | −                       | random int floor
+   43 |  01  | 1                       |
+   44 |  10  | +                       | expr +
+   45 |  15  | F 10ˣ                   | pow10()
+   46 |  38  | К ∨                     | bit_or()
+   47 |  43  | X→П 3                   | set obstacles
+   48 |  60  | П→X 0                   | recall adept
+   49 |  15  | F 10ˣ                   | pow10()
+   50 |  37  | К ∧                     | bit_and()
+   51 |  E7  | К x=0 7                 | false branch for ==; preloaded R7=B3 indirect-target=1 indirect flow
+   52 |  07  | 7                       |
+   53 |  66  | П→X 6                   | recall old_age
+   54 |  11  | −                       | condition compare
+   55 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=B3 indirect-target=1 indirect flow
+   56 |  60  | П→X 0                   | recall adept
+   57 |  62  | П→X 2                   | recall goal
+   58 |  11  | −                       | condition compare
+   59 |  E8  | К x=0 8                 | false branch for ==; preloaded R8=B5 indirect-target=3 indirect flow
+   60 |  D5  | К П→X 5                 | increment stage
+   61 |  08  | 8                       |
+   62 |  65  | П→X 5                   | recall stage
+   63 |  11  | −                       | condition compare
+   64 |  CA  | К x<0 a                 | false branch for >; preloaded Ra=67 indirect-target=67 shifted-forward indirect flow
+   65 |  6D  | П→X d                   | preload const 888
+   66 |  50  | С/П                     | halt
+   67 |  3B  | К СЧ                    | random()
+   68 |  07  | 7                       |
+   69 |  12  | ×                       | expr *
+   70 |  0E  | В↑                      | random int keep scaled draw
+   71 |  35  | К {x}                   | random int fractional part
+   72 |  11  | −                       | random int floor
+   73 |  01  | 1                       |
+   74 |  10  | +                       | expr +
+   75 |  42  | X→П 2                   | set goal
+   76 |  88  | К БП 8                  | tail call await_effort; preloaded R8=B5 indirect-target=3 indirect flow

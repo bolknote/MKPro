@@ -1,0 +1,176 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   -- |   -  | enter pos               | enter a value in X
+   00 |  04  | 4                       |
+   01 |  42  | X→П 2                   | setup R2
+   02 |  00  | 0                       |
+   03 |  45  | X→П 5                   | setup R5
+   04 |  43  | X→П 3                   | setup R3
+   05 |  01  | 1                       |
+   06 |  01  | 1                       |
+   07 |  49  | X→П 9                   | setup R9
+   08 |  00  | 0                       |
+   09 |  0A  | .                       |
+   10 |  00  | 0                       |
+   11 |  00  | 0                       |
+   12 |  00  | 0                       |
+   13 |  00  | 0                       |
+   14 |  00  | 0                       |
+   15 |  01  | 1                       |
+   16 |  4B  | X→П b                   | setup Rb
+   17 |  6B  | П→X b                   | setup constant -0.000001 base 0.000001
+   18 |  0B  | /-/                     | setup constant -0.000001
+   19 |  4E  | X→П e                   | setup Re
+   20 |  03  | 3                       |
+   21 |  0A  | .                       |
+   22 |  00  | 0                       |
+   23 |  00  | 0                       |
+   24 |  00  | 0                       |
+   25 |  00  | 0                       |
+   26 |  00  | 0                       |
+   27 |  00  | 0                       |
+   28 |  08  | 8                       |
+   29 |  4C  | X→П c                   | setup Rc
+   30 |  02  | 2                       |
+   31 |  0C  | ВП                      | exponent
+   32 |  07  | 7                       |
+   33 |  0B  | /-/                     | negative exponent
+   34 |  4A  | X→П a                   | setup Ra
+   35 |  09  | 9                       |
+   36 |  02  | 2                       |
+   37 |  47  | X→П 7                   | setup R7
+   38 |  03  | 3                       |
+   39 |  09  | 9                       |
+   40 |  48  | X→П 8                   | setup R8
+   41 |  14  | X↔Y                     | setup resources_1 from stack.Y
+   42 |  41  | X→П 1                   | setup resources_1
+   43 |  14  | X↔Y                     | restore stack.X after resources_1
+   44 |  4D  | X→П d                   | setup pos
+   45 |  3B  | К СЧ                    | random()
+   46 |  09  | 9                       |
+   47 |  09  | 9                       |
+   48 |  09  | 9                       |
+   49 |  12  | ×                       | expr *
+   50 |  0E  | В↑                      | random int keep scaled draw
+   51 |  35  | К {x}                   | random int fractional part
+   52 |  11  | −                       | random int floor
+   53 |  46  | X→П 6                   | setup walls
+   54 |  3B  | К СЧ                    | random()
+   55 |  09  | 9                       |
+   56 |  09  | 9                       |
+   57 |  09  | 9                       |
+   58 |  12  | ×                       | expr *
+   59 |  0E  | В↑                      | random int keep scaled draw
+   60 |  35  | К {x}                   | random int fractional part
+   61 |  11  | −                       | random int floor
+   62 |  44  | X→П 4                   | setup caches
+   63 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  6D  | П→X d                   | display __inline_show_35_0 source
+   01 |  50  | С/П                     | show __inline_show_35_0
+   02 |  45  | X→П 5                   | read key
+   03 |  D1  | К П→X 1                 | predecrement resources_1
+   04 |  61  | П→X 1                   | decrement/test resources_1
+   05 |  5C  | F x<0                   | decrement underflow resources_1
+   06 |  09  | 09                      | decrement underflow resources_1
+   07 |  51  | БП                      | loop back
+   08 |  07  | 07                      | loop back
+   09 |  65  | П→X 5                   | restore read key
+   10 |  31  | К |x|                   | current-X abs
+   11 |  05  | 5                       |
+   12 |  11  | −                       | condition compare
+   13 |  5E  | F x=0                   | false branch for ==
+   14 |  18  | 18                      | false branch for ==
+   15 |  65  | П→X 5                   | recall key
+   16 |  32  | К ЗН                    | sign()
+   17 |  87  | К БП 7                  | tail jump go; preloaded R7=92 indirect-target=92 shifted-forward indirect flow
+   18 |  65  | П→X 5                   | recall key
+   19 |  5E  | F x=0                   | case mismatch
+   20 |  41  | 41                      | case mismatch
+   21 |  60  | П→X 0                   | recall blocked
+   22 |  78  | К x≠0 8                 | false branch for !=; preloaded R8=F1 indirect-target=39 shifted-forward indirect flow
+   23 |  62  | П→X 2                   | recall resources_2
+   24 |  02  | 2                       |
+   25 |  11  | −                       | condition compare
+   26 |  98  | К x≥0 8                 | false branch for >=; preloaded R8=F1 indirect-target=39 shifted-forward indirect flow
+   27 |  42  | X→П 2                   | set resources_2
+   28 |  66  | П→X 6                   | recall walls
+   29 |  60  | П→X 0                   | recall blocked
+   30 |  35  | К {x}                   | frac()
+   31 |  3A  | К ИНВ                   | bit_not()
+   32 |  37  | К ∧                     | bit_and()
+   33 |  46  | X→П 6                   | set walls
+   34 |  60  | П→X 0                   | recall blocked
+   35 |  4D  | X→П d                   | set pos
+   36 |  00  | 0                       | set blocked
+   37 |  40  | X→П 0                   | set blocked
+   38 |  8A  | К БП a                  | if end; preloaded Ra=2e-7 indirect-target=0 indirect flow
+   39 |  50  | С/П                     | pause
+   40 |  8A  | К БП a                  | dispatch end; preloaded Ra=2e-7 indirect-target=0 indirect flow
+   41 |  04  | 4                       |
+   42 |  11  | −                       | dispatch residual compare
+   43 |  5E  | F x=0                   | case mismatch
+   44 |  54  | 54                      | case mismatch
+   45 |  6D  | П→X d                   | recall pos
+   46 |  6C  | П→X c                   | preload const 3.0000008
+   47 |  11  | −                       | condition compare
+   48 |  5E  | F x=0                   | false branch for ==
+   49 |  52  | 52                      | false branch for ==
+   50 |  69  | П→X 9                   | preload const 11
+   51 |  50  | С/П                     | halt
+   52 |  6B  | П→X b                   | preload const 0.000001
+   53 |  87  | К БП 7                  | tail jump go; preloaded R7=92 indirect-target=92 shifted-forward indirect flow
+   54 |  06  | 6                       |
+   55 |  11  | −                       | dispatch residual compare
+   56 |  5E  | F x=0                   | case mismatch
+   57 |  82  | 82                      | case mismatch
+   58 |  64  | П→X 4                   | membership clear source caches
+   59 |  6D  | П→X d                   | membership clear mask pos
+   60 |  35  | К {x}                   | membership clear mask frac
+   61 |  3A  | К ИНВ                   | membership clear mask complement
+   62 |  37  | К ∧                     | clear membership bit before test
+   63 |  44  | X→П 4                   | set caches
+   64 |  11  | −                       | membership clear delta test
+   65 |  78  | К x≠0 8                 | false branch for !=; branch to reused stop tail at 39
+   66 |  DD  | К П→X d                 | indexed recall resources; indirect-selector-integer-part=pos; indirect-memory-targets=1,2,3
+   67 |  04  | 4                       |
+   68 |  6D  | П→X d                   | recall pos
+   69 |  11  | −                       | expr -
+   70 |  22  | F x²                    | sqr()
+   71 |  10  | +                       | expr +
+   72 |  0E  | В↑                      | x-param inline keep displayed value
+   73 |  50  | С/П                     | show __inline_show_111_2
+   74 |  1C  | F sin                   | risk input read()
+   75 |  01  | 1                       | risk multiplier
+   76 |  10  | +                       | risk multiplier
+   77 |  12  | ×                       | risk combine
+   78 |  34  | К [x]                   | risk integer result
+   79 |  BD  | К X→П d                 | indexed set resources; indirect-selector-integer-part=pos; indirect-memory-targets=1,2,3
+   80 |  8A  | К БП a                  | if end; preloaded Ra=2e-7 indirect-target=0 indirect flow
+   81 |  88  | К БП 8                  | reuse stop tail at 39
+   82 |  04  | 4                       |
+   83 |  10  | +                       | dispatch residual compare
+   84 |  5E  | F x=0                   | case mismatch
+   85 |  88  | 88                      | case mismatch
+   86 |  6E  | П→X e                   | preload const -0.000001
+   87 |  87  | К БП 7                  | tail jump go; preloaded R7=92 indirect-target=92 shifted-forward indirect flow
+   88 |  0B  | /-/                     | dispatch default residual sign direction
+   89 |  32  | К ЗН                    | dispatch default residual sign
+   90 |  6A  | П→X a                   | preload const 2e-7
+   91 |  12  | ×                       | dispatch default residual sign scale
+   92 |  6D  | П→X d                   | go blocked base
+   93 |  10  | +                       | go blocked from X parameter
+   94 |  40  | X→П 0                   | set blocked
+   95 |  35  | К {x}                   | current-X frac
+   96 |  66  | П→X 6                   | recall walls
+   97 |  37  | К ∧                     | bit_and()
+   98 |  5E  | F x=0                   | false branch for ==
+   99 |  A2  | A2                      | false branch for ==
+   A0 |  51  | БП                      | shared terminal tail
+   A1 |  34  | 34                      | shared terminal tail
+   A2 |  00  | 0                       | pause
+   A3 |  88  | К БП 8                  | zero then reuse stop tail at 39

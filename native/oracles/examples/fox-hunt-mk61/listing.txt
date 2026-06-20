@@ -1,0 +1,120 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  00  | 0                       |
+   01 |  44  | X→П 4                   | setup R4
+   02 |  3B  | К СЧ                    | random coord seed
+   03 |  4E  | X→П e                   | random coord seed
+   04 |  09  | 9                       |
+   05 |  42  | X→П 2                   | random coord remaining
+   06 |  6E  | П→X e                   | random coord seed
+   07 |  03  | 3                       |
+   08 |  07  | 7                       |
+   09 |  12  | ×                       | random coord next seed
+   10 |  35  | К {x}                   | random coord seed fraction
+   11 |  4E  | X→П e                   | random coord seed
+   12 |  02  | 2                       |
+   13 |  15  | F 10ˣ                   | constant 100
+   14 |  12  | ×                       | random coord scaled seed
+   15 |  34  | К [x]                   | random coord flat index
+   16 |  01  | 1                       |
+   17 |  00  | 0                       |
+   18 |  13  | ÷                       | random coord scaled decimal cell
+   19 |  40  | X→П 0                   | random coord scaled decimal cell
+   20 |  09  | 9                       |
+   21 |  62  | П→X 2                   | random coord remaining
+   22 |  11  | −                       | random coord previous count
+   23 |  41  | X→П 1                   | random coord previous count
+   24 |  05  | 5                       |
+   25 |  45  | X→П 5                   | random coord pointer
+   26 |  61  | П→X 1                   | random coord previous count
+   27 |  57  | F x≠0                   | random coord first item
+   28 |  36  | 36                      | random coord first item
+   29 |  60  | П→X 0                   | random coord candidate
+   30 |  D5  | К П→X 5                 | random coord previous
+   31 |  11  | −                       | random coord uniqueness
+   32 |  57  | F x≠0                   | random coord collision
+   33 |  06  | 06                      | random coord collision
+   34 |  5B  | F L1                    | random coord previous loop
+   35 |  29  | 29                      | random coord previous loop
+   36 |  60  | П→X 0                   | random coord candidate
+   37 |  B5  | К X→П 5                 | random coord store
+   38 |  58  | F L2                    | random coord outer loop
+   39 |  06  | 06                      | random coord outer loop
+   40 |  01  | 1                       |
+   41 |  02  | 2                       |
+   42 |  00  | 0                       |
+   43 |  00  | 0                       |
+   44 |  02  | 2                       |
+   45 |  02  | 2                       |
+   46 |  06  | 6                       |
+   47 |  0E  | В↑                      | setup formatted report mask split
+   48 |  09  | 9                       |
+   49 |  08  | 8                       |
+   50 |  00  | 0                       |
+   51 |  00  | 0                       |
+   52 |  08  | 8                       |
+   53 |  08  | 8                       |
+   54 |  09  | 9                       |
+   55 |  39  | К ⊕                     | setup formatted report mask
+   56 |  41  | X→П 1                   | setup formatted report mask
+   57 |  07  | 7                       |
+   58 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code     | Command                 | Comment
+------+----------+-------------------------+----------------
+   00 | 50       | С/П                     | read cell
+   01 | 0E       | В↑                      | separate read entry before scaled coord
+   02 | 01 00    | 10                      |
+   04 | 13       | ÷                       | read scaled decimal coord
+   05 | 43       | X→П 3                   | read cell
+   06 | 05       | 5                       |
+   07 | 15       | F 10ˣ                   | coord_list fused formatted report cell scale
+   08 | 12       | ×                       | coord_list fused formatted report cell shift
+   09 | 44       | X→П 4                   | coord_list fused formatted report body
+   10 | 05       | 5                       |
+   11 | 45       | X→П 5                   | coord_list pointer
+   12 | 09       | 9                       |
+   13 | 42       | X→П 2                   | coord_list counter
+   14 | D5       | К П→X 5                 | coord_list fused candidate
+   15 | 40       | X→П 0                   | coord_list fused current
+   16 | 63       | П→X 3                   | recall cell
+   17 | 60       | П→X 0                   | coord_list fused current
+   18 | 11       | −                       | coord_list fused hit compare
+   19 | 78       | К x≠0 8                 | coord_list fused hit; preloaded R8=F3 indirect-target=41 shifted-forward indirect flow
+   20 | 60       | П→X 0                   | recall __coord_list_current
+   21 | 35       | К {x}                   | coord_list fused current x
+   22 | 63       | П→X 3                   | recall cell
+   23 | 35       | К {x}                   | coord_list fused cell x
+   24 | 11       | −                       | coord_list fused dx
+   25 | 77       | К x≠0 7                 | coord_list fused same column; preloaded R7=F7 indirect-target=45 shifted-forward indirect flow
+   26 | 01 00    | 10                      |
+   28 | 12       | ×                       | coord_list fused dx digit
+   29 | 60       | П→X 0                   | recall __coord_list_current
+   30 | 34       | К [x]                   | coord_list fused current y
+   31 | 63       | П→X 3                   | recall cell
+   32 | 34       | К [x]                   | coord_list fused cell y
+   33 | 11       | −                       | coord_list fused dy
+   34 | 77       | К x≠0 7                 | coord_list fused same row; preloaded R7=F7 indirect-target=45 shifted-forward indirect flow
+   35 | 31       | К |x|                   | coord_list fused |dy|
+   36 | 14       | ↔                       | coord_list fused dx
+   37 | 31       | К |x|                   | coord_list fused |dx|
+   38 | 11       | −                       | coord_list fused diagonal compare
+   39 | 77       | К x≠0 7                 | coord_list fused same diagonal; preloaded R7=F7 indirect-target=45 shifted-forward indirect flow
+   40 | 89       | К БП 9                  | coord_list fused not visible; preloaded R9=F8 indirect-target=46 shifted-forward indirect flow
+   41 | 02 00 0B | -20                     | negative number
+   44 | 50       | С/П                     | pause
+   45 | D4       | К П→X 4                 | coord_list fused total
+   46 | 58       | F L2                    | coord_list fused loop
+   47 | 14       | 14                      | coord_list fused loop
+   48 | 64       | П→X 4                   | coord_list fused formatted report body
+   49 | 07       | 7                       |
+   50 | 15       | F 10ˣ                   | display formatted video anchor
+   51 | 10       | +                       | display formatted video body
+   52 | 61       | П→X 1                   | display __inline_show_25_0 formatted mask
+   53 | 39       | К ⊕                     | display formatted mask merge
+   54 | 35       | К {x}                   | display formatted video fraction
+   55 | 0B 0C 07 | -0E7                    | display formatted sign
+   58 | 50       | С/П                     | show __inline_show_25_0
+   59 | 82       | К БП 2                  | loop back via known-one counter

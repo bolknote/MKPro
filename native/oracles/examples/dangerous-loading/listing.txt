@@ -1,0 +1,117 @@
+Setup Block:
+  `R2=8; R4=3; R3=9; R1=3; R0=0; Rc=10; Rd=777; Re=-999; R7=75; R8=Г3; R9=Г5; Ra=Е2`
+
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |   -  | 8                       |
+   01 |  42  | X→П 2                   | setup R2
+   02 |   -  | 3                       |
+   03 |  44  | X→П 4                   | setup R4
+   04 |  41  | X→П 1                   | setup R1
+   05 |   -  | 9                       |
+   06 |  43  | X→П 3                   | setup R3
+   07 |   -  | 0                       |
+   08 |  40  | X→П 0                   | setup R0
+   09 |   -  | 10                      |
+   10 |  4C  | X→П c                   | setup Rc
+   11 |   -  | 777                     |
+   12 |  4D  | X→П d                   | setup Rd
+   13 |   -  | -999                    |
+   14 |  4E  | X→П e                   | setup Re
+   15 |   -  | 75                      |
+   16 |  47  | X→П 7                   | setup R7
+   17 |   -  | 21                      |
+   18 |  48  | X→П 8                   | setup R8
+   19 |   -  | 23                      |
+   20 |  49  | X→П 9                   | setup R9
+   21 |   -  | 30                      |
+   22 |  4A  | X→П a                   | setup Ra
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  63  | П→X 3                   | display __inline_show_30_0 source
+   01 |  6C  | П→X c                   | preload const 10
+   02 |  12  | ×                       | packed display field shift
+   03 |  62  | П→X 2                   | display __inline_show_30_0 source
+   04 |  10  | +                       | packed display field append
+   05 |  6C  | П→X c                   | preload const 10
+   06 |  12  | ×                       | packed display field shift
+   07 |  64  | П→X 4                   | display __inline_show_30_0 source
+   08 |  10  | +                       | packed display field append
+   09 |  6C  | П→X c                   | preload const 10
+   10 |  12  | ×                       | packed display field shift
+   11 |  61  | П→X 1                   | display __inline_show_30_0 source
+   12 |  10  | +                       | packed display field append
+   13 |  50  | С/П                     | show __inline_show_30_0
+   14 |  0E  | В↑                      | separate adjacent number entry
+   15 |  04  | 4                       |
+   16 |  11  | −                       | dispatch compare
+   17 |  E9  | К x=0 9                 | case mismatch; preloaded R9=D5 indirect-target=23 shifted-forward indirect flow
+   18 |  62  | П→X 2                   | recall boat
+   19 |  01  | 1                       |
+   20 |  11  | −                       | expr -
+   21 |  42  | X→П 2                   | set boat
+   22 |  8A  | К БП a                  | empty-stack tail call resolve_turn; preloaded Ra=E2 indirect-target=30 shifted-forward indirect flow
+   23 |  02  | 2                       |
+   24 |  11  | −                       | dispatch residual compare
+   25 |  EA  | К x=0 b                 | case mismatch; preloaded Rb=E2 indirect-target=30 shifted-forward indirect flow
+   26 |  01  | 1                       |
+   27 |  62  | П→X 2                   | recall boat
+   28 |  10  | +                       | expr +
+   29 |  88  | К БП 8                  | shared terminal tail; preloaded R8=D3 indirect-target=21 indirect flow
+   30 |  62  | П→X 2                   | recall boat
+   31 |  64  | П→X 4                   | recall threat
+   32 |  11  | −                       | condition compare
+   33 |  5E  | F x=0                   | false branch for ==
+   34 |  48  | 48                      | false branch for ==
+   35 |  61  | П→X 1                   | recall boats_left
+   36 |  01  | 1                       |
+   37 |  11  | −                       | expr -
+   38 |  41  | X→П 1                   | set boats_left
+   39 |  00  | 0                       | set loaded
+   40 |  40  | X→П 0                   | set loaded
+   41 |  08  | 8                       |
+   42 |  61  | П→X 1                   | recall boats_left
+   43 |  0B  | /-/                     | negate boats_left for zero test
+   44 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=75 indirect-target=75 shifted-forward indirect flow
+   45 |  6E  | П→X e                   | preload const -999
+   46 |  50  | С/П                     | halt
+   47 |  87  | К БП 7                  | if end; preloaded R7=75 indirect-target=75 shifted-forward indirect flow
+   48 |  62  | П→X 2                   | recall boat
+   49 |  01  | 1                       |
+   50 |  11  | −                       | condition compare
+   51 |  5E  | F x=0                   | false branch for ==
+   52 |  55  | 55                      | false branch for ==
+   53 |  01  | 1                       |
+   54 |  40  | X→П 0                   | set loaded
+   55 |  62  | П→X 2                   | recall boat
+   56 |  08  | 8                       |
+   57 |  11  | −                       | condition compare
+   58 |  5E  | F x=0                   | false branch for ==
+   59 |  70  | 70                      | false branch for ==
+   60 |  60  | П→X 0                   | recall loaded
+   61 |  01  | 1                       |
+   62 |  11  | −                       | condition compare
+   63 |  5E  | F x=0                   | false branch for ==
+   64 |  70  | 70                      | false branch for ==
+   65 |  63  | П→X 3                   | recall cargo_left
+   66 |  01  | 1                       |
+   67 |  11  | −                       | expr -
+   68 |  43  | X→П 3                   | set cargo_left
+   69 |  00  | 0                       | set loaded
+   70 |  63  | П→X 3                   | recall cargo_left
+   71 |  0B  | /-/                     | negate cargo_left for zero test
+   72 |  97  | К x≥0 7                 | false branch for <=; reused preloaded R7=75 indirect-target=75 direct flow
+   73 |  6D  | П→X d                   | preload const 777
+   74 |  50  | С/П                     | halt
+   75 |  3B  | К СЧ                    | random()
+   76 |  08  | 8                       |
+   77 |  12  | ×                       | expr *
+   78 |  0E  | В↑                      | random int keep scaled draw
+   79 |  35  | К {x}                   | random int fractional part
+   80 |  11  | −                       | random int floor
+   81 |  01  | 1                       |
+   82 |  10  | +                       | expr +
+   83 |  52  | В/О                     | implicit return from proc

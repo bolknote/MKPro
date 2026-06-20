@@ -1,0 +1,37 @@
+Setup Block:
+  `R5=0`
+
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |   -  | 0                       |
+   01 |  45  | X→П 5                   | setup R5
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  50  | С/П                     | read x
+   01 |  42  | X→П 2                   | read x
+   02 |  50  | С/П                     | read y
+   03 |  43  | X→П 3                   | read y
+   04 |  62  | П→X 2                   | recall x
+   05 |  42  | X→П 2                   | arg a for sum_of_squares
+   06 |  63  | П→X 3                   | recall y
+   07 |  43  | X→П 3                   | arg b for sum_of_squares
+   08 |  53  | ПП                      | call function sum_of_squares
+   09 |  15  | 15                      | call function sum_of_squares
+   10 |  50  | С/П                     | halt
+   11 |  51  | БП                      | loop back
+   12 |  00  | 00                      | loop back
+   13 |  22  | F x²                    | square repeated operand
+   14 |  52  | В/О                     | return value
+   15 |  62  | П→X 2                   | recall a
+   16 |  53  | ПП                      | call function square
+   17 |  13  | 13                      | call function square
+   18 |  40  | X→П 0                   | set __mkpro_call_1
+   19 |  63  | П→X 3                   | recall b
+   20 |  53  | ПП                      | call function square
+   21 |  13  | 13                      | call function square
+   22 |  60  | П→X 0                   | recall __mkpro_call_1
+   23 |  10  | +                       | expr +
+   24 |  52  | В/О                     | return value

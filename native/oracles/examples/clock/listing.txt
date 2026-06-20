@@ -1,0 +1,73 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   -- |   -  | enter hour              | enter any value 0..23 in X
+   -- |   -  | enter minute            | enter any value 0..59 in Y
+   00 |  01  | 1                       |
+   01 |  01  | 1                       |
+   02 |  43  | X→П 3                   | setup R3
+   03 |  01  | 1                       |
+   04 |  00  | 0                       |
+   05 |  42  | X→П 2                   | setup R2
+   06 |  4B  | X→П b                   | setup Rb
+   07 |  02  | 2                       |
+   08 |  04  | 4                       |
+   09 |  4C  | X→П c                   | setup Rc
+   10 |  06  | 6                       |
+   11 |  00  | 0                       |
+   12 |  4D  | X→П d                   | setup Rd
+   13 |  62  | П→X 2                   | setup constant 100 base 10
+   14 |  22  | F x²                    | setup constant 100
+   15 |  4E  | X→П e                   | setup Re
+   16 |  00  | 0                       |
+   17 |  47  | X→П 7                   | setup R7
+   18 |  08  | 8                       |
+   19 |  48  | X→П 8                   | setup R8
+   20 |  01  | 1                       |
+   21 |  05  | 5                       |
+   22 |  49  | X→П 9                   | setup R9
+   23 |  01  | 1                       |
+   24 |  09  | 9                       |
+   25 |  4A  | X→П a                   | setup Ra
+   26 |  14  | X↔Y                     | setup minute from stack.Y
+   27 |  44  | X→П 4                   | setup minute
+   28 |  14  | X↔Y                     | restore stack.X after minute
+   29 |  45  | X→П 5                   | setup hour
+   30 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code  | Command                 | Comment
+------+-------+-------------------------+----------------
+   00 | 65    | П→X 5                   | display __inline_show_18_0 source
+   01 | 6E    | П→X e                   | preload const 100
+   02 | 12    | ×                       | packed display field shift
+   03 | 64    | П→X 4                   | display __inline_show_18_0 source
+   04 | 10    | +                       | packed display field append
+   05 | 50    | С/П                     | show __inline_show_18_0
+   06 | 6B    | П→X b                   | preload const 10
+   07 | 42    | X→П 2                   | set outer_delay
+   08 | 62    | П→X 2                   | recall outer_delay
+   09 | 7A    | К x≠0 a                 | false branch for !=; preloaded Ra=D1 indirect-target=19 shifted-forward indirect flow
+   10 | 01    | 1                       |
+   11 | 11    | −                       | expr -
+   12 | 42    | X→П 2                   | set outer_delay
+   13 | 01 01 | 11                      |
+   15 | 78    | К x≠0 8                 | false branch for !=; preloaded R8=C0 indirect-target=8 indirect flow
+   16 | 01    | 1                       |
+   17 | 11    | −                       | expr -
+   18 | 89    | К БП 9                  | while loop back; preloaded R9=C7 indirect-target=15 indirect flow
+   19 | D4    | К П→X 4                 | increment minute
+   20 | 64    | П→X 4                   | recall minute
+   21 | 6D    | П→X d                   | preload const 60
+   22 | 11    | −                       | condition compare
+   23 | 97    | К x≥0 7                 | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
+   24 | 00    | 0                       | set minute
+   25 | 44    | X→П 4                   | set minute
+   26 | D5    | К П→X 5                 | increment hour
+   27 | 65    | П→X 5                   | recall hour
+   28 | 6C    | П→X c                   | preload const 24
+   29 | 11    | −                       | condition compare
+   30 | 97    | К x≥0 7                 | false branch for >=; preloaded R7=B2 indirect-target=0 indirect flow
+   31 | 00    | 0                       | set hour
+   32 | 45    | X→П 5                   | set hour
+   33 | 87    | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow

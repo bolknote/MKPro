@@ -1,0 +1,307 @@
+#include "mkpro/compiler.hpp"
+#include "mkpro/core/result.hpp"
+#include "mkpro/version.hpp"
+
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <optional>
+#include <sstream>
+#include <string>
+#include <vector>
+
+namespace {
+
+void print_usage(std::ostream& out) {
+  out << "Usage:\n"
+      << "  mkpro-native compile <file.mkpro> [--out listing|hex|json|keys|all]\n"
+      << "                               [--delivery manual|loader|hex] [--budget N]\n"
+      << "                               [--analysis] [--strict]\n"
+      << "  mkpro-native explain <file.mkpro> [--budget N] [--analysis] [--strict]\n";
+}
+
+std::optional<mkpro::OutputFormat> parse_output_format(const std::string& value) {
+  if (value == "listing")
+    return mkpro::OutputFormat::Listing;
+  if (value == "hex")
+    return mkpro::OutputFormat::Hex;
+  if (value == "json")
+    return mkpro::OutputFormat::Json;
+  if (value == "keys")
+    return mkpro::OutputFormat::Keys;
+  if (value == "all")
+    return mkpro::OutputFormat::All;
+  return std::nullopt;
+}
+
+std::optional<mkpro::DeliveryMode> parse_delivery_mode(const std::string& value) {
+  if (value == "manual")
+    return mkpro::DeliveryMode::Manual;
+  if (value == "loader")
+    return mkpro::DeliveryMode::Loader;
+  if (value == "hex")
+    return mkpro::DeliveryMode::Hex;
+  return std::nullopt;
+}
+
+std::string read_source(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    throw std::runtime_error("cannot open source file: " + path.string());
+  }
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  return buffer.str();
+}
+
+void print_diagnostics(const mkpro::CompileResult& result) {
+  for (const auto& diagnostic : result.diagnostics) {
+    std::cerr << mkpro::diagnostic_severity_name(diagnostic.severity) << "[" << diagnostic.code
+              << "]: " << diagnostic.message << "\n";
+  }
+}
+
+void print_json_string(std::ostream& out, const std::string& value) {
+  out << '"';
+  for (char ch : value) {
+    if (ch == '\\') {
+      out << "\\\\";
+    } else if (ch == '"') {
+      out << "\\\"";
+    } else if (ch == '\n') {
+      out << "\\n";
+    } else {
+      out << ch;
+    }
+  }
+  out << '"';
+}
+
+void print_json_steps(const std::vector<mkpro::ResolvedStep>& steps, std::string indent) {
+  std::cout << "[\n";
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    const auto& step = steps[index];
+    std::cout << indent << "  {\"address\": " << step.address << ", \"opcode\": " << step.opcode
+              << ", \"hex\": ";
+    print_json_string(std::cout, step.hex);
+    std::cout << ", \"mnemonic\": ";
+    print_json_string(std::cout, step.mnemonic);
+    if (step.comment.has_value()) {
+      std::cout << ", \"comment\": ";
+      print_json_string(std::cout, *step.comment);
+    }
+    std::cout << "}" << (index + 1U == steps.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent.substr(0, indent.size() - 2U) << "]";
+}
+
+void print_json_string_map(const std::map<std::string, std::string>& values, std::string indent) {
+  std::cout << "{\n";
+  std::size_t index = 0;
+  for (const auto& [key, value] : values) {
+    std::cout << indent << "  ";
+    print_json_string(std::cout, key);
+    std::cout << ": ";
+    print_json_string(std::cout, value);
+    std::cout << (++index == values.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent.substr(0, indent.size() - 2U) << "}";
+}
+
+void print_json(const mkpro::CompileResult& result) {
+  std::cout << "{\n  \"steps\": ";
+  print_json_steps(result.steps, "    ");
+  std::cout << ",\n  \"registers\": ";
+  print_json_string_map(result.registers, "    ");
+  std::cout << ",\n  \"preloads\": [\n";
+  for (std::size_t index = 0; index < result.preloads.size(); ++index) {
+    const auto& preload = result.preloads[index];
+    std::cout << "    {\"register\": ";
+    print_json_string(std::cout, preload.register_name);
+    std::cout << ", \"value\": ";
+    print_json_string(std::cout, preload.value);
+    std::cout << ", \"countsAgainstProgram\": "
+              << (preload.counts_against_program ? "true" : "false") << "}"
+              << (index + 1U == result.preloads.size() ? "" : ",") << "\n";
+  }
+  std::cout << "  ]";
+  std::cout << ",\n  \"optimizations\": [\n";
+  for (std::size_t index = 0; index < result.optimizations.size(); ++index) {
+    const auto& optimization = result.optimizations[index];
+    std::cout << "    {\"name\": ";
+    print_json_string(std::cout, optimization.name);
+    std::cout << ", \"detail\": ";
+    print_json_string(std::cout, optimization.detail);
+    std::cout << "}" << (index + 1U == result.optimizations.size() ? "" : ",") << "\n";
+  }
+  std::cout << "  ]";
+  if (!result.coalesce_shares.empty()) {
+    std::cout << ",\n  \"coalesceShares\": [\n";
+    for (std::size_t index = 0; index < result.coalesce_shares.size(); ++index) {
+      const auto& share = result.coalesce_shares[index];
+      std::cout << "    {\"freeRegister\": ";
+      print_json_string(std::cout, share.free_register);
+      std::cout << ", \"keepRegister\": ";
+      print_json_string(std::cout, share.keep_register);
+      std::cout << "}" << (index + 1U == result.coalesce_shares.size() ? "" : ",") << "\n";
+    }
+    std::cout << "  ]";
+  }
+  if (result.setup_program.has_value()) {
+    std::cout << ",\n  \"setupProgram\": {\"reason\": ";
+    print_json_string(std::cout, result.setup_program->reason);
+    std::cout << ", \"steps\": ";
+    print_json_steps(result.setup_program->steps, "    ");
+    std::cout << "}";
+  }
+  std::cout << ",\n  \"diagnostics\": " << result.diagnostics.size() << "\n}\n";
+}
+
+void print_result(const mkpro::CompileResult& result, mkpro::OutputFormat output) {
+  if (output == mkpro::OutputFormat::Hex) {
+    std::cout << result.hex << "\n";
+  } else if (output == mkpro::OutputFormat::Json) {
+    print_json(result);
+  } else if (output == mkpro::OutputFormat::All) {
+    std::cout << "## Listing\n" << result.listing << "\n";
+    if (!result.setup_hex.empty())
+      std::cout << "\n## Setup Hex\n" << result.setup_hex << "\n";
+    std::cout << "\n## Hex\n" << result.hex << "\n";
+  } else {
+    std::cout << result.listing << "\n";
+  }
+}
+
+int run_compile_like(const std::string& command, std::vector<std::string> args) {
+  if (args.empty()) {
+    print_usage(std::cerr);
+    return 64;
+  }
+
+  const std::filesystem::path source_path = args.front();
+  args.erase(args.begin());
+
+  mkpro::CompileOptions options;
+  if (command == "explain") {
+    options.output = mkpro::OutputFormat::All;
+    options.analysis = true;
+  }
+
+  for (std::size_t index = 0; index < args.size(); ++index) {
+    const std::string& arg = args[index];
+    if (arg == "--analysis") {
+      options.analysis = true;
+    } else if (arg == "--collect-coalesce-shares") {
+      options.collect_coalesce_shares = true;
+      options.analysis = true;
+    } else if (arg == "--segmented-bitplanes") {
+      options.segmented_bitplanes = true;
+    } else if (arg == "--segmented-line-count-scan") {
+      options.segmented_bitplanes = true;
+      options.segmented_line_count_scan = true;
+    } else if (arg == "--compact-bit-mask-helper-body") {
+      options.compact_bit_mask_helper_body = true;
+    } else if (arg == "--general-constant-preloads") {
+      options.general_constant_preloads = true;
+    } else if (arg == "--dual-use-constant-indirect-flow") {
+      options.dual_use_constant_indirect_flow = true;
+    } else if (arg == "--tail-branch-inversion") {
+      options.tail_branch_inversion = true;
+    } else if (arg == "--conditional-branch-trampoline") {
+      options.conditional_branch_trampoline = true;
+    } else if (arg == "--preloaded-indirect-flow") {
+      options.preloaded_indirect_flow = true;
+      options.aggressive_post_layout_indirect_flow = true;
+    } else if (arg == "--aggressive-post-layout-indirect-flow") {
+      options.aggressive_post_layout_indirect_flow = true;
+    } else if (arg == "--force-register-share") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --force-register-share\n";
+        return 64;
+      }
+      const std::string value = args[++index];
+      const std::size_t colon = value.find(':');
+      if (colon == std::string::npos || colon == 0 || colon + 1 >= value.size()) {
+        std::cerr << "invalid --force-register-share value: " << value << "\n";
+        return 64;
+      }
+      options.forced_register_shares.push_back(mkpro::RegisterShare{
+          .free_register = value.substr(0, colon),
+          .keep_register = value.substr(colon + 1),
+      });
+    } else if (arg == "--strict") {
+      options.strict = true;
+    } else if (arg == "--out") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --out\n";
+        return 64;
+      }
+      auto output = parse_output_format(args[++index]);
+      if (!output.has_value()) {
+        std::cerr << "unknown --out value: " << args[index] << "\n";
+        return 64;
+      }
+      options.output = *output;
+    } else if (arg == "--delivery") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --delivery\n";
+        return 64;
+      }
+      auto delivery = parse_delivery_mode(args[++index]);
+      if (!delivery.has_value()) {
+        std::cerr << "unknown --delivery value: " << args[index] << "\n";
+        return 64;
+      }
+      options.delivery = *delivery;
+    } else if (arg == "--budget") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --budget\n";
+        return 64;
+      }
+      try {
+        options.budget = std::stoi(args[++index]);
+      } catch (const std::exception&) {
+        std::cerr << "invalid --budget value: " << args[index] << "\n";
+        return 64;
+      }
+    } else {
+      std::cerr << "unknown argument: " << arg << "\n";
+      return 64;
+    }
+  }
+
+  try {
+    const mkpro::CompileResult result = mkpro::compile_source(read_source(source_path), options);
+    print_diagnostics(result);
+    if (result.implemented)
+      print_result(result, options.output);
+    return result.implemented ? 0 : 78;
+  } catch (const std::exception& error) {
+    std::cerr << "error: " << error.what() << "\n";
+    return 66;
+  }
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+  std::vector<std::string> args(argv + 1, argv + argc);
+  if (args.empty() || args.front() == "--help" || args.front() == "-h") {
+    print_usage(std::cout);
+    return 0;
+  }
+  if (args.front() == "--version") {
+    std::cout << "mkpro-native " << mkpro::kNativeVersion << " (" << mkpro::kNativeStatus << ")\n";
+    return 0;
+  }
+
+  const std::string command = args.front();
+  args.erase(args.begin());
+  if (command == "compile" || command == "explain") {
+    return run_compile_like(command, args);
+  }
+
+  std::cerr << "unknown command: " << command << "\n";
+  print_usage(std::cerr);
+  return 64;
+}

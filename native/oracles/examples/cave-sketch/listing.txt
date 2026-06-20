@@ -1,0 +1,77 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   -- |   -  | enter player            | enter a value in X
+   00 |  01  | 1                       |
+   01 |  00  | 0                       |
+   02 |  4C  | X→П c                   | setup Rc
+   03 |  00  | 0                       |
+   04 |  0A  | .                       |
+   05 |  00  | 0                       |
+   06 |  00  | 0                       |
+   07 |  00  | 0                       |
+   08 |  00  | 0                       |
+   09 |  00  | 0                       |
+   10 |  01  | 1                       |
+   11 |  4E  | X→П e                   | setup Re
+   12 |  02  | 2                       |
+   13 |  0C  | ВП                      | exponent
+   14 |  07  | 7                       |
+   15 |  0B  | /-/                     | negative exponent
+   16 |  4D  | X→П d                   | setup Rd
+   17 |  00  | 0                       |
+   18 |  47  | X→П 7                   | setup R7
+   19 |  09  | 9                       |
+   20 |  48  | X→П 8                   | setup R8
+   21 |  07  | 7                       |
+   22 |  49  | X→П 9                   | setup R9
+   23 |  01  | 1                       |
+   24 |  01  | 1                       |
+   25 |  4A  | X→П a                   | setup Ra
+   26 |  01  | 1                       |
+   27 |  06  | 6                       |
+   28 |  4B  | X→П b                   | setup Rb
+   29 |  41  | X→П 1                   | setup player
+   30 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  61  | П→X 1                   | display __inline_show_25_0 source
+   01 |  50  | С/П                     | show __inline_show_25_0
+   02 |  77  | К x≠0 7                 | case mismatch; preloaded R7=B2 indirect-target=0 indirect flow
+   03 |  02  | 2                       |
+   04 |  11  | −                       | dispatch residual compare
+   05 |  EA  | К x=0 a                 | case mismatch; preloaded Ra=C3 indirect-target=11 shifted-forward indirect flow
+   06 |  6D  | П→X d                   | preload const 2e-7
+   07 |  61  | П→X 1                   | recall player
+   08 |  10  | +                       | expr +
+   09 |  41  | X→П 1                   | set player
+   10 |  87  | К БП 7                  | dispatch end; preloaded R7=B2 indirect-target=0 indirect flow
+   11 |  02  | 2                       |
+   12 |  11  | −                       | dispatch residual compare
+   13 |  EB  | К x=0 b                 | case mismatch; preloaded Rb=C8 indirect-target=16 shifted-forward indirect flow
+   14 |  6E  | П→X e                   | preload const 0.000001
+   15 |  89  | К БП 9                  | shared terminal tail; preloaded R9=B9 indirect-target=7 indirect flow
+   16 |  02  | 2                       |
+   17 |  11  | −                       | dispatch residual compare
+   18 |  5E  | F x=0                   | case mismatch
+   19 |  24  | 24                      | case mismatch
+   20 |  61  | П→X 1                   | recall player
+   21 |  6E  | П→X e                   | preload const 0.000001
+   22 |  11  | −                       | expr -
+   23 |  88  | К БП 8                  | shared terminal tail; preloaded R8=C1 indirect-target=9 indirect flow
+   24 |  02  | 2                       |
+   25 |  11  | −                       | dispatch residual compare
+   26 |  5E  | F x=0                   | case mismatch
+   27 |  32  | 32                      | case mismatch
+   28 |  61  | П→X 1                   | recall player
+   29 |  6D  | П→X d                   | preload const 2e-7
+   30 |  11  | −                       | expr -
+   31 |  88  | К БП 8                  | shared terminal tail; preloaded R8=C1 indirect-target=9 indirect flow
+   32 |  02  | 2                       |
+   33 |  11  | −                       | dispatch residual compare
+   34 |  77  | К x≠0 7                 | case mismatch; preloaded R7=B2 indirect-target=0 indirect flow
+   35 |  00  | 0                       | halt
+   36 |  50  | С/П                     | halt
+   37 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow

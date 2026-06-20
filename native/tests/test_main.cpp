@@ -1,0 +1,195 @@
+#include <functional>
+#include <iostream>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace mkpro::tests {
+
+void arithmetic_if_matches_typescript_contract();
+void bit_mask_quotient_reuse_matches_typescript_contract();
+void board_width_macros_matches_typescript_contract();
+void cfg_matches_typescript_contract();
+void compiler_coord_list_lowering_matches_typescript_contract();
+void compiler_display_lowering_matches_typescript_contract();
+void constant_folding_matches_typescript_contract();
+void cse_display_block_matches_typescript_contract();
+void dead_code_after_halt_matches_typescript_contract();
+void dead_proc_elimination_matches_typescript_contract();
+void dead_store_before_commutative_matches_typescript_contract();
+void dead_store_elimination_matches_typescript_contract();
+void display_lowering_helpers_match_typescript_contract();
+void duplicate_failure_tail_matches_typescript_contract();
+void emitter_matches_initial_typescript_contract();
+void supported_examples_match_native_oracles();
+void expression_lowering_helpers_match_typescript_contract();
+void formal_address_matches_typescript_contract();
+void format_primitives_match_typescript_contract();
+void functions_match_typescript_contract();
+void indirect_addressing_matches_typescript_contract();
+void indirect_selector_integer_part_matches_typescript_contract();
+void ir_round_trip_matches_typescript_contract();
+void liveness_analysis_matches_typescript_contract();
+void lowering_helpers_match_typescript_contract();
+void machine_profile_matches_typescript_contract();
+void match_blocks_match_typescript_contract();
+void maxmin_zero_lint_matches_typescript_contract();
+void opcode_catalog_matches_typescript_contract();
+void oracle_index_loads_committed_artifacts();
+void parser_matches_initial_v2_source_contract();
+void expression_parser_matches_initial_contract();
+void parser_accepts_all_example_sources();
+void pass_pipeline_matches_initial_typescript_contract();
+void post_layout_indirect_flow_matches_typescript_contract();
+void r0_fractional_sentinel_matches_typescript_contract();
+void recall_removal_engine_matches_initial_typescript_contract();
+void residual_elseif_matches_typescript_contract();
+void residual_temp_matches_typescript_contract();
+void register_allocator_matches_typescript_contract();
+void register_coalesce_matches_typescript_contract();
+void rules_match_typescript_contract();
+void safe_minmax_matches_typescript_contract();
+void segmented_bitplanes_match_typescript_contract();
+void state_banks_match_typescript_contract();
+void state_init_counted_loop_matches_typescript_contract();
+void stack_residency_matches_typescript_contract();
+void strict_allocation_matches_typescript_contract();
+void style_lints_matches_typescript_contract();
+void super_dark_layout_matches_typescript_contract();
+void v2_const_matches_typescript_contract();
+void x2_register_dataflow_matches_typescript_contract();
+
+} // namespace mkpro::tests
+
+namespace {
+
+using TestFn = std::function<void()>;
+
+struct TestCase {
+  std::string name;
+  TestFn run;
+};
+
+} // namespace
+
+int main() {
+  const std::vector<TestCase> tests = {
+      {"arithmetic_if_matches_typescript_contract",
+       mkpro::tests::arithmetic_if_matches_typescript_contract},
+      {"bit_mask_quotient_reuse_matches_typescript_contract",
+       mkpro::tests::bit_mask_quotient_reuse_matches_typescript_contract},
+      {"board_width_macros_matches_typescript_contract",
+       mkpro::tests::board_width_macros_matches_typescript_contract},
+      {"cfg_matches_typescript_contract", mkpro::tests::cfg_matches_typescript_contract},
+      {"compiler_coord_list_lowering_matches_typescript_contract",
+       mkpro::tests::compiler_coord_list_lowering_matches_typescript_contract},
+      {"compiler_display_lowering_matches_typescript_contract",
+       mkpro::tests::compiler_display_lowering_matches_typescript_contract},
+      {"constant_folding_matches_typescript_contract",
+       mkpro::tests::constant_folding_matches_typescript_contract},
+      {"cse_display_block_matches_typescript_contract",
+       mkpro::tests::cse_display_block_matches_typescript_contract},
+      {"dead_code_after_halt_matches_typescript_contract",
+       mkpro::tests::dead_code_after_halt_matches_typescript_contract},
+      {"dead_proc_elimination_matches_typescript_contract",
+       mkpro::tests::dead_proc_elimination_matches_typescript_contract},
+      {"dead_store_before_commutative_matches_typescript_contract",
+       mkpro::tests::dead_store_before_commutative_matches_typescript_contract},
+      {"dead_store_elimination_matches_typescript_contract",
+       mkpro::tests::dead_store_elimination_matches_typescript_contract},
+      {"display_lowering_helpers_match_typescript_contract",
+       mkpro::tests::display_lowering_helpers_match_typescript_contract},
+      {"duplicate_failure_tail_matches_typescript_contract",
+       mkpro::tests::duplicate_failure_tail_matches_typescript_contract},
+      {"emitter_matches_initial_typescript_contract",
+       mkpro::tests::emitter_matches_initial_typescript_contract},
+      {"supported_examples_match_native_oracles",
+       mkpro::tests::supported_examples_match_native_oracles},
+      {"expression_lowering_helpers_match_typescript_contract",
+       mkpro::tests::expression_lowering_helpers_match_typescript_contract},
+      {"formal_address_matches_typescript_contract",
+       mkpro::tests::formal_address_matches_typescript_contract},
+      {"format_primitives_match_typescript_contract",
+       mkpro::tests::format_primitives_match_typescript_contract},
+      {"functions_match_typescript_contract", mkpro::tests::functions_match_typescript_contract},
+      {"indirect_addressing_matches_typescript_contract",
+       mkpro::tests::indirect_addressing_matches_typescript_contract},
+      {"indirect_selector_integer_part_matches_typescript_contract",
+       mkpro::tests::indirect_selector_integer_part_matches_typescript_contract},
+      {"ir_round_trip_matches_typescript_contract",
+       mkpro::tests::ir_round_trip_matches_typescript_contract},
+      {"liveness_analysis_matches_typescript_contract",
+       mkpro::tests::liveness_analysis_matches_typescript_contract},
+      {"lowering_helpers_match_typescript_contract",
+       mkpro::tests::lowering_helpers_match_typescript_contract},
+      {"machine_profile_matches_typescript_contract",
+       mkpro::tests::machine_profile_matches_typescript_contract},
+      {"match_blocks_match_typescript_contract",
+       mkpro::tests::match_blocks_match_typescript_contract},
+      {"maxmin_zero_lint_matches_typescript_contract",
+       mkpro::tests::maxmin_zero_lint_matches_typescript_contract},
+      {"opcode_catalog_matches_typescript_contract",
+       mkpro::tests::opcode_catalog_matches_typescript_contract},
+      {"oracle_index_loads_committed_artifacts",
+       mkpro::tests::oracle_index_loads_committed_artifacts},
+      {"parser_matches_initial_v2_source_contract",
+       mkpro::tests::parser_matches_initial_v2_source_contract},
+      {"expression_parser_matches_initial_contract",
+       mkpro::tests::expression_parser_matches_initial_contract},
+      {"parser_accepts_all_example_sources", mkpro::tests::parser_accepts_all_example_sources},
+      {"pass_pipeline_matches_initial_typescript_contract",
+       mkpro::tests::pass_pipeline_matches_initial_typescript_contract},
+      {"post_layout_indirect_flow_matches_typescript_contract",
+       mkpro::tests::post_layout_indirect_flow_matches_typescript_contract},
+      {"r0_fractional_sentinel_matches_typescript_contract",
+       mkpro::tests::r0_fractional_sentinel_matches_typescript_contract},
+      {"recall_removal_engine_matches_initial_typescript_contract",
+       mkpro::tests::recall_removal_engine_matches_initial_typescript_contract},
+      {"residual_elseif_matches_typescript_contract",
+       mkpro::tests::residual_elseif_matches_typescript_contract},
+      {"residual_temp_matches_typescript_contract",
+       mkpro::tests::residual_temp_matches_typescript_contract},
+      {"register_allocator_matches_typescript_contract",
+       mkpro::tests::register_allocator_matches_typescript_contract},
+      {"register_coalesce_matches_typescript_contract",
+       mkpro::tests::register_coalesce_matches_typescript_contract},
+      {"rules_match_typescript_contract", mkpro::tests::rules_match_typescript_contract},
+      {"safe_minmax_matches_typescript_contract",
+       mkpro::tests::safe_minmax_matches_typescript_contract},
+      {"segmented_bitplanes_match_typescript_contract",
+       mkpro::tests::segmented_bitplanes_match_typescript_contract},
+      {"state_banks_match_typescript_contract",
+       mkpro::tests::state_banks_match_typescript_contract},
+      {"state_init_counted_loop_matches_typescript_contract",
+       mkpro::tests::state_init_counted_loop_matches_typescript_contract},
+      {"stack_residency_matches_typescript_contract",
+       mkpro::tests::stack_residency_matches_typescript_contract},
+      {"strict_allocation_matches_typescript_contract",
+       mkpro::tests::strict_allocation_matches_typescript_contract},
+      {"style_lints_matches_typescript_contract",
+       mkpro::tests::style_lints_matches_typescript_contract},
+      {"super_dark_layout_matches_typescript_contract",
+       mkpro::tests::super_dark_layout_matches_typescript_contract},
+      {"v2_const_matches_typescript_contract", mkpro::tests::v2_const_matches_typescript_contract},
+      {"x2_register_dataflow_matches_typescript_contract",
+       mkpro::tests::x2_register_dataflow_matches_typescript_contract},
+  };
+
+  int failed = 0;
+  for (const auto& test : tests) {
+    try {
+      test.run();
+      std::cout << "[PASS] " << test.name << "\n";
+    } catch (const std::exception& error) {
+      ++failed;
+      std::cerr << "[FAIL] " << test.name << ": " << error.what() << "\n";
+    }
+  }
+
+  if (failed > 0) {
+    std::cerr << failed << " native test(s) failed\n";
+    return 1;
+  }
+  std::cout << tests.size() << " native test(s) passed\n";
+  return 0;
+}

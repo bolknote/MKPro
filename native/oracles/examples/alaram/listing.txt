@@ -1,0 +1,150 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  00  | 0                       |
+   01 |  42  | X→П 2                   | setup R2
+   02 |  40  | X→П 0                   | setup R0
+   03 |  41  | X→П 1                   | setup R1
+   04 |  03  | 3                       |
+   05 |  44  | X→П 4                   | setup R4
+   06 |  45  | X→П 5                   | setup R5
+   07 |  43  | X→П 3                   | setup R3
+   08 |  03  | 3                       |
+   09 |  00  | 0                       |
+   10 |  00  | 0                       |
+   11 |  0B  | /-/                     | negative number
+   12 |  46  | X→П 6                   | setup R6
+   13 |  01  | 1                       |
+   14 |  00  | 0                       |
+   15 |  4A  | X→П a                   | setup Ra
+   16 |  01  | 1                       |
+   17 |  00  | 0                       |
+   18 |  00  | 0                       |
+   19 |  4B  | X→П b                   | setup Rb
+   20 |  01  | 1                       |
+   21 |  03  | 3                       |
+   22 |  02  | 2                       |
+   23 |  00  | 0                       |
+   24 |  05  | 5                       |
+   25 |  08  | 8                       |
+   26 |  07  | 7                       |
+   27 |  4D  | X→П d                   | setup Rd
+   28 |  01  | 1                       |
+   29 |  03  | 3                       |
+   30 |  02  | 2                       |
+   31 |  05  | 5                       |
+   32 |  01  | 1                       |
+   33 |  05  | 5                       |
+   34 |  08  | 8                       |
+   35 |  07  | 7                       |
+   36 |  4E  | X→П e                   | setup Re
+   37 |  01  | 1                       |
+   38 |  00  | 0                       |
+   39 |  00  | 0                       |
+   40 |  06  | 6                       |
+   41 |  02  | 2                       |
+   42 |  06  | 6                       |
+   43 |  00  | 0                       |
+   44 |  00  | 0                       |
+   45 |  0E  | В↑                      | setup Rc body split
+   46 |  09  | 9                       |
+   47 |  01  | 1                       |
+   48 |  06  | 6                       |
+   49 |  08  | 8                       |
+   50 |  09  | 9                       |
+   51 |  09  | 9                       |
+   52 |  09  | 9                       |
+   53 |  01  | 1                       |
+   54 |  39  | К ⊕                     | setup Rc body
+   55 |  4C  | X→П c                   | setup Rc body scratch
+   56 |  01  | 1                       |
+   57 |  02  | 2                       |
+   58 |  3A  | К ИНВ                   | setup Rc first digit
+   59 |  35  | К {x}                   | setup Rc first digit
+   60 |  6C  | П→X c                   | setup Rc body scratch
+   61 |  14  | ↔                       | display sign-digit first-cell splice
+   62 |  54  | К НОП                   | display sign-digit first-cell splice
+   63 |  0C  | ВП                      | display sign-digit first-cell splice
+   64 |  0C  | ВП                      | setup Rc exponent
+   65 |  07  | 7                       | setup Rc exponent
+   66 |  4C  | X→П c                   | setup Rc
+   67 |  04  | 4                       |
+   68 |  09  | 9                       |
+   69 |  47  | X→П 7                   | setup R7
+   70 |  03  | 3                       |
+   71 |  02  | 2                       |
+   72 |  48  | X→П 8                   | setup R8
+   73 |  01  | 1                       |
+   74 |  05  | 5                       |
+   75 |  49  | X→П 9                   | setup R9
+   76 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  6D  | П→X d                   | preload const 1320587
+   01 |  3A  | К ИНВ                   | display literal video bytes
+   02 |  50  | С/П                     | show __inline_show_40_0
+   03 |  E9  | К x=0 9                 | case mismatch; preloaded R9=C7 indirect-target=15 shifted-forward indirect flow
+   04 |  6A  | П→X a                   | preload const 10
+   05 |  65  | П→X 5                   | recall level
+   06 |  11  | −                       | expr -
+   07 |  61  | П→X 1                   | recall angle
+   08 |  31  | К |x|                   | abs()
+   09 |  11  | −                       | condition compare
+   10 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
+   11 |  6E  | П→X e                   | preload const 13251587
+   12 |  3A  | К ИНВ                   | display literal video bytes
+   13 |  50  | С/П                     | show __halt_literal_36
+   14 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
+   15 |  02  | 2                       |
+   16 |  11  | −                       | dispatch residual compare
+   17 |  5E  | F x=0                   | case mismatch
+   18 |  25  | 25                      | case mismatch
+   19 |  60  | П→X 0                   | recall altitude
+   20 |  6B  | П→X b                   | preload const 100
+   21 |  11  | −                       | expr -
+   22 |  40  | X→П 0                   | set altitude
+   23 |  17  | F lg                    | domain-error guard trap
+   24 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
+   25 |  02  | 2                       |
+   26 |  11  | −                       | dispatch residual compare
+   27 |  5E  | F x=0                   | case mismatch
+   28 |  34  | 34                      | case mismatch
+   29 |  61  | П→X 1                   | recall angle
+   30 |  6A  | П→X a                   | preload const 10
+   31 |  11  | −                       | expr -
+   32 |  41  | X→П 1                   | set angle
+   33 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
+   34 |  02  | 2                       |
+   35 |  11  | −                       | dispatch residual compare
+   36 |  5E  | F x=0                   | case mismatch
+   37 |  42  | 42                      | case mismatch
+   38 |  6A  | П→X a                   | preload const 10
+   39 |  61  | П→X 1                   | recall angle
+   40 |  10  | +                       | expr +
+   41 |  88  | К БП 8                  | shared terminal tail; preloaded R8=E4 indirect-target=32 indirect flow
+   42 |  02  | 2                       |
+   43 |  11  | −                       | dispatch residual compare
+   44 |  E7  | К x=0 7                 | case mismatch; reused preloaded R7=49 indirect-target=49 direct flow
+   45 |  6B  | П→X b                   | preload const 100
+   46 |  60  | П→X 0                   | recall altitude
+   47 |  10  | +                       | expr +
+   48 |  40  | X→П 0                   | set altitude
+   49 |  01  | 1                       |
+   50 |  66  | П→X 6                   | recall range
+   51 |  10  | +                       | expr +
+   52 |  46  | X→П 6                   | set range
+   53 |  3B  | К СЧ                    | random()
+   54 |  09  | 9                       |
+   55 |  12  | ×                       | expr *
+   56 |  0E  | В↑                      | random int keep scaled draw
+   57 |  35  | К {x}                   | random int fractional part
+   58 |  11  | −                       | random int floor
+   59 |  01  | 1                       |
+   60 |  10  | +                       | expr +
+   61 |  66  | П→X 6                   | recall range
+   62 |  9B  | К x≥0 b                 | false branch for >=; preloaded Rb=100 indirect-target=0 indirect flow
+   63 |  6C  | П→X c                   | display __halt_literal_32 literal
+   64 |  50  | С/П                     | show __halt_literal_32
+   65 |  8B  | К БП b                  | loop back; preloaded Rb=100 indirect-target=0 indirect flow

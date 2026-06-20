@@ -1,0 +1,216 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  01  | 1                       |
+   01 |  0A  | .                       |
+   02 |  00  | 0                       |
+   03 |  00  | 0                       |
+   04 |  00  | 0                       |
+   05 |  00  | 0                       |
+   06 |  00  | 0                       |
+   07 |  00  | 0                       |
+   08 |  08  | 8                       |
+   09 |  49  | X→П 9                   | setup R9
+   10 |  02  | 2                       |
+   11 |  00  | 0                       |
+   12 |  44  | X→П 4                   | setup R4
+   13 |  02  | 2                       |
+   14 |  45  | X→П 5                   | setup R5
+   15 |  00  | 0                       |
+   16 |  46  | X→П 6                   | setup R6
+   17 |  00  | 0                       |
+   18 |  0A  | .                       |
+   19 |  00  | 0                       |
+   20 |  00  | 0                       |
+   21 |  00  | 0                       |
+   22 |  00  | 0                       |
+   23 |  00  | 0                       |
+   24 |  01  | 1                       |
+   25 |  0B  | /-/                     | negative number
+   26 |  4E  | X→П e                   | setup Re
+   27 |  03  | 3                       |
+   28 |  0A  | .                       |
+   29 |  00  | 0                       |
+   30 |  00  | 0                       |
+   31 |  00  | 0                       |
+   32 |  00  | 0                       |
+   33 |  00  | 0                       |
+   34 |  00  | 0                       |
+   35 |  08  | 8                       |
+   36 |  4C  | X→П c                   | setup Rc
+   37 |  02  | 2                       |
+   38 |  0C  | ВП                      | exponent
+   39 |  07  | 7                       |
+   40 |  0B  | /-/                     | negative exponent
+   41 |  4A  | X→П a                   | setup Ra
+   42 |  01  | 1                       |
+   43 |  48  | X→П 8                   | setup R8
+   44 |  01  | 1                       |
+   45 |  0A  | .                       |
+   46 |  00  | 0                       |
+   47 |  00  | 0                       |
+   48 |  08  | 8                       |
+   49 |  00  | 0                       |
+   50 |  08  | 8                       |
+   51 |  00  | 0                       |
+   52 |  08  | 8                       |
+   53 |  0E  | В↑                      | separate adjacent number entry
+   54 |  01  | 1                       |
+   55 |  0A  | .                       |
+   56 |  07  | 7                       |
+   57 |  00  | 0                       |
+   58 |  06  | 6                       |
+   59 |  02  | 2                       |
+   60 |  02  | 2                       |
+   61 |  06  | 6                       |
+   62 |  04  | 4                       |
+   63 |  38  | К ∨                     | bit_or()
+   64 |  41  | X→П 1                   | setup passages_1
+   65 |  01  | 1                       |
+   66 |  0A  | .                       |
+   67 |  08  | 8                       |
+   68 |  00  | 0                       |
+   69 |  08  | 8                       |
+   70 |  0E  | В↑                      | separate adjacent number entry
+   71 |  01  | 1                       |
+   72 |  0A  | .                       |
+   73 |  06  | 6                       |
+   74 |  07  | 7                       |
+   75 |  01  | 1                       |
+   76 |  05  | 5                       |
+   77 |  04  | 4                       |
+   78 |  00  | 0                       |
+   79 |  01  | 1                       |
+   80 |  38  | К ∨                     | bit_or()
+   81 |  42  | X→П 2                   | setup passages_2
+   82 |  01  | 1                       |
+   83 |  0A  | .                       |
+   84 |  08  | 8                       |
+   85 |  00  | 0                       |
+   86 |  08  | 8                       |
+   87 |  08  | 8                       |
+   88 |  00  | 0                       |
+   89 |  08  | 8                       |
+   90 |  08  | 8                       |
+   91 |  0E  | В↑                      | separate adjacent number entry
+   92 |  01  | 1                       |
+   93 |  0A  | .                       |
+   94 |  02  | 2                       |
+   95 |  02  | 2                       |
+   96 |  06  | 6                       |
+   97 |  00  | 0                       |
+   98 |  03  | 3                       |
+   99 |  03  | 3                       |
+   A0 |  05  | 5                       |
+   A1 |  38  | К ∨                     | bit_or()
+   A2 |  43  | X→П 3                   | setup passages_3
+   A3 |  20  | F π                     | pi()
+   A4 |  40  | X→П 0                   | setup caches
+  >69 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code  | Command                 | Comment
+------+-------+-------------------------+----------------
+   00 | 00    | 0                       | initial prompt screen
+   01 | 50    | С/П                     | show __inline_show_39_0
+   02 | 47    | X→П 7                   | read command
+   03 | 64    | П→X 4                   | decrement/test resources_1
+   04 | 01    | 1                       |
+   05 | 11    | −                       | decrement/test resources_1
+   06 | 44    | X→П 4                   | set resources_1
+   07 | 21    | F √                     | decrement underflow domain guard trap
+   08 | 67    | П→X 7                   | recall command
+   09 | 5E    | F x=0                   | false branch for ==
+   10 | 40    | 40                      | false branch for ==
+   11 | 60    | П→X 0                   | membership clear source caches
+   12 | 69    | П→X 9                   | membership clear mask player
+   13 | 35    | К {x}                   | membership clear mask frac
+   14 | 3A    | К ИНВ                   | membership clear mask complement
+   15 | 37    | К ∧                     | clear membership bit before test
+   16 | 40    | X→П 0                   | set caches
+   17 | 11    | −                       | membership clear delta test
+   18 | 78    | К x≠0 8                 | false branch for !=; preloaded R8=B3 indirect-target=1 indirect flow
+   19 | 69    | П→X 9                   | recall player
+   20 | 34    | К [x]                   | int()
+   21 | 47    | X→П 7                   | set floor
+   22 | 03    | 3                       |
+   23 | 10    | +                       | indexed selector offset
+   24 | 4B    | X→П b                   | indexed selector resources
+   25 | DB    | К П→X b                 | indexed recall resources; indirect-memory-targets=4,5,6
+   26 | 67    | П→X 7                   | recall floor
+   27 | 23    | F 1/x                   | reciprocal division
+   28 | 34    | К [x]                   | int()
+   29 | 15    | F 10ˣ                   | pow10()
+   30 | 10    | +                       | expr +
+   31 | 0E    | В↑                      | x-param inline keep displayed value
+   32 | 50    | С/П                     | show __inline_show_131_1
+   33 | 1C    | F sin                   | risk input read()
+   34 | 01    | 1                       | risk multiplier
+   35 | 10    | +                       | risk multiplier
+   36 | 12    | ×                       | risk combine
+   37 | 34    | К [x]                   | risk integer result
+   38 | BB    | К X→П b                 | indexed set resources; indirect-memory-targets=4,5,6
+   39 | 52    | В/О                     | optimized БП 01
+   40 | 1C    | F sin                   | sin()
+   41 | 5E    | F x=0                   | false branch for ==
+   42 | 57    | 57                      | false branch for ==
+   43 | 6D    | П→X d                   | recall blocked
+   44 | 78    | К x≠0 8                 | false branch for !=; preloaded R8=B3 indirect-target=1 indirect flow
+   45 | 65    | П→X 5                   | decrement/test resources_2
+   46 | 01    | 1                       |
+   47 | 11    | −                       | decrement/test resources_2
+   48 | 45    | X→П 5                   | set resources_2
+   49 | 21    | F √                     | decrement underflow domain guard trap
+   50 | 6D    | П→X d                   | recall blocked
+   51 | DD    | К П→X d                 | indexed recall passages; indirect-selector-integer-part=blocked; indirect-memory-targets=1,2,3
+   52 | 38    | К ∨                     | bit_or()
+   53 | BD    | К X→П d                 | indexed set passages; indirect-selector-integer-part=blocked; indirect-memory-targets=1,2,3
+   54 | 00    | 0                       | set blocked
+   55 | 4D    | X→П d                   | set blocked
+   56 | 52    | В/О                     | optimized БП 01
+   57 | 67    | П→X 7                   | recall command
+   58 | 05    | 5                       |
+   59 | 13    | ÷                       | expr /
+   60 | 35    | К {x}                   | frac()
+   61 | 5E    | F x=0                   | false branch for ==
+   62 | 67    | 67                      | false branch for ==
+   63 | 67    | П→X 7                   | recall command
+   64 | 32    | К ЗН                    | sign()
+   65 | 51    | БП                      | tail jump go
+   66 | 95    | 95                      | proc call go
+   67 | 67    | П→X 7                   | recall command
+   68 | 04    | 4                       |
+   69 | 11    | −                       | dispatch compare
+   70 | 5E    | F x=0                   | case mismatch
+   71 | 84    | 84                      | case mismatch
+   72 | 69    | П→X 9                   | recall player
+   73 | 6C    | П→X c                   | preload const 3.0000008
+   74 | 11    | −                       | condition compare
+   75 | 5E    | F x=0                   | false branch for ==
+   76 | 80    | 80                      | false branch for ==
+   77 | 01 01 | 11                      |
+   79 | 50    | С/П                     | halt
+   80 | 6E    | П→X e                   | constant 0.000001 base -0.000001
+   81 | 0B    | /-/                     | constant 0.000001
+   82 | 51    | БП                      | tail jump go
+   83 | 95    | 95                      | proc call go
+   84 | 02    | 2                       |
+   85 | 11    | −                       | dispatch residual compare
+   86 | 5E    | F x=0                   | case mismatch
+   87 | 91    | 91                      | case mismatch
+   88 | 6E    | П→X e                   | preload const -0.000001
+   89 | 51    | БП                      | tail jump go
+   90 | 95    | 95                      | proc call go
+   91 | 0B    | /-/                     | dispatch default residual sign direction
+   92 | 32    | К ЗН                    | dispatch default residual sign
+   93 | 6A    | П→X a                   | preload const 2e-7
+   94 | 12    | ×                       | dispatch default residual sign scale
+   95 | 69    | П→X 9                   | go blocked base
+   96 | 10    | +                       | go blocked from X parameter
+   97 | 4D    | X→П d                   | set blocked
+   98 | DD    | К П→X d                 | indexed recall passages; indirect-selector-integer-part=blocked; indirect-memory-targets=1,2,3
+   99 | 37    | К ∧                     | bit_and()
+   A0 | 35    | К {x}                   | frac()
+   A1 | 78    | К x≠0 8                 | false branch for !=; preloaded R8=B3 indirect-target=1 indirect flow
+   A2 | 6D    | П→X d                   | recall blocked
+   A3 | 52    | В/О                     | optimized БП 01

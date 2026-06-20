@@ -1,0 +1,56 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   -- |   -  | enter bottles           | enter any value 0..99 in X
+   00 |  40  | X→П 0                   | setup bottles
+   01 |  50  | С/П                     | setup complete
+
+# Main Listing
+ Step | Code  | Command                 | Comment
+------+-------+-------------------------+----------------
+   00 | 60    | П→X 0                   | text display verse
+   01 | 01 00 | 10                      | text tens divisor
+   03 | 13    | ÷                       | text tens
+   04 | 34    | К [x]                   | text tens integer
+   05 | 41    | X→П 1                   | text tens scratch
+   06 | 0F    | F Вx                    | text ones from last X
+   07 | 35    | К {x}                   | text ones fraction
+   08 | 01 00 | 10                      | text ones scale
+   10 | 12    | ×                       | text ones
+   11 | 42    | X→П 2                   | text ones scratch
+   12 | 01 01 | 11                      | text display tens prefix
+   14 | 48    | X→П 8                   | text display prefix scratch
+   15 | 01 02 | 12                      | text display tens offset
+   17 | 47    | X→П 7                   | text display digit offset
+   18 | 62    | П→X 2                   | text display ones digit
+   19 | 53    | ПП                      | text digit renderer
+   20 | 34    | 34                      | text digit renderer
+   21 | 4A    | X→П a                   | text display rendered ones
+   22 | 01 04 | 14                      | text display ones prefix
+   24 | 48    | X→П 8                   | text display prefix scratch
+   25 | 01 03 | 13                      | text display ones offset
+   27 | 47    | X→П 7                   | text display digit offset
+   28 | 61    | П→X 1                   | text display tens digit
+   29 | 53    | ПП                      | text digit renderer
+   30 | 34    | 34                      | text digit renderer
+   31 | 6A    | П→X a                   | text display rendered ones
+   32 | 0E    | В↑                      | show text
+   33 | 50    | С/П                     | show text
+   34 | 06    | 6                       | text digit renderer
+   35 | 11    | −                       | text digit renderer
+   36 | 0B    | /-/                     | text digit renderer
+   37 | 5C    | F x<0                   | text digit renderer
+   38 | 45    | 45                      | text digit renderer
+   39 | 09    | 9                       | text digit complement
+   40 | 10    | +                       | text digit complement
+   41 | D7    | К П→X 7                 | text display byte
+   42 | 10    | +                       | text display byte
+   43 | 3A    | К ИНВ                   | text visible digit
+   44 | 52    | В/О                     | text digit return
+   45 | 01    | 1                       | text digit complement
+   46 | 10    | +                       | text digit complement
+   47 | D7    | К П→X 7                 | text display byte
+   48 | 10    | +                       | text display byte
+   49 | 3A    | К ИНВ                   | text visible digit
+   50 | D8    | К П→X 8                 | text display prefix
+   51 | 52    | В/О                     | text digit return

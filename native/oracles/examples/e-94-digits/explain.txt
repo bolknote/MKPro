@@ -1,0 +1,47 @@
+MK-Pro compile report
+Steps: 64/999999
+Delivery: hex
+Optimizer: exact maximum
+Reference: anvarov_e_94_digits; span=64, entries=61, gaps=29,32,35, compiled=64, delta=0, parity=equal
+Machine: mk61
+Optimizer rules: automatic=yes; active=3, considered=0, candidates=59, planned=0
+Budget: official=64, extra=0, physical=64
+Intent IR: lowered=no, v2=yes; intent=9, effects=64, cells=64
+
+Registers:
+
+Labels:
+  main: 00
+
+Optimizations:
+  - intent-domain-lowering: Lowered 0 state fields and 0 rules through the generic intent pipeline.
+  - decimal-series-lowering: Lowered decimal recurrence to 94-digit MK-61 program.
+
+Optimizer Capabilities:
+  - store-recall-peephole: candidate; Elides immediate X->П r / П->X r pairs when the recall is not observable as the last X2 sync before context-sensitive ., /-/, or ВП restoration and its stack lift cannot reach a downstream stack consumer through stack-preserving ops or direct call/return continuations.
+  - stack-current-x-scheduling: candidate; Keeps a just-computed value in X for a following expression, including commutative uses and one-shot temporaries.
+  - tail-call-lowering: candidate; Replaces subroutine calls in tail position with direct jumps so rule factoring and terminal branches do not force extra returns or branch hops.
+  - return-zero-jump: candidate; Uses В/О as one-cell БП 01 only when the return stack is known empty.
+  - vo-return-body-reorder: candidate; Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a ПП/В/О pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs.
+  - packed-line-family-layout: candidate; Candidate: detect packed line banks that are both updated/checked and scored, share source-shaped diagonal score tails through a local middle-entry layout, and continue toward a full shared update/check plus score walker instead of separate packed_add and packed_score traversals.
+  - super-number-deferred-normalization: candidate; Candidate: keep an un-normalized super-number (extra hidden mantissa digits) to defer a range/error check. The reference emulator models only the 8 visible mantissa digits, so the hidden-digit behavior the idiom relies on cannot be reproduced or safely proven, and no language construct produces it.
+  - packed-position-type: candidate; Candidate: a language-level packed position type N.0000H carrying an integer position plus packed (hex) fractional sub-coordinates. The dual-use round-trip (К [x] recovers the position, К {x} recovers the packed fraction) is already exploited by constants-dual-use; a dedicated type would only add language surface that no current program consumes.
+  - coord-list-scaled-decimal: candidate; Stores 10x10 board coordinates as y.x decimal values when all visible uses allow it, so row/column/diagonal scans avoid repeated /10 digit extraction.
+  - dual-constant-sign-digit: candidate; Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface.
+  - grd-angle-trig-identities: candidate; Uses identities such as acos(0)=100 and cos(100)=0 only when the source program explicitly requires ГРД angle mode.
+  - branch-removal: candidate; Umbrella rule for replacing provably equivalent conditionals with branchless arithmetic, sign, extrema, or masked updates.
+
+Machine Features Used:
+  - code-data-overlay: Layout marked address cells as reusable code/data overlay candidates.; Address operands, constants, opcodes, and display bytes may share cells after conflict checks.
+  - dark-entries: Layout emitted formal/dark MK-61 address operand(s).; Formal dark/super-dark entry addresses are available to the layout solver.
+  - address-constants: Layout marked address cells as reusable constants.; Address cells may double as constants for indirect flow and data transforms.
+
+Proofs:
+  - return-stack-empty: not-needed; Program uses subroutine calls, so В/О-as-jump is not assumed globally.
+  - formal-address-operands: proved; Resolved formal MK-61 address byte(s): E1->29.
+
+Cell Roles:
+  09: 05 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  16: E1 address, formal-address, dark-entry, constant, overlay - formal address E1 maps to 29 (dark); uses formal/dark program-address mapping; address can be reused as constant; code/data overlay allowed
+  23: 14 address, constant, overlay - address can be reused as constant; code/data overlay allowed
+  54: 11 address, constant, overlay - address can be reused as constant; code/data overlay allowed

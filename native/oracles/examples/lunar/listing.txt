@@ -1,0 +1,72 @@
+Setup Block:
+  `R3=100; R2=140; R4=0; R0=0; Rb=10; Rc=666; Rd=777; Re=9.8; R7=L2; R8=_3`
+
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |   -  | 100                     |
+   01 |  43  | X→П 3                   | setup R3
+   02 |   -  | 140                     |
+   03 |  42  | X→П 2                   | setup R2
+   04 |   -  | 0                       |
+   05 |  44  | X→П 4                   | setup R4
+   06 |  40  | X→П 0                   | setup R0
+   07 |  47  | X→П 7                   | setup R7
+   08 |   -  | 10                      |
+   09 |  4B  | X→П b                   | setup Rb
+   10 |   -  | 666                     |
+   11 |  4C  | X→П c                   | setup Rc
+   12 |   -  | 777                     |
+   13 |  4D  | X→П d                   | setup Rd
+   14 |   -  | 9.8                     |
+   15 |  4E  | X→П e                   | setup Re
+   16 |   -  | 41                      |
+   17 |  48  | X→П 8                   | setup R8
+
+# Main Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  63  | П→X 3                   | display __inline_show_26_0 source
+   01 |  50  | С/П                     | show __inline_show_26_0
+   02 |  64  | П→X 4                   | display __inline_show_27_1 source
+   03 |  50  | С/П                     | show __inline_show_27_1
+   04 |  62  | П→X 2                   | display __inline_show_28_2 source
+   05 |  50  | С/П                     | show __inline_show_28_2
+   06 |  41  | X→П 1                   | read burn
+   07 |  6B  | П→X b                   | preload const 10
+   08 |  12  | ×                       | expr *
+   09 |  62  | П→X 2                   | recall fuel
+   10 |  13  | ÷                       | expr /
+   11 |  6E  | П→X e                   | preload const 9.8
+   12 |  11  | −                       | expr -
+   13 |  40  | X→П 0                   | set accel
+   14 |  63  | П→X 3                   | recall height
+   15 |  64  | П→X 4                   | recall speed
+   16 |  11  | −                       | expr -
+   17 |  60  | П→X 0                   | recall accel
+   18 |  02  | 2                       |
+   19 |  13  | ÷                       | expr /
+   20 |  11  | −                       | expr -
+   21 |  43  | X→П 3                   | set height
+   22 |  64  | П→X 4                   | recall speed
+   23 |  60  | П→X 0                   | recall accel
+   24 |  10  | +                       | expr +
+   25 |  44  | X→П 4                   | set speed
+   26 |  62  | П→X 2                   | recall fuel
+   27 |  61  | П→X 1                   | recall burn
+   28 |  11  | −                       | expr -
+   29 |  42  | X→П 2                   | set fuel
+   30 |  63  | П→X 3                   | recall height
+   31 |  02  | 2                       |
+   32 |  11  | −                       | condition compare
+   33 |  C7  | К x<0 7                 | false branch for <; preloaded R7=B2 indirect-target=0 indirect flow
+   34 |  05  | 5                       |
+   35 |  64  | П→X 4                   | recall speed
+   36 |  31  | К |x|                   | abs()
+   37 |  11  | −                       | condition compare
+   38 |  98  | К x≥0 8                 | false branch for <=; preloaded R8=F3 indirect-target=41 shifted-forward indirect flow
+   39 |  6D  | П→X d                   | preload const 777
+   40 |  50  | С/П                     | halt
+   41 |  6C  | П→X c                   | preload const 666
+   42 |  50  | С/П                     | halt
+   43 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow
