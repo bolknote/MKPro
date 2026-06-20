@@ -780,6 +780,10 @@ bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringCont
   api.emitter.emit_op(0x54, "К НОП", "display template leader preserve", source_line, true);
   api.emitter.emit_op(0x0c, "ВП", "display template leader restore", source_line);
   api.emitter.emit_op(0x50, "С/П", "show display template", source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "display-byte-x2-lowering",
+      .detail = "Built literal-separated show(...) through a mantissa/exponent video template.",
+  });
   return true;
 }
 
@@ -831,6 +835,10 @@ bool lower_fixed_display_mask_statement(DisplayEmitApi& api, LoweringContext& co
   emit_display_exponent(api.emitter, template_plan->width - 1, source_line,
                         "display mask exponent");
   api.emitter.emit_op(0x50, "С/П", "show display mask", source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "display-byte-mask-lowering",
+      .detail = "Built literal-separated show(...) through a calculator video mask.",
+  });
   return true;
 }
 

@@ -6449,6 +6449,8 @@ program MixedDisplayMask {
           "native compiler should lower mixed literal/source display masks");
   require(mixed_display_mask_statement.diagnostics.empty(),
           "mixed display mask compile should not report diagnostics");
+  require(has_optimization(mixed_display_mask_statement, "display-byte-mask-lowering"),
+          "mixed display mask should report the TS strategy name");
   bool saw_display_mask_scratch = false;
   for (const auto& [name, _register_name] : mixed_display_mask_statement.registers) {
     if (name.rfind("__display_mask_body_", 0) == 0)
@@ -6613,6 +6615,8 @@ program LiteralSeparatedScoreboard {
           "native compiler should lower mantissa/exponent display templates");
   require(mantissa_exponent_display_statement.diagnostics.empty(),
           "mantissa/exponent display compile should not report diagnostics");
+  require(has_optimization(mantissa_exponent_display_statement, "display-byte-x2-lowering"),
+          "mantissa/exponent display should report the TS strategy name");
   require(mantissa_exponent_display_statement.listing.find("display template separator mask") !=
               std::string::npos,
           "mantissa/exponent display should build the separator mask");
