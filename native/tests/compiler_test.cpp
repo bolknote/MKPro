@@ -3721,6 +3721,8 @@ program CellClearReuse {
           "cells contains followed by clear should reuse the membership mask");
   require(cell_clear_reuse.listing.find("clear matched cell with reused mask") != std::string::npos,
           "cells contains followed by clear should clear with the reused mask");
+  require(has_optimization(cell_clear_reuse, "cell-membership-clear-reuse"),
+          "cells membership-clear reuse should report the TS strategy name");
   require(cell_clear_reuse.listing.find("call function hit") == std::string::npos,
           "membership-clear reuse should see through the inlined procedure call");
 

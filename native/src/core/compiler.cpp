@@ -14249,6 +14249,11 @@ bool lower_cells_contains_clear_if(LoweringContext& context, const V2Statement& 
   } else {
     context.emitter.emit_label(false_label, {.hidden = true});
   }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "cell-membership-clear-reuse",
+      .detail = "Reused the successful membership mask when clearing " + collection +
+                " at line " + std::to_string(clear.line) + ".",
+  });
   return true;
 }
 
