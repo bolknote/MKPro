@@ -10963,6 +10963,88 @@ bool lower_shared_packed_display_call(LoweringContext& context, const V2Statemen
   return true;
 }
 
+bool lower_display_byte_body(LoweringContext& context, const V2Statement& statement) {
+  if (!statement.items.has_value())
+    return false;
+  auto display_api = display_emit_api(context);
+  return core::emit::lower_mantissa_exponent_display_statement(display_api, context,
+                                                               *statement.items, statement.line) ||
+         core::emit::lower_variable_leading_display_mask_statement(
+             display_api, context, *statement.items, statement.line) ||
+         core::emit::lower_fixed_display_mask_statement(display_api, context, *statement.items,
+                                                        statement.line);
+}
+
+std::optional<int> estimate_display_byte_body_cost(const LoweringContext& context,
+                                                   const V2Statement& statement) {
+  LoweringContext probe = context;
+  const std::size_t before = probe.emitter.items.size();
+  if (!lower_display_byte_body(probe, statement) || has_errors(probe.diagnostics))
+    return std::nullopt;
+  return static_cast<int>(std::count_if(
+      probe.emitter.items.begin() + static_cast<std::ptrdiff_t>(before), probe.emitter.items.end(),
+      [](const MachineItem& item) { return item.kind != MachineItemKind::Label; }));
+}
+
+bool should_share_display_byte(LoweringContext& context, const V2Statement& statement) {
+  if (context.emitting_display_byte_helper || context.emitting_show_sequence_helper)
+    return false;
+  const std::optional<std::string> key = packed_display_key(statement);
+  if (!key.has_value())
+    return false;
+  const auto uses_it = context.packed_display_use_counts.find(*key);
+  if (uses_it == context.packed_display_use_counts.end() || uses_it->second < 2)
+    return false;
+
+  const std::optional<int> body_cost = estimate_display_byte_body_cost(context, statement);
+  if (!body_cost.has_value())
+    return false;
+  const int uses = uses_it->second;
+  const int helper_cost = uses * 2 + *body_cost + 1;
+  const int inline_total = uses * *body_cost;
+  return inline_total - helper_cost >= kDisplayHelperMinSavings;
+}
+
+const DisplayByteHelperRequest& ensure_display_byte_helper(LoweringContext& context,
+                                                           const V2Statement& statement) {
+  const std::optional<std::string> key = packed_display_key(statement);
+  if (!key.has_value())
+    throw std::logic_error("display-byte helper requested for non-display statement");
+
+  const auto existing = context.display_byte_helper_labels.find(*key);
+  if (existing != context.display_byte_helper_labels.end()) {
+    const auto helper =
+        std::find_if(context.display_byte_helpers.begin(), context.display_byte_helpers.end(),
+                     [&](const DisplayByteHelperRequest& candidate) {
+                       return candidate.label == existing->second;
+                     });
+    if (helper != context.display_byte_helpers.end())
+      return *helper;
+  }
+
+  const std::string label = "__display_byte_" + std::to_string(context.display_byte_helpers.size());
+  context.display_byte_helper_labels[*key] = label;
+  context.display_byte_helpers.push_back(DisplayByteHelperRequest{
+      .key = *key,
+      .label = label,
+      .statement = statement,
+      .line = statement.line,
+  });
+  return context.display_byte_helpers.back();
+}
+
+bool lower_shared_display_byte_call(LoweringContext& context, const V2Statement& statement) {
+  if (!should_share_display_byte(context, statement))
+    return false;
+  const DisplayByteHelperRequest& helper = ensure_display_byte_helper(context, statement);
+  context.emitter.emit_jump(0x53, "ПП", helper.label, "show display-byte helper", statement.line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "display-byte-helper-call",
+      .detail = "Reused shared display-byte helper at line " + std::to_string(statement.line) + ".",
+  });
+  return true;
+}
+
 bool lower_literal_display_body(LoweringContext& context, const std::string& literal, int line) {
   if (literal.empty()) {
     context.emitter.emit_op(0x50, "С/П", "show literal", line);
@@ -11056,20 +11138,14 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
                                                         statement.line))
     return true;
 
-  if (core::emit::lower_mantissa_exponent_display_statement(display_api, context, *statement.items,
-                                                            statement.line))
-    return true;
-
-  if (core::emit::lower_variable_leading_display_mask_statement(display_api, context,
-                                                                *statement.items, statement.line))
-    return true;
-
   if (core::emit::lower_formatted_coord_report_display_statement(display_api, context,
                                                                  *statement.items, statement.line))
     return true;
 
-  if (core::emit::lower_fixed_display_mask_statement(display_api, context, *statement.items,
-                                                     statement.line))
+  if (lower_shared_display_byte_call(context, statement))
+    return true;
+
+  if (lower_display_byte_body(context, statement))
     return true;
 
   if (lower_shared_packed_display_call(context, statement))
@@ -23296,6 +23372,27 @@ bool lower_packed_display_helpers(LoweringContext& context) {
   return true;
 }
 
+bool lower_display_byte_helpers(LoweringContext& context) {
+  for (const DisplayByteHelperRequest& helper : context.display_byte_helpers) {
+    context.emitter.emit_label(
+        helper.label,
+        {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
+    const bool previous = context.emitting_display_byte_helper;
+    context.emitting_display_byte_helper = true;
+    clear_current_x_facts(context);
+    const bool lowered = lower_display_byte_body(context, helper.statement);
+    context.emitting_display_byte_helper = previous;
+    if (!lowered)
+      return false;
+    context.emitter.emit_op(0x52, "В/О", "display byte return", helper.line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "display-byte-helper",
+        .detail = "Emitted shared display-byte helper at line " + std::to_string(helper.line) + ".",
+    });
+  }
+  return true;
+}
+
 bool lower_show_sequence_helpers(LoweringContext& context) {
   for (const ShowSequenceHelperRequest& helper : context.show_sequence_helpers) {
     context.emitter.emit_label(
@@ -25599,11 +25696,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           bool emitted_tail = lower_function_rules(context, *ast.v2);
           const std::size_t function_end = context.emitter.items.size();
           if (emitted_tail && lower_terminal_tail_helpers(context) &&
-              lower_packed_display_helpers(context) && lower_show_sequence_helpers(context) &&
-              lower_literal_display_helpers(context) && lower_random_cell_helpers(context) &&
-              lower_expression_helpers(context) && lower_spatial_sum_helpers(context) &&
-              lower_spatial_hit_helpers(context) && lower_bit_mask_helper(context) &&
-              lower_packed_score_helper(context)) {
+              lower_packed_display_helpers(context) && lower_display_byte_helpers(context) &&
+              lower_show_sequence_helpers(context) && lower_literal_display_helpers(context) &&
+              lower_random_cell_helpers(context) && lower_expression_helpers(context) &&
+              lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
+              lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
           if (emitted_tail) {

@@ -18,6 +18,7 @@ void dead_code_after_halt_matches_typescript_contract();
 void dead_proc_elimination_matches_typescript_contract();
 void dead_store_before_commutative_matches_typescript_contract();
 void dead_store_elimination_matches_typescript_contract();
+void display_byte_helpers_match_typescript_contract();
 void display_lowering_helpers_match_typescript_contract();
 void duplicate_failure_tail_matches_typescript_contract();
 void emitter_matches_initial_typescript_contract();
@@ -104,6 +105,8 @@ int main() {
        mkpro::tests::dead_store_before_commutative_matches_typescript_contract},
       {"dead_store_elimination_matches_typescript_contract",
        mkpro::tests::dead_store_elimination_matches_typescript_contract},
+      {"display_byte_helpers_match_typescript_contract",
+       mkpro::tests::display_byte_helpers_match_typescript_contract},
       {"display_lowering_helpers_match_typescript_contract",
        mkpro::tests::display_lowering_helpers_match_typescript_contract},
       {"duplicate_failure_tail_matches_typescript_contract",

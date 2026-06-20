@@ -106,6 +106,7 @@ add_executable(mkpro_tests
   tests/dead_proc_elimination_test.cpp
   tests/dead_store_before_commutative_test.cpp
   tests/dead_store_elimination_test.cpp
+  tests/display_byte_helper_test.cpp
   tests/display_lowering_test.cpp
   tests/duplicate_failure_tail_test.cpp
   tests/emitter_test.cpp
