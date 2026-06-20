@@ -2658,6 +2658,250 @@ program ArithmeticIfDoubleClamp {
                        }),
           "arithmetic-if double clamp should not emit the original branch tests");
 
+  const CompileResult arithmetic_select = compile_source(R"mkpro(
+program ArithmeticIfSelect {
+  state {
+    flag: flag = 0
+    result: counter 0..99 = 0
+  }
+  loop {
+    if flag == 1 {
+      result = 50
+    }
+    else {
+      result = 10
+    }
+    halt(result)
+  }
+}
+)mkpro");
+  require(arithmetic_select.implemented, "native compiler should lower arithmetic-if select");
+  require(arithmetic_select.diagnostics.empty(),
+          "arithmetic-if select should not report diagnostics");
+  require(has_optimization(arithmetic_select, "branch-removal"),
+          "arithmetic-if select should report branch-removal");
+  require(has_optimization(arithmetic_select, "arithmetic-if-select"),
+          "arithmetic-if select should report the TS strategy name");
+  require(std::none_of(arithmetic_select.steps.begin(), arithmetic_select.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment.has_value() &&
+                                step.comment->find("false branch for ==") != std::string::npos;
+                       }),
+          "arithmetic-if select should not emit the original branch test");
+
+  const CompileResult arithmetic_comparison_mask = compile_source(R"mkpro(
+program ArithmeticIfComparisonMask {
+  state {
+    tile: counter 0..9 = 7
+    matched: flag = 0
+  }
+  loop {
+    if tile == 7 {
+      matched = 1
+    }
+    else {
+      matched = 0
+    }
+    halt(matched)
+  }
+}
+)mkpro");
+  require(arithmetic_comparison_mask.implemented,
+          "native compiler should lower comparison boolean masks");
+  require(arithmetic_comparison_mask.diagnostics.empty(),
+          "arithmetic-if comparison mask should not report diagnostics");
+  require(has_optimization(arithmetic_comparison_mask, "branch-removal"),
+          "arithmetic-if comparison mask should report branch-removal");
+  require(has_optimization(arithmetic_comparison_mask, "arithmetic-if-comparison-mask"),
+          "arithmetic-if comparison mask should report the TS strategy name");
+  require(std::none_of(arithmetic_comparison_mask.steps.begin(),
+                       arithmetic_comparison_mask.steps.end(), [](const ResolvedStep& step) {
+                         return step.comment.has_value() &&
+                                step.comment->find("false branch for ==") != std::string::npos;
+                       }),
+          "arithmetic-if comparison mask should not emit the original branch test");
+
+  const CompileResult arithmetic_boolean_and = compile_source(R"mkpro(
+program ArithmeticIfBooleanAnd {
+  state {
+    flag: flag = 0
+    other: flag = 1
+    result: flag = 0
+  }
+  loop {
+    if flag == 1 {
+      result = other
+    }
+    else {
+      result = 0
+    }
+    halt(result)
+  }
+}
+)mkpro");
+  require(arithmetic_boolean_and.implemented,
+          "native compiler should lower boolean algebra AND");
+  require(arithmetic_boolean_and.diagnostics.empty(),
+          "arithmetic-if boolean algebra should not report diagnostics");
+  require(has_optimization(arithmetic_boolean_and, "branch-removal"),
+          "arithmetic-if boolean algebra should report branch-removal");
+  require(has_optimization(arithmetic_boolean_and, "arithmetic-if-boolean-algebra"),
+          "arithmetic-if boolean algebra should report the TS strategy name");
+
+  const CompileResult arithmetic_boolean_or = compile_source(R"mkpro(
+program ArithmeticIfBooleanOr {
+  state {
+    flag: flag = 0
+    other: flag = 1
+    result: flag = 0
+  }
+  loop {
+    if flag == 1 {
+      result = 1
+    }
+    else {
+      result = other
+    }
+    halt(result)
+  }
+}
+)mkpro");
+  require(arithmetic_boolean_or.implemented,
+          "native compiler should lower boolean algebra OR");
+  require(arithmetic_boolean_or.diagnostics.empty(),
+          "arithmetic-if boolean OR should not report diagnostics");
+  require(has_optimization(arithmetic_boolean_or, "arithmetic-if-boolean-algebra"),
+          "arithmetic-if boolean OR should report the TS strategy name");
+
+  const CompileResult arithmetic_boolean_xor = compile_source(R"mkpro(
+program ArithmeticIfBooleanXor {
+  state {
+    flag: flag = 0
+    other: flag = 1
+    result: flag = 0
+  }
+  loop {
+    if flag == 1 {
+      result = 1 - other
+    }
+    else {
+      result = other
+    }
+    halt(result)
+  }
+}
+)mkpro");
+  require(arithmetic_boolean_xor.implemented,
+          "native compiler should lower boolean algebra XOR");
+  require(arithmetic_boolean_xor.diagnostics.empty(),
+          "arithmetic-if boolean XOR should not report diagnostics");
+  require(has_optimization(arithmetic_boolean_xor, "arithmetic-if-boolean-algebra"),
+          "arithmetic-if boolean XOR should report the TS strategy name");
+
+  const CompileResult arithmetic_sign_toggle = compile_source(R"mkpro(
+program ArithmeticIfSignToggle {
+  state {
+    flag: flag = 0
+    value: packed = 3
+  }
+  loop {
+    if flag == 1 {
+      value = -value
+    }
+    else {
+      value = value
+    }
+    halt(value)
+  }
+}
+)mkpro");
+  require(arithmetic_sign_toggle.implemented,
+          "native compiler should lower arithmetic-if sign toggle");
+  require(arithmetic_sign_toggle.diagnostics.empty(),
+          "arithmetic-if sign toggle should not report diagnostics");
+  require(has_optimization(arithmetic_sign_toggle, "branch-removal"),
+          "arithmetic-if sign toggle should report branch-removal");
+  require(has_optimization(arithmetic_sign_toggle, "arithmetic-if-sign-toggle"),
+          "arithmetic-if sign toggle should report the TS strategy name");
+
+  const CompileResult arithmetic_update = compile_source(R"mkpro(
+program ArithmeticIfUpdate {
+  state {
+    flag: flag = 0
+    score: counter 0..99 = 0
+  }
+  loop {
+    if flag == 1 {
+      score = score + 4
+    }
+    halt(score)
+  }
+}
+)mkpro");
+  require(arithmetic_update.implemented, "native compiler should lower arithmetic-if update");
+  require(arithmetic_update.diagnostics.empty(),
+          "arithmetic-if update should not report diagnostics");
+  require(has_optimization(arithmetic_update, "branch-removal"),
+          "arithmetic-if update should report branch-removal");
+  require(has_optimization(arithmetic_update, "arithmetic-if-update"),
+          "arithmetic-if update should report the TS strategy name");
+
+  const CompileResult arithmetic_conditional_move = compile_source(R"mkpro(
+program ArithmeticIfConditionalMove {
+  state {
+    flag: flag = 0
+    score: counter 0..99 = 0
+    bonus: counter 0..99 = 4
+  }
+  loop {
+    if flag == 1 {
+      score = bonus
+    }
+    halt(score)
+  }
+}
+)mkpro");
+  require(arithmetic_conditional_move.implemented,
+          "native compiler should lower arithmetic-if conditional move");
+  require(arithmetic_conditional_move.diagnostics.empty(),
+          "arithmetic-if conditional move should not report diagnostics");
+  require(has_optimization(arithmetic_conditional_move, "branch-removal"),
+          "arithmetic-if conditional move should report branch-removal");
+  require(has_optimization(arithmetic_conditional_move, "arithmetic-if-conditional-move"),
+          "arithmetic-if conditional move should report the TS strategy name");
+
+  CompileOptions comparison_update_options;
+  comparison_update_options.comparison_guarded_update_selectors = true;
+  const CompileResult arithmetic_comparison_update = compile_source(R"mkpro(
+program ArithmeticIfComparisonUpdate {
+  state {
+    tile: counter 0..9 = 7
+    score: counter 0..99 = 0
+  }
+  loop {
+    if tile == 7 {
+      score++
+    }
+    halt(score)
+  }
+}
+)mkpro",
+                                                                 comparison_update_options);
+  require(arithmetic_comparison_update.implemented,
+          "native compiler should lower comparison guarded arithmetic updates");
+  require(arithmetic_comparison_update.diagnostics.empty(),
+          "arithmetic-if comparison update should not report diagnostics");
+  require(has_optimization(arithmetic_comparison_update, "branch-removal"),
+          "arithmetic-if comparison update should report branch-removal");
+  require(has_optimization(arithmetic_comparison_update, "arithmetic-if-comparison-update"),
+          "arithmetic-if comparison update should report the TS strategy name");
+  require(std::none_of(arithmetic_comparison_update.steps.begin(),
+                       arithmetic_comparison_update.steps.end(), [](const ResolvedStep& step) {
+                         return step.comment.has_value() &&
+                                step.comment->find("false branch for ==") != std::string::npos;
+                       }),
+          "arithmetic-if comparison update should not emit the original branch test");
+
   const CompileResult indexed_store_guard = compile_source(R"mkpro(
 program IndexedStoreGuard {
   state {

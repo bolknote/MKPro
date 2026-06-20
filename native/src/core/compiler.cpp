@@ -14037,6 +14037,10 @@ single_arithmetic_if_assignment(const LoweringContext& context,
 
 bool expression_is_numeric_value(const LoweringContext& context, const Expression& expression,
                                  double expected);
+std::optional<Expression> match_target_plus_delta(const Expression& expression,
+                                                  const std::string& target);
+std::optional<Expression> match_target_minus_delta(const Expression& expression,
+                                                   const std::string& target);
 
 ArithmeticIfCandidate arithmetic_if_abs_candidate(std::string target, Expression expression) {
   return ArithmeticIfCandidate{
@@ -14067,6 +14071,74 @@ ArithmeticIfCandidate arithmetic_if_min_candidate(
       .name = "arithmetic-if-min",
       .detail = std::move(detail),
   };
+}
+
+bool arithmetic_if_boolean_variable(const LoweringContext& context, const std::string& name) {
+  const std::optional<NumericRange> range = numeric_range_for_name(context, name);
+  return range.has_value() && range->min.has_value() && range->max.has_value() &&
+         std::fabs(*range->min) < 1e-12 && std::fabs(*range->max - 1.0) < 1e-12;
+}
+
+std::optional<Expression> arithmetic_if_boolean_selector(const LoweringContext& context,
+                                                         const V2Predicate& predicate,
+                                                         int line) {
+  const Expression left = parse_expression(predicate.left, line);
+  const Expression right = parse_expression(predicate.right, line);
+  std::optional<std::string> variable;
+  std::optional<double> value;
+  if (left.kind == "identifier") {
+    variable = left.name;
+    value = numeric_literal_value(right);
+  } else if (right.kind == "identifier") {
+    variable = right.name;
+    value = numeric_literal_value(left);
+  }
+  if (!variable.has_value() || !value.has_value() ||
+      !arithmetic_if_boolean_variable(context, *variable)) {
+    return std::nullopt;
+  }
+
+  Expression variable_expression = identifier_expression(*variable);
+  if ((predicate.op == "==" && std::fabs(*value - 1.0) < 1e-12) ||
+      (predicate.op == "!=" && std::fabs(*value) < 1e-12)) {
+    return variable_expression;
+  }
+  if ((predicate.op == "==" && std::fabs(*value) < 1e-12) ||
+      (predicate.op == "!=" && std::fabs(*value - 1.0) < 1e-12)) {
+    return one_minus_expression(std::move(variable_expression));
+  }
+  return std::nullopt;
+}
+
+std::optional<Expression> arithmetic_if_boolean_identifier(const LoweringContext& context,
+                                                           const Expression& expression) {
+  if (expression.kind == "identifier" && arithmetic_if_boolean_variable(context, expression.name))
+    return expression;
+  return std::nullopt;
+}
+
+std::optional<Expression> arithmetic_if_comparison_mask(const V2Predicate& predicate, int line) {
+  if (predicate.op != "==" && predicate.op != "!=")
+    return std::nullopt;
+  Expression left = parse_expression(predicate.left, line);
+  Expression right = parse_expression(predicate.right, line);
+  Expression not_equal =
+      sign_expression(abs_expression(subtract_expression(std::move(left), std::move(right))));
+  if (predicate.op == "==")
+    return one_minus_expression(std::move(not_equal));
+  return not_equal;
+}
+
+std::optional<Expression> arithmetic_if_comparison_update_selector(const V2Predicate& predicate,
+                                                                   int line) {
+  return arithmetic_if_comparison_mask(predicate, line);
+}
+
+Expression arithmetic_if_sign_toggle_expression(Expression current, Expression selector) {
+  return multiply_expression(
+      std::move(current),
+      subtract_expression(number_expression("1"),
+                          multiply_expression(number_expression("2"), std::move(selector))));
 }
 
 std::optional<ArithmeticIfCandidate> build_arithmetic_if_abs_candidate(
@@ -14105,6 +14177,96 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_abs_candidate(
       expression_equals(then_assign->second, left) &&
       expression_equals(else_assign->second, negative_left)) {
     return arithmetic_if_abs_candidate(then_assign->first, left);
+  }
+  return std::nullopt;
+}
+
+std::optional<ArithmeticIfCandidate> build_arithmetic_if_comparison_boolean_candidate(
+    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+  if (statement.else_body.empty())
+    return std::nullopt;
+  const std::optional<std::pair<std::string, Expression>> then_assign =
+      single_arithmetic_if_assignment(context, statement.then_body);
+  const std::optional<std::pair<std::string, Expression>> else_assign =
+      single_arithmetic_if_assignment(context, statement.else_body);
+  if (!then_assign.has_value() || !else_assign.has_value() ||
+      then_assign->first != else_assign->first) {
+    return std::nullopt;
+  }
+  const std::optional<double> then_value = numeric_literal_value(then_assign->second);
+  const std::optional<double> else_value = numeric_literal_value(else_assign->second);
+  const bool then_true_else_false =
+      then_value.has_value() && else_value.has_value() && std::fabs(*then_value - 1.0) < 1e-12 &&
+      std::fabs(*else_value) < 1e-12;
+  const bool then_false_else_true =
+      then_value.has_value() && else_value.has_value() && std::fabs(*then_value) < 1e-12 &&
+      std::fabs(*else_value - 1.0) < 1e-12;
+  if (!then_true_else_false && !then_false_else_true)
+    return std::nullopt;
+  std::optional<Expression> truth = arithmetic_if_comparison_mask(predicate, statement.line);
+  if (!truth.has_value())
+    return std::nullopt;
+  return ArithmeticIfCandidate{
+      .target = then_assign->first,
+      .expression = then_true_else_false ? *truth : one_minus_expression(std::move(*truth)),
+      .name = "arithmetic-if-comparison-mask",
+      .detail = "Replaced comparison-to-boolean branch with arithmetic mask",
+  };
+}
+
+std::optional<ArithmeticIfCandidate> build_arithmetic_if_boolean_algebra_candidate(
+    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+  if (statement.else_body.empty())
+    return std::nullopt;
+  const std::optional<std::pair<std::string, Expression>> then_assign =
+      single_arithmetic_if_assignment(context, statement.then_body);
+  const std::optional<std::pair<std::string, Expression>> else_assign =
+      single_arithmetic_if_assignment(context, statement.else_body);
+  if (!then_assign.has_value() || !else_assign.has_value() ||
+      then_assign->first != else_assign->first) {
+    return std::nullopt;
+  }
+  std::optional<Expression> selector =
+      arithmetic_if_boolean_selector(context, predicate, statement.line);
+  if (!selector.has_value())
+    return std::nullopt;
+
+  const std::optional<Expression> other_then =
+      arithmetic_if_boolean_identifier(context, then_assign->second);
+  const std::optional<Expression> other_else =
+      arithmetic_if_boolean_identifier(context, else_assign->second);
+  const std::optional<double> then_value = numeric_literal_value(then_assign->second);
+  const std::optional<double> else_value = numeric_literal_value(else_assign->second);
+
+  if (other_then.has_value() && else_value.has_value() && std::fabs(*else_value) < 1e-12) {
+    return ArithmeticIfCandidate{
+        .target = then_assign->first,
+        .expression = multiply_expression(std::move(*selector), *other_then),
+        .name = "arithmetic-if-boolean-algebra",
+        .detail = "Replaced boolean AND branch with arithmetic expression",
+    };
+  }
+  if (then_value.has_value() && std::fabs(*then_value - 1.0) < 1e-12 &&
+      other_else.has_value()) {
+    return ArithmeticIfCandidate{
+        .target = then_assign->first,
+        .expression = max_expression(std::move(*selector), *other_else),
+        .name = "arithmetic-if-boolean-algebra",
+        .detail = "Replaced boolean OR branch with arithmetic expression",
+    };
+  }
+  if (other_then.has_value() && other_else.has_value() &&
+      expression_equals(*other_then, *other_else)) {
+    return std::nullopt;
+  }
+  if (other_then.has_value() && other_else.has_value() &&
+      expression_equals(then_assign->second, one_minus_expression(*other_else))) {
+    return ArithmeticIfCandidate{
+        .target = then_assign->first,
+        .expression = abs_expression(subtract_expression(std::move(*selector), *other_else)),
+        .name = "arithmetic-if-boolean-algebra",
+        .detail = "Replaced boolean XOR branch with arithmetic expression",
+    };
   }
   return std::nullopt;
 }
@@ -14162,11 +14324,137 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_clamp_candidate(
   return std::nullopt;
 }
 
+bool arithmetic_if_identity_assignment(const std::string& target, const Expression& expression) {
+  return expression_equals(expression, identifier_expression(target));
+}
+
+std::optional<ArithmeticIfCandidate> build_arithmetic_if_boolean_sign_toggle_candidate(
+    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+  if (statement.else_body.empty())
+    return std::nullopt;
+  const std::optional<std::pair<std::string, Expression>> then_assign =
+      single_arithmetic_if_assignment(context, statement.then_body);
+  const std::optional<std::pair<std::string, Expression>> else_assign =
+      single_arithmetic_if_assignment(context, statement.else_body);
+  if (!then_assign.has_value() || !else_assign.has_value() ||
+      then_assign->first != else_assign->first ||
+      !arithmetic_if_identity_assignment(else_assign->first, else_assign->second)) {
+    return std::nullopt;
+  }
+  std::optional<Expression> selector =
+      arithmetic_if_boolean_selector(context, predicate, statement.line);
+  if (!selector.has_value())
+    return std::nullopt;
+  Expression current = identifier_expression(then_assign->first);
+  if (!expression_equals(then_assign->second, unary_expression("-", current)))
+    return std::nullopt;
+  return ArithmeticIfCandidate{
+      .target = then_assign->first,
+      .expression = arithmetic_if_sign_toggle_expression(current, std::move(*selector)),
+      .name = "arithmetic-if-sign-toggle",
+      .detail = "Replaced conditional sign toggle with boolean-masked multiplier",
+  };
+}
+
+std::optional<ArithmeticIfCandidate> build_arithmetic_if_boolean_update_candidate(
+    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+  if (!statement.else_body.empty())
+    return std::nullopt;
+  const std::optional<std::pair<std::string, Expression>> assign =
+      single_arithmetic_if_assignment(context, statement.then_body);
+  if (!assign.has_value())
+    return std::nullopt;
+  std::optional<Expression> selector =
+      arithmetic_if_boolean_selector(context, predicate, statement.line);
+  const bool uses_comparison =
+      !selector.has_value() && context.comparison_guarded_update_selectors;
+  if (uses_comparison)
+    selector = arithmetic_if_comparison_update_selector(predicate, statement.line);
+  if (!selector.has_value())
+    return std::nullopt;
+
+  Expression current = identifier_expression(assign->first);
+  if (std::optional<Expression> plus = match_target_plus_delta(assign->second, assign->first)) {
+    return ArithmeticIfCandidate{
+        .target = assign->first,
+        .expression = add_expression(current, multiply_expression(*plus, std::move(*selector))),
+        .name = uses_comparison ? "arithmetic-if-comparison-update" : "arithmetic-if-update",
+        .detail = uses_comparison
+                       ? "Replaced conditional addition with comparison-mask arithmetic"
+                       : "Replaced conditional addition with boolean-masked arithmetic",
+    };
+  }
+  if (std::optional<Expression> minus = match_target_minus_delta(assign->second, assign->first)) {
+    return ArithmeticIfCandidate{
+        .target = assign->first,
+        .expression = subtract_expression(current,
+                                          multiply_expression(*minus, std::move(*selector))),
+        .name = uses_comparison ? "arithmetic-if-comparison-update" : "arithmetic-if-update",
+        .detail = uses_comparison
+                       ? "Replaced conditional subtraction with comparison-mask arithmetic"
+                       : "Replaced conditional subtraction with boolean-masked arithmetic",
+    };
+  }
+  if (uses_comparison)
+    return std::nullopt;
+  if (expression_equals(assign->second, unary_expression("-", current))) {
+    return ArithmeticIfCandidate{
+        .target = assign->first,
+        .expression = arithmetic_if_sign_toggle_expression(current, std::move(*selector)),
+        .name = "arithmetic-if-sign-toggle",
+        .detail = "Replaced conditional sign toggle with boolean-masked multiplier",
+    };
+  }
+  if (arithmetic_if_identity_assignment(assign->first, assign->second))
+    return std::nullopt;
+  return ArithmeticIfCandidate{
+      .target = assign->first,
+      .expression = add_expression(multiply_expression(current, one_minus_expression(*selector)),
+                                   multiply_expression(assign->second, std::move(*selector))),
+      .name = "arithmetic-if-conditional-move",
+      .detail = "Replaced conditional assignment with boolean-masked conditional move",
+  };
+}
+
+std::optional<ArithmeticIfCandidate> build_arithmetic_if_select_candidate(
+    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+  if (statement.else_body.empty())
+    return std::nullopt;
+  const std::optional<std::pair<std::string, Expression>> then_assign =
+      single_arithmetic_if_assignment(context, statement.then_body);
+  const std::optional<std::pair<std::string, Expression>> else_assign =
+      single_arithmetic_if_assignment(context, statement.else_body);
+  if (!then_assign.has_value() || !else_assign.has_value() ||
+      then_assign->first != else_assign->first) {
+    return std::nullopt;
+  }
+  std::optional<Expression> selector =
+      arithmetic_if_boolean_selector(context, predicate, statement.line);
+  if (!selector.has_value())
+    return std::nullopt;
+  return ArithmeticIfCandidate{
+      .target = then_assign->first,
+      .expression = add_expression(multiply_expression(then_assign->second, *selector),
+                                   multiply_expression(else_assign->second,
+                                                       one_minus_expression(std::move(*selector)))),
+      .name = "arithmetic-if-select",
+      .detail = "Replaced boolean if/else with arithmetic selection",
+  };
+}
+
 std::optional<ArithmeticIfCandidate> build_arithmetic_if_candidate(
     const LoweringContext& context, const V2Statement& statement) {
   const std::optional<V2Predicate> predicate = arithmetic_if_comparison_predicate(statement);
   if (!predicate.has_value())
     return std::nullopt;
+  if (std::optional<ArithmeticIfCandidate> candidate =
+          build_arithmetic_if_comparison_boolean_candidate(context, statement, *predicate)) {
+    return candidate;
+  }
+  if (std::optional<ArithmeticIfCandidate> candidate =
+          build_arithmetic_if_boolean_algebra_candidate(context, statement, *predicate)) {
+    return candidate;
+  }
   if (std::optional<ArithmeticIfCandidate> candidate =
           build_arithmetic_if_abs_candidate(context, statement, *predicate)) {
     return candidate;
@@ -14175,7 +14463,19 @@ std::optional<ArithmeticIfCandidate> build_arithmetic_if_candidate(
           build_arithmetic_if_max_min_candidate(context, statement, *predicate)) {
     return candidate;
   }
-  return build_arithmetic_if_clamp_candidate(context, statement, *predicate);
+  if (std::optional<ArithmeticIfCandidate> candidate =
+          build_arithmetic_if_clamp_candidate(context, statement, *predicate)) {
+    return candidate;
+  }
+  if (std::optional<ArithmeticIfCandidate> candidate =
+          build_arithmetic_if_boolean_sign_toggle_candidate(context, statement, *predicate)) {
+    return candidate;
+  }
+  if (std::optional<ArithmeticIfCandidate> candidate =
+          build_arithmetic_if_boolean_update_candidate(context, statement, *predicate)) {
+    return candidate;
+  }
+  return build_arithmetic_if_select_candidate(context, statement, *predicate);
 }
 
 bool lower_arithmetic_if_branch_removal(LoweringContext& context, const V2Statement& statement) {
@@ -14188,7 +14488,10 @@ bool lower_arithmetic_if_branch_removal(LoweringContext& context, const V2Statem
   if (ordinary_cost >= branch_order_infinite_cost())
     return false;
   const int selected_cost = guarded_estimate_expression_cost(candidate->expression) + 1;
-  if (selected_cost >= ordinary_cost)
+  const bool force_comparison_mask =
+      context.comparison_guarded_update_selectors &&
+      candidate->name == "arithmetic-if-comparison-update";
+  if (selected_cost >= ordinary_cost && !force_comparison_mask)
     return false;
 
   if (!lower_expression_to_x(context, candidate->expression))
@@ -22473,6 +22776,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
   context.compact_bit_mask_helper_body = options.compact_bit_mask_helper_body;
   context.domain_error_guards = options.domain_error_guards;
+  context.comparison_guarded_update_selectors = options.comparison_guarded_update_selectors;
   context.indirect_underflow_decrement = options.indirect_underflow_decrement;
   context.recall_stored_input_after_decrement = options.recall_stored_input_after_decrement;
   context.dead_source_residual_temp_reuse = options.dead_source_residual_temp_reuse;
