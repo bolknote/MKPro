@@ -16430,6 +16430,13 @@ std::size_t lower_bit_or_test_and_set_negative_arg_prefix(LoweringContext& conte
   context.emitter.emit_jump(0x53, "ПП", function_label(*call.name), "call function " + *call.name,
                             call.line);
   clear_current_x_facts(context);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "bit-or-test-and-set-negative-arg",
+      .detail = "Derived " + lowering_it->second.param +
+                " = -1 from the negative changed value in a bit_or test-and-set success path at "
+                "line " +
+                std::to_string(call.line) + ".",
+  });
   return 1;
 }
 
@@ -16464,6 +16471,12 @@ bool lower_bit_or_test_and_set_branch(LoweringContext& context, const V2Statemen
   if (!lower_statement_block(context, rest))
     return false;
   context.emitter.emit_label(end_label, {.hidden = true});
+  context.optimizations.push_back(OptimizationReport{
+      .name = "bit-or-test-and-set-branch",
+      .detail = "Combined " + match->collection +
+                " membership test, bit_or update, and occupied branch at line " +
+                std::to_string(branch.line) + ".",
+  });
   return true;
 }
 

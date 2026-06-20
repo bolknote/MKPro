@@ -1697,6 +1697,10 @@ program BitOrTestAndSet {
           "native compiler should lower bit_or test-and-set branches");
   require(bit_or_test_and_set.diagnostics.empty(),
           "bit_or test-and-set branch compile should not report diagnostics");
+  require(has_optimization(bit_or_test_and_set, "bit-or-test-and-set-branch"),
+          "bit_or test-and-set branch should report the TS strategy name");
+  require(has_optimization(bit_or_test_and_set, "bit-or-test-and-set-negative-arg"),
+          "bit_or test-and-set negative argument should report the TS strategy name");
   require(bit_or_test_and_set.listing.find("bit_or test-and-set occupied") != std::string::npos,
           "membership/update branch should fuse into bit_or test-and-set lowering");
   require(bit_or_test_and_set.listing.find("bit_or test-and-set sign = -1") != std::string::npos,
