@@ -2,6 +2,7 @@
 
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -129,6 +130,11 @@ struct ExpressionHarness {
         return *result;
       if (expression.kind == "binary")
         return core::emit::lower_binary_expression_to_x(api, context, expression);
+      if (expression.kind == "indexed") {
+        context.emitter.emit_op(0x60, "П->X " + expression.base,
+                                "indexed recall " + expression.base);
+        return true;
+      }
       if (expression.kind == "call") {
         const std::optional<bool> call_result =
             core::emit::lower_calculator_builtin_call_to_x(api, context, expression);
@@ -269,6 +275,33 @@ void expression_lowering_helpers_match_typescript_contract() {
             "bit_and() should emit K AND opcode");
     require(harness.context.emitter.items.back().comment == "bit_and()",
             "bit_and() should preserve comment");
+  }
+
+  {
+    ExpressionHarness harness;
+    std::vector<Expression> args;
+    args.push_back(indexed_expr("walls", std::nullopt,
+                                call_expr("int", {identifier_expr("blocked")})));
+    args.push_back(call_expr("bit_not", {call_expr("frac", {identifier_expr("blocked")})}));
+    require(harness.lower(call_expr("bit_and", std::move(args))),
+            "destructive selector operand order should lower");
+    const auto frac_it =
+        std::find_if(harness.context.emitter.items.begin(), harness.context.emitter.items.end(),
+                     [](const MachineItem& item) { return item.comment == "frac()"; });
+    const auto indexed_it =
+        std::find_if(harness.context.emitter.items.begin(), harness.context.emitter.items.end(),
+                     [](const MachineItem& item) {
+                       return item.comment == "indexed recall walls";
+                     });
+    require(frac_it != harness.context.emitter.items.end(),
+            "destructive selector ordering should emit the dependent frac first");
+    require(indexed_it != harness.context.emitter.items.end(),
+            "destructive selector ordering should emit the indexed operand");
+    require(frac_it < indexed_it,
+            "destructive selector ordering should place frac(blocked) before indexed recall");
+    require(!harness.context.optimizations.empty() &&
+                harness.context.optimizations.back().name == "destructive-selector-operand-order",
+            "destructive selector ordering should report the TS optimization name");
   }
 
   {

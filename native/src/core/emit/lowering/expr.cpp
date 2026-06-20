@@ -1,6 +1,7 @@
 #include "mkpro/core/emit/lowering/expr.hpp"
 
 #include "mkpro/core/emit/lowering_helpers.hpp"
+#include "mkpro/core/state_banks.hpp"
 #include "mkpro/core/v2_const.hpp"
 
 #include <algorithm>
@@ -43,6 +44,27 @@ bool is_pure_expression(const Expression& expression) {
   return false;
 }
 
+bool expression_is_deterministic(const Expression& expression) {
+  if (expression.kind == "number" || expression.kind == "string" || expression.kind == "identifier")
+    return true;
+  if (expression.kind == "indexed")
+    return expression.index == nullptr || expression_is_deterministic(*expression.index);
+  if (expression.kind == "unary")
+    return expression.expr != nullptr && expression_is_deterministic(*expression.expr);
+  if (expression.kind == "binary")
+    return expression.left != nullptr && expression.right != nullptr &&
+           expression_is_deterministic(*expression.left) &&
+           expression_is_deterministic(*expression.right);
+  if (expression.kind == "call") {
+    const std::string callee = lower_ascii(expression.callee);
+    if (callee == "random" || callee == "entered")
+      return false;
+    return std::all_of(expression.args.begin(), expression.args.end(),
+                       [](const Expression& arg) { return expression_is_deterministic(arg); });
+  }
+  return false;
+}
+
 bool expression_equals(const Expression& left, const Expression& right) {
   return expression_to_json(left) == expression_to_json(right);
 }
@@ -79,6 +101,44 @@ bool compile_current_x_derivation(
   if (!compile_current_x_derivation(api, expression.args.front(), unary_opcodes))
     return false;
   api.emitter.emit_op(opcode_it->second.first, opcode_it->second.second, "current-X " + fn);
+  return true;
+}
+
+std::optional<std::string> direct_integer_indexed_source(const Expression& expression) {
+  if (expression.kind != "indexed" || expression.index == nullptr)
+    return std::nullopt;
+  const std::optional<mkpro::core::AffineIndexIdentifierOffset> affine =
+      mkpro::core::affine_index_identifier_offset(*expression.index);
+  if (!affine.has_value() || !affine->integer_part)
+    return std::nullopt;
+  return affine->name;
+}
+
+bool lower_commutative_call_with_destructive_selector_last(
+    ExpressionEmitApi& api, LoweringContext& context, const Expression& expression,
+    const std::pair<int, std::string>& opcode) {
+  const Expression& left = expression.args.at(0);
+  const Expression& right = expression.args.at(1);
+  if (!expression_is_deterministic(left) || !expression_is_deterministic(right))
+    return false;
+
+  const std::optional<std::string> left_source = direct_integer_indexed_source(left);
+  if (!left_source.has_value() || !api.expression_contains_identifier(right, *left_source))
+    return false;
+
+  if (!api.lower_expression_to_x(right))
+    return false;
+  if (!api.lower_expression_to_x(left))
+    return false;
+  api.emitter.emit_op(opcode.first, opcode.second, lower_ascii(expression.callee) + "()");
+  api.emitter.current_x_variable.reset();
+  api.emitter.current_x_aliases.clear();
+  context.optimizations.push_back(OptimizationReport{
+      .name = "destructive-selector-operand-order",
+      .detail = "Scheduled integer-indexed operand after the dependent operand so "
+                "integer-part indirect addressing cannot destroy " +
+                *left_source + " before the other operand uses it.",
+  });
   return true;
 }
 
@@ -560,6 +620,9 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       });
       return false;
     }
+    if (lower_commutative_call_with_destructive_selector_last(api, context, expression,
+                                                             binary_it->second))
+      return true;
     if (!api.lower_expression_to_x(expression.args.at(0)))
       return false;
     if (!api.lower_expression_to_x(expression.args.at(1)))
