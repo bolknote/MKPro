@@ -2951,6 +2951,102 @@ program DifferenceZeroNormalize {
                                   "comparison-boundary-normalization", "right - left >= 0"),
           "difference zero normalization should preserve the TS normalized predicate shape");
 
+  const CompileResult condition_current_x_reuse = compile_source(R"mkpro(
+program ConditionCurrentXReuse {
+  state {
+    seen: counter 0..9 = 0
+    target: counter 0..9 = 5
+  }
+  loop {
+    seen = read()
+    if target == seen {
+      target++
+    }
+    halt(target)
+  }
+}
+)mkpro");
+  require(condition_current_x_reuse.implemented,
+          "native compiler should reuse current X in equality conditions");
+  require(condition_current_x_reuse.diagnostics.empty(),
+          "condition current-X reuse should not report diagnostics");
+  require(has_optimization(condition_current_x_reuse, "condition-current-x-reuse"),
+          "condition current-X reuse should report the TS strategy name");
+  const auto current_x_compare =
+      std::find_if(condition_current_x_reuse.steps.begin(),
+                   condition_current_x_reuse.steps.end(), [](const ResolvedStep& step) {
+                     return step.comment == "condition compare";
+                   });
+  require(current_x_compare != condition_current_x_reuse.steps.end(),
+          "condition current-X reuse should still emit a comparison");
+  require(current_x_compare == condition_current_x_reuse.steps.begin() ||
+              std::prev(current_x_compare)->comment != "recall seen",
+          "condition current-X reuse should not recall the value already in X");
+
+  const CompileResult current_x_negated_zero = compile_source(R"mkpro(
+program CurrentXNegatedZeroTest {
+  state {
+    line: packed = 0
+  }
+  loop {
+    line = frac(int(read()) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+    halt(line)
+  }
+}
+)mkpro");
+  require(current_x_negated_zero.implemented,
+          "native compiler should negate current X for compact zero tests");
+  require(current_x_negated_zero.diagnostics.empty(),
+          "current-X negated zero test should not report diagnostics");
+  require(has_optimization(current_x_negated_zero, "current-x-negated-zero-test"),
+          "current-X negated zero test should report the TS strategy name");
+  require(std::any_of(current_x_negated_zero.steps.begin(), current_x_negated_zero.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.mnemonic == "/-/" &&
+                               step.comment == "negate line for zero test";
+                      }),
+          "current-X negated zero test should emit the TS negate step");
+  require(std::none_of(current_x_negated_zero.steps.begin(), current_x_negated_zero.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment == "condition compare";
+                       }),
+          "current-X negated zero test should avoid materialized-zero comparison");
+
+  const CompileResult negated_zero = compile_source(R"mkpro(
+program NegatedZeroComparison {
+  state {
+    energy: counter -99..99 = 5
+    other: counter 0..9 = 0
+  }
+  loop {
+    other++
+    if energy <= 0 {
+      halt(1)
+    }
+    halt(0)
+  }
+}
+)mkpro");
+  require(negated_zero.implemented,
+          "native compiler should negate non-current values for compact zero tests");
+  require(negated_zero.diagnostics.empty(), "negated zero test should not report diagnostics");
+  require(has_optimization(negated_zero, "negated-zero-test"),
+          "negated zero test should report the TS strategy name");
+  require(std::any_of(negated_zero.steps.begin(), negated_zero.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.mnemonic == "/-/" &&
+                               step.comment == "negate energy for zero test";
+                      }),
+          "negated zero test should emit the TS negate step");
+  require(std::none_of(negated_zero.steps.begin(), negated_zero.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment == "condition compare";
+                       }),
+          "negated zero test should avoid materialized-zero comparison");
+
   const CompileResult indexed_store_guard = compile_source(R"mkpro(
 program IndexedStoreGuard {
   state {

@@ -6804,6 +6804,7 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
 bool lower_call_to_x(LoweringContext& context, const Expression& expression);
 bool ensure_hidden_register(LoweringContext& context, const std::string& name);
 bool expression_is_deterministic_for_test_and_set(const Expression& expression);
+bool x_holds_identifier(const LoweringContext& context, const std::string& name);
 bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& predicate,
                                   bool negated, const std::string& false_label, int source_line,
                                   std::optional<std::string> branch_comment = std::nullopt);
@@ -12751,6 +12752,124 @@ std::pair<V2Predicate, bool> select_cheaper_equivalent_condition(
   return {best, !common_branch_predicate_equals(best, predicate, line)};
 }
 
+std::optional<std::pair<int, std::string>> direct_zero_test_opcode(const std::string& op) {
+  if (op == "==")
+    return std::pair<int, std::string>{0x5e, "F x=0"};
+  if (op == "!=")
+    return std::pair<int, std::string>{0x57, "F x!=0"};
+  if (op == ">=")
+    return std::pair<int, std::string>{0x59, "F x>=0"};
+  if (op == "<")
+    return std::pair<int, std::string>{0x5c, "F x<0"};
+  return std::nullopt;
+}
+
+bool lower_direct_zero_false_branch(LoweringContext& context, const V2Predicate& predicate,
+                                    const std::string& false_label, int source_line,
+                                    std::optional<std::string> branch_comment) {
+  const std::optional<std::pair<int, std::string>> opcode =
+      direct_zero_test_opcode(predicate.op);
+  if (!opcode.has_value())
+    return false;
+  const Expression left = parse_expression(predicate.left, source_line);
+  const Expression right = parse_expression(predicate.right, source_line);
+  if (!is_zero_expression(context, right))
+    return false;
+  if (!(left.kind == "identifier" && x_holds_identifier(context, left.name))) {
+    if (!lower_expression_to_x(context, left))
+      return false;
+  }
+  context.emitter.emit_jump(opcode->first, opcode->second, false_label,
+                            branch_comment.value_or("false branch for " + predicate.op),
+                            source_line);
+  return true;
+}
+
+bool lower_equality_with_current_x(LoweringContext& context, const V2Predicate& predicate,
+                                   const std::string& false_label, int source_line,
+                                   std::optional<std::string> branch_comment) {
+  if (predicate.op != "==" && predicate.op != "!=")
+    return false;
+  const Expression left = parse_expression(predicate.left, source_line);
+  const Expression right = parse_expression(predicate.right, source_line);
+  if (right.kind == "identifier" && x_holds_identifier(context, right.name) &&
+      is_simple_stack_load(left)) {
+    if (!lower_expression_to_x(context, left))
+      return false;
+  } else if (left.kind == "identifier" && x_holds_identifier(context, left.name) &&
+             is_simple_stack_load(right)) {
+    if (!lower_expression_to_x(context, right))
+      return false;
+  } else {
+    return false;
+  }
+
+  context.emitter.emit_op(0x11, "-", "condition compare", source_line);
+  const int opcode = predicate.op == "==" ? 0x5e : 0x57;
+  const std::string mnemonic = predicate.op == "==" ? "F x=0" : "F x!=0";
+  context.emitter.emit_jump(opcode, mnemonic, false_label,
+                            branch_comment.value_or("false branch for " + predicate.op),
+                            source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "condition-current-x-reuse",
+      .detail = "Reused the value already in X for equality comparison at line " +
+                std::to_string(source_line) + ".",
+  });
+  return true;
+}
+
+std::optional<std::pair<std::string, std::string>>
+negated_zero_test_match(const LoweringContext& context, const V2Predicate& predicate,
+                        int source_line, bool require_current_x) {
+  const Expression left = parse_expression(predicate.left, source_line);
+  const Expression right = parse_expression(predicate.right, source_line);
+  if (left.kind == "identifier" && is_zero_expression(context, right) &&
+      (!require_current_x || x_holds_identifier(context, left.name))) {
+    if (predicate.op == "<=")
+      return std::pair<std::string, std::string>{left.name, ">="};
+    if (predicate.op == ">")
+      return std::pair<std::string, std::string>{left.name, "<"};
+  }
+  if (is_zero_expression(context, left) && right.kind == "identifier" &&
+      (!require_current_x || x_holds_identifier(context, right.name))) {
+    if (predicate.op == ">=")
+      return std::pair<std::string, std::string>{right.name, ">="};
+    if (predicate.op == "<")
+      return std::pair<std::string, std::string>{right.name, "<"};
+  }
+  return std::nullopt;
+}
+
+bool lower_negated_zero_false_branch(LoweringContext& context, const V2Predicate& predicate,
+                                     const std::string& false_label, int source_line,
+                                     std::optional<std::string> branch_comment,
+                                     bool require_current_x) {
+  const std::optional<std::pair<std::string, std::string>> match =
+      negated_zero_test_match(context, predicate, source_line, require_current_x);
+  if (!match.has_value())
+    return false;
+  const std::string& name = match->first;
+  if (!require_current_x && !lower_expression_to_x(context, identifier_expression(name)))
+    return false;
+  context.emitter.emit_op(0x0b, "/-/", "negate " + name + " for zero test", source_line);
+  clear_current_x_facts(context);
+  const std::optional<std::pair<int, std::string>> opcode = direct_zero_test_opcode(match->second);
+  if (!opcode.has_value())
+    return false;
+  context.emitter.emit_jump(opcode->first, opcode->second, false_label,
+                            branch_comment.value_or("false branch for " + predicate.op),
+                            source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = require_current_x ? "current-x-negated-zero-test" : "negated-zero-test",
+      .detail = (require_current_x ? "Reused " + name + " already in X and negated it for "
+                                   : "Negated " + name + " for ") +
+                condition_text(predicate) +
+                (require_current_x ? "" : " instead of materializing zero") + " at line " +
+                std::to_string(source_line) + ".",
+  });
+  return true;
+}
+
 bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& predicate,
                                   bool negated, const std::string& false_label, int source_line,
                                   std::optional<std::string> branch_comment) {
@@ -12820,6 +12939,19 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
                   ".",
     });
   }
+
+  if (lower_direct_zero_false_branch(context, selected_predicate, false_label, source_line,
+                                     branch_comment))
+    return true;
+  if (lower_equality_with_current_x(context, selected_predicate, false_label, source_line,
+                                    branch_comment))
+    return true;
+  if (lower_negated_zero_false_branch(context, selected_predicate, false_label, source_line,
+                                      branch_comment, true))
+    return true;
+  if (lower_negated_zero_false_branch(context, selected_predicate, false_label, source_line,
+                                      branch_comment, false))
+    return true;
 
   const std::string op = selected_predicate.op;
   std::string left_text = selected_predicate.left;
