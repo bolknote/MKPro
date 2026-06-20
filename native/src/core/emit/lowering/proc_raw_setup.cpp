@@ -54,6 +54,38 @@ std::optional<int> parse_integer_text(std::string_view text) {
   }
 }
 
+std::string join_setup_registers(const std::vector<std::string>& registers) {
+  std::string result;
+  for (std::size_t index = 0; index < registers.size(); ++index) {
+    if (index > 0)
+      result += ", ";
+    result += "R" + registers.at(index);
+  }
+  return result;
+}
+
+void report_duplicate_preload_store_reuse(std::vector<OptimizationReport>& optimizations,
+                                          const std::string& value,
+                                          const std::vector<std::string>& stored_registers,
+                                          std::size_t target_count,
+                                          const std::string& target_register) {
+  if (stored_registers.size() > 1U) {
+    optimizations.push_back(OptimizationReport{
+        .name = "duplicate-preload-store-reuse",
+        .detail = "Loaded setup constant " + value + " once and stored it into " +
+                  join_setup_registers(stored_registers) + ".",
+    });
+  }
+  if (stored_registers.size() < target_count) {
+    optimizations.push_back(OptimizationReport{
+        .name = "duplicate-preload-register-elision",
+        .detail = "Skipped " + std::to_string(target_count - stored_registers.size()) +
+                  " duplicate setup store(s) to R" + target_register +
+                  " after the same constant was already stored there.",
+    });
+  }
+}
+
 enum class DecimalSeriesOpKind {
   Op,
   Jump,
@@ -877,13 +909,26 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       setup.emit_op(0x14, "X↔Y", "setup from stack.Y", std::nullopt, true);
     if (!from_stack_x && !from_stack_y)
       setup.emit_number(preload.value);
+    std::vector<std::string> stored_registers;
+    std::set<std::string> seen_registers;
+    std::size_t target_count = 0;
     for (std::size_t other = index; other < preloads.size(); ++other) {
       if (consumed.contains(other) || preloads.at(other).value != preload.value)
         continue;
       consumed.insert(other);
-      const int reg_index = register_index(preloads.at(other).register_name);
-      setup.emit_op(0x40 + reg_index, "X->П " + preloads.at(other).register_name,
-                    "setup R" + preloads.at(other).register_name, std::nullopt, true);
+      ++target_count;
+      const std::string& register_name = preloads.at(other).register_name;
+      if (seen_registers.contains(register_name))
+        continue;
+      seen_registers.insert(register_name);
+      stored_registers.push_back(register_name);
+      const int reg_index = register_index(register_name);
+      setup.emit_op(0x40 + reg_index, "X->П " + register_name, "setup R" + register_name,
+                    std::nullopt, true);
+    }
+    if (!from_stack_x && !from_stack_y) {
+      report_duplicate_preload_store_reuse(optimizations, preload.value, stored_registers,
+                                           target_count, preload.register_name);
     }
     if (from_stack_y)
       setup.emit_op(0x14, "X↔Y", "restore stack.X after stack.Y setup", std::nullopt, true);

@@ -50,6 +50,7 @@ void register_coalesce_matches_typescript_contract();
 void rules_match_typescript_contract();
 void safe_minmax_matches_typescript_contract();
 void segmented_bitplanes_match_typescript_contract();
+void setup_program_matches_typescript_contract();
 void state_banks_match_typescript_contract();
 void state_init_counted_loop_matches_typescript_contract();
 void stack_residency_matches_typescript_contract();
@@ -158,6 +159,8 @@ int main() {
        mkpro::tests::safe_minmax_matches_typescript_contract},
       {"segmented_bitplanes_match_typescript_contract",
        mkpro::tests::segmented_bitplanes_match_typescript_contract},
+      {"setup_program_matches_typescript_contract",
+       mkpro::tests::setup_program_matches_typescript_contract},
       {"state_banks_match_typescript_contract",
        mkpro::tests::state_banks_match_typescript_contract},
       {"state_init_counted_loop_matches_typescript_contract",

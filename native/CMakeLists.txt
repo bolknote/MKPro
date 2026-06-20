@@ -136,6 +136,7 @@ add_executable(mkpro_tests
   tests/rules_test.cpp
   tests/safe_minmax_test.cpp
   tests/segmented_bitplane_test.cpp
+  tests/setup_program_test.cpp
   tests/state_banks_test.cpp
   tests/state_init_counted_loop_test.cpp
   tests/stack_residency_test.cpp
