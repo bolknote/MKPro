@@ -17410,6 +17410,122 @@ OptimizedMatchDefaultCases optimize_match_default_cases(LoweringContext& context
   return result;
 }
 
+struct DispatchResidualSignMatch {
+  double bound = 0.0;
+  bool negate = false;
+  std::optional<Expression> factor;
+};
+
+std::optional<double> numeric_expression_value(LoweringContext& context,
+                                               const Expression& expression) {
+  try {
+    return numeric_value_of_expression(context, expression);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::optional<DispatchResidualSignMatch>
+match_dispatch_residual_sign_expression(LoweringContext& context, const Expression& expression,
+                                        const Expression& dispatch_expression) {
+  if (expression.kind == "binary" && expression.op == "*" && expression.left != nullptr &&
+      expression.right != nullptr) {
+    if (std::optional<DispatchResidualSignMatch> left =
+            match_dispatch_residual_sign_expression(context, *expression.left,
+                                                    dispatch_expression);
+        left.has_value() && numeric_expression_value(context, *expression.right).has_value()) {
+      left->factor = *expression.right;
+      return left;
+    }
+    if (std::optional<DispatchResidualSignMatch> right =
+            match_dispatch_residual_sign_expression(context, *expression.right,
+                                                    dispatch_expression);
+        right.has_value() && numeric_expression_value(context, *expression.left).has_value()) {
+      right->factor = *expression.left;
+      return right;
+    }
+    return std::nullopt;
+  }
+
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "sign" ||
+      expression.args.size() != 1U) {
+    return std::nullopt;
+  }
+  const Expression& arg = expression.args.front();
+  if (arg.kind != "binary" || arg.op != "-" || arg.left == nullptr || arg.right == nullptr)
+    return std::nullopt;
+
+  if (const std::optional<double> right_bound = numeric_expression_value(context, *arg.right);
+      right_bound.has_value() && expression_equals(*arg.left, dispatch_expression)) {
+    return DispatchResidualSignMatch{.bound = *right_bound, .negate = false};
+  }
+  if (const std::optional<double> left_bound = numeric_expression_value(context, *arg.left);
+      left_bound.has_value() && expression_equals(*arg.right, dispatch_expression)) {
+    return DispatchResidualSignMatch{.bound = *left_bound, .negate = true};
+  }
+  return std::nullopt;
+}
+
+void emit_residual_compare_delta(LoweringContext& context, double delta, const std::string& comment,
+                                 int line) {
+  if (std::fabs(delta) <= 1e-12)
+    return;
+  context.emitter.emit_number(format_number_literal(std::fabs(delta)));
+  context.emitter.emit_op(delta < 0 ? 0x10 : 0x11, delta < 0 ? "+" : "-", comment, line);
+}
+
+bool lower_dispatch_residual_default_x_param_call(LoweringContext& context,
+                                                  const V2StatementPtr& action,
+                                                  const Expression& dispatch_expression,
+                                                  double compared_value) {
+  if (action == nullptr || action->kind != "v2_invoke" || !action->name.has_value() ||
+      action->args.size() != 1U) {
+    return false;
+  }
+  const auto rule_it = context.rules.find(*action->name);
+  const auto x_param_it = context.x_param_procs.find(*action->name);
+  if (rule_it == context.rules.end() || x_param_it == context.x_param_procs.end())
+    return false;
+
+  const Expression arg = parse_expression(action->args.front(), action->line);
+  const std::optional<DispatchResidualSignMatch> matched =
+      match_dispatch_residual_sign_expression(context, arg, dispatch_expression);
+  if (!matched.has_value())
+    return false;
+
+  emit_residual_compare_delta(context, matched->bound - compared_value,
+                              "dispatch default residual adjust", action->line);
+  if (matched->negate)
+    context.emitter.emit_op(0x0b, "/-/", "dispatch default residual sign direction", action->line);
+  context.emitter.emit_op(0x32, "К ЗН", "dispatch default residual sign", action->line);
+  if (matched->factor.has_value()) {
+    if (!lower_expression_to_x(context, *matched->factor))
+      return false;
+    context.emitter.emit_op(0x12, "*", "dispatch default residual sign scale", action->line);
+  }
+
+  const V2Rule& rule = *rule_it->second;
+  context.emitter.emit_jump(0x53, "ПП", function_label(rule.name), "call function " + rule.name,
+                            action->line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "dispatch-default-residual-sign",
+      .detail = "Derived " + action->args.front() + " from the dispatch residual at line " +
+                std::to_string(action->line) + ".",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "dispatch-default-residual-x-param",
+      .detail = "Passed residual-derived " + x_param_it->second.param + " to " + rule.name +
+                " through X at line " + std::to_string(action->line) + ".",
+  });
+  if (const std::optional<std::string> return_x = proc_return_x_variable(context, rule)) {
+    mark_current_x(context, *return_x);
+    context.emitter.current_x_known_zero = false;
+  } else {
+    clear_current_x_facts(context);
+  }
+  return true;
+}
+
 bool lower_numeric_residual_match_statement(LoweringContext& context,
                                             const V2Statement& statement) {
   if (statement.kind != "v2_match" || !statement.expr.has_value() || statement.cases.empty())
@@ -17466,8 +17582,13 @@ bool lower_numeric_residual_match_statement(LoweringContext& context,
     context.emitter.emit_label(next_label, {.hidden = true});
   }
 
-  if (statement.otherwise != nullptr && !lower_match_action(context, *statement.otherwise))
-    return false;
+  if (statement.otherwise != nullptr) {
+    if (!lower_dispatch_residual_default_x_param_call(context, statement.otherwise, match_expr,
+                                                      compared_value) &&
+        !lower_match_action(context, *statement.otherwise)) {
+      return false;
+    }
+  }
   context.emitter.emit_label(end_label, {.hidden = true});
   context.optimizations.push_back(OptimizationReport{
       .name = "numeric-dispatch-residual-chain",

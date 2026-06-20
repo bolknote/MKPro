@@ -5193,6 +5193,40 @@ program SingleCaseResidualFallback {
   require(dispatch_default_merge.listing.find("match value") == std::string::npos,
           "merged residual dispatch should not reserve a generic match scratch");
 
+  CompileOptions dispatch_residual_sign_options;
+  dispatch_residual_sign_options.analysis = true;
+  const CompileResult dispatch_residual_sign = compile_source(R"mkpro(
+program DispatchResidualDefaultSign {
+  state {
+    key: counter 0..9 = stack.X
+  }
+
+  fn move(dir) {
+    halt(dir)
+  }
+
+  loop {
+    match key {
+      0 => halt(0)
+      5 => halt(5)
+      otherwise => move(sign(5 - key))
+    }
+  }
+}
+)mkpro",
+                                                          dispatch_residual_sign_options);
+  require(dispatch_residual_sign.implemented,
+          "native compiler should derive dispatch default sign expressions");
+  require(dispatch_residual_sign.diagnostics.empty(),
+          "dispatch residual sign compile should not report diagnostics");
+  require(has_optimization(dispatch_residual_sign, "dispatch-default-residual-sign"),
+          "dispatch residual sign should report the TS optimization name");
+  require(has_optimization(dispatch_residual_sign, "dispatch-default-residual-x-param"),
+          "dispatch residual sign should feed the x-param call through X");
+  require(dispatch_residual_sign.listing.find("dispatch default residual sign") !=
+              std::string::npos,
+          "dispatch residual sign should be emitted from the residual already in X");
+
   const CompileResult inverted_if_chain = compile_source(R"mkpro(
 program InvertedIfChain {
   state {
