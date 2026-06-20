@@ -10430,6 +10430,11 @@ core::emit::DisplayEmitApi display_emit_api(LoweringContext& context) {
           [&](const DisplayItem& item, std::string comment) {
             return lower_display_item_to_x(context, item, std::move(comment));
           },
+      .emit_number_or_preload =
+          [&](const std::string& value, std::optional<std::string> comment,
+              std::optional<int> source_line) {
+            emit_number_or_preload(context, value, std::move(comment), source_line);
+          },
       .emit_display_scale =
           [&](const std::string& scale, int source_line) {
             emit_display_scale(context, scale, source_line);
@@ -10728,6 +10733,10 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
   auto display_api = display_emit_api(context);
 
   if (lower_text_display_statement(context, *statement.items, statement.line))
+    return true;
+
+  if (core::emit::lower_dynamic_line_report_display_statement(display_api, context,
+                                                              *statement.items, statement.line))
     return true;
 
   if (core::emit::lower_floor_packed_row_display_statement(display_api, context, *statement.items,

@@ -1,6 +1,7 @@
 #include "mkpro/core/emit/lowering/display.hpp"
 
 #include "mkpro/core/emit/lowering_helpers.hpp"
+#include "mkpro/core/machine_profile.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -45,8 +46,7 @@ std::optional<std::pair<int, int>> coord_field_bounds(const LoweringContext& con
   if (board.width == 1)
     return std::pair<int, int>{board.y_min, board.y_max};
   if (board.x_min >= 0 && board.x_max <= 9 && board.y_min >= 0 && board.y_max <= 9) {
-    return std::pair<int, int>{board.x_min + 10 * board.y_min,
-                               board.x_max + 10 * board.y_max};
+    return std::pair<int, int>{board.x_min + 10 * board.y_min, board.x_max + 10 * board.y_max};
   }
   return std::nullopt;
 }
@@ -76,8 +76,8 @@ struct DecimalDisplayField {
   int width = 1;
 };
 
-std::optional<DecimalDisplayField> measure_decimal_display_field(
-    const LoweringContext& context, const DisplayItem& item) {
+std::optional<DecimalDisplayField> measure_decimal_display_field(const LoweringContext& context,
+                                                                 const DisplayItem& item) {
   if (item.kind != "source")
     return std::nullopt;
   const std::optional<std::pair<int, int>> bounds =
@@ -145,17 +145,31 @@ struct MantissaExponentTemplate {
   const DisplayItem* exponent = nullptr;
 };
 
+bool is_one_digit_display_source(const LoweringContext& context, const DisplayItem& source) {
+  if (source.kind != "source")
+    return false;
+  if (source.width.has_value())
+    return *source.width == 1;
+  const std::optional<std::pair<int, int>> bounds =
+      decimal_display_field_bounds(context, source.name);
+  if (!bounds.has_value())
+    return true;
+  const int magnitude = std::max(std::abs(bounds->first), std::abs(bounds->second));
+  const int width = std::max(1, static_cast<int>(std::to_string(magnitude).size()));
+  return bounds->first >= 0 && bounds->second <= 9 && width == 1;
+}
+
 bool source_field_fits_width(const LoweringContext& context, const DisplayItem& item,
                              int expected_width) {
   if (item.kind != "source" || item.expr.has_value())
     return false;
-  const std::optional<DecimalDisplayField> measured =
-      measure_decimal_display_field(context, item);
+  const std::optional<DecimalDisplayField> measured = measure_decimal_display_field(context, item);
   return measured.has_value() && measured->width == expected_width;
 }
 
-std::optional<MantissaExponentTemplate> plan_mantissa_exponent_template(
-    const LoweringContext& context, const std::vector<DisplayItem>& items) {
+std::optional<MantissaExponentTemplate>
+plan_mantissa_exponent_template(const LoweringContext& context,
+                                const std::vector<DisplayItem>& items) {
   if (items.size() != 7U)
     return std::nullopt;
   if (!source_field_fits_width(context, items.at(0), 1) ||
@@ -164,14 +178,11 @@ std::optional<MantissaExponentTemplate> plan_mantissa_exponent_template(
       !source_field_fits_width(context, items.at(6), 2)) {
     return std::nullopt;
   }
-  if (items.at(1).kind != "literal" ||
-      normalize_display_template_literal(items.at(1).text) != ".-")
+  if (items.at(1).kind != "literal" || normalize_display_template_literal(items.at(1).text) != ".-")
     return std::nullopt;
-  if (items.at(3).kind != "literal" ||
-      normalize_display_template_literal(items.at(3).text) != "-")
+  if (items.at(3).kind != "literal" || normalize_display_template_literal(items.at(3).text) != "-")
     return std::nullopt;
-  if (items.at(5).kind != "literal" ||
-      normalize_display_template_literal(items.at(5).text) != "-")
+  if (items.at(5).kind != "literal" || normalize_display_template_literal(items.at(5).text) != "-")
     return std::nullopt;
   return MantissaExponentTemplate{
       .leader = &items.at(0),
@@ -188,8 +199,7 @@ bool display_source_can_be_zero(const LoweringContext& context, const DisplayIte
 }
 
 bool append_literal_display_mask_cells(std::vector<int>& mask_cells,
-                                       std::vector<DisplayMaskBodyField>& body_fields,
-                                       int& width,
+                                       std::vector<DisplayMaskBodyField>& body_fields, int& width,
                                        const std::vector<int>& literal_cells) {
   if (literal_cells.empty())
     return true;
@@ -203,8 +213,9 @@ bool append_literal_display_mask_cells(std::vector<int>& mask_cells,
   return width <= 8;
 }
 
-std::optional<FixedDisplayMaskTemplate> plan_fixed_display_mask_template(
-    const LoweringContext& context, const std::vector<DisplayItem>& items) {
+std::optional<FixedDisplayMaskTemplate>
+plan_fixed_display_mask_template(const LoweringContext& context,
+                                 const std::vector<DisplayItem>& items) {
   if (items.size() < 2U)
     return std::nullopt;
 
@@ -218,12 +229,10 @@ std::optional<FixedDisplayMaskTemplate> plan_fixed_display_mask_template(
   if (first.kind == "source") {
     if (first.expr.has_value())
       return std::nullopt;
-    const std::optional<DecimalDisplayField> field =
-        measure_decimal_display_field(context, first);
+    const std::optional<DecimalDisplayField> field = measure_decimal_display_field(context, first);
     const std::optional<std::pair<int, int>> bounds =
         decimal_display_field_bounds(context, first.name);
-    if (!field.has_value() || field->width != 1 || !bounds.has_value() ||
-        bounds->first < 0)
+    if (!field.has_value() || field->width != 1 || !bounds.has_value() || bounds->first < 0)
       return std::nullopt;
     result.leader_item = &first;
   } else if (first.kind == "literal") {
@@ -252,8 +261,7 @@ std::optional<FixedDisplayMaskTemplate> plan_fixed_display_mask_template(
     if (item.kind == "source") {
       if (item.expr.has_value())
         return std::nullopt;
-      const std::optional<DecimalDisplayField> field =
-          measure_decimal_display_field(context, item);
+      const std::optional<DecimalDisplayField> field = measure_decimal_display_field(context, item);
       if (!field.has_value())
         return std::nullopt;
       result.body_fields.push_back(DisplayMaskBodyField{
@@ -286,20 +294,20 @@ std::optional<FixedDisplayMaskTemplate> plan_fixed_display_mask_template(
   return result;
 }
 
-std::optional<VariableLeadingDisplayMaskTemplate> plan_variable_leading_display_mask_template(
-    const LoweringContext& context, const std::vector<DisplayItem>& items) {
+std::optional<VariableLeadingDisplayMaskTemplate>
+plan_variable_leading_display_mask_template(const LoweringContext& context,
+                                            const std::vector<DisplayItem>& items) {
   if (items.size() < 2U)
     return std::nullopt;
   const DisplayItem& first = items.front();
   if (first.kind != "source" || first.expr.has_value())
     return std::nullopt;
 
-  const std::optional<DecimalDisplayField> source =
-      measure_decimal_display_field(context, first);
+  const std::optional<DecimalDisplayField> source = measure_decimal_display_field(context, first);
   const std::optional<std::pair<int, int>> bounds =
       decimal_display_field_bounds(context, first.name);
-  if (!source.has_value() || source->width != 2 || !bounds.has_value() ||
-      bounds->first < 0 || bounds->second < 10 || bounds->second >= 100) {
+  if (!source.has_value() || source->width != 2 || !bounds.has_value() || bounds->first < 0 ||
+      bounds->second < 10 || bounds->second >= 100) {
     return std::nullopt;
   }
 
@@ -321,8 +329,7 @@ std::optional<VariableLeadingDisplayMaskTemplate> plan_variable_leading_display_
     if (item.kind == "source") {
       if (item.expr.has_value())
         return std::nullopt;
-      const std::optional<DecimalDisplayField> field =
-          measure_decimal_display_field(context, item);
+      const std::optional<DecimalDisplayField> field = measure_decimal_display_field(context, item);
       if (!field.has_value())
         return std::nullopt;
       const DisplayMaskBodyField body_field{
@@ -345,8 +352,7 @@ std::optional<VariableLeadingDisplayMaskTemplate> plan_variable_leading_display_
 
     if (item.kind != "literal")
       return std::nullopt;
-    const std::optional<std::vector<int>> literal_cells =
-        display_literal_mantissa_cells(item.text);
+    const std::optional<std::vector<int>> literal_cells = display_literal_mantissa_cells(item.text);
     if (!literal_cells.has_value())
       return std::nullopt;
     if (std::any_of(literal_cells->begin(), literal_cells->end(),
@@ -501,9 +507,8 @@ struct FormattedCoordReportTemplate {
   int video_anchor_exp = 7;
 };
 
-bool formatted_coord_report_body_matches(
-    const std::optional<FormattedCoordReportBodyFact>& body,
-    const FormattedCoordReportTemplate& template_plan) {
+bool formatted_coord_report_body_matches(const std::optional<FormattedCoordReportBodyFact>& body,
+                                         const FormattedCoordReportTemplate& template_plan) {
   return body.has_value() && template_plan.cell != nullptr && template_plan.bearing != nullptr &&
          body->cell == template_plan.cell->name &&
          body->cell_width == template_plan.cell->width.value_or(2) &&
@@ -511,8 +516,9 @@ bool formatted_coord_report_body_matches(
          body->bearing_width == template_plan.bearing->width.value_or(1);
 }
 
-std::optional<FormattedCoordReportTemplate> plan_formatted_coord_report_template(
-    const LoweringContext& context, const std::vector<DisplayItem>& items) {
+std::optional<FormattedCoordReportTemplate>
+plan_formatted_coord_report_template(const LoweringContext& context,
+                                     const std::vector<DisplayItem>& items) {
   if (!items_match_formatted_coord_report_shape(items))
     return std::nullopt;
   const DisplayItem& cell = items.at(1);
@@ -548,7 +554,7 @@ void collect_display_scratch_register_names(const V2Statement& statement,
     collect_display_scratch_register_names(*statement.otherwise, names);
 }
 
-}  // namespace
+} // namespace
 
 bool items_match_formatted_coord_report_shape(const std::vector<DisplayItem>& items) {
   if (items.size() != 4U)
@@ -584,8 +590,7 @@ bool statement_uses_formatted_coord_report(const V2Statement& statement) {
       return true;
   }
   for (const V2MatchCase& match_case : statement.cases) {
-    if (match_case.action != nullptr &&
-        statement_uses_formatted_coord_report(*match_case.action)) {
+    if (match_case.action != nullptr && statement_uses_formatted_coord_report(*match_case.action)) {
       return true;
     }
   }
@@ -607,8 +612,7 @@ bool program_uses_formatted_coord_report(const V2Program& program) {
   return false;
 }
 
-std::vector<std::string> display_scratch_register_names_for_program(
-    const V2Program& program) {
+std::vector<std::string> display_scratch_register_names_for_program(const V2Program& program) {
   std::vector<std::string> names;
   for (const V2Statement& statement : program.body)
     collect_display_scratch_register_names(statement, names);
@@ -630,8 +634,8 @@ std::optional<std::string> collapse_literal_only_display(const std::vector<Displ
 }
 
 bool emit_display_literal_program_to_x(MachineEmitter& emitter,
-                                       const DisplayLiteralProgram& program,
-                                       int source_line, std::string comment) {
+                                       const DisplayLiteralProgram& program, int source_line,
+                                       std::string comment) {
   if (program.kind == "kinv") {
     emitter.emit_number(program.digits);
     emitter.emit_op(0x3a, "К ИНВ", std::move(comment), source_line);
@@ -649,8 +653,7 @@ bool emit_display_literal_program_to_x(MachineEmitter& emitter,
 }
 
 bool emit_direct_display_literal_program(MachineEmitter& emitter,
-                                         const DisplayLiteralProgram& program,
-                                         int source_line) {
+                                         const DisplayLiteralProgram& program, int source_line) {
   if (program.kind == "error") {
     emitter.emit_op(0x29, "К ÷", "show literal error", source_line, true);
     emitter.emit_op(0x54, "К НОП", "show literal error padding", source_line, true);
@@ -700,10 +703,9 @@ void emit_first_digit_splice(MachineEmitter& emitter, int source_line) {
   emitter.emit_op(0x0c, "ВП", "display first-cell splice", source_line);
 }
 
-bool emit_first_splice_display_literal_program(
-    DisplayEmitApi& api, LoweringContext& context,
-    const FirstSpliceDisplayLiteralProgram& program, const std::string& scratch,
-    int source_line) {
+bool emit_first_splice_display_literal_program(DisplayEmitApi& api, LoweringContext& context,
+                                               const FirstSpliceDisplayLiteralProgram& program,
+                                               const std::string& scratch, int source_line) {
   if (!emit_display_literal_program_to_x(api.emitter, program.body, source_line,
                                          "display literal video bytes body"))
     return false;
@@ -714,11 +716,9 @@ bool emit_first_splice_display_literal_program(
     api.emitter.items.back().comment = "display literal body scratch";
     if (program.negative)
       api.emitter.emit_op(0x0b, "/-/", "display literal sign", source_line);
-    api.emitter.emit_op(0x54, "К НОП", "display literal first digit reuse", source_line,
-                        true);
+    api.emitter.emit_op(0x54, "К НОП", "display literal first digit reuse", source_line, true);
     api.emitter.emit_op(0x0c, "ВП", "display literal first digit reuse", source_line);
-    emit_display_exponent(api.emitter, program.exponent, source_line,
-                          "display literal exponent");
+    emit_display_exponent(api.emitter, program.exponent, source_line, "display literal exponent");
     context.optimizations.push_back(OptimizationReport{
         .name = "display-literal-first-digit-reuse",
         .detail = "Reused the literal body's leading 8 while restoring X2.",
@@ -727,15 +727,13 @@ bool emit_first_splice_display_literal_program(
   }
 
   if (program.first == 10 && program.second.has_value() && *program.second == 10) {
-    api.emitter.emit_op(0x35, "К {x}", "display literal first digit from body",
-                        source_line);
+    api.emitter.emit_op(0x35, "К {x}", "display literal first digit from body", source_line);
     api.emit_recall(scratch);
     api.emitter.items.back().comment = "display literal body scratch";
     if (program.negative)
       api.emitter.emit_op(0x0b, "/-/", "display literal sign", source_line);
     emit_first_digit_splice(api.emitter, source_line);
-    emit_display_exponent(api.emitter, program.exponent, source_line,
-                          "display literal exponent");
+    emit_display_exponent(api.emitter, program.exponent, source_line, "display literal exponent");
     context.optimizations.push_back(OptimizationReport{
         .name = "display-literal-minus-source-reuse",
         .detail = "Derived a leading '-' from the literal body's fractional tail.",
@@ -743,22 +741,19 @@ bool emit_first_splice_display_literal_program(
     return true;
   }
 
-  if (!emit_display_first_digit(context, program.first, source_line,
-                                "display literal first digit"))
+  if (!emit_display_first_digit(context, program.first, source_line, "display literal first digit"))
     return false;
   api.emit_recall(scratch);
   api.emitter.items.back().comment = "display literal body scratch";
   if (program.negative)
     api.emitter.emit_op(0x0b, "/-/", "display literal sign", source_line);
   emit_first_digit_splice(api.emitter, source_line);
-  emit_display_exponent(api.emitter, program.exponent, source_line,
-                        "display literal exponent");
+  emit_display_exponent(api.emitter, program.exponent, source_line, "display literal exponent");
   return true;
 }
 
 bool lower_decimal_point_display_statement(DisplayEmitApi& api, LoweringContext& context,
-                                           const std::vector<DisplayItem>& items,
-                                           int source_line) {
+                                           const std::vector<DisplayItem>& items, int source_line) {
   int dot_index = -1;
   for (std::size_t index = 0; index < items.size(); ++index) {
     const DisplayItem& item = items.at(index);
@@ -819,6 +814,39 @@ bool lower_decimal_point_display_statement(DisplayEmitApi& api, LoweringContext&
   return true;
 }
 
+bool lower_dynamic_line_report_display_statement(DisplayEmitApi& api, LoweringContext& context,
+                                                 const std::vector<DisplayItem>& items,
+                                                 int source_line) {
+  if (!machine_supports(mk61_profile(), "display-bytes"))
+    return false;
+  if (items.size() != 2U)
+    return false;
+  const DisplayItem& prefix = items.at(0);
+  const DisplayItem& source = items.at(1);
+  if (prefix.kind != "literal" || source.kind != "source" || prefix.text != "8.-0" ||
+      !is_one_digit_display_source(context, source)) {
+    return false;
+  }
+
+  if (!api.lower_display_item_to_x(source, "display dynamic line report source"))
+    return false;
+  api.emitter.emit_op(0x0e, "В↑", "display dynamic line report source", source_line);
+  api.emit_number_or_preload("9800", std::nullopt, source_line);
+  api.emitter.emit_op(0x14, "<->", "display dynamic line report digit operand order", source_line);
+  api.emitter.emit_op(0x10, "+", "display dynamic line report digit", source_line);
+  api.emitter.emit_op(0x0e, "В↑", "display dynamic line report right value", source_line);
+  api.emit_number_or_preload("1200", std::nullopt, source_line);
+  api.emitter.emit_op(0x14, "<->", "display dynamic line report operand order", source_line);
+  api.emitter.emit_op(0x39, "К ⊕", "display dynamic line report video bytes", source_line);
+  api.emitter.emit_op(0x50, "С/П", "show dynamic line report", source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "screen-dynamic-line-report-lowering",
+      .detail = "Lowered screen at line " + std::to_string(source_line) +
+                " as a dynamic 8.-0n calculator line report.",
+  });
+  return true;
+}
+
 bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                               const std::vector<DisplayItem>& items,
                                               int source_line) {
@@ -841,7 +869,8 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
   const int floor_min = floor_field.min.value_or(0);
   const int floor_max = floor_field.max.value_or(floor_min);
   const int floor_width = floor.width.value_or(std::max(
-      1, static_cast<int>(std::to_string(std::max(std::abs(floor_min), std::abs(floor_max))).size())));
+      1,
+      static_cast<int>(std::to_string(std::max(std::abs(floor_min), std::abs(floor_max))).size())));
   if (floor_width != 1 || floor_min < 0 || floor_max > 9)
     return false;
   if (!row.expr.has_value()) {
@@ -859,8 +888,7 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
     api.emitter.items.back().comment = "display packed row floor";
     api.emitter.emit_op(0x14, "<->", "display packed row expression merge", source_line);
     api.emitter.emit_op(0x0e, "В↑", "display packed row expression copy", source_line);
-    api.emitter.emit_op(0x25, "F reverse", "display packed row expression rotate",
-                        source_line);
+    api.emitter.emit_op(0x25, "F reverse", "display packed row expression rotate", source_line);
     api.emitter.emit_op(0x14, "<->", "display packed row floor restore", source_line);
   } else {
     api.emit_recall(floor.name);
@@ -873,8 +901,8 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
   api.emitter.emit_op(0x0c, "ВП", "display packed row restore", source_line);
   api.emitter.emit_op(0x50, "С/П", "show packed row", source_line);
   context.optimizations.push_back(OptimizationReport{
-      .name = row.expr.has_value() ? "floor-packed-row-expression-display"
-                                   : "floor-packed-row-display",
+      .name =
+          row.expr.has_value() ? "floor-packed-row-expression-display" : "floor-packed-row-display",
       .detail = row.expr.has_value()
                     ? "Spliced one-digit floor into a packed row expression display."
                     : "Spliced one-digit floor into a packed row display.",
@@ -908,8 +936,7 @@ bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringCont
   api.emitter.emit_op(0x09, "9", "display template numeric anchor", source_line);
   api.emitter.emit_op(0x10, "+", "display template numeric body", source_line);
 
-  const std::optional<DisplayLiteralProgram> mask_program =
-      display_literal_program("8,-00-000");
+  const std::optional<DisplayLiteralProgram> mask_program = display_literal_program("8,-00-000");
   if (!mask_program.has_value() ||
       !emit_display_literal_program_to_x(api.emitter, *mask_program, source_line,
                                          "display template separator mask")) {
@@ -924,13 +951,12 @@ bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringCont
   api.emit_store(value_scratch, "display template body");
 
   const std::string exponent_zero_label = api.emitter.fresh_label("display_exponent_zero");
-  const bool exponent_can_be_zero =
-      display_source_can_be_zero(context, *template_plan->exponent);
+  const bool exponent_can_be_zero = display_source_can_be_zero(context, *template_plan->exponent);
   if (!api.lower_display_item_to_x(*template_plan->exponent, "display template exponent"))
     return false;
   if (exponent_can_be_zero) {
-    api.emitter.emit_jump(0x57, "F x!=0", exponent_zero_label,
-                          "display template zero exponent", source_line);
+    api.emitter.emit_jump(0x57, "F x!=0", exponent_zero_label, "display template zero exponent",
+                          source_line);
   }
   api.emit_store(loop_scratch, "display template exponent counter");
   api.emit_recall(value_scratch);
@@ -947,8 +973,7 @@ bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringCont
   api.emitter.emit_number("1");
   api.emitter.emit_op(0x11, "-", "display template exponent decrement", source_line);
   api.emit_store(loop_scratch, "display template exponent counter");
-  api.emitter.emit_jump(0x5e, "F x=0", loop_label, "display template exponent loop",
-                        source_line);
+  api.emitter.emit_jump(0x5e, "F x=0", loop_label, "display template exponent loop", source_line);
 
   if (exponent_can_be_zero)
     api.emitter.emit_label(exponent_zero_label, {.hidden = true});
@@ -968,8 +993,7 @@ bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringCont
   return true;
 }
 
-bool lower_variable_leading_display_mask_statement(DisplayEmitApi& api,
-                                                   LoweringContext& context,
+bool lower_variable_leading_display_mask_statement(DisplayEmitApi& api, LoweringContext& context,
                                                    const std::vector<DisplayItem>& items,
                                                    int source_line) {
   const std::optional<VariableLeadingDisplayMaskTemplate> template_plan =
@@ -998,8 +1022,7 @@ bool lower_variable_leading_display_mask_statement(DisplayEmitApi& api,
   if (!emit_variable_leading_high_body(api, *template_plan, scratch, source_line))
     return false;
   emit_mantissa_mask_body_merge(api, *high_mask, scratch, source_line, "display mask high");
-  emit_variable_leading_high_leader(api, *template_plan->source, template_plan->split,
-                                    source_line);
+  emit_variable_leading_high_leader(api, *template_plan->source, template_plan->split, source_line);
   emit_mantissa_mask_leader_splice(api, scratch, template_plan->high.width, source_line,
                                    "display mask high");
   api.emitter.emit_jump(0x51, "БП", end_label, "display mask end", source_line);
@@ -1021,8 +1044,7 @@ bool lower_variable_leading_display_mask_statement(DisplayEmitApi& api,
 }
 
 bool lower_fixed_display_mask_statement(DisplayEmitApi& api, LoweringContext& context,
-                                        const std::vector<DisplayItem>& items,
-                                        int source_line) {
+                                        const std::vector<DisplayItem>& items, int source_line) {
   const std::optional<FixedDisplayMaskTemplate> template_plan =
       plan_fixed_display_mask_template(context, items);
   if (!template_plan.has_value())
@@ -1075,8 +1097,7 @@ bool lower_fixed_display_mask_statement(DisplayEmitApi& api, LoweringContext& co
   return true;
 }
 
-bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api,
-                                                    LoweringContext& context,
+bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                                     const std::vector<DisplayItem>& items,
                                                     int source_line) {
   const std::optional<FormattedCoordReportTemplate> template_plan =
@@ -1138,8 +1159,8 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api,
   api.emitter.emit_op(0x0b, "/-/", "display formatted sign", source_line);
   api.emitter.emit_op(0x0c, "ВП", "display formatted exponent entry", source_line);
   api.emitter.emit_op(0x00 + template_plan->video_anchor_exp,
-                      std::to_string(template_plan->video_anchor_exp),
-                      "display formatted exponent", source_line);
+                      std::to_string(template_plan->video_anchor_exp), "display formatted exponent",
+                      source_line);
   api.emitter.emit_op(0x50, "С/П", "show formatted coord report", source_line);
   api.emitter.current_x_variable.reset();
   api.emitter.current_x_aliases.clear();
@@ -1150,4 +1171,4 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api,
   return true;
 }
 
-}  // namespace mkpro::core::emit
+} // namespace mkpro::core::emit

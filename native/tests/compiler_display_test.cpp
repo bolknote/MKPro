@@ -268,6 +268,63 @@ program GenericBeerTextDisplay {
                         return step.opcode == 0x50 && step.comment == "show text";
                       }),
           "generic text display should emit the visible text stop");
+
+  const CompileResult dynamic_line = compile_source(R"mkpro(
+program DynamicLineReportShow {
+  state {
+    line: counter 0..9 = 3
+  }
+
+  loop {
+    show("8.-0", line)
+  }
+}
+)mkpro");
+  require(dynamic_line.implemented, "native compiler should lower dynamic line reports");
+  require(dynamic_line.diagnostics.empty(),
+          "dynamic line report compile should not report diagnostics");
+  require(has_optimization(dynamic_line, "screen-dynamic-line-report-lowering"),
+          "dynamic line report should report the TS strategy name");
+  require(std::any_of(dynamic_line.steps.begin(), dynamic_line.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment == "display dynamic line report source";
+                      }),
+          "dynamic line report should load its one-digit source");
+  require(std::any_of(dynamic_line.steps.begin(), dynamic_line.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x14 &&
+                               step.comment == "display dynamic line report operand order";
+                      }),
+          "dynamic line report should splice the right video value");
+  require(std::any_of(dynamic_line.steps.begin(), dynamic_line.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x39 &&
+                               step.comment == "display dynamic line report video bytes";
+                      }),
+          "dynamic line report should combine the video bytes with K xor");
+  require(std::any_of(dynamic_line.steps.begin(), dynamic_line.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x50 && step.comment == "show dynamic line report";
+                      }),
+          "dynamic line report should emit the visible report stop");
+
+  const CompileResult dynamic_line_width = compile_source(R"mkpro(
+program DynamicLineReportWidth {
+  state {
+    line: counter 0..9 = 4
+  }
+
+  loop {
+    show("8.-0", line:1)
+  }
+}
+)mkpro");
+  require(dynamic_line_width.implemented,
+          "native compiler should lower explicitly one-wide dynamic line reports");
+  require(dynamic_line_width.diagnostics.empty(),
+          "explicit-width dynamic line report compile should not report diagnostics");
+  require(has_optimization(dynamic_line_width, "screen-dynamic-line-report-lowering"),
+          "explicit-width dynamic line report should report the TS strategy name");
 }
 
 } // namespace mkpro::tests
