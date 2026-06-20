@@ -27712,6 +27712,128 @@ bool source_may_use_bit_mask_helper(const std::string& source) {
   return std::regex_search(source, bit_call) || std::regex_search(source, membership);
 }
 
+bool statement_has_comparison_guarded_update(const std::map<std::string, std::string>& state_types,
+                                             const V2Statement& statement);
+
+bool action_has_comparison_guarded_update(const std::map<std::string, std::string>& state_types,
+                                          const V2StatementPtr& action) {
+  return action != nullptr && statement_has_comparison_guarded_update(state_types, *action);
+}
+
+bool statements_have_comparison_guarded_update(
+    const std::map<std::string, std::string>& state_types,
+    const std::vector<V2Statement>& statements) {
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    if (comparison_guarded_update_correction_run(state_types, statements, index).has_value())
+      return true;
+    if (statement_has_comparison_guarded_update(state_types, statements.at(index)))
+      return true;
+  }
+  return false;
+}
+
+bool statement_has_comparison_guarded_update(const std::map<std::string, std::string>& state_types,
+                                             const V2Statement& statement) {
+  if (statement.kind == "v2_if") {
+    try {
+      LoweringContext context;
+      context.comparison_guarded_update_selectors = true;
+      const std::optional<ArithmeticIfCandidate> candidate =
+          build_arithmetic_if_candidate(context, statement);
+      if (candidate.has_value() && candidate->name == "arithmetic-if-comparison-update")
+        return true;
+    } catch (const std::exception&) {
+    }
+  }
+
+  if (statements_have_comparison_guarded_update(state_types, statement.body) ||
+      statements_have_comparison_guarded_update(state_types, statement.then_body) ||
+      statements_have_comparison_guarded_update(state_types, statement.else_body)) {
+    return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (action_has_comparison_guarded_update(state_types, match_case.action))
+      return true;
+  }
+  return action_has_comparison_guarded_update(state_types, statement.otherwise);
+}
+
+bool source_has_comparison_guarded_update(const std::string& source) {
+  try {
+    ProgramAst ast = parse_program(source);
+    if (!ast.v2.has_value())
+      return false;
+    const std::map<std::string, std::string> state_types = v2_state_types_by_name(*ast.v2);
+    if (statements_have_comparison_guarded_update(state_types, ast.v2->body))
+      return true;
+    for (const V2Rule& rule : ast.v2->rules) {
+      if (statements_have_comparison_guarded_update(state_types, rule.body))
+        return true;
+    }
+  } catch (const std::exception&) {
+    return false;
+  }
+  return false;
+}
+
+std::string normalize_constant_literal(std::string raw) {
+  raw = trim_ascii(std::move(raw));
+  try {
+    std::size_t parsed = 0;
+    const long double value = std::stold(raw, &parsed);
+    if (parsed == raw.size() && std::isfinite(static_cast<double>(value)))
+      return format_number_literal(static_cast<double>(value));
+  } catch (const std::exception&) {
+  }
+  return raw;
+}
+
+std::optional<std::string> executable_setup_number_value(const std::string& value) {
+  std::string normalized = trim_ascii(value);
+  std::replace(normalized.begin(), normalized.end(), ',', '.');
+  static const std::regex setup_number(R"(^-?\d+(?:\.\d+)?(?:E-?\d{1,2})?$)",
+                                       std::regex_constants::icase);
+  if (!std::regex_match(normalized, setup_number))
+    return std::nullopt;
+  return normalized;
+}
+
+std::optional<std::string> demotable_indirect_flow_preload_value(const PreloadReport& preload) {
+  if (preload.counts_against_program)
+    return std::nullopt;
+  const std::string value = normalize_constant_literal(preload.value);
+  static const std::regex formal_hex_address(R"(^[A-F][0-9A-F]$)", std::regex_constants::icase);
+  if (std::regex_match(value, formal_hex_address))
+    return std::nullopt;
+  return executable_setup_number_value(value).has_value() ? std::optional<std::string>{value}
+                                                          : std::nullopt;
+}
+
+std::vector<std::string>
+demotable_indirect_flow_preload_values(const CompileResult& result,
+                                       const std::set<std::string>& suppressed = {}) {
+  constexpr std::size_t kMaxDemotedIndirectFlowValues = 4;
+  std::set<std::string> unique;
+  for (const PreloadReport& preload : result.preloads) {
+    const std::optional<std::string> value = demotable_indirect_flow_preload_value(preload);
+    if (value.has_value() && !suppressed.contains(*value))
+      unique.insert(*value);
+  }
+  std::vector<std::string> values(unique.begin(), unique.end());
+  std::sort(values.begin(), values.end(), [](const std::string& left, const std::string& right) {
+    const int left_cost = number_entry_cost(left);
+    const int right_cost = number_entry_cost(right);
+    if (left_cost != right_cost)
+      return left_cost < right_cost;
+    if (left.size() != right.size())
+      return left.size() < right.size();
+    return left < right;
+  });
+  if (values.size() > kMaxDemotedIndirectFlowValues)
+    values.resize(kMaxDemotedIndirectFlowValues);
+  return values;
+}
+
 CompileResult compile_source(std::string source, const CompileOptions& options) {
   if (has_explicit_lowering_variant(options))
     return compile_source_once(std::move(source), options);
@@ -27735,12 +27857,11 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
 
   std::vector<CandidateSpec> candidates;
   std::set<std::string> candidate_effective_keys{implemented_candidate_key(options)};
-  auto add_candidate = [&](const std::function<void(CompileOptions&)>& configure, std::string name,
-                           std::string detail, CandidateGate gate = CandidateGate::Always) {
+  auto add_configured_candidate = [&](CompileOptions candidate_options, std::string name,
+                                      std::string detail,
+                                      CandidateGate gate = CandidateGate::Always) {
     if (gate == CandidateGate::SizeRescue && !needs_size_rescue)
       return;
-    CompileOptions candidate_options = options;
-    configure(candidate_options);
     const std::string effective_key = implemented_candidate_key(candidate_options);
     if (!candidate_effective_keys.insert(effective_key).second)
       return;
@@ -27750,6 +27871,13 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         .detail = std::move(detail),
         .gate = gate,
     });
+  };
+  auto add_candidate = [&](const std::function<void(CompileOptions&)>& configure, std::string name,
+                           std::string detail, CandidateGate gate = CandidateGate::Always) {
+    CompileOptions candidate_options = options;
+    configure(candidate_options);
+    add_configured_candidate(std::move(candidate_options), std::move(name), std::move(detail),
+                             gate);
   };
 
   add_candidate(
@@ -28387,6 +28515,176 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       "runtime-indirect-call-flow-aggressive",
       "Tried runtime indirect-call selector rewrites with the aggressive call threshold",
       CandidateGate::SizeRescue);
+
+  if (needs_size_rescue) {
+    std::vector<CompileOptions> demote_bases;
+    std::set<std::string> demote_base_keys;
+    auto add_demote_base = [&](const std::function<void(CompileOptions&)>& configure) {
+      CompileOptions base_options = options;
+      configure(base_options);
+      const std::string key = reclaim_base_key(base_options);
+      if (!demote_base_keys.insert(key).second)
+        return;
+      demote_bases.push_back(std::move(base_options));
+    };
+    add_demote_base([](CompileOptions&) {});
+    add_demote_base(
+        [](CompileOptions& base_options) { base_options.indirect_underflow_decrement = true; });
+    add_demote_base(
+        [](CompileOptions& base_options) { base_options.dual_use_constant_indirect_flow = true; });
+    add_demote_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+    });
+    add_demote_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.order_procs_by_call_count = true;
+    });
+    add_demote_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+      base_options.order_procs_by_call_count = true;
+    });
+    add_demote_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.proc_layout_strategy = "size-asc";
+    });
+    add_demote_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+      base_options.proc_layout_strategy = "size-asc";
+    });
+    add_demote_base([](CompileOptions& base_options) {
+      base_options.indirect_underflow_decrement = true;
+      base_options.dual_use_constant_indirect_flow = true;
+    });
+    add_demote_base([](CompileOptions& base_options) {
+      base_options.share_random_cell = true;
+      base_options.hoist_shared_helpers = true;
+    });
+    add_demote_base(
+        [](CompileOptions& base_options) { base_options.free_residual_dispatch_scratch = true; });
+    add_demote_base(
+        [](CompileOptions& base_options) { base_options.shared_bit_mask_helper_calls = true; });
+    add_demote_base([](CompileOptions& base_options) {
+      base_options.shared_bit_mask_helper_calls = true;
+      base_options.hoist_shared_helpers = true;
+    });
+    add_demote_base([](CompileOptions& base_options) {
+      base_options.setup_only_counted_loop_init = true;
+      base_options.hoist_procs = true;
+      base_options.aggressive_indirect_call = true;
+    });
+    if (source_has_comparison_guarded_update(source)) {
+      add_demote_base([](CompileOptions& base_options) {
+        base_options.comparison_guarded_update_selectors = true;
+      });
+      add_demote_base([](CompileOptions& base_options) {
+        base_options.comparison_guarded_update_selectors = true;
+        base_options.invert_branch_order = true;
+      });
+    }
+    if (source_may_contain_error_trap(source)) {
+      add_demote_base([](CompileOptions& base_options) {
+        base_options.domain_error_guards = true;
+        base_options.unroll_counted_loops = true;
+      });
+      add_demote_base([](CompileOptions& base_options) {
+        base_options.domain_error_guards = true;
+        base_options.unroll_counted_loops = true;
+        base_options.setup_only_counted_loop_init = true;
+      });
+      add_demote_base([](CompileOptions& base_options) {
+        base_options.domain_error_guards = true;
+        base_options.setup_only_counted_loop_init = true;
+        base_options.stack_resident_temps = true;
+      });
+      add_demote_base([](CompileOptions& base_options) {
+        base_options.domain_error_guards = true;
+        base_options.setup_only_counted_loop_init = true;
+        base_options.show_read_guarded_transfer = true;
+      });
+      add_demote_base([](CompileOptions& base_options) {
+        base_options.domain_error_guards = true;
+        base_options.unroll_counted_loops = true;
+        base_options.order_procs_by_call_count = true;
+      });
+      add_demote_base([](CompileOptions& base_options) {
+        base_options.domain_error_guards = true;
+        base_options.unroll_counted_loops = true;
+        base_options.setup_only_counted_loop_init = true;
+        base_options.order_procs_by_call_count = true;
+      });
+      add_demote_base([](CompileOptions& base_options) {
+        base_options.domain_error_guards = true;
+        base_options.unroll_counted_loops = true;
+        base_options.proc_layout_strategy = "size-asc";
+      });
+      add_demote_base([](CompileOptions& base_options) {
+        base_options.domain_error_guards = true;
+        base_options.unroll_counted_loops = true;
+        base_options.setup_only_counted_loop_init = true;
+        base_options.proc_layout_strategy = "size-asc";
+      });
+    }
+
+    std::set<std::string> tried_demotions;
+    auto add_demote_candidate = [&](const CompileOptions& base_options,
+                                    const std::vector<std::string>& values, std::string name,
+                                    std::string detail) {
+      std::string key = reclaim_base_key(base_options) + "|demote:" + join_strings(values, ",");
+      if (!tried_demotions.insert(key).second)
+        return;
+      CompileOptions candidate_options = base_options;
+      candidate_options.suppress_constant_preloads.insert(values.begin(), values.end());
+      candidates.push_back(CandidateSpec{
+          .options = std::move(candidate_options),
+          .name = std::move(name),
+          .detail = std::move(detail),
+          .gate = CandidateGate::Always,
+      });
+    };
+    auto compile_demote_probe =
+        [&](const CompileOptions& base_options) -> std::optional<CompileResult> {
+      try {
+        CompileOptions probe_options = base_options;
+        probe_options.analysis = true;
+        return compile_source_once(source, probe_options);
+      } catch (const std::exception&) {
+        return std::nullopt;
+      }
+    };
+
+    for (const CompileOptions& base_options : demote_bases) {
+      const std::optional<CompileResult> probe = compile_demote_probe(base_options);
+      if (!probe.has_value())
+        continue;
+      for (const std::string& value : demotable_indirect_flow_preload_values(*probe)) {
+        add_demote_candidate(base_options, {value}, "demote-constant-indirect-flow",
+                             "Inlined single-use constant " + value +
+                                 " to free a register for post-layout indirect flow");
+      }
+
+      std::vector<std::string> chain_values;
+      std::set<std::string> suppressed;
+      for (int depth = 0; depth < 6; ++depth) {
+        CompileOptions chain_probe_options = base_options;
+        chain_probe_options.suppress_constant_preloads.insert(suppressed.begin(), suppressed.end());
+        const std::optional<CompileResult> chain_probe = compile_demote_probe(chain_probe_options);
+        if (!chain_probe.has_value())
+          break;
+        const std::vector<std::string> next_values =
+            demotable_indirect_flow_preload_values(*chain_probe, suppressed);
+        if (next_values.empty())
+          break;
+        chain_values.push_back(next_values.front());
+        suppressed.insert(next_values.front());
+        add_demote_candidate(base_options, chain_values, "demote-constant-chain-indirect-flow",
+                             "Inlined constants " + join_strings(chain_values, ", ") +
+                                 " to keep a register free for post-layout indirect flow");
+      }
+    }
+  }
 
   std::set<std::string> tried_reclaims;
   auto add_reclaim_candidate = [&](const CompileOptions& base_options) {
