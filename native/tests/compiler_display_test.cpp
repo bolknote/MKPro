@@ -190,6 +190,41 @@ program LiteralAlphabetScreen {
                                step.comment->find("first digit reuse") != std::string::npos;
                       }),
           "setup display literal preload should use first-digit reuse instructions");
+
+  const CompileResult variable_mask = compile_source(R"mkpro(
+program VariableLeadingSpaceLow {
+  state {
+    room: counter 1..20 = 1
+    arrows: counter 0..5 = 5
+    clue: counter 0..9 = 3
+  }
+
+  loop {
+    show(room, " ", arrows, " ", clue)
+  }
+}
+)mkpro");
+  require(variable_mask.implemented, "native compiler should lower variable-leading display masks");
+  require(variable_mask.diagnostics.empty(),
+          "variable-leading display mask compile should not report diagnostics");
+  require(has_optimization(variable_mask, "display-byte-variable-mask-lowering"),
+          "variable-leading display mask should report the TS strategy name");
+  bool saw_low_mask = false;
+  bool saw_high_mask = false;
+  for (const PreloadReport& preload : variable_mask.preloads) {
+    saw_low_mask = saw_low_mask || preload.value == "8_0_0";
+    saw_high_mask = saw_high_mask || preload.value == "80_0_0";
+  }
+  require(saw_low_mask, "variable-leading display should preload the low-width mask");
+  require(saw_high_mask, "variable-leading display should preload the high-width mask");
+  require(std::any_of(
+              variable_mask.steps.begin(), variable_mask.steps.end(),
+              [](const ResolvedStep& step) { return step.comment == "display mask high leader"; }),
+          "variable-leading display should emit the high-width leader branch");
+  require(std::any_of(
+              variable_mask.steps.begin(), variable_mask.steps.end(),
+              [](const ResolvedStep& step) { return step.comment == "display mask low branch"; }),
+          "variable-leading display should emit the width dispatch branch");
 }
 
 } // namespace mkpro::tests

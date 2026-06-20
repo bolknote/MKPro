@@ -20,6 +20,7 @@ struct DisplayEmitApi {
   std::function<bool(const DisplayItem&, std::string)> lower_display_item_to_x;
   std::function<void(const std::string&, int)> emit_display_scale;
   std::function<bool(const std::string&)> ensure_hidden_register;
+  std::function<std::optional<std::string>(const std::string&)> ensure_preloaded_number;
   std::function<std::string(const std::string&)> register_text_for;
 };
 
@@ -49,6 +50,10 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
 bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                                const std::vector<DisplayItem>& items,
                                                int source_line);
+bool lower_variable_leading_display_mask_statement(DisplayEmitApi& api,
+                                                   LoweringContext& context,
+                                                   const std::vector<DisplayItem>& items,
+                                                   int source_line);
 bool lower_fixed_display_mask_statement(DisplayEmitApi& api, LoweringContext& context,
                                         const std::vector<DisplayItem>& items,
                                         int source_line);

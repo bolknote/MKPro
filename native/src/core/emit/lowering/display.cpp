@@ -125,6 +125,19 @@ struct FixedDisplayMaskTemplate {
   int width = 1;
 };
 
+struct VariableLeadingDisplayMaskBranch {
+  std::vector<DisplayMaskBodyField> body_fields;
+  std::string mask;
+  int width = 1;
+};
+
+struct VariableLeadingDisplayMaskTemplate {
+  const DisplayItem* source = nullptr;
+  int split = 10;
+  VariableLeadingDisplayMaskBranch low;
+  VariableLeadingDisplayMaskBranch high;
+};
+
 struct MantissaExponentTemplate {
   const DisplayItem* leader = nullptr;
   const DisplayItem* score = nullptr;
@@ -273,24 +286,117 @@ std::optional<FixedDisplayMaskTemplate> plan_fixed_display_mask_template(
   return result;
 }
 
+std::optional<VariableLeadingDisplayMaskTemplate> plan_variable_leading_display_mask_template(
+    const LoweringContext& context, const std::vector<DisplayItem>& items) {
+  if (items.size() < 2U)
+    return std::nullopt;
+  const DisplayItem& first = items.front();
+  if (first.kind != "source" || first.expr.has_value())
+    return std::nullopt;
+
+  const std::optional<DecimalDisplayField> source =
+      measure_decimal_display_field(context, first);
+  const std::optional<std::pair<int, int>> bounds =
+      decimal_display_field_bounds(context, first.name);
+  if (!source.has_value() || source->width != 2 || !bounds.has_value() ||
+      bounds->first < 0 || bounds->second < 10 || bounds->second >= 100) {
+    return std::nullopt;
+  }
+
+  VariableLeadingDisplayMaskTemplate result;
+  result.source = &first;
+  result.low.body_fields.push_back(DisplayMaskBodyField{
+      .literal = true,
+      .value = "9",
+      .width = 1,
+  });
+  std::vector<int> low_mask_cells{8};
+  std::vector<int> high_mask_cells{8, 0};
+  int low_width = 1;
+  int high_width = 2;
+  bool has_video_literal = false;
+
+  for (std::size_t index = 1; index < items.size(); ++index) {
+    const DisplayItem& item = items.at(index);
+    if (item.kind == "source") {
+      if (item.expr.has_value())
+        return std::nullopt;
+      const std::optional<DecimalDisplayField> field =
+          measure_decimal_display_field(context, item);
+      if (!field.has_value())
+        return std::nullopt;
+      const DisplayMaskBodyField body_field{
+          .item = &item,
+          .literal = false,
+          .width = field->width,
+      };
+      result.low.body_fields.push_back(body_field);
+      result.high.body_fields.push_back(body_field);
+      for (int digit = 0; digit < field->width; ++digit) {
+        low_mask_cells.push_back(0);
+        high_mask_cells.push_back(0);
+      }
+      low_width += field->width;
+      high_width += field->width;
+      if (high_width > 8)
+        return std::nullopt;
+      continue;
+    }
+
+    if (item.kind != "literal")
+      return std::nullopt;
+    const std::optional<std::vector<int>> literal_cells =
+        display_literal_mantissa_cells(item.text);
+    if (!literal_cells.has_value())
+      return std::nullopt;
+    if (std::any_of(literal_cells->begin(), literal_cells->end(),
+                    [](int cell) { return cell > 9; })) {
+      has_video_literal = true;
+    }
+    if (literal_cells->empty())
+      continue;
+    const DisplayMaskBodyField gap_field{
+        .literal = true,
+        .value = "0",
+        .width = static_cast<int>(literal_cells->size()),
+    };
+    result.low.body_fields.push_back(gap_field);
+    result.high.body_fields.push_back(gap_field);
+    low_mask_cells.insert(low_mask_cells.end(), literal_cells->begin(), literal_cells->end());
+    high_mask_cells.insert(high_mask_cells.end(), literal_cells->begin(), literal_cells->end());
+    low_width += static_cast<int>(literal_cells->size());
+    high_width += static_cast<int>(literal_cells->size());
+    if (high_width > 8)
+      return std::nullopt;
+  }
+
+  if (!has_video_literal || low_width < 2 || high_width > 8)
+    return std::nullopt;
+  result.low.mask = display_cells_literal(low_mask_cells);
+  result.low.width = low_width;
+  result.high.mask = display_cells_literal(high_mask_cells);
+  result.high.width = high_width;
+  return result;
+}
+
+bool emit_display_mask_field_value(DisplayEmitApi& api, const DisplayMaskBodyField& field,
+                                   std::string comment) {
+  if (field.literal) {
+    api.emitter.emit_number(field.value);
+    if (!api.emitter.items.empty())
+      api.emitter.items.back().comment = std::move(comment);
+    return true;
+  }
+  return api.lower_display_item_to_x(*field.item, std::move(comment));
+}
+
 bool lower_display_mask_body_fields(DisplayEmitApi& api,
                                     const std::vector<DisplayMaskBodyField>& fields,
                                     int source_line) {
   if (fields.empty())
     return false;
 
-  const auto emit_field_value = [&](const DisplayMaskBodyField& field,
-                                    std::string comment) -> bool {
-    if (field.literal) {
-      api.emitter.emit_number(field.value);
-      if (!api.emitter.items.empty())
-        api.emitter.items.back().comment = std::move(comment);
-      return true;
-    }
-    return api.lower_display_item_to_x(*field.item, std::move(comment));
-  };
-
-  if (!emit_field_value(fields.front(), "display mask numeric anchor"))
+  if (!emit_display_mask_field_value(api, fields.front(), "display mask numeric anchor"))
     return false;
   for (std::size_t index = 1; index < fields.size(); ++index) {
     const DisplayMaskBodyField& field = fields.at(index);
@@ -298,11 +404,78 @@ bool lower_display_mask_body_fields(DisplayEmitApi& api,
     api.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
     if (field.literal && field.value == "0")
       continue;
-    if (!emit_field_value(field, "display source"))
+    if (!emit_display_mask_field_value(api, field, "display source"))
       return false;
     api.emitter.emit_op(0x10, "+", "packed display field append", source_line);
   }
   return true;
+}
+
+void emit_mantissa_mask_body_merge(DisplayEmitApi& api, const std::string& mask_register,
+                                   const std::string& scratch, int source_line,
+                                   const std::string& comment_prefix) {
+  api.emit_recall(mask_register);
+  api.emitter.items.back().comment = comment_prefix + " literal mask";
+  api.emitter.emit_op(0x38, "К ∨", "display mask body merge", source_line);
+  api.emit_store(scratch, comment_prefix + " body");
+}
+
+void emit_mantissa_mask_leader_splice(DisplayEmitApi& api, const std::string& scratch, int width,
+                                      int source_line, const std::string& comment_prefix) {
+  api.emit_recall(scratch);
+  api.emitter.items.back().comment = comment_prefix + " body";
+  api.emitter.emit_op(0x14, "<->", comment_prefix + " leader merge", source_line);
+  api.emitter.emit_op(0x54, "К НОП", comment_prefix + " leader preserve", source_line, true);
+  api.emitter.emit_op(0x0c, "ВП", comment_prefix + " leader restore", source_line);
+  emit_display_exponent(api.emitter, width - 1, source_line, comment_prefix + " exponent");
+  api.emitter.emit_op(0x50, "С/П", "show display mask", source_line);
+}
+
+void emit_variable_leading_tail_digit(DisplayEmitApi& api, const DisplayItem& source, int split,
+                                      int source_line) {
+  api.emit_recall(source.name);
+  api.emitter.items.back().comment = "display mask trailing digit";
+  api.emit_display_scale(std::to_string(split), source_line);
+  api.emitter.emit_op(0x13, "/", "display mask trailing digit quotient", source_line);
+  api.emitter.emit_op(0x35, "К {x}", "display mask trailing digit fraction", source_line);
+  api.emit_display_scale(std::to_string(split), source_line);
+  api.emitter.emit_op(0x12, "*", "display mask trailing digit", source_line);
+}
+
+bool emit_variable_leading_high_body(DisplayEmitApi& api,
+                                     const VariableLeadingDisplayMaskTemplate& template_plan,
+                                     const std::string& scratch, int source_line) {
+  emit_variable_leading_tail_digit(api, *template_plan.source, template_plan.split, source_line);
+  api.emit_store(scratch, "display mask trailing digit");
+
+  api.emitter.emit_number("9");
+  if (!api.emitter.items.empty())
+    api.emitter.items.back().comment = "display mask numeric anchor";
+  api.emit_display_scale(std::to_string(template_plan.split), source_line);
+  api.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
+  api.emit_recall(scratch);
+  api.emitter.items.back().comment = "display mask trailing digit";
+  api.emitter.emit_op(0x10, "+", "packed display field append", source_line);
+
+  for (const DisplayMaskBodyField& field : template_plan.high.body_fields) {
+    api.emit_display_scale(std::to_string(decimal_power10(field.width)), source_line);
+    api.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
+    if (field.literal && field.value == "0")
+      continue;
+    if (!emit_display_mask_field_value(api, field, "display source"))
+      return false;
+    api.emitter.emit_op(0x10, "+", "packed display field append", source_line);
+  }
+  return true;
+}
+
+void emit_variable_leading_high_leader(DisplayEmitApi& api, const DisplayItem& source, int split,
+                                       int source_line) {
+  api.emit_recall(source.name);
+  api.emitter.items.back().comment = "display mask high leader";
+  api.emit_display_scale(std::to_string(split), source_line);
+  api.emitter.emit_op(0x13, "/", "display mask high leader quotient", source_line);
+  api.emitter.emit_op(0x34, "К [x]", "display mask high leader", source_line);
 }
 
 bool looks_like_mantissa_exponent_display_template(const std::vector<DisplayItem>& items) {
@@ -791,6 +964,58 @@ bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringCont
   context.optimizations.push_back(OptimizationReport{
       .name = "display-byte-x2-lowering",
       .detail = "Built literal-separated show(...) through a mantissa/exponent video template.",
+  });
+  return true;
+}
+
+bool lower_variable_leading_display_mask_statement(DisplayEmitApi& api,
+                                                   LoweringContext& context,
+                                                   const std::vector<DisplayItem>& items,
+                                                   int source_line) {
+  const std::optional<VariableLeadingDisplayMaskTemplate> template_plan =
+      plan_variable_leading_display_mask_template(context, items);
+  if (!template_plan.has_value())
+    return false;
+
+  const std::optional<std::string> low_mask = api.ensure_preloaded_number(template_plan->low.mask);
+  const std::optional<std::string> high_mask =
+      api.ensure_preloaded_number(template_plan->high.mask);
+  if (!low_mask.has_value() || !high_mask.has_value())
+    return false;
+
+  const std::string scratch = "__display_mask_body_" + std::to_string(source_line);
+  if (!api.ensure_hidden_register(scratch))
+    return false;
+
+  const std::string low_label = api.emitter.fresh_label("display_mask_low");
+  const std::string end_label = api.emitter.fresh_label("display_mask_end");
+  api.emit_recall(template_plan->source->name);
+  api.emitter.items.back().comment = "display mask leading field";
+  api.emit_display_scale(std::to_string(template_plan->split), source_line);
+  api.emitter.emit_op(0x11, "-", "display mask leading width test", source_line);
+  api.emitter.emit_jump(0x59, "F x>=0", low_label, "display mask low branch", source_line);
+
+  if (!emit_variable_leading_high_body(api, *template_plan, scratch, source_line))
+    return false;
+  emit_mantissa_mask_body_merge(api, *high_mask, scratch, source_line, "display mask high");
+  emit_variable_leading_high_leader(api, *template_plan->source, template_plan->split,
+                                    source_line);
+  emit_mantissa_mask_leader_splice(api, scratch, template_plan->high.width, source_line,
+                                   "display mask high");
+  api.emitter.emit_jump(0x51, "БП", end_label, "display mask end", source_line);
+
+  api.emitter.emit_label(low_label, {.hidden = true});
+  if (!lower_display_mask_body_fields(api, template_plan->low.body_fields, source_line))
+    return false;
+  emit_mantissa_mask_body_merge(api, *low_mask, scratch, source_line, "display mask");
+  api.emit_recall(template_plan->source->name);
+  api.emitter.items.back().comment = "display mask leader";
+  emit_mantissa_mask_leader_splice(api, scratch, template_plan->low.width, source_line,
+                                   "display mask");
+  api.emitter.emit_label(end_label, {.hidden = true});
+  context.optimizations.push_back(OptimizationReport{
+      .name = "display-byte-variable-mask-lowering",
+      .detail = "Built variable-width literal-separated show(...) through calculator video masks.",
   });
   return true;
 }

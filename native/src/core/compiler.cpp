@@ -10318,6 +10318,15 @@ core::emit::DisplayEmitApi display_emit_api(LoweringContext& context) {
           },
       .ensure_hidden_register =
           [&](const std::string& name) { return ensure_hidden_register(context, name); },
+      .ensure_preloaded_number = [&](const std::string& value) -> std::optional<std::string> {
+        if (!reserve_preloaded_number(context, value))
+          return std::nullopt;
+        const std::string key = normalize_preload_key(value);
+        const auto preload_it = context.preloaded_numbers.find(key);
+        if (preload_it == context.preloaded_numbers.end())
+          return std::nullopt;
+        return preload_it->second;
+      },
       .register_text_for =
           [&](const std::string& name) { return register_text_for(context, name); },
   };
@@ -10610,6 +10619,10 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
 
   if (core::emit::lower_mantissa_exponent_display_statement(display_api, context, *statement.items,
                                                             statement.line))
+    return true;
+
+  if (core::emit::lower_variable_leading_display_mask_statement(display_api, context,
+                                                                *statement.items, statement.line))
     return true;
 
   if (core::emit::lower_formatted_coord_report_display_statement(display_api, context,
