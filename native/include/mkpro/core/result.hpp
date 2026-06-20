@@ -132,6 +132,7 @@ struct CompileOptions {
   std::map<std::string, std::string> preloaded_constant_registers;
   std::set<std::string> suppress_constant_preloads;
   std::vector<FractionalConstantSelectorPlan> fractional_constant_selectors;
+  std::vector<std::string> force_fractional_constant_selector_preloads;
   std::vector<std::string> pack_counter_stripe_names;
   std::vector<RegisterShare> forced_register_shares;
 };

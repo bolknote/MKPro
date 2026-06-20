@@ -7042,6 +7042,20 @@ bool fractional_selector_needs_recovery(const std::string& value,
          normalize_number_key(natural->first) != normalize_number_key(selector_value);
 }
 
+std::vector<std::string>
+unique_normalized_fractional_selector_values(const std::vector<std::string>& values) {
+  std::vector<std::string> result;
+  std::set<std::string> seen;
+  for (const std::string& value : values) {
+    const std::string normalized = normalize_number_key(value);
+    if (!fractional_selector_candidate_value(normalized))
+      continue;
+    if (seen.insert(normalized).second)
+      result.push_back(normalized);
+  }
+  return result;
+}
+
 void emit_number_or_preload(LoweringContext& context, const std::string& value,
                             std::optional<std::string> comment = std::nullopt,
                             std::optional<int> source_line = std::nullopt) {
@@ -8736,11 +8750,25 @@ std::vector<std::string> collect_preload_constant_values(const V2Program& progra
 bool reserve_preloaded_number(LoweringContext& context, const std::string& value);
 
 void plan_general_constant_preloads(LoweringContext& context, const V2Program& program,
-                                    bool startup_aware) {
-  for (const std::string& value : collect_preload_constant_values(program, startup_aware)) {
+                                    bool startup_aware,
+                                    const std::vector<std::string>& forced_fractional_values = {}) {
+  std::vector<std::string> values =
+      unique_normalized_fractional_selector_values(forced_fractional_values);
+  const std::vector<std::string> ranked_values =
+      collect_preload_constant_values(program, startup_aware);
+  values.insert(values.end(), ranked_values.begin(), ranked_values.end());
+  for (const std::string& value : values) {
     if (context.registers.size() >= 15U)
       return;
-    (void)reserve_preloaded_number(context, value);
+    if (context.suppress_constant_preloads.contains(normalize_number_key(value)))
+      continue;
+    const std::optional<FractionalConstantSelectorPlan> selector =
+        fractional_constant_selector_for_value(context, normalize_number_key(value));
+    const std::optional<std::string> selector_value =
+        selector.has_value()
+            ? fractional_selector_preload_value(normalize_number_key(value), selector->target)
+            : std::nullopt;
+    (void)reserve_preloaded_number(context, selector_value.value_or(value));
   }
 }
 
@@ -24409,7 +24437,12 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     const auto register_it = context.registers.find(name);
     if (register_it == context.registers.end())
       continue;
-    add_preload(register_it->second, value);
+    const std::optional<FractionalConstantSelectorPlan> selector =
+        fractional_constant_selector_for_value(context, value);
+    const std::optional<std::string> selector_value =
+        selector.has_value() ? fractional_selector_preload_value(value, selector->target)
+                             : std::nullopt;
+    add_preload(register_it->second, selector_value.value_or(value));
   }
 
   const std::map<std::string, int> label_addresses = machine_item_label_address_map(items);
@@ -24428,8 +24461,14 @@ planned_preloaded_constant_registers(const LoweringContext& context) {
   std::map<std::string, std::string> registers;
   for (const auto& [value, name] : context.preloaded_numbers) {
     const auto register_it = context.registers.find(name);
-    if (register_it != context.registers.end())
-      registers[register_it->second] = value;
+    if (register_it != context.registers.end()) {
+      const std::optional<FractionalConstantSelectorPlan> selector =
+          fractional_constant_selector_for_value(context, value);
+      const std::optional<std::string> selector_value =
+          selector.has_value() ? fractional_selector_preload_value(value, selector->target)
+                               : std::nullopt;
+      registers[register_it->second] = selector_value.value_or(value);
+    }
   }
   return registers;
 }
@@ -27335,8 +27374,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         index_rules(context, *ast.v2);
         collect_registers(context, *ast.v2);
         apply_forced_register_shares(context, options.forced_register_shares);
-        if (options.general_constant_preloads || options.startup_aware_constant_preloads)
-          plan_general_constant_preloads(context, *ast.v2, options.startup_aware_constant_preloads);
+        if (options.general_constant_preloads || options.startup_aware_constant_preloads ||
+            !options.force_fractional_constant_selector_preloads.empty()) {
+          plan_general_constant_preloads(context, *ast.v2, options.startup_aware_constant_preloads,
+                                         options.force_fractional_constant_selector_preloads);
+        }
         plan_spatial_line_count_preloads(context, *ast.v2);
       }
       if (!has_errors(context.diagnostics)) {
@@ -27558,8 +27600,9 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.hoist_procs || options.order_procs_by_call_count ||
          !options.proc_layout_strategy.empty() || !options.pack_counter_stripe_names.empty() ||
          !options.preloaded_constant_registers.empty() ||
-         !options.suppress_constant_preloads.empty() || options.collect_coalesce_shares ||
-         !options.forced_register_shares.empty();
+         !options.suppress_constant_preloads.empty() ||
+         !options.force_fractional_constant_selector_preloads.empty() ||
+         options.collect_coalesce_shares || !options.forced_register_shares.empty();
 }
 
 int estimated_startup_program_cost(const CompileResult& result) {
@@ -27675,6 +27718,8 @@ std::string implemented_candidate_key(const CompileOptions& options) {
     out << ";suppress_constant=" << value;
   for (const FractionalConstantSelectorPlan& plan : options.fractional_constant_selectors)
     out << ";fractional_selector=" << normalize_number_key(plan.value) << ":" << plan.target;
+  for (const std::string& value : options.force_fractional_constant_selector_preloads)
+    out << ";force_fractional_selector_preload=" << normalize_number_key(value);
   for (const RegisterShare& share : options.forced_register_shares)
     out << ";forced_share=" << share.free_register << ">" << share.keep_register;
   return out.str();
@@ -27834,6 +27879,179 @@ demotable_indirect_flow_preload_values(const CompileResult& result,
   return values;
 }
 
+struct FractionalConstantSelectorSource {
+  std::string value;
+  std::vector<std::string> registers;
+  int use_count = 0;
+};
+
+struct FractionalConstantSelectorPlanWithBenefit {
+  FractionalConstantSelectorPlan plan;
+  int benefit = 0;
+};
+
+struct DirectFlowTargetStats {
+  int count = 0;
+  int stable_without_retarget_count = 0;
+};
+
+std::map<int, DirectFlowTargetStats>
+direct_flow_target_stats(const std::vector<ResolvedStep>& steps) {
+  std::map<int, DirectFlowTargetStats> stats;
+  for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
+    if (!opcode_by_code(steps.at(index).opcode).takes_address)
+      continue;
+    const int target = formal_address_info(steps.at(index + 1U).opcode).actual;
+    if (target < 0 || target > 104) {
+      ++index;
+      continue;
+    }
+    DirectFlowTargetStats& current = stats[target];
+    ++current.count;
+    if (steps.at(index + 1U).address > target)
+      ++current.stable_without_retarget_count;
+    ++index;
+  }
+  return stats;
+}
+
+int direct_flow_target_rank(const std::vector<ResolvedStep>& steps, int target) {
+  int rank = 0;
+  for (std::size_t index = 0; index + 1U < steps.size(); ++index) {
+    if (!opcode_by_code(steps.at(index).opcode).takes_address)
+      continue;
+    if (formal_address_info(steps.at(index + 1U).opcode).actual == target)
+      rank += static_cast<int>(steps.size() - index);
+    ++index;
+  }
+  return rank;
+}
+
+int fractional_constant_recall_count(const std::vector<ResolvedStep>& steps,
+                                     const std::string& register_name, const std::string& value) {
+  const int opcode = 0x60 + register_index(register_name);
+  const std::string comment = "preload const " + value;
+  return static_cast<int>(std::count_if(steps.begin(), steps.end(), [&](const ResolvedStep& step) {
+    return step.opcode == opcode && step.comment.has_value() && *step.comment == comment;
+  }));
+}
+
+std::vector<std::string> stable_constant_selector_probe_registers() {
+  std::vector<std::string> result;
+  const std::vector<int>& order = core::register_order_indices();
+  for (auto it = order.rbegin(); it != order.rend(); ++it) {
+    if (*it >= 7)
+      result.push_back(core::register_name_for_index(*it));
+  }
+  return result;
+}
+
+std::map<std::string, int> runtime_literal_use_counts(const V2Program& program) {
+  std::set<std::string> values;
+  std::map<std::string, int> occurrences;
+  collect_preload_number_literals_from_statements(program.body, values, occurrences);
+  for (const V2Rule& rule : program.rules)
+    collect_preload_number_literals_from_statements(rule.body, values, occurrences);
+  return occurrences;
+}
+
+std::vector<FractionalConstantSelectorSource>
+fractional_constant_selector_sources(const CompileResult& result,
+                                     const V2Program* program = nullptr) {
+  std::map<std::string, FractionalConstantSelectorSource> sources;
+  for (const PreloadReport& preload : result.preloads) {
+    const std::string value = normalize_constant_literal(preload.value);
+    if (!fractional_selector_candidate_value(value))
+      continue;
+    const int recall_count =
+        fractional_constant_recall_count(result.steps, preload.register_name, value);
+    if (recall_count == 0)
+      continue;
+    sources[value] = FractionalConstantSelectorSource{
+        .value = value,
+        .registers = {preload.register_name},
+        .use_count = recall_count,
+    };
+  }
+
+  if (program != nullptr) {
+    const std::map<std::string, int> counts = runtime_literal_use_counts(*program);
+    for (const auto& [value, use_count] : counts) {
+      if (!fractional_selector_candidate_value(value) || sources.contains(value) || use_count == 0)
+        continue;
+      sources[value] = FractionalConstantSelectorSource{
+          .value = value,
+          .registers = stable_constant_selector_probe_registers(),
+          .use_count = use_count,
+      };
+    }
+  }
+
+  std::vector<FractionalConstantSelectorSource> result_sources;
+  result_sources.reserve(sources.size());
+  for (auto& [unused, source] : sources) {
+    (void)unused;
+    result_sources.push_back(std::move(source));
+  }
+  return result_sources;
+}
+
+std::vector<FractionalConstantSelectorPlan>
+discover_fractional_constant_selector_plans(const CompileResult& result,
+                                            const V2Program* program = nullptr) {
+  const std::map<int, DirectFlowTargetStats> target_stats = direct_flow_target_stats(result.steps);
+  if (target_stats.empty())
+    return {};
+
+  std::vector<FractionalConstantSelectorPlanWithBenefit> plans;
+  for (const FractionalConstantSelectorSource& source :
+       fractional_constant_selector_sources(result, program)) {
+    for (const auto& [target, stats] : target_stats) {
+      const std::optional<std::string> selector_value =
+          fractional_selector_preload_value(source.value, target);
+      if (!selector_value.has_value())
+        continue;
+      const bool needs_recovery = fractional_selector_needs_recovery(source.value, *selector_value);
+      const int direct_count = needs_recovery ? stats.count : stats.stable_without_retarget_count;
+      const int recovery_cost = needs_recovery ? source.use_count : 0;
+      const int benefit = direct_count - recovery_cost;
+      if (benefit <= 0)
+        continue;
+      const bool register_matches_target = std::any_of(
+          source.registers.begin(), source.registers.end(), [&](const std::string& reg) {
+            const std::optional<core::IndirectAddressEvaluation> evaluated =
+                core::evaluate_indirect_address(reg, *selector_value,
+                                                core::IndirectOperationKind::Flow);
+            return evaluated.has_value() && evaluated->actual_flow_target.has_value() &&
+                   *evaluated->actual_flow_target == target;
+          });
+      if (!register_matches_target)
+        continue;
+      plans.push_back(FractionalConstantSelectorPlanWithBenefit{
+          .plan = FractionalConstantSelectorPlan{.value = source.value, .target = target},
+          .benefit = benefit,
+      });
+    }
+  }
+
+  std::sort(plans.begin(), plans.end(),
+            [&](const FractionalConstantSelectorPlanWithBenefit& left,
+                const FractionalConstantSelectorPlanWithBenefit& right) {
+              if (left.benefit != right.benefit)
+                return left.benefit > right.benefit;
+              const int left_rank = direct_flow_target_rank(result.steps, left.plan.target);
+              const int right_rank = direct_flow_target_rank(result.steps, right.plan.target);
+              if (left_rank != right_rank)
+                return left_rank > right_rank;
+              return left.plan.value < right.plan.value;
+            });
+  std::vector<FractionalConstantSelectorPlan> result_plans;
+  result_plans.reserve(plans.size());
+  for (const FractionalConstantSelectorPlanWithBenefit& plan : plans)
+    result_plans.push_back(plan.plan);
+  return result_plans;
+}
+
 CompileResult compile_source(std::string source, const CompileOptions& options) {
   if (has_explicit_lowering_variant(options))
     return compile_source_once(std::move(source), options);
@@ -27847,6 +28065,13 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   const bool needs_size_rescue = !best.implemented || best.steps.size() > rescue_threshold;
   const bool allow_aggressive_post_layout =
       needs_size_rescue || source_has_reference_declaration(source);
+  std::optional<V2Program> selector_probe_program;
+  try {
+    ProgramAst ast = parse_program(source);
+    if (ast.v2.has_value())
+      selector_probe_program = *ast.v2;
+  } catch (const std::exception&) {
+  }
 
   struct CandidateSpec {
     CompileOptions options;
@@ -27879,6 +28104,41 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     add_configured_candidate(std::move(candidate_options), std::move(name), std::move(detail),
                              gate);
   };
+  auto add_fractional_selector_candidates_for_base =
+      [&](const CompileOptions& base_options, std::set<std::string>& tried, std::string name,
+          const std::function<std::string(const FractionalConstantSelectorPlan&)>& detail,
+          std::size_t limit = 12U) {
+        CompileResult probe;
+        try {
+          CompileOptions probe_options = base_options;
+          probe_options.analysis = true;
+          probe = compile_source_once(source, probe_options);
+        } catch (const std::exception&) {
+          return;
+        }
+
+        std::vector<FractionalConstantSelectorPlan> plans =
+            discover_fractional_constant_selector_plans(
+                probe, selector_probe_program.has_value() ? &*selector_probe_program : nullptr);
+        if (plans.size() > limit)
+          plans.resize(limit);
+        for (const FractionalConstantSelectorPlan& plan : plans) {
+          const std::string key = implemented_candidate_key(base_options) +
+                                  "|fractional:" + normalize_number_key(plan.value) + ":" +
+                                  std::to_string(plan.target);
+          if (!tried.insert(key).second)
+            continue;
+          CompileOptions candidate_options = base_options;
+          candidate_options.dual_use_constant_indirect_flow = true;
+          candidate_options.fractional_constant_selectors = {plan};
+          std::vector<std::string> forced =
+              candidate_options.force_fractional_constant_selector_preloads;
+          forced.push_back(plan.value);
+          candidate_options.force_fractional_constant_selector_preloads =
+              unique_normalized_fractional_selector_values(forced);
+          add_configured_candidate(std::move(candidate_options), name, detail(plan));
+        }
+      };
 
   add_candidate(
       [](CompileOptions& candidate_options) {
@@ -28517,6 +28777,55 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       CandidateGate::SizeRescue);
 
   if (needs_size_rescue) {
+    std::set<std::string> tried_fractional_selectors;
+    std::vector<CompileOptions> fractional_bases;
+    auto add_fractional_base = [&](const std::function<void(CompileOptions&)>& configure) {
+      CompileOptions base_options = options;
+      configure(base_options);
+      fractional_bases.push_back(std::move(base_options));
+    };
+    add_fractional_base([](CompileOptions&) {});
+    add_fractional_base(
+        [](CompileOptions& base_options) { base_options.dual_use_constant_indirect_flow = true; });
+    add_fractional_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+    });
+    add_fractional_base(
+        [](CompileOptions& base_options) { base_options.conditional_branch_trampoline = true; });
+    add_fractional_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.conditional_branch_trampoline = true;
+    });
+    add_fractional_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+      base_options.conditional_branch_trampoline = true;
+    });
+    add_fractional_base(
+        [](CompileOptions& base_options) { base_options.proc_layout_strategy = "reverse"; });
+    add_fractional_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+      base_options.proc_layout_strategy = "reverse";
+    });
+    add_fractional_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+      base_options.conditional_branch_trampoline = true;
+      base_options.proc_layout_strategy = "reverse";
+    });
+    for (const CompileOptions& base_options : fractional_bases) {
+      add_fractional_selector_candidates_for_base(
+          base_options, tried_fractional_selectors, "fractional-constant-selector",
+          [](const FractionalConstantSelectorPlan& plan) {
+            return "Packed direct-flow target " + std::to_string(plan.target) +
+                   " into fractional constant " + plan.value;
+          });
+    }
+  }
+
+  if (needs_size_rescue) {
     std::vector<CompileOptions> demote_bases;
     std::set<std::string> demote_base_keys;
     auto add_demote_base = [&](const std::function<void(CompileOptions&)>& configure) {
@@ -28655,6 +28964,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       }
     };
 
+    std::set<std::string> tried_demoted_fractional_selectors;
     for (const CompileOptions& base_options : demote_bases) {
       const std::optional<CompileResult> probe = compile_demote_probe(base_options);
       if (!probe.has_value())
@@ -28663,6 +28973,18 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         add_demote_candidate(base_options, {value}, "demote-constant-indirect-flow",
                              "Inlined single-use constant " + value +
                                  " to free a register for post-layout indirect flow");
+        if (base_options.dual_use_constant_indirect_flow) {
+          CompileOptions demoted_base = base_options;
+          demoted_base.suppress_constant_preloads.insert(value);
+          add_fractional_selector_candidates_for_base(
+              demoted_base, tried_demoted_fractional_selectors,
+              "demote-fractional-constant-selector",
+              [value](const FractionalConstantSelectorPlan& plan) {
+                return "Inlined single-use constant " + value + " and packed direct-flow target " +
+                       std::to_string(plan.target) + " into fractional constant " + plan.value;
+              },
+              4U);
+        }
       }
 
       std::vector<std::string> chain_values;

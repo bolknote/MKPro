@@ -4239,6 +4239,30 @@ program NaturalFractionalSelectorPreload {
                            "natural-fractional-constant-selector-use"),
           "natural fractional selector use should report the TS optimization name");
 
+  CompileOptions forced_fractional_selector_options;
+  forced_fractional_selector_options.analysis = true;
+  forced_fractional_selector_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.123456", .target = 36});
+  forced_fractional_selector_options.force_fractional_constant_selector_preloads.push_back(
+      "0.123456");
+  const CompileResult forced_fractional_selector_preload =
+      compile_source(R"mkpro(
+program ForcedFractionalSelectorPreload {
+  loop {
+    halt(0.123456)
+  }
+}
+)mkpro",
+                     forced_fractional_selector_options);
+  require(forced_fractional_selector_preload.implemented,
+          "native compiler should lower forced fractional selector preloads");
+  require(std::any_of(forced_fractional_selector_preload.preloads.begin(),
+                      forced_fractional_selector_preload.preloads.end(),
+                      [](const PreloadReport& preload) { return preload.value == "36.123456"; }),
+          "forced fractional selector preload should report the selector carrier value");
+  require(has_optimization(forced_fractional_selector_preload, "fractional-constant-selector-use"),
+          "forced fractional selector preload should recover the source constant");
+
   const CompileResult known_zero_reuse = compile_source(R"mkpro(
 program KnownZeroReuse {
   state {
