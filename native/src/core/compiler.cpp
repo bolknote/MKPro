@@ -1060,6 +1060,24 @@ std::optional<std::string> x_param_value_scratch_name(const LoweringContext& con
   return std::nullopt;
 }
 
+bool is_x_param_value_function_call(const LoweringContext& context, const Expression& expression) {
+  if (!context.x_param_value_functions || expression.kind != "call")
+    return false;
+  const auto rule_it = context.rules.find(expression.callee);
+  return rule_it != context.rules.end() &&
+         match_x_param_value_function(*rule_it->second).has_value();
+}
+
+bool can_reuse_x_param_value_call_temp(const LoweringContext& context,
+                                       const Expression& expression) {
+  return expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
+         expression.right != nullptr &&
+         is_x_param_value_function_call(context, *expression.left) &&
+         expression.right->kind == "call" &&
+         !is_x_param_value_function_call(context, *expression.right) &&
+         x_param_value_scratch_name(context).has_value();
+}
+
 void collect_expression_calls(const Expression& expression, std::vector<const Expression*>& calls) {
   if (expression.kind == "call")
     calls.push_back(&expression);
@@ -4764,7 +4782,8 @@ void collect_locals_from_expression_excluding(LoweringContext& context,
   }
   if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
       expression.right != nullptr && expression.left->kind == "call" &&
-      expression.right->kind == "call") {
+      expression.right->kind == "call" &&
+      !can_reuse_x_param_value_call_temp(context, expression)) {
     add_register_variable(collection, "__mkpro_call_1");
   }
   if (expression.kind == "identifier") {
@@ -10271,6 +10290,24 @@ bool lower_dungeon_match(LoweringContext& context, const V2Statement& statement)
 }
 
 bool lower_binary_to_x(LoweringContext& context, const Expression& expression) {
+  if (can_reuse_x_param_value_call_temp(context, expression)) {
+    const std::optional<std::string> scratch = x_param_value_scratch_name(context);
+    if (!scratch.has_value() || expression.left == nullptr || expression.right == nullptr)
+      return false;
+    if (!lower_call_to_x(context, *expression.left))
+      return false;
+    if (!lower_call_to_x(context, *expression.right))
+      return false;
+    emit_recall(context, *scratch);
+    context.emitter.emit_op(0x10, "+", "expr +");
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "x-param-value-call-temp-reuse",
+        .detail = "Hoisted 1 nested X-parameter value function call through " + *scratch + ".",
+    });
+    return true;
+  }
   auto expr_api = expression_emit_api(context);
   return core::emit::lower_binary_expression_to_x(expr_api, context, expression);
 }

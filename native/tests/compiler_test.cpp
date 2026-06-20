@@ -803,6 +803,47 @@ program XParamValueStoreElision {
   require(has_optimization(x_param_value_store_elision, "x-param-value-function-call"),
           "store elision should reuse the X-param value-function call lowering");
 
+  const CompileResult x_param_value_call_temp_reuse = compile_source(R"mkpro(
+program XParamValueCallTempReuse {
+  state {
+    wrapped: packed = 0
+    adjusted: packed = 0
+    value: packed = 0
+  }
+
+  fn wrap(value) {
+    value = 4 * frac(int(value) / 4)
+    if value <= 0 {
+      return value + 4
+    }
+    return value
+  }
+
+  fn plus_one(input) {
+    return input + 1
+  }
+
+  loop {
+    adjusted = read()
+    wrapped = wrap(7) + plus_one(adjusted)
+    halt(wrapped)
+  }
+}
+)mkpro",
+                                                                 x_param_value_options);
+  require(x_param_value_call_temp_reuse.implemented,
+          "native compiler should reuse X-param value scratch for nested call temps");
+  require(x_param_value_call_temp_reuse.diagnostics.empty(),
+          "X-param value call temp reuse compile should not report diagnostics");
+  require(has_optimization(x_param_value_call_temp_reuse, "x-param-value-call-temp-reuse"),
+          "X-param value call temp reuse should report the TS strategy name");
+  require(x_param_value_call_temp_reuse.registers.find("__mkpro_call_1") ==
+              x_param_value_call_temp_reuse.registers.end(),
+          "X-param value call temp reuse should avoid the generic function-call scratch");
+  require(x_param_value_call_temp_reuse.listing.find("recall __mkpro_unary_arg_1") !=
+              std::string::npos,
+          "X-param value call temp reuse should recall the existing X-param scratch");
+
   const CompileResult x_param_indexed_rule = compile_source(R"mkpro(
 program XParamIndexedRule {
   state {
