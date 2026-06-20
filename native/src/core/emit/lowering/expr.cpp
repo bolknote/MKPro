@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <map>
 
 namespace mkpro::core::emit {
@@ -40,6 +41,16 @@ bool is_pure_expression(const Expression& expression) {
     return expression.left != nullptr && expression.right != nullptr &&
            is_pure_expression(*expression.left) && is_pure_expression(*expression.right);
   return false;
+}
+
+bool expression_equals(const Expression& left, const Expression& right) {
+  return expression_to_json(left) == expression_to_json(right);
+}
+
+bool is_numeric_value(const LoweringContext& context, const Expression& expression,
+                      double expected) {
+  const std::optional<double> value = numeric_value_of_expression(expression, context.constants);
+  return value.has_value() && std::fabs(*value - expected) < 1e-12;
 }
 
 bool current_x_holds_name(ExpressionEmitApi& api, const std::string& name) {
@@ -217,6 +228,29 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
     }
   }
 
+  if (expression.op == "/" && is_numeric_value(context, *expression.left, 1.0)) {
+    if (!api.lower_expression_to_x(*expression.right))
+      return false;
+    api.emitter.emit_op(0x23, "F 1/x", "reciprocal division");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "reciprocal-division-lowering",
+        .detail = "Lowered reciprocal division through F 1/x.",
+    });
+    return true;
+  }
+
+  if (expression.op == "*" && expression_equals(*expression.left, *expression.right) &&
+      is_pure_expression(*expression.left)) {
+    if (!api.lower_expression_to_x(*expression.left))
+      return false;
+    api.emitter.emit_op(0x22, "F x^2", "square repeated operand");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "square-expression-lowering",
+        .detail = "Lowered repeated multiplication through F x^2.",
+    });
+    return true;
+  }
+
   const std::map<std::string, int> arithmetic_opcodes = {
       {"+", 0x10},
       {"-", 0x11},
@@ -369,6 +403,10 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     api.emitter.emit_op(0x0b, "/-/", "min()");
     api.emitter.current_x_variable.reset();
     api.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "min-via-max-lowering",
+        .detail = "Lowered " + expression.callee + "() through min-via-max().",
+    });
     return true;
   }
 
@@ -436,7 +474,44 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     api.emitter.emit_op(unary_it->second.first, unary_it->second.second, callee + "()");
     api.emitter.current_x_variable.reset();
     api.emitter.current_x_aliases.clear();
+    if (callee == "pow10") {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "pow10-opcode-lowering",
+          .detail = "Lowered " + expression.callee + "() through F 10^x.",
+      });
+    }
     return true;
+  }
+
+  if (callee == "pow") {
+    if (expression.args.size() != 2) {
+      context.diagnostics.push_back(Diagnostic{
+          .severity = DiagnosticSeverity::Error,
+          .code = "native-unsupported",
+          .message = "Function " + expression.callee + " expects two arguments",
+      });
+      return false;
+    }
+    if (is_numeric_value(context, expression.args.at(1), 2.0)) {
+      if (!api.lower_expression_to_x(expression.args.at(0)))
+        return false;
+      api.emitter.emit_op(0x22, "F x^2", callee + "()");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "pow-square-lowering",
+          .detail = "Lowered " + expression.callee + "() through F x^2.",
+      });
+      return true;
+    }
+    if (is_numeric_value(context, expression.args.at(0), 10.0)) {
+      if (!api.lower_expression_to_x(expression.args.at(1)))
+        return false;
+      api.emitter.emit_op(0x15, "F 10^x", callee + "()");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "pow10-opcode-lowering",
+          .detail = "Lowered " + expression.callee + "() through F 10^x.",
+      });
+      return true;
+    }
   }
 
   const std::map<std::string, std::pair<int, std::string>> binary_opcodes = {

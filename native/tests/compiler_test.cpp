@@ -2040,8 +2040,70 @@ program BuiltinCalls {
           "built-in call listing should include min()");
   require(builtin_call.registers.find("__min_scratch") != builtin_call.registers.end(),
           "min() should allocate a reusable scratch register");
+  require(has_optimization(builtin_call, "min-via-max-lowering"),
+          "min() should report the TS strategy name");
   require(builtin_call.listing.find("cos()") != std::string::npos,
           "built-in call listing should include cos()");
+
+  const CompileResult compact_math_primitives = compile_source(R"mkpro(
+program CompactMathPrimitives {
+  state {
+    value: packed = 0
+  }
+
+  loop {
+    x = read()
+    y = read()
+    value = e() + 1 / x + pow(10, y) + min(x, y)
+    halt(value)
+  }
+}
+)mkpro");
+  require(compact_math_primitives.implemented,
+          "native compiler should lower compact math primitives");
+  require(compact_math_primitives.diagnostics.empty(),
+          "compact math primitive compile should not report diagnostics");
+  require(has_optimization(compact_math_primitives, "reciprocal-division-lowering"),
+          "reciprocal division should report the TS strategy name");
+  require(has_optimization(compact_math_primitives, "pow10-opcode-lowering"),
+          "pow(10, y) should report the TS strategy name");
+  require(has_optimization(compact_math_primitives, "min-via-max-lowering"),
+          "min() should report the TS strategy name in full compiler lowering");
+  require(std::none_of(compact_math_primitives.steps.begin(),
+                       compact_math_primitives.steps.end(), [](const ResolvedStep& step) {
+                         return step.mnemonic == "F x^y";
+                       }),
+          "compact math primitive lowering should not materialize generic pow()");
+
+  const CompileResult square_primitive_lowering = compile_source(R"mkpro(
+program SquarePrimitiveLowering {
+  state {
+    value: packed = 0
+  }
+
+  loop {
+    x = read()
+    y = read()
+    value = x * x + pow(y, 2) + pow(10, y)
+    halt(value)
+  }
+}
+)mkpro");
+  require(square_primitive_lowering.implemented,
+          "native compiler should lower square primitive forms");
+  require(square_primitive_lowering.diagnostics.empty(),
+          "square primitive compile should not report diagnostics");
+  require(has_optimization(square_primitive_lowering, "square-expression-lowering"),
+          "repeated multiplication should report the TS strategy name");
+  require(has_optimization(square_primitive_lowering, "pow-square-lowering"),
+          "pow(y, 2) should report the TS strategy name");
+  require(has_optimization(square_primitive_lowering, "pow10-opcode-lowering"),
+          "pow(10, y) should report the TS strategy name");
+  require(std::none_of(square_primitive_lowering.steps.begin(),
+                       square_primitive_lowering.steps.end(), [](const ResolvedStep& step) {
+                         return step.mnemonic == "F x^y";
+                       }),
+          "square primitive lowering should not materialize generic pow()");
 
   const CompileResult digit_at_call = compile_source(R"mkpro(
 program DigitAtCall {
