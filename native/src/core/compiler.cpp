@@ -9044,6 +9044,97 @@ void report_packed_display_lowering(LoweringContext& context) {
   });
 }
 
+int estimate_number_or_preload_cost(const LoweringContext& context, const std::string& raw) {
+  const std::string key = normalize_number_key(raw);
+  if (context.preloaded_numbers.contains(key))
+    return 1;
+  if (context.register_index_by_name.contains("__display_scale_" + raw))
+    return 1;
+  return number_entry_cost(raw);
+}
+
+int estimate_decimal_packed_display_cost(const LoweringContext& context,
+                                         const std::vector<PackedDisplayField>& fields,
+                                         bool reuse_current_x) {
+  if (fields.empty())
+    return 2;
+
+  int current_index = -1;
+  if (reuse_current_x && context.emitter.current_x_variable.has_value()) {
+    for (std::size_t index = 0; index < fields.size(); ++index) {
+      if (fields.at(index).item != nullptr &&
+          fields.at(index).item->name == *context.emitter.current_x_variable) {
+        current_index = static_cast<int>(index);
+        break;
+      }
+    }
+  }
+
+  const auto field_value_cost = [](const PackedDisplayField& field) {
+    return field.item == nullptr ? 1000000 : 1;
+  };
+  const auto scale_cost = [&](const PackedDisplayField& field) {
+    return estimate_number_or_preload_cost(context, display_scale_for_width(field.width));
+  };
+
+  if (current_index > 0) {
+    int cost = field_value_cost(fields.front());
+    for (std::size_t index = 1; index < static_cast<std::size_t>(current_index); ++index)
+      cost += scale_cost(fields.at(index)) + field_value_cost(fields.at(index)) + 2;
+    cost += scale_cost(fields.at(static_cast<std::size_t>(current_index))) + 2;
+    for (std::size_t index = static_cast<std::size_t>(current_index + 1); index < fields.size();
+         ++index) {
+      cost += scale_cost(fields.at(index)) + field_value_cost(fields.at(index)) + 2;
+    }
+    return cost + 1;
+  }
+
+  int cost = reuse_current_x && fields.front().item != nullptr &&
+                     context.emitter.current_x_variable == fields.front().item->name
+                 ? 0
+                 : field_value_cost(fields.front());
+  for (std::size_t index = 1; index < fields.size(); ++index)
+    cost += scale_cost(fields.at(index)) + field_value_cost(fields.at(index)) + 2;
+  return cost + 1;
+}
+
+int estimate_packed_storage_reuse_display_cost(const LoweringContext& context,
+                                               const std::vector<PackedDisplayField>& fields,
+                                               bool reuse_current_x) {
+  if (fields.empty())
+    return 2;
+  int current_index = -1;
+  if (reuse_current_x && context.emitter.current_x_variable.has_value()) {
+    for (std::size_t index = 0; index < fields.size(); ++index) {
+      if (fields.at(index).item != nullptr &&
+          fields.at(index).item->name == *context.emitter.current_x_variable) {
+        current_index = static_cast<int>(index);
+        break;
+      }
+    }
+  }
+  const int recalled =
+      current_index >= 0 ? static_cast<int>(fields.size()) - 1 : static_cast<int>(fields.size());
+  return recalled + std::max(0, static_cast<int>(fields.size()) - 1) + 1;
+}
+
+std::string select_packed_display_strategy(
+    LoweringContext& context, const std::vector<PackedDisplayField>& decimal_fields,
+    const std::optional<std::vector<PackedDisplayField>>& storage_fields) {
+  const int decimal_cost = estimate_decimal_packed_display_cost(context, decimal_fields, true);
+  const int storage_cost =
+      storage_fields.has_value()
+          ? estimate_packed_storage_reuse_display_cost(context, *storage_fields, true)
+          : std::numeric_limits<int>::max();
+  const std::string selected =
+      storage_cost < decimal_cost ? "packed-storage-reuse" : "decimal-pack";
+  context.optimizations.push_back(OptimizationReport{
+      .name = "display-strategy-selection",
+      .detail = "Selected " + selected + " for display.",
+  });
+  return selected;
+}
+
 bool lower_packed_display_fields_in_order(LoweringContext& context,
                                           const std::vector<PackedDisplayField>& fields,
                                           int source_line, bool reuse_current_x) {
@@ -9075,6 +9166,26 @@ bool lower_packed_display_fields_in_order(LoweringContext& context,
     context.emitter.emit_op(0x10, "+", "packed display field append", source_line);
   }
   return true;
+}
+
+std::optional<std::vector<PackedDisplayField>>
+packed_storage_reuse_display_fields(const LoweringContext& context,
+                                    const std::vector<DisplayItem>& items) {
+  const std::optional<std::vector<PackedDisplayField>> fields =
+      numeric_source_display_fields(context, items);
+  if (!fields.has_value() || fields->size() < 2)
+    return std::nullopt;
+  const auto first_state = context.state_fields.find(fields->front().item->name);
+  if (first_state == context.state_fields.end() || first_state->second == nullptr ||
+      first_state->second->type != "packed") {
+    return std::nullopt;
+  }
+  if (!std::all_of(std::next(fields->begin()), fields->end(), [](const PackedDisplayField& field) {
+        return field.item != nullptr && field.item->width.has_value();
+      })) {
+    return std::nullopt;
+  }
+  return fields;
 }
 
 bool lower_packed_numeric_display_statement(LoweringContext& context,
@@ -9135,26 +9246,6 @@ bool lower_packed_numeric_display_statement(LoweringContext& context,
   return true;
 }
 
-std::optional<std::vector<PackedDisplayField>>
-packed_storage_reuse_display_fields(const LoweringContext& context,
-                                    const std::vector<DisplayItem>& items) {
-  const std::optional<std::vector<PackedDisplayField>> fields =
-      numeric_source_display_fields(context, items);
-  if (!fields.has_value() || fields->size() < 2)
-    return std::nullopt;
-  const auto first_state = context.state_fields.find(fields->front().item->name);
-  if (first_state == context.state_fields.end() || first_state->second == nullptr ||
-      first_state->second->type != "packed") {
-    return std::nullopt;
-  }
-  if (!std::all_of(std::next(fields->begin()), fields->end(), [](const PackedDisplayField& field) {
-        return field.item != nullptr && field.item->width.has_value();
-      })) {
-    return std::nullopt;
-  }
-  return fields;
-}
-
 bool lower_packed_storage_reuse_display_statement(LoweringContext& context,
                                                   const std::vector<DisplayItem>& items,
                                                   int source_line) {
@@ -9200,6 +9291,24 @@ bool lower_packed_storage_reuse_display_statement(LoweringContext& context,
       .detail = "Displayed by adding fields already stored in their decimal positions.",
   });
   return true;
+}
+
+bool lower_selected_packed_display_statement(LoweringContext& context,
+                                             const std::vector<DisplayItem>& items,
+                                             int source_line) {
+  const std::optional<std::vector<PackedDisplayField>> decimal_fields =
+      numeric_source_display_fields(context, items);
+  if (!decimal_fields.has_value() || decimal_fields->size() < 2)
+    return false;
+  const std::optional<std::vector<PackedDisplayField>> storage_fields =
+      packed_storage_reuse_display_fields(context, items);
+  const std::string selected =
+      select_packed_display_strategy(context, *decimal_fields, storage_fields);
+  if (selected == "packed-storage-reuse" &&
+      lower_packed_storage_reuse_display_statement(context, items, source_line)) {
+    return true;
+  }
+  return lower_packed_numeric_display_statement(context, items, source_line);
 }
 
 core::emit::DisplayEmitApi display_emit_api(LoweringContext& context) {
@@ -9348,10 +9457,7 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
     return true;
   }
 
-  if (lower_packed_storage_reuse_display_statement(context, *statement.items, statement.line))
-    return true;
-
-  if (lower_packed_numeric_display_statement(context, *statement.items, statement.line))
+  if (lower_selected_packed_display_statement(context, *statement.items, statement.line))
     return true;
 
   if (!lower_display_item_to_x(context, statement.items->at(0), "display source"))

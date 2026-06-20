@@ -4422,6 +4422,9 @@ program DisplayCurrentXSuffixReuse {
           "native compiler should lower packed display current-X suffix reuse");
   require(has_optimization(display_current_x_suffix, "display-current-x-suffix-reuse"),
           "packed display should reuse a suffix field already in X");
+  require(has_optimization_detail(display_current_x_suffix, "display-strategy-selection",
+                                  "Selected decimal-pack"),
+          "ordinary packed display should report decimal-pack strategy selection");
   require(has_optimization(display_current_x_suffix, "packed-display-lowering"),
           "generic packed display lowering should report the TS optimization name");
   require(std::any_of(display_current_x_suffix.steps.begin(), display_current_x_suffix.steps.end(),
@@ -4467,6 +4470,9 @@ program DisplayStorageReuse {
           "native compiler should lower ready-packed display storage reuse");
   require(has_optimization(display_storage_reuse, "packed-display-storage-reuse"),
           "ready-packed display fields should be added without decimal shifting");
+  require(has_optimization_detail(display_storage_reuse, "display-strategy-selection",
+                                  "Selected packed-storage-reuse"),
+          "ready-packed display should report packed-storage-reuse strategy selection");
   require(has_optimization(display_storage_reuse, "display-stack-reuse"),
           "ready-packed display should reorder fields to reuse the value already in X");
   require(std::any_of(display_storage_reuse.steps.begin(), display_storage_reuse.steps.end(),
