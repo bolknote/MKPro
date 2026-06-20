@@ -117,6 +117,8 @@ program SharedBitMaskHelper {
           "shared bit_mask helper should report shared-bit-mask-helper-layout");
   require(has_optimization(shared, "bit-mask-condition-helper"),
           "shared bit_mask helper should report bit-mask-condition-helper");
+  require(has_optimization(shared, "bit-mask-helper-call"),
+          "shared bit_mask helper should report bit-mask-helper-call");
   require(has_optimization(shared, "bit-mask-helper"),
           "shared bit_mask helper should report bit-mask-helper");
 

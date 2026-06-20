@@ -9086,6 +9086,14 @@ bool emit_bit_mask_helper_call_from_current_x(LoweringContext& context, int sour
   const std::string label = bit_mask_helper_label(context);
   context.emitter.emit_jump(0x53, "ПП", label, "bit_mask helper", source_line);
   ++context.bit_mask_helper_calls;
+  std::string detail = "Shared bit_mask() through " + label;
+  if (source_line > 0)
+    detail += " at line " + std::to_string(source_line);
+  detail += ".";
+  context.optimizations.push_back(OptimizationReport{
+      .name = "bit-mask-helper-call",
+      .detail = std::move(detail),
+  });
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_aliases.clear();
   return true;
@@ -14998,8 +15006,189 @@ std::optional<std::pair<std::string, Expression>> cells_set_update(const Lowerin
                                             parse_expression(*statement.expr, statement.line)};
 }
 
+struct CellsSetUpdate {
+  std::string collection;
+  Expression item;
+  int line = 0;
+};
+
+std::optional<CellsSetUpdate> cells_set_update_info(const LoweringContext& context,
+                                                    const V2Statement& statement) {
+  const std::optional<std::pair<std::string, Expression>> update =
+      cells_set_update(context, statement);
+  if (!update.has_value())
+    return std::nullopt;
+  return CellsSetUpdate{
+      .collection = update->first,
+      .item = update->second,
+      .line = statement.line,
+  };
+}
+
+struct CellsSetRunPrefix {
+  std::vector<CellsSetUpdate> sets;
+  std::vector<V2Statement> tail;
+};
+
+std::optional<CellsSetRunPrefix> cells_set_run_prefix(
+    const LoweringContext& context, const std::vector<V2Statement>& statements,
+    const Expression& item) {
+  std::vector<CellsSetUpdate> sets;
+  std::size_t index = 0;
+  while (index < statements.size()) {
+    const std::optional<CellsSetUpdate> set = cells_set_update_info(context, statements.at(index));
+    if (!set.has_value() || !expression_equals(set->item, item))
+      break;
+    sets.push_back(*set);
+    ++index;
+  }
+  if (sets.empty())
+    return std::nullopt;
+  return CellsSetRunPrefix{
+      .sets = std::move(sets),
+      .tail = std::vector<V2Statement>(statements.begin() + static_cast<std::ptrdiff_t>(index),
+                                       statements.end()),
+  };
+}
+
 std::string bit_mask_scratch_name(const V2Statement& statement) {
   return "__bit_mask_" + std::to_string(statement.line);
+}
+
+bool emit_membership_mask_test_with_scratch(LoweringContext& context,
+                                            const std::string& collection,
+                                            const Expression& item,
+                                            const std::string& scratch, int line) {
+  if (!hidden_register_available(context, scratch))
+    return false;
+  if (!ensure_hidden_register(context, scratch))
+    return false;
+  if (!lower_bit_mask_to_x(context, item, line))
+    return false;
+  emit_store(context, scratch, "cell bit mask scratch");
+  emit_recall(context, collection);
+  context.emitter.emit_op(0x37, "К ∧", "membership test with reused mask", line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "membership-mask-stack-test-reuse",
+      .detail = "Kept " + scratch + " on the stack for a membership test at line " +
+                std::to_string(line) + ".",
+  });
+  context.emitter.emit_op(0x35, "К {x}", "membership fraction", line);
+  return true;
+}
+
+void emit_bit_set_collection_with_scratch(LoweringContext& context, const std::string& collection,
+                                          const std::string& scratch, int line) {
+  emit_recall(context, collection);
+  emit_recall(context, scratch);
+  if (!context.emitter.items.empty())
+    context.emitter.items.back().comment = "reuse cell bit mask";
+  context.emitter.emit_op(0x38, "К ∨", "bit_set with reused mask", line);
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_aliases.clear();
+  emit_store(context, collection, "set " + collection);
+}
+
+std::string joined_set_targets(const std::vector<CellsSetUpdate>& sets) {
+  std::string result;
+  for (const CellsSetUpdate& set : sets) {
+    if (!result.empty())
+      result += ", ";
+    result += set.collection;
+  }
+  return result;
+}
+
+void report_membership_set_reuse(LoweringContext& context, const std::vector<CellsSetUpdate>& sets,
+                                 int line) {
+  if (sets.size() > 1U) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "cell-membership-mask-run-reuse",
+        .detail = "Reused the failed membership mask when setting " + joined_set_targets(sets) +
+                  " after line " + std::to_string(line) + ".",
+    });
+    return;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "cell-membership-set-reuse",
+      .detail = "Reused the failed membership mask when setting " + sets.front().collection +
+                " at line " + std::to_string(sets.front().line) + ".",
+  });
+}
+
+bool lower_cells_contains_set_reuse_if(LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value())
+    return false;
+  const V2Predicate& predicate = *statement.predicate;
+  if (predicate.kind != "v2_contains")
+    return false;
+  const std::string collection = trim_ascii(predicate.collection);
+  const V2StateField* collection_field = state_field_named(context, collection);
+  if (collection_field == nullptr || collection_field->type != "cells" ||
+      is_segmented_cells_name(context, collection)) {
+    return false;
+  }
+  const Expression item = parse_expression(predicate.item, statement.line);
+
+  const std::vector<V2Statement>& set_branch =
+      statement.negated ? statement.then_body : statement.else_body;
+  if (!statement.negated && set_branch.empty())
+    return false;
+  const std::optional<CellsSetRunPrefix> set_run =
+      cells_set_run_prefix(context, set_branch, item);
+  if (!set_run.has_value())
+    return false;
+
+  const std::string scratch = bit_mask_scratch_name(statement);
+  const std::string false_label =
+      context.emitter.fresh_label(statement.else_body.empty() ? "if_end" : "if_false");
+  const int branch_opcode = statement.negated ? 0x5e : 0x57;
+  const std::string branch_mnemonic = statement.negated ? "F x=0" : "F x!=0";
+  const std::string branch_comment =
+      statement.negated ? "false branch for cells not in" : "false branch for cells in";
+  if (!emit_membership_mask_test_with_scratch(context, collection, item, scratch, statement.line))
+    return false;
+  context.emitter.emit_jump(branch_opcode, branch_mnemonic, false_label, branch_comment,
+                            statement.line);
+
+  if (statement.negated) {
+    for (const CellsSetUpdate& set : set_run->sets)
+      emit_bit_set_collection_with_scratch(context, set.collection, scratch, set.line);
+    const bool then_stops = statements_always_stop(context, set_run->tail);
+    if (!lower_statement_block(context, set_run->tail))
+      return false;
+    if (!statement.else_body.empty()) {
+      const std::string end_label =
+          then_stops ? std::string{} : context.emitter.fresh_label("if_end");
+      if (!then_stops)
+        context.emitter.emit_jump(0x51, "БП", end_label, "if end", statement.line);
+      context.emitter.emit_label(false_label, {.hidden = true});
+      if (!lower_statement_block(context, statement.else_body))
+        return false;
+      if (!then_stops)
+        context.emitter.emit_label(end_label, {.hidden = true});
+    } else {
+      context.emitter.emit_label(false_label, {.hidden = true});
+    }
+    report_membership_set_reuse(context, set_run->sets, statement.line);
+    return true;
+  }
+
+  const bool then_stops = statements_always_stop(context, statement.then_body);
+  const std::string end_label = then_stops ? std::string{} : context.emitter.fresh_label("if_end");
+  if (!lower_statement_block(context, statement.then_body))
+    return false;
+  if (!then_stops)
+    context.emitter.emit_jump(0x51, "БП", end_label, "if end", statement.line);
+  context.emitter.emit_label(false_label, {.hidden = true});
+  for (const CellsSetUpdate& set : set_run->sets)
+    emit_bit_set_collection_with_scratch(context, set.collection, scratch, set.line);
+  if (!lower_statement_block(context, set_run->tail))
+    return false;
+  if (!then_stops)
+    context.emitter.emit_label(end_label, {.hidden = true});
+  report_membership_set_reuse(context, set_run->sets, statement.line);
+  return true;
 }
 
 bool lower_adjacent_cells_set_mask_reuse(LoweringContext& context, const V2Statement& first,
@@ -15601,6 +15790,10 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
     if (has_errors(context.diagnostics))
       return false;
     if (lower_cells_contains_clear_if(context, statement))
+      return true;
+    if (has_errors(context.diagnostics))
+      return false;
+    if (lower_cells_contains_set_reuse_if(context, statement))
       return true;
     if (has_errors(context.diagnostics))
       return false;

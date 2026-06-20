@@ -3758,6 +3758,87 @@ program MaskMembershipClear {
                        }),
           "mask membership clear delta branch should avoid the generic membership fraction path");
 
+  const CompileResult membership_single_set = compile_source(R"mkpro(
+program MembershipSingleSetCollection {
+  grid: board(1..4, 1..4)
+
+  state {
+    cell: coord(grid)
+    occupied: cells(grid)
+    player_marks: cells(grid)
+  }
+
+  loop {
+    cell = read()
+    unless cell in occupied {
+      player_marks += cell
+      halt(player_marks)
+    }
+    halt(0)
+  }
+}
+)mkpro",
+                                                       membership_options);
+  require(membership_single_set.implemented,
+          "native compiler should lower failed membership set reuse");
+  require(membership_single_set.diagnostics.empty(),
+          "failed membership set reuse should not report diagnostics");
+  require(has_optimization(membership_single_set, "cell-membership-set-reuse"),
+          "failed membership set reuse should report the TS strategy name");
+  require(has_optimization(membership_single_set, "membership-mask-stack-test-reuse"),
+          "failed membership set reuse should reuse the stack-held mask for the membership test");
+  require(!has_optimization(membership_single_set, "cell-membership-mask-run-reuse"),
+          "single failed membership set should not report the run reuse strategy");
+  const auto single_set_index =
+      std::find_if(membership_single_set.steps.begin(), membership_single_set.steps.end(),
+                   [](const ResolvedStep& step) {
+                     return step.comment == "bit_set with reused mask";
+                   });
+  require(single_set_index != membership_single_set.steps.end(),
+          "failed membership set should use the reusable mask for bit_set");
+  require(single_set_index - membership_single_set.steps.begin() >= 2,
+          "failed membership set should have recall steps before bit_set");
+  require((single_set_index - 2)->comment == "recall player_marks",
+          "failed membership set should recall the set collection before the mask");
+
+  const CompileResult membership_mask_run = compile_source(R"mkpro(
+program MembershipMaskRun {
+  grid: board(1..4, 1..4)
+
+  state {
+    cell: coord(grid)
+    player_marks: cells(grid)
+    occupied: cells(grid)
+  }
+
+  loop {
+    cell = read()
+    if cell in occupied {
+      halt(0)
+    }
+    else {
+      player_marks += cell
+      occupied += cell
+      halt(player_marks + occupied)
+    }
+  }
+}
+)mkpro",
+                                                   membership_options);
+  require(membership_mask_run.implemented,
+          "native compiler should lower failed membership mask run reuse");
+  require(membership_mask_run.diagnostics.empty(),
+          "failed membership mask run reuse should not report diagnostics");
+  require(has_optimization(membership_mask_run, "cell-membership-mask-run-reuse"),
+          "failed membership mask run should report the TS strategy name");
+  require(has_optimization(membership_mask_run, "membership-mask-stack-test-reuse"),
+          "failed membership mask run should reuse the stack-held mask for the membership test");
+  require(std::count_if(membership_mask_run.steps.begin(), membership_mask_run.steps.end(),
+                        [](const ResolvedStep& step) {
+                          return step.comment == "bit_set with reused mask";
+                        }) == 2,
+          "failed membership mask run should use the reusable mask for both set updates");
+
   const CompileResult tail_display = compile_source(R"mkpro(
 program TailDisplay {
   state {
