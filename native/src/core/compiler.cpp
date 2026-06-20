@@ -5666,6 +5666,48 @@ void collect_literal_display_use_counts(LoweringContext& context, const V2Progra
     collect_literal_display_use_counts(rule.body, context.literal_display_use_counts);
 }
 
+std::optional<std::string> show_sequence_key(const V2Statement& first, const V2Statement& second) {
+  if (first.kind != "v2_show" || second.kind != "v2_show")
+    return std::nullopt;
+  if (first.target.has_value() || second.target.has_value())
+    return std::nullopt;
+  const std::optional<std::string> first_key = show_display_key(first);
+  const std::optional<std::string> second_key = show_display_key(second);
+  if (!first_key.has_value() || !second_key.has_value())
+    return std::nullopt;
+  return *first_key + '\0' + *second_key;
+}
+
+void collect_show_sequence_use_counts(const std::vector<V2Statement>& statements,
+                                      std::map<std::string, int>& counts) {
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    if (index + 2U < statements.size() && statements.at(index + 2U).kind == "v2_read" &&
+        statements.at(index + 2U).target.has_value()) {
+      if (const std::optional<std::string> key =
+              show_sequence_key(statements.at(index), statements.at(index + 1U))) {
+        ++counts[*key];
+      }
+    }
+    const V2Statement& statement = statements.at(index);
+    collect_show_sequence_use_counts(statement.body, counts);
+    collect_show_sequence_use_counts(statement.then_body, counts);
+    collect_show_sequence_use_counts(statement.else_body, counts);
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr)
+        collect_show_sequence_use_counts(std::vector<V2Statement>{*match_case.action}, counts);
+    }
+    if (statement.otherwise != nullptr)
+      collect_show_sequence_use_counts(std::vector<V2Statement>{*statement.otherwise}, counts);
+  }
+}
+
+void collect_show_sequence_use_counts(LoweringContext& context, const V2Program& program) {
+  context.show_sequence_use_counts.clear();
+  collect_show_sequence_use_counts(program.body, context.show_sequence_use_counts);
+  for (const V2Rule& rule : program.rules)
+    collect_show_sequence_use_counts(rule.body, context.show_sequence_use_counts);
+}
+
 void collect_expression_use_count(LoweringContext& context, const Expression& expression) {
   ++context.expression_use_counts[expression_to_json(expression)];
   if (expression.kind == "indexed" && expression.index != nullptr)
@@ -19730,6 +19772,99 @@ bool lower_show_read_fusion(LoweringContext& context, const V2Statement& show,
   return true;
 }
 
+std::optional<int> estimate_show_sequence_display_cost(LoweringContext& context,
+                                                       const V2Statement& statement) {
+  if (statement.kind != "v2_show" || statement.target.has_value() || !statement.items.has_value())
+    return std::nullopt;
+  const std::optional<std::vector<PackedDisplayField>> fields =
+      numeric_display_fields(context, *statement.items);
+  if (!fields.has_value())
+    return std::nullopt;
+  return estimate_decimal_packed_display_cost(context, *fields, false);
+}
+
+bool should_share_show_sequence(LoweringContext& context, const V2Statement& first,
+                                const V2Statement& second) {
+  if (context.emitting_show_sequence_helper)
+    return false;
+  const std::optional<std::string> key = show_sequence_key(first, second);
+  if (!key.has_value())
+    return false;
+  const auto uses_it = context.show_sequence_use_counts.find(*key);
+  if (uses_it == context.show_sequence_use_counts.end() || uses_it->second < 2)
+    return false;
+
+  const std::optional<int> first_cost = estimate_show_sequence_display_cost(context, first);
+  const std::optional<int> second_cost = estimate_show_sequence_display_cost(context, second);
+  if (!first_cost.has_value() || !second_cost.has_value())
+    return false;
+
+  const int body_cost = *first_cost + *second_cost;
+  const int inline_total = uses_it->second * (body_cost + 1);
+  const int helper_total = uses_it->second * 3 + body_cost + 1;
+  return inline_total - helper_total >= kDisplayHelperMinSavings;
+}
+
+const ShowSequenceHelperRequest& ensure_show_sequence_helper(LoweringContext& context,
+                                                             const V2Statement& first,
+                                                             const V2Statement& second) {
+  const std::optional<std::string> key = show_sequence_key(first, second);
+  if (!key.has_value())
+    throw std::logic_error("show sequence helper requested for non-show sequence");
+
+  const auto existing = context.show_sequence_helper_labels.find(*key);
+  if (existing != context.show_sequence_helper_labels.end()) {
+    const auto helper =
+        std::find_if(context.show_sequence_helpers.begin(), context.show_sequence_helpers.end(),
+                     [&](const ShowSequenceHelperRequest& candidate) {
+                       return candidate.label == existing->second;
+                     });
+    if (helper != context.show_sequence_helpers.end())
+      return *helper;
+  }
+
+  const std::string label = "__showseq_" + std::to_string(context.show_sequence_helpers.size());
+  context.show_sequence_helper_labels[*key] = label;
+  context.show_sequence_helpers.push_back(ShowSequenceHelperRequest{
+      .key = *key,
+      .label = label,
+      .first = first,
+      .second = second,
+      .line = first.line,
+  });
+  return context.show_sequence_helpers.back();
+}
+
+bool lower_show_sequence_read(LoweringContext& context, const std::vector<V2Statement>& statements,
+                              std::size_t index, std::size_t& consumed) {
+  consumed = 0;
+  if (index + 2U >= statements.size())
+    return false;
+
+  const V2Statement& first = statements.at(index);
+  const V2Statement& second = statements.at(index + 1U);
+  const V2Statement& read = statements.at(index + 2U);
+  if (read.kind != "v2_read" || !read.target.has_value())
+    return false;
+  if (context.constants.contains(*read.target) ||
+      context.scaled_coord_cell_names.contains(*read.target)) {
+    return false;
+  }
+  if (!should_share_show_sequence(context, first, second))
+    return false;
+
+  const ShowSequenceHelperRequest& helper = ensure_show_sequence_helper(context, first, second);
+  context.emitter.emit_jump(0x53, "ПП", helper.label, "show sequence helper", first.line);
+  mark_current_x(context, *read.target);
+  emit_store(context, *read.target, "read " + *read.target);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "show-sequence-helper-call",
+      .detail = "Reused shared show-show-read helper before read " + *read.target + ".",
+  });
+  consumed = 3;
+  return true;
+}
+
 bool lower_ephemeral_input_branch(LoweringContext& context,
                                   const std::vector<V2Statement>& statements, std::size_t index,
                                   std::size_t& consumed) {
@@ -22927,6 +23062,13 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     }
     if (has_errors(context.diagnostics))
       return false;
+    std::size_t show_sequence_consumed = 0;
+    if (lower_show_sequence_read(context, statements, index, show_sequence_consumed)) {
+      index += show_sequence_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
     if (index + 1U < statements.size() &&
         lower_show_read_fusion(context, statements.at(index), statements.at(index + 1U))) {
       ++index;
@@ -23022,6 +23164,28 @@ bool lower_terminal_tail_helpers(LoweringContext& context) {
         .name = "local-terminal-tail",
         .detail =
             "Emitted local terminal tail for branch at line " + std::to_string(helper.line) + ".",
+    });
+  }
+  return true;
+}
+
+bool lower_show_sequence_helpers(LoweringContext& context) {
+  for (const ShowSequenceHelperRequest& helper : context.show_sequence_helpers) {
+    context.emitter.emit_label(
+        helper.label,
+        {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
+    const bool previous = context.emitting_show_sequence_helper;
+    context.emitting_show_sequence_helper = true;
+    const bool first_lowered = lower_display_statement(context, helper.first);
+    const bool second_lowered = first_lowered && lower_display_statement(context, helper.second);
+    context.emitting_show_sequence_helper = previous;
+    if (!second_lowered)
+      return false;
+    context.emitter.emit_op(0x52, "В/О", "show sequence return", helper.line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "show-sequence-helper",
+        .detail =
+            "Emitted shared show-show-read helper at line " + std::to_string(helper.line) + ".",
     });
   }
   return true;
@@ -25226,6 +25390,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         extract_guarded_prologue_gadgets(*ast.v2, context.optimizations);
       index_program_metadata(context, *ast.v2);
       collect_literal_display_use_counts(context, *ast.v2);
+      collect_show_sequence_use_counts(context, *ast.v2);
       collect_expression_use_counts(context, *ast.v2);
       index_constants(context, *ast.v2);
       const int grd_angle_mode_assumptions =
@@ -25306,10 +25471,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           bool emitted_tail = lower_function_rules(context, *ast.v2);
           const std::size_t function_end = context.emitter.items.size();
           if (emitted_tail && lower_terminal_tail_helpers(context) &&
-              lower_literal_display_helpers(context) && lower_random_cell_helpers(context) &&
-              lower_expression_helpers(context) && lower_spatial_sum_helpers(context) &&
-              lower_spatial_hit_helpers(context) && lower_bit_mask_helper(context) &&
-              lower_packed_score_helper(context)) {
+              lower_show_sequence_helpers(context) && lower_literal_display_helpers(context) &&
+              lower_random_cell_helpers(context) && lower_expression_helpers(context) &&
+              lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
+              lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
           if (emitted_tail) {
