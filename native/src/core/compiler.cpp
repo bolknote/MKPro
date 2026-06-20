@@ -21300,6 +21300,57 @@ bool emit_counted_while_body(LoweringContext& context, const V2Statement& loop,
   return true;
 }
 
+bool lower_setup_only_counted_while(LoweringContext& context,
+                                    const std::vector<V2Statement>& statements, std::size_t index,
+                                    std::size_t& consumed) {
+  consumed = 0;
+  if (!context.setup_only_counted_loop_init || context.program == nullptr ||
+      &statements != &context.program->body)
+    return false;
+
+  const V2Statement& loop = statements.at(index);
+  if (loop.kind != "v2_while")
+    return false;
+
+  const std::optional<std::string> counted_target =
+      unit_decrement_counted_while_target(context, loop);
+  if (!counted_target.has_value())
+    return false;
+
+  const auto field_it = context.state_fields.find(*counted_target);
+  if (field_it == context.state_fields.end() || field_it->second == nullptr ||
+      !field_it->second->initial.has_value())
+    return false;
+
+  const Expression initial_expression =
+      parse_expression(*field_it->second->initial, field_it->second->line);
+  const std::optional<int> initial_value = integer_value_of_expression(context, initial_expression);
+  if (!initial_value.has_value() || *initial_value < 1)
+    return false;
+  if (scalar_referenced_outside_loop(*context.program, *counted_target, loop))
+    return false;
+
+  const auto register_it = context.register_index_by_name.find(*counted_target);
+  if (register_it == context.register_index_by_name.end())
+    return false;
+  const std::optional<std::pair<int, std::string>> fl =
+      fl_loop_opcode_for_register(register_it->second);
+  if (!fl.has_value())
+    return false;
+
+  if (!emit_counted_while_body(context, loop, *fl, "setup_counted_while",
+                               "setup-counted while " + *counted_target))
+    return false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "setup-only-counted-loop-init",
+      .detail = "Used setup initializer for " + *counted_target + " and lowered while " +
+                *counted_target + " >= 1 through " + fl->second + " at line " +
+                std::to_string(loop.line) + ".",
+  });
+  consumed = 1;
+  return true;
+}
+
 bool lower_initialized_counted_while_run(LoweringContext& context,
                                          const std::vector<V2Statement>& statements,
                                          std::size_t index, std::size_t& consumed) {
@@ -23125,6 +23176,13 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (lower_repeated_assignment_counted_loop_reuse_run(context, statements, index,
                                                          counted_consumed)) {
       index += counted_consumed - 1;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    counted_consumed = 0;
+    if (lower_setup_only_counted_while(context, statements, index, counted_consumed)) {
+      index += counted_consumed - 1U;
       continue;
     }
     if (has_errors(context.diagnostics))
@@ -25554,9 +25612,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   }
 
   LoweringContext context;
+  context.program = &*ast.v2;
   context.segmented_bitplanes = options.segmented_bitplanes;
   context.segmented_line_count_scan = options.segmented_line_count_scan;
   context.stack_resident_temps = options.stack_resident_temps;
+  context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
   context.x_param_value_functions = options.x_param_value_functions;
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
   context.compact_bit_mask_helper_body = options.compact_bit_mask_helper_body;
@@ -25669,15 +25729,17 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       }
       warn_undeclared_allocations(*ast.v2, options.strict, loop_prompt_names, context.diagnostics);
       warn_show_halt_style_rule(*ast.v2, context.diagnostics);
-      const int normalized_state_init_counted_loops = normalize_state_init_counted_loops(*ast.v2);
-      if (normalized_state_init_counted_loops > 0) {
-        context.optimizations.push_back(OptimizationReport{
-            .name = "state-init-counted-loop",
-            .detail = "Recovered the compact F Lx counted-loop lowering for " +
-                      std::to_string(normalized_state_init_counted_loops) +
-                      " state-initialized countdown counter" +
-                      (normalized_state_init_counted_loops == 1 ? "." : "s."),
-        });
+      if (!context.setup_only_counted_loop_init) {
+        const int normalized_state_init_counted_loops = normalize_state_init_counted_loops(*ast.v2);
+        if (normalized_state_init_counted_loops > 0) {
+          context.optimizations.push_back(OptimizationReport{
+              .name = "state-init-counted-loop",
+              .detail = "Recovered the compact F Lx counted-loop lowering for " +
+                        std::to_string(normalized_state_init_counted_loops) +
+                        " state-initialized countdown counter" +
+                        (normalized_state_init_counted_loops == 1 ? "." : "s."),
+          });
+        }
       }
       context.transient_show_targets = transient_show_targets(*ast.v2);
       if (!has_errors(context.diagnostics)) {

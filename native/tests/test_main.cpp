@@ -56,6 +56,7 @@ void rules_match_typescript_contract();
 void safe_minmax_matches_typescript_contract();
 void segmented_bitplanes_match_typescript_contract();
 void setup_program_matches_typescript_contract();
+void setup_only_counted_loop_matches_typescript_contract();
 void show_sequence_helpers_match_typescript_contract();
 void small_set_condition_lowering_matches_typescript_contract();
 void state_banks_match_typescript_contract();
@@ -178,6 +179,8 @@ int main() {
        mkpro::tests::segmented_bitplanes_match_typescript_contract},
       {"setup_program_matches_typescript_contract",
        mkpro::tests::setup_program_matches_typescript_contract},
+      {"setup_only_counted_loop_matches_typescript_contract",
+       mkpro::tests::setup_only_counted_loop_matches_typescript_contract},
       {"show_sequence_helpers_match_typescript_contract",
        mkpro::tests::show_sequence_helpers_match_typescript_contract},
       {"small_set_condition_lowering_matches_typescript_contract",

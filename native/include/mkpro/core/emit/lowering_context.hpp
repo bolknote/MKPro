@@ -99,6 +99,7 @@ struct BankSelectorCacheEntry {
 
 struct LoweringContext {
   MachineEmitter emitter;
+  const V2Program* program = nullptr;
   std::map<std::string, std::string> registers;
   std::map<std::string, int> register_index_by_name;
   std::map<std::string, const V2Rule*> rules;
@@ -176,6 +177,7 @@ struct LoweringContext {
   bool segmented_line_count_scan = false;
   bool use_packed_score_helper = false;
   bool stack_resident_temps = false;
+  bool setup_only_counted_loop_init = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
   bool compact_bit_mask_helper_body = false;
