@@ -546,6 +546,10 @@ bool emit_first_splice_display_literal_program(
     api.emitter.emit_op(0x0c, "ВП", "display literal first digit reuse", source_line);
     emit_display_exponent(api.emitter, program.exponent, source_line,
                           "display literal exponent");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "display-literal-first-digit-reuse",
+        .detail = "Reused the literal body's leading 8 while restoring X2.",
+    });
     return true;
   }
 
@@ -559,6 +563,10 @@ bool emit_first_splice_display_literal_program(
     emit_first_digit_splice(api.emitter, source_line);
     emit_display_exponent(api.emitter, program.exponent, source_line,
                           "display literal exponent");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "display-literal-minus-source-reuse",
+        .detail = "Derived a leading '-' from the literal body's fractional tail.",
+    });
     return true;
   }
 

@@ -77,6 +77,18 @@ void lowering_helpers_match_typescript_contract() {
           "first-splice should expose the second display cell");
   require(first_splice->exponent == 2,
           "first-splice should derive exponent from the decimal point position");
+  const auto signed_first_splice =
+      core::emit::signed_first_splice_display_literal_program("-9.С L -03");
+  require(signed_first_splice.has_value(), "signed first-splice display literal should be planned");
+  require(signed_first_splice->first == 9 && signed_first_splice->negative,
+          "signed first-splice should strip the display sign and preserve it as metadata");
+  const auto exponent_tail = core::emit::exponent_tail_display_literal_program("700-----8");
+  require(exponent_tail.has_value() && exponent_tail->exponent == 8,
+          "exponent-tail display literal should move the ninth cell into the exponent");
+  require(core::emit::should_use_preloaded_display_literal("700-----8"),
+          "game-style exponent-tail literals should be selected for setup preload");
+  require(!core::emit::should_use_preloaded_display_literal("2Е"),
+          "zero-digit tail literals should stay on their specialized direct lowering path");
 
   Expression id = core::emit::identifier_expression("cell");
   require(id.kind == "identifier" && id.name == "cell", "identifier expression helper");

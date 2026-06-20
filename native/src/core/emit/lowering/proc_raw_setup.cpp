@@ -189,10 +189,10 @@ void emit_setup_first_digit_splice(MachineEmitter& setup, std::string comment) {
   setup.emit_op(0x0c, "ВП", std::move(comment), std::nullopt, true);
 }
 
-bool emit_first_splice_display_literal_program_to_x(MachineEmitter& setup,
-                                                    const FirstSpliceDisplayLiteralProgram& program,
-                                                    const std::string& scratch_register,
-                                                    const std::string& comment) {
+bool emit_first_splice_display_literal_program_to_x(
+    MachineEmitter& setup, const FirstSpliceDisplayLiteralProgram& program,
+    const std::string& scratch_register, const std::string& comment,
+    std::vector<OptimizationReport>& optimizations) {
   if (!emit_display_literal_program_to_x(setup, program.body, comment + " body"))
     return false;
   const int scratch_index = register_index(scratch_register);
@@ -205,6 +205,10 @@ bool emit_first_splice_display_literal_program_to_x(MachineEmitter& setup,
       setup.emit_op(0x0b, "/-/", comment + " sign", std::nullopt, true);
     setup.emit_op(0x54, "К НОП", comment + " first digit reuse", std::nullopt, true);
     setup.emit_op(0x0c, "ВП", comment + " first digit reuse", std::nullopt, true);
+    optimizations.push_back(OptimizationReport{
+        .name = "display-literal-first-digit-reuse",
+        .detail = "Reused the literal body's leading 8 while restoring X2.",
+    });
     return emit_setup_display_exponent(setup, program.exponent, comment + " exponent");
   }
 
@@ -214,6 +218,10 @@ bool emit_first_splice_display_literal_program_to_x(MachineEmitter& setup,
     if (program.negative)
       setup.emit_op(0x0b, "/-/", comment + " sign", std::nullopt, true);
     emit_setup_first_digit_splice(setup, "display sign-digit first-cell splice");
+    optimizations.push_back(OptimizationReport{
+        .name = "display-literal-minus-source-reuse",
+        .detail = "Derived a leading '-' from the literal body's fractional tail.",
+    });
     return emit_setup_display_exponent(setup, program.exponent, comment + " exponent");
   }
 
@@ -978,18 +986,19 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     }
     if (!from_stack_x && !from_stack_y && !has_executable_setup_number_value(preload.value)) {
       bool emitted_display_literal_preload = false;
-      if (const std::optional<DisplayLiteralProgram> literal =
-              display_literal_program(preload.value)) {
-        if (literal->kind != "error" &&
-            emit_display_literal_program_to_x(setup, *literal, "setup display literal")) {
-          emitted_display_literal_preload = true;
-        }
+      if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
+              preferred_first_splice_display_literal_program(preload.value)) {
+        emitted_display_literal_preload = emit_first_splice_display_literal_program_to_x(
+            setup, *first_splice, preload.register_name, "setup R" + preload.register_name,
+            optimizations);
       }
       if (!emitted_display_literal_preload) {
-        if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
-                first_splice_display_literal_program(preload.value)) {
-          emitted_display_literal_preload = emit_first_splice_display_literal_program_to_x(
-              setup, *first_splice, preload.register_name, "setup R" + preload.register_name);
+        if (const std::optional<DisplayLiteralProgram> literal =
+                display_literal_program(preload.value)) {
+          if (literal->kind != "error" &&
+              emit_display_literal_program_to_x(setup, *literal, "setup display literal")) {
+            emitted_display_literal_preload = true;
+          }
         }
       }
       if (emitted_display_literal_preload) {

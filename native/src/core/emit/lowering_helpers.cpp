@@ -478,28 +478,127 @@ std::optional<int> display_literal_point_exponent(std::string_view text) {
 }
 
 std::optional<FirstSpliceDisplayLiteralProgram>
+first_splice_display_literal_program_from_cells(const std::vector<int>& cells, int exponent,
+                                                bool negative) {
+  if (cells.empty())
+    return std::nullopt;
+  const int first = cells.front();
+  if (first == 15)
+    return std::nullopt;
+
+  std::vector<int> body_cells;
+  body_cells.reserve(cells.size());
+  body_cells.push_back(8);
+  body_cells.insert(body_cells.end(), cells.begin() + 1, cells.end());
+  std::optional<DisplayLiteralProgram> body = display_literal_program_from_cells(body_cells, false);
+  if (!body.has_value() || body->kind == "error")
+    return std::nullopt;
+
+  return FirstSpliceDisplayLiteralProgram{
+      .first = first,
+      .second = cells.size() > 1U ? std::optional<int>{cells.at(1)} : std::nullopt,
+      .body = std::move(*body),
+      .exponent = exponent,
+      .negative = negative,
+  };
+}
+
+std::optional<FirstSpliceDisplayLiteralProgram>
 first_splice_display_literal_program(std::string_view text) {
   const std::optional<std::vector<int>> cells = display_literal_cells(text);
   if (!cells.has_value() || cells->empty() || cells->size() > 8U)
     return std::nullopt;
-  const int first = cells->front();
-  if (first == 15)
+
+  return first_splice_display_literal_program_from_cells(
+      *cells, display_literal_point_exponent(text).value_or(static_cast<int>(cells->size()) - 1),
+      false);
+}
+
+std::optional<FirstSpliceDisplayLiteralProgram>
+signed_first_splice_display_literal_program(std::string_view text) {
+  const std::optional<std::string> normalized = normalize_display_literal_text(text);
+  if (!normalized.has_value() || normalized->size() < 2U || normalized->front() != '-' ||
+      !std::isdigit(static_cast<unsigned char>(normalized->at(1)))) {
     return std::nullopt;
-  std::vector<int> body_cells;
-  body_cells.reserve(cells->size());
-  body_cells.push_back(8);
-  body_cells.insert(body_cells.end(), cells->begin() + 1, cells->end());
-  std::optional<DisplayLiteralProgram> body = display_literal_program_from_cells(body_cells, false);
-  if (!body.has_value() || body->kind == "error")
+  }
+
+  const std::string body = normalized->substr(1);
+  const std::optional<std::vector<int>> cells = display_literal_cells(body);
+  if (!cells.has_value() || cells->empty() || cells->size() > 8U)
     return std::nullopt;
-  return FirstSpliceDisplayLiteralProgram{
-      .first = first,
-      .second = cells->size() > 1U ? std::optional<int>{cells->at(1)} : std::nullopt,
-      .body = std::move(*body),
-      .exponent =
-          display_literal_point_exponent(text).value_or(static_cast<int>(cells->size()) - 1),
-      .negative = false,
-  };
+
+  return first_splice_display_literal_program_from_cells(
+      *cells, display_literal_point_exponent(body).value_or(static_cast<int>(cells->size()) - 1),
+      true);
+}
+
+std::optional<FirstSpliceDisplayLiteralProgram>
+exponent_tail_display_literal_program(std::string_view text) {
+  const std::optional<std::vector<int>> cells = display_literal_cells(text);
+  if (!cells.has_value() || cells->size() != 9U)
+    return std::nullopt;
+  const int exponent = cells->back();
+  if (exponent < 0 || exponent > 9)
+    return std::nullopt;
+
+  std::vector<int> body_cells(cells->begin(), cells->end() - 1);
+  return first_splice_display_literal_program_from_cells(body_cells, exponent, false);
+}
+
+std::optional<FirstSpliceDisplayLiteralProgram>
+preferred_first_splice_display_literal_program(std::string_view text) {
+  if (std::optional<FirstSpliceDisplayLiteralProgram> program =
+          signed_first_splice_display_literal_program(text)) {
+    return program;
+  }
+  if (std::optional<FirstSpliceDisplayLiteralProgram> program =
+          exponent_tail_display_literal_program(text)) {
+    return program;
+  }
+  return first_splice_display_literal_program(text);
+}
+
+std::optional<int> display_literal_trailing_zero_exponent(std::string_view text) {
+  const std::optional<std::vector<int>> cells = display_literal_cells(text);
+  if (!cells.has_value() || cells->empty() || cells->size() > 8U)
+    return std::nullopt;
+  return cells->back() == 0 ? std::optional<int>{static_cast<int>(cells->size()) - 1}
+                            : std::nullopt;
+}
+
+bool should_use_first_splice_display_literal(std::string_view text) {
+  if (!first_splice_display_literal_program(text).has_value())
+    return false;
+  if (decimal_display_literal_number(text).has_value())
+    return false;
+  if (zero_digit_tail_display_program(text).has_value())
+    return false;
+  if (sign_digit_literal_display_program(text).has_value())
+    return false;
+  const std::optional<DisplayLiteralProgram> direct = display_literal_program(text);
+  return !direct.has_value() ||
+         (direct->kind != "error" && display_literal_trailing_zero_exponent(text).has_value());
+}
+
+bool should_use_preloaded_display_literal(std::string_view text) {
+  if (decimal_display_literal_number(text).has_value())
+    return false;
+  if (zero_digit_tail_display_program(text).has_value())
+    return false;
+  if (sign_digit_literal_display_program(text).has_value())
+    return false;
+
+  const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
+      preferred_first_splice_display_literal_program(text);
+  if (first_splice.has_value() && first_splice->first == 0)
+    return false;
+
+  const std::optional<DisplayLiteralProgram> direct = display_literal_program(text);
+  if (direct.has_value() && direct->kind != "error")
+    return should_use_first_splice_display_literal(text);
+  return should_use_first_splice_display_literal(text) ||
+         signed_first_splice_display_literal_program(text).has_value() ||
+         exponent_tail_display_literal_program(text).has_value();
 }
 
 Expression number_expression(std::string raw) {

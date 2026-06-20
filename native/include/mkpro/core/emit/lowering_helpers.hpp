@@ -89,6 +89,15 @@ std::string normalize_display_template_literal(std::string_view text);
 std::optional<int> display_literal_point_exponent(std::string_view text);
 std::optional<FirstSpliceDisplayLiteralProgram>
 first_splice_display_literal_program(std::string_view text);
+std::optional<FirstSpliceDisplayLiteralProgram>
+signed_first_splice_display_literal_program(std::string_view text);
+std::optional<FirstSpliceDisplayLiteralProgram>
+exponent_tail_display_literal_program(std::string_view text);
+std::optional<FirstSpliceDisplayLiteralProgram>
+preferred_first_splice_display_literal_program(std::string_view text);
+std::optional<int> display_literal_trailing_zero_exponent(std::string_view text);
+bool should_use_first_splice_display_literal(std::string_view text);
+bool should_use_preloaded_display_literal(std::string_view text);
 Expression number_expression(std::string raw);
 Expression identifier_expression(std::string name);
 Expression binary_expression(Expression left, std::string op, Expression right);

@@ -43,7 +43,8 @@ program FormattedCoordReport {
     require(name.find("__display_mask_body_") != 0,
             "formatted coord report should not allocate generic display-mask body scratch");
   }
-  require(result.listing.find("setup display literal") != std::string::npos,
+  require(std::any_of(result.preloads.begin(), result.preloads.end(),
+                      [](const PreloadReport& preload) { return preload.value == "8,-00--_"; }),
           "formatted coord report should preload its verified video mask");
   require(result.listing.find("display formatted mask") != std::string::npos,
           "formatted coord report should recall the preloaded mask");
@@ -153,6 +154,42 @@ program SignDigitLiteralScreen {
                         return step.opcode == 0x50 && step.comment == "show literal";
                       }),
           "sign-digit literal display should emit the calculator stop");
+
+  CompileOptions display_preload_options;
+  display_preload_options.general_constant_preloads = true;
+  const CompileResult text_literal_preload = compile_source(R"mkpro(
+program LiteralAlphabetScreen {
+  loop {
+    show("---")
+    show("8-LСГ90")
+    show("700-----8")
+  }
+}
+)mkpro",
+                                                            display_preload_options);
+  require(text_literal_preload.implemented,
+          "native compiler should lower preloaded game-style text literals");
+  require(text_literal_preload.diagnostics.empty(),
+          "preloaded text literal display compile should not report diagnostics");
+  require(has_optimization(text_literal_preload, "screen-text-literal-preload"),
+          "preloaded text literal display should report the TS strategy name");
+  require(has_optimization(text_literal_preload, "setup-display-literal-minus-source-reuse"),
+          "setup display literal preload should report minus-source reuse");
+  require(has_optimization(text_literal_preload, "setup-display-literal-first-digit-reuse"),
+          "setup display literal preload should report first-digit reuse");
+  require(text_literal_preload.setup_program.has_value(),
+          "preloaded text literal display should expose a setup program");
+  require(std::any_of(
+              text_literal_preload.steps.begin(), text_literal_preload.steps.end(),
+              [](const ResolvedStep& step) { return step.comment == "display literal preload"; }),
+          "preloaded text literal display should recall the prepared literal");
+  require(std::any_of(text_literal_preload.setup_program->steps.begin(),
+                      text_literal_preload.setup_program->steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment.has_value() &&
+                               step.comment->find("first digit reuse") != std::string::npos;
+                      }),
+          "setup display literal preload should use first-digit reuse instructions");
 }
 
 } // namespace mkpro::tests

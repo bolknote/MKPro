@@ -62,7 +62,6 @@ using core::emit::display_literal_mantissa_cells;
 using core::emit::display_literal_program;
 using core::emit::DisplayLiteralProgram;
 using core::emit::divide_expression;
-using core::emit::first_splice_display_literal_program;
 using core::emit::FirstSpliceDisplayLiteralProgram;
 using core::emit::frac_expression;
 using core::emit::identifier_expression;
@@ -80,6 +79,8 @@ using core::emit::number_expression;
 using core::emit::offset_expression;
 using core::emit::one_minus_expression;
 using core::emit::pow10_expression;
+using core::emit::preferred_first_splice_display_literal_program;
+using core::emit::should_use_preloaded_display_literal;
 using core::emit::sign_digit_literal_display_program;
 using core::emit::sign_expression;
 using core::emit::SignDigitLiteralDisplayProgram;
@@ -266,6 +267,16 @@ std::string format_number_literal(double value) {
 
 std::string normalize_number_key(const std::string& value) {
   return lower_ascii(trim_ascii(value));
+}
+
+std::string normalize_preload_key(const std::string& value) {
+  const std::string trimmed = trim_ascii(value);
+  if (should_use_preloaded_display_literal(trimmed) ||
+      display_literal_program(trimmed).has_value() ||
+      preferred_first_splice_display_literal_program(trimmed).has_value()) {
+    return trimmed;
+  }
+  return normalize_number_key(trimmed);
 }
 
 int number_entry_cost(const std::string& value) {
@@ -8119,8 +8130,10 @@ void collect_display_literal_preload_values(const std::string& literal,
                                             std::set<std::string>& values) {
   if (const std::optional<LeadingZeroHexProductPlan> plan =
           leading_zero_hex_product_display_program(literal)) {
-    values.insert(normalize_number_key(plan->source_literal));
+    values.insert(normalize_preload_key(plan->source_literal));
   }
+  if (should_use_preloaded_display_literal(literal))
+    values.insert(normalize_preload_key(literal));
 }
 
 void collect_preload_number_literals_from_display_items(const std::vector<DisplayItem>& items,
@@ -8500,7 +8513,7 @@ std::string legacy_preloaded_number_name(const std::string& value) {
 }
 
 bool reserve_preloaded_number(LoweringContext& context, const std::string& value) {
-  const std::string key = normalize_number_key(value);
+  const std::string key = normalize_preload_key(value);
   if (context.suppress_constant_preloads.contains(key))
     return false;
   if (context.preloaded_numbers.contains(key))
@@ -8529,7 +8542,7 @@ bool reserve_preloaded_number(LoweringContext& context, const std::string& value
 
 void reserve_preloaded_number_at(LoweringContext& context, const std::string& register_name,
                                  const std::string& value) {
-  const std::string key = normalize_number_key(value);
+  const std::string key = normalize_preload_key(value);
   const std::string name = preloaded_number_name(key);
   bind_register(context, name, register_index(register_name));
   context.preloaded_numbers[key] = name;
@@ -8543,7 +8556,7 @@ bool reserve_bit_mask_helper_preloads(LoweringContext& context) {
 }
 
 bool has_preloaded_number(const LoweringContext& context, const std::string& value) {
-  return context.preloaded_numbers.contains(normalize_number_key(value));
+  return context.preloaded_numbers.contains(normalize_preload_key(value));
 }
 
 void plan_spatial_line_count_preloads(LoweringContext& context, const V2Program& program) {
@@ -10324,6 +10337,28 @@ void report_screen_video_literal_lowering(LoweringContext& context, int line) {
                                      " as a literal calculator video string.");
 }
 
+bool lower_preloaded_display_literal(LoweringContext& context, const std::string& literal,
+                                     int line) {
+  if (!should_use_preloaded_display_literal(literal))
+    return false;
+  const std::string key = normalize_preload_key(literal);
+  const auto preload_it = context.preloaded_numbers.find(key);
+  if (preload_it == context.preloaded_numbers.end())
+    return false;
+
+  emit_recall(context, preload_it->second);
+  if (!context.emitter.items.empty()) {
+    context.emitter.items.back().comment = "display literal preload";
+    context.emitter.items.back().source_line = line;
+  }
+  context.emitter.emit_op(0x50, "С/П", "show literal", line);
+  report_screen_literal_lowering(context, "screen-text-literal-preload",
+                                 "Displayed screen literal at line " + std::to_string(line) +
+                                     " from prebuilt literal R" +
+                                     register_text_for(context, preload_it->second) + ".");
+  return true;
+}
+
 bool lower_leading_zero_hex_product_display(LoweringContext& context, const std::string& literal,
                                             int line) {
   const std::optional<LeadingZeroHexProductPlan> plan =
@@ -10505,6 +10540,10 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
                                          std::to_string(statement.line) + " as a plain pause.");
       return true;
     }
+    if (lower_preloaded_display_literal(context, *literal, statement.line)) {
+      report_screen_video_literal_lowering(context, statement.line);
+      return true;
+    }
     if (const std::optional<DisplayLiteralProgram> program = display_literal_program(*literal)) {
       if (!core::emit::emit_direct_display_literal_program(context.emitter, *program,
                                                            statement.line))
@@ -10541,7 +10580,7 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
       return true;
     }
     if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
-            first_splice_display_literal_program(*literal)) {
+            preferred_first_splice_display_literal_program(*literal)) {
       const std::string scratch = "__display_first_literal";
       if (!ensure_hidden_register(context, scratch))
         return false;
@@ -10703,7 +10742,7 @@ bool lower_literal_terminal_stop(LoweringContext& context, const std::string& li
   }
 
   if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
-          first_splice_display_literal_program(literal)) {
+          preferred_first_splice_display_literal_program(literal)) {
     const std::string scratch = "__display_first_literal";
     if (!ensure_hidden_register(context, scratch))
       return false;
