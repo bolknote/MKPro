@@ -122,6 +122,37 @@ program ZeroDigitTailScreen {
                         return step.opcode == 0x50 && step.comment == "show literal";
                       }),
           "zero-digit tail display should emit the calculator stop");
+
+  const CompileResult sign_digit = compile_source(R"mkpro(
+program SignDigitLiteralScreen {
+  loop {
+    show("3Е0000021")
+  }
+}
+)mkpro");
+  require(sign_digit.implemented, "native compiler should lower sign-digit display literals");
+  require(sign_digit.diagnostics.empty(),
+          "sign-digit literal display compile should not report diagnostics");
+  require(has_optimization(sign_digit, "screen-sign-digit-literal-lowering"),
+          "sign-digit literal display should report the TS strategy name");
+  require(has_optimization(sign_digit, "screen-video-literal-lowering"),
+          "sign-digit literal display should report the outer literal-screen lowering strategy");
+  require(std::any_of(sign_digit.steps.begin(), sign_digit.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x3a && step.comment == "display sign-digit E source";
+                      }),
+          "sign-digit literal display should build the E source");
+  require(std::any_of(sign_digit.steps.begin(), sign_digit.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode >= 0xd0 && step.opcode <= 0xd6 &&
+                               step.comment == "display sign-digit indirect normalize";
+                      }),
+          "sign-digit literal display should normalize through indirect memory");
+  require(std::any_of(sign_digit.steps.begin(), sign_digit.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x50 && step.comment == "show literal";
+                      }),
+          "sign-digit literal display should emit the calculator stop");
 }
 
 } // namespace mkpro::tests

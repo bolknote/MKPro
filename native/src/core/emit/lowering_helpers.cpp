@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <cmath>
+#include <iomanip>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -363,6 +366,51 @@ std::optional<ZeroDigitTailDisplayProgram> zero_digit_tail_display_program(std::
   if (sign_digit < 2 || sign_digit > 9 || tail != 14)
     return std::nullopt;
   return ZeroDigitTailDisplayProgram{.input = sign_digit - 1};
+}
+
+std::optional<SignDigitLiteralDisplayProgram>
+sign_digit_literal_display_program(std::string_view text) {
+  const std::optional<std::vector<int>> cells = display_literal_cells(text);
+  if (!cells.has_value() || cells->size() != 9U)
+    return std::nullopt;
+
+  const int sign_digit = cells->at(0);
+  if (sign_digit < 2 || sign_digit > 9)
+    return std::nullopt;
+
+  const int first = cells->at(1);
+  if (!((first >= 0 && first <= 9) || first == 14))
+    return std::nullopt;
+
+  std::string lower;
+  lower.reserve(7);
+  for (std::size_t index = 2; index < cells->size(); ++index) {
+    const int cell = cells->at(index);
+    if (cell < 0 || cell > 9)
+      return std::nullopt;
+    lower.push_back(static_cast<char>('0' + cell));
+  }
+
+  int target_lower = 0;
+  const char* begin = lower.data();
+  const char* end = begin + lower.size();
+  const std::from_chars_result parsed = std::from_chars(begin, end, target_lower);
+  if (parsed.ec != std::errc{} || parsed.ptr != end)
+    return std::nullopt;
+
+  const int indirect_steps = sign_digit - 1;
+  const int start_lower = target_lower - indirect_steps;
+  if (start_lower < 0 || start_lower > 9999999)
+    return std::nullopt;
+
+  std::ostringstream padded;
+  padded << "1" << std::setw(7) << std::setfill('0') << start_lower;
+  return SignDigitLiteralDisplayProgram{
+      .sign_digit = sign_digit,
+      .first = first == 14 ? "E" : std::string(1, static_cast<char>('0' + first)),
+      .start = padded.str(),
+      .indirect_steps = indirect_steps,
+  };
 }
 
 std::optional<std::vector<int>> display_literal_mantissa_cells(std::string_view text) {

@@ -80,7 +80,9 @@ using core::emit::number_expression;
 using core::emit::offset_expression;
 using core::emit::one_minus_expression;
 using core::emit::pow10_expression;
+using core::emit::sign_digit_literal_display_program;
 using core::emit::sign_expression;
+using core::emit::SignDigitLiteralDisplayProgram;
 using core::emit::spatial_bit_index_expression_for_board;
 using core::emit::spatial_hit_expression;
 using core::emit::subtract_expression;
@@ -10391,6 +10393,97 @@ bool lower_zero_digit_tail_display(LoweringContext& context, const std::string& 
   return true;
 }
 
+std::optional<std::pair<int, int>>
+sign_digit_literal_scratch_registers(const LoweringContext& context) {
+  std::set<int> used;
+  for (const auto& [unused_name, index] : context.register_index_by_name) {
+    (void)unused_name;
+    used.insert(index);
+  }
+
+  std::optional<int> indirect;
+  for (const int candidate : {0x4, 0x5, 0x6}) {
+    if (!used.contains(candidate)) {
+      indirect = candidate;
+      break;
+    }
+  }
+  if (!indirect.has_value())
+    return std::nullopt;
+
+  const std::vector<int>& order = core::register_order_indices();
+  for (auto it = order.rbegin(); it != order.rend(); ++it) {
+    if (*it != *indirect && !used.contains(*it))
+      return std::pair<int, int>{*indirect, *it};
+  }
+  return std::nullopt;
+}
+
+void emit_register_op(MachineEmitter& emitter, int base, int reg, std::string_view mnemonic,
+                      std::string comment, int line, bool raw = false) {
+  const std::string reg_text = core::register_name_for_index(reg);
+  emitter.emit_op(base + reg, std::string(mnemonic) + " " + reg_text, std::move(comment), line,
+                  raw);
+}
+
+void emit_sign_digit_first_cell_splice(MachineEmitter& emitter, int line) {
+  emitter.emit_op(0x14, "<->", "display sign-digit first-cell splice", line);
+  emitter.emit_op(0x54, "К НОП", "display sign-digit first-cell splice", line, true);
+  emitter.emit_op(0x0c, "ВП", "display sign-digit first-cell splice", line);
+}
+
+void emit_sign_digit_indirect_step(MachineEmitter& emitter, int reg, int line) {
+  emit_register_op(emitter, 0x40, reg, "X->П", "display sign-digit indirect scratch", line, true);
+  emit_register_op(emitter, 0xd0, reg, "К П->X", "display sign-digit indirect normalize", line);
+  emit_register_op(emitter, 0x60, reg, "П->X", "display sign-digit indirect body", line);
+}
+
+bool lower_sign_digit_literal_display(LoweringContext& context, const std::string& literal,
+                                      int line) {
+  const std::optional<SignDigitLiteralDisplayProgram> program =
+      sign_digit_literal_display_program(literal);
+  if (!program.has_value())
+    return false;
+  const std::optional<std::pair<int, int>> scratch = sign_digit_literal_scratch_registers(context);
+  if (!scratch.has_value())
+    return false;
+  const int indirect = scratch->first;
+  const int source = scratch->second;
+
+  context.emitter.emit_number("11");
+  context.emitter.emit_op(0x3a, "К ИНВ", "display sign-digit E source", line);
+  context.emitter.emit_op(0x35, "К {x}", "display sign-digit E source", line);
+  emit_register_op(context.emitter, 0x40, source, "X->П", "display sign-digit E source", line,
+                   true);
+
+  emit_register_op(context.emitter, 0x60, source, "П->X", "display sign-digit source", line);
+  context.emitter.emit_number(program->start);
+  emit_sign_digit_first_cell_splice(context.emitter, line);
+
+  for (int index = 0; index < program->indirect_steps; ++index) {
+    emit_sign_digit_indirect_step(context.emitter, indirect, line);
+    if (index < program->indirect_steps - 1) {
+      emit_register_op(context.emitter, 0x60, source, "П->X", "display sign-digit source", line);
+      emit_register_op(context.emitter, 0x60, indirect, "П->X", "display sign-digit body", line);
+      emit_sign_digit_first_cell_splice(context.emitter, line);
+    }
+  }
+
+  if (program->first == "E") {
+    emit_register_op(context.emitter, 0x60, source, "П->X", "display sign-digit final source",
+                     line);
+  } else {
+    context.emitter.emit_number(program->first);
+  }
+  emit_register_op(context.emitter, 0x60, indirect, "П->X", "display sign-digit final body", line);
+  emit_sign_digit_first_cell_splice(context.emitter, line);
+  context.emitter.emit_op(0x50, "С/П", "show literal", line);
+  report_screen_literal_lowering(context, "screen-sign-digit-literal-lowering",
+                                 "Lowered screen literal at line " + std::to_string(line) +
+                                     " through indirect sign-digit display construction.");
+  return true;
+}
+
 bool lower_display_statement(LoweringContext& context, const V2Statement& statement) {
   if (!statement.items.has_value()) {
     context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
@@ -10440,6 +10533,10 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
       return true;
     }
     if (lower_zero_digit_tail_display(context, *literal, statement.line)) {
+      report_screen_video_literal_lowering(context, statement.line);
+      return true;
+    }
+    if (lower_sign_digit_literal_display(context, *literal, statement.line)) {
       report_screen_video_literal_lowering(context, statement.line);
       return true;
     }
