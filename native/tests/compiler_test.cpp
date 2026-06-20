@@ -3839,6 +3839,96 @@ program MembershipMaskRun {
                         }) == 2,
           "failed membership mask run should use the reusable mask for both set updates");
 
+  const CompileResult fractional_membership_x2 = compile_source(R"mkpro(
+program FractionalMembershipMaskX2Set {
+  state {
+    pos: packed = 1.0000008
+    marks: packed = 0
+  }
+
+  loop {
+    if bit_and(marks, frac(pos)) != 0 {
+      halt(9)
+    }
+    else {
+      marks = bit_or(marks, frac(pos))
+    }
+    halt(marks)
+  }
+}
+)mkpro",
+                                                        membership_options);
+  require(fractional_membership_x2.implemented,
+          "native compiler should lower fractional membership X2 restore");
+  require(fractional_membership_x2.diagnostics.empty(),
+          "fractional membership X2 restore should not report diagnostics");
+  require(has_optimization(fractional_membership_x2, "membership-collection-x2-restore"),
+          "fractional membership set should report X2 collection restore");
+  require(has_optimization(fractional_membership_x2, "fractional-membership-mask-test"),
+          "fractional membership set should skip redundant fractional extraction");
+  require(!has_optimization(fractional_membership_x2, "membership-mask-stack-test-reuse"),
+          "fractional membership X2 restore should not use the scratch-mask path");
+  require(std::any_of(fractional_membership_x2.steps.begin(),
+                      fractional_membership_x2.steps.end(), [](const ResolvedStep& step) {
+                        return step.comment == "guard X2 restore gap";
+                      }),
+          "fractional membership X2 restore should insert the preserving no-op");
+  require(std::any_of(fractional_membership_x2.steps.begin(),
+                      fractional_membership_x2.steps.end(), [](const ResolvedStep& step) {
+                        return step.comment == "restore membership collection from X2";
+                      }),
+          "fractional membership X2 restore should restore the collection from X2");
+
+  const CompileResult membership_current_x_scratch = compile_source(R"mkpro(
+program MembershipMaskCurrentXScratch {
+  state {
+    mask: packed = 0
+    occupied: packed = 0
+    marks: packed = 0
+  }
+
+  loop {
+    mask = occupied + 0.1
+    if bit_and(occupied, mask) != 0 {
+      halt(0)
+    }
+    else {
+      marks = bit_or(marks, mask)
+      halt(marks)
+    }
+  }
+}
+)mkpro",
+                                                          membership_options);
+  require(membership_current_x_scratch.implemented,
+          "native compiler should lower current-X membership mask scratch");
+  require(membership_current_x_scratch.diagnostics.empty(),
+          "current-X membership mask scratch should not report diagnostics");
+  require(has_optimization(membership_current_x_scratch, "membership-mask-current-x-scratch"),
+          "current-X membership mask scratch should report the TS strategy name");
+  require(has_optimization(membership_current_x_scratch, "membership-mask-stack-test-reuse"),
+          "current-X membership mask scratch should reuse the stack-held mask for the test");
+  require(!has_optimization(membership_current_x_scratch, "membership-collection-x2-restore"),
+          "current-X membership mask scratch should not use X2 collection restore");
+  const auto scratch_index =
+      std::find_if(membership_current_x_scratch.steps.begin(),
+                   membership_current_x_scratch.steps.end(), [](const ResolvedStep& step) {
+                     return step.comment == "cell bit mask scratch";
+                   });
+  const auto test_index =
+      std::find_if(membership_current_x_scratch.steps.begin(),
+                   membership_current_x_scratch.steps.end(), [](const ResolvedStep& step) {
+                     return step.comment == "membership test with reused mask";
+                   });
+  require(scratch_index != membership_current_x_scratch.steps.end(),
+          "current-X membership mask scratch should store the reusable mask");
+  require(scratch_index != membership_current_x_scratch.steps.begin(),
+          "current-X membership mask scratch should have a preceding step");
+  require((scratch_index - 1)->comment != "recall mask",
+          "current-X membership mask scratch should not recall mask before storing it");
+  require(test_index > scratch_index,
+          "current-X membership mask scratch should test after storing the scratch");
+
   const CompileResult tail_display = compile_source(R"mkpro(
 program TailDisplay {
   state {

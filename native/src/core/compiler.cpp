@@ -6802,6 +6802,7 @@ void emit_number_or_preload(LoweringContext& context, const std::string& value,
 bool lower_expression_to_x(LoweringContext& context, const Expression& expression);
 bool lower_call_to_x(LoweringContext& context, const Expression& expression);
 bool ensure_hidden_register(LoweringContext& context, const std::string& name);
+bool expression_is_deterministic_for_test_and_set(const Expression& expression);
 bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& predicate,
                                   bool negated, const std::string& false_label, int source_line,
                                   std::optional<std::string> branch_comment = std::nullopt);
@@ -14255,6 +14256,42 @@ bool expression_is_membership_clear(const Expression& expression, const std::str
          matches(expression.args.at(1), expression.args.at(0));
 }
 
+bool expression_is_membership_set(const Expression& expression, const std::string& collection,
+                                  const Expression& mask) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_or" ||
+      expression.args.size() != 2U) {
+    return false;
+  }
+  const auto matches = [&](const Expression& left, const Expression& right) {
+    return left.kind == "identifier" && left.name == collection && expression_equals(right, mask);
+  };
+  return matches(expression.args.at(0), expression.args.at(1)) ||
+         matches(expression.args.at(1), expression.args.at(0));
+}
+
+bool expression_is_known_fractional(const Expression& expression) {
+  const std::optional<double> literal = numeric_literal_value(expression);
+  if (literal.has_value())
+    return std::fabs(*literal) < 1.0;
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr)
+    return expression_is_known_fractional(*expression.expr);
+  return expression.kind == "call" && lower_ascii(expression.callee) == "frac" &&
+         expression.args.size() == 1U;
+}
+
+void emit_membership_fraction_if_needed(LoweringContext& context, const Expression& mask,
+                                        std::string comment, int line) {
+  if (expression_is_known_fractional(mask)) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "fractional-membership-mask-test",
+        .detail = "Skipped fractional extraction for a known-fractional membership mask at line " +
+                  std::to_string(line) + ".",
+    });
+    return;
+  }
+  context.emitter.emit_op(0x35, "К {x}", std::move(comment), line);
+}
+
 bool emit_y_preserving_membership_mask(LoweringContext& context, const Expression& mask, int line) {
   if (mask.kind == "identifier") {
     emit_recall(context, mask.name);
@@ -15191,6 +15228,150 @@ bool lower_cells_contains_set_reuse_if(LoweringContext& context, const V2Stateme
   return true;
 }
 
+struct MaskMembershipSetPrefix {
+  std::string target;
+  int line = 0;
+  std::vector<V2Statement> tail;
+};
+
+std::optional<MaskMembershipSetPrefix>
+mask_membership_set_prefix(const std::vector<V2Statement>& statements,
+                           const MaskMembershipCondition& membership) {
+  if (statements.empty())
+    return std::nullopt;
+  const V2Statement& set = statements.front();
+  if (set.kind != "v2_assign" || !set.target.has_value() || !set.expr.has_value())
+    return std::nullopt;
+  const Expression target = parse_expression(*set.target, set.line);
+  if (target.kind != "identifier")
+    return std::nullopt;
+  if (!expression_is_membership_set(parse_expression(*set.expr, set.line), target.name,
+                                    membership.mask)) {
+    return std::nullopt;
+  }
+  return MaskMembershipSetPrefix{
+      .target = target.name,
+      .line = set.line,
+      .tail = std::vector<V2Statement>(statements.begin() + 1, statements.end()),
+  };
+}
+
+bool emit_mask_membership_test_with_scratch(LoweringContext& context,
+                                            const MaskMembershipCondition& membership,
+                                            const std::string& scratch, int line) {
+  if (!hidden_register_available(context, scratch))
+    return false;
+  if (!ensure_hidden_register(context, scratch))
+    return false;
+  if (membership.mask.kind == "identifier" &&
+      context.emitter.current_x_aliases.contains(membership.mask.name)) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "membership-mask-current-x-scratch",
+        .detail = "Stored " + membership.mask.name +
+                  " directly from X as a reusable membership mask scratch at line " +
+                  std::to_string(line) + ".",
+    });
+  } else if (!lower_expression_to_x(context, membership.mask)) {
+    return false;
+  }
+  emit_store(context, scratch, "cell bit mask scratch");
+  emit_recall(context, membership.collection);
+  context.emitter.emit_op(0x37, "К ∧", "membership test with reused mask", line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "membership-mask-stack-test-reuse",
+      .detail = "Kept " + scratch + " on the stack for a membership test at line " +
+                std::to_string(line) + ".",
+  });
+  emit_membership_fraction_if_needed(context, membership.mask, "membership fraction", line);
+  return true;
+}
+
+bool emit_membership_collection_x2_test(LoweringContext& context,
+                                        const MaskMembershipCondition& membership, int line) {
+  if (membership.mask.kind == "identifier" && x_holds_identifier(context, membership.mask.name)) {
+    // Keep the current X mask in place; recalling the collection lifts it into Y.
+  } else if (membership.mask.kind == "identifier") {
+    emit_recall(context, membership.mask.name);
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "membership X2 mask " + membership.mask.name;
+  } else if (!lower_expression_to_x(context, membership.mask)) {
+    return false;
+  }
+  emit_recall(context, membership.collection);
+  if (!context.emitter.items.empty())
+    context.emitter.items.back().comment = "membership X2 collection " + membership.collection;
+  context.emitter.emit_op(0x37, "К ∧", "membership test with X2-restorable collection", line);
+  emit_membership_fraction_if_needed(context, membership.mask, "membership fraction", line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "membership-collection-x2-restore",
+      .detail = "Kept the membership mask in Y and " + membership.collection +
+                " in X2 for a membership set at line " + std::to_string(line) + ".",
+  });
+  return true;
+}
+
+bool lower_mask_membership_set_reuse_if(LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value() || statement.negated ||
+      statement.else_body.empty()) {
+    return false;
+  }
+  const std::optional<MaskMembershipCondition> membership =
+      match_mask_membership_condition(context, *statement.predicate, false, statement.line);
+  if (!membership.has_value())
+    return false;
+  const std::optional<MaskMembershipSetPrefix> set =
+      mask_membership_set_prefix(statement.else_body, *membership);
+  if (!set.has_value())
+    return false;
+
+  const bool x2_restore =
+      set->target == membership->collection && membership_mask_preserves_y(membership->mask) &&
+      expression_is_deterministic_for_test_and_set(membership->mask);
+  if (x2_restore) {
+    if (!emit_membership_collection_x2_test(context, *membership, statement.line))
+      return false;
+  } else {
+    const std::string scratch = bit_mask_scratch_name(statement);
+    if (!emit_mask_membership_test_with_scratch(context, *membership, scratch, statement.line))
+      return false;
+  }
+
+  const std::string false_label = context.emitter.fresh_label("if_false");
+  const bool then_stops = statements_always_stop(context, statement.then_body);
+  const std::string end_label = then_stops ? std::string{} : context.emitter.fresh_label("if_end");
+  context.emitter.emit_jump(0x57, "F x!=0", false_label, "false branch for !=",
+                            statement.line);
+  if (!lower_statement_block(context, statement.then_body))
+    return false;
+  if (!then_stops)
+    context.emitter.emit_jump(0x51, "БП", end_label, "if end", statement.line);
+  context.emitter.emit_label(false_label, {.hidden = true});
+
+  if (x2_restore) {
+    if (expression_is_known_fractional(membership->mask))
+      context.emitter.emit_op(0x54, "К НОП", "guard X2 restore gap", set->line);
+    context.emitter.emit_op(0x0a, ".", "restore membership collection from X2", set->line);
+    context.emitter.emit_op(0x38, "К ∨", "bit_set with X2-restored collection", set->line);
+    emit_store(context, set->target, "set " + set->target);
+  } else {
+    emit_bit_set_collection_with_scratch(context, set->target, bit_mask_scratch_name(statement),
+                                         set->line);
+  }
+  if (!lower_statement_block(context, set->tail))
+    return false;
+  if (!then_stops)
+    context.emitter.emit_label(end_label, {.hidden = true});
+  if (!x2_restore)
+    report_membership_set_reuse(context,
+                                std::vector<CellsSetUpdate>{CellsSetUpdate{
+                                    .collection = set->target,
+                                    .item = membership->mask,
+                                    .line = set->line,
+                                }},
+                                statement.line);
+  return true;
+}
+
 bool lower_adjacent_cells_set_mask_reuse(LoweringContext& context, const V2Statement& first,
                                          const V2Statement& second) {
   const std::optional<std::pair<std::string, Expression>> first_set =
@@ -15794,6 +15975,10 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
     if (has_errors(context.diagnostics))
       return false;
     if (lower_cells_contains_set_reuse_if(context, statement))
+      return true;
+    if (has_errors(context.diagnostics))
+      return false;
+    if (lower_mask_membership_set_reuse_if(context, statement))
       return true;
     if (has_errors(context.diagnostics))
       return false;
