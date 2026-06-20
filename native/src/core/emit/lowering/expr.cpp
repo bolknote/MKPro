@@ -142,6 +142,98 @@ bool lower_commutative_call_with_destructive_selector_last(
   return true;
 }
 
+std::optional<std::size_t> packed_grid_macro_arity(const std::string& name) {
+  static const std::map<std::string, std::size_t> arities = {
+      {"grid_norm", 1},    {"grid_wrap", 1},     {"bit_mask", 1},
+      {"bit_has", 2},      {"bit_set", 2},       {"bit_clear", 2},
+      {"bit_toggle", 2},   {"diag_left_index", 2},
+      {"diag_right_index", 2},
+      {"cell_mask", 2},    {"cell_has", 3},      {"cell_set", 3},
+      {"cell_clear", 3},   {"cell_toggle", 3},   {"cell_used", 3},
+      {"cell_mark", 3},    {"digit_at", 2},      {"digit_add", 3},
+      {"digit_set", 3},    {"packed_add", 3},    {"packed_digit", 2},
+      {"packed_score", 2},
+  };
+  const auto it = arities.find(name);
+  return it == arities.end() ? std::nullopt : std::optional<std::size_t>{it->second};
+}
+
+Expression digit_place_expression(Expression index) {
+  return pow10_expression(subtract_expression(std::move(index), number_expression("1")));
+}
+
+Expression packed_digit_expression(Expression value, Expression index) {
+  return int_expression(multiply_expression(
+      frac_expression(divide_expression(std::move(value), pow10_expression(std::move(index)))),
+      number_expression("10")));
+}
+
+Expression digit_set_expression(Expression value, Expression index, Expression digit) {
+  Expression place = digit_place_expression(index);
+  return add_expression(subtract_expression(value, multiply_expression(
+                                                       packed_digit_expression(value, index), place)),
+                        multiply_expression(std::move(digit), std::move(place)));
+}
+
+std::optional<Expression> packed_grid_expression_macro(const std::string& name,
+                                                       const std::vector<Expression>& args) {
+  if (name == "grid_norm" || name == "grid_wrap")
+    return grid_norm_expression(args.at(0));
+  if (name == "bit_mask")
+    return bit_mask_expression(args.at(0));
+  if (name == "bit_has")
+    return bit_membership_expression(args.at(0), args.at(1));
+  if (name == "bit_set")
+    return call_expression("bit_or", {args.at(0), bit_mask_expression(args.at(1))});
+  if (name == "bit_clear") {
+    return call_expression("bit_and",
+                           {args.at(0), call_expression("bit_not",
+                                                        {bit_mask_expression(args.at(1))})});
+  }
+  if (name == "bit_toggle")
+    return call_expression("bit_xor", {args.at(0), bit_mask_expression(args.at(1))});
+  if (name == "diag_left_index")
+    return positive_grid_norm_expression(add_expression(args.at(0), args.at(1)));
+  if (name == "diag_right_index") {
+    return positive_grid_norm_expression(
+        subtract_expression(subtract_expression(args.at(0), args.at(1)), number_expression("4")));
+  }
+  if (name == "cell_mask")
+    return cell_mask_expression(args.at(0), args.at(1));
+  if (name == "cell_has" || name == "cell_used") {
+    return sign_expression(frac_expression(call_expression(
+        "bit_and", {args.at(0), cell_mask_expression(args.at(1), args.at(2))})));
+  }
+  if (name == "cell_set" || name == "cell_mark")
+    return call_expression("bit_or", {args.at(0), cell_mask_expression(args.at(1), args.at(2))});
+  if (name == "cell_clear") {
+    return call_expression(
+        "bit_and",
+        {args.at(0),
+         call_expression("bit_not", {cell_mask_expression(args.at(1), args.at(2))})});
+  }
+  if (name == "cell_toggle")
+    return call_expression("bit_xor", {args.at(0), cell_mask_expression(args.at(1), args.at(2))});
+  if (name == "digit_add") {
+    return add_expression(args.at(0),
+                          multiply_expression(args.at(2), digit_place_expression(args.at(1))));
+  }
+  if (name == "packed_add")
+    return add_expression(multiply_expression(args.at(2), pow10_expression(args.at(1))),
+                          args.at(0));
+  if (name == "digit_set")
+    return digit_set_expression(args.at(0), args.at(1), args.at(2));
+  if (name == "packed_digit")
+    return packed_digit_expression(args.at(0), args.at(1));
+  if (name == "packed_score") {
+    return call_expression(
+        "sqr", {subtract_expression(frac_expression(divide_expression(
+                                      args.at(0), pow10_expression(args.at(1)))),
+                                  number_expression("0.41200076"))});
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, LoweringContext& context,
@@ -390,6 +482,29 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     return true;
   }
 
+  if (const std::optional<std::size_t> arity = packed_grid_macro_arity(callee);
+      arity.has_value() && expression.args.size() != *arity) {
+    context.diagnostics.push_back(Diagnostic{
+        .severity = DiagnosticSeverity::Error,
+        .code = "native-unsupported",
+        .message = expression.callee + "() expects " + std::to_string(*arity) +
+                   " arguments, got " + std::to_string(expression.args.size()) + ".",
+    });
+    return false;
+  }
+
+  if (const std::optional<Expression> macro =
+          packed_grid_expression_macro(callee, expression.args)) {
+    if (!api.lower_expression_to_x(*macro))
+      return false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "packed-grid-primitive-lowering",
+        .detail = "Lowered " + expression.callee +
+                  "() to reusable 4x4 grid/packed-line arithmetic.",
+    });
+    return true;
+  }
+
   if (callee == "digit_at") {
     if (expression.args.size() != 2) {
       context.diagnostics.push_back(Diagnostic{
@@ -411,6 +526,11 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     api.emitter.emit_op(0x34, "К [x]", "digit_at()");
     api.emitter.current_x_variable.reset();
     api.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "packed-grid-primitive-lowering",
+        .detail = "Lowered " + expression.callee +
+                  "() to reusable 4x4 grid/packed-line arithmetic.",
+    });
     return true;
   }
 

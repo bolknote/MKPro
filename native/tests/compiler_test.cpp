@@ -2125,6 +2125,8 @@ program DigitAtCall {
           "digit_at should compute a decimal place");
   require(digit_at_call.listing.find("digit_at()") != std::string::npos,
           "digit_at should extract an integer digit");
+  require(has_optimization(digit_at_call, "packed-grid-primitive-lowering"),
+          "digit_at should report the TS packed-grid strategy name");
 
   const CompileResult small_set_call = compile_source(R"mkpro(
 program SmallSetCalls {
@@ -2156,6 +2158,38 @@ program SmallSetCalls {
           "eq_any should produce an assignable expression result");
   require(has_optimization(small_set_call, "small-set-primitive-lowering"),
           "near_any()/eq_any() should report the TS strategy name");
+
+  CompileOptions formula_helper_options;
+  formula_helper_options.analysis = true;
+  const CompileResult formula_helpers = compile_source(R"mkpro(
+program FormulaHelpers {
+  state {
+    mask: packed = 0
+    value: packed = 0
+  }
+  loop {
+    value = bit_mask(5) + bit_has(mask, 5)
+    mask = bit_set(mask, 5)
+    value = value + bit_clear(mask, 5) + bit_toggle(mask, 5)
+    value = value + cell_mask(1, 2) + cell_has(mask, 1, 2)
+    mask = cell_set(mask, 1, 2)
+    value = value + cell_clear(mask, 1, 2) + cell_toggle(mask, 1, 2)
+    value = value + digit_at(1234, 2) + digit_add(1000, 1, 7) + digit_set(1234, 2, 9)
+    halt(value)
+  }
+}
+)mkpro",
+                                               formula_helper_options);
+  require(formula_helpers.implemented,
+          "native compiler should lower packed-grid formula helpers");
+  require(formula_helpers.diagnostics.empty(),
+          "packed-grid formula helpers should not report diagnostics");
+  require(has_optimization(formula_helpers, "packed-grid-primitive-lowering"),
+          "packed-grid formula helpers should report the TS strategy name");
+  for (const std::string& opcode : {"15", "24", "34", "35", "37", "38", "39", "3A"}) {
+    require(formula_helpers.hex.find(opcode) != std::string::npos,
+            "packed-grid formula helpers should emit opcode " + opcode);
+  }
 
   const CompileResult bounded_random_call = compile_source(R"mkpro(
 program BoundedRandomCalls {
