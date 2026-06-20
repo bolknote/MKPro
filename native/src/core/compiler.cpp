@@ -13121,6 +13121,28 @@ bool lower_builtin_call_to_x(LoweringContext& context, const Expression& express
   if (callee == "int" && lower_random_integer_call_to_x(context, expression))
     return true;
 
+  if (callee == "packed_score" && context.use_packed_score_helper) {
+    if (expression.args.size() != 2) {
+      context.diagnostics.push_back(
+          diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                     "Function " + expression.callee + " expects two arguments"));
+      return false;
+    }
+    if (!lower_expression_to_x(context, expression.args.at(0)))
+      return false;
+    if (!lower_expression_to_x(context, expression.args.at(1)))
+      return false;
+    context.emitter.emit_jump(0x53, "ПП", packed_score_helper_label(context),
+                              "packed_score helper");
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "packed-score-stack-helper-call",
+        .detail = "Reused shared packed_score stack helper for packed-line scoring.",
+    });
+    return true;
+  }
+
   auto expr_api = expression_emit_api(context);
   if (const std::optional<bool> calculator_builtin =
           core::emit::lower_calculator_builtin_call_to_x(expr_api, context, expression)) {
@@ -13245,17 +13267,6 @@ bool lower_builtin_call_to_x(LoweringContext& context, const Expression& express
           diagnostic(DiagnosticSeverity::Error, "native-unsupported",
                      "Function " + expression.callee + " expects two arguments"));
       return false;
-    }
-    if (context.use_packed_score_helper) {
-      if (!lower_expression_to_x(context, expression.args.at(0)))
-        return false;
-      if (!lower_expression_to_x(context, expression.args.at(1)))
-        return false;
-      context.emitter.emit_jump(0x53, "ПП", packed_score_helper_label(context),
-                                "packed_score helper");
-      context.emitter.current_x_variable.reset();
-      context.emitter.current_x_aliases.clear();
-      return true;
     }
     return lower_expression_to_x(
         context,
@@ -22680,6 +22691,10 @@ bool lower_packed_score_helper(LoweringContext& context) {
   context.emitter.emit_op(0x11, "-", "packed_score helper center");
   context.emitter.emit_op(0x22, "F x^2", "packed_score helper square");
   context.emitter.emit_op(0x52, "В/О", "packed_score helper return");
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-score-stack-helper",
+      .detail = "Emitted shared stack helper for packed_score(value, index).",
+  });
   return true;
 }
 
