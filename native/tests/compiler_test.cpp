@@ -2180,6 +2180,71 @@ program BoundedRandomCalls {
       ++random_range_count;
   }
   require(random_range_count == 2, "bounded random calls should multiply by their range");
+  require(has_optimization(bounded_random_call, "random-range-lowering"),
+          "bounded random calls should report the TS strategy name");
+
+  const CompileResult random_range_sugar = compile_source(R"mkpro(
+program RandomRangeSugar {
+  state {
+    roll: counter 0..99 = 0
+    span: packed = 10
+  }
+
+  loop {
+    roll = int(random(1, span))
+    halt(roll)
+  }
+}
+)mkpro");
+  require(random_range_sugar.implemented,
+          "native compiler should lower nonzero random range integer draws");
+  require(random_range_sugar.diagnostics.empty(),
+          "random range integer compile should not report diagnostics");
+  require(has_optimization(random_range_sugar, "random-range-lowering"),
+          "nonzero random range should report random-range-lowering");
+  require(has_optimization(random_range_sugar, "int-random-range-lowering"),
+          "random range integer draw should report int-random-range-lowering");
+  require(std::none_of(random_range_sugar.steps.begin(), random_range_sugar.steps.end(),
+                       [](const ResolvedStep& step) { return step.mnemonic == "К [x]"; }),
+          "random range integer draw should not use the MK-61 integer opcode");
+
+  const CompileResult random_unit_integer = compile_source(R"mkpro(
+program RandomUnitInteger {
+  loop {
+    halt(int(random()))
+  }
+}
+)mkpro");
+  require(random_unit_integer.implemented,
+          "native compiler should lower unit random integer draws");
+  require(random_unit_integer.diagnostics.empty(),
+          "unit random integer compile should not report diagnostics");
+  require(has_optimization(random_unit_integer, "int-random-range-lowering"),
+          "unit random integer draw should report int-random-range-lowering");
+  require(std::none_of(random_unit_integer.steps.begin(), random_unit_integer.steps.end(),
+                       [](const ResolvedStep& step) { return step.mnemonic == "К [x]"; }),
+          "unit random integer draw should not use the MK-61 integer opcode");
+
+  const CompileResult random_domain = compile_source(R"mkpro(
+program RandomDomain {
+  field: board(1..20, 1..1)
+  state {
+    room: coord(field) = 1
+  }
+
+  loop {
+    room = random(field)
+    halt(room)
+  }
+}
+)mkpro");
+  require(random_domain.implemented, "native compiler should lower runtime random(board)");
+  require(random_domain.diagnostics.empty(),
+          "runtime random(board) compile should not report diagnostics");
+  require(has_optimization(random_domain, "random-range-lowering"),
+          "runtime random(board) should report random-range-lowering");
+  require(has_optimization(random_domain, "int-random-range-lowering"),
+          "runtime random(board) should report int-random-range-lowering");
 
   const CompileResult prior_random_stack_reuse = compile_source(R"mkpro(
 program PriorRandomStackReuse {

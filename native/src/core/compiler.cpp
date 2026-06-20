@@ -7928,6 +7928,14 @@ bool lower_random_board_call_to_x(LoweringContext& context, const V2Board& board
   }
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_aliases.clear();
+  context.optimizations.push_back(OptimizationReport{
+      .name = "random-range-lowering",
+      .detail = "Lowered random(board) through a bounded random coordinate draw.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "int-random-range-lowering",
+      .detail = "Lowered random(board) without К [x] so the MK-61 random sequence keeps moving.",
+  });
   return true;
 }
 
@@ -12178,6 +12186,11 @@ bool is_numeric_zero_expression(const LoweringContext& context, const Expression
   return value.has_value() && std::fabs(*value) < 1e-12;
 }
 
+Expression random_range_expression(const Expression& min, const Expression& max) {
+  return add_expression(
+      min, multiply_expression(call_expression("random", {}), subtract_expression(max, min)));
+}
+
 bool lower_random_call_to_x(LoweringContext& context, const Expression& expression) {
   if (expression.args.empty()) {
     context.emitter.emit_op(0x3b, "К СЧ", "random()");
@@ -12186,10 +12199,14 @@ bool lower_random_call_to_x(LoweringContext& context, const Expression& expressi
 
   if (expression.args.size() == 2) {
     if (!is_numeric_zero_expression(context, expression.args.at(0))) {
-      context.diagnostics.push_back(
-          diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                     "Native random(min, max) lowering currently requires min to be 0"));
-      return false;
+      if (!lower_expression_to_x(
+              context, random_range_expression(expression.args.at(0), expression.args.at(1))))
+        return false;
+      context.optimizations.push_back(OptimizationReport{
+          .name = "random-range-lowering",
+          .detail = "Lowered random(min, max) as min + random() * (max - min).",
+      });
+      return true;
     }
     if (!lower_random_call_to_x(context, Expression{
                                              .kind = "call",
@@ -12201,8 +12218,10 @@ bool lower_random_call_to_x(LoweringContext& context, const Expression& expressi
   }
 
   if (expression.args.size() != 1) {
-    context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                                             "random() expects zero, one, or two arguments"));
+    context.diagnostics.push_back(
+        diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                   "random() expects zero, one, or two arguments, got " +
+                       std::to_string(expression.args.size())));
     return false;
   }
 
@@ -12218,11 +12237,57 @@ bool lower_random_call_to_x(LoweringContext& context, const Expression& expressi
   context.emitter.emit_op(0x12, "*", "random range");
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_aliases.clear();
+  context.optimizations.push_back(OptimizationReport{
+      .name = "random-range-lowering",
+      .detail = "Lowered random(max) as random() * max.",
+  });
+  return true;
+}
+
+bool expression_contains_valid_random(const Expression& expression) {
+  if (expression.kind == "number" || expression.kind == "string" || expression.kind == "identifier")
+    return false;
+  if (expression.kind == "indexed")
+    return expression.index != nullptr && expression_contains_valid_random(*expression.index);
+  if (expression.kind == "unary")
+    return expression.expr != nullptr && expression_contains_valid_random(*expression.expr);
+  if (expression.kind == "binary") {
+    return (expression.left != nullptr && expression_contains_valid_random(*expression.left)) ||
+           (expression.right != nullptr && expression_contains_valid_random(*expression.right));
+  }
+  if (expression.kind == "call") {
+    if (lower_ascii(expression.callee) == "random" && expression.args.size() <= 2)
+      return true;
+    return std::any_of(expression.args.begin(), expression.args.end(),
+                       [](const Expression& arg) { return expression_contains_valid_random(arg); });
+  }
+  return false;
+}
+
+bool lower_random_integer_call_to_x(LoweringContext& context, const Expression& expression) {
+  if (lower_ascii(expression.callee) != "int" || expression.args.size() != 1 ||
+      !expression_contains_valid_random(expression.args.front())) {
+    return false;
+  }
+  if (!lower_expression_to_x(context, expression.args.front()))
+    return false;
+  context.emitter.emit_op(0x0e, "В↑", "random int keep scaled draw");
+  context.emitter.emit_op(0x35, "К {x}", "random int fractional part");
+  context.emitter.emit_op(0x11, "-", "random int floor");
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_aliases.clear();
+  context.optimizations.push_back(OptimizationReport{
+      .name = "int-random-range-lowering",
+      .detail = "Lowered int(random...) without К [x] so the MK-61 random sequence keeps moving.",
+  });
   return true;
 }
 
 bool lower_builtin_call_to_x(LoweringContext& context, const Expression& expression) {
   const std::string callee = lower_ascii(expression.callee);
+  if (callee == "int" && lower_random_integer_call_to_x(context, expression))
+    return true;
+
   auto expr_api = expression_emit_api(context);
   if (const std::optional<bool> calculator_builtin =
           core::emit::lower_calculator_builtin_call_to_x(expr_api, context, expression)) {
