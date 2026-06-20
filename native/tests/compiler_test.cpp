@@ -4248,6 +4248,126 @@ program TerminalThenEnd {
   require(has_optimization(terminal_then_end, "terminal-branch-end-elision"),
           "terminal then branch should report the TS strategy name");
 
+  CompileOptions branch_x_options;
+  branch_x_options.budget = 999;
+  branch_x_options.analysis = true;
+  const CompileResult false_branch_x = compile_source(R"mkpro(
+program FalseBranchXReuse {
+  state {
+    target: packed = 0
+    wumpus: packed = 1
+    arrows: counter 1..5 = 2
+  }
+
+  loop {
+    target = read()
+    if target >= 0 {
+      halt(1)
+    }
+    else {
+      shoot()
+    }
+  }
+
+  fn shoot() {
+    arrows--
+
+    if target + wumpus == 0 {
+      halt(2)
+    }
+    else {
+      halt(arrows)
+    }
+  }
+}
+)mkpro",
+                                                   branch_x_options);
+  require(false_branch_x.implemented,
+          "native compiler should preserve X facts into false branches");
+  require(false_branch_x.diagnostics.empty(),
+          "false-branch X reuse compile should not report diagnostics");
+  require(has_optimization(false_branch_x, "x-preserving-false-branch"),
+          "false-branch X reuse should report the TS strategy name");
+  require(has_optimization(false_branch_x, "indirect-incdec-counter"),
+          "false-branch X reuse fixture should still lower arrows through indirect inc/dec");
+  require(!has_optimization(false_branch_x, "fl-unit-decrement"),
+          "false-branch X reuse should not regress to the FL decrement path");
+
+  const CompileResult fallthrough_x = compile_source(R"mkpro(
+program FallthroughXReuse {
+  state { energy: counter -9..9 = 0 }
+
+  loop {
+    energy = energy + 1 - read()
+    if energy < 0 {
+      halt(energy)
+    }
+    halt(0)
+  }
+}
+)mkpro",
+                                                  branch_x_options);
+  require(fallthrough_x.implemented,
+          "native compiler should preserve X facts into fallthrough branches");
+  require(fallthrough_x.diagnostics.empty(),
+          "fallthrough X reuse compile should not report diagnostics");
+  require(has_optimization(fallthrough_x, "x-preserving-fallthrough-branch"),
+          "fallthrough X reuse should report the TS strategy name");
+
+  const CompileResult false_branch_zero = compile_source(R"mkpro(
+program FalseBranchZeroReuse {
+  state {
+    value: counter 0..9 = 0
+    out: counter 0..9 = 1
+    sink: counter 0..99 = 0
+  }
+
+  loop {
+    if value != 0 {
+      sink = value + out
+    }
+    else {
+      out = 0
+    }
+    halt(out + sink)
+  }
+}
+)mkpro",
+                                                        branch_x_options);
+  require(false_branch_zero.implemented,
+          "native compiler should reuse zero on false inequality branches");
+  require(false_branch_zero.diagnostics.empty(),
+          "false-branch zero reuse compile should not report diagnostics");
+  require(has_optimization(false_branch_zero, "inequality-zero-false-branch"),
+          "false-branch zero reuse should report the TS strategy name");
+  require(has_optimization(false_branch_zero, "known-zero-reuse"),
+          "false-branch zero reuse should feed the existing known-zero optimization");
+
+  const CompileResult equality_zero = compile_source(R"mkpro(
+program EqualityZeroFallthroughReuse {
+  state {
+    value: counter 0..9 = 0
+    out: counter 0..9 = 1
+  }
+
+  loop {
+    if value == 0 {
+      out = 0
+    }
+    halt(out)
+  }
+}
+)mkpro",
+                                                   branch_x_options);
+  require(equality_zero.implemented,
+          "native compiler should reuse zero on equality fallthrough branches");
+  require(equality_zero.diagnostics.empty(),
+          "equality zero fallthrough compile should not report diagnostics");
+  require(has_optimization(equality_zero, "equality-zero-fallthrough"),
+          "equality zero fallthrough should report the TS strategy name");
+  require(has_optimization(equality_zero, "known-zero-reuse"),
+          "equality zero fallthrough should feed the existing known-zero optimization");
+
   const CompileResult show_read_decrement = compile_source(R"mkpro(
 program ReadKeyResourceUnderflow {
   state {

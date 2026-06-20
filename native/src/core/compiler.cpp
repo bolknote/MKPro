@@ -13415,6 +13415,215 @@ void mark_branch_residual_reuse(LoweringContext& context, const Expression& resi
   });
 }
 
+std::string flip_comparison_operands_op(const std::string& op) {
+  if (op == "<")
+    return ">";
+  if (op == "<=")
+    return ">=";
+  if (op == ">")
+    return "<";
+  if (op == ">=")
+    return "<=";
+  return op;
+}
+
+struct NormalizedZeroComparison {
+  Expression expression;
+  std::string op;
+};
+
+std::optional<NormalizedZeroComparison>
+normalize_zero_comparison(LoweringContext& context, const V2Predicate& predicate, bool negated,
+                          int line) {
+  if (predicate.kind != "v2_compare")
+    return std::nullopt;
+  try {
+    const std::string effective_op = negated ? invert_comparison_op(predicate.op) : predicate.op;
+    const Expression left = parse_expression(predicate.left, line);
+    const Expression right = parse_expression(predicate.right, line);
+    if (is_zero_expression(context, right))
+      return NormalizedZeroComparison{.expression = left, .op = effective_op};
+    if (is_zero_expression(context, left)) {
+      return NormalizedZeroComparison{
+          .expression = right,
+          .op = flip_comparison_operands_op(effective_op),
+      };
+    }
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+const V2Statement* first_inline_statement(LoweringContext& context,
+                                          const std::vector<V2Statement>& statements,
+                                          std::set<std::string>& seen) {
+  if (statements.empty())
+    return nullptr;
+  const V2Statement& first = statements.front();
+  if (first.kind != "v2_invoke" || !first.name.has_value() || !first.args.empty() ||
+      !context.inline_statement_rules.contains(*first.name) || seen.contains(*first.name)) {
+    return &first;
+  }
+  const auto rule_it = context.rules.find(*first.name);
+  if (rule_it == context.rules.end())
+    return &first;
+  seen.insert(*first.name);
+  return first_inline_statement(context, rule_it->second->body, seen);
+}
+
+std::vector<V2Statement> inline_statement_prefix(LoweringContext& context,
+                                                 const std::vector<V2Statement>& statements,
+                                                 std::set<std::string>& seen) {
+  if (statements.empty())
+    return statements;
+  const V2Statement& first = statements.front();
+  if (first.kind != "v2_invoke" || !first.name.has_value() || !first.args.empty() ||
+      !context.inline_statement_rules.contains(*first.name) || seen.contains(*first.name)) {
+    return statements;
+  }
+  const auto rule_it = context.rules.find(*first.name);
+  if (rule_it == context.rules.end())
+    return statements;
+  seen.insert(*first.name);
+  return inline_statement_prefix(context, rule_it->second->body, seen);
+}
+
+bool branch_expression_can_use_current_x(const Expression& expression, const std::string& name) {
+  if (expression.kind != "binary" || (expression.op != "+" && expression.op != "*") ||
+      expression.left == nullptr || expression.right == nullptr) {
+    return false;
+  }
+  return (expression.left->kind == "identifier" && expression.left->name == name &&
+          is_simple_stack_load(*expression.right)) ||
+         (expression.right->kind == "identifier" && expression.right->name == name &&
+          is_simple_stack_load(*expression.left));
+}
+
+bool branch_condition_can_use_current_x(LoweringContext& context, const V2Predicate& predicate,
+                                        bool negated, const std::string& name, int line) {
+  const std::optional<NormalizedZeroComparison> normalized =
+      normalize_zero_comparison(context, predicate, negated, line);
+  return normalized.has_value() &&
+         branch_expression_can_use_current_x(normalized->expression, name);
+}
+
+bool statement_starts_with_current_x_use(LoweringContext& context, const V2Statement* statement,
+                                         const std::string& name) {
+  if (statement == nullptr)
+    return false;
+  if (statement->kind == "v2_if" && statement->predicate.has_value())
+    return branch_condition_can_use_current_x(context, *statement->predicate, statement->negated,
+                                              name, statement->line);
+  if ((statement->kind == "v2_assign" || statement->kind == "v2_update") &&
+      statement->expr.has_value()) {
+    try {
+      return branch_expression_can_use_current_x(parse_expression(*statement->expr, statement->line),
+                                                 name);
+    } catch (const std::exception&) {
+      return false;
+    }
+  }
+  if ((statement->kind == "v2_stop" || statement->kind == "v2_preview") &&
+      statement->target.has_value()) {
+    try {
+      const Expression target = parse_expression(*statement->target, statement->line);
+      return target.kind == "identifier" && target.name == name;
+    } catch (const std::exception&) {
+      return false;
+    }
+  }
+  return false;
+}
+
+std::optional<std::string>
+fallthrough_current_x_candidate(LoweringContext& context, const V2Predicate& predicate,
+                                bool negated, const std::vector<V2Statement>& then_body,
+                                int line) {
+  const std::optional<NormalizedZeroComparison> normalized =
+      normalize_zero_comparison(context, predicate, negated, line);
+  if (!normalized.has_value() || !guarded_can_test_against_zero_directly(normalized->op) ||
+      normalized->expression.kind != "identifier") {
+    return std::nullopt;
+  }
+  std::set<std::string> seen;
+  const V2Statement* first = first_inline_statement(context, then_body, seen);
+  if (!statement_starts_with_current_x_use(context, first, normalized->expression.name))
+    return std::nullopt;
+  return normalized->expression.name;
+}
+
+bool fl_opcode_exists_for_register(int index) {
+  return fl_loop_opcode_for_register(index).has_value();
+}
+
+std::optional<std::string>
+false_branch_current_x_candidate(LoweringContext& context, const V2Predicate& predicate,
+                                 bool negated, const std::vector<V2Statement>& else_body,
+                                 int line) {
+  const std::optional<NormalizedZeroComparison> normalized =
+      normalize_zero_comparison(context, predicate, negated, line);
+  if (!normalized.has_value() || !guarded_can_test_against_zero_directly(normalized->op) ||
+      normalized->expression.kind != "identifier") {
+    return std::nullopt;
+  }
+
+  const std::string preserved = normalized->expression.name;
+  std::set<std::string> seen;
+  const std::vector<V2Statement> statements = inline_statement_prefix(context, else_body, seen);
+  std::size_t index = 0;
+  if (!statements.empty()) {
+    const V2Statement& first = statements.front();
+    if (statement_is_unit_decrement(first) && first.target.has_value() &&
+        *first.target != preserved) {
+      const auto register_it = context.register_index_by_name.find(*first.target);
+      if (register_it != context.register_index_by_name.end() &&
+          fl_opcode_exists_for_register(register_it->second)) {
+        index = 1;
+      }
+    }
+  }
+
+  if (index >= statements.size() ||
+      !statement_starts_with_current_x_use(context, &statements.at(index), preserved)) {
+    return std::nullopt;
+  }
+  return preserved;
+}
+
+bool simple_equality_operand(const Expression& expression) {
+  return expression.kind == "identifier" || expression.kind == "number";
+}
+
+bool equality_true_fallthrough_leaves_zero(LoweringContext&, const V2Predicate& predicate,
+                                           bool negated, int line) {
+  if (predicate.kind != "v2_compare")
+    return false;
+  const std::string effective_op = negated ? invert_comparison_op(predicate.op) : predicate.op;
+  if (effective_op != "==")
+    return false;
+  try {
+    return simple_equality_operand(parse_expression(predicate.left, line)) &&
+           simple_equality_operand(parse_expression(predicate.right, line));
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool inequality_false_branch_leaves_zero(LoweringContext& context, const V2Predicate& predicate,
+                                         bool negated, int line) {
+  const std::optional<NormalizedZeroComparison> normalized =
+      normalize_zero_comparison(context, predicate, negated, line);
+  if (!normalized.has_value() || normalized->op != "!=")
+    return false;
+  if (normalized->expression.kind == "call") {
+    const std::string callee = lower_ascii(normalized->expression.callee);
+    if (callee == "coord_list_has" || callee == "__mkpro_negative_zero_ge")
+      return false;
+  }
+  return true;
+}
+
 int branch_order_infinite_cost() {
   return std::numeric_limits<int>::max() / 4;
 }
@@ -13560,11 +13769,42 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
   const bool reuse_false_branch_residual =
       false_branch_residual.has_value() &&
       display_statement_is_single_expression(selected.else_body.front(), *false_branch_residual);
+  const std::optional<std::string> fallthrough_identifier =
+      fallthrough_current_x_candidate(context, *selected.predicate, selected.negated,
+                                      selected.then_body, selected.line);
+  const std::optional<std::string> false_branch_identifier =
+      has_else ? false_branch_current_x_candidate(context, *selected.predicate, selected.negated,
+                                                  selected.else_body, selected.line)
+               : std::nullopt;
+  const bool false_branch_known_zero =
+      has_else &&
+      inequality_false_branch_leaves_zero(context, *selected.predicate, selected.negated,
+                                          selected.line);
+  const bool true_fallthrough_known_zero =
+      equality_true_fallthrough_leaves_zero(context, *selected.predicate, selected.negated,
+                                            selected.line);
   const std::string false_label = context.emitter.fresh_label(has_else ? "if_else" : "if_end");
   const std::string end_label = has_else ? context.emitter.fresh_label("if_end") : false_label;
   if (!lower_condition_false_branch(context, *selected.predicate, selected.negated, false_label,
                                     selected.line))
     return false;
+  if (fallthrough_identifier.has_value()) {
+    mark_current_x(context, *fallthrough_identifier);
+    context.emitter.current_x_known_zero = true_fallthrough_known_zero;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "x-preserving-fallthrough-branch",
+        .detail = "Preserved " + *fallthrough_identifier +
+                  " in X across the true branch of the zero-test at line " +
+                  std::to_string(selected.line) + ".",
+    });
+  } else if (true_fallthrough_known_zero) {
+    context.emitter.current_x_known_zero = true;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "equality-zero-fallthrough",
+        .detail = "Reused the zero left in X by equality comparison at line " +
+                  std::to_string(selected.line) + ".",
+    });
+  }
   if (!lower_statement_block(context, selected.then_body))
     return false;
 
@@ -13573,6 +13813,23 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     if (!then_stops)
       context.emitter.emit_jump(0x51, "БП", end_label, "if end", selected.line);
     context.emitter.emit_label(false_label, {.hidden = true});
+    if (false_branch_identifier.has_value()) {
+      mark_current_x(context, *false_branch_identifier);
+      context.emitter.current_x_known_zero = false_branch_known_zero;
+      context.optimizations.push_back(OptimizationReport{
+          .name = "x-preserving-false-branch",
+          .detail = "Preserved " + *false_branch_identifier +
+                    " in X across the false branch of the zero-test at line " +
+                    std::to_string(selected.line) + ".",
+      });
+    } else if (false_branch_known_zero) {
+      context.emitter.current_x_known_zero = true;
+      context.optimizations.push_back(OptimizationReport{
+          .name = "inequality-zero-false-branch",
+          .detail = "Reused the zero left in X by false branch of inequality comparison at line " +
+                    std::to_string(selected.line) + ".",
+      });
+    }
     if (reuse_false_branch_residual)
       mark_branch_residual_reuse(context, *false_branch_residual, selected.line, "false branch");
     if (!lower_statement_block(context, selected.else_body))
