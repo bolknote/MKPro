@@ -13824,6 +13824,113 @@ bool lower_negated_zero_false_branch(LoweringContext& context, const V2Predicate
   return true;
 }
 
+Expression near_any_margin_expression(const Expression& value, const Expression& radius,
+                                      const Expression& candidate) {
+  return binary_expression(radius, "-",
+                           call_expression("abs", {binary_expression(value, "-", candidate)}));
+}
+
+Expression eq_any_difference_expression(const Expression& value, const Expression& candidate) {
+  return binary_expression(value, "-", candidate);
+}
+
+bool emit_small_set_any_condition(LoweringContext& context, const std::string& kind,
+                                  const std::vector<Expression>& tests,
+                                  const std::pair<int, std::string>& true_test,
+                                  const std::pair<int, std::string>& false_test,
+                                  const std::string& false_label, int source_line) {
+  if (tests.size() < 2U)
+    return false;
+  const std::string true_label = context.emitter.fresh_label(kind + "_any_true");
+  for (std::size_t index = 0; index + 1U < tests.size(); ++index) {
+    if (!lower_expression_to_x(context, tests.at(index)))
+      return false;
+    context.emitter.emit_jump(true_test.first, true_test.second, true_label, kind + " any hit",
+                              source_line);
+  }
+  if (!lower_expression_to_x(context, tests.back()))
+    return false;
+  context.emitter.emit_jump(false_test.first, false_test.second, false_label, kind + " any miss",
+                            source_line);
+  context.emitter.emit_label(true_label, {.hidden = true});
+  return true;
+}
+
+bool emit_small_set_all_condition(LoweringContext& context, const std::string& kind,
+                                  const std::vector<Expression>& tests,
+                                  const std::pair<int, std::string>& false_test,
+                                  const std::string& false_label, int source_line) {
+  if (tests.size() < 2U)
+    return false;
+  for (const Expression& test : tests) {
+    if (!lower_expression_to_x(context, test))
+      return false;
+    context.emitter.emit_jump(false_test.first, false_test.second, false_label, kind + " all miss",
+                              source_line);
+  }
+  return true;
+}
+
+bool lower_small_set_condition_false_branch(LoweringContext& context, const V2Predicate& predicate,
+                                            const std::string& false_label, int source_line) {
+  if (predicate.kind != "v2_compare")
+    return false;
+  const Expression right = parse_expression(predicate.right, source_line);
+  if (!is_zero_expression(context, right))
+    return false;
+
+  const Expression left = parse_expression(predicate.left, source_line);
+  if (left.kind != "call")
+    return false;
+
+  const std::string callee = lower_ascii(left.callee);
+  std::vector<Expression> tests;
+
+  if (callee == "near_any" && left.args.size() >= 4U &&
+      (predicate.op == ">=" || predicate.op == "<")) {
+    const Expression& value = left.args.at(0);
+    const Expression& radius = left.args.at(1);
+    for (std::size_t index = 2; index < left.args.size(); ++index)
+      tests.push_back(near_any_margin_expression(value, radius, left.args.at(index)));
+    const std::optional<std::pair<int, std::string>> true_test = direct_zero_test_opcode("<");
+    const std::optional<std::pair<int, std::string>> false_test = direct_zero_test_opcode(">=");
+    if (!true_test.has_value() || !false_test.has_value())
+      return false;
+    const bool lowered = predicate.op == ">="
+                             ? emit_small_set_any_condition(context, "near_any", tests, *true_test,
+                                                            *false_test, false_label, source_line)
+                             : emit_small_set_all_condition(context, "near_any", tests, *false_test,
+                                                            false_label, source_line);
+    if (!lowered)
+      return false;
+  } else if (callee == "eq_any" && left.args.size() >= 3U &&
+             (predicate.op == "==" || predicate.op == "!=")) {
+    const Expression& value = left.args.at(0);
+    for (std::size_t index = 1; index < left.args.size(); ++index)
+      tests.push_back(eq_any_difference_expression(value, left.args.at(index)));
+    const std::optional<std::pair<int, std::string>> true_test = direct_zero_test_opcode("!=");
+    const std::optional<std::pair<int, std::string>> false_test = direct_zero_test_opcode("==");
+    if (!true_test.has_value() || !false_test.has_value())
+      return false;
+    const bool lowered = predicate.op == "=="
+                             ? emit_small_set_any_condition(context, "eq_any", tests, *true_test,
+                                                            *false_test, false_label, source_line)
+                             : emit_small_set_all_condition(context, "eq_any", tests, *false_test,
+                                                            false_label, source_line);
+    if (!lowered)
+      return false;
+  } else {
+    return false;
+  }
+
+  context.optimizations.push_back(OptimizationReport{
+      .name = "small-set-condition-lowering",
+      .detail = "Lowered " + condition_text(predicate) + " as " + std::to_string(tests.size()) +
+                " direct small-set tests at line " + std::to_string(source_line) + ".",
+  });
+  return true;
+}
+
 bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& predicate,
                                   bool negated, const std::string& false_label, int source_line,
                                   std::optional<std::string> branch_comment) {
@@ -13893,6 +14000,11 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
                   ".",
     });
   }
+
+  if (lower_small_set_condition_false_branch(context, selected_predicate, false_label, source_line))
+    return true;
+  if (has_errors(context.diagnostics))
+    return false;
 
   if (lower_remainder_zero_false_branch(context, selected_predicate, false_label, source_line,
                                         branch_comment))

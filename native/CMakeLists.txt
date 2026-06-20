@@ -138,6 +138,7 @@ add_executable(mkpro_tests
   tests/safe_minmax_test.cpp
   tests/segmented_bitplane_test.cpp
   tests/setup_program_test.cpp
+  tests/small_set_condition_test.cpp
   tests/state_banks_test.cpp
   tests/state_init_counted_loop_test.cpp
   tests/stack_residency_test.cpp
