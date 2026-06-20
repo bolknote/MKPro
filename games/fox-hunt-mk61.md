@@ -1,8 +1,9 @@
 # Охота на лис (вариант для МК-61)
 
-- Source: [MonatkoDenis blog](https://monatkodenis.blogspot.com/2014/01/blog-post.html)
+- Source: [Alexander Bulatov GeoCities page, archived](https://web.archive.org/web/20091020020922/http://geocities.com/CapeCanaveral/Hall/5525/Foxhunt/Foxhuntru.htm)
+- Mirror source: [MonatkoDenis blog](https://monatkodenis.blogspot.com/2014/01/blog-post.html)
 - Program: [fox-hunt-mk61.txt](fox-hunt-mk61.txt)
-- Listing restored from the image `fh.jpg` in the source post
+- Listing restored from the archived `fh.jpg` image; byte-code checked against the mirror image.
 
 ## Description
 
