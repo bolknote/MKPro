@@ -16287,6 +16287,10 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
   if (const std::optional<std::string> return_x = proc_return_x_variable(context, rule)) {
     mark_current_x(context, *return_x);
     context.emitter.current_x_known_zero = false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "proc-return-x-reuse",
+        .detail = "Tracked " + *return_x + " in X after returning from rule " + rule.name + ".",
+    });
   } else {
     context.emitter.current_x_variable.reset();
     context.emitter.current_x_aliases.clear();

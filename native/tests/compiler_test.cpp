@@ -494,6 +494,9 @@ program InvokeWithArg {
           "parameterized invoke listing should include function call");
   require(has_optimization(invoked_with_arg, "proc-call-lowering"),
           "parameterized procedure call should report TS proc-call-lowering");
+  require(has_optimization_detail(invoked_with_arg, "proc-return-x-reuse",
+                                  "Tracked total in X after returning from rule add."),
+          "parameterized procedure call should report TS proc-return-x-reuse");
 
   const CompileResult x_param_invoked = compile_source(R"mkpro(
 program XParamInvoke {
