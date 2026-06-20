@@ -4187,6 +4187,42 @@ program ShowReadFusion {
                        }),
           "show-read fusion should not emit a second calculator stop for read choice");
 
+  CompileOptions terminal_loop_screen_options;
+  terminal_loop_screen_options.budget = 999;
+  terminal_loop_screen_options.analysis = true;
+  const CompileResult terminal_loop_screen = compile_source(R"mkpro(
+program TerminalLoopScreen {
+  state {
+    pos: counter 0..9 = 1
+    score: counter 0..9 = 0
+  }
+
+  loop {
+    show(pos)
+    key = read()
+    match key {
+      1 => score_point()
+      otherwise => halt(0)
+    }
+  }
+
+  fn score_point() {
+    score = 1
+    show(pos)
+  }
+}
+)mkpro",
+                                                          terminal_loop_screen_options);
+  require(terminal_loop_screen.implemented,
+          "native compiler should elide terminal screens repeated by loop headers");
+  require(terminal_loop_screen.diagnostics.empty(),
+          "terminal loop screen compile should not report diagnostics");
+  require(has_optimization(terminal_loop_screen, "terminal-loop-screen-elision"),
+          "terminal loop screen elision should report the TS strategy name");
+  require(std::count_if(terminal_loop_screen.steps.begin(), terminal_loop_screen.steps.end(),
+                        [](const ResolvedStep& step) { return step.comment == "show pos"; }) <= 1,
+          "terminal loop screen elision should remove the procedure-tail show(pos)");
+
   const CompileResult show_read_decrement = compile_source(R"mkpro(
 program ReadKeyResourceUnderflow {
   state {

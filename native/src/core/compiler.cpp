@@ -2134,6 +2134,418 @@ V2Statement statement_from_rewritten_vector(std::vector<V2Statement> statements,
   };
 }
 
+std::optional<std::string> show_display_key(const V2Statement& statement) {
+  if (statement.kind != "v2_show")
+    return std::nullopt;
+  if (statement.target.has_value())
+    return *statement.target;
+  if (!statement.items.has_value())
+    return std::string();
+  std::ostringstream key;
+  for (const DisplayItem& item : *statement.items) {
+    key << item.kind << "|";
+    key << item.text << "|";
+    key << item.name << "|";
+    if (item.expr.has_value())
+      key << expression_to_json(*item.expr);
+    key << "|";
+    if (item.width.has_value())
+      key << *item.width;
+    key << "|";
+    if (item.pad.has_value())
+      key << *item.pad;
+    key << ";";
+  }
+  return key.str();
+}
+
+struct LoopHeaderScreen {
+  std::string display;
+  std::set<std::string> pure_display_procs;
+  bool inlined_header = false;
+};
+
+std::map<std::string, V2Rule*> mutable_rule_map_for_program(V2Program& program) {
+  std::map<std::string, V2Rule*> result;
+  for (V2Rule& rule : program.rules)
+    result[rule.name] = &rule;
+  return result;
+}
+
+std::map<std::string, std::set<std::string>>
+collect_pure_display_procs_by_display(const std::map<std::string, V2Rule*>& proc_map) {
+  std::map<std::string, std::set<std::string>> result;
+  for (const auto& [name, rule] : proc_map) {
+    if (rule == nullptr || rule->body.size() != 1U)
+      continue;
+    const std::optional<std::string> display = show_display_key(rule->body.front());
+    if (display.has_value())
+      result[*display].insert(name);
+  }
+  return result;
+}
+
+std::optional<LoopHeaderScreen> loop_header_screen(
+    V2Statement& statement, const std::map<std::string, V2Rule*>& proc_map,
+    const std::map<std::string, std::set<std::string>>& pure_display_procs_by_display) {
+  if (statement.kind != "v2_loop" || statement.body.size() < 2U)
+    return std::nullopt;
+  V2Statement& first = statement.body.at(0);
+  const V2Statement& second = statement.body.at(1);
+  if (second.kind != "v2_read")
+    return std::nullopt;
+
+  if (const std::optional<std::string> display = show_display_key(first)) {
+    const auto pure_it = pure_display_procs_by_display.find(*display);
+    return LoopHeaderScreen{
+        .display = *display,
+        .pure_display_procs =
+            pure_it == pure_display_procs_by_display.end() ? std::set<std::string>()
+                                                           : pure_it->second,
+    };
+  }
+
+  if (first.kind != "v2_invoke" || !first.name.has_value())
+    return std::nullopt;
+  const auto proc_it = proc_map.find(*first.name);
+  if (proc_it == proc_map.end() || proc_it->second == nullptr ||
+      proc_it->second->body.size() != 1U)
+    return std::nullopt;
+  const std::optional<std::string> display = show_display_key(proc_it->second->body.front());
+  if (!display.has_value())
+    return std::nullopt;
+  V2Statement inlined = proc_it->second->body.front();
+  inlined.line = first.line;
+  first = std::move(inlined);
+  const auto pure_it = pure_display_procs_by_display.find(*display);
+  return LoopHeaderScreen{
+      .display = *display,
+      .pure_display_procs =
+          pure_it == pure_display_procs_by_display.end() ? std::set<std::string>()
+                                                         : pure_it->second,
+      .inlined_header = true,
+  };
+}
+
+void collect_statement_list_calls_by_position(
+    const std::vector<V2Statement>& statements, const std::optional<std::string>& terminal_display,
+    const std::map<std::string, V2Rule*>& proc_map,
+    std::map<std::string, std::set<std::string>>& terminal_calls_by_display,
+    std::set<std::string>& non_terminal_calls);
+
+void collect_calls_by_position(
+    const V2Statement& statement, const std::optional<std::string>& terminal_display,
+    const std::map<std::string, V2Rule*>& proc_map,
+    std::map<std::string, std::set<std::string>>& terminal_calls_by_display,
+    std::set<std::string>& non_terminal_calls) {
+  if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+      proc_map.contains(*statement.name)) {
+    if (terminal_display.has_value()) {
+      terminal_calls_by_display[*terminal_display].insert(*statement.name);
+    } else {
+      non_terminal_calls.insert(*statement.name);
+    }
+    return;
+  }
+
+  if (statement.kind == "v2_if") {
+    collect_statement_list_calls_by_position(statement.then_body, terminal_display, proc_map,
+                                             terminal_calls_by_display, non_terminal_calls);
+    collect_statement_list_calls_by_position(statement.else_body, terminal_display, proc_map,
+                                             terminal_calls_by_display, non_terminal_calls);
+    return;
+  }
+
+  if (statement.kind == "v2_match") {
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr) {
+        collect_statement_list_calls_by_position(std::vector<V2Statement>{*match_case.action},
+                                                 terminal_display, proc_map,
+                                                 terminal_calls_by_display, non_terminal_calls);
+      }
+    }
+    if (statement.otherwise != nullptr) {
+      collect_statement_list_calls_by_position(std::vector<V2Statement>{*statement.otherwise},
+                                               terminal_display, proc_map,
+                                               terminal_calls_by_display, non_terminal_calls);
+    }
+    return;
+  }
+
+  if (statement.kind == "v2_block")
+    collect_statement_list_calls_by_position(statement.body, terminal_display, proc_map,
+                                             terminal_calls_by_display, non_terminal_calls);
+}
+
+void collect_statement_list_calls_by_position(
+    const std::vector<V2Statement>& statements, const std::optional<std::string>& terminal_display,
+    const std::map<std::string, V2Rule*>& proc_map,
+    std::map<std::string, std::set<std::string>>& terminal_calls_by_display,
+    std::set<std::string>& non_terminal_calls) {
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const bool at_tail = index + 1U == statements.size();
+    collect_calls_by_position(statements.at(index), at_tail ? terminal_display : std::nullopt,
+                              proc_map, terminal_calls_by_display, non_terminal_calls);
+  }
+}
+
+void collect_statement_list_terminal_calls(const std::vector<V2Statement>& statements,
+                                           const std::map<std::string, V2Rule*>& proc_map,
+                                           std::set<std::string>& terminal_calls);
+
+void collect_statement_terminal_calls(const V2Statement& statement,
+                                      const std::map<std::string, V2Rule*>& proc_map,
+                                      std::set<std::string>& terminal_calls) {
+  if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+      proc_map.contains(*statement.name)) {
+    terminal_calls.insert(*statement.name);
+    return;
+  }
+  if (statement.kind == "v2_if") {
+    collect_statement_list_terminal_calls(statement.then_body, proc_map, terminal_calls);
+    collect_statement_list_terminal_calls(statement.else_body, proc_map, terminal_calls);
+    return;
+  }
+  if (statement.kind == "v2_match") {
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr)
+        collect_statement_terminal_calls(*match_case.action, proc_map, terminal_calls);
+    }
+    if (statement.otherwise != nullptr)
+      collect_statement_terminal_calls(*statement.otherwise, proc_map, terminal_calls);
+    return;
+  }
+  if (statement.kind == "v2_block")
+    collect_statement_list_terminal_calls(statement.body, proc_map, terminal_calls);
+}
+
+void collect_statement_list_terminal_calls(const std::vector<V2Statement>& statements,
+                                           const std::map<std::string, V2Rule*>& proc_map,
+                                           std::set<std::string>& terminal_calls) {
+  if (statements.empty())
+    return;
+  collect_statement_terminal_calls(statements.back(), proc_map, terminal_calls);
+}
+
+std::set<std::string> expand_terminal_proc_closure(
+    const std::set<std::string>& initial, const std::map<std::string, V2Rule*>& proc_map,
+    const std::set<std::string>& non_terminal_calls) {
+  std::set<std::string> result;
+  std::vector<std::string> queue;
+  for (const std::string& name : initial) {
+    if (!non_terminal_calls.contains(name))
+      queue.push_back(name);
+  }
+
+  while (!queue.empty()) {
+    const std::string name = queue.front();
+    queue.erase(queue.begin());
+    if (result.contains(name) || non_terminal_calls.contains(name))
+      continue;
+    const auto proc_it = proc_map.find(name);
+    if (proc_it == proc_map.end() || proc_it->second == nullptr)
+      continue;
+    result.insert(name);
+    std::set<std::string> nested_terminal_calls;
+    collect_statement_list_terminal_calls(proc_it->second->body, proc_map, nested_terminal_calls);
+    for (const std::string& nested : nested_terminal_calls) {
+      if (!result.contains(nested) && !non_terminal_calls.contains(nested))
+        queue.push_back(nested);
+    }
+  }
+  return result;
+}
+
+int elide_tail_screen_in_statement_list(std::vector<V2Statement>& statements,
+                                        const std::string& display,
+                                        const std::set<std::string>& pure_display_procs);
+
+int elide_tail_screen_in_action(V2StatementPtr& action, int line, const std::string& display,
+                                const std::set<std::string>& pure_display_procs) {
+  if (action == nullptr)
+    return 0;
+  std::vector<V2Statement> body{*action};
+  const int removed = elide_tail_screen_in_statement_list(body, display, pure_display_procs);
+  if (removed > 0)
+    *action = statement_from_rewritten_vector(std::move(body), line);
+  return removed;
+}
+
+int elide_tail_screen_in_statement_list(std::vector<V2Statement>& statements,
+                                        const std::string& display,
+                                        const std::set<std::string>& pure_display_procs) {
+  if (statements.empty())
+    return 0;
+  V2Statement& last = statements.back();
+  if (const std::optional<std::string> show = show_display_key(last);
+      show.has_value() && *show == display) {
+    statements.pop_back();
+    return 1;
+  }
+  if (last.kind == "v2_invoke" && last.name.has_value() &&
+      pure_display_procs.contains(*last.name)) {
+    statements.pop_back();
+    return 1;
+  }
+
+  int removed = 0;
+  if (last.kind == "v2_if") {
+    removed += elide_tail_screen_in_statement_list(last.then_body, display, pure_display_procs);
+    removed += elide_tail_screen_in_statement_list(last.else_body, display, pure_display_procs);
+  } else if (last.kind == "v2_match") {
+    for (V2MatchCase& match_case : last.cases)
+      removed += elide_tail_screen_in_action(match_case.action, match_case.line, display,
+                                             pure_display_procs);
+    removed +=
+        elide_tail_screen_in_action(last.otherwise, last.line, display, pure_display_procs);
+  } else if (last.kind == "v2_block") {
+    removed += elide_tail_screen_in_statement_list(last.body, display, pure_display_procs);
+  }
+  return removed;
+}
+
+void visit_terminal_loop_screen_statement_list(
+    std::vector<V2Statement>& statements, const std::optional<std::string>& terminal_display,
+    const std::map<std::string, V2Rule*>& proc_map,
+    const std::map<std::string, std::set<std::string>>& pure_display_procs_by_display,
+    std::map<std::string, std::set<std::string>>& terminal_calls_by_display,
+    std::set<std::string>& non_terminal_calls, int& removed, int& inlined_headers);
+
+void visit_terminal_loop_screen_action(
+    V2StatementPtr& action, int line, const std::optional<std::string>& terminal_display,
+    const std::map<std::string, V2Rule*>& proc_map,
+    const std::map<std::string, std::set<std::string>>& pure_display_procs_by_display,
+    std::map<std::string, std::set<std::string>>& terminal_calls_by_display,
+    std::set<std::string>& non_terminal_calls, int& removed, int& inlined_headers) {
+  if (action == nullptr)
+    return;
+  std::vector<V2Statement> body{*action};
+  visit_terminal_loop_screen_statement_list(body, terminal_display, proc_map,
+                                            pure_display_procs_by_display,
+                                            terminal_calls_by_display, non_terminal_calls, removed,
+                                            inlined_headers);
+  *action = statement_from_rewritten_vector(std::move(body), line);
+}
+
+void visit_terminal_loop_screen_statement_list(
+    std::vector<V2Statement>& statements, const std::optional<std::string>& terminal_display,
+    const std::map<std::string, V2Rule*>& proc_map,
+    const std::map<std::string, std::set<std::string>>& pure_display_procs_by_display,
+    std::map<std::string, std::set<std::string>>& terminal_calls_by_display,
+    std::set<std::string>& non_terminal_calls, int& removed, int& inlined_headers) {
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    V2Statement& statement = statements.at(index);
+    const bool at_tail = index + 1U == statements.size();
+    collect_calls_by_position(statement, at_tail ? terminal_display : std::nullopt, proc_map,
+                              terminal_calls_by_display, non_terminal_calls);
+
+    if (statement.kind == "v2_loop") {
+      const std::optional<LoopHeaderScreen> header =
+          loop_header_screen(statement, proc_map, pure_display_procs_by_display);
+      if (header.has_value()) {
+        if (header->inlined_header)
+          ++inlined_headers;
+        removed += elide_tail_screen_in_statement_list(statement.body, header->display,
+                                                       header->pure_display_procs);
+      }
+      visit_terminal_loop_screen_statement_list(
+          statement.body, header.has_value() ? std::optional<std::string>{header->display}
+                                             : std::nullopt,
+          proc_map, pure_display_procs_by_display, terminal_calls_by_display, non_terminal_calls,
+          removed, inlined_headers);
+    } else if (statement.kind == "v2_if") {
+      visit_terminal_loop_screen_statement_list(
+          statement.then_body, at_tail ? terminal_display : std::nullopt, proc_map,
+          pure_display_procs_by_display, terminal_calls_by_display, non_terminal_calls, removed,
+          inlined_headers);
+      visit_terminal_loop_screen_statement_list(
+          statement.else_body, at_tail ? terminal_display : std::nullopt, proc_map,
+          pure_display_procs_by_display, terminal_calls_by_display, non_terminal_calls, removed,
+          inlined_headers);
+    } else if (statement.kind == "v2_match") {
+      for (V2MatchCase& match_case : statement.cases) {
+        visit_terminal_loop_screen_action(
+            match_case.action, match_case.line, at_tail ? terminal_display : std::nullopt,
+            proc_map, pure_display_procs_by_display, terminal_calls_by_display,
+            non_terminal_calls, removed, inlined_headers);
+      }
+      visit_terminal_loop_screen_action(
+          statement.otherwise, statement.line, at_tail ? terminal_display : std::nullopt, proc_map,
+          pure_display_procs_by_display, terminal_calls_by_display, non_terminal_calls, removed,
+          inlined_headers);
+    } else if (statement.kind == "v2_block") {
+      visit_terminal_loop_screen_statement_list(
+          statement.body, at_tail ? terminal_display : std::nullopt, proc_map,
+          pure_display_procs_by_display, terminal_calls_by_display, non_terminal_calls, removed,
+          inlined_headers);
+    }
+  }
+}
+
+void elide_terminal_loop_header_shows(V2Program& program,
+                                      std::vector<OptimizationReport>& optimizations) {
+  std::map<std::string, V2Rule*> proc_map = mutable_rule_map_for_program(program);
+  if (proc_map.empty())
+    return;
+  const std::map<std::string, std::set<std::string>> pure_display_procs_by_display =
+      collect_pure_display_procs_by_display(proc_map);
+  std::map<std::string, std::set<std::string>> terminal_calls_by_display;
+  std::set<std::string> non_terminal_calls;
+  int removed = 0;
+  int inlined_headers = 0;
+
+  visit_terminal_loop_screen_statement_list(program.body, std::nullopt, proc_map,
+                                            pure_display_procs_by_display,
+                                            terminal_calls_by_display, non_terminal_calls, removed,
+                                            inlined_headers);
+  for (const auto& [unused_name, proc] : proc_map) {
+    if (proc != nullptr) {
+      std::map<std::string, std::set<std::string>> ignored_terminal_calls;
+      collect_statement_list_calls_by_position(proc->body,
+                                               std::optional<std::string>{
+                                                   "__mkpro_terminal_proc_tail"},
+                                               proc_map, ignored_terminal_calls,
+                                               non_terminal_calls);
+    }
+    (void)unused_name;
+  }
+
+  for (const auto& [display, calls] : terminal_calls_by_display) {
+    const std::set<std::string> terminal_procs =
+        expand_terminal_proc_closure(calls, proc_map, non_terminal_calls);
+    const auto pure_it = pure_display_procs_by_display.find(display);
+    const std::set<std::string> pure_display_procs =
+        pure_it == pure_display_procs_by_display.end() ? std::set<std::string>() : pure_it->second;
+    for (const std::string& name : terminal_procs) {
+      const auto proc_it = proc_map.find(name);
+      if (proc_it != proc_map.end() && proc_it->second != nullptr)
+        removed +=
+            elide_tail_screen_in_statement_list(proc_it->second->body, display, pure_display_procs);
+    }
+  }
+
+  if (removed == 0 && inlined_headers == 0)
+    return;
+  std::vector<std::string> details;
+  if (removed > 0) {
+    details.push_back("elided " + std::to_string(removed) + " terminal show" +
+                      (removed == 1 ? "" : "s") +
+                      " already provided by the next loop header");
+  }
+  if (inlined_headers > 0) {
+    details.push_back("inlined " + std::to_string(inlined_headers) +
+                      " one-screen loop header helper" + (inlined_headers == 1 ? "" : "s") +
+                      " before input");
+  }
+  std::string detail = join_strings(details, "; ");
+  if (!detail.empty())
+    detail.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(detail.front())));
+  optimizations.push_back(OptimizationReport{
+      .name = "terminal-loop-screen-elision",
+      .detail = detail + ".",
+  });
+}
+
 std::optional<std::string> scalar_assignment_target_name(const V2Statement& statement) {
   if (!statement.target.has_value())
     return std::nullopt;
@@ -20683,6 +21095,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       materialize_display_expressions(*ast.v2, context.optimizations);
       elide_x_param_return_state_fields(*ast.v2, context.optimizations);
       elide_loop_carried_prompt_state_fields(context, *ast.v2);
+      elide_terminal_loop_header_shows(*ast.v2, context.optimizations);
       inline_display_string_assignments(*ast.v2, context.optimizations);
       hoist_one_shot_loop_initializers(*ast.v2, context.optimizations);
       inline_single_use_constant_guarded_calls(*ast.v2, context.optimizations);
