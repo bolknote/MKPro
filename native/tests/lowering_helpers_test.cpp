@@ -50,6 +50,10 @@ void lowering_helpers_match_typescript_contract() {
   const auto decimal = core::emit::decimal_display_literal_number("-20");
   require(decimal.has_value() && *decimal == "-20",
           "decimal display literal should preserve a signed decimal number");
+  const auto leading_zero = core::emit::leading_zero_hex_product_display_program("020");
+  require(leading_zero.has_value(), "leading-zero display literal should use hex product plan");
+  require(leading_zero->source_literal == "-" && leading_zero->factor == "18",
+          "leading-zero hex product plan should match the TS helper table");
   require(!core::emit::display_literal_mantissa_cells("1.2").has_value(),
           "display mantissa cells should reject explicit decimal points");
   require(core::emit::display_cells_literal({8, 10, 0, 15, 14}) == "8-0_E",
@@ -76,16 +80,14 @@ void lowering_helpers_match_typescript_contract() {
   Expression bit_mask = core::emit::bit_mask_expression(core::emit::identifier_expression("i"));
   require(bit_mask.kind == "binary" && bit_mask.op == "+",
           "bit_mask expression should build the anchored mask addition");
-  require(bit_mask.left != nullptr && bit_mask.left->kind == "number" &&
-              bit_mask.left->raw == "8",
+  require(bit_mask.left != nullptr && bit_mask.left->kind == "number" && bit_mask.left->raw == "8",
           "bit_mask expression should anchor masks at integer 8");
   require(bit_mask.right != nullptr && bit_mask.right->kind == "binary" &&
               bit_mask.right->op == "/",
           "bit_mask expression should divide bit value by a decimal place");
 
-  Expression membership =
-      core::emit::bit_membership_expression(core::emit::identifier_expression("mask"),
-                                            core::emit::identifier_expression("i"));
+  Expression membership = core::emit::bit_membership_expression(
+      core::emit::identifier_expression("mask"), core::emit::identifier_expression("i"));
   require(membership.kind == "call" && membership.callee == "sign",
           "bit membership should collapse the fractional test through sign()");
   require(membership.args.size() == 1 && membership.args.at(0).callee == "frac",
@@ -98,9 +100,8 @@ void lowering_helpers_match_typescript_contract() {
   line_board.y_max = 0;
   line_board.width = 5;
   line_board.height = 1;
-  Expression line_index =
-      core::emit::spatial_bit_index_expression_for_board(&line_board,
-                                                         core::emit::identifier_expression("cell"));
+  Expression line_index = core::emit::spatial_bit_index_expression_for_board(
+      &line_board, core::emit::identifier_expression("cell"));
   require(line_index.kind == "binary" && line_index.op == "-",
           "single-row boards should offset the spatial bit index by xMin");
 
@@ -110,4 +111,4 @@ void lowering_helpers_match_typescript_contract() {
           "spatial hit helper should use the internal spatial-hit callee");
 }
 
-}  // namespace mkpro::tests
+} // namespace mkpro::tests

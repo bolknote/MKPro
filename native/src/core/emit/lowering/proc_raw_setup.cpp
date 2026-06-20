@@ -34,6 +34,15 @@ std::string normalized_v2_text(std::string_view text) {
   return normalized;
 }
 
+bool has_executable_setup_number_value(std::string_view value) {
+  const std::string normalized = normalized_v2_text(value);
+  static const std::regex decimal_pattern(R"(^-?\d+(?:[,.]\d+)?(?:E-?\d{1,2})?$)",
+                                          std::regex_constants::icase);
+  static const std::regex formal_address_pattern(R"(^[A-F][0-9A-F]$)", std::regex_constants::icase);
+  return std::regex_match(normalized, decimal_pattern) ||
+         std::regex_match(normalized, formal_address_pattern);
+}
+
 std::optional<int> parse_integer_text(std::string_view text) {
   const std::string normalized = normalized_v2_text(text);
   if (normalized.empty())
@@ -144,6 +153,77 @@ bool emit_display_literal_program_to_x(MachineEmitter& setup, const DisplayLiter
   if (program.negative)
     setup.emit_op(0x0b, "/-/", "setup display literal sign", std::nullopt, true);
   return true;
+}
+
+void emit_setup_recall(MachineEmitter& setup, const std::string& register_name,
+                       std::string comment);
+
+bool emit_setup_display_first_digit(MachineEmitter& setup, int cell, std::string comment) {
+  if (cell >= 0 && cell <= 9) {
+    setup.emit_number(std::to_string(cell));
+    if (!setup.items.empty())
+      setup.items.back().comment = std::move(comment);
+    return true;
+  }
+  if (cell >= 10 && cell <= 14) {
+    setup.emit_number("1" + std::to_string(15 - cell));
+    setup.emit_op(0x3a, "К ИНВ", comment, std::nullopt, true);
+    setup.emit_op(0x35, "К {x}", std::move(comment), std::nullopt, true);
+    return true;
+  }
+  return false;
+}
+
+bool emit_setup_display_exponent(MachineEmitter& setup, int exponent, std::string comment) {
+  if (exponent < 0 || exponent > 99)
+    return false;
+  setup.emit_op(0x0c, "ВП", comment, std::nullopt, true);
+  for (char ch : std::to_string(exponent))
+    setup.emit_op(ch - '0', std::string(1, ch), comment, std::nullopt, true);
+  return true;
+}
+
+void emit_setup_first_digit_splice(MachineEmitter& setup, std::string comment) {
+  setup.emit_op(0x14, "X↔Y", comment, std::nullopt, true);
+  setup.emit_op(0x54, "К НОП", comment, std::nullopt, true);
+  setup.emit_op(0x0c, "ВП", std::move(comment), std::nullopt, true);
+}
+
+bool emit_first_splice_display_literal_program_to_x(MachineEmitter& setup,
+                                                    const FirstSpliceDisplayLiteralProgram& program,
+                                                    const std::string& scratch_register,
+                                                    const std::string& comment) {
+  if (!emit_display_literal_program_to_x(setup, program.body, comment + " body"))
+    return false;
+  const int scratch_index = register_index(scratch_register);
+  setup.emit_op(0x40 + scratch_index, "X->П " + scratch_register, comment + " body scratch",
+                std::nullopt, true);
+
+  if (program.first == 8) {
+    emit_setup_recall(setup, scratch_register, comment + " body scratch");
+    if (program.negative)
+      setup.emit_op(0x0b, "/-/", comment + " sign", std::nullopt, true);
+    setup.emit_op(0x54, "К НОП", comment + " first digit reuse", std::nullopt, true);
+    setup.emit_op(0x0c, "ВП", comment + " first digit reuse", std::nullopt, true);
+    return emit_setup_display_exponent(setup, program.exponent, comment + " exponent");
+  }
+
+  if (program.first == 10 && program.second.has_value() && *program.second == 10) {
+    setup.emit_op(0x35, "К {x}", comment + " first digit from body", std::nullopt, true);
+    emit_setup_recall(setup, scratch_register, comment + " body scratch");
+    if (program.negative)
+      setup.emit_op(0x0b, "/-/", comment + " sign", std::nullopt, true);
+    emit_setup_first_digit_splice(setup, "display sign-digit first-cell splice");
+    return emit_setup_display_exponent(setup, program.exponent, comment + " exponent");
+  }
+
+  if (!emit_setup_display_first_digit(setup, program.first, comment + " first digit"))
+    return false;
+  emit_setup_recall(setup, scratch_register, comment + " body scratch");
+  if (program.negative)
+    setup.emit_op(0x0b, "/-/", comment + " sign", std::nullopt, true);
+  emit_setup_first_digit_splice(setup, "display sign-digit first-cell splice");
+  return emit_setup_display_exponent(setup, program.exponent, comment + " exponent");
 }
 
 std::optional<std::vector<DecimalSeriesOp>> verified_decimal_series_listing(int digits,
@@ -655,11 +735,11 @@ bool emit_random_unique_coord_list_setup(MachineEmitter& setup,
     return false;
 
   if (emit_compact_random_unique_coord_list_setup(setup, boards, registers, value,
-                                                 item_registers)) {
+                                                  item_registers)) {
     optimizations.push_back(OptimizationReport{
         .name = "coord-list-indirect-random-unique",
-        .detail = "Generated compact indirect setup for " +
-                  std::to_string(item_registers.size()) + " unique coord_list item(s).",
+        .detail = "Generated compact indirect setup for " + std::to_string(item_registers.size()) +
+                  " unique coord_list item(s).",
     });
     return true;
   }
@@ -817,8 +897,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
         ordered_registers.push_back(item_it->second);
       }
       if (static_cast<int>(ordered_registers.size()) == unique->count &&
-          emit_random_unique_coord_list_setup(setup, boards, registers, *unique,
-                                              ordered_registers, optimizations)) {
+          emit_random_unique_coord_list_setup(setup, boards, registers, *unique, ordered_registers,
+                                              optimizations)) {
         for (const std::size_t consumed_index : group_indices)
           consumed.insert(consumed_index);
         continue;
@@ -896,21 +976,32 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
         continue;
       }
     }
-    if (!from_stack_x && !from_stack_y) {
+    if (!from_stack_x && !from_stack_y && !has_executable_setup_number_value(preload.value)) {
+      bool emitted_display_literal_preload = false;
       if (const std::optional<DisplayLiteralProgram> literal =
               display_literal_program(preload.value)) {
         if (literal->kind != "error" &&
             emit_display_literal_program_to_x(setup, *literal, "setup display literal")) {
-          for (std::size_t other = index; other < preloads.size(); ++other) {
-            if (consumed.contains(other) || preloads.at(other).value != preload.value)
-              continue;
-            consumed.insert(other);
-            const int reg_index = register_index(preloads.at(other).register_name);
-            setup.emit_op(0x40 + reg_index, "X->П " + preloads.at(other).register_name,
-                          "setup R" + preloads.at(other).register_name, std::nullopt, true);
-          }
-          continue;
+          emitted_display_literal_preload = true;
         }
+      }
+      if (!emitted_display_literal_preload) {
+        if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
+                first_splice_display_literal_program(preload.value)) {
+          emitted_display_literal_preload = emit_first_splice_display_literal_program_to_x(
+              setup, *first_splice, preload.register_name, "setup R" + preload.register_name);
+        }
+      }
+      if (emitted_display_literal_preload) {
+        for (std::size_t other = index; other < preloads.size(); ++other) {
+          if (consumed.contains(other) || preloads.at(other).value != preload.value)
+            continue;
+          consumed.insert(other);
+          const int reg_index = register_index(preloads.at(other).register_name);
+          setup.emit_op(0x40 + reg_index, "X->П " + preloads.at(other).register_name,
+                        "setup R" + preloads.at(other).register_name, std::nullopt, true);
+        }
+        continue;
       }
     }
     if (from_stack_y)

@@ -42,6 +42,11 @@ struct FirstSpliceDisplayLiteralProgram {
   bool negative = false;
 };
 
+struct LeadingZeroHexProductPlan {
+  std::string source_literal;
+  std::string factor;
+};
+
 struct RemainderByConstantMatch {
   Expression value;
   Expression divisor;
@@ -58,16 +63,18 @@ std::string spatial_count_counter_scratch_name();
 bool is_unsigned_decimal_digits(std::string_view text);
 std::optional<std::string> normalize_display_literal_text(std::string_view text);
 std::optional<std::vector<int>> display_literal_cells(std::string_view text);
-std::optional<DisplayLiteralProgram> display_literal_program_from_cells(
-    const std::optional<std::vector<int>>& cells, bool negative);
+std::optional<DisplayLiteralProgram>
+display_literal_program_from_cells(const std::optional<std::vector<int>>& cells, bool negative);
 std::optional<DisplayLiteralProgram> display_literal_program(std::string_view text);
 std::optional<std::string> decimal_display_literal_number(std::string_view text);
+std::optional<LeadingZeroHexProductPlan>
+leading_zero_hex_product_display_program(std::string_view text);
 std::optional<std::vector<int>> display_literal_mantissa_cells(std::string_view text);
 std::string display_cells_literal(const std::vector<int>& cells);
 std::string normalize_display_template_literal(std::string_view text);
 std::optional<int> display_literal_point_exponent(std::string_view text);
-std::optional<FirstSpliceDisplayLiteralProgram> first_splice_display_literal_program(
-    std::string_view text);
+std::optional<FirstSpliceDisplayLiteralProgram>
+first_splice_display_literal_program(std::string_view text);
 Expression number_expression(std::string raw);
 Expression identifier_expression(std::string name);
 Expression binary_expression(Expression left, std::string op, Expression right);
@@ -97,7 +104,6 @@ Expression offset_expression(Expression expression, int offset);
 Expression board_cell_expression(Expression x, Expression y);
 Expression spatial_bit_index_expression_for_board(const V2Board* board, Expression cell);
 Expression spatial_hit_expression(Expression mask, Expression index);
-std::optional<RemainderByConstantMatch> match_remainder_by_constant(
-    const Expression& expression);
+std::optional<RemainderByConstantMatch> match_remainder_by_constant(const Expression& expression);
 
-}  // namespace mkpro::core::emit
+} // namespace mkpro::core::emit

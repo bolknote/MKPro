@@ -1,6 +1,7 @@
 #include "mkpro/core/emit/lowering_helpers.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <regex>
@@ -118,8 +119,7 @@ std::optional<double> numeric_literal_value(const Expression& expression) {
   }
 }
 
-std::optional<RemainderByConstantMatch> match_int_divide_by_constant(
-    const Expression& expression) {
+std::optional<RemainderByConstantMatch> match_int_divide_by_constant(const Expression& expression) {
   if (expression.kind != "call" || lower_ascii(expression.callee) != "int" ||
       expression.args.size() != 1U) {
     return std::nullopt;
@@ -132,7 +132,7 @@ std::optional<RemainderByConstantMatch> match_int_divide_by_constant(
   return RemainderByConstantMatch{.value = *divided.left, .divisor = *divided.right};
 }
 
-}  // namespace
+} // namespace
 
 std::string coord_list_item_name(const std::string& list_name, int index) {
   return std::string(k_coord_list_item_prefix) + list_name + "_" + std::to_string(index);
@@ -266,8 +266,8 @@ std::optional<std::vector<int>> display_literal_cells(std::string_view text) {
   return cells;
 }
 
-std::optional<DisplayLiteralProgram> display_literal_program_from_cells(
-    const std::optional<std::vector<int>>& cells, bool negative) {
+std::optional<DisplayLiteralProgram>
+display_literal_program_from_cells(const std::optional<std::vector<int>>& cells, bool negative) {
   if (!cells.has_value() || cells->empty() || cells->size() > 8U)
     return std::nullopt;
   if (cells->at(0) != 8)
@@ -325,6 +325,35 @@ std::optional<std::string> decimal_display_literal_number(std::string_view text)
   return normalized;
 }
 
+std::optional<LeadingZeroHexProductPlan>
+leading_zero_hex_product_display_program(std::string_view text) {
+  struct Row {
+    std::string_view source_literal;
+    int factor = 0;
+    std::string_view output;
+  };
+  static constexpr std::array<Row, 28> kRows{{
+      {"-", 10, "00"},  {"-", 12, "04"},  {"-", 14, "08"},  {"-", 16, "000"}, {"-", 17, "010"},
+      {"-", 18, "020"}, {"-", 19, "030"}, {"-", 35, "030"}, {"-", 36, "040"}, {"-", 37, "050"},
+      {"L", 15, "021"}, {"L", 16, "032"}, {"L", 17, "043"}, {"L", 18, "054"}, {"L", 29, "015"},
+      {"C", 15, "052"}, {"C", 26, "024"}, {"C", 27, "020"}, {"C", 28, "032"}, {"C", 29, "044"},
+      {"D", 25, "053"}, {"D", 26, "050"}, {"D", 37, "033"}, {"D", 38, "030"}, {"D", 39, "043"},
+      {"E", 35, "042"}, {"E", 36, "040"}, {"E", 37, "054"},
+  }};
+
+  const std::optional<std::string> normalized = normalize_display_literal_text(text);
+  if (!normalized.has_value())
+    return std::nullopt;
+  const auto it = std::find_if(kRows.begin(), kRows.end(),
+                               [&](const Row& row) { return row.output == *normalized; });
+  if (it == kRows.end())
+    return std::nullopt;
+  return LeadingZeroHexProductPlan{
+      .source_literal = std::string(it->source_literal),
+      .factor = std::to_string(it->factor),
+  };
+}
+
 std::optional<std::vector<int>> display_literal_mantissa_cells(std::string_view text) {
   const std::optional<std::string> normalized = normalize_display_literal_text(text);
   if (!normalized.has_value())
@@ -363,8 +392,7 @@ std::string normalize_display_template_literal(std::string_view text) {
     const std::optional<char32_t> codepoint = next_utf8_codepoint(text, offset);
     if (!codepoint.has_value())
       return std::string(text);
-    if (*codepoint < 0x80U &&
-        std::isspace(static_cast<unsigned char>(*codepoint)) != 0) {
+    if (*codepoint < 0x80U && std::isspace(static_cast<unsigned char>(*codepoint)) != 0) {
       continue;
     }
     if (*codepoint < 0x80U) {
@@ -390,8 +418,8 @@ std::optional<int> display_literal_point_exponent(std::string_view text) {
   return static_cast<int>(prefix_cells->size()) - 1;
 }
 
-std::optional<FirstSpliceDisplayLiteralProgram> first_splice_display_literal_program(
-    std::string_view text) {
+std::optional<FirstSpliceDisplayLiteralProgram>
+first_splice_display_literal_program(std::string_view text) {
   const std::optional<std::vector<int>> cells = display_literal_cells(text);
   if (!cells.has_value() || cells->empty() || cells->size() > 8U)
     return std::nullopt;
@@ -402,15 +430,15 @@ std::optional<FirstSpliceDisplayLiteralProgram> first_splice_display_literal_pro
   body_cells.reserve(cells->size());
   body_cells.push_back(8);
   body_cells.insert(body_cells.end(), cells->begin() + 1, cells->end());
-  std::optional<DisplayLiteralProgram> body =
-      display_literal_program_from_cells(body_cells, false);
+  std::optional<DisplayLiteralProgram> body = display_literal_program_from_cells(body_cells, false);
   if (!body.has_value() || body->kind == "error")
     return std::nullopt;
   return FirstSpliceDisplayLiteralProgram{
       .first = first,
       .second = cells->size() > 1U ? std::optional<int>{cells->at(1)} : std::nullopt,
       .body = std::move(*body),
-      .exponent = display_literal_point_exponent(text).value_or(static_cast<int>(cells->size()) - 1),
+      .exponent =
+          display_literal_point_exponent(text).value_or(static_cast<int>(cells->size()) - 1),
       .negative = false,
   };
 }
@@ -495,7 +523,8 @@ Expression max_expression(Expression left, Expression right) {
 }
 
 Expression min_expression(const Expression& left, const Expression& right) {
-  return unary_expression("-", max_expression(unary_expression("-", left), unary_expression("-", right)));
+  return unary_expression(
+      "-", max_expression(unary_expression("-", left), unary_expression("-", right)));
 }
 
 Expression safe_max_expression(const Expression& left, const Expression& right) {
@@ -522,8 +551,7 @@ std::string cell_mask_row_constant_literal(int width) {
   if (width == 4)
     return "0.22600029";
   throw std::runtime_error("cell_mask is only hardware-verified for board width(s) 4; width " +
-                           std::to_string(width) +
-                           " needs a verified fractional constant");
+                           std::to_string(width) + " needs a verified fractional constant");
 }
 
 double cell_mask_row_constant(int width) {
@@ -549,22 +577,20 @@ Expression positive_grid_norm_expression(Expression expression, int width) {
       frac_expression(divide_expression(int_expression(std::move(expression)),
                                         number_expression(board_width_literal(width)))),
       number_expression(board_width_literal(width)));
-  Expression correction =
-      multiply_expression(number_expression(board_width_literal(width)),
-                          one_minus_expression(sign_expression(rem)));
+  Expression correction = multiply_expression(number_expression(board_width_literal(width)),
+                                              one_minus_expression(sign_expression(rem)));
   return add_expression(std::move(rem), std::move(correction));
 }
 
 Expression bit_mask_expression(Expression index) {
   Expression nibble = int_expression(divide_expression(index, number_expression("4")));
-  Expression offset = subtract_expression(index, multiply_expression(nibble, number_expression("4")));
-  Expression bit_value =
-      int_expression(add_expression(call_expression("pow", {number_expression("2"), offset}),
-                                    number_expression("0.5")));
-  return add_expression(
-      number_expression("8"),
-      divide_expression(bit_value,
-                        pow10_expression(add_expression(nibble, number_expression("1")))));
+  Expression offset =
+      subtract_expression(index, multiply_expression(nibble, number_expression("4")));
+  Expression bit_value = int_expression(add_expression(
+      call_expression("pow", {number_expression("2"), offset}), number_expression("0.5")));
+  return add_expression(number_expression("8"),
+                        divide_expression(bit_value, pow10_expression(add_expression(
+                                                         nibble, number_expression("1")))));
 }
 
 Expression bit_membership_expression(Expression mask, Expression index) {
@@ -575,8 +601,8 @@ Expression bit_membership_expression(Expression mask, Expression index) {
 Expression cell_mask_expression(Expression x, Expression y, int width) {
   return add_expression(
       pow10_expression(std::move(x)),
-      int_expression(pow10_expression(
-          multiply_expression(std::move(y), number_expression(cell_mask_row_constant_literal(width))))));
+      int_expression(pow10_expression(multiply_expression(
+          std::move(y), number_expression(cell_mask_row_constant_literal(width))))));
 }
 
 Expression offset_expression(Expression expression, int offset) {
@@ -588,8 +614,7 @@ Expression offset_expression(Expression expression, int offset) {
 }
 
 Expression board_cell_expression(Expression x, Expression y) {
-  return add_expression(std::move(x),
-                        multiply_expression(number_expression("10"), std::move(y)));
+  return add_expression(std::move(x), multiply_expression(number_expression("10"), std::move(y)));
 }
 
 Expression spatial_bit_index_expression_for_board(const V2Board* board, Expression cell) {
@@ -604,8 +629,7 @@ Expression spatial_hit_expression(Expression mask, Expression index) {
   return call_expression(std::string(k_spatial_hit_callee), {std::move(mask), std::move(index)});
 }
 
-std::optional<RemainderByConstantMatch> match_remainder_by_constant(
-    const Expression& expression) {
+std::optional<RemainderByConstantMatch> match_remainder_by_constant(const Expression& expression) {
   if (expression.kind != "binary" || expression.op != "-" || expression.left == nullptr ||
       expression.right == nullptr ||
       !expression_pure_for_remainder_substitution(*expression.left)) {
@@ -636,4 +660,4 @@ std::optional<RemainderByConstantMatch> match_remainder_by_constant(
   return std::nullopt;
 }
 
-}  // namespace mkpro::core::emit
+} // namespace mkpro::core::emit

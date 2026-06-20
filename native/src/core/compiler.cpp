@@ -26,8 +26,8 @@
 #include <cctype>
 #include <cmath>
 #include <functional>
-#include <iomanip>
 #include <initializer_list>
+#include <iomanip>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -68,6 +68,8 @@ using core::emit::frac_expression;
 using core::emit::identifier_expression;
 using core::emit::int_expression;
 using core::emit::is_unsigned_decimal_digits;
+using core::emit::leading_zero_hex_product_display_program;
+using core::emit::LeadingZeroHexProductPlan;
 using core::emit::match_remainder_by_constant;
 using core::emit::max_expression;
 using core::emit::min_expression;
@@ -8109,9 +8111,19 @@ void collect_preload_number_literals_from_predicate(const std::optional<V2Predic
   collect_preload_number_literals_from_text(predicate->right, source_line, values, occurrences);
 }
 
+void collect_display_literal_preload_values(const std::string& literal,
+                                            std::set<std::string>& values) {
+  if (const std::optional<LeadingZeroHexProductPlan> plan =
+          leading_zero_hex_product_display_program(literal)) {
+    values.insert(normalize_number_key(plan->source_literal));
+  }
+}
+
 void collect_preload_number_literals_from_display_items(const std::vector<DisplayItem>& items,
                                                         std::set<std::string>& values,
                                                         std::map<std::string, int>& occurrences) {
+  if (const std::optional<std::string> literal = core::emit::collapse_literal_only_display(items))
+    collect_display_literal_preload_values(*literal, values);
   for (const DisplayItem& item : items) {
     if (item.expr.has_value())
       collect_preload_number_literals(*item.expr, values, occurrences);
@@ -10071,8 +10083,10 @@ bool lower_packed_display_field_to_x(LoweringContext& context, const PackedDispl
   return lower_display_item_to_x(context, *field.item, std::move(comment));
 }
 
-bool source_field_matches_current_x(const LoweringContext& context, const PackedDisplayField& field) {
-  return !field.literal && field.item != nullptr && context.emitter.current_x_variable.has_value() &&
+bool source_field_matches_current_x(const LoweringContext& context,
+                                    const PackedDisplayField& field) {
+  return !field.literal && field.item != nullptr &&
+         context.emitter.current_x_variable.has_value() &&
          context.emitter.current_x_variable == field.item->name;
 }
 
@@ -10140,9 +10154,8 @@ bool lower_packed_numeric_display_statement(LoweringContext& context,
     return false;
 
   const std::vector<PackedDisplayField>& fields = *parsed_fields;
-  const bool has_literal_field = std::any_of(fields.begin(), fields.end(), [](const auto& field) {
-    return field.literal;
-  });
+  const bool has_literal_field =
+      std::any_of(fields.begin(), fields.end(), [](const auto& field) { return field.literal; });
   int current_index = -1;
   if (context.emitter.current_x_variable.has_value()) {
     for (std::size_t index = 0; index < fields.size(); ++index) {
@@ -10307,6 +10320,38 @@ void report_screen_video_literal_lowering(LoweringContext& context, int line) {
                                      " as a literal calculator video string.");
 }
 
+bool lower_leading_zero_hex_product_display(LoweringContext& context, const std::string& literal,
+                                            int line) {
+  const std::optional<LeadingZeroHexProductPlan> plan =
+      leading_zero_hex_product_display_program(literal);
+  if (!plan.has_value() || !machine_supports(mk61_profile(), "display-bytes"))
+    return false;
+
+  const std::string source_key = normalize_number_key(plan->source_literal);
+  const auto preload_it = context.preloaded_numbers.find(source_key);
+  if (preload_it == context.preloaded_numbers.end())
+    return false;
+
+  emit_recall(context, preload_it->second);
+  if (!context.emitter.items.empty()) {
+    context.emitter.items.back().comment = "display literal hex zero source";
+    context.emitter.items.back().source_line = line;
+  }
+  context.emitter.emit_op(0x34, "К [x]", "display leading-zero hex source", line);
+  emit_number_or_preload(context, plan->factor);
+  context.emitter.emit_op(0x12, "*", "display leading-zero hex product", line);
+  context.emitter.emit_op(0x50, "С/П", "show literal", line);
+  report_screen_literal_lowering(
+      context, "screen-leading-zero-hex-lowering",
+      "Lowered screen literal at line " + std::to_string(line) +
+          " through hex mantissa multiplication to preserve the leading zero.");
+  report_screen_literal_lowering(context, "hex-mantissa-arithmetic",
+                                 "Used " + plan->source_literal + " * " + plan->factor +
+                                     " to render \"" + literal +
+                                     "\" with a non-normal leading zero.");
+  return true;
+}
+
 bool lower_display_statement(LoweringContext& context, const V2Statement& statement) {
   if (!statement.items.has_value()) {
     context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
@@ -10348,6 +10393,10 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
                                      "Lowered screen literal at line " +
                                          std::to_string(statement.line) +
                                          " as an ordinary decimal display literal.");
+      report_screen_video_literal_lowering(context, statement.line);
+      return true;
+    }
+    if (lower_leading_zero_hex_product_display(context, *literal, statement.line)) {
       report_screen_video_literal_lowering(context, statement.line);
       return true;
     }
@@ -14305,8 +14354,7 @@ struct StackUnaryDerivationAssignment {
 
 bool lower_stack_unary_derived_assignments_run(LoweringContext& context,
                                                const std::vector<V2Statement>& statements,
-                                               std::size_t start,
-                                               std::size_t& consumed) {
+                                               std::size_t start, std::size_t& consumed) {
   consumed = 0;
   if (start >= statements.size())
     return false;
@@ -14364,8 +14412,7 @@ bool lower_stack_unary_derived_assignments_run(LoweringContext& context,
   if (!lower_expression_to_x(context, first_match->arg))
     return false;
   for (std::size_t copy = 1; copy < derivations.size(); ++copy) {
-    context.emitter.emit_op(0x0e, "В↑", "duplicate operand for Z-stack derived tail",
-                            first.line);
+    context.emitter.emit_op(0x0e, "В↑", "duplicate operand for Z-stack derived tail", first.line);
   }
 
   for (std::size_t index = 0; index < derivations.size(); ++index) {
@@ -15054,9 +15101,9 @@ std::string terminal_tail_helper_key(const std::vector<V2Statement>& body) {
 
 std::optional<std::string> existing_terminal_tail_helper_label(LoweringContext& context,
                                                                const std::string& key) {
-  const auto helper_it = std::find_if(
-      context.terminal_tail_helpers.begin(), context.terminal_tail_helpers.end(),
-      [&](const TerminalTailHelperRequest& helper) { return helper.key == key; });
+  const auto helper_it =
+      std::find_if(context.terminal_tail_helpers.begin(), context.terminal_tail_helpers.end(),
+                   [&](const TerminalTailHelperRequest& helper) { return helper.key == key; });
   if (helper_it == context.terminal_tail_helpers.end())
     return std::nullopt;
   return helper_it->label;
@@ -17020,14 +17067,14 @@ struct GridCellHelperCall {
   Expression y;
 };
 
-std::optional<GridCellHelperCall> match_grid_cell_helper_call(
-    const Expression& expression, std::initializer_list<std::string_view> names) {
+std::optional<GridCellHelperCall>
+match_grid_cell_helper_call(const Expression& expression,
+                            std::initializer_list<std::string_view> names) {
   if (expression.kind != "call" || expression.args.size() != 3U)
     return std::nullopt;
   const std::string name = lower_ascii(expression.callee);
-  const bool accepted = std::any_of(names.begin(), names.end(), [&](std::string_view candidate) {
-    return name == candidate;
-  });
+  const bool accepted = std::any_of(names.begin(), names.end(),
+                                    [&](std::string_view candidate) { return name == candidate; });
   if (!accepted)
     return std::nullopt;
   return GridCellHelperCall{
@@ -20164,8 +20211,9 @@ bool lower_repeated_assignment_counted_loop_reuse_run(LoweringContext& context,
   return false;
 }
 
-bool repeated_assignment_feeds_later_unit_decrement_loop(
-    LoweringContext& context, const std::vector<V2Statement>& statements, std::size_t index) {
+bool repeated_assignment_feeds_later_unit_decrement_loop(LoweringContext& context,
+                                                         const std::vector<V2Statement>& statements,
+                                                         std::size_t index) {
   const V2Statement& initializer = statements.at(index);
   if (initializer.kind != "v2_assign" || !initializer.target.has_value() ||
       !initializer.expr.has_value())
@@ -22037,8 +22085,8 @@ bool lower_terminal_tail_helpers(LoweringContext& context) {
       return false;
     context.optimizations.push_back(OptimizationReport{
         .name = "local-terminal-tail",
-        .detail = "Emitted local terminal tail for branch at line " +
-                  std::to_string(helper.line) + ".",
+        .detail =
+            "Emitted local terminal tail for branch at line " + std::to_string(helper.line) + ".",
     });
   }
   return true;
@@ -24253,9 +24301,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           bool emitted_tail = lower_function_rules(context, *ast.v2);
           const std::size_t function_end = context.emitter.items.size();
           if (emitted_tail && lower_terminal_tail_helpers(context) &&
-              lower_spatial_sum_helpers(context) &&
-              lower_spatial_hit_helpers(context) && lower_bit_mask_helper(context) &&
-              lower_packed_score_helper(context)) {
+              lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
+              lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
           if (emitted_tail) {
@@ -24508,6 +24555,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";preloaded_indirect_flow=" << options.preloaded_indirect_flow
       << ";runtime_indirect_call_flow=" << options.runtime_indirect_call_flow
       << ";general_constant_preloads=" << options.general_constant_preloads
+      << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
       << ";stack_resident_temps=" << options.stack_resident_temps
       << ";share_random_cell=" << options.share_random_cell
       << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
@@ -24683,8 +24731,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   add_candidate(
       [](CompileOptions& candidate_options) { candidate_options.general_constant_preloads = true; },
       "general-constant-preloads",
-      "Preloaded high-value runtime numeric literals through compiler-owned setup registers",
-      CandidateGate::SizeRescue);
+      "Preloaded high-value runtime numeric literals through compiler-owned setup registers");
   add_candidate([](CompileOptions& candidate_options) { candidate_options.coalesce_copies = true; },
                 "coalesce-copies", "Coalesced copy-related registers that never diverge");
   add_candidate(
