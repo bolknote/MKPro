@@ -3298,6 +3298,38 @@ program OneBasedModuloNormalize {
                        }),
           "one-based modulo normalization should remove the zero-fix branch");
 
+  const CompileResult int_frac_shared_tail = compile_source(R"mkpro(
+program IntFracSharedTail {
+  state {
+    source: packed = 23
+    seed: packed = 7
+    whole: packed = 0
+    part: packed = 0
+  }
+  loop {
+    whole = int((source + seed) * 20)
+    part = frac((source + seed) * 20)
+    halt(whole + part)
+  }
+}
+)mkpro");
+  require(int_frac_shared_tail.implemented,
+          "native compiler should share adjacent int()/frac() tails");
+  require(int_frac_shared_tail.diagnostics.empty(),
+          "int/frac shared tail compile should not report diagnostics");
+  require(has_optimization(int_frac_shared_tail, "int-frac-shared-tail"),
+          "int/frac shared tail should report the TS strategy name");
+  require(std::any_of(int_frac_shared_tail.steps.begin(), int_frac_shared_tail.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment == "duplicate operand for shared int/frac tail";
+                      }),
+          "int/frac shared tail should duplicate the shared operand");
+  require(std::any_of(int_frac_shared_tail.steps.begin(), int_frac_shared_tail.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment == "restore saved operand for frac()";
+                      }),
+          "int/frac shared tail should restore the saved operand");
+
   const CompileResult signed_modulo_normalize = compile_source(R"mkpro(
 program SignedModuloNormalize {
   state {

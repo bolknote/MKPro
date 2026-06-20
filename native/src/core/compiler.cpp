@@ -13793,6 +13793,69 @@ bool lower_one_based_modulo_normalization(LoweringContext& context, const V2Stat
   return true;
 }
 
+struct IntOrFracCall {
+  std::string fn;
+  Expression arg;
+};
+
+std::optional<IntOrFracCall> match_int_or_frac_call(const Expression& expression) {
+  if (expression.kind != "call" || expression.args.size() != 1U)
+    return std::nullopt;
+  const std::string fn = lower_ascii(expression.callee);
+  if (fn != "int" && fn != "frac")
+    return std::nullopt;
+  return IntOrFracCall{.fn = fn, .arg = expression.args.front()};
+}
+
+bool scalar_register_assignment(const LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_assign" || !statement.target.has_value() || !statement.expr.has_value())
+    return false;
+  const Expression target = parse_expression(*statement.target, statement.line);
+  return target.kind == "identifier" && context.register_index_by_name.contains(target.name);
+}
+
+bool lower_int_frac_shared_tail(LoweringContext& context, const V2Statement& first,
+                                const V2Statement& second) {
+  if (!scalar_register_assignment(context, first) || !scalar_register_assignment(context, second) ||
+      *first.target == *second.target) {
+    return false;
+  }
+
+  const Expression first_expression = parse_expression(*first.expr, first.line);
+  const Expression second_expression = parse_expression(*second.expr, second.line);
+  const std::optional<IntOrFracCall> first_call = match_int_or_frac_call(first_expression);
+  const std::optional<IntOrFracCall> second_call = match_int_or_frac_call(second_expression);
+  if (!first_call.has_value() || !second_call.has_value() || first_call->fn == second_call->fn ||
+      !expression_equals(first_call->arg, second_call->arg) ||
+      !expression_pure_for_substitution(first_call->arg) ||
+      guarded_estimate_expression_cost(first_call->arg) <= 2) {
+    return false;
+  }
+
+  const V2Statement& int_statement = first_call->fn == "int" ? first : second;
+  const V2Statement& frac_statement = first_call->fn == "frac" ? first : second;
+
+  if (!lower_expression_to_x(context, first_call->arg))
+    return false;
+  context.emitter.emit_op(0x0e, "В↑", "duplicate operand for shared int/frac tail",
+                          first.line);
+  context.emitter.emit_op(0x34, "К [x]", "int()", int_statement.line);
+  clear_current_x_facts(context);
+  emit_store(context, *int_statement.target, "set " + *int_statement.target);
+  context.emitter.emit_op(0x14, "X↔Y", "restore saved operand for frac()",
+                          frac_statement.line);
+  clear_current_x_facts(context);
+  context.emitter.emit_op(0x35, "К {x}", "frac()", frac_statement.line);
+  clear_current_x_facts(context);
+  emit_store(context, *frac_statement.target, "set " + *frac_statement.target);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "int-frac-shared-tail",
+      .detail = "Computed a shared pure operand once and derived int()/frac() through a shared "
+                "В↑/X↔Y tail.",
+  });
+  return true;
+}
+
 struct ResidualGuardedUpdateMatch {
   V2Predicate condition;
   V2Statement assignment;
@@ -21051,6 +21114,13 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (index + 1U < statements.size() &&
         lower_one_based_modulo_normalization(context, statements.at(index),
                                              statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
+        lower_int_frac_shared_tail(context, statements.at(index), statements.at(index + 1U))) {
       ++index;
       continue;
     }
