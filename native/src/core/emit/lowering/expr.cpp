@@ -251,6 +251,26 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
     return true;
   }
 
+  if (const std::optional<RemainderByConstantMatch> remainder =
+          match_remainder_by_constant(expression)) {
+    if (!api.lower_expression_to_x(remainder->value))
+      return false;
+    if (!api.lower_expression_to_x(remainder->divisor))
+      return false;
+    api.emitter.emit_op(0x13, "/", "remainder quotient");
+    api.emitter.emit_op(0x35, "К {x}", "remainder fractional part");
+    if (!api.lower_expression_to_x(remainder->divisor))
+      return false;
+    api.emitter.emit_op(0x12, "*", "remainder scale");
+    api.emitter.current_x_variable.reset();
+    api.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "remainder-fraction-lowering",
+        .detail = "Lowered integer remainder without recomputing the dividend.",
+    });
+    return true;
+  }
+
   const std::map<std::string, int> arithmetic_opcodes = {
       {"+", 0x10},
       {"-", 0x11},

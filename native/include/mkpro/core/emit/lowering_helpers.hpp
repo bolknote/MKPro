@@ -42,6 +42,11 @@ struct FirstSpliceDisplayLiteralProgram {
   bool negative = false;
 };
 
+struct RemainderByConstantMatch {
+  Expression value;
+  Expression divisor;
+};
+
 std::string coord_list_item_name(const std::string& list_name, int index);
 std::optional<CoordListItemInfo> coord_list_item_info(std::string_view name);
 std::string segmented_bitplane_name(const std::string& collection, int index);
@@ -92,5 +97,7 @@ Expression offset_expression(Expression expression, int offset);
 Expression board_cell_expression(Expression x, Expression y);
 Expression spatial_bit_index_expression_for_board(const V2Board* board, Expression cell);
 Expression spatial_hit_expression(Expression mask, Expression index);
+std::optional<RemainderByConstantMatch> match_remainder_by_constant(
+    const Expression& expression);
 
 }  // namespace mkpro::core::emit

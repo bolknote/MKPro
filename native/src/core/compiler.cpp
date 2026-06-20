@@ -67,6 +67,7 @@ using core::emit::frac_expression;
 using core::emit::identifier_expression;
 using core::emit::int_expression;
 using core::emit::is_unsigned_decimal_digits;
+using core::emit::match_remainder_by_constant;
 using core::emit::max_expression;
 using core::emit::min_expression;
 using core::emit::multiply_expression;
@@ -12850,6 +12851,47 @@ bool lower_direct_zero_false_branch(LoweringContext& context, const V2Predicate&
   return true;
 }
 
+bool lower_remainder_zero_false_branch(LoweringContext& context, const V2Predicate& predicate,
+                                       const std::string& false_label, int source_line,
+                                       std::optional<std::string> branch_comment) {
+  if (predicate.op != "==" && predicate.op != "!=")
+    return false;
+  const Expression left = parse_expression(predicate.left, source_line);
+  const Expression right = parse_expression(predicate.right, source_line);
+  if (!is_zero_expression(context, right))
+    return false;
+  const std::optional<core::emit::RemainderByConstantMatch> remainder =
+      match_remainder_by_constant(left);
+  if (!remainder.has_value())
+    return false;
+  const std::optional<double> divisor = numeric_literal_value(remainder->divisor);
+  if (!divisor.has_value() || *divisor == 0.0)
+    return false;
+
+  if (!lower_expression_to_x(context, remainder->value))
+    return false;
+  if (!lower_expression_to_x(context, remainder->divisor))
+    return false;
+  context.emitter.emit_op(0x13, "/", "remainder quotient", source_line);
+  context.emitter.emit_op(0x35, "К {x}", "remainder zero fractional part", source_line);
+
+  const std::optional<std::pair<int, std::string>> opcode =
+      direct_zero_test_opcode(predicate.op);
+  if (!opcode.has_value())
+    return false;
+  context.emitter.emit_jump(opcode->first, opcode->second, false_label,
+                            branch_comment.value_or("false branch for " + predicate.op),
+                            source_line);
+  clear_current_x_facts(context);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "remainder-zero-test-lowering",
+      .detail = "Tested integer remainder against zero without rescaling the fractional "
+                "remainder at line " +
+                std::to_string(source_line) + ".",
+  });
+  return true;
+}
+
 bool lower_equality_with_current_x(LoweringContext& context, const V2Predicate& predicate,
                                    const std::string& false_label, int source_line,
                                    std::optional<std::string> branch_comment) {
@@ -13005,6 +13047,9 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
     });
   }
 
+  if (lower_remainder_zero_false_branch(context, selected_predicate, false_label, source_line,
+                                        branch_comment))
+    return true;
   if (lower_direct_zero_false_branch(context, selected_predicate, false_label, source_line,
                                      branch_comment))
     return true;

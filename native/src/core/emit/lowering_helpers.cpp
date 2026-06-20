@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <regex>
 #include <stdexcept>
 #include <utility>
@@ -70,6 +71,65 @@ std::optional<std::pair<int, int>> decimal_xor_pair(int value) {
     }
   }
   return std::nullopt;
+}
+
+std::string lower_ascii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return value;
+}
+
+bool expression_equals(const Expression& left, const Expression& right) {
+  return expression_to_json(left) == expression_to_json(right);
+}
+
+bool expression_pure_for_remainder_substitution(const Expression& expression) {
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "read")
+    return false;
+  if (expression.index != nullptr && !expression_pure_for_remainder_substitution(*expression.index))
+    return false;
+  if (expression.expr != nullptr && !expression_pure_for_remainder_substitution(*expression.expr))
+    return false;
+  if (expression.left != nullptr && !expression_pure_for_remainder_substitution(*expression.left))
+    return false;
+  if (expression.right != nullptr && !expression_pure_for_remainder_substitution(*expression.right))
+    return false;
+  return std::all_of(expression.args.begin(), expression.args.end(), [](const Expression& arg) {
+    return expression_pure_for_remainder_substitution(arg);
+  });
+}
+
+std::optional<double> numeric_literal_value(const Expression& expression) {
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr) {
+    const std::optional<double> value = numeric_literal_value(*expression.expr);
+    return value.has_value() ? std::optional<double>{-*value} : std::nullopt;
+  }
+  if (expression.kind != "number")
+    return std::nullopt;
+  const std::string raw = expression.raw.empty() ? expression.text : expression.raw;
+  try {
+    std::size_t parsed = 0;
+    const double value = std::stod(raw, &parsed);
+    if (parsed != raw.size() || !std::isfinite(value))
+      return std::nullopt;
+    return value;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::optional<RemainderByConstantMatch> match_int_divide_by_constant(
+    const Expression& expression) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "int" ||
+      expression.args.size() != 1U) {
+    return std::nullopt;
+  }
+  const Expression& divided = expression.args.front();
+  if (divided.kind != "binary" || divided.op != "/" || divided.left == nullptr ||
+      divided.right == nullptr || !numeric_literal_value(*divided.right).has_value()) {
+    return std::nullopt;
+  }
+  return RemainderByConstantMatch{.value = *divided.left, .divisor = *divided.right};
 }
 
 }  // namespace
@@ -542,6 +602,38 @@ Expression spatial_bit_index_expression_for_board(const V2Board* board, Expressi
 
 Expression spatial_hit_expression(Expression mask, Expression index) {
   return call_expression(std::string(k_spatial_hit_callee), {std::move(mask), std::move(index)});
+}
+
+std::optional<RemainderByConstantMatch> match_remainder_by_constant(
+    const Expression& expression) {
+  if (expression.kind != "binary" || expression.op != "-" || expression.left == nullptr ||
+      expression.right == nullptr ||
+      !expression_pure_for_remainder_substitution(*expression.left)) {
+    return std::nullopt;
+  }
+
+  const Expression& product = *expression.right;
+  if (product.kind != "binary" || product.op != "*" || product.left == nullptr ||
+      product.right == nullptr) {
+    return std::nullopt;
+  }
+
+  const std::optional<RemainderByConstantMatch> left_int_divide =
+      match_int_divide_by_constant(*product.left);
+  if (left_int_divide.has_value() && expression_equals(left_int_divide->value, *expression.left) &&
+      expression_equals(left_int_divide->divisor, *product.right)) {
+    return left_int_divide;
+  }
+
+  const std::optional<RemainderByConstantMatch> right_int_divide =
+      match_int_divide_by_constant(*product.right);
+  if (right_int_divide.has_value() &&
+      expression_equals(right_int_divide->value, *expression.left) &&
+      expression_equals(right_int_divide->divisor, *product.left)) {
+    return right_int_divide;
+  }
+
+  return std::nullopt;
 }
 
 }  // namespace mkpro::core::emit

@@ -3178,6 +3178,60 @@ program NegatedZeroComparison {
                        }),
           "negated zero test should avoid materialized-zero comparison");
 
+  const CompileResult remainder_lowering = compile_source(R"mkpro(
+program RemainderLowering {
+  state {
+    value: packed = 23
+    ones: packed = 0
+  }
+  loop {
+    ones = value - 10 * int(value / 10)
+    halt(ones)
+  }
+}
+)mkpro");
+  require(remainder_lowering.implemented,
+          "native compiler should lower integer remainder expressions");
+  require(remainder_lowering.diagnostics.empty(),
+          "integer remainder lowering should not report diagnostics");
+  require(has_optimization(remainder_lowering, "remainder-fraction-lowering"),
+          "integer remainder lowering should report the TS strategy name");
+  require(std::any_of(remainder_lowering.steps.begin(), remainder_lowering.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment == "remainder fractional part";
+                      }),
+          "integer remainder lowering should keep the TS fractional remainder step");
+
+  const CompileResult remainder_zero_test = compile_source(R"mkpro(
+program RemainderZeroTest {
+  state {
+    value: packed = 25
+  }
+  loop {
+    if value - 5 * int(value / 5) == 0 {
+      halt(1)
+    }
+    halt(0)
+  }
+}
+)mkpro");
+  require(remainder_zero_test.implemented,
+          "native compiler should lower integer remainder zero tests");
+  require(remainder_zero_test.diagnostics.empty(),
+          "integer remainder zero test should not report diagnostics");
+  require(has_optimization(remainder_zero_test, "remainder-zero-test-lowering"),
+          "integer remainder zero test should report the TS strategy name");
+  require(std::any_of(remainder_zero_test.steps.begin(), remainder_zero_test.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment == "remainder zero fractional part";
+                      }),
+          "integer remainder zero test should keep the TS fractional test step");
+  require(std::none_of(remainder_zero_test.steps.begin(), remainder_zero_test.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment == "remainder scale";
+                       }),
+          "integer remainder zero test should skip rescaling the fractional remainder");
+
   const CompileResult indexed_store_guard = compile_source(R"mkpro(
 program IndexedStoreGuard {
   state {
