@@ -145,6 +145,7 @@ add_executable(mkpro_tests
   tests/segmented_bitplane_test.cpp
   tests/setup_program_test.cpp
   tests/setup_only_counted_loop_test.cpp
+  tests/show_read_guarded_transfer_test.cpp
   tests/show_sequence_helper_test.cpp
   tests/small_set_condition_test.cpp
   tests/state_banks_test.cpp

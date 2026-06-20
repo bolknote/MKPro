@@ -20335,6 +20335,201 @@ bool lower_show_read_decrement_underflow_fusion(LoweringContext& context,
   return true;
 }
 
+bool read_transform_is_stack_decrement_safe(const Expression& expression) {
+  if (expression.kind != "call")
+    return false;
+  const std::string callee = lower_ascii(expression.callee);
+  if (callee == "read")
+    return expression.args.empty();
+  return (callee == "int" || callee == "frac") && expression.args.size() == 1U &&
+         read_transform_is_stack_decrement_safe(expression.args.front());
+}
+
+bool lower_read_transform_tail_from_current_x(LoweringContext& context,
+                                              const Expression& expression, int source_line) {
+  if (expression.kind != "call")
+    return false;
+  const std::string callee = lower_ascii(expression.callee);
+  if (callee == "read")
+    return expression.args.empty();
+  if (expression.args.size() != 1U ||
+      !lower_read_transform_tail_from_current_x(context, expression.args.front(), source_line)) {
+    return false;
+  }
+  if (callee == "int") {
+    context.emitter.emit_op(0x34, "К [x]", "int()", source_line);
+    clear_current_x_facts(context);
+    return true;
+  }
+  if (callee == "frac") {
+    context.emitter.emit_op(0x35, "К {x}", "frac()", source_line);
+    clear_current_x_facts(context);
+    return true;
+  }
+  return false;
+}
+
+std::optional<Expression> self_update_assignable_target(const V2Statement& statement,
+                                                        const std::string& op,
+                                                        const std::string& temp) {
+  if ((statement.kind != "v2_assign" && statement.kind != "v2_update") ||
+      !statement.target.has_value() || !statement.expr.has_value()) {
+    return std::nullopt;
+  }
+
+  try {
+    const Expression target = parse_expression(*statement.target, statement.line);
+    if (target.kind != "identifier" && target.kind != "indexed")
+      return std::nullopt;
+
+    if (statement.kind == "v2_update") {
+      const std::string expected = op == "+" ? "+=" : "-=";
+      if (!statement.op.has_value() || *statement.op != expected)
+        return std::nullopt;
+      const Expression amount = parse_expression(*statement.expr, statement.line);
+      return expression_equals(amount, identifier_expression(temp))
+                 ? std::optional<Expression>{target}
+                 : std::nullopt;
+    }
+
+    const Expression expression = parse_expression(*statement.expr, statement.line);
+    if (expression.kind != "binary" || expression.op != op || expression.left == nullptr ||
+        expression.right == nullptr || !expression_equals(*expression.left, target) ||
+        !expression_equals(*expression.right, identifier_expression(temp))) {
+      return std::nullopt;
+    }
+    return target;
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+bool lower_show_read_guarded_transfer(LoweringContext& context,
+                                      const std::vector<V2Statement>& statements, std::size_t index,
+                                      std::size_t& consumed) {
+  consumed = 0;
+  if (!context.domain_error_guards || !context.show_read_guarded_transfer ||
+      index + 3U >= statements.size()) {
+    return false;
+  }
+
+  const V2Statement& show = statements.at(index);
+  const V2Statement& input = statements.at(index + 1U);
+  const V2Statement& decrement = statements.at(index + 2U);
+  const V2Statement& branch = statements.at(index + 3U);
+  if (show.kind != "v2_show" || input.kind != "v2_assign" || !input.target.has_value() ||
+      !input.expr.has_value() || branch.kind != "v2_if" || !branch.predicate.has_value() ||
+      branch.negated || !branch.has_else_body || branch.else_body.size() < 2U) {
+    return false;
+  }
+
+  const std::string temp = *input.target;
+  if (context.constants.contains(temp))
+    return false;
+
+  Expression input_expression;
+  try {
+    input_expression = parse_expression(*input.expr, input.line);
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (!read_transform_is_stack_decrement_safe(input_expression))
+    return false;
+  if (tail_reads_identifier(statements, index + 4U, temp))
+    return false;
+
+  const std::optional<Expression> decrement_target =
+      self_update_assignable_target(decrement, "-", temp);
+  if (!decrement_target.has_value())
+    return false;
+  if (!condition_is_negative_assignable_guard(context, *branch.predicate, *decrement_target,
+                                              branch.line)) {
+    return false;
+  }
+  if (!statements_are_domain_error_trap(context, branch.then_body))
+    return false;
+
+  const V2Statement& increment = branch.else_body.at(0);
+  const V2Statement& increment_guard = branch.else_body.at(1);
+  const std::optional<Expression> increment_target =
+      self_update_assignable_target(increment, "+", temp);
+  if (!increment_target.has_value())
+    return false;
+  if (increment_guard.kind != "v2_if" || !increment_guard.predicate.has_value() ||
+      increment_guard.negated) {
+    return false;
+  }
+  if (!condition_is_negative_assignable_guard(context, *increment_guard.predicate,
+                                              *increment_target, increment_guard.line)) {
+    return false;
+  }
+  if (!statements_are_domain_error_trap(context, increment_guard.then_body))
+    return false;
+
+  std::vector<V2Statement> continuation;
+  if (increment_guard.has_else_body) {
+    if (branch.else_body.size() != 2U)
+      return false;
+    continuation = increment_guard.else_body;
+  } else {
+    continuation.assign(branch.else_body.begin() + 2, branch.else_body.end());
+  }
+  if (statements_read_identifier(continuation, temp, false))
+    return false;
+
+  if (show.target.has_value()) {
+    if (!lower_pause_statement(context, show))
+      return false;
+  } else if (!lower_display_statement(context, show)) {
+    return false;
+  }
+
+  clear_current_x_facts(context);
+  if (!lower_read_transform_tail_from_current_x(context, input_expression, input.line))
+    return false;
+  if (!emit_assignable_recall(context, *decrement_target,
+                              "decrement " + assignable_target_text(*decrement_target),
+                              decrement.line)) {
+    return false;
+  }
+  context.emitter.emit_op(0x14, "X↔Y", "decrement input order", decrement.line);
+  context.emitter.emit_op(0x11, "-", "decrement input", decrement.line);
+  clear_current_x_facts(context);
+  if (!emit_assignable_store(context, *decrement_target, decrement.line))
+    return false;
+
+  const std::string trap_label = context.emitter.fresh_label("decrement_increment_trap");
+  context.emitter.emit_jump(0x59, "F x>=0", trap_label, "decrement negative trap", branch.line);
+  context.emitter.emit_op(0x0f, "F Вx", "restore decremented input", input.line);
+  clear_current_x_facts(context);
+  if (!emit_assignable_recall(context, *increment_target,
+                              "increment " + assignable_target_text(*increment_target),
+                              increment.line)) {
+    return false;
+  }
+  context.emitter.emit_op(0x10, "+", "increment input", increment.line);
+  clear_current_x_facts(context);
+  if (!emit_assignable_store(context, *increment_target, increment.line))
+    return false;
+
+  context.emitter.emit_label(trap_label, {.hidden = true});
+  context.emitter.emit_op(0x21, "F √", "decrement/increment domain-error guard trap",
+                          increment_guard.line);
+  clear_current_x_facts(context);
+  context.scaled_coord_variables.clear();
+  if (!lower_statement_block(context, continuation))
+    return false;
+
+  context.optimizations.push_back(OptimizationReport{
+      .name = "show-read-guarded-transfer",
+      .detail = "Kept read " + temp + " on the stack while decrementing " +
+                assignable_target_text(*decrement_target) + " and incrementing " +
+                assignable_target_text(*increment_target) + ".",
+  });
+  consumed = 4;
+  return true;
+}
+
 bool statement_always_stops(LoweringContext& context, const V2Statement& statement);
 
 bool statements_always_stop(LoweringContext& context, const std::vector<V2Statement>& statements) {
@@ -23572,6 +23767,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
     std::size_t show_read_decrement_consumed = 0;
+    if (lower_show_read_guarded_transfer(context, statements, index,
+                                         show_read_decrement_consumed)) {
+      index += show_read_decrement_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    show_read_decrement_consumed = 0;
     if (lower_show_read_decrement_underflow_fusion(context, statements, index,
                                                    show_read_decrement_consumed)) {
       index += show_read_decrement_consumed - 1U;
@@ -25965,6 +26168,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
   context.compact_bit_mask_helper_body = options.compact_bit_mask_helper_body;
   context.domain_error_guards = options.domain_error_guards;
+  context.show_read_guarded_transfer = options.show_read_guarded_transfer;
   context.comparison_guarded_update_selectors = options.comparison_guarded_update_selectors;
   context.indirect_underflow_decrement = options.indirect_underflow_decrement;
   context.recall_stored_input_after_decrement = options.recall_stored_input_after_decrement;

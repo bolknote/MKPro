@@ -182,6 +182,7 @@ struct LoweringContext {
   bool x_param_y_stack_stored_entry = false;
   bool compact_bit_mask_helper_body = false;
   bool domain_error_guards = false;
+  bool show_read_guarded_transfer = false;
   bool comparison_guarded_update_selectors = false;
   bool indirect_underflow_decrement = false;
   bool recall_stored_input_after_decrement = false;
