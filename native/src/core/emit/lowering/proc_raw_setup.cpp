@@ -645,7 +645,8 @@ bool emit_random_unique_coord_list_setup(MachineEmitter& setup,
                                          const std::map<std::string, const V2Board*>& boards,
                                          const std::map<std::string, std::string>& registers,
                                          const RandomUniqueCoordListValue& value,
-                                         const std::vector<std::string>& item_registers) {
+                                         const std::vector<std::string>& item_registers,
+                                         std::vector<OptimizationReport>& optimizations) {
   const auto board_it = boards.find(value.domain);
   if (board_it == boards.end())
     return false;
@@ -653,8 +654,15 @@ bool emit_random_unique_coord_list_setup(MachineEmitter& setup,
   if (!board_random_unique_candidate_supported(board))
     return false;
 
-  if (emit_compact_random_unique_coord_list_setup(setup, boards, registers, value, item_registers))
+  if (emit_compact_random_unique_coord_list_setup(setup, boards, registers, value,
+                                                 item_registers)) {
+    optimizations.push_back(OptimizationReport{
+        .name = "coord-list-indirect-random-unique",
+        .detail = "Generated compact indirect setup for " +
+                  std::to_string(item_registers.size()) + " unique coord_list item(s).",
+    });
     return true;
+  }
 
   const std::string seed_register = item_registers.back();
   setup.emit_op(0x3b, "К СЧ", "random coord seed", std::nullopt, true);
@@ -810,7 +818,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       }
       if (static_cast<int>(ordered_registers.size()) == unique->count &&
           emit_random_unique_coord_list_setup(setup, boards, registers, *unique,
-                                              ordered_registers)) {
+                                              ordered_registers, optimizations)) {
         for (const std::size_t consumed_index : group_indices)
           consumed.insert(consumed_index);
         continue;

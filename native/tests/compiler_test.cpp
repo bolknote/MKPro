@@ -4595,6 +4595,8 @@ program CoordListUniqueSetup {
           "coord_list random_unique setup should use one compact indirect store");
   require(unique_indirect_stores == 1,
           "coord_list random_unique setup should store through the pointer register");
+  require(has_optimization(coord_list_unique_setup, "setup-coord-list-indirect-random-unique"),
+          "coord_list random_unique setup should report the compact indirect setup strategy");
 
   CompileOptions segmented_options = spatial_options;
   segmented_options.segmented_bitplanes = true;
