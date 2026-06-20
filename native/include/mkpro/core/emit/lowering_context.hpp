@@ -41,6 +41,13 @@ struct LiteralDisplayHelperRequest {
   int line = 0;
 };
 
+struct PackedDisplayHelperRequest {
+  std::string key;
+  std::string label;
+  V2Statement statement;
+  int line = 0;
+};
+
 struct ShowSequenceHelperRequest {
   std::string key;
   std::string label;
@@ -125,6 +132,9 @@ struct LoweringContext {
   std::map<std::string, int> literal_display_use_counts;
   std::map<std::string, std::string> literal_display_helper_labels;
   std::vector<LiteralDisplayHelperRequest> literal_display_helpers;
+  std::map<std::string, int> packed_display_use_counts;
+  std::map<std::string, std::string> packed_display_helper_labels;
+  std::vector<PackedDisplayHelperRequest> packed_display_helpers;
   std::map<std::string, int> show_sequence_use_counts;
   std::map<std::string, std::string> show_sequence_helper_labels;
   std::vector<ShowSequenceHelperRequest> show_sequence_helpers;
@@ -167,6 +177,7 @@ struct LoweringContext {
   bool dead_source_residual_temp_reuse = false;
   bool single_bit_mask_op_copy_reuse = false;
   bool emitting_literal_display_helper = false;
+  bool emitting_packed_display_helper = false;
   bool emitting_show_sequence_helper = false;
   bool emitting_random_cell_helper = false;
   bool emitting_expression_helper = false;

@@ -5666,6 +5666,36 @@ void collect_literal_display_use_counts(LoweringContext& context, const V2Progra
     collect_literal_display_use_counts(rule.body, context.literal_display_use_counts);
 }
 
+std::optional<std::string> packed_display_key(const V2Statement& statement) {
+  if (statement.kind != "v2_show" || statement.target.has_value())
+    return std::nullopt;
+  return show_display_key(statement);
+}
+
+void collect_packed_display_use_counts(const std::vector<V2Statement>& statements,
+                                       std::map<std::string, int>& counts) {
+  for (const V2Statement& statement : statements) {
+    if (const std::optional<std::string> key = packed_display_key(statement))
+      ++counts[*key];
+    collect_packed_display_use_counts(statement.body, counts);
+    collect_packed_display_use_counts(statement.then_body, counts);
+    collect_packed_display_use_counts(statement.else_body, counts);
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr)
+        collect_packed_display_use_counts(std::vector<V2Statement>{*match_case.action}, counts);
+    }
+    if (statement.otherwise != nullptr)
+      collect_packed_display_use_counts(std::vector<V2Statement>{*statement.otherwise}, counts);
+  }
+}
+
+void collect_packed_display_use_counts(LoweringContext& context, const V2Program& program) {
+  context.packed_display_use_counts.clear();
+  collect_packed_display_use_counts(program.body, context.packed_display_use_counts);
+  for (const V2Rule& rule : program.rules)
+    collect_packed_display_use_counts(rule.body, context.packed_display_use_counts);
+}
+
 std::optional<std::string> show_sequence_key(const V2Statement& first, const V2Statement& second) {
   if (first.kind != "v2_show" || second.kind != "v2_show")
     return std::nullopt;
@@ -10869,6 +10899,70 @@ bool lower_shared_literal_display_call(LoweringContext& context, const std::stri
   return true;
 }
 
+bool should_share_packed_display(LoweringContext& context, const V2Statement& statement) {
+  if (context.emitting_packed_display_helper || context.emitting_show_sequence_helper)
+    return false;
+  if (!statement.items.has_value())
+    return false;
+  const std::optional<std::string> key = packed_display_key(statement);
+  if (!key.has_value())
+    return false;
+  const std::optional<std::vector<PackedDisplayField>> fields =
+      numeric_display_fields(context, *statement.items);
+  if (!fields.has_value() || fields->size() < 2)
+    return false;
+  const auto uses_it = context.packed_display_use_counts.find(*key);
+  if (uses_it == context.packed_display_use_counts.end() || uses_it->second < 2)
+    return false;
+
+  const int uses = uses_it->second;
+  const int inline_cost = estimate_decimal_packed_display_cost(context, *fields, false);
+  const int helper_cost = uses * 2 + inline_cost + 1;
+  const int inline_total = uses * inline_cost;
+  return inline_total - helper_cost >= kDisplayHelperMinSavings;
+}
+
+const PackedDisplayHelperRequest& ensure_packed_display_helper(LoweringContext& context,
+                                                               const V2Statement& statement) {
+  const std::optional<std::string> key = packed_display_key(statement);
+  if (!key.has_value())
+    throw std::logic_error("packed display helper requested for non-display statement");
+
+  const auto existing = context.packed_display_helper_labels.find(*key);
+  if (existing != context.packed_display_helper_labels.end()) {
+    const auto helper =
+        std::find_if(context.packed_display_helpers.begin(), context.packed_display_helpers.end(),
+                     [&](const PackedDisplayHelperRequest& candidate) {
+                       return candidate.label == existing->second;
+                     });
+    if (helper != context.packed_display_helpers.end())
+      return *helper;
+  }
+
+  const std::string label = "__display_" + std::to_string(context.packed_display_helpers.size());
+  context.packed_display_helper_labels[*key] = label;
+  context.packed_display_helpers.push_back(PackedDisplayHelperRequest{
+      .key = *key,
+      .label = label,
+      .statement = statement,
+      .line = statement.line,
+  });
+  return context.packed_display_helpers.back();
+}
+
+bool lower_shared_packed_display_call(LoweringContext& context, const V2Statement& statement) {
+  if (!should_share_packed_display(context, statement))
+    return false;
+  const PackedDisplayHelperRequest& helper = ensure_packed_display_helper(context, statement);
+  context.emitter.emit_jump(0x53, "ПП", helper.label, "show packed display helper", statement.line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-display-helper-call",
+      .detail =
+          "Reused shared packed display helper at line " + std::to_string(statement.line) + ".",
+  });
+  return true;
+}
+
 bool lower_literal_display_body(LoweringContext& context, const std::string& literal, int line) {
   if (literal.empty()) {
     context.emitter.emit_op(0x50, "С/П", "show literal", line);
@@ -10976,6 +11070,9 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
 
   if (core::emit::lower_fixed_display_mask_statement(display_api, context, *statement.items,
                                                      statement.line))
+    return true;
+
+  if (lower_shared_packed_display_call(context, statement))
     return true;
 
   if (lower_selected_packed_display_statement(context, *statement.items, statement.line))
@@ -23169,6 +23266,36 @@ bool lower_terminal_tail_helpers(LoweringContext& context) {
   return true;
 }
 
+bool lower_packed_display_helpers(LoweringContext& context) {
+  for (const PackedDisplayHelperRequest& helper : context.packed_display_helpers) {
+    if (!helper.statement.items.has_value())
+      return false;
+    const std::optional<std::vector<PackedDisplayField>> fields =
+        numeric_display_fields(context, *helper.statement.items);
+    if (!fields.has_value())
+      return false;
+
+    context.emitter.emit_label(
+        helper.label,
+        {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
+    const bool previous = context.emitting_packed_display_helper;
+    context.emitting_packed_display_helper = true;
+    clear_current_x_facts(context);
+    const bool lowered = lower_packed_display_fields_in_order(context, *fields, helper.line, false);
+    context.emitting_packed_display_helper = previous;
+    if (!lowered)
+      return false;
+    context.emitter.emit_op(0x50, "С/П", "show", helper.line);
+    context.emitter.emit_op(0x52, "В/О", "packed display return", helper.line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "packed-display-helper",
+        .detail =
+            "Emitted shared packed display helper at line " + std::to_string(helper.line) + ".",
+    });
+  }
+  return true;
+}
+
 bool lower_show_sequence_helpers(LoweringContext& context) {
   for (const ShowSequenceHelperRequest& helper : context.show_sequence_helpers) {
     context.emitter.emit_label(
@@ -25390,6 +25517,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         extract_guarded_prologue_gadgets(*ast.v2, context.optimizations);
       index_program_metadata(context, *ast.v2);
       collect_literal_display_use_counts(context, *ast.v2);
+      collect_packed_display_use_counts(context, *ast.v2);
       collect_show_sequence_use_counts(context, *ast.v2);
       collect_expression_use_counts(context, *ast.v2);
       index_constants(context, *ast.v2);
@@ -25471,10 +25599,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           bool emitted_tail = lower_function_rules(context, *ast.v2);
           const std::size_t function_end = context.emitter.items.size();
           if (emitted_tail && lower_terminal_tail_helpers(context) &&
-              lower_show_sequence_helpers(context) && lower_literal_display_helpers(context) &&
-              lower_random_cell_helpers(context) && lower_expression_helpers(context) &&
-              lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
-              lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
+              lower_packed_display_helpers(context) && lower_show_sequence_helpers(context) &&
+              lower_literal_display_helpers(context) && lower_random_cell_helpers(context) &&
+              lower_expression_helpers(context) && lower_spatial_sum_helpers(context) &&
+              lower_spatial_hit_helpers(context) && lower_bit_mask_helper(context) &&
+              lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
           if (emitted_tail) {

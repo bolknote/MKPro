@@ -37,6 +37,7 @@ void match_blocks_match_typescript_contract();
 void maxmin_zero_lint_matches_typescript_contract();
 void opcode_catalog_matches_typescript_contract();
 void oracle_index_loads_committed_artifacts();
+void packed_display_helpers_match_typescript_contract();
 void packed_score_helpers_match_typescript_contract();
 void parser_matches_initial_v2_source_contract();
 void expression_parser_matches_initial_contract();
@@ -140,6 +141,8 @@ int main() {
        mkpro::tests::opcode_catalog_matches_typescript_contract},
       {"oracle_index_loads_committed_artifacts",
        mkpro::tests::oracle_index_loads_committed_artifacts},
+      {"packed_display_helpers_match_typescript_contract",
+       mkpro::tests::packed_display_helpers_match_typescript_contract},
       {"packed_score_helpers_match_typescript_contract",
        mkpro::tests::packed_score_helpers_match_typescript_contract},
       {"parser_matches_initial_v2_source_contract",
