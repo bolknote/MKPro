@@ -269,6 +269,10 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     api.emitter.current_x_variable.reset();
     api.emitter.current_x_aliases.clear();
     api.emitter.current_x_known_zero = false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "entered-current-x",
+        .detail = "Consumed the current keyboard-entered X value without emitting another stop.",
+    });
     return true;
   }
 

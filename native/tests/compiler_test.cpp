@@ -1393,6 +1393,8 @@ program EnteredCurrentX {
   require(entered_current_x.diagnostics.empty(), "entered() compile should not report diagnostics");
   require(entered_current_x.listing.find("read()") == std::string::npos,
           "entered() should consume current X without emitting a read stop");
+  require(has_optimization(entered_current_x, "entered-current-x"),
+          "entered() should report the TS strategy name");
 
   CompileOptions input_branch_options;
   input_branch_options.analysis = true;
