@@ -145,6 +145,7 @@ struct LoweringContext {
   bool indirect_underflow_decrement = false;
   bool recall_stored_input_after_decrement = false;
   bool dead_source_residual_temp_reuse = false;
+  bool single_bit_mask_op_copy_reuse = false;
   bool emitting_literal_display_helper = false;
   bool emitting_random_cell_helper = false;
   bool share_random_cell = false;

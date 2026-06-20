@@ -28,11 +28,10 @@ int count_comment(const std::vector<std::string>& values, const std::string& com
 }
 
 int count_bit_mask_helper_calls(const CompileResult& result) {
-  return static_cast<int>(std::count_if(result.steps.begin(), result.steps.end(),
-                                        [](const ResolvedStep& step) {
-                                          return step.opcode == 0x53 &&
-                                                 step.comment == "bit_mask helper";
-                                        }));
+  return static_cast<int>(
+      std::count_if(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+        return step.opcode == 0x53 && step.comment == "bit_mask helper";
+      }));
 }
 
 } // namespace
@@ -73,8 +72,7 @@ program AdjacentSetUpdates {
   require(scratch_index != step_comments.end(), "shared mask scratch store should be emitted");
   require(first_set_index != step_comments.end(), "first bit_set should use the shared mask");
   require(first_set_index > scratch_index, "first reused bit_set should follow scratch store");
-  require(std::find(scratch_index + 1, first_set_index, "reuse cell bit mask") ==
-              first_set_index,
+  require(std::find(scratch_index + 1, first_set_index, "reuse cell bit mask") == first_set_index,
           "first reused bit_set should consume the still-live stack mask without recalling it");
   require(count_bit_mask_helper_calls(result) == 1,
           "adjacent cells set updates should compute bit_mask once");
@@ -110,9 +108,8 @@ program SharedBitMaskHelper {
     require(diagnostic.severity != DiagnosticSeverity::Error,
             "shared bit_mask helper should not report errors: " + diagnostic.message);
   }
-  require(shared.steps.size() == 43,
-          "shared bit_mask helper should compile to 43 steps, got " +
-              std::to_string(shared.steps.size()));
+  require(shared.steps.size() == 43, "shared bit_mask helper should compile to 43 steps, got " +
+                                         std::to_string(shared.steps.size()));
   require(has_optimization(shared, "shared-bit-mask-helper-layout"),
           "shared bit_mask helper should report shared-bit-mask-helper-layout");
   require(has_optimization(shared, "bit-mask-condition-helper"),
@@ -167,12 +164,9 @@ program RepeatedBitClearScratch {
     require(diagnostic.severity != DiagnosticSeverity::Error,
             "repeated bit clear scratch should not report errors: " + diagnostic.message);
   }
-  const int single_bit_ops =
-      static_cast<int>(std::count_if(repeated_clear.optimizations.begin(),
-                                     repeated_clear.optimizations.end(),
-                                     [](const OptimizationReport& item) {
-                                       return item.name == "single-bit-mask-op";
-                                     }));
+  const int single_bit_ops = static_cast<int>(std::count_if(
+      repeated_clear.optimizations.begin(), repeated_clear.optimizations.end(),
+      [](const OptimizationReport& item) { return item.name == "single-bit-mask-op"; }));
   require(single_bit_ops == 4,
           "repeated bit clear scratch should report four single-bit-mask-op optimizations, got " +
               std::to_string(single_bit_ops));
@@ -180,6 +174,77 @@ program RepeatedBitClearScratch {
           "repeated bit clear scratch should allocate plans");
   require(repeated_clear.registers.contains("pos"),
           "repeated bit clear scratch should allocate pos");
+
+  CompileOptions copy_reuse_options;
+  copy_reuse_options.budget = 999;
+  copy_reuse_options.analysis = true;
+  copy_reuse_options.single_bit_mask_op_copy_reuse = true;
+  const CompileResult copy_reuse = compile_source(R"mkpro(
+program SingleBitMaskCopyReuse {
+  state {
+    marks: packed = 0
+    pos: packed = 1.0000008
+    saved: packed = 0
+  }
+
+  loop {
+    marks = bit_or(marks, frac(pos))
+    saved = pos
+    halt(marks + saved)
+  }
+}
+)mkpro",
+                                                  copy_reuse_options);
+
+  require(copy_reuse.implemented, "single bit mask copy reuse program should compile");
+  for (const Diagnostic& diagnostic : copy_reuse.diagnostics) {
+    require(diagnostic.severity != DiagnosticSeverity::Error,
+            "single bit mask copy reuse should not report errors: " + diagnostic.message);
+  }
+  require(has_optimization(copy_reuse, "single-bit-mask-op-copy-reuse"),
+          "single bit mask copy reuse should report the TS strategy name");
+  require(!has_optimization(copy_reuse, "single-bit-mask-op"),
+          "copy reuse path should not spill through the ordinary single-bit scratch strategy");
+  const std::vector<std::string> copy_comments = comments(copy_reuse);
+  const auto copy_store = std::find(copy_comments.begin(), copy_comments.end(), "set saved");
+  const auto copy_fraction =
+      std::find(copy_comments.begin(), copy_comments.end(), "single bit op copy mask fraction");
+  const auto copied_mask_op =
+      std::find(copy_comments.begin(), copy_comments.end(), "marks bit op with copied mask");
+  require(copy_store != copy_comments.end(), "copy reuse should store the copied mask source");
+  require(copy_fraction != copy_comments.end(), "copy reuse should derive the fractional mask");
+  require(copied_mask_op != copy_comments.end(),
+          "copy reuse should apply the bit op with the copied mask");
+  require(copy_store < copy_fraction && copy_fraction < copied_mask_op,
+          "copy reuse should copy the source before deriving and applying the mask");
+
+  const CompileResult complement_copy_reuse = compile_source(R"mkpro(
+program SingleBitMaskComplementCopyReuse {
+  state {
+    marks: packed = 9
+    pos: packed = 1.0000008
+    saved: packed = 0
+  }
+
+  loop {
+    marks = bit_and(marks, bit_not(frac(pos)))
+    saved = pos
+    halt(marks + saved)
+  }
+}
+)mkpro",
+                                                             copy_reuse_options);
+
+  require(complement_copy_reuse.implemented,
+          "single bit complement copy reuse program should compile");
+  for (const Diagnostic& diagnostic : complement_copy_reuse.diagnostics) {
+    require(diagnostic.severity != DiagnosticSeverity::Error,
+            "single bit complement copy reuse should not report errors: " + diagnostic.message);
+  }
+  require(has_optimization(complement_copy_reuse, "single-bit-mask-op-copy-reuse"),
+          "single bit complement copy reuse should report the TS strategy name");
+  require(count_comment(comments(complement_copy_reuse), "single bit op copy mask complement") == 1,
+          "single bit complement copy reuse should emit the mask complement");
 }
 
 } // namespace mkpro::tests

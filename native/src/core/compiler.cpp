@@ -18033,6 +18033,126 @@ bool lower_adjacent_cells_set_mask_reuse(LoweringContext& context, const V2State
   return true;
 }
 
+struct FractionalMaskOperand {
+  Expression base;
+  bool fractional = false;
+  bool negate = false;
+};
+
+struct FractionalMaskOpThenCopy {
+  int opcode = 0;
+  std::string mnemonic;
+  Expression collection;
+  Expression base;
+  bool fractional = false;
+  bool negate = false;
+};
+
+std::optional<std::pair<int, std::string>> bitwise_opcode(const std::string& name) {
+  const std::string callee = lower_ascii(name);
+  if (callee == "bit_and")
+    return std::pair{0x37, std::string("К ∧")};
+  if (callee == "bit_or")
+    return std::pair{0x38, std::string("К ∨")};
+  if (callee == "bit_xor")
+    return std::pair{0x39, std::string("К ⊕")};
+  return std::nullopt;
+}
+
+FractionalMaskOperand fractional_mask_operand(const Expression& expression) {
+  FractionalMaskOperand result{
+      .base = expression,
+  };
+  const Expression* mask = &expression;
+  if (mask->kind == "call" && lower_ascii(mask->callee) == "bit_not" && mask->args.size() == 1U) {
+    result.negate = true;
+    mask = &mask->args.front();
+  }
+  if (mask->kind == "call" && lower_ascii(mask->callee) == "frac" && mask->args.size() == 1U) {
+    result.base = mask->args.front();
+    result.fractional = true;
+  } else {
+    result.base = *mask;
+  }
+  return result;
+}
+
+std::optional<FractionalMaskOpThenCopy>
+match_fractional_mask_op_then_copy(const V2Statement& first, const V2Statement& second) {
+  if (first.kind != "v2_assign" || second.kind != "v2_assign" || !first.expr.has_value() ||
+      !second.expr.has_value())
+    return std::nullopt;
+  const std::optional<std::string> first_target = scalar_assignment_target_name(first);
+  const std::optional<std::string> second_target = scalar_assignment_target_name(second);
+  if (!first_target.has_value() || !second_target.has_value() || *first_target == *second_target)
+    return std::nullopt;
+
+  const Expression expression = parse_expression(*first.expr, first.line);
+  if (expression.kind != "call" || expression.args.size() != 2U)
+    return std::nullopt;
+  const std::optional<std::pair<int, std::string>> opcode = bitwise_opcode(expression.callee);
+  if (!opcode.has_value())
+    return std::nullopt;
+  const Expression& collection = expression.args.at(0);
+  if (!expression_equals(collection, identifier_expression(*first_target)))
+    return std::nullopt;
+
+  const FractionalMaskOperand mask = fractional_mask_operand(expression.args.at(1));
+  const Expression copied = parse_expression(*second.expr, second.line);
+  if (!expression_equals(mask.base, copied))
+    return std::nullopt;
+  if (!expression_is_deterministic_for_test_and_set(mask.base) ||
+      !expression_is_deterministic_for_test_and_set(collection))
+    return std::nullopt;
+  if (count_identifier_reads(mask.base, *first_target) > 0 ||
+      count_identifier_reads(collection, *second_target) > 0)
+    return std::nullopt;
+
+  return FractionalMaskOpThenCopy{
+      .opcode = opcode->first,
+      .mnemonic = opcode->second,
+      .collection = collection,
+      .base = mask.base,
+      .fractional = mask.fractional,
+      .negate = mask.negate,
+  };
+}
+
+bool lower_single_bit_mask_op_copy_reuse(LoweringContext& context, const V2Statement& first,
+                                         const V2Statement& second) {
+  if (!context.single_bit_mask_op_copy_reuse)
+    return false;
+  const std::optional<std::string> first_target = scalar_assignment_target_name(first);
+  const std::optional<std::string> second_target = scalar_assignment_target_name(second);
+  if (!first_target.has_value() || !second_target.has_value())
+    return false;
+  const std::optional<FractionalMaskOpThenCopy> lowering =
+      match_fractional_mask_op_then_copy(first, second);
+  if (!lowering.has_value())
+    return false;
+
+  if (!lower_expression_to_x(context, lowering->base))
+    return false;
+  emit_store(context, *second_target, "set " + *second_target);
+  if (lowering->fractional)
+    context.emitter.emit_op(0x35, "К {x}", "single bit op copy mask fraction", first.line);
+  if (lowering->negate)
+    context.emitter.emit_op(0x3a, "К ИНВ", "single bit op copy mask complement", first.line);
+  if (!lower_expression_to_x(context, lowering->collection))
+    return false;
+  context.emitter.emit_op(lowering->opcode, lowering->mnemonic,
+                          *first_target + " bit op with copied mask", first.line);
+  clear_current_x_facts(context);
+  emit_store(context, *first_target, "set " + *first_target);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "single-bit-mask-op-copy-reuse",
+      .detail = "Copied " + expression_to_source(lowering->base) + " to " + *second_target +
+                " and reused it for " + *first_target + " " + lowering->mnemonic + " at lines " +
+                std::to_string(first.line) + "/" + std::to_string(second.line) + ".",
+  });
+  return true;
+}
+
 bool lower_preview_statement(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_preview" || !statement.expr.has_value())
     return false;
@@ -22791,6 +22911,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
     if (index + 1U < statements.size() &&
+        lower_single_bit_mask_op_copy_reuse(context, statements.at(index),
+                                            statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
         lower_arithmetic_if_double_clamp(context, statements.at(index),
                                          statements.at(index + 1U))) {
       ++index;
@@ -24967,6 +25095,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.indirect_underflow_decrement = options.indirect_underflow_decrement;
   context.recall_stored_input_after_decrement = options.recall_stored_input_after_decrement;
   context.dead_source_residual_temp_reuse = options.dead_source_residual_temp_reuse;
+  context.single_bit_mask_op_copy_reuse = options.single_bit_mask_op_copy_reuse;
   context.share_random_cell = options.share_random_cell;
   context.aggressive_terminal_direct = options.aggressive_terminal_direct;
   context.invert_branch_order = options.invert_branch_order;
