@@ -2525,6 +2525,139 @@ program MaxAssignEqualityBranch {
   require(max_assign_equality.steps.at(max_index + 2U).opcode == 0x11,
           "max assignment equality branch should compare immediately after storing best");
 
+  const CompileResult arithmetic_max = compile_source(R"mkpro(
+program ArithmeticIfMax {
+  state {
+    left: packed = 3
+    right: packed = 5
+    result: packed = 0
+  }
+  loop {
+    if left > right {
+      result = left
+    }
+    else {
+      result = right
+    }
+    halt(result)
+  }
+}
+)mkpro");
+  require(arithmetic_max.implemented, "native compiler should lower arithmetic-if max");
+  require(arithmetic_max.diagnostics.empty(), "arithmetic-if max should not report diagnostics");
+  require(has_optimization(arithmetic_max, "branch-removal"),
+          "arithmetic-if max should report branch-removal");
+  require(has_optimization(arithmetic_max, "arithmetic-if-max"),
+          "arithmetic-if max should report the TS strategy name");
+  require(std::none_of(arithmetic_max.steps.begin(), arithmetic_max.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment.has_value() &&
+                                step.comment->find("false branch for >") != std::string::npos;
+                       }),
+          "arithmetic-if max should not emit the original branch");
+
+  const CompileResult arithmetic_min = compile_source(R"mkpro(
+program ArithmeticIfMin {
+  state {
+    left: packed = 3
+    right: packed = 5
+    result: packed = 0
+  }
+  loop {
+    if left < right {
+      result = left
+    }
+    else {
+      result = right
+    }
+    halt(result)
+  }
+}
+)mkpro");
+  require(arithmetic_min.implemented, "native compiler should lower arithmetic-if min");
+  require(arithmetic_min.diagnostics.empty(), "arithmetic-if min should not report diagnostics");
+  require(has_optimization(arithmetic_min, "branch-removal"),
+          "arithmetic-if min should report branch-removal");
+  require(has_optimization(arithmetic_min, "arithmetic-if-min"),
+          "arithmetic-if min should report the TS strategy name");
+
+  const CompileResult arithmetic_abs = compile_source(R"mkpro(
+program ArithmeticIfAbs {
+  state {
+    value: packed = -3
+  }
+  loop {
+    if value < 0 {
+      value = -value
+    }
+    halt(value)
+  }
+}
+)mkpro");
+  require(arithmetic_abs.implemented, "native compiler should lower arithmetic-if abs");
+  require(arithmetic_abs.diagnostics.empty(), "arithmetic-if abs should not report diagnostics");
+  require(has_optimization(arithmetic_abs, "branch-removal"),
+          "arithmetic-if abs should report branch-removal");
+  require(has_optimization(arithmetic_abs, "arithmetic-if-abs"),
+          "arithmetic-if abs should report the TS strategy name");
+  require(std::any_of(arithmetic_abs.steps.begin(), arithmetic_abs.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.mnemonic == "К |x|" && step.comment == "abs()";
+                      }),
+          "arithmetic-if abs should lower through abs()");
+
+  const CompileResult arithmetic_clamp = compile_source(R"mkpro(
+program ArithmeticIfClamp {
+  state {
+    value: packed = -3
+  }
+  loop {
+    if value < 0 {
+      value = 0
+    }
+    halt(value)
+  }
+}
+)mkpro");
+  require(arithmetic_clamp.implemented, "native compiler should lower arithmetic-if clamp");
+  require(arithmetic_clamp.diagnostics.empty(),
+          "arithmetic-if clamp should not report diagnostics");
+  require(has_optimization(arithmetic_clamp, "branch-removal"),
+          "arithmetic-if clamp should report branch-removal");
+  require(has_optimization(arithmetic_clamp, "arithmetic-if-max"),
+          "lower clamp should report arithmetic-if-max");
+
+  const CompileResult arithmetic_double_clamp = compile_source(R"mkpro(
+program ArithmeticIfDoubleClamp {
+  state {
+    value: packed = 12
+  }
+  loop {
+    if value < 0 {
+      value = 0
+    }
+    if value > 9 {
+      value = 9
+    }
+    halt(value)
+  }
+}
+)mkpro");
+  require(arithmetic_double_clamp.implemented,
+          "native compiler should lower arithmetic-if double clamp");
+  require(arithmetic_double_clamp.diagnostics.empty(),
+          "arithmetic-if double clamp should not report diagnostics");
+  require(has_optimization(arithmetic_double_clamp, "branch-removal"),
+          "arithmetic-if double clamp should report branch-removal");
+  require(has_optimization(arithmetic_double_clamp, "arithmetic-if-double-clamp"),
+          "arithmetic-if double clamp should report the TS strategy name");
+  require(std::none_of(arithmetic_double_clamp.steps.begin(),
+                       arithmetic_double_clamp.steps.end(), [](const ResolvedStep& step) {
+                         return step.comment.has_value() &&
+                                step.comment->find("false branch for") != std::string::npos;
+                       }),
+          "arithmetic-if double clamp should not emit the original branch tests");
+
   const CompileResult indexed_store_guard = compile_source(R"mkpro(
 program IndexedStoreGuard {
   state {

@@ -68,6 +68,7 @@ using core::emit::identifier_expression;
 using core::emit::int_expression;
 using core::emit::is_unsigned_decimal_digits;
 using core::emit::max_expression;
+using core::emit::min_expression;
 using core::emit::multiply_expression;
 using core::emit::normalize_display_literal_text;
 using core::emit::normalize_display_template_literal;
@@ -13988,6 +13989,293 @@ bool lower_direct_terminal_if_branch(LoweringContext& context, const V2Statement
   return true;
 }
 
+struct ArithmeticIfCandidate {
+  std::string target;
+  Expression expression;
+  std::string name;
+  std::string detail;
+};
+
+std::optional<V2Predicate> arithmetic_if_comparison_predicate(const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value() ||
+      statement.predicate->kind != "v2_compare") {
+    return std::nullopt;
+  }
+  V2Predicate predicate = *statement.predicate;
+  if (statement.negated)
+    predicate.op = invert_comparison_op(predicate.op);
+  return predicate;
+}
+
+std::optional<Expression> arithmetic_if_assignment_expression(const LoweringContext& context,
+                                                              const V2Statement& statement,
+                                                              std::string& target) {
+  if (statement.kind != "v2_assign" || !statement.target.has_value() || !statement.expr.has_value())
+    return std::nullopt;
+  const Expression target_expression = parse_expression(*statement.target, statement.line);
+  if (target_expression.kind != "identifier" || is_cells_state_name(context, target_expression.name) ||
+      is_coord_list_state_name(context, target_expression.name) ||
+      is_segmented_cells_name(context, target_expression.name)) {
+    return std::nullopt;
+  }
+  target = target_expression.name;
+  return parse_expression(*statement.expr, statement.line);
+}
+
+std::optional<std::pair<std::string, Expression>>
+single_arithmetic_if_assignment(const LoweringContext& context,
+                                const std::vector<V2Statement>& statements) {
+  if (statements.size() != 1U)
+    return std::nullopt;
+  std::string target;
+  std::optional<Expression> expression =
+      arithmetic_if_assignment_expression(context, statements.front(), target);
+  if (!expression.has_value())
+    return std::nullopt;
+  return std::pair{target, *expression};
+}
+
+bool expression_is_numeric_value(const LoweringContext& context, const Expression& expression,
+                                 double expected);
+
+ArithmeticIfCandidate arithmetic_if_abs_candidate(std::string target, Expression expression) {
+  return ArithmeticIfCandidate{
+      .target = std::move(target),
+      .expression = abs_expression(std::move(expression)),
+      .name = "arithmetic-if-abs",
+      .detail = "Replaced sign branch with abs()",
+  };
+}
+
+ArithmeticIfCandidate arithmetic_if_max_candidate(std::string target, Expression left,
+                                                  Expression right,
+                                                  std::string detail = "Replaced max branch with К max") {
+  return ArithmeticIfCandidate{
+      .target = std::move(target),
+      .expression = max_expression(std::move(left), std::move(right)),
+      .name = "arithmetic-if-max",
+      .detail = std::move(detail),
+  };
+}
+
+ArithmeticIfCandidate arithmetic_if_min_candidate(
+    std::string target, const Expression& left, const Expression& right,
+    std::string detail = "Replaced min branch with min-via-max()") {
+  return ArithmeticIfCandidate{
+      .target = std::move(target),
+      .expression = min_expression(left, right),
+      .name = "arithmetic-if-min",
+      .detail = std::move(detail),
+  };
+}
+
+std::optional<ArithmeticIfCandidate> build_arithmetic_if_abs_candidate(
+    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+  if (!expression_is_numeric_value(context, parse_expression(predicate.right, statement.line), 0.0))
+    return std::nullopt;
+  const Expression left = parse_expression(predicate.left, statement.line);
+  const Expression negative_left = unary_expression("-", left);
+
+  const std::optional<std::pair<std::string, Expression>> then_assign =
+      single_arithmetic_if_assignment(context, statement.then_body);
+  if (!then_assign.has_value())
+    return std::nullopt;
+
+  if (statement.else_body.empty()) {
+    if (!expression_equals(identifier_expression(then_assign->first), left))
+      return std::nullopt;
+    if ((predicate.op == "<" || predicate.op == "<=") &&
+        expression_equals(then_assign->second, negative_left)) {
+      return arithmetic_if_abs_candidate(then_assign->first, left);
+    }
+    return std::nullopt;
+  }
+
+  const std::optional<std::pair<std::string, Expression>> else_assign =
+      single_arithmetic_if_assignment(context, statement.else_body);
+  if (!else_assign.has_value() || then_assign->first != else_assign->first)
+    return std::nullopt;
+
+  if ((predicate.op == "<" || predicate.op == "<=") &&
+      expression_equals(then_assign->second, negative_left) &&
+      expression_equals(else_assign->second, left)) {
+    return arithmetic_if_abs_candidate(then_assign->first, left);
+  }
+  if ((predicate.op == ">" || predicate.op == ">=") &&
+      expression_equals(then_assign->second, left) &&
+      expression_equals(else_assign->second, negative_left)) {
+    return arithmetic_if_abs_candidate(then_assign->first, left);
+  }
+  return std::nullopt;
+}
+
+std::optional<ArithmeticIfCandidate> build_arithmetic_if_max_min_candidate(
+    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+  if (statement.else_body.empty())
+    return std::nullopt;
+  const std::optional<std::pair<std::string, Expression>> then_assign =
+      single_arithmetic_if_assignment(context, statement.then_body);
+  const std::optional<std::pair<std::string, Expression>> else_assign =
+      single_arithmetic_if_assignment(context, statement.else_body);
+  if (!then_assign.has_value() || !else_assign.has_value() ||
+      then_assign->first != else_assign->first) {
+    return std::nullopt;
+  }
+
+  const Expression left = parse_expression(predicate.left, statement.line);
+  const Expression right = parse_expression(predicate.right, statement.line);
+  if (predicate.op == ">" || predicate.op == ">=") {
+    if (expression_equals(then_assign->second, left) && expression_equals(else_assign->second, right))
+      return arithmetic_if_max_candidate(then_assign->first, left, right);
+    if (expression_equals(then_assign->second, right) && expression_equals(else_assign->second, left))
+      return arithmetic_if_min_candidate(then_assign->first, left, right);
+  }
+  if (predicate.op == "<" || predicate.op == "<=") {
+    if (expression_equals(then_assign->second, right) && expression_equals(else_assign->second, left))
+      return arithmetic_if_max_candidate(then_assign->first, left, right);
+    if (expression_equals(then_assign->second, left) && expression_equals(else_assign->second, right))
+      return arithmetic_if_min_candidate(then_assign->first, left, right);
+  }
+  return std::nullopt;
+}
+
+std::optional<ArithmeticIfCandidate> build_arithmetic_if_clamp_candidate(
+    const LoweringContext& context, const V2Statement& statement, const V2Predicate& predicate) {
+  const std::optional<std::pair<std::string, Expression>> assign =
+      single_arithmetic_if_assignment(context, statement.then_body);
+  if (!assign.has_value())
+    return std::nullopt;
+  const Expression target = identifier_expression(assign->first);
+  const Expression left = parse_expression(predicate.left, statement.line);
+  const Expression right = parse_expression(predicate.right, statement.line);
+  if (!expression_equals(left, target) || !expression_equals(assign->second, right))
+    return std::nullopt;
+
+  if (predicate.op == "<" || predicate.op == "<=") {
+    return arithmetic_if_max_candidate(assign->first, target, right,
+                                       "Replaced lower clamp branch with max()");
+  }
+  if (predicate.op == ">" || predicate.op == ">=") {
+    return arithmetic_if_min_candidate(assign->first, target, right,
+                                       "Replaced upper clamp branch with min-via-max()");
+  }
+  return std::nullopt;
+}
+
+std::optional<ArithmeticIfCandidate> build_arithmetic_if_candidate(
+    const LoweringContext& context, const V2Statement& statement) {
+  const std::optional<V2Predicate> predicate = arithmetic_if_comparison_predicate(statement);
+  if (!predicate.has_value())
+    return std::nullopt;
+  if (std::optional<ArithmeticIfCandidate> candidate =
+          build_arithmetic_if_abs_candidate(context, statement, *predicate)) {
+    return candidate;
+  }
+  if (std::optional<ArithmeticIfCandidate> candidate =
+          build_arithmetic_if_max_min_candidate(context, statement, *predicate)) {
+    return candidate;
+  }
+  return build_arithmetic_if_clamp_candidate(context, statement, *predicate);
+}
+
+bool lower_arithmetic_if_branch_removal(LoweringContext& context, const V2Statement& statement) {
+  const std::optional<ArithmeticIfCandidate> candidate =
+      build_arithmetic_if_candidate(context, statement);
+  if (!candidate.has_value())
+    return false;
+
+  const int ordinary_cost = estimate_branch_order_statement_cost(context, statement);
+  if (ordinary_cost >= branch_order_infinite_cost())
+    return false;
+  const int selected_cost = guarded_estimate_expression_cost(candidate->expression) + 1;
+  if (selected_cost >= ordinary_cost)
+    return false;
+
+  if (!lower_expression_to_x(context, candidate->expression))
+    return false;
+  emit_store(context, candidate->target, candidate->name + " " + candidate->target);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "branch-removal",
+      .detail = candidate->detail + " at line " + std::to_string(statement.line) +
+                "; emitted branchless " + candidate->name + ".",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = candidate->name,
+      .detail = candidate->detail + " at line " + std::to_string(statement.line) + " (" +
+                std::to_string(selected_cost) + " vs " + std::to_string(ordinary_cost) +
+                " estimated steps).",
+  });
+  return true;
+}
+
+struct ArithmeticClampBound {
+  std::string target;
+  Expression bound;
+};
+
+std::optional<ArithmeticClampBound> arithmetic_clamp_bound(const LoweringContext& context,
+                                                           const V2Statement& statement,
+                                                           std::string_view direction) {
+  const std::optional<V2Predicate> predicate = arithmetic_if_comparison_predicate(statement);
+  if (!predicate.has_value())
+    return std::nullopt;
+  const std::optional<std::pair<std::string, Expression>> assign =
+      single_arithmetic_if_assignment(context, statement.then_body);
+  if (!assign.has_value())
+    return std::nullopt;
+  const Expression target = identifier_expression(assign->first);
+  const Expression left = parse_expression(predicate->left, statement.line);
+  const Expression right = parse_expression(predicate->right, statement.line);
+  if (!expression_equals(left, target) || !expression_equals(assign->second, right))
+    return std::nullopt;
+  if (direction == "lower" && (predicate->op == "<" || predicate->op == "<=")) {
+    return ArithmeticClampBound{.target = assign->first, .bound = right};
+  }
+  if (direction == "upper" && (predicate->op == ">" || predicate->op == ">=")) {
+    return ArithmeticClampBound{.target = assign->first, .bound = right};
+  }
+  return std::nullopt;
+}
+
+bool lower_arithmetic_if_double_clamp(LoweringContext& context, const V2Statement& first,
+                                      const V2Statement& second) {
+  const std::optional<ArithmeticClampBound> lower =
+      arithmetic_clamp_bound(context, first, "lower");
+  const std::optional<ArithmeticClampBound> upper =
+      arithmetic_clamp_bound(context, second, "upper");
+  if (!lower.has_value() || !upper.has_value() || lower->target != upper->target)
+    return false;
+  Expression expression = min_expression(max_expression(identifier_expression(lower->target),
+                                                        lower->bound),
+                                         upper->bound);
+  const int ordinary_cost =
+      estimate_branch_order_statement_cost(context, first) +
+      estimate_branch_order_statement_cost(context, second);
+  if (ordinary_cost >= branch_order_infinite_cost())
+    return false;
+  const int selected_cost = guarded_estimate_expression_cost(expression) + 1;
+  if (selected_cost >= ordinary_cost)
+    return false;
+
+  if (!lower_expression_to_x(context, expression))
+    return false;
+  emit_store(context, lower->target, "arithmetic-if-double-clamp " + lower->target);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "branch-removal",
+      .detail = "Replaced adjacent lower/upper clamp branches with min(max()) at lines " +
+                std::to_string(first.line) + "/" + std::to_string(second.line) +
+                "; emitted branchless arithmetic-if-double-clamp.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "arithmetic-if-double-clamp",
+      .detail = "Replaced adjacent lower/upper clamp branches with min(max()) at lines " +
+                std::to_string(first.line) + "/" + std::to_string(second.line) + " (" +
+                std::to_string(selected_cost) + " vs " + std::to_string(ordinary_cost) +
+                " estimated steps).",
+  });
+  return true;
+}
+
 bool lower_residual_guarded_update(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value())
     return false;
@@ -14087,6 +14375,10 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     return false;
 
   if (lower_domain_error_guard(context, statement))
+    return true;
+  if (has_errors(context.diagnostics))
+    return false;
+  if (lower_arithmetic_if_branch_removal(context, statement))
     return true;
   if (has_errors(context.diagnostics))
     return false;
@@ -20065,6 +20357,13 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (index + 1U < statements.size() &&
         lower_adjacent_cells_set_mask_reuse(context, statements.at(index),
                                             statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
+        lower_arithmetic_if_double_clamp(context, statements.at(index), statements.at(index + 1U))) {
       ++index;
       continue;
     }
