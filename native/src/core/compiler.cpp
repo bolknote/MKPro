@@ -27685,33 +27685,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
 
 std::string implemented_candidate_key(const CompileOptions& options) {
   std::ostringstream out;
-  out << "canonicalize_if_chains=" << options.canonicalize_if_chains
-      << ";segmented_bitplanes=" << options.segmented_bitplanes
-      << ";segmented_line_count_scan=" << options.segmented_line_count_scan
-      << ";tail_branch_inversion=" << options.tail_branch_inversion
-      << ";conditional_branch_trampoline=" << options.conditional_branch_trampoline
-      << ";shared_straight_line_call_bodies=" << options.shared_straight_line_call_bodies
-      << ";disable_interprocedural_opts=" << options.disable_interprocedural_opts
-      << ";coalesce_copies=" << options.coalesce_copies << ";aggressive_indirect_call_threshold="
-      << (options.aggressive_indirect_call_threshold || options.aggressive_indirect_call)
-      << ";dual_use_constant_indirect_flow=" << options.dual_use_constant_indirect_flow
-      << ";aggressive_post_layout_indirect_flow=" << options.aggressive_post_layout_indirect_flow
-      << ";preloaded_indirect_flow=" << options.preloaded_indirect_flow
-      << ";runtime_indirect_call_flow=" << options.runtime_indirect_call_flow
-      << ";general_constant_preloads=" << options.general_constant_preloads
-      << ";stack_resident_temps=" << options.stack_resident_temps
-      << ";guarded_prologue_gadgets=" << options.guarded_prologue_gadgets
-      << ";compact_bit_mask_helper_body=" << options.compact_bit_mask_helper_body
-      << ";domain_error_guards=" << options.domain_error_guards
-      << ";pack_counter_stripes=" << options.pack_counter_stripes
-      << ";dead_source_residual_temp_reuse=" << options.dead_source_residual_temp_reuse
-      << ";hoist_shared_helpers=" << options.hoist_shared_helpers
-      << ";hoist_procs=" << options.hoist_procs
-      << ";order_procs_by_call_count=" << options.order_procs_by_call_count
-      << ";proc_layout_strategy=" << options.proc_layout_strategy
+  out << reclaim_base_key(options)
       << ";collect_coalesce_shares=" << options.collect_coalesce_shares;
-  for (const std::string& name : options.pack_counter_stripe_names)
-    out << ";pack_counter_stripe_name=" << name;
   for (const auto& [value, reg] : options.preloaded_constant_registers)
     out << ";preloaded_constant=" << value << ":" << reg;
   for (const std::string& value : options.suppress_constant_preloads)
@@ -28139,6 +28114,24 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           add_configured_candidate(std::move(candidate_options), name, detail(plan));
         }
       };
+  std::size_t evaluated_candidate_count = 0;
+  auto evaluate_queued_candidates = [&]() {
+    for (; evaluated_candidate_count < candidates.size(); ++evaluated_candidate_count) {
+      const CandidateSpec& candidate = candidates.at(evaluated_candidate_count);
+      CompileResult result = compile_source_once(source, candidate.options);
+      if (!candidate_beats_best(result, best))
+        continue;
+      const std::string comparison = best.implemented
+                                         ? std::to_string(result.steps.size()) + " vs " +
+                                               std::to_string(best.steps.size()) + " cells"
+                                         : "primary lowering failed";
+      result.optimizations.push_back(OptimizationReport{
+          .name = candidate.name,
+          .detail = candidate.detail + " (" + comparison + ").",
+      });
+      best = std::move(result);
+    }
+  };
 
   add_candidate(
       [](CompileOptions& candidate_options) {
@@ -28646,6 +28639,21 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       CandidateGate::SizeRescue);
   add_candidate([](CompileOptions& candidate_options) { candidate_options.alias_x_reuse = true; },
                 "alias-x-reuse", "Reused X for copy-equivalent variables at scalar sites");
+  if (source_has_comparison_guarded_update(source)) {
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.comparison_guarded_update_selectors = true;
+        },
+        "comparison-guarded-update-selector",
+        "Tried abs/sign comparison masks for guarded arithmetic updates after full layout");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.comparison_guarded_update_selectors = true;
+          candidate_options.invert_branch_order = true;
+        },
+        "comparison-guarded-update-branch-order",
+        "Combined comparison guarded update masks with inverted branch-order layout");
+  }
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.free_residual_dispatch_scratch = true;
@@ -28684,6 +28692,15 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       "packed-line-family-borrowed-mutating-selector-update-check-tail",
       "Tried borrowing a dead R0..R3 register for descending packed-line update/check tails",
       CandidateGate::SizeRescue);
+  add_candidate(
+      [](CompileOptions& candidate_options) {
+        candidate_options.hoist_shared_helpers = true;
+        candidate_options.canonicalize_if_chains = true;
+        candidate_options.tail_branch_inversion = true;
+      },
+      "hoisted-helper-if-chain-tail-branch-layout",
+      "Combined helper hoisting, if-chain canonicalization, and tail-branch inversion after full "
+      "layout");
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.preloaded_indirect_flow = true;
@@ -28776,6 +28793,62 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       "Tried runtime indirect-call selector rewrites with the aggressive call threshold",
       CandidateGate::SizeRescue);
 
+  std::set<std::string> tried_reclaims;
+  auto add_reclaim_candidate = [&](const CompileOptions& base_options) {
+    CompileOptions probe_options = base_options;
+    probe_options.analysis = true;
+    probe_options.collect_coalesce_shares = true;
+    CompileResult probe = compile_source_once(source, probe_options);
+    if (!probe.implemented || probe.coalesce_shares.empty())
+      return;
+
+    std::vector<RegisterShare> shares = probe.coalesce_shares;
+    std::sort(shares.begin(), shares.end(),
+              [](const RegisterShare& left, const RegisterShare& right) {
+                if (left.free_register != right.free_register)
+                  return left.free_register < right.free_register;
+                return left.keep_register < right.keep_register;
+              });
+
+    std::string key = reclaim_base_key(base_options);
+    for (const RegisterShare& share : shares) {
+      key += "|";
+      key += share.free_register + ">" + share.keep_register;
+    }
+    if (tried_reclaims.contains(key))
+      return;
+    tried_reclaims.insert(key);
+
+    CompileOptions candidate_options = base_options;
+    candidate_options.forced_register_shares = std::move(shares);
+    candidates.push_back(CandidateSpec{
+        .options = std::move(candidate_options),
+        .name = "reclaim-coalesced-preloads",
+        .detail = "Pinned coalesce-freed registers before allocation to reclaim them for preloaded "
+                  "constants",
+        .gate = CandidateGate::Always,
+    });
+  };
+  add_reclaim_candidate(options);
+  if (needs_size_rescue) {
+    CompileOptions aggressive_base = options;
+    aggressive_base.aggressive_post_layout_indirect_flow = true;
+    add_reclaim_candidate(aggressive_base);
+
+    CompileOptions aggressive_tail_base = aggressive_base;
+    aggressive_tail_base.tail_branch_inversion = true;
+    add_reclaim_candidate(aggressive_tail_base);
+  }
+  if (source_may_use_bit_mask_helper(source)) {
+    CompileOptions compact_base = options;
+    compact_base.compact_bit_mask_helper_body = true;
+    add_reclaim_candidate(compact_base);
+
+    CompileOptions compact_tail_base = compact_base;
+    compact_tail_base.tail_branch_inversion = true;
+    add_reclaim_candidate(compact_tail_base);
+  }
+
   if (needs_size_rescue) {
     std::set<std::string> tried_fractional_selectors;
     std::vector<CompileOptions> fractional_bases;
@@ -28825,7 +28898,117 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     }
   }
 
-  if (needs_size_rescue) {
+  evaluate_queued_candidates();
+
+  const bool selected_still_overflows =
+      best.implemented && best.steps.size() > kOfficialProgramLimit;
+  if (needs_size_rescue && selected_still_overflows && source_has_multiple_procs(source)) {
+    struct ExpansionSpec {
+      std::function<void(CompileOptions&)> configure;
+      std::string name;
+      std::string detail;
+    };
+    std::vector<ExpansionSpec> semantic_bundles{
+        {[](CompileOptions& candidate_options) {
+           candidate_options.stack_resident_temps = true;
+         },
+         "stack-resident-temps", "stack-resident temporaries"},
+        {[](CompileOptions& candidate_options) {
+           candidate_options.shared_bit_mask_helper_calls = true;
+         },
+         "shared-bit-mask-helper", "shared bit_mask helper calls"},
+        {[](CompileOptions& candidate_options) {
+           candidate_options.dual_use_constant_indirect_flow = true;
+         },
+         "dual-use-constant-indirect-flow", "dual-use constant indirect-flow selectors"},
+        {[](CompileOptions& candidate_options) {
+           candidate_options.dual_use_constant_indirect_flow = true;
+           candidate_options.tail_branch_inversion = true;
+         },
+         "dual-use-constant-tail-branch",
+         "dual-use constant indirect-flow selectors with tail-branch inversion"},
+        {[](CompileOptions& candidate_options) {
+           candidate_options.conditional_branch_trampoline = true;
+         },
+         "conditional-branch-trampoline", "conditional branch trampolines"},
+        {[](CompileOptions& candidate_options) {
+           candidate_options.dual_use_constant_indirect_flow = true;
+           candidate_options.conditional_branch_trampoline = true;
+         },
+         "dual-use-constant-conditional-trampoline",
+         "dual-use constant indirect-flow selectors with conditional branch trampolines"},
+        {[](CompileOptions& candidate_options) {
+           candidate_options.x_param_y_stack_stored_entry = true;
+         },
+         "x-param-y-stack-stored-entry", "secondary X-parameter/Y-stack procedure entries"},
+    };
+    if (source_may_use_bit_mask_helper(source)) {
+      semantic_bundles.push_back(ExpansionSpec{
+          [](CompileOptions& candidate_options) {
+            candidate_options.compact_bit_mask_helper_body = true;
+          },
+          "compact-bit-mask-helper-body", "compact shared bit_mask helper body"});
+      semantic_bundles.push_back(ExpansionSpec{
+          [](CompileOptions& candidate_options) {
+            candidate_options.compact_bit_mask_helper_body = true;
+            candidate_options.tail_branch_inversion = true;
+          },
+          "compact-bit-mask-helper-tail-branch",
+          "compact shared bit_mask helper body with tail-branch inversion"});
+    }
+    if (allow_aggressive_post_layout) {
+      semantic_bundles.push_back(ExpansionSpec{
+          [](CompileOptions& candidate_options) {
+            candidate_options.dead_source_residual_temp_reuse = true;
+          },
+          "dead-source-residual-temp-reuse", "dead-source residual temp reuse"});
+      semantic_bundles.push_back(ExpansionSpec{
+          [](CompileOptions& candidate_options) {
+            candidate_options.dead_source_residual_temp_reuse = true;
+            candidate_options.tail_branch_inversion = true;
+          },
+          "dead-source-residual-tail-branch",
+          "dead-source residual temp reuse with tail-branch inversion"});
+    }
+
+    const std::vector<ExpansionSpec> proc_layout_modifiers{
+        {[](CompileOptions& candidate_options) {
+           candidate_options.order_procs_by_call_count = true;
+         },
+         "call-count-proc-layout",
+         "Emitted procedures in descending call-count order so hot helpers occupy the cheapest "
+         "addresses"},
+        {[](CompileOptions& candidate_options) {
+           candidate_options.proc_layout_strategy = "size-asc";
+         },
+         "size-asc-proc-layout",
+         "Emitted the smallest procedures first to pack hot helpers into the cheapest addresses"},
+        {[](CompileOptions& candidate_options) {
+           candidate_options.proc_layout_strategy = "size-desc";
+         },
+         "size-desc-proc-layout", "Emitted the largest procedures first"},
+        {[](CompileOptions& candidate_options) {
+           candidate_options.proc_layout_strategy = "reverse";
+         },
+         "reverse-proc-layout", "Emitted procedures in reverse source order"},
+    };
+
+    for (const ExpansionSpec& bundle : semantic_bundles) {
+      for (const ExpansionSpec& layout : proc_layout_modifiers) {
+        const std::function<void(CompileOptions&)> configure_bundle = bundle.configure;
+        const std::function<void(CompileOptions&)> configure_layout = layout.configure;
+        add_candidate(
+            [configure_bundle, configure_layout](CompileOptions& candidate_options) {
+              configure_bundle(candidate_options);
+              configure_layout(candidate_options);
+            },
+            bundle.name + "-" + layout.name,
+            "Combined " + bundle.detail + " with " + lower_ascii(layout.detail));
+      }
+    }
+  }
+
+  if (needs_size_rescue && selected_still_overflows) {
     std::vector<CompileOptions> demote_bases;
     std::set<std::string> demote_base_keys;
     auto add_demote_base = [&](const std::function<void(CompileOptions&)>& configure) {
@@ -29008,76 +29191,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     }
   }
 
-  std::set<std::string> tried_reclaims;
-  auto add_reclaim_candidate = [&](const CompileOptions& base_options) {
-    CompileOptions probe_options = base_options;
-    probe_options.analysis = true;
-    probe_options.collect_coalesce_shares = true;
-    CompileResult probe = compile_source_once(source, probe_options);
-    if (!probe.implemented || probe.coalesce_shares.empty())
-      return;
-
-    std::vector<RegisterShare> shares = probe.coalesce_shares;
-    std::sort(shares.begin(), shares.end(),
-              [](const RegisterShare& left, const RegisterShare& right) {
-                if (left.free_register != right.free_register)
-                  return left.free_register < right.free_register;
-                return left.keep_register < right.keep_register;
-              });
-
-    std::string key = reclaim_base_key(base_options);
-    for (const RegisterShare& share : shares) {
-      key += "|";
-      key += share.free_register + ">" + share.keep_register;
-    }
-    if (tried_reclaims.contains(key))
-      return;
-    tried_reclaims.insert(key);
-
-    CompileOptions candidate_options = base_options;
-    candidate_options.forced_register_shares = std::move(shares);
-    candidates.push_back(CandidateSpec{
-        .options = std::move(candidate_options),
-        .name = "reclaim-coalesced-preloads",
-        .detail = "Pinned coalesce-freed registers before allocation to reclaim them for preloaded "
-                  "constants",
-        .gate = CandidateGate::Always,
-    });
-  };
-  add_reclaim_candidate(options);
-  if (needs_size_rescue) {
-    CompileOptions aggressive_base = options;
-    aggressive_base.aggressive_post_layout_indirect_flow = true;
-    add_reclaim_candidate(aggressive_base);
-
-    CompileOptions aggressive_tail_base = aggressive_base;
-    aggressive_tail_base.tail_branch_inversion = true;
-    add_reclaim_candidate(aggressive_tail_base);
-  }
-  if (source_may_use_bit_mask_helper(source)) {
-    CompileOptions compact_base = options;
-    compact_base.compact_bit_mask_helper_body = true;
-    add_reclaim_candidate(compact_base);
-
-    CompileOptions compact_tail_base = compact_base;
-    compact_tail_base.tail_branch_inversion = true;
-    add_reclaim_candidate(compact_tail_base);
-  }
-
-  for (const CandidateSpec& candidate : candidates) {
-    CompileResult result = compile_source_once(source, candidate.options);
-    if (!candidate_beats_best(result, best))
-      continue;
-    const std::string comparison = best.implemented
-                                       ? std::to_string(result.steps.size()) + " vs " +
-                                             std::to_string(best.steps.size()) + " cells"
-                                       : "primary lowering failed";
-    result.optimizations.push_back(OptimizationReport{
-        .name = candidate.name,
-        .detail = candidate.detail + " (" + comparison + ").",
-    });
-    best = std::move(result);
-  }
+  evaluate_queued_candidates();
 
   return best;
 }
