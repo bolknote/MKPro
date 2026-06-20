@@ -4248,6 +4248,78 @@ program TerminalThenEnd {
   require(has_optimization(terminal_then_end, "terminal-branch-end-elision"),
           "terminal then branch should report the TS strategy name");
 
+  const CompileResult direct_terminal_branch = compile_source(R"mkpro(
+program DirectTerminalBranch {
+  state {
+    score: counter 0..9 = 0
+    crash_value: packed = -999
+  }
+
+  loop {
+    if score >= 5 {
+      fail()
+    }
+    else {
+      other()
+    }
+  }
+
+  fn fail() {
+    show(crash_value)
+    halt(-999)
+  }
+
+  fn other() {
+    if score < 2 {
+      fail()
+    }
+    else {
+      halt(2)
+    }
+  }
+}
+)mkpro");
+  require(direct_terminal_branch.implemented,
+          "native compiler should branch directly to reusable terminal rules");
+  require(direct_terminal_branch.diagnostics.empty(),
+          "direct terminal branch compile should not report diagnostics");
+  require(has_optimization(direct_terminal_branch, "terminal-if-direct-branch"),
+          "direct terminal branch should report the TS strategy name");
+
+  const CompileResult late_layout_terminal_if = compile_source(R"mkpro(
+program LateLayoutIfVariant {
+  state {
+    strength: counter -9..9 = 0
+    value: counter 0..9 = 0
+    fail_value: packed = -999
+  }
+
+  loop {
+    if strength <= 0 {
+      exhausted()
+    }
+    value++
+    if value >= 9 {
+      exhausted()
+    }
+    halt(value)
+  }
+
+  fn exhausted() {
+    show(fail_value)
+    halt(-999)
+  }
+}
+)mkpro");
+  require(late_layout_terminal_if.implemented,
+          "native compiler should select aggressive terminal-if variants when they win");
+  require(late_layout_terminal_if.diagnostics.empty(),
+          "late-layout terminal-if compile should not report diagnostics");
+  require(has_optimization(late_layout_terminal_if, "late-layout-if-variant"),
+          "late-layout terminal-if should keep the TS candidate-selection strategy");
+  require(has_optimization(late_layout_terminal_if, "terminal-if-direct-branch"),
+          "late-layout terminal-if should report the direct branch strategy");
+
   CompileOptions branch_x_options;
   branch_x_options.budget = 999;
   branch_x_options.analysis = true;

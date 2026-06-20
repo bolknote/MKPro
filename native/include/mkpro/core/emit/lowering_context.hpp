@@ -115,6 +115,7 @@ struct LoweringContext {
   bool indirect_underflow_decrement = false;
   bool recall_stored_input_after_decrement = false;
   bool dead_source_residual_temp_reuse = false;
+  bool aggressive_terminal_direct = false;
   bool invert_branch_order = false;
   bool order_procs_by_call_count = false;
   std::string proc_layout_strategy;

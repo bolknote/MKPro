@@ -13753,6 +13753,174 @@ V2Statement branch_order_statement(LoweringContext& context, const V2Statement& 
   return inverted;
 }
 
+bool direct_terminal_statement_stops(LoweringContext& context, const V2Statement& statement,
+                                     std::set<std::string>& seen_rules);
+
+bool direct_terminal_statements_stop(LoweringContext& context,
+                                     const std::vector<V2Statement>& statements,
+                                     std::set<std::string>& seen_rules) {
+  if (statements.empty())
+    return false;
+  return direct_terminal_statement_stops(context, statements.back(), seen_rules);
+}
+
+bool direct_terminal_statement_stops(LoweringContext& context, const V2Statement& statement,
+                                     std::set<std::string>& seen_rules) {
+  if (statement.kind == "v2_stop" || statement.kind == "v2_loop" ||
+      statement.kind == "v2_return") {
+    return true;
+  }
+  if (statement.kind == "v2_block")
+    return direct_terminal_statements_stop(context, statement.body, seen_rules);
+  if (statement.kind == "v2_if" && !statement.else_body.empty()) {
+    std::set<std::string> then_seen = seen_rules;
+    std::set<std::string> else_seen = seen_rules;
+    return direct_terminal_statements_stop(context, statement.then_body, then_seen) &&
+           direct_terminal_statements_stop(context, statement.else_body, else_seen);
+  }
+  if (statement.kind == "v2_match" && statement.otherwise != nullptr) {
+    std::set<std::string> otherwise_seen = seen_rules;
+    if (!direct_terminal_statement_stops(context, *statement.otherwise, otherwise_seen))
+      return false;
+    return std::all_of(statement.cases.begin(), statement.cases.end(), [&](const V2MatchCase& item) {
+      if (item.action == nullptr)
+        return false;
+      std::set<std::string> case_seen = seen_rules;
+      return direct_terminal_statement_stops(context, *item.action, case_seen);
+    });
+  }
+  if (statement.kind == "v2_invoke" && statement.name.has_value() && statement.args.empty()) {
+    if (seen_rules.contains(*statement.name))
+      return false;
+    const auto rule_it = context.rules.find(*statement.name);
+    if (rule_it == context.rules.end())
+      return false;
+    seen_rules.insert(*statement.name);
+    return direct_terminal_statements_stop(context, rule_it->second->body, seen_rules);
+  }
+  return false;
+}
+
+bool direct_terminal_statements_stop(LoweringContext& context,
+                                     const std::vector<V2Statement>& statements) {
+  std::set<std::string> seen_rules;
+  return direct_terminal_statements_stop(context, statements, seen_rules);
+}
+
+std::optional<std::string>
+direct_terminal_call_target(LoweringContext& context, const std::vector<V2Statement>& statements,
+                            std::set<std::string>& seen_rules) {
+  if (statements.size() != 1U)
+    return std::nullopt;
+  const V2Statement& statement = statements.front();
+  if (statement.kind != "v2_invoke" || !statement.name.has_value() || !statement.args.empty())
+    return std::nullopt;
+  const auto rule_it = context.rules.find(*statement.name);
+  if (rule_it == context.rules.end())
+    return std::nullopt;
+  if (context.inline_statement_rules.contains(*statement.name)) {
+    if (seen_rules.contains(*statement.name))
+      return std::nullopt;
+    seen_rules.insert(*statement.name);
+    return direct_terminal_call_target(context, rule_it->second->body, seen_rules);
+  }
+
+  std::set<std::string> terminal_seen;
+  terminal_seen.insert(*statement.name);
+  if (!direct_terminal_statements_stop(context, rule_it->second->body, terminal_seen))
+    return std::nullopt;
+  return *statement.name;
+}
+
+std::optional<std::string>
+direct_terminal_call_target(LoweringContext& context,
+                            const std::vector<V2Statement>& statements) {
+  std::set<std::string> seen_rules;
+  return direct_terminal_call_target(context, statements, seen_rules);
+}
+
+bool lower_direct_terminal_if_branch(LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value())
+    return false;
+
+  const std::optional<std::string> then_target =
+      direct_terminal_call_target(context, statement.then_body);
+  const std::optional<std::string> else_target =
+      statement.else_body.empty() ? std::nullopt
+                                  : direct_terminal_call_target(context, statement.else_body);
+  if (!then_target.has_value() && !else_target.has_value())
+    return false;
+
+  const int original_cost = estimate_branch_order_condition_cost(
+      context, *statement.predicate, statement.negated, statement.line);
+  if (original_cost >= branch_order_infinite_cost())
+    return false;
+
+  struct Candidate {
+    bool branch_when_true = false;
+    std::string target;
+    int estimated_cost = 0;
+    int ordinary_cost = 0;
+  };
+  std::vector<Candidate> candidates;
+
+  if (then_target.has_value() &&
+      (!statement.else_body.empty() || context.aggressive_terminal_direct)) {
+    const int inverted_cost = estimate_branch_order_condition_cost(
+        context, *statement.predicate, !statement.negated, statement.line);
+    if (inverted_cost < branch_order_infinite_cost()) {
+      candidates.push_back(Candidate{
+          .branch_when_true = true,
+          .target = *then_target,
+          .estimated_cost = inverted_cost,
+          .ordinary_cost = original_cost + 2,
+      });
+    }
+  }
+
+  if (else_target.has_value()) {
+    const bool then_terminates = direct_terminal_statements_stop(context, statement.then_body);
+    candidates.push_back(Candidate{
+        .branch_when_true = false,
+        .target = *else_target,
+        .estimated_cost = original_cost,
+        .ordinary_cost = original_cost + (then_terminates ? 1 : 2),
+    });
+  }
+
+  std::sort(candidates.begin(), candidates.end(), [](const Candidate& left, const Candidate& right) {
+    return left.estimated_cost < right.estimated_cost;
+  });
+  const auto selected_it = std::find_if(candidates.begin(), candidates.end(), [](const Candidate& item) {
+    return item.estimated_cost < item.ordinary_cost;
+  });
+  if (selected_it == candidates.end())
+    return false;
+
+  const std::string target_label = function_label(selected_it->target);
+  if (!lower_condition_false_branch(context, *statement.predicate,
+                                    selected_it->branch_when_true ? !statement.negated
+                                                                  : statement.negated,
+                                    target_label, statement.line))
+    return false;
+  if (selected_it->branch_when_true) {
+    if (!statement.else_body.empty() && !lower_statement_block(context, statement.else_body))
+      return false;
+  } else if (!lower_statement_block(context, statement.then_body)) {
+    return false;
+  }
+
+  context.optimizations.push_back(OptimizationReport{
+      .name = "terminal-if-direct-branch",
+      .detail = "Branched directly to terminal " + selected_it->target + " for " +
+                std::string(selected_it->branch_when_true ? "true" : "false") +
+                " path at line " + std::to_string(statement.line) + " (" +
+                std::to_string(selected_it->estimated_cost) + " vs " +
+                std::to_string(selected_it->ordinary_cost) + " estimated branch cells).",
+  });
+  return true;
+}
+
 bool lower_if_statement(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value())
     return false;
@@ -13761,6 +13929,8 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     return true;
   if (has_errors(context.diagnostics))
     return false;
+  if (lower_direct_terminal_if_branch(context, statement))
+    return true;
 
   const V2Statement selected = branch_order_statement(context, statement);
   const bool has_else = !selected.else_body.empty();
@@ -21335,6 +21505,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.indirect_underflow_decrement = options.indirect_underflow_decrement;
   context.recall_stored_input_after_decrement = options.recall_stored_input_after_decrement;
   context.dead_source_residual_temp_reuse = options.dead_source_residual_temp_reuse;
+  context.aggressive_terminal_direct = options.aggressive_terminal_direct;
   context.invert_branch_order = options.invert_branch_order;
   context.order_procs_by_call_count = options.order_procs_by_call_count;
   context.proc_layout_strategy = options.proc_layout_strategy;
