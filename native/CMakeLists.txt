@@ -129,6 +129,7 @@ add_executable(mkpro_tests
   tests/passes_test.cpp
   tests/post_layout_indirect_flow_test.cpp
   tests/r0_fractional_sentinel_test.cpp
+  tests/random_cell_helper_test.cpp
   tests/recall_removal_test.cpp
   tests/residual_elseif_test.cpp
   tests/residual_temp_test.cpp

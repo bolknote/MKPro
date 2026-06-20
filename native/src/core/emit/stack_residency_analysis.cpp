@@ -3,6 +3,7 @@
 #include "mkpro/core/parser.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <exception>
 #include <functional>
@@ -14,9 +15,18 @@ namespace mkpro::core::emit {
 
 namespace {
 
+std::string lower_ascii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return value;
+}
+
 bool expression_pure_for_substitution(const Expression& expression) {
-  if (expression.kind == "call" && expression.callee == "read")
-    return false;
+  if (expression.kind == "call") {
+    const std::string callee = lower_ascii(expression.callee);
+    if (callee == "random" || callee == "entered" || callee == "read")
+      return false;
+  }
   if (expression.index != nullptr && !expression_pure_for_substitution(*expression.index))
     return false;
   if (expression.expr != nullptr && !expression_pure_for_substitution(*expression.expr))
@@ -119,8 +129,7 @@ bool statements_read_identifier(const std::vector<V2Statement>& statements,
 }
 
 bool condition_references_protected(const V2Predicate& predicate,
-                                    const std::set<std::string>& protected_temps,
-                                    int line) {
+                                    const std::set<std::string>& protected_temps, int line) {
   for (const std::string& temp : protected_temps) {
     if (expression_text_references_identifier(predicate.left, temp, line) ||
         expression_text_references_identifier(predicate.right, temp, line) ||
@@ -132,8 +141,8 @@ bool condition_references_protected(const V2Predicate& predicate,
   return false;
 }
 
-bool statements_preserve_stack_residency_block(
-    const std::vector<V2Statement>& statements, const std::set<std::string>& protected_temps) {
+bool statements_preserve_stack_residency_block(const std::vector<V2Statement>& statements,
+                                               const std::set<std::string>& protected_temps) {
   return std::all_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
     return statement_preserves_stack_residency(statement, protected_temps);
   });
@@ -173,14 +182,12 @@ bool validate_stack_resident_expression(const Expression& expression,
   if (expression.kind == "unary" && expression.expr != nullptr)
     return validate_stack_resident_expression(*expression.expr, temps);
   if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
-    const bool left_refs =
-        std::any_of(temps.begin(), temps.end(), [&](const std::string& temp) {
-          return count_identifier_reads(*expression.left, temp) > 0;
-        });
-    const bool right_refs =
-        std::any_of(temps.begin(), temps.end(), [&](const std::string& temp) {
-          return count_identifier_reads(*expression.right, temp) > 0;
-        });
+    const bool left_refs = std::any_of(temps.begin(), temps.end(), [&](const std::string& temp) {
+      return count_identifier_reads(*expression.left, temp) > 0;
+    });
+    const bool right_refs = std::any_of(temps.begin(), temps.end(), [&](const std::string& temp) {
+      return count_identifier_reads(*expression.right, temp) > 0;
+    });
     if (left_refs && right_refs) {
       return validate_stack_resident_expression(*expression.left, temps) &&
              validate_stack_resident_expression(*expression.right, temps);
@@ -214,7 +221,8 @@ bool assign_temp_is_safe(const V2Statement& statement, const std::set<std::strin
   }
   if (targets.contains(*statement.target))
     return false;
-  const std::optional<Expression> expression = parse_expression_or_none(*statement.expr, statement.line);
+  const std::optional<Expression> expression =
+      parse_expression_or_none(*statement.expr, statement.line);
   if (!expression.has_value() || !stack_temp_source_is_safe(*expression))
     return false;
   if (expression_references_identifier(*expression, *statement.target))
@@ -236,7 +244,8 @@ int count_indexed_consumer(const std::vector<V2Statement>& statements, std::size
   if (find_stack_resident_fusion_site(statements, start).has_value())
     return 0;
   const std::optional<Expression> source = parse_expression_or_none(temp.expr, temp.line);
-  const std::optional<Expression> consumer_expr = parse_expression_or_none(consumer.expr, consumer.line);
+  const std::optional<Expression> consumer_expr =
+      parse_expression_or_none(consumer.expr, consumer.line);
   if (!source.has_value() || !consumer_expr.has_value() || !stack_temp_source_is_safe(*source))
     return 0;
   if (expression_references_identifier(*source, *temp.target))
@@ -260,14 +269,16 @@ int count_straight_single_use_pair(const std::vector<V2Statement>& statements, s
   if (find_stack_resident_fusion_site(statements, start).has_value())
     return 0;
   const std::optional<Expression> source = parse_expression_or_none(temp.expr, temp.line);
-  const std::optional<Expression> consumer_expr = parse_expression_or_none(consumer.expr, consumer.line);
+  const std::optional<Expression> consumer_expr =
+      parse_expression_or_none(consumer.expr, consumer.line);
   if (!source.has_value() || !consumer_expr.has_value() || !stack_temp_source_is_safe(*source))
     return 0;
   if (expression_references_identifier(*source, *temp.target))
     return 0;
   const std::vector<V2Statement> tail(statements.begin() + static_cast<std::ptrdiff_t>(start + 2U),
                                       statements.end());
-  if (!stack_temp_value_dead_after_consumer(*temp.target, consumer_overwrite_target(consumer), tail))
+  if (!stack_temp_value_dead_after_consumer(*temp.target, consumer_overwrite_target(consumer),
+                                            tail))
     return 0;
   if (count_identifier_reads(*consumer_expr, *temp.target) != 1)
     return 0;
@@ -393,8 +404,8 @@ bool statement_preserves_stack_residency(const V2Statement& statement,
   return false;
 }
 
-std::optional<StackResidentFusionSite> find_stack_resident_fusion_site(
-    const std::vector<V2Statement>& statements, std::size_t start) {
+std::optional<StackResidentFusionSite>
+find_stack_resident_fusion_site(const std::vector<V2Statement>& statements, std::size_t start) {
   std::vector<StackResidentTempSegment> segments;
   std::set<std::string> targets;
   std::size_t index = start;
@@ -428,7 +439,8 @@ std::optional<StackResidentFusionSite> find_stack_resident_fusion_site(
   const V2Statement& consumer = statements.at(index);
   if (!is_stack_resident_consumer(consumer))
     return std::nullopt;
-  const std::optional<Expression> consumer_expr = parse_expression_or_none(consumer.expr, consumer.line);
+  const std::optional<Expression> consumer_expr =
+      parse_expression_or_none(consumer.expr, consumer.line);
   if (!consumer_expr.has_value())
     return std::nullopt;
 
@@ -439,8 +451,8 @@ std::optional<StackResidentFusionSite> find_stack_resident_fusion_site(
       return std::nullopt;
     temp_names.push_back(*segment.assign.target);
   }
-  const std::vector<V2Statement> tail(
-      statements.begin() + static_cast<std::ptrdiff_t>(index + 1U), statements.end());
+  const std::vector<V2Statement> tail(statements.begin() + static_cast<std::ptrdiff_t>(index + 1U),
+                                      statements.end());
   const std::optional<std::string> overwrite = consumer_overwrite_target(consumer);
   for (const std::string& name : temp_names) {
     if (!stack_temp_value_dead_after_consumer(name, overwrite, tail))
@@ -464,8 +476,8 @@ std::optional<StackResidentFusionSite> find_stack_resident_fusion_site(
   };
 }
 
-StackResidencySummary summarize_stack_residency_candidates_in_block(
-    const std::vector<V2Statement>& statements) {
+StackResidencySummary
+summarize_stack_residency_candidates_in_block(const std::vector<V2Statement>& statements) {
   StackResidencySummary summary;
   summary.max_live_temps = peak_live_assign_temps_in_block(statements);
 

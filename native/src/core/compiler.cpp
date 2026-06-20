@@ -583,8 +583,11 @@ std::optional<std::pair<int, std::string>> binary_opcode(const std::string& op) 
 }
 
 bool expression_pure_for_substitution(const Expression& expression) {
-  if (expression.kind == "call" && lower_ascii(expression.callee) == "read")
-    return false;
+  if (expression.kind == "call") {
+    const std::string callee = lower_ascii(expression.callee);
+    if (callee == "random" || callee == "entered" || callee == "read")
+      return false;
+  }
   if (expression.index != nullptr && !expression_pure_for_substitution(*expression.index))
     return false;
   if (expression.expr != nullptr && !expression_pure_for_substitution(*expression.expr))
@@ -5661,6 +5664,74 @@ void collect_literal_display_use_counts(LoweringContext& context, const V2Progra
   collect_literal_display_use_counts(program.body, context.literal_display_use_counts);
   for (const V2Rule& rule : program.rules)
     collect_literal_display_use_counts(rule.body, context.literal_display_use_counts);
+}
+
+void collect_expression_use_count(LoweringContext& context, const Expression& expression) {
+  ++context.random_cell_expression_use_counts[expression_to_json(expression)];
+  if (expression.kind == "indexed" && expression.index != nullptr)
+    collect_expression_use_count(context, *expression.index);
+  if (expression.kind == "unary" && expression.expr != nullptr)
+    collect_expression_use_count(context, *expression.expr);
+  if (expression.kind == "binary") {
+    if (expression.left != nullptr)
+      collect_expression_use_count(context, *expression.left);
+    if (expression.right != nullptr)
+      collect_expression_use_count(context, *expression.right);
+  }
+  if (expression.kind == "call") {
+    for (const Expression& arg : expression.args)
+      collect_expression_use_count(context, arg);
+  }
+}
+
+void collect_expression_use_count_from_text(LoweringContext& context, const std::string& text,
+                                            int line) {
+  try {
+    collect_expression_use_count(context, parse_expression(text, line));
+  } catch (const std::exception&) {
+  }
+}
+
+void collect_expression_use_counts(LoweringContext& context,
+                                   const std::vector<V2Statement>& statements) {
+  for (const V2Statement& statement : statements) {
+    if (statement.expr.has_value())
+      collect_expression_use_count_from_text(context, *statement.expr, statement.line);
+    if (statement.predicate.has_value()) {
+      const V2Predicate& predicate = *statement.predicate;
+      if (predicate.kind == "v2_compare") {
+        collect_expression_use_count_from_text(context, predicate.left, statement.line);
+        collect_expression_use_count_from_text(context, predicate.right, statement.line);
+      } else if (predicate.kind == "v2_contains") {
+        collect_expression_use_count_from_text(context, predicate.collection, statement.line);
+        collect_expression_use_count_from_text(context, predicate.item, statement.line);
+      }
+    }
+    for (const std::string& arg : statement.args)
+      collect_expression_use_count_from_text(context, arg, statement.line);
+    if (statement.items.has_value()) {
+      for (const DisplayItem& item : *statement.items) {
+        if (item.expr.has_value())
+          collect_expression_use_count(context, *item.expr);
+      }
+    }
+    collect_expression_use_counts(context, statement.body);
+    collect_expression_use_counts(context, statement.then_body);
+    collect_expression_use_counts(context, statement.else_body);
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr)
+        collect_expression_use_counts(context, std::vector<V2Statement>{*match_case.action});
+    }
+    if (statement.otherwise != nullptr)
+      collect_expression_use_counts(context, std::vector<V2Statement>{*statement.otherwise});
+  }
+}
+
+void collect_expression_use_counts(LoweringContext& context, const V2Program& program) {
+  context.random_cell_expression_use_counts.clear();
+  collect_expression_use_counts(context, program.body);
+  for (const V2Rule& rule : program.rules)
+    collect_expression_use_counts(context, rule.body);
 }
 
 void index_program_metadata(LoweringContext& context, const V2Program& program) {
@@ -13104,6 +13175,178 @@ bool expression_contains_valid_random(const Expression& expression) {
   return false;
 }
 
+bool expression_contains_random_call(const Expression& expression) {
+  if (expression.kind == "number" || expression.kind == "string" || expression.kind == "identifier")
+    return false;
+  if (expression.kind == "indexed")
+    return expression.index != nullptr && expression_contains_random_call(*expression.index);
+  if (expression.kind == "unary")
+    return expression.expr != nullptr && expression_contains_random_call(*expression.expr);
+  if (expression.kind == "binary") {
+    return (expression.left != nullptr && expression_contains_random_call(*expression.left)) ||
+           (expression.right != nullptr && expression_contains_random_call(*expression.right));
+  }
+  if (expression.kind == "call") {
+    if (lower_ascii(expression.callee) == "random")
+      return true;
+    return std::any_of(expression.args.begin(), expression.args.end(),
+                       [](const Expression& arg) { return expression_contains_random_call(arg); });
+  }
+  return false;
+}
+
+bool is_unit_random_call(const Expression& expression) {
+  return expression.kind == "call" && lower_ascii(expression.callee) == "random" &&
+         expression.args.empty();
+}
+
+bool is_zero_based_random_range_call(const LoweringContext& context, const Expression& expression) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "random")
+    return false;
+  if (expression.args.size() == 1U) {
+    if (expression.args.front().kind == "identifier" &&
+        context.boards.contains(expression.args.front().name))
+      return true;
+    return !expression_contains_random_call(expression.args.front());
+  }
+  return expression.args.size() == 2U &&
+         is_numeric_zero_expression(context, expression.args.at(0)) &&
+         !expression_contains_random_call(expression.args.at(1));
+}
+
+bool is_random_scaled_integer(const LoweringContext& context, const Expression& expression) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "int" ||
+      expression.args.size() != 1U)
+    return false;
+  const Expression& arg = expression.args.front();
+  if (is_zero_based_random_range_call(context, arg))
+    return true;
+  if (arg.kind != "binary" || arg.op != "*" || arg.left == nullptr || arg.right == nullptr)
+    return false;
+  if (is_unit_random_call(*arg.left))
+    return !expression_contains_random_call(*arg.right);
+  if (is_unit_random_call(*arg.right))
+    return !expression_contains_random_call(*arg.left);
+  return false;
+}
+
+bool is_random_cell_expression_shape(const LoweringContext& context, const Expression& expression) {
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "random" &&
+      expression.args.size() == 1U && expression.args.front().kind == "identifier" &&
+      context.boards.contains(expression.args.front().name)) {
+    return true;
+  }
+  if (is_random_scaled_integer(context, expression))
+    return true;
+  if (expression.kind != "binary" || expression.left == nullptr || expression.right == nullptr)
+    return false;
+  if (expression.op == "+") {
+    return (is_random_scaled_integer(context, *expression.left) &&
+            numeric_value_of_expression(context, *expression.right).has_value()) ||
+           (numeric_value_of_expression(context, *expression.left).has_value() &&
+            is_random_scaled_integer(context, *expression.right));
+  }
+  if (expression.op == "-") {
+    return is_random_scaled_integer(context, *expression.left) &&
+           numeric_value_of_expression(context, *expression.right).has_value();
+  }
+  return false;
+}
+
+int random_cell_helper_expression_cost(const LoweringContext& context,
+                                       const Expression& expression) {
+  if (expression.kind == "number" || expression.kind == "identifier")
+    return 1;
+  if (expression.kind == "string")
+    return 0;
+  if (expression.kind == "indexed")
+    return expression.index == nullptr
+               ? 2
+               : random_cell_helper_expression_cost(context, *expression.index) + 2;
+  if (expression.kind == "unary")
+    return expression.expr == nullptr
+               ? 1
+               : random_cell_helper_expression_cost(context, *expression.expr) + 1;
+  if (expression.kind == "binary") {
+    const int left = expression.left == nullptr
+                         ? 0
+                         : random_cell_helper_expression_cost(context, *expression.left);
+    const int right = expression.right == nullptr
+                          ? 0
+                          : random_cell_helper_expression_cost(context, *expression.right);
+    return left + right + 1;
+  }
+  if (expression.kind != "call")
+    return 1;
+  const std::string callee = lower_ascii(expression.callee);
+  if (callee == "random") {
+    if (expression.args.empty())
+      return 1;
+    if (expression.args.size() == 1U && expression.args.front().kind == "identifier") {
+      const auto board_it = context.boards.find(expression.args.front().name);
+      if (board_it != context.boards.end()) {
+        const std::optional<int> base = board_random_base(*board_it->second);
+        return 6 + (base.has_value() && *base != 0 ? 2 : 0);
+      }
+    }
+    int cost = 2;
+    for (const Expression& arg : expression.args)
+      cost += random_cell_helper_expression_cost(context, arg);
+    return cost;
+  }
+  int cost = 1;
+  for (const Expression& arg : expression.args)
+    cost += random_cell_helper_expression_cost(context, arg);
+  return cost;
+}
+
+bool should_share_random_cell_expression(const LoweringContext& context,
+                                         const Expression& expression) {
+  if (!is_random_cell_expression_shape(context, expression))
+    return false;
+  const std::string key = expression_to_json(expression);
+  const auto count_it = context.random_cell_expression_use_counts.find(key);
+  if (count_it == context.random_cell_expression_use_counts.end() || count_it->second < 2)
+    return false;
+  const int uses = count_it->second;
+  const int cost = random_cell_helper_expression_cost(context, expression);
+  const int inline_total = uses * cost;
+  const int helper_total = uses * 2 + cost + 1;
+  const int threshold = context.share_random_cell ? 1 : 4;
+  return inline_total - helper_total >= threshold;
+}
+
+const RandomCellHelperRequest* ensure_random_cell_helper(LoweringContext& context,
+                                                         const Expression& expression) {
+  const std::string key = expression_to_json(expression);
+  const auto existing = context.random_cell_helper_labels.find(key);
+  if (existing != context.random_cell_helper_labels.end()) {
+    const auto helper =
+        std::find_if(context.random_cell_helpers.begin(), context.random_cell_helpers.end(),
+                     [&](const RandomCellHelperRequest& candidate) {
+                       return candidate.label == existing->second;
+                     });
+    if (helper != context.random_cell_helpers.end())
+      return &*helper;
+  }
+  const std::string label = "__random_coord_" + std::to_string(context.random_cell_helpers.size());
+  context.random_cell_helper_labels[key] = label;
+  context.random_cell_helpers.push_back(RandomCellHelperRequest{
+      .key = key,
+      .label = label,
+      .expr = expression,
+  });
+  return &context.random_cell_helpers.back();
+}
+
+const RandomCellHelperRequest* shared_random_cell_helper(LoweringContext& context,
+                                                         const Expression& expression) {
+  if (context.emitting_random_cell_helper ||
+      !should_share_random_cell_expression(context, expression))
+    return nullptr;
+  return ensure_random_cell_helper(context, expression);
+}
+
 bool lower_random_integer_call_to_x(LoweringContext& context, const Expression& expression) {
   if (lower_ascii(expression.callee) != "int" || expression.args.size() != 1 ||
       !expression_contains_valid_random(expression.args.front())) {
@@ -13401,6 +13644,21 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
 bool lower_expression_to_x(LoweringContext& context, const Expression& expression) {
   if (context.emitter.current_x_expression != nullptr &&
       expression_equals(*context.emitter.current_x_expression, expression)) {
+    return true;
+  }
+
+  if (const RandomCellHelperRequest* helper = shared_random_cell_helper(context, expression);
+      helper != nullptr) {
+    context.emitter.emit_jump(0x53, "ПП", helper->label,
+                              "random cell " + expression_to_source(expression));
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_aliases.clear();
+    context.emitter.current_x_expression.reset();
+    context.emitter.current_x_known_zero = false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "random-cell-helper-call",
+        .detail = "Reused shared random cell helper for " + expression_to_source(expression) + ".",
+    });
     return true;
   }
 
@@ -22600,6 +22858,27 @@ bool lower_literal_display_helpers(LoweringContext& context) {
   return true;
 }
 
+bool lower_random_cell_helpers(LoweringContext& context) {
+  for (const RandomCellHelperRequest& helper : context.random_cell_helpers) {
+    context.emitter.emit_label(
+        helper.label,
+        {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
+    const bool previous = context.emitting_random_cell_helper;
+    context.emitting_random_cell_helper = true;
+    const bool lowered = lower_expression_to_x(context, helper.expr);
+    context.emitting_random_cell_helper = previous;
+    if (!lowered)
+      return false;
+    context.emitter.emit_op(0x52, "В/О", "random coordinate helper return", helper.line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "random-cell-helper",
+        .detail =
+            "Emitted shared random cell helper for " + expression_to_source(helper.expr) + ".",
+    });
+  }
+  return true;
+}
+
 bool lower_spatial_hit_helpers(LoweringContext& context) {
   if (!context.spatial_hit_helper_order.empty() && !reserve_bit_mask_helper_preloads(context))
     return false;
@@ -24688,6 +24967,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.indirect_underflow_decrement = options.indirect_underflow_decrement;
   context.recall_stored_input_after_decrement = options.recall_stored_input_after_decrement;
   context.dead_source_residual_temp_reuse = options.dead_source_residual_temp_reuse;
+  context.share_random_cell = options.share_random_cell;
   context.aggressive_terminal_direct = options.aggressive_terminal_direct;
   context.invert_branch_order = options.invert_branch_order;
   context.order_procs_by_call_count = options.order_procs_by_call_count;
@@ -24735,6 +25015,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         extract_guarded_prologue_gadgets(*ast.v2, context.optimizations);
       index_program_metadata(context, *ast.v2);
       collect_literal_display_use_counts(context, *ast.v2);
+      collect_expression_use_counts(context, *ast.v2);
       index_constants(context, *ast.v2);
       const int grd_angle_mode_assumptions =
           fold_grd_angle_mode_constants(*ast.v2, context.constants);
@@ -24814,9 +25095,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           bool emitted_tail = lower_function_rules(context, *ast.v2);
           const std::size_t function_end = context.emitter.items.size();
           if (emitted_tail && lower_terminal_tail_helpers(context) &&
-              lower_literal_display_helpers(context) && lower_spatial_sum_helpers(context) &&
-              lower_spatial_hit_helpers(context) && lower_bit_mask_helper(context) &&
-              lower_packed_score_helper(context)) {
+              lower_literal_display_helpers(context) && lower_random_cell_helpers(context) &&
+              lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
+              lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
           if (emitted_tail) {

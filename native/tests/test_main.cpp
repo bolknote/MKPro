@@ -43,6 +43,7 @@ void parser_accepts_all_example_sources();
 void pass_pipeline_matches_initial_typescript_contract();
 void post_layout_indirect_flow_matches_typescript_contract();
 void r0_fractional_sentinel_matches_typescript_contract();
+void random_cell_helpers_match_typescript_contract();
 void recall_removal_engine_matches_initial_typescript_contract();
 void residual_elseif_matches_typescript_contract();
 void residual_temp_matches_typescript_contract();
@@ -148,6 +149,8 @@ int main() {
        mkpro::tests::post_layout_indirect_flow_matches_typescript_contract},
       {"r0_fractional_sentinel_matches_typescript_contract",
        mkpro::tests::r0_fractional_sentinel_matches_typescript_contract},
+      {"random_cell_helpers_match_typescript_contract",
+       mkpro::tests::random_cell_helpers_match_typescript_contract},
       {"recall_removal_engine_matches_initial_typescript_contract",
        mkpro::tests::recall_removal_engine_matches_initial_typescript_contract},
       {"residual_elseif_matches_typescript_contract",
