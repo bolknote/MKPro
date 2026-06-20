@@ -39,6 +39,14 @@ struct XParamYStackProcLowering {
   std::string y_name;
 };
 
+struct BankSelectorCacheEntry {
+  std::string key;
+  std::set<std::string> deps;
+  std::string base;
+  std::string index_text;
+  int offset = 0;
+};
+
 struct LoweringContext {
   MachineEmitter emitter;
   std::map<std::string, std::string> registers;
@@ -58,6 +66,7 @@ struct LoweringContext {
   std::map<std::string, const V2StateField*> state_fields;
   std::map<std::string, const V2Board*> boards;
   std::map<std::string, const V2StateField*> state_banks;
+  std::map<std::string, BankSelectorCacheEntry> bank_selector_cache;
   std::map<std::string, std::vector<std::string>> segmented_cells;
   std::set<std::string> scaled_coord_lists;
   std::set<std::string> scaled_coord_cell_names;

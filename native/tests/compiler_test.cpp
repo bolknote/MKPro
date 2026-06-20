@@ -2576,6 +2576,41 @@ program ComplexDynamicIndexedState {
   require(complex_dynamic_indexed_state.listing.find("indexed selector slots") != std::string::npos,
           "complex dynamic indexed state should materialize the selector expression");
 
+  CompileOptions indexed_selector_cache_options;
+  indexed_selector_cache_options.budget = 999;
+  indexed_selector_cache_options.analysis = true;
+  const CompileResult indexed_selector_cache = compile_source(R"mkpro(
+program IndexedSelectorSiblingReuse {
+  state {
+    line: group(1..3) {
+      front: packed = 10
+      robots: packed = 0
+    }
+    i: counter 1..2 = 1
+    j: counter 0..1 = 1
+    order: packed = 3
+  }
+
+  loop {
+    line[i + j + j].robots += order
+    line[i + j + j].front -= 1
+    halt(line[1].front)
+  }
+}
+)mkpro",
+                                                        indexed_selector_cache_options);
+  require(indexed_selector_cache.implemented,
+          "native compiler should lower sibling indexed selector cache reuse");
+  require(indexed_selector_cache.diagnostics.empty(),
+          "sibling indexed selector cache compile should not report diagnostics");
+  require(has_optimization(indexed_selector_cache, "indexed-selector-cache"),
+          "sibling indexed selector cache should report the TS strategy name");
+  require(std::any_of(indexed_selector_cache.steps.begin(), indexed_selector_cache.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment == "indexed selector reuse line.front";
+                      }),
+          "sibling indexed selector cache should recall a cached selector");
+
   const CompileResult int_dynamic_indexed_state = compile_source(R"mkpro(
 program IntDynamicIndexedState {
   state {
@@ -2600,6 +2635,101 @@ program IntDynamicIndexedState {
           "int(identifier) indexed state should use the named state-bank selector");
   require(int_dynamic_indexed_state.listing.find("indexed selector slots") != std::string::npos,
           "int(identifier) indexed state should materialize integer selector expression");
+
+  const CompileResult current_x_indexed_selector = compile_source(R"mkpro(
+program CurrentXIndexedSelector {
+  state {
+    slots: packed[1..3] = 0
+    index: counter 1..3 = 1
+    value: packed = 0
+  }
+
+  loop {
+    index = read()
+    value = slots[index]
+    halt(value)
+  }
+}
+)mkpro");
+  require(current_x_indexed_selector.implemented,
+          "native compiler should lower current-X indexed selector reuse");
+  require(current_x_indexed_selector.diagnostics.empty(),
+          "current-X indexed selector compile should not report diagnostics");
+  require(has_optimization(current_x_indexed_selector, "current-x-indexed-selector"),
+          "current-X indexed selector reuse should report the TS strategy name");
+
+  const CompileResult affine_indexed_selector_reuse = compile_source(R"mkpro(
+program AffineIndexedSelectorReuse {
+  state {
+    slots: packed[17..19] = 0
+    f0: packed = 0
+    f1: packed = 0
+    f2: packed = 0
+    f3: packed = 0
+    index: counter 16..18 = 16
+    value: packed = 0
+  }
+
+  loop {
+    f0 = read()
+    f1 = read()
+    f2 = read()
+    f3 = read()
+    index = read()
+    value = slots[index + 1]
+    halt(value + f0 + f1 + f2 + f3)
+  }
+}
+)mkpro");
+  require(affine_indexed_selector_reuse.implemented,
+          "native compiler should lower affine direct indexed selector reuse");
+  require(affine_indexed_selector_reuse.diagnostics.empty(),
+          "affine indexed selector compile should not report diagnostics");
+  require(has_optimization(affine_indexed_selector_reuse, "affine-indexed-selector-reuse"),
+          "affine indexed selector reuse should report the TS strategy name");
+  require(has_optimization(affine_indexed_selector_reuse, "indirect-memory-alias-selector"),
+          "affine indexed selector reuse should report indirect-memory aliasing");
+  require(affine_indexed_selector_reuse.listing.find("indexed selector slots") ==
+              std::string::npos,
+          "affine direct selector reuse should not materialize the hidden selector");
+  require(affine_indexed_selector_reuse.listing.find("indirect-memory-targets=0,1,2") !=
+              std::string::npos,
+          "affine direct selector listing should keep indirect-memory target metadata");
+
+  const CompileResult fractional_indirect_addressing = compile_source(R"mkpro(
+program FractionalIndirectAddressing {
+  state {
+    slots: packed[0..2] = 0
+    f0: packed = 0
+    f1: packed = 0
+    f2: packed = 0
+    f3: packed = 0
+    pos: coord(cave) = 1.0000008
+    value: packed = 0
+  }
+
+  cave: board(packed_decimal_zero_run)
+
+  loop {
+    f0 = read()
+    f1 = read()
+    f2 = read()
+    f3 = read()
+    pos = read()
+    value = slots[int(pos)]
+    halt(value + f0 + f1 + f2 + f3)
+  }
+}
+)mkpro");
+  require(fractional_indirect_addressing.implemented,
+          "native compiler should lower fractional indirect addressing");
+  require(fractional_indirect_addressing.diagnostics.empty(),
+          "fractional indirect addressing compile should not report diagnostics");
+  require(has_optimization(fractional_indirect_addressing, "fractional-indirect-addressing"),
+          "fractional indirect addressing should report the TS strategy name");
+  require(fractional_indirect_addressing.listing.find("indirect-selector-integer-part=pos") !=
+              std::string::npos,
+          "fractional indirect addressing listing should record integer-part selector metadata");
 
   const CompileResult coord_list_spatial = compile_source(R"mkpro(
 program CoordListSpatial {

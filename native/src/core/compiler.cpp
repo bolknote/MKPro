@@ -6098,8 +6098,23 @@ void emit_recall(LoweringContext& context, const std::string& name) {
   mark_current_x(context, name);
 }
 
+void invalidate_bank_selector_cache_for_store(LoweringContext& context, const std::string& name,
+                                              int register_index) {
+  for (auto it = context.bank_selector_cache.begin(); it != context.bank_selector_cache.end();) {
+    const auto selector_register_it = context.register_index_by_name.find(it->first);
+    const bool same_register = selector_register_it != context.register_index_by_name.end() &&
+                               selector_register_it->second == register_index;
+    if (it->first == name || it->second.deps.contains(name) || same_register) {
+      it = context.bank_selector_cache.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 void emit_store(LoweringContext& context, const std::string& name, std::string comment) {
   const int index = register_index_for(context, name);
+  invalidate_bank_selector_cache_for_store(context, name, index);
   const bool known_zero = context.emitter.current_x_known_zero;
   std::set<std::string> aliases = context.emitter.current_x_aliases;
   context.emitter.emit_op(0x40 + index, "X->П " + register_text_for(context, name),
@@ -6436,38 +6451,107 @@ int selector_offset_cost(int offset) {
   return offset == 0 ? 0 : number_entry_cost(std::to_string(std::abs(offset))) + 1;
 }
 
-std::optional<int> indirect_memory_selector_offset_for_field(const LoweringContext& context,
-                                                             const V2StateField& field) {
+struct IndirectMemorySelectorOffsetChoice {
+  int offset = 0;
+  bool uses_negative_selectors = false;
+};
+
+struct PreparedIndexedSelector {
+  std::string selector;
+  std::optional<std::string> integer_part;
+};
+
+std::optional<int> contiguous_register_offset_for_field(const LoweringContext& context,
+                                                        const V2StateField& field) {
   if (!field.bank.has_value())
     return std::nullopt;
-  std::optional<int> best;
-  int best_cost = std::numeric_limits<int>::max();
-  for (int offset = -99; offset <= 99; ++offset) {
-    bool matches = true;
-    for (int index = field.bank->min; index <= field.bank->max; ++index) {
-      const auto register_it =
-          context.register_index_by_name.find(state_bank_element_name(field, index));
-      if (register_it == context.register_index_by_name.end()) {
-        matches = false;
-        break;
-      }
-      const std::optional<int> target =
-          core::memory_target_from_transformed(std::to_string(index + offset));
-      if (!target.has_value() || *target != register_it->second) {
-        matches = false;
-        break;
-      }
+  std::optional<int> offset;
+  for (int index = field.bank->min; index <= field.bank->max; ++index) {
+    const auto register_it =
+        context.register_index_by_name.find(state_bank_element_name(field, index));
+    if (register_it == context.register_index_by_name.end())
+      return std::nullopt;
+    const int current = register_it->second - index;
+    if (!offset.has_value()) {
+      offset = current;
+      continue;
     }
-    if (!matches)
+    if (*offset != current)
+      return std::nullopt;
+  }
+  return offset;
+}
+
+std::optional<IndirectMemorySelectorOffsetChoice>
+state_bank_offset_matches_indirect_memory(const LoweringContext& context,
+                                          const V2StateField& field, int offset) {
+  if (!field.bank.has_value())
+    return std::nullopt;
+  bool uses_negative_selectors = false;
+  for (int index = field.bank->min; index <= field.bank->max; ++index) {
+    const auto register_it =
+        context.register_index_by_name.find(state_bank_element_name(field, index));
+    if (register_it == context.register_index_by_name.end())
+      return std::nullopt;
+    const int selector_value = index + offset;
+    uses_negative_selectors = uses_negative_selectors || selector_value < 0;
+    const std::optional<int> target =
+        core::memory_target_from_transformed(std::to_string(selector_value));
+    if (!target.has_value() || *target != register_it->second)
+      return std::nullopt;
+  }
+  return IndirectMemorySelectorOffsetChoice{
+      .offset = offset,
+      .uses_negative_selectors = uses_negative_selectors,
+  };
+}
+
+std::optional<IndirectMemorySelectorOffsetChoice> indirect_memory_selector_offset_choice_for_field(
+    const LoweringContext& context, const V2StateField& field,
+    std::optional<int> preferred_offset = std::nullopt) {
+  const std::optional<int> fallback_offset = contiguous_register_offset_for_field(context, field);
+  if (!fallback_offset.has_value())
+    return std::nullopt;
+
+  std::vector<int> candidates;
+  const auto add_candidate = [&](int offset) {
+    if (std::find(candidates.begin(), candidates.end(), offset) == candidates.end())
+      candidates.push_back(offset);
+  };
+  add_candidate(*fallback_offset);
+  add_candidate(0);
+  if (preferred_offset.has_value())
+    add_candidate(*preferred_offset);
+  for (int offset = -99; offset <= 99; ++offset)
+    add_candidate(offset);
+
+  std::optional<IndirectMemorySelectorOffsetChoice> best;
+  int best_cost = std::numeric_limits<int>::max();
+  for (const int offset : candidates) {
+    const std::optional<IndirectMemorySelectorOffsetChoice> proof =
+        state_bank_offset_matches_indirect_memory(context, field, offset);
+    if (!proof.has_value())
       continue;
     const int cost = selector_offset_cost(offset);
+    const bool offset_is_preferred = preferred_offset.has_value() && offset == *preferred_offset;
+    const bool best_is_preferred =
+        preferred_offset.has_value() && best.has_value() && best->offset == *preferred_offset;
     if (!best.has_value() || cost < best_cost ||
-        (cost == best_cost && std::abs(offset) < std::abs(*best))) {
-      best = offset;
+        (cost == best_cost && offset_is_preferred && !best_is_preferred) ||
+        (cost == best_cost && !offset_is_preferred && !best_is_preferred &&
+         std::abs(offset) < std::abs(best->offset))) {
+      best = *proof;
       best_cost = cost;
     }
   }
   return best;
+}
+
+std::optional<int> indirect_memory_selector_offset_for_field(const LoweringContext& context,
+                                                             const V2StateField& field) {
+  const std::optional<IndirectMemorySelectorOffsetChoice> choice =
+      indirect_memory_selector_offset_choice_for_field(context, field);
+  return choice.has_value() ? std::optional<int>{choice->offset} : std::nullopt;
 }
 
 bool ensure_hidden_register(LoweringContext& context, const std::string& name) {
@@ -6485,37 +6569,244 @@ std::optional<std::string> reusable_index_selector_text(const Expression& expres
   return std::nullopt;
 }
 
-std::optional<std::string> prepare_indirect_index_selector(LoweringContext& context,
-                                                           const Expression& expression,
-                                                           int source_line) {
+void collect_expression_identifier_deps(const Expression& expression, std::set<std::string>& deps) {
+  if (expression.kind == "identifier")
+    deps.insert(expression.name);
+  if (expression.index != nullptr)
+    collect_expression_identifier_deps(*expression.index, deps);
+  if (expression.expr != nullptr)
+    collect_expression_identifier_deps(*expression.expr, deps);
+  if (expression.left != nullptr)
+    collect_expression_identifier_deps(*expression.left, deps);
+  if (expression.right != nullptr)
+    collect_expression_identifier_deps(*expression.right, deps);
+  for (const Expression& arg : expression.args)
+    collect_expression_identifier_deps(arg, deps);
+}
+
+std::set<std::string> expression_identifier_deps(const Expression& expression) {
+  std::set<std::string> deps;
+  collect_expression_identifier_deps(expression, deps);
+  return deps;
+}
+
+struct CachedSiblingBankSelector {
+  std::string selector_name;
+  int delta = 0;
+};
+
+int indexed_selector_compute_cost(const Expression& index, int offset) {
+  return guarded_estimate_expression_cost(index) + selector_offset_cost(offset) + 1;
+}
+
+std::optional<CachedSiblingBankSelector> cached_sibling_bank_selector(
+    const LoweringContext& context, const std::string& selector_name, const std::string& base,
+    const std::string& index_text, const Expression& index, int offset) {
+  std::optional<CachedSiblingBankSelector> best;
+  int best_cost = std::numeric_limits<int>::max();
+  const int compute_cost = indexed_selector_compute_cost(index, offset);
+  for (const auto& [cached_selector_name, cached] : context.bank_selector_cache) {
+    if (cached_selector_name == selector_name)
+      continue;
+    if (cached.base != base || cached.index_text != index_text)
+      continue;
+    if (!context.register_index_by_name.contains(cached_selector_name))
+      continue;
+    const int delta = offset - cached.offset;
+    const int cost = 1 + selector_offset_cost(delta) + 1;
+    if (cost >= compute_cost)
+      continue;
+    if (!best.has_value() || cost < best_cost) {
+      best = CachedSiblingBankSelector{.selector_name = cached_selector_name, .delta = delta};
+      best_cost = cost;
+    }
+  }
+  return best;
+}
+
+void cache_bank_selector(LoweringContext& context, const std::string& selector,
+                         const std::string& key, const std::string& base,
+                         const std::string& index_text, const Expression& index, int offset) {
+  context.bank_selector_cache[selector] = BankSelectorCacheEntry{
+      .key = key + ":" + index_text + ":" + std::to_string(offset),
+      .deps = expression_identifier_deps(index),
+      .base = base,
+      .index_text = index_text,
+      .offset = offset,
+  };
+}
+
+std::string indexed_memory_comment(const LoweringContext& context, const std::string& action,
+                                   const Expression& expression, const V2StateField& field,
+                                   const PreparedIndexedSelector& prepared) {
+  std::vector<std::string> suffixes;
+  if (prepared.integer_part.has_value())
+    suffixes.push_back("indirect-selector-integer-part=" + *prepared.integer_part);
+  std::vector<int> targets;
+  if (field.bank.has_value()) {
+    for (int index = field.bank->min; index <= field.bank->max; ++index) {
+      const auto register_it =
+          context.register_index_by_name.find(state_bank_element_name(field, index));
+      if (register_it != context.register_index_by_name.end() &&
+          std::find(targets.begin(), targets.end(), register_it->second) == targets.end()) {
+        targets.push_back(register_it->second);
+      }
+    }
+  }
+  if (!targets.empty()) {
+    std::sort(targets.begin(), targets.end());
+    std::ostringstream out;
+    for (std::size_t index = 0; index < targets.size(); ++index) {
+      if (index > 0)
+        out << ",";
+      out << core::register_name_for_index(targets.at(index));
+    }
+    suffixes.push_back("indirect-memory-targets=" + out.str());
+  }
+
+  std::string comment = action + " " + bank_member_key(expression.base, expression.field);
+  for (const std::string& suffix : suffixes)
+    comment += "; " + suffix;
+  return comment;
+}
+
+std::optional<PreparedIndexedSelector> prepare_indirect_index_selector(
+    LoweringContext& context, const Expression& expression, int source_line) {
   const V2StateField* field = indexed_state_field(context, expression);
   if (field == nullptr || !field->bank.has_value())
     return std::nullopt;
   if (expression.index == nullptr || numeric_index_value(*expression.index).has_value())
     return std::nullopt;
-  const std::optional<int> offset = indirect_memory_selector_offset_for_field(context, *field);
-  if (!offset.has_value())
+  const std::optional<core::AffineIndexIdentifierOffset> affine =
+      core::affine_index_identifier_offset(*expression.index);
+  const std::optional<IndirectMemorySelectorOffsetChoice> offset_choice =
+      indirect_memory_selector_offset_choice_for_field(
+          context, *field, affine.has_value() ? std::optional<int>{-affine->offset}
+                                              : std::nullopt);
+  if (!offset_choice.has_value())
     return std::nullopt;
+  const int offset = offset_choice->offset;
+  const std::optional<int> linear_offset = contiguous_register_offset_for_field(context, *field);
+  const std::string key = bank_member_key(expression.base, expression.field);
+  const std::string alias_selector_scope =
+      offset_choice->uses_negative_selectors ? " including negative selector values" : "";
+
+  if (affine.has_value() && offset + affine->offset == 0) {
+    const auto index_register_it = context.register_index_by_name.find(affine->name);
+    if (index_register_it != context.register_index_by_name.end() &&
+        index_register_it->second >= 7) {
+      PreparedIndexedSelector prepared{.selector = affine->name};
+      if (affine->integer_part) {
+        prepared.integer_part = affine->name;
+        context.optimizations.push_back(OptimizationReport{
+            .name = "fractional-indirect-addressing",
+            .detail = "Used " + affine->name + "'s integer part directly as " + key +
+                      " selector at line " + std::to_string(source_line) + ".",
+        });
+      } else if (affine->offset != 0) {
+        context.optimizations.push_back(OptimizationReport{
+            .name = "affine-indexed-selector-reuse",
+            .detail = "Used " + affine->name + (affine->offset > 0 ? "+" : "") +
+                      std::to_string(affine->offset) + " directly as " + key +
+                      " selector at line " + std::to_string(source_line) + ".",
+        });
+      }
+      if (linear_offset.has_value() && offset != *linear_offset) {
+        context.optimizations.push_back(OptimizationReport{
+            .name = "indirect-memory-alias-selector",
+            .detail = "Used " + key +
+                      " index values directly as indirect-memory register aliases" +
+                      alias_selector_scope + " at line " + std::to_string(source_line) + ".",
+        });
+      }
+      return prepared;
+    }
+  }
 
   const std::string selector = bank_selector_variable_name(expression.base, expression.field);
   if (!ensure_hidden_register(context, selector))
     return std::nullopt;
   if (register_index_for(context, selector) < 7)
     return std::nullopt;
-  if (!lower_expression_to_x(context, *expression.index))
+
+  const std::string index_text = expression_to_json(*expression.index);
+  const std::string cache_key = key + ":" + index_text + ":" + std::to_string(offset);
+  const bool cacheable = expression_pure_for_substitution(*expression.index);
+  const auto cached_it = context.bank_selector_cache.find(selector);
+  if (cacheable && cached_it != context.bank_selector_cache.end() &&
+      cached_it->second.key == cache_key) {
+    return PreparedIndexedSelector{.selector = selector};
+  }
+  const std::optional<CachedSiblingBankSelector> sibling =
+      cacheable ? cached_sibling_bank_selector(context, selector, expression.base, index_text,
+                                               *expression.index, offset)
+                : std::nullopt;
+  if (sibling.has_value()) {
+    emit_recall(context, sibling->selector_name);
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "indexed selector reuse " + key;
+    if (sibling->delta > 0) {
+      emit_number_or_preload(context, std::to_string(sibling->delta),
+                             "indexed selector sibling offset", source_line);
+      context.emitter.emit_op(0x10, "+", "indexed selector sibling offset", source_line);
+    } else if (sibling->delta < 0) {
+      emit_number_or_preload(context, std::to_string(-sibling->delta),
+                             "indexed selector sibling offset", source_line);
+      context.emitter.emit_op(0x11, "-", "indexed selector sibling offset", source_line);
+    }
+    emit_store(context, selector, "indexed selector " + key);
+    cache_bank_selector(context, selector, key, expression.base, index_text, *expression.index,
+                        offset);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "indexed-selector-cache",
+        .detail = "Derived " + key + " selector from cached " + sibling->selector_name +
+                  " at line " + std::to_string(source_line) + ".",
+    });
+    return PreparedIndexedSelector{.selector = selector};
+  }
+
+  if (affine.has_value() && !affine->integer_part) {
+    if (context.emitter.current_x_variable == affine->name ||
+        context.emitter.current_x_aliases.contains(affine->name)) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "current-x-indexed-selector",
+          .detail = "Reused " + affine->name + " already in X while preparing " + key +
+                    " selector at line " + std::to_string(source_line) + ".",
+      });
+    } else {
+      emit_recall(context, affine->name);
+      if (!context.emitter.items.empty())
+        context.emitter.items.back().comment = "indexed selector " + affine->name;
+    }
+  } else if (!lower_expression_to_x(context, *expression.index)) {
     return std::nullopt;
-  if (*offset > 0) {
-    emit_number_or_preload(context, std::to_string(*offset), "indexed selector offset",
+  }
+
+  const int effective_offset =
+      offset + (affine.has_value() && !affine->integer_part ? affine->offset : 0);
+  if (effective_offset > 0) {
+    emit_number_or_preload(context, std::to_string(effective_offset), "indexed selector offset",
                            source_line);
     context.emitter.emit_op(0x10, "+", "indexed selector offset", source_line);
-  } else if (*offset < 0) {
-    emit_number_or_preload(context, std::to_string(-*offset), "indexed selector offset",
+  } else if (effective_offset < 0) {
+    emit_number_or_preload(context, std::to_string(-effective_offset), "indexed selector offset",
                            source_line);
     context.emitter.emit_op(0x11, "-", "indexed selector offset", source_line);
   }
-  emit_store(context, selector,
-             "indexed selector " + bank_member_key(expression.base, expression.field));
-  return selector;
+  emit_store(context, selector, "indexed selector " + key);
+  if (linear_offset.has_value() && offset != *linear_offset) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "indirect-memory-alias-selector",
+        .detail = "Used offset " + std::to_string(offset) + " instead of " +
+                  std::to_string(*linear_offset) + " for " + key +
+                  " indirect-memory aliases" + alias_selector_scope + " at line " +
+                  std::to_string(source_line) + ".",
+    });
+  }
+  if (cacheable)
+    cache_bank_selector(context, selector, key, expression.base, index_text, *expression.index,
+                        offset);
+  return PreparedIndexedSelector{.selector = selector};
 }
 
 bool prepare_dynamic_index_selector(LoweringContext& context, const Expression& expression,
@@ -6610,21 +6901,34 @@ bool emit_dynamic_indexed_store(LoweringContext& context, const Expression& expr
 }
 
 void emit_prepared_indirect_indexed_recall(LoweringContext& context, const Expression& expression,
-                                           const std::string& selector, int source_line) {
-  const int selector_index = register_index_for(context, selector);
-  context.emitter.emit_op(0xd0 + selector_index, "К П->X " + register_text_for(context, selector),
-                          "indexed recall " + bank_member_key(expression.base, expression.field),
+                                           const PreparedIndexedSelector& prepared,
+                                           int source_line) {
+  const int selector_index = register_index_for(context, prepared.selector);
+  const V2StateField* field = indexed_state_field(context, expression);
+  const std::string comment =
+      field == nullptr ? "indexed recall " + bank_member_key(expression.base, expression.field)
+                       : indexed_memory_comment(context, "indexed recall", expression, *field,
+                                                prepared);
+  context.emitter.emit_op(0xd0 + selector_index,
+                          "К П->X " + register_text_for(context, prepared.selector), comment,
                           source_line);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression = std::make_shared<Expression>(expression);
   context.emitter.current_x_aliases.clear();
+  context.emitter.current_x_known_zero = false;
 }
 
 void emit_prepared_indirect_indexed_store(LoweringContext& context, const Expression& expression,
-                                          const std::string& selector, int source_line) {
-  const int selector_index = register_index_for(context, selector);
-  context.emitter.emit_op(0xb0 + selector_index, "К X->П " + register_text_for(context, selector),
-                          "indexed set " + bank_member_key(expression.base, expression.field),
+                                          const PreparedIndexedSelector& prepared,
+                                          int source_line) {
+  const int selector_index = register_index_for(context, prepared.selector);
+  const V2StateField* field = indexed_state_field(context, expression);
+  const std::string comment =
+      field == nullptr ? "indexed set " + bank_member_key(expression.base, expression.field)
+                       : indexed_memory_comment(context, "indexed set", expression, *field,
+                                                prepared);
+  context.emitter.emit_op(0xb0 + selector_index,
+                          "К X->П " + register_text_for(context, prepared.selector), comment,
                           source_line);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression = std::make_shared<Expression>(expression);
@@ -6635,7 +6939,7 @@ bool emit_indexed_recall(LoweringContext& context, const Expression& expression,
   const std::optional<std::string> element =
       constant_indexed_state_element(context, expression, source_line);
   if (!element.has_value()) {
-    if (const std::optional<std::string> selector =
+    if (const std::optional<PreparedIndexedSelector> selector =
             prepare_indirect_index_selector(context, expression, source_line)) {
       emit_prepared_indirect_indexed_recall(context, expression, *selector, source_line);
       return true;
@@ -10705,7 +11009,8 @@ bool emit_indexed_packed_pow10_delta_from_stack_index(LoweringContext& context,
   if (!opcode.has_value())
     return false;
   context.emitter.emit_op(opcode->first, opcode->second, "indexed packed digit update", line);
-  emit_prepared_indirect_indexed_store(context, target, selector, line);
+  emit_prepared_indirect_indexed_store(context, target,
+                                       PreparedIndexedSelector{.selector = selector}, line);
   return true;
 }
 
@@ -10767,12 +11072,12 @@ bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
     }
   }
 
-  const std::optional<std::string> prepared_selector =
+  const std::optional<PreparedIndexedSelector> prepared_selector =
       prepare_indirect_index_selector(context, target, statement.line);
   if (!prepared_selector.has_value())
     return false;
-  context.emitter.emit_op(0xd0 + register_index_for(context, *prepared_selector),
-                          "К П->X " + register_text_for(context, *prepared_selector),
+  context.emitter.emit_op(0xd0 + register_index_for(context, prepared_selector->selector),
+                          "К П->X " + register_text_for(context, prepared_selector->selector),
                           "indexed packed digit update base", statement.line);
   if (!lower_expression_to_x(context, factor))
     return false;
@@ -11240,7 +11545,9 @@ void emit_packed_line_family_update_check_tail(LoweringContext& context,
   if (op.has_value())
     context.emitter.emit_op(op->first, op->second, "indexed packed digit update",
                             update.update_line);
-  emit_prepared_indirect_indexed_store(context, update.target, update.selector, update.update_line);
+  emit_prepared_indirect_indexed_store(
+      context, update.target, PreparedIndexedSelector{.selector = update.selector},
+      update.update_line);
 
   (void)lower_expression_to_x(context, update.mask);
   context.emitter.emit_op(0x37, "К ∧", "updated packed fractional report mask", update.branch_line);
@@ -13443,7 +13750,7 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
     } else {
       return false;
     }
-    const std::optional<std::string> prepared_selector =
+    const std::optional<PreparedIndexedSelector> prepared_selector =
         prepare_indirect_index_selector(context, target_expression, statement.line);
     if (prepared_selector.has_value()) {
       emit_prepared_indirect_indexed_recall(context, target_expression, *prepared_selector,
@@ -14146,7 +14453,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
         return true;
       if (has_errors(context.diagnostics))
         return false;
-      const std::optional<std::string> prepared_selector =
+      const std::optional<PreparedIndexedSelector> prepared_selector =
           prepare_indirect_index_selector(context, target_expression, statement.line);
       const Expression expression = parse_expression(*statement.expr, statement.line);
       if (!lower_expression_to_x(context, expression))
@@ -17322,7 +17629,8 @@ bool can_compile_indexed_stack_temp_expression(const Expression& expression,
 bool lower_indexed_stack_temp_expression_to_x(LoweringContext& context,
                                               const Expression& expression, const std::string& temp,
                                               const Expression& indexed_target,
-                                              const std::optional<std::string>& prepared_selector,
+                                              const std::optional<PreparedIndexedSelector>&
+                                                  prepared_selector,
                                               int line) {
   if (expression.kind == "identifier" && expression.name == temp) {
     mark_current_x(context, temp);
@@ -17675,7 +17983,7 @@ bool lower_stack_resident_indexed_temp(LoweringContext& context,
   if (!can_compile_indexed_stack_temp_expression(consumer.expression, *temp.target))
     return false;
 
-  std::optional<std::string> prepared_selector;
+  std::optional<PreparedIndexedSelector> prepared_selector;
   if (consumer.target.index != nullptr &&
       !numeric_index_value(*consumer.target.index).has_value()) {
     prepared_selector = prepare_indirect_index_selector(context, consumer.target, consumer.line);
