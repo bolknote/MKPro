@@ -5153,6 +5153,46 @@ program CanonicalIfChain {
   require(canonical_if_chain.listing.find("match value") == std::string::npos,
           "canonicalized numeric if-chain should not reserve a generic match scratch");
 
+  CompileOptions dispatch_default_merge_options;
+  dispatch_default_merge_options.analysis = true;
+  dispatch_default_merge_options.canonicalize_if_chains = true;
+  dispatch_default_merge_options.free_residual_dispatch_scratch = true;
+  const CompileResult dispatch_default_merge = compile_source(R"mkpro(
+program SingleCaseResidualFallback {
+  state {
+    a: counter 0..9 = 0
+    b: counter 0..9 = 0
+    value: counter 0..9 = 0
+  }
+
+  loop {
+    if a + b == 1 {
+      value = 0
+    }
+    else {
+      if a + b == 2 {
+        value = 1
+      }
+      else {
+        value = 0
+      }
+    }
+    halt(value)
+  }
+}
+)mkpro",
+                                                        dispatch_default_merge_options);
+  require(dispatch_default_merge.implemented,
+          "native compiler should merge dispatch cases matching the default branch");
+  require(dispatch_default_merge.diagnostics.empty(),
+          "dispatch default merge compile should not report diagnostics");
+  require(has_optimization(dispatch_default_merge, "dispatch-default-merge"),
+          "dispatch default merge should report the TS optimization name");
+  require(has_optimization(dispatch_default_merge, "dispatch-lowering"),
+          "dispatch default merge should still report dispatch-lowering");
+  require(dispatch_default_merge.listing.find("match value") == std::string::npos,
+          "merged residual dispatch should not reserve a generic match scratch");
+
   const CompileResult inverted_if_chain = compile_source(R"mkpro(
 program InvertedIfChain {
   state {

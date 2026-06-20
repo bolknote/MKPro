@@ -17349,6 +17349,67 @@ std::optional<double> numeric_match_value(LoweringContext& context, const std::s
   }
 }
 
+struct OptimizedMatchDefaultCases {
+  V2Statement statement;
+  int removed = 0;
+};
+
+bool later_match_case_has_numeric_value(LoweringContext& context,
+                                        const std::vector<V2MatchCase>& cases,
+                                        std::size_t current_case_index, double value) {
+  for (std::size_t case_index = current_case_index + 1U; case_index < cases.size();
+       ++case_index) {
+    const V2MatchCase& later_case = cases.at(case_index);
+    for (const std::string& later_value_text : later_case.values) {
+      const std::optional<double> later_value =
+          numeric_match_value(context, later_value_text, later_case.line);
+      if (later_value.has_value() && std::fabs(*later_value - value) <= 1e-12)
+        return true;
+    }
+  }
+  return false;
+}
+
+OptimizedMatchDefaultCases optimize_match_default_cases(LoweringContext& context,
+                                                        const V2Statement& statement) {
+  OptimizedMatchDefaultCases result{.statement = statement};
+  if (statement.kind != "v2_match" || statement.cases.empty() || statement.otherwise == nullptr)
+    return result;
+
+  const std::vector<V2Statement> default_body = action_to_common_branch_body(statement.otherwise);
+  std::vector<V2MatchCase> kept_cases;
+  kept_cases.reserve(statement.cases.size());
+  for (std::size_t case_index = 0; case_index < statement.cases.size(); ++case_index) {
+    const V2MatchCase& match_case = statement.cases.at(case_index);
+    if (match_case.action == nullptr) {
+      kept_cases.push_back(match_case);
+      continue;
+    }
+
+    const std::vector<V2Statement> case_body = action_to_common_branch_body(match_case.action);
+    const bool case_matches_default = common_branch_statement_lists_equal(case_body, default_body);
+    V2MatchCase kept_case = match_case;
+    kept_case.values.clear();
+    for (const std::string& value_text : match_case.values) {
+      const std::optional<double> numeric = numeric_match_value(context, value_text, match_case.line);
+      const bool can_remove = numeric.has_value() && case_matches_default &&
+                              !later_match_case_has_numeric_value(context, statement.cases,
+                                                                  case_index, *numeric);
+      if (can_remove) {
+        result.removed += 1;
+      } else {
+        kept_case.values.push_back(value_text);
+      }
+    }
+    if (!kept_case.values.empty())
+      kept_cases.push_back(std::move(kept_case));
+  }
+
+  if (result.removed > 0)
+    result.statement.cases = std::move(kept_cases);
+  return result;
+}
+
 bool lower_numeric_residual_match_statement(LoweringContext& context,
                                             const V2Statement& statement) {
   if (statement.kind != "v2_match" || !statement.expr.has_value() || statement.cases.empty())
@@ -17419,26 +17480,43 @@ bool lower_match_statement(LoweringContext& context, const V2Statement& statemen
   if (statement.kind != "v2_match" || !statement.expr.has_value())
     return false;
 
-  if (statement.cases.empty()) {
-    if (statement.otherwise == nullptr)
+  const OptimizedMatchDefaultCases optimized = optimize_match_default_cases(context, statement);
+  if (optimized.removed > 0) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "dispatch-default-merge",
+        .detail = "Removed " + std::to_string(optimized.removed) + " dispatch case" +
+                  (optimized.removed == 1 ? "" : "s") +
+                  " whose body matched the default branch.",
+    });
+  }
+  const V2Statement& lowered_statement = optimized.statement;
+
+  if (lowered_statement.cases.empty()) {
+    if (lowered_statement.otherwise == nullptr)
       return true;
-    return lower_match_action(context, *statement.otherwise);
+    return lower_match_action(context, *lowered_statement.otherwise);
   }
 
-  if (lower_numeric_residual_match_statement(context, statement))
+  if (lower_numeric_residual_match_statement(context, lowered_statement)) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "dispatch-lowering",
+        .detail = "Selected residual-compare-chain for match at line " +
+                  std::to_string(lowered_statement.line) + ".",
+    });
     return true;
+  }
 
-  const std::string scratch = "__match_value_" + std::to_string(statement.line);
+  const std::string scratch = "__match_value_" + std::to_string(lowered_statement.line);
   assign_register(context, scratch);
   if (has_errors(context.diagnostics))
     return false;
-  const Expression match_expr = parse_expression(*statement.expr, statement.line);
+  const Expression match_expr = parse_expression(*lowered_statement.expr, lowered_statement.line);
   if (!lower_expression_to_x(context, match_expr))
     return false;
   emit_store(context, scratch, "match value");
 
   const std::string end_label = context.emitter.fresh_label("match_end");
-  for (const V2MatchCase& match_case : statement.cases) {
+  for (const V2MatchCase& match_case : lowered_statement.cases) {
     for (const std::string& value : match_case.values) {
       const std::string next_label = context.emitter.fresh_label("match_next");
       V2Predicate predicate;
@@ -17456,9 +17534,15 @@ bool lower_match_statement(LoweringContext& context, const V2Statement& statemen
     }
   }
 
-  if (statement.otherwise != nullptr && !lower_match_action(context, *statement.otherwise))
+  if (lowered_statement.otherwise != nullptr &&
+      !lower_match_action(context, *lowered_statement.otherwise))
     return false;
   context.emitter.emit_label(end_label, {.hidden = true});
+  context.optimizations.push_back(OptimizationReport{
+      .name = "dispatch-lowering",
+      .detail = "Selected scratch-compare-chain for match at line " +
+                std::to_string(lowered_statement.line) + ".",
+  });
   return true;
 }
 
