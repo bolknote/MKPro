@@ -23659,6 +23659,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       exact_decimal_series = true;
       (void)core::emit::lowering::lower_decimal_series_program(context.emitter, context.diagnostics,
                                                                *decimal_series);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "decimal-series-lowering",
+          .detail = "Lowered decimal recurrence to " + std::to_string(decimal_series->digits) +
+                    "-digit MK-61 program.",
+      });
     } else {
       materialize_display_expressions(*ast.v2, context.optimizations);
       elide_x_param_return_state_fields(*ast.v2, context.optimizations);

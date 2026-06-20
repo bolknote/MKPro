@@ -6853,6 +6853,8 @@ program E94Digits {
           "verified decimal recurrence should emit the TS verified listing");
   require(decimal_series.listing.find("decimal recurrence setup") != std::string::npos,
           "verified decimal recurrence should carry lowering comments");
+  require(has_optimization(decimal_series, "decimal-series-lowering"),
+          "verified decimal recurrence should report decimal-series-lowering");
 
   const CompileResult unverified_decimal_series = compile_source(R"mkpro(
 program E64Digits {
