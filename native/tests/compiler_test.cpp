@@ -3232,6 +3232,65 @@ program RemainderZeroTest {
                        }),
           "integer remainder zero test should skip rescaling the fractional remainder");
 
+  const CompileResult one_based_modulo_normalize = compile_source(R"mkpro(
+program OneBasedModuloNormalize {
+  state {
+    line: counter 0..9 = 8
+  }
+  loop {
+    line = frac(int(line) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+    halt(line)
+  }
+}
+)mkpro");
+  require(one_based_modulo_normalize.implemented,
+          "native compiler should fold one-based modulo normalization");
+  require(one_based_modulo_normalize.diagnostics.empty(),
+          "one-based modulo normalization should not report diagnostics");
+  require(has_optimization(one_based_modulo_normalize, "one-based-modulo-normalization"),
+          "one-based modulo normalization should report the TS strategy name");
+  require(std::any_of(one_based_modulo_normalize.steps.begin(),
+                      one_based_modulo_normalize.steps.end(), [](const ResolvedStep& step) {
+                        return step.comment == "one-based modulo normalize line";
+                      }),
+          "one-based modulo normalization should emit the TS store comment");
+  require(std::none_of(one_based_modulo_normalize.steps.begin(),
+                       one_based_modulo_normalize.steps.end(), [](const ResolvedStep& step) {
+                         return step.comment.has_value() &&
+                                step.comment->starts_with("false branch");
+                       }),
+          "one-based modulo normalization should remove the zero-fix branch");
+
+  const CompileResult signed_modulo_normalize = compile_source(R"mkpro(
+program SignedModuloNormalize {
+  state {
+    line: packed = -8
+  }
+  loop {
+    line = frac(int(line) / 4) * 4
+    if line <= 0 {
+      line += 4
+    }
+    halt(line)
+  }
+}
+)mkpro");
+  require(signed_modulo_normalize.implemented,
+          "native compiler should keep signed modulo normalization branch");
+  require(signed_modulo_normalize.diagnostics.empty(),
+          "signed modulo normalization should not report diagnostics");
+  require(!has_optimization(signed_modulo_normalize, "one-based-modulo-normalization"),
+          "signed modulo normalization must not report branchless normalization");
+  require(std::any_of(signed_modulo_normalize.steps.begin(), signed_modulo_normalize.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment.has_value() &&
+                               step.comment->starts_with("false branch");
+                      }),
+          "signed modulo normalization should keep the zero-fix branch");
+
   const CompileResult indexed_store_guard = compile_source(R"mkpro(
 program IndexedStoreGuard {
   state {

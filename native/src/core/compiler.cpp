@@ -13718,6 +13718,81 @@ std::optional<double> numeric_self_update_delta(const std::string& target,
   return std::nullopt;
 }
 
+Expression one_based_modulo_expression(const std::string& target, int width) {
+  const std::string width_text = std::to_string(width);
+  Expression shifted = add_expression(int_expression(identifier_expression(target)),
+                                      number_expression(std::to_string(width - 1)));
+  Expression scaled =
+      multiply_expression(frac_expression(divide_expression(std::move(shifted),
+                                                            number_expression(width_text))),
+                          number_expression(width_text));
+  return add_expression(std::move(scaled), number_expression("1"));
+}
+
+std::optional<int> match_one_based_modulo_normalization(LoweringContext& context,
+                                                        const V2Statement& assign,
+                                                        const V2Statement& branch) {
+  if (assign.kind != "v2_assign" || !assign.target.has_value() || !assign.expr.has_value() ||
+      branch.kind != "v2_if" || !branch.predicate.has_value() || branch.has_else_body ||
+      !branch.else_body.empty() || branch.then_body.size() != 1U) {
+    return std::nullopt;
+  }
+
+  const std::string& target = *assign.target;
+  const V2Predicate& predicate = *branch.predicate;
+  if (predicate.kind != "v2_compare" || predicate.op != "<=")
+    return std::nullopt;
+  const Expression left = parse_expression(predicate.left, branch.line);
+  const Expression right = parse_expression(predicate.right, branch.line);
+  if (!identifier_expression_is(left, target) || !is_zero_expression(context, right))
+    return std::nullopt;
+
+  const Expression assign_expression = parse_expression(*assign.expr, assign.line);
+  const std::optional<int> width = match_positive_modulo_expression(assign_expression, target);
+  if (!width.has_value() || *width <= 1)
+    return std::nullopt;
+
+  const std::optional<double> delta =
+      numeric_self_update_delta(target, branch.then_body.front());
+  if (!delta.has_value() || std::fabs(*delta - static_cast<double>(*width)) >= 1e-12)
+    return std::nullopt;
+
+  const V2StateField* field = state_field_named(context, target);
+  if (field != nullptr && field->min.value_or(std::numeric_limits<int>::min()) < 0)
+    return std::nullopt;
+
+  const Expression normalized = one_based_modulo_expression(target, *width);
+  const int lowered_cost = guarded_estimate_expression_cost(normalized) + 1;
+  const int ordinary_cost = guarded_estimate_expression_cost(assign_expression) + 1 +
+                            guarded_condition_compile_cost(predicate, branch.line) +
+                            guarded_estimate_expression_cost(
+                                parse_expression(*branch.then_body.front().expr,
+                                                 branch.then_body.front().line)) +
+                            1 + 2;
+  if (lowered_cost >= ordinary_cost)
+    return std::nullopt;
+
+  return width;
+}
+
+bool lower_one_based_modulo_normalization(LoweringContext& context, const V2Statement& assign,
+                                          const V2Statement& branch) {
+  const std::optional<int> width = match_one_based_modulo_normalization(context, assign, branch);
+  if (!width.has_value())
+    return false;
+
+  const Expression normalized = one_based_modulo_expression(*assign.target, *width);
+  if (!lower_expression_to_x(context, normalized))
+    return false;
+  emit_store(context, *assign.target, "one-based modulo normalize " + *assign.target);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "one-based-modulo-normalization",
+      .detail = "Folded " + *assign.target + " modulo-" + std::to_string(*width) +
+                " zero-fix branch into one branchless normalization expression.",
+  });
+  return true;
+}
+
 struct ResidualGuardedUpdateMatch {
   V2Predicate condition;
   V2Statement assignment;
@@ -20968,6 +21043,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
       return false;
     if (index + 1U < statements.size() &&
         lower_decrement_test_pair(context, statements.at(index), statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
+        lower_one_based_modulo_normalization(context, statements.at(index),
+                                             statements.at(index + 1U))) {
       ++index;
       continue;
     }
