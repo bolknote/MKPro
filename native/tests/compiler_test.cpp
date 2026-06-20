@@ -5227,6 +5227,44 @@ program DispatchResidualDefaultSign {
               std::string::npos,
           "dispatch residual sign should be emitted from the residual already in X");
 
+  CompileOptions dispatch_order_options;
+  dispatch_order_options.analysis = true;
+  const std::string dispatch_order_source = R"mkpro(
+program DispatchCaseOrdering {
+  state {
+    key: counter -9..9 = stack.X
+  }
+
+  loop {
+    match key {
+      4 => halt(4)
+      0 => halt(0)
+      6 => halt(6)
+      otherwise => halt(9)
+    }
+  }
+}
+)mkpro";
+  const CompileResult dispatch_order = compile_source(dispatch_order_source, dispatch_order_options);
+  require(dispatch_order.implemented,
+          "native compiler should reorder numeric residual dispatch cases");
+  require(dispatch_order.diagnostics.empty(),
+          "dispatch case ordering compile should not report diagnostics");
+  require(has_optimization(dispatch_order, "dispatch-case-ordering"),
+          "numeric dispatch ordering should report the TS optimization name");
+
+  CompileOptions preserve_dispatch_order_options;
+  preserve_dispatch_order_options.analysis = true;
+  preserve_dispatch_order_options.preserve_dispatch_case_order = true;
+  const CompileResult preserve_dispatch_order =
+      compile_source(dispatch_order_source, preserve_dispatch_order_options);
+  require(preserve_dispatch_order.implemented,
+          "native compiler should lower preserved-order numeric dispatch cases");
+  require(preserve_dispatch_order.diagnostics.empty(),
+          "preserved dispatch order compile should not report diagnostics");
+  require(!has_optimization(preserve_dispatch_order, "dispatch-case-ordering"),
+          "preserved dispatch order should not report dispatch-case-ordering");
+
   const CompileResult inverted_if_chain = compile_source(R"mkpro(
 program InvertedIfChain {
   state {

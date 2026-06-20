@@ -17526,18 +17526,137 @@ bool lower_dispatch_residual_default_x_param_call(LoweringContext& context,
   return true;
 }
 
+struct NumericMatchCase {
+  double value = 0.0;
+  const V2Statement* action = nullptr;
+  int line = 0;
+};
+
+bool numeric_match_case_values_are_unique(const std::vector<NumericMatchCase>& cases) {
+  for (std::size_t left = 0; left < cases.size(); ++left) {
+    for (std::size_t right = left + 1U; right < cases.size(); ++right) {
+      if (std::fabs(cases.at(left).value - cases.at(right).value) <= 1e-12)
+        return false;
+    }
+  }
+  return true;
+}
+
+int residual_dispatch_step_cost(std::optional<double> previous, double value) {
+  const double delta = previous.has_value() ? value - *previous : value;
+  if (std::fabs(delta) <= 1e-12)
+    return 0;
+  return number_entry_cost(format_number_literal(std::fabs(delta))) + 1;
+}
+
+int residual_dispatch_order_cost(const std::vector<NumericMatchCase>& cases,
+                                 const std::vector<std::size_t>& order) {
+  std::optional<double> previous;
+  int cost = 0;
+  for (const std::size_t index : order) {
+    const double value = cases.at(index).value;
+    cost += residual_dispatch_step_cost(previous, value);
+    previous = value;
+  }
+  return cost;
+}
+
+std::vector<std::size_t> identity_order(std::size_t count) {
+  std::vector<std::size_t> order(count);
+  std::iota(order.begin(), order.end(), 0U);
+  return order;
+}
+
+bool order_is_identity(const std::vector<std::size_t>& order) {
+  for (std::size_t index = 0; index < order.size(); ++index) {
+    if (order.at(index) != index)
+      return false;
+  }
+  return true;
+}
+
+std::vector<std::size_t> zero_first_dispatch_order(const std::vector<NumericMatchCase>& cases) {
+  const std::vector<std::size_t> identity = identity_order(cases.size());
+  const auto zero_it = std::find_if(cases.begin(), cases.end(), [](const NumericMatchCase& item) {
+    return std::fabs(item.value) <= 1e-12;
+  });
+  if (zero_it == cases.end())
+    return identity;
+  const std::size_t zero_index = static_cast<std::size_t>(std::distance(cases.begin(), zero_it));
+  if (zero_index == 0)
+    return identity;
+  std::vector<std::size_t> order{zero_index};
+  for (std::size_t index = 0; index < cases.size(); ++index) {
+    if (index != zero_index)
+      order.push_back(index);
+  }
+  return order;
+}
+
+std::vector<std::size_t> best_residual_dispatch_order(const std::vector<NumericMatchCase>& cases) {
+  const std::vector<std::size_t> current = identity_order(cases.size());
+  if (cases.size() > 8U || !numeric_match_case_values_are_unique(cases))
+    return current;
+
+  std::vector<std::size_t> best = current;
+  const int current_cost = residual_dispatch_order_cost(cases, current);
+  int best_cost = current_cost;
+  std::set<std::size_t> used;
+  std::vector<std::size_t> order;
+
+  std::function<void(std::optional<double>, int)> visit =
+      [&](std::optional<double> previous, int cost) {
+        if (cost >= best_cost)
+          return;
+        if (order.size() == cases.size()) {
+          best_cost = cost;
+          best = order;
+          return;
+        }
+        for (std::size_t index = 0; index < cases.size(); ++index) {
+          if (used.contains(index))
+            continue;
+          used.insert(index);
+          order.push_back(index);
+          const double value = cases.at(index).value;
+          visit(value, cost + residual_dispatch_step_cost(previous, value));
+          order.pop_back();
+          used.erase(index);
+        }
+      };
+  visit(std::nullopt, 0);
+  if (current_cost - best_cost < 3)
+    return current;
+  return best;
+}
+
+struct OrderedNumericMatchCases {
+  std::vector<NumericMatchCase> cases;
+  int reordered = 0;
+};
+
+OrderedNumericMatchCases order_numeric_match_cases_for_residual(
+    const std::vector<NumericMatchCase>& cases) {
+  std::vector<std::size_t> order = best_residual_dispatch_order(cases);
+  if (order_is_identity(order))
+    order = zero_first_dispatch_order(cases);
+
+  OrderedNumericMatchCases result;
+  result.cases.reserve(cases.size());
+  for (std::size_t index = 0; index < order.size(); ++index) {
+    if (order.at(index) != index)
+      result.reordered += 1;
+    result.cases.push_back(cases.at(order.at(index)));
+  }
+  return result;
+}
+
 bool lower_numeric_residual_match_statement(LoweringContext& context,
                                             const V2Statement& statement) {
   if (statement.kind != "v2_match" || !statement.expr.has_value() || statement.cases.empty())
     return false;
 
-  struct NumericCase {
-    double value = 0.0;
-    const V2Statement* action = nullptr;
-    int line = 0;
-  };
-
-  std::vector<NumericCase> cases;
+  std::vector<NumericMatchCase> cases;
   for (const V2MatchCase& match_case : statement.cases) {
     if (match_case.action == nullptr)
       return false;
@@ -17545,12 +17664,24 @@ bool lower_numeric_residual_match_statement(LoweringContext& context,
       const std::optional<double> numeric = numeric_match_value(context, value, match_case.line);
       if (!numeric.has_value())
         return false;
-      cases.push_back(NumericCase{
+      cases.push_back(NumericMatchCase{
           .value = *numeric, .action = match_case.action.get(), .line = match_case.line});
     }
   }
   if (cases.empty())
     return false;
+  if (!context.preserve_dispatch_case_order) {
+    OrderedNumericMatchCases ordered = order_numeric_match_cases_for_residual(cases);
+    if (ordered.reordered > 0) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "dispatch-case-ordering",
+          .detail = "Reordered " + std::to_string(ordered.reordered) +
+                    " numeric dispatch case" + (ordered.reordered == 1 ? "" : "s") +
+                    " to shorten residual comparisons.",
+      });
+      cases = std::move(ordered.cases);
+    }
+  }
 
   const Expression match_expr = parse_expression(*statement.expr, statement.line);
   if (!lower_expression_to_x(context, match_expr))
@@ -17559,7 +17690,7 @@ bool lower_numeric_residual_match_statement(LoweringContext& context,
   const std::string end_label = context.emitter.fresh_label("match_end");
   double compared_value = 0.0;
   bool has_compared_value = false;
-  for (const NumericCase& match_case : cases) {
+  for (const NumericMatchCase& match_case : cases) {
     const std::string next_label = context.emitter.fresh_label("match_next");
     if (!has_compared_value) {
       if (std::fabs(match_case.value) > 1e-12) {
@@ -27451,6 +27582,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.share_random_cell = options.share_random_cell;
   context.aggressive_terminal_direct = options.aggressive_terminal_direct;
   context.invert_branch_order = options.invert_branch_order;
+  context.preserve_dispatch_case_order = options.preserve_dispatch_case_order;
   context.order_procs_by_call_count = options.order_procs_by_call_count;
   context.proc_layout_strategy = options.proc_layout_strategy;
   context.fractional_constant_selectors = options.fractional_constant_selectors;
