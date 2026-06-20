@@ -119,6 +119,7 @@ add_executable(mkpro_tests
   tests/functions_test.cpp
   tests/indirect_addressing_test.cpp
   tests/indirect_selector_integer_part_test.cpp
+  tests/inline_floor_packed_row_test.cpp
   tests/ir_round_trip_test.cpp
   tests/liveness_analysis_test.cpp
   tests/lowering_helpers_test.cpp

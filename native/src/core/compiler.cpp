@@ -24701,17 +24701,48 @@ bool statement_has_materializable_display_items(const V2Statement& statement) {
          statement.items.has_value();
 }
 
+bool can_inline_floor_packed_row_display_expression(const V2Program& program,
+                                                    const V2Statement& statement,
+                                                    std::size_t index) {
+  if (!statement_has_materializable_display_items(statement) || index != 2U ||
+      statement.items->size() != 3U) {
+    return false;
+  }
+  const DisplayItem& floor = statement.items->at(0);
+  const DisplayItem& separator = statement.items->at(1);
+  const DisplayItem& row = statement.items->at(2);
+  if (floor.kind != "source" || floor.expr.has_value() || separator.kind != "literal" ||
+      separator.text != "." || row.kind != "source" || !row.expr.has_value() ||
+      row.width.has_value()) {
+    return false;
+  }
+  const auto floor_it =
+      std::find_if(program.state.begin(), program.state.end(),
+                   [&](const V2StateField& field) { return field.name == floor.name; });
+  if (floor_it == program.state.end())
+    return false;
+  const int floor_min = floor_it->min.value_or(0);
+  const int floor_max = floor_it->max.value_or(floor_min);
+  const int floor_width = floor.width.value_or(std::max(
+      1,
+      static_cast<int>(std::to_string(std::max(std::abs(floor_min), std::abs(floor_max))).size())));
+  return floor_width == 1 && floor_min >= 0 && floor_max <= 9;
+}
+
 std::vector<V2Statement> materialize_display_expression_statements(
-    std::vector<V2Statement> statements, int& materialized, int& residual_elisions,
+    const V2Program& program, std::vector<V2Statement> statements, int& materialized,
+    int& residual_elisions, bool inline_floor_packed_row_expressions,
     const std::optional<Expression>& first_statement_residual_elision = std::nullopt);
 
-void materialize_display_expression_child(V2StatementPtr& child, int& materialized,
-                                          int& residual_elisions) {
+void materialize_display_expression_child(const V2Program& program, V2StatementPtr& child,
+                                          int& materialized, int& residual_elisions,
+                                          bool inline_floor_packed_row_expressions) {
   if (child == nullptr)
     return;
   std::vector<V2Statement> statements{*child};
-  statements = materialize_display_expression_statements(std::move(statements), materialized,
-                                                         residual_elisions);
+  statements = materialize_display_expression_statements(program, std::move(statements),
+                                                         materialized, residual_elisions,
+                                                         inline_floor_packed_row_expressions);
   if (!statements.empty())
     *child = statements.size() == 1U ? std::move(statements.front())
                                      : V2Statement{
@@ -24722,7 +24753,8 @@ void materialize_display_expression_child(V2StatementPtr& child, int& materializ
 }
 
 std::vector<V2Statement> materialize_display_expression_statements(
-    std::vector<V2Statement> statements, int& materialized, int& residual_elisions,
+    const V2Program& program, std::vector<V2Statement> statements, int& materialized,
+    int& residual_elisions, bool inline_floor_packed_row_expressions,
     const std::optional<Expression>& first_statement_residual_elision) {
   std::vector<V2Statement> result;
   result.reserve(statements.size());
@@ -24734,15 +24766,20 @@ std::vector<V2Statement> materialize_display_expression_statements(
 
     const std::optional<Expression> else_residual_elision =
         residual_expression_for_guarded_update_display(statement);
-    statement.body = materialize_display_expression_statements(std::move(statement.body),
-                                                               materialized, residual_elisions);
+    statement.body = materialize_display_expression_statements(program, std::move(statement.body),
+                                                               materialized, residual_elisions,
+                                                               inline_floor_packed_row_expressions);
     statement.then_body = materialize_display_expression_statements(
-        std::move(statement.then_body), materialized, residual_elisions);
+        program, std::move(statement.then_body), materialized, residual_elisions,
+        inline_floor_packed_row_expressions);
     statement.else_body = materialize_display_expression_statements(
-        std::move(statement.else_body), materialized, residual_elisions, else_residual_elision);
+        program, std::move(statement.else_body), materialized, residual_elisions,
+        inline_floor_packed_row_expressions, else_residual_elision);
     for (V2MatchCase& match_case : statement.cases)
-      materialize_display_expression_child(match_case.action, materialized, residual_elisions);
-    materialize_display_expression_child(statement.otherwise, materialized, residual_elisions);
+      materialize_display_expression_child(program, match_case.action, materialized,
+                                           residual_elisions, inline_floor_packed_row_expressions);
+    materialize_display_expression_child(program, statement.otherwise, materialized,
+                                         residual_elisions, inline_floor_packed_row_expressions);
 
     std::vector<V2Statement> assignments;
     if (elide_display_materialization) {
@@ -24752,6 +24789,10 @@ std::vector<V2Statement> materialize_display_expression_statements(
         DisplayItem& item = statement.items->at(index);
         if (item.kind != "source" || !item.expr.has_value())
           continue;
+        if (inline_floor_packed_row_expressions &&
+            can_inline_floor_packed_row_display_expression(program, statement, index)) {
+          continue;
+        }
         const std::string target = display_expression_target_name(statement, index);
         assignments.push_back(V2Statement{
             .kind = "v2_assign",
@@ -24771,14 +24812,17 @@ std::vector<V2Statement> materialize_display_expression_statements(
 }
 
 void materialize_display_expressions(V2Program& program,
-                                     std::vector<OptimizationReport>& optimizations) {
+                                     std::vector<OptimizationReport>& optimizations,
+                                     bool inline_floor_packed_row_expressions) {
   int materialized = 0;
   int residual_elisions = 0;
-  program.body = materialize_display_expression_statements(std::move(program.body), materialized,
-                                                           residual_elisions);
+  program.body = materialize_display_expression_statements(program, std::move(program.body),
+                                                           materialized, residual_elisions,
+                                                           inline_floor_packed_row_expressions);
   for (V2Rule& rule : program.rules)
-    rule.body = materialize_display_expression_statements(std::move(rule.body), materialized,
-                                                          residual_elisions);
+    rule.body = materialize_display_expression_statements(program, std::move(rule.body),
+                                                          materialized, residual_elisions,
+                                                          inline_floor_packed_row_expressions);
   if (residual_elisions > 0) {
     optimizations.push_back(OptimizationReport{
         .name = "residual-display-materialization-elision",
@@ -25954,7 +25998,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                     "-digit MK-61 program.",
       });
     } else {
-      materialize_display_expressions(*ast.v2, context.optimizations);
+      materialize_display_expressions(*ast.v2, context.optimizations,
+                                      options.inline_floor_packed_row_expressions);
       elide_x_param_return_state_fields(*ast.v2, context.optimizations);
       elide_loop_carried_prompt_state_fields(context, *ast.v2);
       elide_terminal_loop_header_shows(*ast.v2, context.optimizations);
