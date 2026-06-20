@@ -8,6 +8,7 @@
 #include <iterator>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace mkpro::tests {
 
@@ -45,6 +46,14 @@ std::size_t optimization_count(const CompileResult& result, const std::string& n
   return static_cast<std::size_t>(
       std::count_if(result.optimizations.begin(), result.optimizations.end(),
                     [&](const OptimizationReport& item) { return item.name == name; }));
+}
+
+std::vector<std::string> step_comments(const CompileResult& result) {
+  std::vector<std::string> comments;
+  comments.reserve(result.steps.size());
+  for (const ResolvedStep& step : result.steps)
+    comments.push_back(step.comment.value_or(""));
+  return comments;
 }
 
 } // namespace
@@ -2222,6 +2231,48 @@ program FormulaHelpers {
     require(formula_helpers.hex.find(opcode) != std::string::npos,
             "packed-grid formula helpers should emit opcode " + opcode);
   }
+
+  const CompileResult grid_cell_mask_cse = compile_source(R"mkpro(
+program GridCellMaskCse {
+  state {
+    x: counter 1..4 = 1
+    y: counter 1..4 = 2
+    occupied: packed = 0
+    hit: flag = 0
+  }
+  loop {
+    hit = cell_has(occupied, x, y)
+    occupied = cell_set(occupied, x, y)
+    halt(hit + occupied)
+  }
+}
+)mkpro",
+                                                        formula_helper_options);
+  require(grid_cell_mask_cse.implemented,
+          "native compiler should reuse grid cell masks across adjacent helpers");
+  require(grid_cell_mask_cse.diagnostics.empty(),
+          "grid cell mask CSE compile should not report diagnostics");
+  require(has_optimization(grid_cell_mask_cse, "grid-cell-mask-cse"),
+          "grid cell mask CSE should report the TS strategy name");
+  require(has_optimization(grid_cell_mask_cse, "mask-stack-op-reuse"),
+          "grid cell mask CSE should report stack mask reuse");
+  const std::vector<std::string> grid_cell_comments = step_comments(grid_cell_mask_cse);
+  const auto grid_scratch_it =
+      std::find(grid_cell_comments.begin(), grid_cell_comments.end(), "grid cell mask scratch");
+  const auto grid_has_it =
+      std::find(grid_cell_comments.begin(), grid_cell_comments.end(), "cell_has with reused mask");
+  require(grid_scratch_it != grid_cell_comments.end(),
+          "grid cell mask CSE should store the scratch mask");
+  require(grid_has_it != grid_cell_comments.end(),
+          "grid cell mask CSE should use the scratch mask for cell_has");
+  require(grid_has_it > grid_scratch_it,
+          "grid cell mask CSE should build the scratch before cell_has");
+  require(std::count(grid_cell_comments.begin(), grid_cell_comments.end(),
+                     "reuse grid cell mask") == 1,
+          "grid cell mask CSE should recall the scratch mask once for cell_set");
+  require(std::count(grid_cell_comments.begin(), grid_cell_comments.end(),
+                     "cell_set with reused mask") == 1,
+          "grid cell mask CSE should use the scratch mask for cell_set");
 
   const CompileResult bounded_random_call = compile_source(R"mkpro(
 program BoundedRandomCalls {

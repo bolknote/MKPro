@@ -27,6 +27,7 @@
 #include <cmath>
 #include <functional>
 #include <iomanip>
+#include <initializer_list>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -16931,6 +16932,100 @@ bool emit_mask_membership_test_with_scratch(LoweringContext& context,
   return true;
 }
 
+struct GridCellHelperCall {
+  std::string name;
+  Expression mask;
+  Expression x;
+  Expression y;
+};
+
+std::optional<GridCellHelperCall> match_grid_cell_helper_call(
+    const Expression& expression, std::initializer_list<std::string_view> names) {
+  if (expression.kind != "call" || expression.args.size() != 3U)
+    return std::nullopt;
+  const std::string name = lower_ascii(expression.callee);
+  const bool accepted = std::any_of(names.begin(), names.end(), [&](std::string_view candidate) {
+    return name == candidate;
+  });
+  if (!accepted)
+    return std::nullopt;
+  return GridCellHelperCall{
+      .name = name,
+      .mask = expression.args.at(0),
+      .x = expression.args.at(1),
+      .y = expression.args.at(2),
+  };
+}
+
+std::string grid4_mask_scratch_name(const V2Statement& statement) {
+  return "__grid4_mask_" + std::to_string(statement.line);
+}
+
+bool lower_grid_cell_mask_reuse(LoweringContext& context, const V2Statement& first,
+                                const V2Statement& second) {
+  if (first.kind != "v2_assign" || second.kind != "v2_assign" || !first.expr.has_value() ||
+      !second.expr.has_value()) {
+    return false;
+  }
+  const std::optional<std::string> second_target = scalar_assignment_target_name(second);
+  if (!second_target.has_value())
+    return false;
+
+  const std::optional<GridCellHelperCall> used = match_grid_cell_helper_call(
+      parse_expression(*first.expr, first.line), {"cell_used", "cell_has"});
+  const std::optional<GridCellHelperCall> mark = match_grid_cell_helper_call(
+      parse_expression(*second.expr, second.line), {"cell_mark", "cell_set"});
+  if (!used.has_value() || !mark.has_value())
+    return false;
+  if (!expression_equals(used->mask, mark->mask) || !expression_equals(used->x, mark->x) ||
+      !expression_equals(used->y, mark->y) || used->mask.kind != "identifier" ||
+      *second_target != used->mask.name) {
+    return false;
+  }
+
+  const std::optional<std::string> first_target = scalar_assignment_target_name(first);
+  if (!first_target.has_value())
+    return false;
+
+  const std::string scratch = grid4_mask_scratch_name(first);
+  if (!hidden_register_available(context, scratch))
+    return false;
+  if (!ensure_hidden_register(context, scratch))
+    return false;
+
+  if (!lower_expression_to_x(context, cell_mask_expression(used->x, used->y)))
+    return false;
+  emit_store(context, scratch, "grid cell mask scratch");
+
+  emit_recall(context, used->mask.name);
+  context.emitter.emit_op(0x37, "К ∧", "cell_has with reused mask", first.line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "mask-stack-op-reuse",
+      .detail = "Kept " + scratch + " on the stack for cell_has at line " +
+                std::to_string(first.line) + ".",
+  });
+  context.emitter.emit_op(0x35, "К {x}", "cell_has membership fraction", first.line);
+  context.emitter.emit_op(0x32, "К ЗН", "cell_has to 0/1", first.line);
+  clear_current_x_facts(context);
+  emit_store(context, *first_target, "set " + *first_target);
+
+  if (!lower_expression_to_x(context, mark->mask))
+    return false;
+  emit_recall(context, scratch);
+  if (!context.emitter.items.empty())
+    context.emitter.items.back().comment = "reuse grid cell mask";
+  context.emitter.emit_op(0x38, "К ∨", "cell_set with reused mask", second.line);
+  clear_current_x_facts(context);
+  emit_store(context, *second_target, "set " + *second_target);
+
+  context.optimizations.push_back(OptimizationReport{
+      .name = "grid-cell-mask-cse",
+      .detail = "Computed cell_mask once for adjacent cell_has/cell_set at lines " +
+                std::to_string(first.line) + "/" + std::to_string(second.line) + ".",
+  });
+  return true;
+}
+
 bool emit_membership_collection_x2_test(LoweringContext& context,
                                         const MaskMembershipCondition& membership, int line) {
   if (membership.mask.kind == "identifier" && x_holds_identifier(context, membership.mask.name)) {
@@ -21801,6 +21896,13 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (index + 1U < statements.size() &&
         lower_preincrement_indexed_store(context, statements.at(index),
                                          statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
+        lower_grid_cell_mask_reuse(context, statements.at(index), statements.at(index + 1U))) {
       ++index;
       continue;
     }
