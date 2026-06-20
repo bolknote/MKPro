@@ -314,6 +314,9 @@ void expression_lowering_helpers_match_typescript_contract() {
             "eq_any() should lower to a product of differences");
     require(harness.context.emitter.items.back().comment == "expr *",
             "eq_any() should preserve product comment");
+    require(!harness.context.optimizations.empty() &&
+                harness.context.optimizations.back().name == "small-set-primitive-lowering",
+            "eq_any() should report the TS strategy name");
   }
 
   {
@@ -333,6 +336,9 @@ void expression_lowering_helpers_match_typescript_contract() {
     }
     require(saw_abs, "near_any() should lower distance through abs()");
     require(!saw_max, "single-candidate near_any() should not need max()");
+    require(!harness.context.optimizations.empty() &&
+                harness.context.optimizations.back().name == "small-set-primitive-lowering",
+            "near_any() should report the TS strategy name");
   }
 }
 

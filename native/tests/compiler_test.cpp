@@ -2154,6 +2154,8 @@ program SmallSetCalls {
           "near_any should combine multiple candidates through max()");
   require(small_set_call.listing.find("assign match") != std::string::npos,
           "eq_any should produce an assignable expression result");
+  require(has_optimization(small_set_call, "small-set-primitive-lowering"),
+          "near_any()/eq_any() should report the TS strategy name");
 
   const CompileResult bounded_random_call = compile_source(R"mkpro(
 program BoundedRandomCalls {

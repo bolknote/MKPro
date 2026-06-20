@@ -357,7 +357,13 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
         best_margin = std::move(margin);
       }
     }
-    return best_margin.has_value() && api.lower_expression_to_x(*best_margin);
+    if (!best_margin.has_value() || !api.lower_expression_to_x(*best_margin))
+      return false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "small-set-primitive-lowering",
+        .detail = "Lowered " + expression.callee + "() to coordinate-set arithmetic.",
+    });
+    return true;
   }
 
   if (callee == "eq_any") {
@@ -376,7 +382,13 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       product = binary_expression(std::move(product), "*",
                                   binary_expression(value, "-", expression.args.at(index)));
     }
-    return api.lower_expression_to_x(product);
+    if (!api.lower_expression_to_x(product))
+      return false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "small-set-primitive-lowering",
+        .detail = "Lowered " + expression.callee + "() to coordinate-set arithmetic.",
+    });
+    return true;
   }
 
   if (callee == "min") {
