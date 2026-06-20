@@ -5170,6 +5170,8 @@ void add_coord_list_line_count_assignment_scratch(RegisterCollection& collection
   add_register_variable(collection, std::string(kCoordListPointer));
   add_register_variable(collection, std::string(kCoordListCounter));
   add_register_variable(collection, std::string(kCoordListCurrent));
+  add_register_variable(collection, std::string(kCoordListDx));
+  add_register_variable(collection, "__coord_list_dy");
 }
 
 void add_coord_list_line_count_expression_scratch(RegisterCollection& collection) {
@@ -9978,6 +9980,11 @@ bool lower_coord_list_line_count_assignment(LoweringContext& context, const std:
         .detail = "Accumulated " + target + " as a packed formatted report body at line " +
                   std::to_string(source_line) + ".",
     });
+    context.pending_coord_list_line_count_formatted_report_fusion = OptimizationReport{
+        .name = "coord-list-line-count-formatted-report-fusion",
+        .detail = "Packed coord_list line_count() directly for formatted report at line " +
+                  std::to_string(source_line) + ".",
+    };
   }
   return true;
 }

@@ -112,6 +112,7 @@ struct LoweringContext {
   std::map<std::string, Expression> constants;
   std::vector<Diagnostic> diagnostics;
   std::vector<OptimizationReport> optimizations;
+  std::optional<OptimizationReport> pending_coord_list_line_count_formatted_report_fusion;
   int constant_indexed_state_resolutions = 0;
   std::optional<std::string> current_rule_name;
   bool uses_formatted_coord_report = false;

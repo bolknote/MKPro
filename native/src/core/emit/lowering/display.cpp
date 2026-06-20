@@ -1132,8 +1132,14 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
         .name = "formatted-coord-report-lowering",
         .detail = "Lowered formatted coord report as --CC-- N calculator video output.",
     });
+    if (context.pending_coord_list_line_count_formatted_report_fusion.has_value()) {
+      context.optimizations.push_back(
+          *context.pending_coord_list_line_count_formatted_report_fusion);
+      context.pending_coord_list_line_count_formatted_report_fusion.reset();
+    }
     return true;
   }
+  context.pending_coord_list_line_count_formatted_report_fusion.reset();
 
   if (api.emitter.current_x_variable != template_plan->bearing->name) {
     api.emit_recall(template_plan->bearing->name);

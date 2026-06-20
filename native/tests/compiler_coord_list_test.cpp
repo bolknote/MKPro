@@ -2,9 +2,19 @@
 
 #include "test_support.hpp"
 
+#include <algorithm>
 #include <string>
 
 namespace mkpro::tests {
+
+namespace {
+
+bool has_optimization(const CompileResult& result, const std::string& name) {
+  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                     [&](const OptimizationReport& item) { return item.name == name; });
+}
+
+} // namespace
 
 void compiler_coord_list_lowering_matches_typescript_contract() {
   const CompileResult result = compile_source(R"mkpro(
@@ -40,6 +50,40 @@ program CoordListLineCountAssignment {
           "coord_list line_count assignment should loop through the coord_list");
   require(result.listing.find("coord_list line_count result") != std::string::npos,
           "coord_list line_count assignment should leave the target value in X");
+
+  const CompileResult formatted_report = compile_source(R"mkpro(
+program FormattedCoordReportRun {
+  field: board(0..9, 0..9)
+
+  state {
+    cell: coord(field) = 58
+    foxes: coord_list(field, 1) = 0
+    bearing: counter 0..9 = 0
+  }
+
+  loop {
+    bearing = line_count(foxes, cell)
+    show("--", cell:02, "--", bearing)
+  }
+}
+)mkpro");
+
+  require(formatted_report.implemented,
+          "native compiler should lower coord_list line_count formatted reports");
+  require(formatted_report.diagnostics.empty(),
+          "coord_list formatted report compile should not report diagnostics");
+  require(formatted_report.registers.find("__coord_list_dx") != formatted_report.registers.end(),
+          "coord_list formatted report should reserve the dx scratch register");
+  require(formatted_report.registers.find("__coord_list_dy") != formatted_report.registers.end(),
+          "coord_list formatted report should reserve the dy scratch register");
+  require(has_optimization(formatted_report, "coord-list-line-count-formatted-report-body"),
+          "coord_list formatted report should report the TS packed body strategy");
+  require(has_optimization(formatted_report, "formatted-coord-report-packed-body"),
+          "coord_list formatted report should reuse the packed body in X");
+  require(has_optimization(formatted_report, "coord-list-line-count-formatted-report-fusion"),
+          "coord_list formatted report should report the TS assignment/show fusion strategy");
+  require(formatted_report.listing.find("display formatted cell scale") == std::string::npos,
+          "coord_list formatted report should not rebuild the generic formatted body");
 
   const CompileResult remove = compile_source(R"mkpro(
 program CoordListRemove {
