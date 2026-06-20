@@ -100,6 +100,7 @@ add_executable(mkpro_tests
   tests/compiler_coord_list_test.cpp
   tests/compiler_display_test.cpp
   tests/compiler_test.cpp
+  tests/counted_loop_unroll_test.cpp
   tests/constant_folding_test.cpp
   tests/cse_display_block_test.cpp
   tests/dead_code_after_halt_test.cpp

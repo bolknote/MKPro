@@ -20556,6 +20556,306 @@ int normalize_state_init_counted_loops(V2Program& program) {
   return normalized;
 }
 
+bool counted_loop_condition_holds(const std::string& op, int value, int bound) {
+  if (op == "<")
+    return value < bound;
+  if (op == "<=")
+    return value <= bound;
+  if (op == ">")
+    return value > bound;
+  if (op == ">=")
+    return value >= bound;
+  return false;
+}
+
+struct CountedLoopUpdate {
+  std::string target;
+  int step = 0;
+  int line = 0;
+};
+
+std::optional<CountedLoopUpdate> match_linear_self_update(const V2Statement& statement) {
+  if (!statement.target.has_value())
+    return std::nullopt;
+  const std::optional<std::string> target =
+      scalar_target_identifier(statement.target, statement.line);
+  if (!target.has_value())
+    return std::nullopt;
+
+  if (statement.kind == "v2_update" && statement.op.has_value() && statement.expr.has_value() &&
+      (*statement.op == "+=" || *statement.op == "-=")) {
+    const std::optional<int> value = integer_literal_value(*statement.expr, statement.line);
+    if (!value.has_value())
+      return std::nullopt;
+    return CountedLoopUpdate{
+        .target = *target,
+        .step = *statement.op == "+=" ? *value : -*value,
+        .line = statement.line,
+    };
+  }
+
+  if (statement.kind != "v2_assign" || !statement.expr.has_value())
+    return std::nullopt;
+
+  const Expression expression = parse_expression(*statement.expr, statement.line);
+  if (expression.kind != "binary" || (expression.op != "+" && expression.op != "-") ||
+      expression.left == nullptr || expression.right == nullptr) {
+    return std::nullopt;
+  }
+
+  std::optional<int> step;
+  if (expression.left->kind == "identifier" && expression.left->name == *target) {
+    step = integer_value_of_parsed_expression_without_constants(*expression.right);
+  } else if (expression.op == "+" && expression.right->kind == "identifier" &&
+             expression.right->name == *target) {
+    step = integer_value_of_parsed_expression_without_constants(*expression.left);
+  }
+  if (!step.has_value())
+    return std::nullopt;
+
+  return CountedLoopUpdate{
+      .target = *target,
+      .step = expression.op == "-" ? -*step : *step,
+      .line = statement.line,
+  };
+}
+
+bool vector_contains_target(const std::vector<CountedLoopUpdate>& updates,
+                            const std::string& target) {
+  return std::any_of(updates.begin(), updates.end(),
+                     [&](const CountedLoopUpdate& update) { return update.target == target; });
+}
+
+void collect_scalar_writes(const std::vector<V2Statement>& statements,
+                           const std::map<std::string, const V2Rule*>& rules,
+                           std::set<std::string>& out, std::set<std::string>& seen_rules);
+
+void collect_scalar_writes_from_statement(const V2Statement& statement,
+                                          const std::map<std::string, const V2Rule*>& rules,
+                                          std::set<std::string>& out,
+                                          std::set<std::string>& seen_rules) {
+  if ((statement.kind == "v2_assign" || statement.kind == "v2_update" ||
+       statement.kind == "v2_read") &&
+      statement.target.has_value()) {
+    if (const std::optional<std::string> target =
+            scalar_target_identifier(statement.target, statement.line)) {
+      out.insert(*target);
+    }
+  }
+
+  if (statement.kind == "v2_loop" || statement.kind == "v2_while" || statement.kind == "v2_block") {
+    collect_scalar_writes(statement.body, rules, out, seen_rules);
+  }
+  if (statement.kind == "v2_if") {
+    collect_scalar_writes(statement.then_body, rules, out, seen_rules);
+    collect_scalar_writes(statement.else_body, rules, out, seen_rules);
+  }
+  if (statement.kind == "v2_match") {
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr)
+        collect_scalar_writes_from_statement(*match_case.action, rules, out, seen_rules);
+    }
+    if (statement.otherwise != nullptr)
+      collect_scalar_writes_from_statement(*statement.otherwise, rules, out, seen_rules);
+  }
+  if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+      !seen_rules.contains(*statement.name)) {
+    seen_rules.insert(*statement.name);
+    const auto rule_it = rules.find(*statement.name);
+    if (rule_it != rules.end())
+      collect_scalar_writes(rule_it->second->body, rules, out, seen_rules);
+  }
+}
+
+void collect_scalar_writes(const std::vector<V2Statement>& statements,
+                           const std::map<std::string, const V2Rule*>& rules,
+                           std::set<std::string>& out, std::set<std::string>& seen_rules) {
+  for (const V2Statement& statement : statements)
+    collect_scalar_writes_from_statement(statement, rules, out, seen_rules);
+}
+
+std::optional<std::vector<V2Statement>>
+build_counted_loop_unroll(const V2Statement& loop, std::vector<V2Statement>& preceding,
+                          const std::map<std::string, const V2Rule*>& rules) {
+  constexpr int kMaxTripCount = 8;
+  if (loop.kind != "v2_while" || !loop.predicate.has_value() ||
+      loop.predicate->kind != "v2_compare")
+    return std::nullopt;
+
+  Expression left;
+  try {
+    left = parse_expression(loop.predicate->left, loop.line);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  if (left.kind != "identifier")
+    return std::nullopt;
+
+  const std::string condition_var = left.name;
+  const std::optional<int> bound = integer_literal_value(loop.predicate->right, loop.line);
+  if (!bound.has_value())
+    return std::nullopt;
+  if (loop.predicate->op != "<" && loop.predicate->op != "<=")
+    return std::nullopt;
+
+  std::vector<CountedLoopUpdate> prefix_updates;
+  for (const V2Statement& statement : loop.body) {
+    const std::optional<CountedLoopUpdate> update = match_linear_self_update(statement);
+    if (!update.has_value())
+      break;
+    if (vector_contains_target(prefix_updates, update->target))
+      break;
+    prefix_updates.push_back(*update);
+  }
+  if (!vector_contains_target(prefix_updates, condition_var))
+    return std::nullopt;
+
+  std::map<std::string, int> entry_values;
+  for (std::size_t cursor = preceding.size(); cursor > 0; --cursor) {
+    const V2Statement& statement = preceding.at(cursor - 1U);
+    if (statement.kind != "v2_assign" || !statement.target.has_value() ||
+        !statement.expr.has_value())
+      break;
+    const std::optional<std::string> target =
+        scalar_target_identifier(statement.target, statement.line);
+    if (!target.has_value())
+      break;
+    const std::optional<int> value = integer_literal_value(*statement.expr, statement.line);
+    if (!value.has_value())
+      break;
+    if (!entry_values.contains(*target))
+      entry_values[*target] = *value;
+  }
+  if (std::any_of(
+          prefix_updates.begin(), prefix_updates.end(),
+          [&](const CountedLoopUpdate& update) { return !entry_values.contains(update.target); })) {
+    return std::nullopt;
+  }
+
+  const std::vector<V2Statement> rest(
+      loop.body.begin() + static_cast<std::ptrdiff_t>(prefix_updates.size()), loop.body.end());
+  std::set<std::string> rest_writes;
+  std::set<std::string> seen_rules;
+  collect_scalar_writes(rest, rules, rest_writes, seen_rules);
+  if (std::any_of(
+          prefix_updates.begin(), prefix_updates.end(),
+          [&](const CountedLoopUpdate& update) { return rest_writes.contains(update.target); })) {
+    return std::nullopt;
+  }
+
+  std::vector<std::map<std::string, int>> iterations;
+  std::map<std::string, int> current;
+  for (const CountedLoopUpdate& update : prefix_updates)
+    current[update.target] = entry_values.at(update.target);
+  while (counted_loop_condition_holds(loop.predicate->op, current.at(condition_var), *bound)) {
+    for (const CountedLoopUpdate& update : prefix_updates)
+      current[update.target] = current.at(update.target) + update.step;
+    iterations.push_back(current);
+    if (iterations.size() > static_cast<std::size_t>(kMaxTripCount))
+      return std::nullopt;
+  }
+  if (iterations.empty())
+    return std::nullopt;
+
+  std::vector<V2Statement> replacement;
+  for (const std::map<std::string, int>& iteration : iterations) {
+    for (const CountedLoopUpdate& update : prefix_updates) {
+      V2Statement assignment;
+      assignment.kind = "v2_assign";
+      assignment.target = update.target;
+      assignment.expr = std::to_string(iteration.at(update.target));
+      assignment.line = update.line;
+      replacement.push_back(std::move(assignment));
+    }
+    replacement.insert(replacement.end(), rest.begin(), rest.end());
+  }
+
+  while (!preceding.empty()) {
+    const V2Statement& last = preceding.back();
+    if (last.kind != "v2_assign" || !last.target.has_value() || !last.expr.has_value())
+      break;
+    const std::optional<std::string> target = scalar_target_identifier(last.target, last.line);
+    if (!target.has_value() || !vector_contains_target(prefix_updates, *target))
+      break;
+    if (!integer_literal_value(*last.expr, last.line).has_value())
+      break;
+    preceding.pop_back();
+  }
+  return replacement;
+}
+
+V2Statement unroll_counted_loop_statement(V2Statement statement,
+                                          const std::map<std::string, const V2Rule*>& rules,
+                                          int& unrolled);
+
+void unroll_counted_loop_action(V2StatementPtr& action,
+                                const std::map<std::string, const V2Rule*>& rules, int& unrolled) {
+  if (action != nullptr)
+    *action = unroll_counted_loop_statement(std::move(*action), rules, unrolled);
+}
+
+std::vector<V2Statement>
+unroll_counted_loop_statements(std::vector<V2Statement> statements,
+                               const std::map<std::string, const V2Rule*>& rules, int& unrolled) {
+  std::vector<V2Statement> result;
+  for (V2Statement& statement : statements) {
+    V2Statement visited = unroll_counted_loop_statement(std::move(statement), rules, unrolled);
+    if (visited.kind == "v2_while") {
+      if (std::optional<std::vector<V2Statement>> replacement =
+              build_counted_loop_unroll(visited, result, rules)) {
+        ++unrolled;
+        result.insert(result.end(), replacement->begin(), replacement->end());
+        continue;
+      }
+    }
+    result.push_back(std::move(visited));
+  }
+  return result;
+}
+
+V2Statement unroll_counted_loop_statement(V2Statement statement,
+                                          const std::map<std::string, const V2Rule*>& rules,
+                                          int& unrolled) {
+  if (statement.kind == "v2_loop" || statement.kind == "v2_while" || statement.kind == "v2_block") {
+    statement.body = unroll_counted_loop_statements(std::move(statement.body), rules, unrolled);
+    return statement;
+  }
+  if (statement.kind == "v2_if") {
+    statement.then_body =
+        unroll_counted_loop_statements(std::move(statement.then_body), rules, unrolled);
+    statement.else_body =
+        unroll_counted_loop_statements(std::move(statement.else_body), rules, unrolled);
+    return statement;
+  }
+  if (statement.kind == "v2_match") {
+    for (V2MatchCase& match_case : statement.cases)
+      unroll_counted_loop_action(match_case.action, rules, unrolled);
+    unroll_counted_loop_action(statement.otherwise, rules, unrolled);
+    return statement;
+  }
+  return statement;
+}
+
+void unroll_counted_loops(V2Program& program, std::vector<OptimizationReport>& optimizations) {
+  std::map<std::string, const V2Rule*> rules;
+  for (const V2Rule& rule : program.rules)
+    rules[rule.name] = &rule;
+
+  int unrolled = 0;
+  program.body = unroll_counted_loop_statements(std::move(program.body), rules, unrolled);
+  for (V2Rule& rule : program.rules)
+    rule.body = unroll_counted_loop_statements(rule.body, rules, unrolled);
+
+  if (unrolled == 0)
+    return;
+  optimizations.push_back(OptimizationReport{
+      .name = "counted-loop-unroll",
+      .detail = "Fully unrolled " + std::to_string(unrolled) + " small constant-trip counted loop" +
+                (unrolled == 1 ? "" : "s") +
+                ", replacing induction variables with per-iteration constants.",
+  });
+}
+
 std::optional<std::pair<int, int>> scalar_state_range(const V2Program& program,
                                                       const std::string& name) {
   const auto found =
@@ -25741,6 +26041,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           });
         }
       }
+      if (options.unroll_counted_loops)
+        unroll_counted_loops(*ast.v2, context.optimizations);
       context.transient_show_targets = transient_show_targets(*ast.v2);
       if (!has_errors(context.diagnostics)) {
         index_rules(context, *ast.v2);

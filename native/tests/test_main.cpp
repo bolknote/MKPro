@@ -12,6 +12,7 @@ void board_width_macros_matches_typescript_contract();
 void cfg_matches_typescript_contract();
 void compiler_coord_list_lowering_matches_typescript_contract();
 void compiler_display_lowering_matches_typescript_contract();
+void counted_loop_unroll_matches_typescript_contract();
 void constant_folding_matches_typescript_contract();
 void cse_display_block_matches_typescript_contract();
 void dead_code_after_halt_matches_typescript_contract();
@@ -94,6 +95,8 @@ int main() {
        mkpro::tests::compiler_coord_list_lowering_matches_typescript_contract},
       {"compiler_display_lowering_matches_typescript_contract",
        mkpro::tests::compiler_display_lowering_matches_typescript_contract},
+      {"counted_loop_unroll_matches_typescript_contract",
+       mkpro::tests::counted_loop_unroll_matches_typescript_contract},
       {"constant_folding_matches_typescript_contract",
        mkpro::tests::constant_folding_matches_typescript_contract},
       {"cse_display_block_matches_typescript_contract",
