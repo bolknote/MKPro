@@ -6391,6 +6391,8 @@ program PackedRowDisplay {
           "native compiler should lower floor packed-row displays");
   require(packed_row_display_statement.diagnostics.empty(),
           "floor packed-row display compile should not report diagnostics");
+  require(has_optimization(packed_row_display_statement, "floor-packed-row-display"),
+          "floor packed-row display should report the TS strategy name");
   require(packed_row_display_statement.listing.find("display packed row floor merge") !=
               std::string::npos,
           "floor packed-row display should merge the one-digit floor");
@@ -6416,6 +6418,10 @@ program PackedRowExpressionDisplay {
           "native compiler should lower floor packed-row expression displays");
   require(packed_row_expression_display_statement.diagnostics.empty(),
           "floor packed-row expression display compile should not report diagnostics");
+  require(
+      has_optimization(packed_row_expression_display_statement,
+                       "floor-packed-row-expression-display"),
+      "floor packed-row expression display should report the TS strategy name");
   require(packed_row_expression_display_statement.listing.find(
               "display packed row expression merge") != std::string::npos,
           "floor packed-row expression display should merge the computed row");

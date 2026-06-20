@@ -691,6 +691,13 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
   api.emitter.emit_op(0x25, "F reverse", "display packed row preserve", source_line);
   api.emitter.emit_op(0x0c, "ВП", "display packed row restore", source_line);
   api.emitter.emit_op(0x50, "С/П", "show packed row", source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = row.expr.has_value() ? "floor-packed-row-expression-display"
+                                   : "floor-packed-row-display",
+      .detail = row.expr.has_value()
+                    ? "Spliced one-digit floor into a packed row expression display."
+                    : "Spliced one-digit floor into a packed row display.",
+  });
   return true;
 }
 
