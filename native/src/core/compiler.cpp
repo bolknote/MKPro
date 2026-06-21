@@ -10,6 +10,7 @@
 #include "mkpro/core/emit/stack_residency_analysis.hpp"
 #include "mkpro/core/format.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/interprocedural_dse.hpp"
 #include "mkpro/core/machine_profile.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/parser.hpp"
@@ -28047,6 +28048,17 @@ void inline_indexed_bit_report_branch_temps(V2Program& program,
   });
 }
 
+void run_interprocedural_ast_passes(const CompileOptions& options, V2Program& program,
+                                    std::vector<OptimizationReport>& optimizations) {
+  if (options.disable_interprocedural_opts)
+    return;
+  for (int pass = 0; pass < 4; ++pass) {
+    const int removed = core::eliminate_interprocedural_dead_stores(program, optimizations);
+    if (removed == 0)
+      break;
+  }
+}
+
 } // namespace
 
 CompileResult compile_source_once(std::string source, const CompileOptions& options) {
@@ -28148,12 +28160,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       inline_indexed_bit_report_branch_temps(*ast.v2, context.optimizations);
       eliminate_unobserved_state(*ast.v2, context.optimizations);
       eliminate_identity_assignments(*ast.v2, context.optimizations);
+      run_interprocedural_ast_passes(options, *ast.v2, context.optimizations);
       // TS performs dead-source residual temp reuse before common-tail hoisting.
       // Native still recognizes that shape during lowering, so keep it intact for now.
       if (!context.dead_source_residual_temp_reuse)
         hoist_common_branch_tails(*ast.v2, context.optimizations);
       if (options.guarded_prologue_gadgets)
         extract_guarded_prologue_gadgets(*ast.v2, context.optimizations);
+      run_interprocedural_ast_passes(options, *ast.v2, context.optimizations);
       index_program_metadata(context, *ast.v2);
       collect_literal_display_use_counts(context, *ast.v2);
       collect_packed_display_use_counts(context, *ast.v2);

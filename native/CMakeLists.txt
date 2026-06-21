@@ -29,6 +29,7 @@ add_library(mkpro_core STATIC
   src/core/formal_address.cpp
   src/core/format.cpp
   src/core/indirect_addressing.cpp
+  src/core/interprocedural_dse.cpp
   src/core/ir.cpp
   src/core/machine_profile.cpp
   src/core/opcodes.cpp
@@ -76,6 +77,7 @@ add_library(mkpro_core STATIC
   src/core/passes/x2_noop_restore.cpp
   src/core/post_layout_indirect_flow.cpp
   src/core/register_allocator.cpp
+  src/core/rule_cfg.cpp
   src/core/rules.cpp
   src/core/state_banks.cpp
   src/core/super_dark_layout.cpp

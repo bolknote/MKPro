@@ -2594,6 +2594,42 @@ program SingleUseGuardSubstitution {
   require(single_use_guard_substitution.listing.find("set tmp") == std::string::npos,
           "single-use guard substitution should not spill tmp");
 
+  const std::string dse_across_call_source = R"mkpro(
+program DseAcrossCall {
+  state {
+    shown: packed = 0
+    scratch: packed = 0
+  }
+
+  fn overwrite() {
+    scratch = 2
+    shown = scratch
+  }
+
+  loop {
+    scratch = 1
+    overwrite()
+    show(shown)
+  }
+}
+)mkpro";
+  const CompileResult dse_across_call = compile_source(dse_across_call_source);
+  CompileOptions no_interprocedural_dse_options;
+  no_interprocedural_dse_options.disable_interprocedural_opts = true;
+  const CompileResult dse_across_call_unoptimized =
+      compile_source(dse_across_call_source, no_interprocedural_dse_options);
+  require(dse_across_call.implemented, "native compiler should lower DSE-across-call program");
+  require(dse_across_call.diagnostics.empty(),
+          "DSE-across-call compile should not report diagnostics");
+  require(dse_across_call_unoptimized.implemented,
+          "native compiler should lower DSE-across-call program with interprocedural opts disabled");
+  require(has_optimization(dse_across_call, "interprocedural-dead-store"),
+          "interprocedural DSE should report the TS strategy name");
+  require(!has_optimization(dse_across_call_unoptimized, "interprocedural-dead-store"),
+          "disable_interprocedural_opts should suppress interprocedural DSE");
+  require(dse_across_call.steps.size() < dse_across_call_unoptimized.steps.size(),
+          "interprocedural DSE should shrink the generated program");
+
   const CompileResult read_expression_call = compile_source(R"mkpro(
 program ReadExpression {
   state {
