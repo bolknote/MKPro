@@ -95,6 +95,11 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     require(decoded.has_value() && decoded->actual_flow_target.has_value() &&
                 *decoded->actual_flow_target == 0,
             "post-layout selector preload should decode back to the final target address");
+    require(std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                        [](const core::passes::AppliedOptimization& optimization) {
+                          return optimization.name == "dark-entry-layout";
+                        }),
+            "post-layout indirect flow should report dark-entry layout for proven formal targets");
   }
 
   {
@@ -359,16 +364,19 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     MachineItem proc = MachineItem::label("finish_turn");
     proc.procedure_boundary = "start";
     std::vector<MachineItem> program = {
-        MachineItem::label("main"), MachineItem::op(0x53, "ПП"),
-        MachineItem::address("finish_turn"), MachineItem::op(0x88, "К БП 8"), proc,
-        digit(), MachineItem::op(0x52, "В/О"),
+        MachineItem::label("main"),
+        MachineItem::op(0x53, "ПП"),
+        MachineItem::address("finish_turn"),
+        MachineItem::op(0x88, "К БП 8"),
+        proc,
+        digit(),
+        MachineItem::op(0x52, "В/О"),
     };
     program.at(1).comment = "proc call finish_turn";
 
-    const core::PostLayoutIndirectFlowResult result =
-        core::optimize_post_layout_stop_tail_reuse(
-            program, {PreloadReport{
-                         .register_name = "8", .value = "B2", .counts_against_program = false}});
+    const core::PostLayoutIndirectFlowResult result = core::optimize_post_layout_stop_tail_reuse(
+        program,
+        {PreloadReport{.register_name = "8", .value = "B2", .counts_against_program = false}});
 
     require(result.applied == 1,
             "post-layout stop-tail reuse should apply empty-stack tail-call rewrite");
@@ -385,9 +393,10 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     require(result.items.at(2).kind == MachineItemKind::Address &&
                 std::get<std::string>(result.items.at(2).target) == "finish_turn",
             "empty-stack post-layout rewrite should keep the original procedure target");
-    require(std::none_of(result.items.begin(), result.items.end(), [](const MachineItem& item) {
-              return item.kind == MachineItemKind::Op && item.opcode == 0x88;
-            }),
+    require(std::none_of(result.items.begin(), result.items.end(),
+                         [](const MachineItem& item) {
+                           return item.kind == MachineItemKind::Op && item.opcode == 0x88;
+                         }),
             "empty-stack post-layout rewrite should remove the proved loop-back jump");
   }
 

@@ -79,7 +79,8 @@ struct RetargetedMachine {
   std::vector<PreloadReport> preloads;
 };
 
-std::vector<passes::AppliedOptimization> post_layout_optimizations(int applied);
+std::vector<passes::AppliedOptimization>
+post_layout_optimizations(int applied, const std::vector<PreloadReport>& preloads);
 
 bool is_direct_flow(const IrOp& op) {
   return op.kind == IrKind::Jump || op.kind == IrKind::Call || op.kind == IrKind::CondJump ||
@@ -567,9 +568,8 @@ std::set<std::string> used_registers(const std::vector<IrOp>& ops) {
   return used;
 }
 
-std::optional<std::string>
-first_spare_stable_register(const std::vector<IrOp>& ops,
-                            const std::set<std::string>& reserved = {}) {
+std::optional<std::string> first_spare_stable_register(const std::vector<IrOp>& ops,
+                                                       const std::set<std::string>& reserved = {}) {
   const std::set<std::string> used = used_registers(ops);
   for (const std::string_view candidate_view : kStableRegisters) {
     const std::string candidate(candidate_view);
@@ -927,17 +927,20 @@ apply_shifted_forward_group(const std::vector<MachineItem>& items,
   if (machine_cell_count(lowered) >= machine_cell_count(items))
     return std::nullopt;
 
+  std::vector<PreloadReport> preloads = {
+      PreloadReport{
+          .register_name = *selector,
+          .value = selector_value,
+          .counts_against_program = false,
+      },
+  };
+  std::vector<passes::AppliedOptimization> optimizations =
+      post_layout_optimizations(static_cast<int>(group->indices.size()), preloads);
+
   return PostLayoutIndirectFlowResult{
       .items = std::move(lowered),
-      .preloads =
-          {
-              PreloadReport{
-                  .register_name = *selector,
-                  .value = selector_value,
-                  .counts_against_program = false,
-              },
-          },
-      .optimizations = post_layout_optimizations(static_cast<int>(group->indices.size())),
+      .preloads = std::move(preloads),
+      .optimizations = std::move(optimizations),
       .applied = static_cast<int>(group->indices.size()),
   };
 }
@@ -998,16 +1001,15 @@ std::optional<int> first_procedure_start_address(const std::vector<MachineItem>&
   return std::nullopt;
 }
 
-std::optional<int> known_machine_indirect_jump_target(
-    const MachineItem& item, const std::vector<PreloadReport>& preloads) {
+std::optional<int> known_machine_indirect_jump_target(const MachineItem& item,
+                                                      const std::vector<PreloadReport>& preloads) {
   if (item.kind != MachineItemKind::Op)
     return std::nullopt;
   const std::optional<std::string> register_name = register_from_indirect_opcode(item.opcode);
   if (!register_name.has_value() || item.opcode - register_index(*register_name) != 0x80)
     return std::nullopt;
 
-  if (const std::optional<int> comment_target =
-          known_indirect_flow_target_comment(item.comment)) {
+  if (const std::optional<int> comment_target = known_indirect_flow_target_comment(item.comment)) {
     return comment_target;
   }
 
@@ -1015,8 +1017,8 @@ std::optional<int> known_machine_indirect_jump_target(
       preload_value_for_register(preloads, *register_name);
   if (!selector_value.has_value())
     return std::nullopt;
-  const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
-      *register_name, *selector_value, IndirectOperationKind::Flow);
+  const std::optional<IndirectAddressEvaluation> decoded =
+      evaluate_indirect_address(*register_name, *selector_value, IndirectOperationKind::Flow);
   if (!decoded.has_value())
     return std::nullopt;
   return decoded->actual_flow_target;
@@ -1380,16 +1382,39 @@ std::vector<MachineItem> apply_branch_rewrite(const std::vector<MachineItem>& it
   return result;
 }
 
-std::vector<passes::AppliedOptimization> post_layout_optimizations(int applied) {
+bool preload_targets_dark_entry(const PreloadReport& preload) {
+  const std::optional<IndirectAddressEvaluation> decoded =
+      evaluate_indirect_address(preload.register_name, preload.value, IndirectOperationKind::Flow);
+  if (!decoded.has_value() || !decoded->formal_address.has_value())
+    return false;
+  return decoded->formal_address->kind != FormalAddressKind::Official &&
+         decoded->formal_address->kind != FormalAddressKind::SuperDark;
+}
+
+std::vector<passes::AppliedOptimization>
+post_layout_optimizations(int applied, const std::vector<PreloadReport>& preloads) {
   if (applied == 0)
     return {};
-  return {
+  std::vector<passes::AppliedOptimization> optimizations = {
       passes::AppliedOptimization{
           .name = "preloaded-indirect-flow",
           .detail = "Activated post-layout: replaced " + std::to_string(applied) +
                     " direct branch/call(s) with proven preloaded indirect flow.",
       },
   };
+  const int dark_entry_applied = static_cast<int>(
+      std::count_if(preloads.begin(), preloads.end(), [](const PreloadReport& preload) {
+        return preload_targets_dark_entry(preload);
+      }));
+  if (dark_entry_applied > 0) {
+    optimizations.push_back(passes::AppliedOptimization{
+        .name = "dark-entry-layout",
+        .detail = "Pointed " + std::to_string(dark_entry_applied) +
+                  " branch(es) at an executable suffix through a proven dark-entry formal "
+                  "address (beyond the 104-cell window).",
+    });
+  }
+  return optimizations;
 }
 
 } // namespace
@@ -1446,8 +1471,7 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
             .applied = pass.applied,
         };
       }
-      if (shifted.has_value() &&
-          (!selected.has_value() || shifted->applied > selected->applied)) {
+      if (shifted.has_value() && (!selected.has_value() || shifted->applied > selected->applied)) {
         selected = shifted;
       }
     }
@@ -1468,10 +1492,12 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
     };
   }
 
+  std::vector<passes::AppliedOptimization> optimizations =
+      post_layout_optimizations(applied, preloads);
   return PostLayoutIndirectFlowResult{
       .items = std::move(current),
       .preloads = std::move(preloads),
-      .optimizations = post_layout_optimizations(applied),
+      .optimizations = std::move(optimizations),
       .applied = applied,
   };
 }
@@ -1567,8 +1593,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
       const auto removed_it = address_by_item.find(rewrite->loop_back_index);
       if (removed_it == address_by_item.end())
         break;
-      std::vector<MachineItem> candidate =
-          apply_empty_stack_tail_call_rewrite(current, *rewrite);
+      std::vector<MachineItem> candidate = apply_empty_stack_tail_call_rewrite(current, *rewrite);
       if (machine_cell_count(candidate) >= machine_cell_count(current))
         break;
       const std::optional<RetargetedMachine> retargeted =
@@ -1655,8 +1680,7 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
     optimizations.push_back(passes::AppliedOptimization{
         .name = "post-layout-empty-stack-tail-call",
         .detail = "Replaced " + std::to_string(empty_stack_tail_call_applied) +
-                  " terminal main-loop call" +
-                  (empty_stack_tail_call_applied == 1 ? "" : "s") +
+                  " terminal main-loop call" + (empty_stack_tail_call_applied == 1 ? "" : "s") +
                   " with direct jump(s) whose final В/О returns through the empty stack to the "
                   "loop head.",
     });
