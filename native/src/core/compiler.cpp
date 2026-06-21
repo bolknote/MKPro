@@ -8546,9 +8546,8 @@ std::optional<int> world_random_base(const V2World& world) {
   if (!world.position.has_value() || !world.position->encoding.has_value())
     return 1;
   const std::string encoding = *world.position->encoding;
-  if (encoding == "pier_to_ship" || encoding == "corridor_plan" ||
-      encoding == "decimal_player" || encoding == "floor_plan" ||
-      encoding == "packed_decimal_zero_run" || encoding == "row_scan")
+  if (encoding == "pier_to_ship" || encoding == "corridor_plan" || encoding == "decimal_player" ||
+      encoding == "floor_plan" || encoding == "packed_decimal_zero_run" || encoding == "row_scan")
     return 1;
   return std::nullopt;
 }
@@ -8728,14 +8727,26 @@ void collect_number_literals(const Expression& expression, std::map<std::string,
     collect_number_literals(arg, counts);
 }
 
-void collect_preload_literal_occurrence(const std::string& raw, std::set<std::string>& values,
+struct OrderedStringSet {
+  std::vector<std::string> ordered;
+  std::set<std::string> seen;
+
+  void insert(const std::string& value) {
+    if (seen.insert(value).second)
+      ordered.push_back(value);
+  }
+};
+
+template <typename ValueSet>
+void collect_preload_literal_occurrence(const std::string& raw, ValueSet& values,
                                         std::map<std::string, int>& occurrences) {
   const std::string value = normalize_number_key(raw);
   values.insert(value);
   ++occurrences[value];
 }
 
-void collect_preload_number_literals(const Expression& expression, std::set<std::string>& values,
+template <typename ValueSet>
+void collect_preload_number_literals(const Expression& expression, ValueSet& values,
                                      std::map<std::string, int>& occurrences) {
   if (expression.kind == "number") {
     const std::string value = expression.raw.empty() ? expression.text : expression.raw;
@@ -8762,8 +8773,9 @@ void collect_preload_number_literals(const Expression& expression, std::set<std:
     collect_preload_number_literals(arg, values, occurrences);
 }
 
+template <typename ValueSet>
 void collect_preload_number_literals_from_text(const std::optional<std::string>& text,
-                                               int source_line, std::set<std::string>& values,
+                                               int source_line, ValueSet& values,
                                                std::map<std::string, int>& occurrences) {
   if (!text.has_value() || trim_ascii(*text).empty())
     return;
@@ -8773,8 +8785,9 @@ void collect_preload_number_literals_from_text(const std::optional<std::string>&
   }
 }
 
+template <typename ValueSet>
 void collect_preload_number_literals_from_predicate(const std::optional<V2Predicate>& predicate,
-                                                    int source_line, std::set<std::string>& values,
+                                                    int source_line, ValueSet& values,
                                                     std::map<std::string, int>& occurrences) {
   if (!predicate.has_value())
     return;
@@ -8782,8 +8795,8 @@ void collect_preload_number_literals_from_predicate(const std::optional<V2Predic
   collect_preload_number_literals_from_text(predicate->right, source_line, values, occurrences);
 }
 
-void collect_display_literal_preload_values(const std::string& literal,
-                                            std::set<std::string>& values) {
+template <typename ValueSet>
+void collect_display_literal_preload_values(const std::string& literal, ValueSet& values) {
   if (const std::optional<LeadingZeroHexProductPlan> plan =
           leading_zero_hex_product_display_program(literal)) {
     values.insert(normalize_preload_key(plan->source_literal));
@@ -8792,8 +8805,9 @@ void collect_display_literal_preload_values(const std::string& literal,
     values.insert(normalize_preload_key(literal));
 }
 
+template <typename ValueSet>
 void collect_preload_number_literals_from_display_items(const std::vector<DisplayItem>& items,
-                                                        std::set<std::string>& values,
+                                                        ValueSet& values,
                                                         std::map<std::string, int>& occurrences) {
   if (const std::optional<std::string> literal = core::emit::collapse_literal_only_display(items))
     collect_display_literal_preload_values(*literal, values);
@@ -8803,8 +8817,9 @@ void collect_preload_number_literals_from_display_items(const std::vector<Displa
   }
 }
 
+template <typename ValueSet>
 void collect_preload_number_literals_from_statements(const std::vector<V2Statement>& statements,
-                                                     std::set<std::string>& values,
+                                                     ValueSet& values,
                                                      std::map<std::string, int>& occurrences) {
   for (const V2Statement& statement : statements) {
     if (statement.kind == "v2_stop")
@@ -8870,9 +8885,10 @@ int natural_display_width(const V2Program& program, const DisplayItem& item) {
   return 1;
 }
 
+template <typename ValueSet>
 void collect_display_scale_preload_values_from_items(const V2Program& program,
                                                      const std::vector<DisplayItem>& items,
-                                                     std::set<std::string>& values) {
+                                                     ValueSet& values) {
   bool seen_source = false;
   for (const DisplayItem& item : items) {
     if (item.kind != "source")
@@ -8887,9 +8903,9 @@ void collect_display_scale_preload_values_from_items(const V2Program& program,
   }
 }
 
+template <typename ValueSet>
 void collect_display_scale_preload_values_from_statements(
-    const V2Program& program, const std::vector<V2Statement>& statements,
-    std::set<std::string>& values) {
+    const V2Program& program, const std::vector<V2Statement>& statements, ValueSet& values) {
   for (const V2Statement& statement : statements) {
     if (statement.items.has_value())
       collect_display_scale_preload_values_from_items(program, *statement.items, values);
@@ -9036,7 +9052,7 @@ int dual_use_address_constant_preload_bonus(const std::string& value) {
 
 std::vector<std::string> collect_preload_constant_values(const V2Program& program,
                                                          bool startup_aware) {
-  std::set<std::string> values;
+  OrderedStringSet values;
   std::map<std::string, int> occurrences;
   std::map<std::string, int> weights;
   std::map<std::string, int> bonuses;
@@ -9057,6 +9073,7 @@ std::vector<std::string> collect_preload_constant_values(const V2Program& progra
     values.insert("19");
     values.insert("-99");
     values.insert("-81");
+    values.insert("0.5");
     boost("10", 5);
   }
 
@@ -9067,7 +9084,7 @@ std::vector<std::string> collect_preload_constant_values(const V2Program& progra
     collect_display_scale_preload_values_from_statements(program, rule.body, values);
   }
 
-  std::vector<std::string> ranked(values.begin(), values.end());
+  std::vector<std::string> ranked = values.ordered;
   ranked.erase(std::remove_if(ranked.begin(), ranked.end(),
                               [&](const std::string& value) {
                                 if (value == "0")
@@ -9201,8 +9218,8 @@ bool reserve_preloaded_number(LoweringContext& context, const std::string& value
     return false;
   if (context.preloaded_numbers.contains(key))
     return true;
-  for (const std::string& name : {preloaded_number_name(key), legacy_preloaded_number_name(key),
-                                  "__display_scale_" + key}) {
+  for (const std::string& name :
+       {preloaded_number_name(key), legacy_preloaded_number_name(key), "__display_scale_" + key}) {
     if (context.registers.contains(name)) {
       context.preloaded_numbers[key] = name;
       return true;
@@ -19620,9 +19637,9 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
 
   Expression target = identifier_expression(*statement.target);
   Expression delta = parse_expression(*statement.expr, statement.line);
-  Expression update =
-      statement.op == "+=" ? add_expression(std::move(target), std::move(delta))
-                           : subtract_expression(std::move(target), std::move(delta));
+  Expression update = statement.op == "+="
+                          ? add_expression(std::move(target), std::move(delta))
+                          : subtract_expression(std::move(target), std::move(delta));
   if (!lower_expression_to_x(context, update))
     return false;
   emit_store(context, *statement.target, "set " + *statement.target);
