@@ -4776,6 +4776,7 @@ struct RegisterCollection {
   std::set<std::string> seen_state_bank_selectors;
   bool needs_line_count_scratch = false;
   bool needs_neighbor_total_scratch = false;
+  bool needs_spatial_line_progression_step = false;
 };
 
 void add_register_variable(RegisterCollection& collection, std::string name) {
@@ -5220,6 +5221,13 @@ void collect_locals_from_expression_excluding(LoweringContext& context,
         if (!expression.args.empty() && expression.args.front().kind == "identifier" &&
             !is_segmented_cells_name(context, expression.args.front().name)) {
           add_register_variable(collection, spatial_hit_scratch_name(expression.args.front().name));
+          const V2StateField* field = state_field_named(context, expression.args.front().name);
+          const auto board_it = field != nullptr && field->domain.has_value()
+                                    ? context.boards.find(*field->domain)
+                                    : context.boards.end();
+          const V2Board* board = board_it == context.boards.end() ? nullptr : board_it->second;
+          if (board != nullptr && board->width <= 4 && board->height <= 4)
+            collection.needs_spatial_line_progression_step = true;
         }
       }
     } else if (callee == "neighbor_count" && !expression.args.empty() &&
@@ -5441,6 +5449,10 @@ void add_spatial_count_scratch_registers(RegisterCollection& collection) {
 void collect_spatial_count_scratch_registers(RegisterCollection& collection) {
   if (collection.needs_line_count_scratch) {
     add_spatial_count_scratch_registers(collection);
+    if (collection.needs_spatial_line_progression_step &&
+        collection.variables.size() < core::register_order_indices().size()) {
+      add_register_variable(collection, core::emit::spatial_count_step_scratch_name());
+    }
     return;
   }
   if (collection.needs_neighbor_total_scratch)
@@ -9163,22 +9175,21 @@ bool emit_segmented_bitplane_hit_from_current_x(LoweringContext& context,
   }
 
   if (!emit_segmented_bitplane_group_dispatch(
-      context, collection, source_line, [&](int /*group*/, const std::string& plane) {
-        Expression hit =
-            bit_membership_expression(identifier_expression(plane),
-                                      identifier_expression(std::string(kSegmentedBitplaneIndex)));
-        if (!lower_expression_to_x(context, hit))
-          return false;
-        if (!context.emitter.items.empty())
-          context.emitter.items.back().comment = "segmented bitplane hit";
-        return true;
-      })) {
+          context, collection, source_line, [&](int /*group*/, const std::string& plane) {
+            Expression hit = bit_membership_expression(
+                identifier_expression(plane),
+                identifier_expression(std::string(kSegmentedBitplaneIndex)));
+            if (!lower_expression_to_x(context, hit))
+              return false;
+            if (!context.emitter.items.empty())
+              context.emitter.items.back().comment = "segmented bitplane hit";
+            return true;
+          })) {
     return false;
   }
   context.optimizations.push_back(OptimizationReport{
       .name = "segmented-bitplane-hit-helper",
-      .detail =
-          "Emitted shared hit helper for " + collection + " through four 25-cell bitplanes.",
+      .detail = "Emitted shared hit helper for " + collection + " through four 25-cell bitplanes.",
   });
   return true;
 }
@@ -9273,8 +9284,8 @@ bool emit_selected_segmented_plane_store(LoweringContext& context, const std::st
 bool emit_segmented_bitplane_hit_with_selector(LoweringContext& context,
                                                const std::string& collection,
                                                const std::string& selector, int source_line) {
-  if (!lower_expression_to_x(
-          context, bit_mask_expression(identifier_expression(std::string(kSegmentedBitplaneIndex)))))
+  if (!lower_expression_to_x(context, bit_mask_expression(identifier_expression(
+                                          std::string(kSegmentedBitplaneIndex)))))
     return false;
   if (!emit_selected_segmented_plane_recall(context, selector, "segmented bitplane selected plane",
                                             source_line))
@@ -9284,8 +9295,8 @@ bool emit_segmented_bitplane_hit_with_selector(LoweringContext& context,
   context.emitter.emit_op(0x32, "К ЗН", "segmented bitplane hit to count", source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "segmented-bitplane-hit-indirect-helper",
-      .detail = "Emitted shared hit helper for " + collection +
-                " with one indirect selected plane.",
+      .detail =
+          "Emitted shared hit helper for " + collection + " with one indirect selected plane.",
   });
   return true;
 }
@@ -9681,6 +9692,27 @@ std::string spatial_sum_helper_label(LoweringContext& context, const std::string
   return label;
 }
 
+std::string spatial_line_progression_helper_label(LoweringContext& context, const std::string& mask,
+                                                  const Expression& cell,
+                                                  const std::string& operation) {
+  const std::string counter = spatial_count_counter_name(context);
+  const std::string key = operation + ":" + mask + ":" + expression_to_json(cell) + ":" + counter;
+  const auto existing = context.spatial_line_progression_helper_labels.find(key);
+  if (existing != context.spatial_line_progression_helper_labels.end())
+    return existing->second;
+  const std::string label = context.emitter.fresh_label("__spatial_line_" + operation + "_" + mask);
+  context.spatial_line_progression_helper_labels[key] = label;
+  context.spatial_line_progression_helpers.push_back(SpatialLineProgressionHelperRequest{
+      .key = key,
+      .label = label,
+      .mask = mask,
+      .cell = cell,
+      .counter = counter,
+      .operation = operation,
+  });
+  return label;
+}
+
 bool lower_expression_with_stack_carried_left_literal(LoweringContext& context,
                                                       const Expression& expression,
                                                       int carried_literal) {
@@ -9710,12 +9742,50 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
   if (mask.kind != "identifier")
     return false;
   const V2Board* board = board_for_cells_mask(context, mask);
-  if (board == nullptr || (board->width <= 4 && board->height <= 4))
+  if (board == nullptr)
     return false;
   if (!ensure_spatial_count_registers(context))
     return false;
   if (context.segmented_line_count_scan && is_segmented_cells_name(context, mask.name) &&
       lower_segmented_bitplane_line_count_scan_to_x(context, mask.name, cell, 0)) {
+    return true;
+  }
+  if (!is_segmented_cells_name(context, mask.name) && board->width <= 4 && board->height <= 4) {
+    const std::string step = core::emit::spatial_count_step_scratch_name();
+    if (!ensure_hidden_register(context, step))
+      return false;
+    if (context.emitter.current_x_known_zero) {
+      context.emitter.current_x_known_zero = false;
+    } else {
+      context.emitter.emit_number("0");
+    }
+    emit_store(context, core::emit::spatial_count_total_scratch_name(), "line_count total");
+    const std::string helper =
+        spatial_line_progression_helper_label(context, mask.name, cell, "line_count");
+    for (const SpatialProgression& progression : spatial_line_progressions(*board, cell)) {
+      context.emitter.emit_number("0");
+      emit_store(context, core::emit::spatial_count_line_scratch_name(), "line_count current line");
+      if (!lower_expression_to_x(context, progression.start_offset))
+        return false;
+      emit_store(context, core::emit::spatial_count_offset_scratch_name(), "line_count offset");
+      if (!lower_expression_to_x(context, progression.step))
+        return false;
+      emit_store(context, step, "line_count step");
+      emit_number_or_preload(context, std::to_string(progression.count), "line_count counter");
+      emit_store(context, spatial_count_counter_name(context), "line_count counter");
+      context.emitter.emit_jump(0x53, "ПП", helper, "line_count line progression");
+      emit_recall(context, core::emit::spatial_count_total_scratch_name());
+      emit_recall(context, core::emit::spatial_count_line_scratch_name());
+      context.emitter.emit_op(0x36, "К max", "line_count best line");
+      emit_store(context, core::emit::spatial_count_total_scratch_name(), "line_count total");
+    }
+    emit_recall(context, core::emit::spatial_count_total_scratch_name());
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "line_count result";
+    context.optimizations.push_back(OptimizationReport{
+        .name = "spatial-line-progression-helper-call",
+        .detail = "Reused shared line_count line progression helper for " + mask.name + ".",
+    });
     return true;
   }
 
@@ -14179,9 +14249,11 @@ bool lower_cells_contains_false_branch_with_spatial_hit_helper(
   return true;
 }
 
-bool lower_segmented_bitplane_condition_false_branch(
-    LoweringContext& context, const V2Predicate& predicate, const std::string& false_label,
-    int source_line, std::optional<std::string> branch_comment) {
+bool lower_segmented_bitplane_condition_false_branch(LoweringContext& context,
+                                                     const V2Predicate& predicate,
+                                                     const std::string& false_label,
+                                                     int source_line,
+                                                     std::optional<std::string> branch_comment) {
   if (predicate.kind != "v2_compare" ||
       !is_zero_expression(context, parse_expression(predicate.right, source_line)))
     return false;
@@ -17815,8 +17887,7 @@ struct OptimizedMatchDefaultCases {
 bool later_match_case_has_numeric_value(LoweringContext& context,
                                         const std::vector<V2MatchCase>& cases,
                                         std::size_t current_case_index, double value) {
-  for (std::size_t case_index = current_case_index + 1U; case_index < cases.size();
-       ++case_index) {
+  for (std::size_t case_index = current_case_index + 1U; case_index < cases.size(); ++case_index) {
     const V2MatchCase& later_case = cases.at(case_index);
     for (const std::string& later_value_text : later_case.values) {
       const std::optional<double> later_value =
@@ -17849,10 +17920,11 @@ OptimizedMatchDefaultCases optimize_match_default_cases(LoweringContext& context
     V2MatchCase kept_case = match_case;
     kept_case.values.clear();
     for (const std::string& value_text : match_case.values) {
-      const std::optional<double> numeric = numeric_match_value(context, value_text, match_case.line);
-      const bool can_remove = numeric.has_value() && case_matches_default &&
-                              !later_match_case_has_numeric_value(context, statement.cases,
-                                                                  case_index, *numeric);
+      const std::optional<double> numeric =
+          numeric_match_value(context, value_text, match_case.line);
+      const bool can_remove =
+          numeric.has_value() && case_matches_default &&
+          !later_match_case_has_numeric_value(context, statement.cases, case_index, *numeric);
       if (can_remove) {
         result.removed += 1;
       } else {
@@ -17889,15 +17961,13 @@ match_dispatch_residual_sign_expression(LoweringContext& context, const Expressi
   if (expression.kind == "binary" && expression.op == "*" && expression.left != nullptr &&
       expression.right != nullptr) {
     if (std::optional<DispatchResidualSignMatch> left =
-            match_dispatch_residual_sign_expression(context, *expression.left,
-                                                    dispatch_expression);
+            match_dispatch_residual_sign_expression(context, *expression.left, dispatch_expression);
         left.has_value() && numeric_expression_value(context, *expression.right).has_value()) {
       left->factor = *expression.right;
       return left;
     }
-    if (std::optional<DispatchResidualSignMatch> right =
-            match_dispatch_residual_sign_expression(context, *expression.right,
-                                                    dispatch_expression);
+    if (std::optional<DispatchResidualSignMatch> right = match_dispatch_residual_sign_expression(
+            context, *expression.right, dispatch_expression);
         right.has_value() && numeric_expression_value(context, *expression.left).has_value()) {
       right->factor = *expression.left;
       return right;
@@ -18062,26 +18132,26 @@ std::vector<std::size_t> best_residual_dispatch_order(const std::vector<NumericM
   std::set<std::size_t> used;
   std::vector<std::size_t> order;
 
-  std::function<void(std::optional<double>, int)> visit =
-      [&](std::optional<double> previous, int cost) {
-        if (cost >= best_cost)
-          return;
-        if (order.size() == cases.size()) {
-          best_cost = cost;
-          best = order;
-          return;
-        }
-        for (std::size_t index = 0; index < cases.size(); ++index) {
-          if (used.contains(index))
-            continue;
-          used.insert(index);
-          order.push_back(index);
-          const double value = cases.at(index).value;
-          visit(value, cost + residual_dispatch_step_cost(previous, value));
-          order.pop_back();
-          used.erase(index);
-        }
-      };
+  std::function<void(std::optional<double>, int)> visit = [&](std::optional<double> previous,
+                                                              int cost) {
+    if (cost >= best_cost)
+      return;
+    if (order.size() == cases.size()) {
+      best_cost = cost;
+      best = order;
+      return;
+    }
+    for (std::size_t index = 0; index < cases.size(); ++index) {
+      if (used.contains(index))
+        continue;
+      used.insert(index);
+      order.push_back(index);
+      const double value = cases.at(index).value;
+      visit(value, cost + residual_dispatch_step_cost(previous, value));
+      order.pop_back();
+      used.erase(index);
+    }
+  };
   visit(std::nullopt, 0);
   if (current_cost - best_cost < 3)
     return current;
@@ -18093,8 +18163,8 @@ struct OrderedNumericMatchCases {
   int reordered = 0;
 };
 
-OrderedNumericMatchCases order_numeric_match_cases_for_residual(
-    const std::vector<NumericMatchCase>& cases) {
+OrderedNumericMatchCases
+order_numeric_match_cases_for_residual(const std::vector<NumericMatchCase>& cases) {
   std::vector<std::size_t> order = best_residual_dispatch_order(cases);
   if (order_is_identity(order))
     order = zero_first_dispatch_order(cases);
@@ -18133,9 +18203,8 @@ bool lower_numeric_residual_match_statement(LoweringContext& context,
     if (ordered.reordered > 0) {
       context.optimizations.push_back(OptimizationReport{
           .name = "dispatch-case-ordering",
-          .detail = "Reordered " + std::to_string(ordered.reordered) +
-                    " numeric dispatch case" + (ordered.reordered == 1 ? "" : "s") +
-                    " to shorten residual comparisons.",
+          .detail = "Reordered " + std::to_string(ordered.reordered) + " numeric dispatch case" +
+                    (ordered.reordered == 1 ? "" : "s") + " to shorten residual comparisons.",
       });
       cases = std::move(ordered.cases);
     }
@@ -18195,8 +18264,7 @@ bool lower_match_statement(LoweringContext& context, const V2Statement& statemen
     context.optimizations.push_back(OptimizationReport{
         .name = "dispatch-default-merge",
         .detail = "Removed " + std::to_string(optimized.removed) + " dispatch case" +
-                  (optimized.removed == 1 ? "" : "s") +
-                  " whose body matched the default branch.",
+                  (optimized.removed == 1 ? "" : "s") + " whose body matched the default branch.",
     });
   }
   const V2Statement& lowered_statement = optimized.statement;
@@ -24077,24 +24145,20 @@ Expression substitute_expression_identifier(const Expression& expression, const 
 
   Expression result = expression;
   if (expression.index != nullptr) {
-    result.index =
-        std::make_shared<Expression>(substitute_expression_identifier(*expression.index, name,
-                                                                      replacement));
+    result.index = std::make_shared<Expression>(
+        substitute_expression_identifier(*expression.index, name, replacement));
   }
   if (expression.expr != nullptr) {
-    result.expr =
-        std::make_shared<Expression>(substitute_expression_identifier(*expression.expr, name,
-                                                                     replacement));
+    result.expr = std::make_shared<Expression>(
+        substitute_expression_identifier(*expression.expr, name, replacement));
   }
   if (expression.left != nullptr) {
-    result.left =
-        std::make_shared<Expression>(substitute_expression_identifier(*expression.left, name,
-                                                                     replacement));
+    result.left = std::make_shared<Expression>(
+        substitute_expression_identifier(*expression.left, name, replacement));
   }
   if (expression.right != nullptr) {
-    result.right =
-        std::make_shared<Expression>(substitute_expression_identifier(*expression.right, name,
-                                                                     replacement));
+    result.right = std::make_shared<Expression>(
+        substitute_expression_identifier(*expression.right, name, replacement));
   }
   result.args.clear();
   result.args.reserve(expression.args.size());
@@ -24110,12 +24174,10 @@ std::optional<V2Predicate> substitute_predicate_identifier(const V2Predicate& pr
   try {
     V2Predicate result = predicate;
     if (predicate.kind == "v2_compare") {
-      result.left = expression_to_source(
-          substitute_expression_identifier(parse_expression(predicate.left, source_line), name,
-                                           replacement));
-      result.right = expression_to_source(
-          substitute_expression_identifier(parse_expression(predicate.right, source_line), name,
-                                           replacement));
+      result.left = expression_to_source(substitute_expression_identifier(
+          parse_expression(predicate.left, source_line), name, replacement));
+      result.right = expression_to_source(substitute_expression_identifier(
+          parse_expression(predicate.right, source_line), name, replacement));
       return result;
     }
     if (predicate.kind == "v2_contains") {
@@ -24170,8 +24232,7 @@ bool lower_guard_assignment_substitution(LoweringContext& context, const V2State
     return false;
   context.optimizations.push_back(OptimizationReport{
       .name = "single-use-guard-substitution",
-      .detail = "Substituted " + target_name +
-                " directly into the following condition at lines " +
+      .detail = "Substituted " + target_name + " directly into the following condition at lines " +
                 std::to_string(assign.line) + "/" + std::to_string(guarded.line) + ".",
   });
   return true;
@@ -25059,6 +25120,63 @@ bool lower_spatial_hit_helpers(LoweringContext& context) {
   return true;
 }
 
+bool lower_spatial_line_progression_helpers(LoweringContext& context) {
+  for (const SpatialLineProgressionHelperRequest& helper :
+       context.spatial_line_progression_helpers) {
+    context.emitter.emit_label(
+        helper.label,
+        {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
+    const std::string start = context.emitter.fresh_label(helper.operation + "_line_loop");
+    context.emitter.emit_label(start, {.hidden = true});
+
+    Expression hit_index = add_expression(
+        helper.cell, identifier_expression(core::emit::spatial_count_offset_scratch_name()));
+    if (!lower_expression_to_x(context, hit_index))
+      return false;
+    if (!emit_spatial_hit_helper_call_from_current_x(context, helper.mask, 0))
+      return false;
+    emit_recall(context, core::emit::spatial_count_line_scratch_name());
+    context.emitter.emit_op(0x10, "+", helper.operation + " add hit");
+    emit_store(context, core::emit::spatial_count_line_scratch_name(),
+               helper.operation + " line accumulator");
+
+    emit_recall(context, core::emit::spatial_count_offset_scratch_name());
+    emit_recall(context, core::emit::spatial_count_step_scratch_name());
+    context.emitter.emit_op(0x10, "+", helper.operation + " next offset");
+    emit_store(context, core::emit::spatial_count_offset_scratch_name(),
+               helper.operation + " offset");
+
+    const auto counter_it = context.register_index_by_name.find(helper.counter);
+    const std::optional<std::pair<int, std::string>> fl =
+        counter_it == context.register_index_by_name.end()
+            ? std::nullopt
+            : fl_loop_opcode_for_register(counter_it->second);
+    if (fl.has_value()) {
+      context.emitter.emit_jump(fl->first, fl->second, start, helper.operation + " line loop");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "spatial-count-fl-loop",
+          .detail =
+              "Used " + fl->second + " for " + helper.operation + " line progression loop counter.",
+      });
+    } else {
+      emit_recall(context, helper.counter);
+      context.emitter.emit_number("1");
+      context.emitter.emit_op(0x11, "-", helper.operation + " decrement");
+      emit_store(context, helper.counter, helper.operation + " counter");
+      emit_recall(context, helper.counter);
+      context.emitter.emit_jump(0x5e, "F x=0", start, helper.operation + " line loop");
+    }
+    emit_recall(context, core::emit::spatial_count_line_scratch_name());
+    context.emitter.emit_op(0x52, "В/О", helper.operation + " line progression return");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "spatial-line-progression-helper",
+        .detail = "Emitted shared " + helper.operation + " line progression helper for " +
+                  helper.mask + ".",
+    });
+  }
+  return true;
+}
+
 bool lower_spatial_sum_helpers(LoweringContext& context) {
   for (const SpatialSumHelperRequest& helper : context.spatial_sum_helpers) {
     context.emitter.emit_label(
@@ -25139,8 +25257,8 @@ bool lower_spatial_sum_helpers(LoweringContext& context) {
     context.emitter.emit_op(0x52, "В/О", helper.operation + " progression return");
     context.optimizations.push_back(OptimizationReport{
         .name = "spatial-sum-loop-helper",
-        .detail = "Emitted shared " + helper.operation + " progression helper for " +
-                  helper.mask + ".",
+        .detail =
+            "Emitted shared " + helper.operation + " progression helper for " + helper.mask + ".",
     });
   }
   return true;
@@ -28391,9 +28509,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               lower_packed_display_helpers(context) && lower_display_byte_helpers(context) &&
               lower_show_sequence_helpers(context) && lower_literal_display_helpers(context) &&
               lower_random_cell_helpers(context) && lower_expression_helpers(context) &&
-              lower_near_any_helpers(context) && lower_spatial_sum_helpers(context) &&
-              lower_spatial_hit_helpers(context) && lower_bit_mask_helper(context) &&
-              lower_packed_score_helper(context)) {
+              lower_near_any_helpers(context) && lower_spatial_line_progression_helpers(context) &&
+              lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
+              lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
           if (emitted_tail) {
@@ -29909,9 +30027,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       std::string detail;
     };
     std::vector<ExpansionSpec> semantic_bundles{
-        {[](CompileOptions& candidate_options) {
-           candidate_options.stack_resident_temps = true;
-         },
+        {[](CompileOptions& candidate_options) { candidate_options.stack_resident_temps = true; },
          "stack-resident-temps", "stack-resident temporaries"},
         {[](CompileOptions& candidate_options) {
            candidate_options.shared_bit_mask_helper_calls = true;
@@ -29943,32 +30059,32 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
          "x-param-y-stack-stored-entry", "secondary X-parameter/Y-stack procedure entries"},
     };
     if (source_may_use_bit_mask_helper(source)) {
-      semantic_bundles.push_back(ExpansionSpec{
-          [](CompileOptions& candidate_options) {
-            candidate_options.compact_bit_mask_helper_body = true;
-          },
-          "compact-bit-mask-helper-body", "compact shared bit_mask helper body"});
-      semantic_bundles.push_back(ExpansionSpec{
-          [](CompileOptions& candidate_options) {
-            candidate_options.compact_bit_mask_helper_body = true;
-            candidate_options.tail_branch_inversion = true;
-          },
-          "compact-bit-mask-helper-tail-branch",
-          "compact shared bit_mask helper body with tail-branch inversion"});
+      semantic_bundles.push_back(
+          ExpansionSpec{[](CompileOptions& candidate_options) {
+                          candidate_options.compact_bit_mask_helper_body = true;
+                        },
+                        "compact-bit-mask-helper-body", "compact shared bit_mask helper body"});
+      semantic_bundles.push_back(
+          ExpansionSpec{[](CompileOptions& candidate_options) {
+                          candidate_options.compact_bit_mask_helper_body = true;
+                          candidate_options.tail_branch_inversion = true;
+                        },
+                        "compact-bit-mask-helper-tail-branch",
+                        "compact shared bit_mask helper body with tail-branch inversion"});
     }
     if (allow_aggressive_post_layout) {
-      semantic_bundles.push_back(ExpansionSpec{
-          [](CompileOptions& candidate_options) {
-            candidate_options.dead_source_residual_temp_reuse = true;
-          },
-          "dead-source-residual-temp-reuse", "dead-source residual temp reuse"});
-      semantic_bundles.push_back(ExpansionSpec{
-          [](CompileOptions& candidate_options) {
-            candidate_options.dead_source_residual_temp_reuse = true;
-            candidate_options.tail_branch_inversion = true;
-          },
-          "dead-source-residual-tail-branch",
-          "dead-source residual temp reuse with tail-branch inversion"});
+      semantic_bundles.push_back(
+          ExpansionSpec{[](CompileOptions& candidate_options) {
+                          candidate_options.dead_source_residual_temp_reuse = true;
+                        },
+                        "dead-source-residual-temp-reuse", "dead-source residual temp reuse"});
+      semantic_bundles.push_back(
+          ExpansionSpec{[](CompileOptions& candidate_options) {
+                          candidate_options.dead_source_residual_temp_reuse = true;
+                          candidate_options.tail_branch_inversion = true;
+                        },
+                        "dead-source-residual-tail-branch",
+                        "dead-source residual temp reuse with tail-branch inversion"});
     }
 
     const std::vector<ExpansionSpec> proc_layout_modifiers{

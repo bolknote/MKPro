@@ -21,6 +21,15 @@ struct SpatialSumHelperRequest {
   std::string operation;
 };
 
+struct SpatialLineProgressionHelperRequest {
+  std::string key;
+  std::string label;
+  std::string mask;
+  Expression cell;
+  std::string counter;
+  std::string operation;
+};
+
 struct SpatialHitHelperRequest {
   std::string mask;
   std::string scratch;
@@ -152,6 +161,8 @@ struct LoweringContext {
   std::vector<std::string> spatial_hit_helper_order;
   std::map<std::string, std::string> indirect_helper_registers;
   std::vector<SpatialSumHelperRequest> spatial_sum_helpers;
+  std::map<std::string, std::string> spatial_line_progression_helper_labels;
+  std::vector<SpatialLineProgressionHelperRequest> spatial_line_progression_helpers;
   std::vector<TerminalTailHelperRequest> terminal_tail_helpers;
   std::map<std::string, int> literal_display_use_counts;
   std::map<std::string, std::string> literal_display_helper_labels;

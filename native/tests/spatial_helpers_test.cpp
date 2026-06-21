@@ -46,7 +46,7 @@ program SpatialSumLoopHelperReports {
   }
 }
 )mkpro",
-                                                  options);
+                                                   options);
   require_clean_compile(spatial_sum, "ordinary spatial sum-loop helper");
   require(has_optimization(spatial_sum, "spatial-sum-loop-helper-call"),
           "ordinary line_count should report the TS spatial sum-loop helper call");
@@ -54,6 +54,30 @@ program SpatialSumLoopHelperReports {
           "ordinary line_count should emit the TS spatial sum-loop helper");
   require(has_optimization(spatial_sum, "spatial-hit-inline"),
           "ordinary sum-loop helper should report inline spatial hit tests");
+
+  const CompileResult line_progression = compile_source(R"mkpro(
+program SpatialLineProgressionHelperReports {
+  field: board(1..4, 1..4)
+
+  state {
+    cell: coord(field)
+    marks: cells(field) = 0
+    answer: counter 0..9 = 0
+  }
+
+  loop {
+    cell = read()
+    answer = line_count(marks, cell)
+    halt(answer)
+  }
+}
+)mkpro",
+                                                        options);
+  require_clean_compile(line_progression, "ordinary spatial line-progression helper");
+  require(has_optimization(line_progression, "spatial-line-progression-helper-call"),
+          "small-board line_count should call the TS spatial line-progression helper");
+  require(has_optimization(line_progression, "spatial-line-progression-helper"),
+          "small-board line_count should emit the TS spatial line-progression helper body");
 
   CompileOptions segmented_options = options;
   segmented_options.segmented_bitplanes = true;

@@ -182,6 +182,10 @@ std::string spatial_count_counter_scratch_name() {
   return std::string(k_spatial_count_scratch_prefix) + "counter";
 }
 
+std::string spatial_count_step_scratch_name() {
+  return std::string(k_spatial_count_scratch_prefix) + "step";
+}
+
 bool is_unsigned_decimal_digits(std::string_view text) {
   return !text.empty() &&
          std::all_of(text.begin(), text.end(), [](unsigned char ch) { return std::isdigit(ch); });
