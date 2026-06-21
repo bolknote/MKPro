@@ -57,11 +57,13 @@ validation, or optimizer choices, it belongs in a comment, not in the language.
 The compiler owns implementation choices such as X2, dark entries, overlays,
 register placement, display bytes, and undocumented opcodes.
 
-The modern parser surface deliberately rejects legacy block forms and old command
-syntax in favor of `show(...)`, `read()`, `if/unless/while/match`, `loop`, and `fn` blocks.
-These rejected forms include `fleet`, `world`, `encounters`, `screen`, `turn`,
-`rule`, and `challenge` blocks, as well as bare `read X`, `show X`, `stop`, and
-`move X <dir>` statements.
+The modern parser surface uses only the current command shapes:
+`show(...)`, `preview(...)`, `halt(...)`, `name = read()`,
+`if/unless/while/match`, `loop`, `raw`, and `fn` blocks. Old command-shaped
+source such as `read X`, `show X`, `stop X`, `move X <dir>`, `screen ...`,
+`turn ...`, `rule ...`, `challenge ...`, `fleet ...`, `encounters ...`, or
+`world ...` is not a separate parser surface; it fails as ordinary invalid
+syntax instead of being kept as legacy keywords.
 
 ## Comments
 
@@ -245,7 +247,7 @@ state {
 
 Use `counter` for bounded numeric values, including consumables, scores, fuel,
 and remaining-piece counts. Use `coord(domain)` for a cell coordinate,
-`cells(domain)` for generated map, fleet, mine, wall, or encounter masks, and
+`cells(domain)` for generated map, mine, wall, or encounter masks, and
 `coord_list(domain, count)` for a fixed-size list of coordinates on a board.
 The complete canonical state set is `flag`, `counter`, `coord(domain)`,
 `cells(domain)`, `coord_list(domain, count)`, and `packed`. Register placement,
@@ -506,7 +508,7 @@ state {
 
 `board` describes the coordinate system. `cells(domain)` describes a generated
 set of occupied cells. Counters that count remaining pieces are ordinary
-`counter` fields, not hidden inside a special fleet block. This keeps games
+`counter` fields, not hidden inside a special block. This keeps games
 such as Sea Battle, Minesweeper, fox hunting, or board puzzles from pretending
 to be hallway movement games while still using the same declaration form as
 other state.
@@ -695,7 +697,7 @@ in formulas that scale the draw, for example `int(random() * 9) + 1`.
 
 `random(max)` is range sugar for `random() * max`. `random(min, max)` is range
 sugar for `min + random() * (max - min)`. `random(domain)` draws a coordinate
-from a board/world domain. The numeric upper bound is exclusive; wrap the call
+from a board domain. The numeric upper bound is exclusive; wrap the call
 in `int(...)` when a numeric range needs a whole number. `int(random(10))`
 yields `0..9`, `int(random(0, 10))` also yields `0..9`, and
 `int(random(0, 100))` yields `0..99`. Fractional bounds are allowed when a
@@ -1049,12 +1051,11 @@ the lowerer specializes those calls automatically.
 
 Statement-level actions use the same call shape as the rest of the language:
 write `apply_step(player + 1)`, because `apply_step` is a function call and
-`player + 1` is an expression. Built-in names such as `show`, `read`,
-and `halt` cannot be used as function names.
+`player + 1` is an expression. Syntax words and built-in names such as `show`,
+`read`, and `halt` cannot be used as function names.
 The full parser-reserved function-name list is:
-`challenge`, `else`, `fn`, `halt`, `if`, `loop`, `match`, `otherwise`,
-`program`, `read`, `return`, `rule`, `screen`, `state`, `stop`, `turn`,
-`world`.
+`else`, `fn`, `halt`, `if`, `loop`, `match`, `otherwise`, `program`, `read`,
+`requires`, `return`, `show`, and `state`.
 
 Current scalar lowerings are still deliberately small and auditable:
 
@@ -1067,7 +1068,7 @@ Current scalar lowerings are still deliberately small and auditable:
   hexadecimal-`Y` stack cases.
 - `random(max)` is syntax sugar for `random() * max`, `random(min, max)`
   is syntax sugar for `min + random() * (max - min)`, and `random(domain)`
-  draws a coordinate from a board/world domain. Numeric upper bounds are
+  draws a coordinate from a board domain. Numeric upper bounds are
   exclusive. `int(random(max))` and integer-min `int(random(min, max))` floor
   the scaled draw with `x - frac(x)` before adding the offset, avoiding
   `К [x]` immediately after `К СЧ`.

@@ -45,7 +45,6 @@ interface SourceLine {
 }
 
 const V2_RESERVED_RULE_NAMES = new Set([
-  "challenge",
   "else",
   "fn",
   "halt",
@@ -57,13 +56,8 @@ const V2_RESERVED_RULE_NAMES = new Set([
   "read",
   "requires",
   "return",
-  "rule",
-  "screen",
   "show",
   "state",
-  "stop",
-  "turn",
-  "world",
 ]);
 
 export class ParseError extends Error {
@@ -212,25 +206,9 @@ class MKProParser {
         continue;
       }
       if (line.text.startsWith("board ")) throw new ParseError("Board must look like 'name: board(0..9, 0..9)'", line.line);
-      if (line.text.startsWith("fleet ")) throw new ParseError("Fleet blocks were removed; declare cells and counters in state", line.line);
-      if (line.text.startsWith("world ")) {
-        throw new ParseError("Use 'name: board(encoding)' instead of world blocks", line.line);
-      }
-      if (line.text.startsWith("encounters ")) {
-        throw new ParseError("Use match blocks instead of encounters blocks", line.line);
-      }
-      if (line.text.startsWith("screen ")) {
-        throw new ParseError("Use 'fn name() { show(...) }' instead of screen blocks", line.line);
-      }
-      if (line.text === "turn {") {
-        throw new ParseError("Use 'loop {' instead of turn blocks", line.line);
-      }
       if (line.text.startsWith("fn ")) {
         rules.push(this.parseV2Rule(line.text));
         continue;
-      }
-      if (line.text.startsWith("rule ")) {
-        throw new ParseError("Use 'fn name(arg, ...) {' instead of rule blocks", line.line);
       }
       const knownStatementBlock = /^(match|if|while|loop)\b/u.test(line.text) || line.text === "raw {";
       if (line.text.startsWith("input ") || line.text.endsWith("{") && !knownStatementBlock) {
@@ -366,9 +344,6 @@ class MKProParser {
         body: this.parseV2StatementBlock(),
         line: line.line,
       };
-    }
-    if (line.text.startsWith("challenge ") && line.text.endsWith("{")) {
-      throw new ParseError("Use ordinary show/read/if statements instead of challenge blocks", line.line);
     }
     if (line.text === "raw {") {
       this.index += 1;
@@ -725,9 +700,6 @@ function parseV2InlineStatement(text: string, line: number): V2StatementAst {
   }
   if (text.startsWith("read ")) {
     throw new ParseError("Read input with 'name = read()'", line);
-  }
-  if (text.startsWith("stop ")) {
-    throw new ParseError("Use 'halt(...)' instead of stop", line);
   }
   if (text === "return" || text.startsWith("return ")) {
     const expr = text.slice("return".length).trim();

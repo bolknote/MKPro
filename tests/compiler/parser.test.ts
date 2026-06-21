@@ -345,6 +345,25 @@ program Demo {
     ]));
   });
 
+  it("allows removed legacy words as ordinary function names", () => {
+    const ast = parseProgram(`
+program Demo {
+  loop {
+    world()
+    screen()
+  }
+  fn world() {
+    screen()
+  }
+  fn screen() {
+    halt(0)
+  }
+}
+`);
+
+    expect(ast.v2?.rules.map((rule) => rule.name)).toEqual(["world", "screen"]);
+  });
+
   it("rejects unknown compact board encodings", () => {
     expect(() => parseProgram(`
 program UnknownCompactBoard {
@@ -566,7 +585,7 @@ program Bad {
   }
 }
 `),
-    ).toThrow(/Use 'fn name\(arg, \.\.\.\) \{'/u);
+    ).toThrow(/Unexpected program line 'rule step\(delta\) \{'/u);
 
     expect(() =>
       parseProgram(`
@@ -1141,7 +1160,7 @@ program Bad {
     ).toThrow(/Unexpected top-level line 'resource strength \{'/u);
   });
 
-  it("rejects removed challenge blocks", () => {
+  it("rejects challenge-shaped blocks as ordinary invalid statements", () => {
     expect(() =>
       parseProgram(`
 program Demo {
@@ -1157,7 +1176,7 @@ program Demo {
   }
 }
 `),
-    ).toThrow(/Use ordinary show\/read\/if statements instead of challenge blocks/u);
+    ).toThrow(/Function calls must look like 'name\(\.\.\.\)'/u);
   });
 
   it("rejects old input declarations and bad target references", () => {
@@ -1202,7 +1221,7 @@ program BadChallenge {
   }
 }
 `),
-    ).toThrow(/Use ordinary show\/read\/if statements instead of challenge blocks/u);
+    ).toThrow(/Function calls must look like 'name\(\.\.\.\)'/u);
   });
 
   it("rejects unknown state field syntax", () => {
@@ -1435,7 +1454,7 @@ program Bad {
     ).toThrow(/Function calls must look like 'name\(\.\.\.\)'/u);
   });
 
-  it("rejects removed screen blocks", () => {
+  it("rejects screen-shaped blocks as ordinary invalid program lines", () => {
     expect(() =>
       parseProgram(`
 program Bad {
@@ -1451,10 +1470,10 @@ program Bad {
   }
 }
 `),
-    ).toThrow(/Use 'fn name\(\) \{ show\(\.\.\.\) \}' instead of screen blocks/u);
+    ).toThrow(/Unexpected program line 'screen main \{'/u);
   });
 
-  it("rejects unknown state and removed board/fleet config syntax", () => {
+  it("rejects unknown state and old board/fleet config syntax", () => {
     expect(() =>
       parseProgram(`
 program Bad {
@@ -1505,7 +1524,7 @@ program Bad {
   }
 }
 `),
-    ).toThrow(/Fleet blocks were removed/u);
+    ).toThrow(/Unexpected program line 'fleet enemy_fleet on ocean \{'/u);
   });
 
   it("rejects unknown state field tails", () => {
