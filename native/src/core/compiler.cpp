@@ -29051,8 +29051,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         .detail = "Generated optimized setup program for compiler-owned preloads.",
     });
     for (const OptimizationReport& optimization : result.setup_program->optimizations) {
+      std::string name = "setup-" + optimization.name;
+      if (optimization.name == "coord-list-indirect-random-unique")
+        name = "setup-coord-list-indirect-random-unique";
       result.optimizations.push_back(OptimizationReport{
-          .name = "setup-" + optimization.name,
+          .name = std::move(name),
           .detail = optimization.detail,
       });
     }
