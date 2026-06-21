@@ -105,6 +105,9 @@ Diagnostic diagnostic(DiagnosticSeverity severity, std::string code, std::string
 constexpr int kMk61ReturnStackLimit = 5;
 constexpr int kDisplayHelperMinSavings = 4;
 constexpr std::string_view kRepeatedUnaryUpdateArgPrefix = "__mkpro_unary_arg_";
+constexpr std::string_view kNegativeZeroDegreeRegister = "__negative_zero_degree";
+constexpr std::string_view kNegativeZeroDegreeSelectorGe = "__mkpro_negative_zero_ge";
+constexpr std::string_view kNegativeZeroDegreePreloadValue = "1|-00";
 
 using FunctionEdgeMap = std::map<std::string, std::map<std::string, int>>;
 
@@ -4049,8 +4052,20 @@ bool guarded_is_safe_integer_value(double value) {
 
 int guarded_estimate_expression_cost(const Expression& expression);
 
+int guarded_estimate_negative_zero_threshold_raw_cost(const Expression& value,
+                                                      const Expression& bound) {
+  return guarded_estimate_expression_cost(divide_expression(value, bound)) + 4;
+}
+
 int guarded_estimate_call_cost(const Expression& expression) {
   const std::string name = lower_ascii(expression.callee);
+  if (name == kNegativeZeroDegreeSelectorGe) {
+    if (expression.args.size() != 2U)
+      return std::numeric_limits<int>::max() / 4;
+    return guarded_estimate_negative_zero_threshold_raw_cost(expression.args.at(0),
+                                                             expression.args.at(1)) +
+           1;
+  }
   if (name == "random") {
     if (expression.args.size() == 1U)
       return guarded_estimate_expression_cost(expression.args.front()) + 2;
@@ -4734,6 +4749,32 @@ void compile_stack_stop_risk_tail(LoweringContext& context, const StackStopRiskM
 void bind_register(LoweringContext& context, const std::string& name, int index) {
   context.register_index_by_name[name] = index;
   context.registers[name] = register_from_text(core::register_name_for_index(index));
+}
+
+std::optional<int> available_constant_register_index(const LoweringContext& context) {
+  std::set<int> used;
+  for (const auto& [unused_name, index] : context.register_index_by_name) {
+    (void)unused_name;
+    used.insert(index);
+  }
+  return core::pick_constant_register_index(used);
+}
+
+bool can_reserve_negative_zero_degree_register(const LoweringContext& context) {
+  return context.negative_zero_degree_register.has_value() ||
+         available_constant_register_index(context).has_value();
+}
+
+bool reserve_negative_zero_degree_register(LoweringContext& context) {
+  if (context.negative_zero_degree_register.has_value())
+    return true;
+  const std::optional<int> index = available_constant_register_index(context);
+  if (!index.has_value())
+    return false;
+  const std::string name(kNegativeZeroDegreeRegister);
+  bind_register(context, name, *index);
+  context.negative_zero_degree_register = name;
+  return true;
 }
 
 void assign_register(LoweringContext& context, const std::string& name) {
@@ -13931,8 +13972,53 @@ bool lower_random_integer_call_to_x(LoweringContext& context, const Expression& 
   return true;
 }
 
+bool emit_negative_zero_threshold_raw(LoweringContext& context, const Expression& value,
+                                      const Expression& bound, std::optional<int> source_line) {
+  if (!reserve_negative_zero_degree_register(context)) {
+    context.diagnostics.push_back(
+        diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                   "Internal: negative-zero threshold selector was emitted without a reserved "
+                   "register."));
+    return false;
+  }
+  if (!lower_expression_to_x(context, divide_expression(value, bound)))
+    return false;
+  emit_recall(context, *context.negative_zero_degree_register);
+  if (!context.emitter.items.empty()) {
+    context.emitter.items.back().comment = "negative-zero threshold sentinel";
+    context.emitter.items.back().source_line = source_line;
+  }
+  context.emitter.emit_op(0x14, "X↔Y", "place threshold value above negative-zero sentinel",
+                          source_line);
+  context.emitter.emit_op(0x12, "*", "negative-zero threshold zero-through", source_line);
+  context.emitter.emit_op(0x0e, "В↑", "normalize negative-zero threshold result", source_line);
+  clear_current_x_facts(context);
+  return true;
+}
+
 bool lower_builtin_call_to_x(LoweringContext& context, const Expression& expression) {
   const std::string callee = lower_ascii(expression.callee);
+  if (callee == kNegativeZeroDegreeSelectorGe) {
+    if (expression.args.size() != 2U) {
+      context.diagnostics.push_back(
+          diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                     std::string(kNegativeZeroDegreeSelectorGe) + "() expects two arguments."));
+      return false;
+    }
+    if (!emit_negative_zero_threshold_raw(context, expression.args.at(0), expression.args.at(1),
+                                          std::nullopt))
+      return false;
+    context.emitter.emit_op(0x32, "К ЗН", "negative-zero threshold selector");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "negative-zero-threshold-selector",
+        .detail = "Used preloaded " + std::string(kNegativeZeroDegreePreloadValue) + " in R" +
+                  register_text_for(context, *context.negative_zero_degree_register) + " for " +
+                  expression_to_source(expression.args.at(0)) +
+                  " >= " + expression_to_source(expression.args.at(1)) + ".",
+    });
+    clear_current_x_facts(context);
+    return true;
+  }
   if (callee == "int" && lower_random_integer_call_to_x(context, expression))
     return true;
 
@@ -15565,6 +15651,73 @@ bool is_known_integer_valued_expression(const LoweringContext& context,
   return false;
 }
 
+struct NegativeZeroThresholdMatch {
+  Expression value;
+  double bound = 0.0;
+  std::string truth;
+};
+
+std::optional<V2Predicate> flip_numeric_left_condition(const V2Predicate& predicate) {
+  if (predicate.kind != "v2_compare")
+    return std::nullopt;
+  V2Predicate flipped = predicate;
+  flipped.left = predicate.right;
+  flipped.right = predicate.left;
+  flipped.op = swap_comparison_sides_op(predicate.op);
+  return flipped;
+}
+
+std::optional<NegativeZeroThresholdMatch>
+match_negative_zero_threshold_condition(const LoweringContext& context,
+                                        const V2Predicate& predicate, int line) {
+  if (predicate.kind != "v2_compare")
+    return std::nullopt;
+
+  const Expression left = parse_expression(predicate.left, line);
+  if (left.kind == "number") {
+    const std::optional<V2Predicate> flipped = flip_numeric_left_condition(predicate);
+    return flipped.has_value() ? match_negative_zero_threshold_condition(context, *flipped, line)
+                               : std::nullopt;
+  }
+
+  const Expression right = parse_expression(predicate.right, line);
+  const std::optional<double> bound = numeric_literal_value(right);
+  if (!bound.has_value() || !std::isfinite(*bound) || *bound <= 0.0 || *bound > 1e12)
+    return std::nullopt;
+  if (!is_known_integer_valued_expression(context, left))
+    return std::nullopt;
+  const std::optional<NumericRange> range = numeric_range_for_expression(context, left);
+  if (!range.has_value() || !range->min.has_value() || *range->min < 0.0)
+    return std::nullopt;
+  if (range->max.has_value() && *range->max / *bound >= 1e60)
+    return std::nullopt;
+
+  if (predicate.op == ">=")
+    return NegativeZeroThresholdMatch{.value = left, .bound = *bound, .truth = "ge"};
+  if (predicate.op == "<")
+    return NegativeZeroThresholdMatch{.value = left, .bound = *bound, .truth = "lt"};
+  if (predicate.op == ">" && std::floor(*bound + 1.0) == *bound + 1.0)
+    return NegativeZeroThresholdMatch{.value = left, .bound = *bound + 1.0, .truth = "ge"};
+  if (predicate.op == "<=" && std::floor(*bound + 1.0) == *bound + 1.0)
+    return NegativeZeroThresholdMatch{.value = left, .bound = *bound + 1.0, .truth = "lt"};
+  return std::nullopt;
+}
+
+std::optional<Expression>
+negative_zero_threshold_selector_expression(const LoweringContext& context,
+                                            const V2Predicate& predicate, int line) {
+  const std::optional<NegativeZeroThresholdMatch> threshold =
+      match_negative_zero_threshold_condition(context, predicate, line);
+  if (!threshold.has_value() || !can_reserve_negative_zero_degree_register(context))
+    return std::nullopt;
+  Expression selector = call_expression(
+      std::string(kNegativeZeroDegreeSelectorGe),
+      {threshold->value, number_expression(format_number_literal(threshold->bound))});
+  if (threshold->truth == "ge")
+    return selector;
+  return one_minus_expression(std::move(selector));
+}
+
 bool range_cannot_trap_below_minus_one(const LoweringContext& context,
                                        const Expression& expression) {
   const std::optional<NumericRange> range = numeric_range_for_expression(context, expression);
@@ -16876,6 +17029,12 @@ struct ArithmeticIfCandidate {
   std::string detail;
 };
 
+struct TerminalSelectCandidate {
+  Expression expression;
+  std::string name;
+  std::string detail;
+};
+
 std::optional<V2Predicate> arithmetic_if_comparison_predicate(const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value() ||
       statement.predicate->kind != "v2_compare") {
@@ -16885,6 +17044,107 @@ std::optional<V2Predicate> arithmetic_if_comparison_predicate(const V2Statement&
   if (statement.negated)
     predicate.op = invert_comparison_op(predicate.op);
   return predicate;
+}
+
+std::optional<Expression> plain_terminal_stop_expression(const V2Statement& statement) {
+  if (statement.kind != "v2_stop" || statement.items.has_value() || !statement.target.has_value())
+    return std::nullopt;
+  Expression expression = parse_expression(*statement.target, statement.line);
+  if (expression.kind == "string")
+    return std::nullopt;
+  return expression;
+}
+
+std::optional<std::pair<Expression, Expression>>
+plain_terminal_if_stop_expressions(const V2Statement& statement) {
+  if (statement.then_body.size() != 1U || statement.else_body.size() != 1U)
+    return std::nullopt;
+  std::optional<Expression> then_expression =
+      plain_terminal_stop_expression(statement.then_body.front());
+  std::optional<Expression> else_expression =
+      plain_terminal_stop_expression(statement.else_body.front());
+  if (!then_expression.has_value() || !else_expression.has_value())
+    return std::nullopt;
+  return std::pair<Expression, Expression>{*then_expression, *else_expression};
+}
+
+Expression terminal_select_expression(const Expression& then_expression,
+                                      const Expression& else_expression, Expression selector) {
+  const std::optional<double> then_value = numeric_literal_value(then_expression);
+  const std::optional<double> else_value = numeric_literal_value(else_expression);
+  if (then_value.has_value() && else_value.has_value()) {
+    const double delta = *then_value - *else_value;
+    if (std::fabs(delta) < 1e-12)
+      return number_expression(format_number_literal(*then_value));
+    if (std::fabs(*else_value) < 1e-12 && std::fabs(delta - 1.0) < 1e-12)
+      return selector;
+    if (std::fabs(*else_value - 1.0) < 1e-12 && std::fabs(delta + 1.0) < 1e-12)
+      return one_minus_expression(std::move(selector));
+    if (std::fabs(*else_value) < 1e-12)
+      return multiply_expression(number_expression(format_number_literal(delta)),
+                                 std::move(selector));
+    if (std::fabs(delta - 1.0) < 1e-12)
+      return add_expression(number_expression(format_number_literal(*else_value)),
+                            std::move(selector));
+    return add_expression(
+        number_expression(format_number_literal(*else_value)),
+        multiply_expression(number_expression(format_number_literal(delta)), std::move(selector)));
+  }
+  return add_expression(
+      multiply_expression(then_expression, selector),
+      multiply_expression(else_expression, one_minus_expression(std::move(selector))));
+}
+
+std::optional<TerminalSelectCandidate>
+build_negative_zero_terminal_select_candidate(LoweringContext& context,
+                                              const V2Statement& statement) {
+  const std::optional<V2Predicate> predicate = arithmetic_if_comparison_predicate(statement);
+  if (!predicate.has_value() || statement.else_body.empty())
+    return std::nullopt;
+  const std::optional<std::pair<Expression, Expression>> terminals =
+      plain_terminal_if_stop_expressions(statement);
+  if (!terminals.has_value())
+    return std::nullopt;
+  std::optional<Expression> selector =
+      negative_zero_threshold_selector_expression(context, *predicate, statement.line);
+  if (!selector.has_value())
+    return std::nullopt;
+  return TerminalSelectCandidate{
+      .expression =
+          terminal_select_expression(terminals->first, terminals->second, std::move(*selector)),
+      .name = "negative-zero-threshold-terminal-select",
+      .detail = "Replaced threshold halt if/else with negative-zero selection",
+  };
+}
+
+bool lower_negative_zero_terminal_select(LoweringContext& context, const V2Statement& statement) {
+  const std::optional<TerminalSelectCandidate> candidate =
+      build_negative_zero_terminal_select_candidate(context, statement);
+  if (!candidate.has_value())
+    return false;
+
+  const int ordinary_cost = estimate_branch_order_statement_cost(context, statement);
+  if (ordinary_cost >= branch_order_infinite_cost())
+    return false;
+  const int selected_cost = guarded_estimate_expression_cost(candidate->expression) + 1;
+  if (selected_cost >= ordinary_cost)
+    return false;
+
+  if (!lower_expression_to_x(context, candidate->expression))
+    return false;
+  context.emitter.emit_op(0x50, "С/П", "halt", statement.line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "branch-removal",
+      .detail = candidate->detail + " at line " + std::to_string(statement.line) +
+                "; emitted branchless " + candidate->name + ".",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = candidate->name,
+      .detail = candidate->detail + " at line " + std::to_string(statement.line) + " (" +
+                std::to_string(selected_cost) + " vs " + std::to_string(ordinary_cost) +
+                " estimated steps).",
+  });
+  return true;
 }
 
 std::optional<Expression> arithmetic_if_assignment_expression(const LoweringContext& context,
@@ -17657,6 +17917,10 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     return false;
 
   if (lower_domain_error_guard(context, statement))
+    return true;
+  if (has_errors(context.diagnostics))
+    return false;
+  if (lower_negative_zero_terminal_select(context, statement))
     return true;
   if (has_errors(context.diagnostics))
     return false;
@@ -25978,6 +26242,16 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         selector.has_value() ? fractional_selector_preload_value(value, selector->target)
                              : std::nullopt;
     add_preload(register_it->second, selector_value.value_or(value));
+  }
+
+  if (context.negative_zero_degree_register.has_value() &&
+      std::any_of(context.optimizations.begin(), context.optimizations.end(),
+                  [](const OptimizationReport& optimization) {
+                    return optimization.name == "negative-zero-threshold-selector";
+                  })) {
+    const auto register_it = context.registers.find(*context.negative_zero_degree_register);
+    if (register_it != context.registers.end())
+      add_preload(register_it->second, std::string(kNegativeZeroDegreePreloadValue));
   }
 
   const std::map<std::string, int> label_addresses = machine_item_label_address_map(items);

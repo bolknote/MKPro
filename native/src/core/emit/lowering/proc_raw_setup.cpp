@@ -476,6 +476,27 @@ void emit_setup_recall(MachineEmitter& setup, const std::string& register_name,
   setup.emit_op(0x60 + reg_index, "П->X " + register_name, std::move(comment), std::nullopt, true);
 }
 
+void emit_negative_zero_degree_setup(MachineEmitter& setup, const std::string& register_name) {
+  setup.emit_op(0x54, "К НОП", "negative-zero degree seed", std::nullopt, true);
+  setup.emit_op(0x01, "1", "negative-zero degree seed", std::nullopt, true);
+  setup.emit_op(0x03, "3", "negative-zero degree seed", std::nullopt, true);
+  emit_setup_store(setup, register_name, "negative-zero degree seed");
+  setup.emit_op(0x01, "1", "negative-zero degree mantissa", std::nullopt, true);
+  setup.emit_op(0x08, "8", "negative-zero degree mantissa", std::nullopt, true);
+  setup.emit_op(0x38, "К ∨", "negative-zero degree mantissa", std::nullopt, true);
+  setup.emit_op(0x35, "К {x}", "negative-zero degree mantissa", std::nullopt, true);
+  setup.emit_op(0x0b, "/-/", "negative-zero degree sign", std::nullopt, true);
+  setup.emit_op(0x0c, "ВП", "negative-zero degree exponent", std::nullopt, true);
+  setup.emit_op(0x02, "2", "negative-zero degree exponent", std::nullopt, true);
+  setup.emit_op(0x15, "F 10^x", "negative-zero degree exponent", std::nullopt, true);
+  setup.emit_op(0x0e, "В↑", "negative-zero degree normalize", std::nullopt, true);
+  setup.emit_op(0x0c, "ВП", "negative-zero degree exponent", std::nullopt, true);
+  setup.emit_op(0x0b, "/-/", "negative-zero degree exponent sign", std::nullopt, true);
+  setup.emit_op(0x05, "5", "negative-zero degree exponent", std::nullopt, true);
+  setup.emit_op(0x00, "0", "negative-zero degree exponent", std::nullopt, true);
+  emit_setup_store(setup, register_name, "setup R" + register_name);
+}
+
 bool emit_stack_preload_setup(MachineEmitter& setup, const PreloadReport& preload) {
   if (preload.value != "stack.X" && preload.value != "stack.Y")
     return false;
@@ -1078,6 +1099,11 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
                          "setup " +
                              preload.setup_target_name.value_or("R" + preload.register_name));
       }
+      continue;
+    }
+    if (preload.value == "1|-00") {
+      consumed.insert(index);
+      emit_negative_zero_degree_setup(setup, preload.register_name);
       continue;
     }
     if (const std::optional<RandomUniqueCoordListValue> unique =

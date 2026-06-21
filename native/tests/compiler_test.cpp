@@ -6036,6 +6036,42 @@ program LateLayoutIfVariant {
   require(has_optimization(late_layout_terminal_if, "terminal-if-direct-branch"),
           "late-layout terminal-if should report the direct branch strategy");
 
+  const CompileResult negative_zero_threshold = compile_source(R"mkpro(
+program NegativeZeroThreshold {
+  state {
+    score: counter 0..999 = 0
+  }
+  loop {
+    if score >= 100 {
+      halt(1)
+    }
+    else {
+      halt(0)
+    }
+  }
+}
+)mkpro");
+  require(negative_zero_threshold.implemented,
+          "native compiler should lower negative-zero threshold terminal select");
+  require(negative_zero_threshold.diagnostics.empty(),
+          "negative-zero threshold compile should not report diagnostics");
+  require(has_optimization(negative_zero_threshold, "negative-zero-threshold-selector"),
+          "negative-zero threshold should report the TS selector strategy name");
+  require(has_optimization(negative_zero_threshold, "negative-zero-threshold-terminal-select"),
+          "negative-zero threshold should report the TS terminal-select strategy name");
+  require(has_optimization(negative_zero_threshold, "branch-removal"),
+          "negative-zero threshold terminal select should report branch removal");
+  require(std::any_of(negative_zero_threshold.preloads.begin(),
+                      negative_zero_threshold.preloads.end(),
+                      [](const PreloadReport& preload) { return preload.value == "1|-00"; }),
+          "negative-zero threshold should expose the TS 1|-00 preload");
+  require(negative_zero_threshold.setup_program.has_value(),
+          "negative-zero threshold should generate a setup program for the sentinel preload");
+  require(std::any_of(negative_zero_threshold.setup_program->steps.begin(),
+                      negative_zero_threshold.setup_program->steps.end(),
+                      [](const ResolvedStep& step) { return step.opcode == 0x54; }),
+          "negative-zero threshold setup should include the TS К НОП seed sequence");
+
   CompileOptions branch_x_options;
   branch_x_options.budget = 999;
   branch_x_options.analysis = true;
