@@ -131,6 +131,8 @@ program SegmentedSpatialSumLoopHelperReports {
           "segmented line_count should report the TS spatial sum-loop helper call");
   require(has_optimization(segmented_sum, "spatial-sum-loop-helper"),
           "segmented line_count should emit the TS spatial sum-loop helper");
+  require(has_optimization(segmented_sum, "segmented-bitplane-line-count-helper"),
+          "segmented line_count should report the TS segmented bitplane line-count helper");
   require(has_optimization(segmented_sum, "segmented-bitplane-sum-helper-inline-hit"),
           "segmented sum-loop helper should report inline segmented bitplane hits");
   require(!has_optimization(segmented_sum, "spatial-hit-inline"),

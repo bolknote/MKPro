@@ -9924,6 +9924,13 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
       .name = "spatial-sum-loop-helper-call",
       .detail = "Reused shared line_count progression helper for " + mask.name + ".",
   });
+  if (is_segmented_cells_name(context, mask.name)) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "segmented-bitplane-line-count-helper",
+        .detail = "Lowered line_count(" + mask.name +
+                  ", ...) through a shared segmented bitplane progression helper.",
+    });
+  }
   return true;
 }
 
