@@ -9723,6 +9723,10 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
     stack_carried_counter =
         helper_takes_counter_in_x ? std::optional<int>{progression.count} : std::nullopt;
   }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "spatial-sum-loop-helper-call",
+      .detail = "Reused shared line_count progression helper for " + mask.name + ".",
+  });
   return true;
 }
 
@@ -24981,6 +24985,11 @@ bool lower_spatial_sum_helpers(LoweringContext& context) {
     if (is_segmented_cells_name(context, helper.mask)) {
       if (!lower_segmented_bitplane_hit_to_x(context, helper.mask, hit_index, 0))
         return false;
+      context.optimizations.push_back(OptimizationReport{
+          .name = "segmented-bitplane-sum-helper-inline-hit",
+          .detail = "Inlined segmented bitplane hit inside the " + helper.operation +
+                    " sum-loop helper for " + helper.mask + ".",
+      });
     } else {
       if (!lower_expression_to_x(context, hit_index))
         return false;
@@ -24992,6 +25001,10 @@ bool lower_spatial_sum_helpers(LoweringContext& context) {
       context.emitter.emit_op(0x37, "К ∧", "spatial hit test");
       context.emitter.emit_op(0x35, "К {x}", "spatial hit membership fraction");
       context.emitter.emit_op(0x32, "К ЗН", "spatial hit to count");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "spatial-hit-inline",
+          .detail = "Inlined spatial hit test for " + helper.mask + " into generated loop.",
+      });
     }
 
     emit_recall(context, core::emit::spatial_count_offset_scratch_name());
@@ -25030,6 +25043,11 @@ bool lower_spatial_sum_helpers(LoweringContext& context) {
       context.emitter.emit_jump(0x5e, "F x=0", start, helper.operation + " loop");
     }
     context.emitter.emit_op(0x52, "В/О", helper.operation + " progression return");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "spatial-sum-loop-helper",
+        .detail = "Emitted shared " + helper.operation + " progression helper for " +
+                  helper.mask + ".",
+    });
   }
   return true;
 }

@@ -152,6 +152,7 @@ add_executable(mkpro_tests
   tests/show_read_guarded_transfer_test.cpp
   tests/show_sequence_helper_test.cpp
   tests/small_set_condition_test.cpp
+  tests/spatial_helpers_test.cpp
   tests/state_banks_test.cpp
   tests/state_init_counted_loop_test.cpp
   tests/stack_residency_test.cpp

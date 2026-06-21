@@ -63,6 +63,7 @@ void setup_only_counted_loop_matches_typescript_contract();
 void show_read_guarded_transfer_matches_typescript_contract();
 void show_sequence_helpers_match_typescript_contract();
 void small_set_condition_lowering_matches_typescript_contract();
+void spatial_helpers_match_typescript_contract();
 void state_banks_match_typescript_contract();
 void state_init_counted_loop_matches_typescript_contract();
 void stack_residency_matches_typescript_contract();
@@ -197,6 +198,8 @@ int main() {
        mkpro::tests::show_sequence_helpers_match_typescript_contract},
       {"small_set_condition_lowering_matches_typescript_contract",
        mkpro::tests::small_set_condition_lowering_matches_typescript_contract},
+      {"spatial_helpers_match_typescript_contract",
+       mkpro::tests::spatial_helpers_match_typescript_contract},
       {"state_banks_match_typescript_contract",
        mkpro::tests::state_banks_match_typescript_contract},
       {"state_init_counted_loop_matches_typescript_contract",
