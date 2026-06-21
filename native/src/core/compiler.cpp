@@ -15238,6 +15238,11 @@ bool lower_small_set_condition_false_branch(LoweringContext& context, const V2Pr
   return true;
 }
 
+bool lower_negative_zero_threshold_flow_false_branch(LoweringContext& context,
+                                                     const V2Predicate& predicate,
+                                                     const std::string& false_label,
+                                                     int source_line);
+
 bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& predicate,
                                   bool negated, const std::string& false_label, int source_line,
                                   std::optional<std::string> branch_comment) {
@@ -15297,6 +15302,12 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
   V2Predicate effective_predicate = predicate;
   if (negated)
     effective_predicate.op = invert_comparison_op(effective_predicate.op);
+  if (lower_negative_zero_threshold_flow_false_branch(context, effective_predicate, false_label,
+                                                      source_line))
+    return true;
+  if (has_errors(context.diagnostics))
+    return false;
+
   const auto [selected_predicate, normalized] =
       select_cheaper_equivalent_condition(context, effective_predicate, source_line);
   if (normalized) {
@@ -15701,6 +15712,44 @@ match_negative_zero_threshold_condition(const LoweringContext& context,
   if (predicate.op == "<=" && std::floor(*bound + 1.0) == *bound + 1.0)
     return NegativeZeroThresholdMatch{.value = left, .bound = *bound + 1.0, .truth = "lt"};
   return std::nullopt;
+}
+
+bool lower_negative_zero_threshold_flow_false_branch(LoweringContext& context,
+                                                     const V2Predicate& predicate,
+                                                     const std::string& false_label,
+                                                     int source_line) {
+  const std::optional<NegativeZeroThresholdMatch> threshold =
+      match_negative_zero_threshold_condition(context, predicate, source_line);
+  if (!threshold.has_value())
+    return false;
+
+  const int selected_cost =
+      guarded_estimate_negative_zero_threshold_raw_cost(
+          threshold->value, number_expression(format_number_literal(threshold->bound))) +
+      2;
+  const auto [selected_predicate, unused_normalized] =
+      select_cheaper_equivalent_condition(context, predicate, source_line);
+  (void)unused_normalized;
+  const int ordinary_cost = guarded_condition_compile_cost(selected_predicate, source_line);
+  if (!can_reserve_negative_zero_degree_register(context) || selected_cost >= ordinary_cost)
+    return false;
+
+  if (!emit_negative_zero_threshold_raw(context, threshold->value,
+                                        number_expression(format_number_literal(threshold->bound)),
+                                        source_line))
+    return false;
+
+  const int opcode = threshold->truth == "ge" ? 0x57 : 0x5e;
+  const std::string mnemonic = threshold->truth == "ge" ? "F x!=0" : "F x=0";
+  context.emitter.emit_jump(opcode, mnemonic, false_label,
+                            "negative-zero false branch for " + predicate.op, source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "negative-zero-threshold-flow",
+      .detail = "Tested " + condition_text(predicate) + " through preloaded " +
+                std::string(kNegativeZeroDegreePreloadValue) + " in R" +
+                register_text_for(context, *context.negative_zero_degree_register) + ".",
+  });
+  return true;
 }
 
 std::optional<Expression>
@@ -26247,7 +26296,8 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
   if (context.negative_zero_degree_register.has_value() &&
       std::any_of(context.optimizations.begin(), context.optimizations.end(),
                   [](const OptimizationReport& optimization) {
-                    return optimization.name == "negative-zero-threshold-selector";
+                    return optimization.name == "negative-zero-threshold-selector" ||
+                           optimization.name == "negative-zero-threshold-flow";
                   })) {
     const auto register_it = context.registers.find(*context.negative_zero_degree_register);
     if (register_it != context.registers.end())
