@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 namespace mkpro::tests {
 
@@ -29,6 +30,14 @@ std::string diagnostics_text(const CompileResult& result) {
   return text;
 }
 
+std::vector<std::string> step_hexes(const CompileResult& result) {
+  std::vector<std::string> values;
+  values.reserve(result.steps.size());
+  for (const ResolvedStep& step : result.steps)
+    values.push_back(step.hex);
+  return values;
+}
+
 } // namespace
 
 void inline_floor_packed_row_matches_typescript_contract() {
@@ -40,7 +49,7 @@ void inline_floor_packed_row_matches_typescript_contract() {
   const CompileResult result = compile_source(R"mkpro(
 program InlineFloorPackedRow {
   state {
-    floor: counter 1..9 = 2
+    floor: counter 1..4 = 2
   }
 
   loop {
@@ -62,6 +71,10 @@ program InlineFloorPackedRow {
           "inline floor packed-row expression should not allocate display-expression scratch");
   require(result.listing.find("display packed row expression merge") != std::string::npos,
           "inline floor packed-row expression should splice the computed row");
+  require(step_hexes(result) == std::vector<std::string>{"05", "0E", "09", "13", "3A", "60", "14",
+                                                         "0E", "25", "14", "25", "0C", "50", "51",
+                                                         "00"},
+          "forced inline floor packed-row expression should match the TS opcode contract");
 
   const CompileResult indexed = compile_source(R"mkpro(
 program IndexedFloorPackedRow {
@@ -88,6 +101,10 @@ program IndexedFloorPackedRow {
   require(
       !has_optimization(indexed, "display-expression-materialization"),
       "indexed inline floor packed-row expression should skip display-expression materialization");
+  require(indexed.registers.at("rows_1") == "1", "indexed rows_1 should stay fixed at R1");
+  require(indexed.registers.at("rows_9") == "9", "indexed rows_9 should stay fixed at R9");
+  require(std::stoi(indexed.registers.at("floor"), nullptr, 16) >= 7,
+          "indexed floor selector should stay in the high register range");
   require(indexed.listing.find("indexed recall rows") != std::string::npos,
           "indexed inline floor packed-row expression should read the row through indexed memory");
 }

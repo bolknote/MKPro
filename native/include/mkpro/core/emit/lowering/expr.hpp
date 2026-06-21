@@ -26,7 +26,7 @@ struct ExpressionEmitApi {
 std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, LoweringContext& context,
                                                 const Expression& expression);
 bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& context,
-                                  const Expression& expression);
+                                  const Expression& expression, bool allow_constant_fold = true);
 std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
                                                        LoweringContext& context,
                                                        const Expression& expression);

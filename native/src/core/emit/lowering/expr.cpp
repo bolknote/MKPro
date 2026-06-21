@@ -144,15 +144,12 @@ bool lower_commutative_call_with_destructive_selector_last(
 
 std::optional<std::size_t> packed_grid_macro_arity(const std::string& name) {
   static const std::map<std::string, std::size_t> arities = {
-      {"grid_norm", 1},    {"grid_wrap", 1},     {"bit_mask", 1},
-      {"bit_has", 2},      {"bit_set", 2},       {"bit_clear", 2},
-      {"bit_toggle", 2},   {"diag_left_index", 2},
-      {"diag_right_index", 2},
-      {"cell_mask", 2},    {"cell_has", 3},      {"cell_set", 3},
-      {"cell_clear", 3},   {"cell_toggle", 3},   {"cell_used", 3},
-      {"cell_mark", 3},    {"digit_at", 2},      {"digit_add", 3},
-      {"digit_set", 3},    {"packed_add", 3},    {"packed_digit", 2},
-      {"packed_score", 2},
+      {"grid_norm", 1},        {"grid_wrap", 1},    {"bit_mask", 1},   {"bit_has", 2},
+      {"bit_set", 2},          {"bit_clear", 2},    {"bit_toggle", 2}, {"diag_left_index", 2},
+      {"diag_right_index", 2}, {"cell_mask", 2},    {"cell_has", 3},   {"cell_set", 3},
+      {"cell_clear", 3},       {"cell_toggle", 3},  {"cell_used", 3},  {"cell_mark", 3},
+      {"digit_at", 2},         {"digit_add", 3},    {"digit_set", 3},  {"packed_add", 3},
+      {"packed_digit", 2},     {"packed_score", 2},
   };
   const auto it = arities.find(name);
   return it == arities.end() ? std::nullopt : std::optional<std::size_t>{it->second};
@@ -170,9 +167,9 @@ Expression packed_digit_expression(Expression value, Expression index) {
 
 Expression digit_set_expression(Expression value, Expression index, Expression digit) {
   Expression place = digit_place_expression(index);
-  return add_expression(subtract_expression(value, multiply_expression(
-                                                       packed_digit_expression(value, index), place)),
-                        multiply_expression(std::move(digit), std::move(place)));
+  return add_expression(
+      subtract_expression(value, multiply_expression(packed_digit_expression(value, index), place)),
+      multiply_expression(std::move(digit), std::move(place)));
 }
 
 std::optional<Expression> packed_grid_expression_macro(const std::string& name,
@@ -186,9 +183,8 @@ std::optional<Expression> packed_grid_expression_macro(const std::string& name,
   if (name == "bit_set")
     return call_expression("bit_or", {args.at(0), bit_mask_expression(args.at(1))});
   if (name == "bit_clear") {
-    return call_expression("bit_and",
-                           {args.at(0), call_expression("bit_not",
-                                                        {bit_mask_expression(args.at(1))})});
+    return call_expression(
+        "bit_and", {args.at(0), call_expression("bit_not", {bit_mask_expression(args.at(1))})});
   }
   if (name == "bit_toggle")
     return call_expression("bit_xor", {args.at(0), bit_mask_expression(args.at(1))});
@@ -201,16 +197,15 @@ std::optional<Expression> packed_grid_expression_macro(const std::string& name,
   if (name == "cell_mask")
     return cell_mask_expression(args.at(0), args.at(1));
   if (name == "cell_has" || name == "cell_used") {
-    return sign_expression(frac_expression(call_expression(
-        "bit_and", {args.at(0), cell_mask_expression(args.at(1), args.at(2))})));
+    return sign_expression(frac_expression(
+        call_expression("bit_and", {args.at(0), cell_mask_expression(args.at(1), args.at(2))})));
   }
   if (name == "cell_set" || name == "cell_mark")
     return call_expression("bit_or", {args.at(0), cell_mask_expression(args.at(1), args.at(2))});
   if (name == "cell_clear") {
     return call_expression(
         "bit_and",
-        {args.at(0),
-         call_expression("bit_not", {cell_mask_expression(args.at(1), args.at(2))})});
+        {args.at(0), call_expression("bit_not", {cell_mask_expression(args.at(1), args.at(2))})});
   }
   if (name == "cell_toggle")
     return call_expression("bit_xor", {args.at(0), cell_mask_expression(args.at(1), args.at(2))});
@@ -227,9 +222,9 @@ std::optional<Expression> packed_grid_expression_macro(const std::string& name,
     return packed_digit_expression(args.at(0), args.at(1));
   if (name == "packed_score") {
     return call_expression(
-        "sqr", {subtract_expression(frac_expression(divide_expression(
-                                      args.at(0), pow10_expression(args.at(1)))),
-                                  number_expression("0.41200076"))});
+        "sqr", {subtract_expression(
+                   frac_expression(divide_expression(args.at(0), pow10_expression(args.at(1)))),
+                   number_expression("0.41200076"))});
   }
   return std::nullopt;
 }
@@ -318,12 +313,14 @@ std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, Lowering
 }
 
 bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& context,
-                                  const Expression& expression) {
-  if (const std::optional<double> folded =
-          numeric_value_of_expression(expression, context.constants);
-      folded.has_value()) {
-    api.emitter.emit_number(format_number_literal(*folded));
-    return true;
+                                  const Expression& expression, bool allow_constant_fold) {
+  if (allow_constant_fold) {
+    if (const std::optional<double> folded =
+            numeric_value_of_expression(expression, context.constants);
+        folded.has_value()) {
+      api.emitter.emit_number(format_number_literal(*folded));
+      return true;
+    }
   }
 
   if (expression.left == nullptr || expression.right == nullptr)
@@ -487,8 +484,8 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     context.diagnostics.push_back(Diagnostic{
         .severity = DiagnosticSeverity::Error,
         .code = "native-unsupported",
-        .message = expression.callee + "() expects " + std::to_string(*arity) +
-                   " arguments, got " + std::to_string(expression.args.size()) + ".",
+        .message = expression.callee + "() expects " + std::to_string(*arity) + " arguments, got " +
+                   std::to_string(expression.args.size()) + ".",
     });
     return false;
   }
@@ -499,8 +496,8 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       return false;
     context.optimizations.push_back(OptimizationReport{
         .name = "packed-grid-primitive-lowering",
-        .detail = "Lowered " + expression.callee +
-                  "() to reusable 4x4 grid/packed-line arithmetic.",
+        .detail =
+            "Lowered " + expression.callee + "() to reusable 4x4 grid/packed-line arithmetic.",
     });
     return true;
   }
@@ -528,8 +525,8 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     api.emitter.current_x_aliases.clear();
     context.optimizations.push_back(OptimizationReport{
         .name = "packed-grid-primitive-lowering",
-        .detail = "Lowered " + expression.callee +
-                  "() to reusable 4x4 grid/packed-line arithmetic.",
+        .detail =
+            "Lowered " + expression.callee + "() to reusable 4x4 grid/packed-line arithmetic.",
     });
     return true;
   }
@@ -741,7 +738,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       return false;
     }
     if (lower_commutative_call_with_destructive_selector_last(api, context, expression,
-                                                             binary_it->second))
+                                                              binary_it->second))
       return true;
     if (!api.lower_expression_to_x(expression.args.at(0)))
       return false;

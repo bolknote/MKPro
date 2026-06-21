@@ -5519,6 +5519,177 @@ void apply_state_bank_selector_hints(const RegisterCollection& collection, Regis
   }
 }
 
+std::optional<std::string> direct_index_selector_candidate(const LoweringContext& context,
+                                                           const Expression& expression,
+                                                           const RegisterHints& hints) {
+  if (expression.kind != "indexed" || expression.index == nullptr)
+    return std::nullopt;
+  const std::optional<core::AffineIndexIdentifierOffset> affine =
+      core::affine_index_identifier_offset(*expression.index);
+  if (!affine.has_value())
+    return std::nullopt;
+  const auto bank_it = context.state_banks.find(bank_member_key(expression.base, expression.field));
+  if (bank_it == context.state_banks.end() || bank_it->second == nullptr ||
+      !bank_it->second->bank.has_value()) {
+    return std::nullopt;
+  }
+  const V2StateField& field = *bank_it->second;
+  const int offset = -affine->offset;
+  for (int index = field.bank->min; index <= field.bank->max; ++index) {
+    const auto hint_it = hints.find(state_bank_element_name(field, index));
+    if (hint_it == hints.end())
+      return std::nullopt;
+    const std::optional<int> target =
+        core::memory_target_from_transformed(std::to_string(index + offset));
+    if (!target.has_value() || *target != hint_it->second.index)
+      return std::nullopt;
+  }
+  return affine->name;
+}
+
+bool prefer_high_index_selector_register(const std::string& name,
+                                         const RegisterCollection& collection,
+                                         RegisterHints& hints) {
+  if (!collection.variables.contains(name))
+    return false;
+  const auto existing = hints.find(name);
+  if (existing != hints.end())
+    return existing->second.index >= 7;
+  const std::vector<int> preference = {0x0d, 0x0c, 0x0b, 0x0a, 0x9, 0x8, 0x7, 0x0e};
+  for (const int candidate : preference) {
+    if (hint_register_is_used(hints, candidate))
+      continue;
+    hints[name] = RegisterHint{.mode = RegisterHintMode::Prefer, .index = candidate};
+    return true;
+  }
+  return false;
+}
+
+void add_required_state_bank_selector(std::set<std::string>& seen, std::vector<std::string>& order,
+                                      const std::string& selector) {
+  if (seen.insert(selector).second)
+    order.push_back(selector);
+}
+
+void collect_state_bank_selector_requirements_from_expression(
+    const LoweringContext& context, RegisterCollection& collection, RegisterHints& hints,
+    const Expression& expression, std::set<std::string>& required,
+    std::vector<std::string>& required_order) {
+  if (expression.kind == "indexed") {
+    if (expression.index != nullptr) {
+      collect_state_bank_selector_requirements_from_expression(
+          context, collection, hints, *expression.index, required, required_order);
+    }
+    if (dynamic_state_bank_index_needs_selector(context, expression)) {
+      const std::optional<std::string> direct =
+          direct_index_selector_candidate(context, expression, hints);
+      if (!direct.has_value() || !prefer_high_index_selector_register(*direct, collection, hints)) {
+        add_required_state_bank_selector(
+            required, required_order,
+            bank_selector_variable_name(expression.base, expression.field));
+      }
+    }
+    return;
+  }
+  if (expression.expr != nullptr)
+    collect_state_bank_selector_requirements_from_expression(
+        context, collection, hints, *expression.expr, required, required_order);
+  if (expression.left != nullptr)
+    collect_state_bank_selector_requirements_from_expression(
+        context, collection, hints, *expression.left, required, required_order);
+  if (expression.right != nullptr)
+    collect_state_bank_selector_requirements_from_expression(
+        context, collection, hints, *expression.right, required, required_order);
+  for (const Expression& arg : expression.args)
+    collect_state_bank_selector_requirements_from_expression(context, collection, hints, arg,
+                                                             required, required_order);
+}
+
+void collect_state_bank_selector_requirements_from_statement(
+    const LoweringContext& context, RegisterCollection& collection, RegisterHints& hints,
+    const V2Statement& statement, std::set<std::string>& required,
+    std::vector<std::string>& required_order) {
+  const auto visit_text = [&](const std::string& text, int line) {
+    try {
+      collect_state_bank_selector_requirements_from_expression(
+          context, collection, hints, parse_expression(text, line), required, required_order);
+    } catch (const std::exception&) {
+    }
+  };
+
+  if (statement.target.has_value())
+    visit_text(*statement.target, statement.line);
+  if (statement.expr.has_value())
+    visit_text(*statement.expr, statement.line);
+  if (statement.kind == "v2_stop" && statement.target.has_value())
+    visit_text(*statement.target, statement.line);
+  if (statement.predicate.has_value()) {
+    const V2Predicate& predicate = *statement.predicate;
+    if (predicate.kind == "v2_compare") {
+      visit_text(predicate.left, statement.line);
+      visit_text(predicate.right, statement.line);
+    } else if (predicate.kind == "v2_contains") {
+      visit_text(predicate.collection, statement.line);
+      visit_text(predicate.item, statement.line);
+    }
+  }
+  for (const std::string& arg : statement.args)
+    visit_text(arg, statement.line);
+  if (statement.items.has_value()) {
+    for (const DisplayItem& item : *statement.items) {
+      if (item.expr.has_value()) {
+        collect_state_bank_selector_requirements_from_expression(
+            context, collection, hints, *item.expr, required, required_order);
+      } else if (item.kind == "source" && !item.name.empty()) {
+        visit_text(item.name, item.line);
+      }
+    }
+  }
+  for (const V2Statement& child : statement.body)
+    collect_state_bank_selector_requirements_from_statement(context, collection, hints, child,
+                                                            required, required_order);
+  for (const V2Statement& child : statement.then_body)
+    collect_state_bank_selector_requirements_from_statement(context, collection, hints, child,
+                                                            required, required_order);
+  for (const V2Statement& child : statement.else_body)
+    collect_state_bank_selector_requirements_from_statement(context, collection, hints, child,
+                                                            required, required_order);
+  for (const V2MatchCase& match_case : statement.cases) {
+    for (const std::string& value : match_case.values)
+      visit_text(value, match_case.line);
+    if (match_case.action != nullptr)
+      collect_state_bank_selector_requirements_from_statement(
+          context, collection, hints, *match_case.action, required, required_order);
+  }
+  if (statement.otherwise != nullptr)
+    collect_state_bank_selector_requirements_from_statement(
+        context, collection, hints, *statement.otherwise, required, required_order);
+}
+
+void apply_direct_state_bank_selector_hints(const LoweringContext& context,
+                                            const V2Program& program,
+                                            RegisterCollection& collection, RegisterHints& hints) {
+  std::set<std::string> required;
+  std::vector<std::string> required_order;
+  for (const V2Statement& statement : program.body)
+    collect_state_bank_selector_requirements_from_statement(context, collection, hints, statement,
+                                                            required, required_order);
+  for (const V2Rule& rule : program.rules) {
+    for (const V2Statement& statement : rule.body)
+      collect_state_bank_selector_requirements_from_statement(context, collection, hints, statement,
+                                                              required, required_order);
+  }
+
+  for (const std::string& selector : collection.state_bank_selectors) {
+    if (!required.contains(selector))
+      collection.variables.erase(selector);
+  }
+  for (const std::string& selector : required_order)
+    collection.variables.insert(selector);
+  collection.state_bank_selectors = std::move(required_order);
+  collection.seen_state_bank_selectors = std::move(required);
+}
+
 void apply_coord_list_register_hints(const RegisterCollection& collection, RegisterHints& hints) {
   const std::vector<int> item_registers = {0x6, 0x7, 0x8, 0x9, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e};
   for (const std::string& variable : collection.variables) {
@@ -6774,6 +6945,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   }
   collect_spatial_count_scratch_registers(collection);
   apply_packed_line_family_mutating_selector_hints(context, program, collection, hints);
+  apply_direct_state_bank_selector_hints(context, program, collection, hints);
   apply_state_bank_selector_hints(collection, hints);
   apply_coord_list_register_hints(collection, hints);
   apply_scaled_coord_register_hints(context, collection, hints);
@@ -14044,6 +14216,18 @@ bool lower_builtin_call_to_x(LoweringContext& context, const Expression& express
     return true;
   }
 
+  if (callee == "bit_not" && expression.args.size() == 1U &&
+      expression.args.front().kind == "binary") {
+    auto expr_api = expression_emit_api(context);
+    if (!core::emit::lower_binary_expression_to_x(expr_api, context, expression.args.front(),
+                                                  false))
+      return false;
+    context.emitter.emit_op(0x3a, "К ИНВ", "bit_not()");
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_aliases.clear();
+    return true;
+  }
+
   auto expr_api = expression_emit_api(context);
   if (const std::optional<bool> calculator_builtin =
           core::emit::lower_calculator_builtin_call_to_x(expr_api, context, expression)) {
@@ -14327,6 +14511,11 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
         .detail = "Reused shared helper for " + expression_to_source(expression) + ".",
     });
     return true;
+  }
+
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "bit_not" &&
+      expression.args.size() == 1U && expression.args.front().kind == "binary") {
+    return lower_call_to_x(context, expression);
   }
 
   if (expression.kind != "number" && expression.kind != "identifier") {
