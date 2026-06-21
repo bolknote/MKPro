@@ -199,6 +199,7 @@ struct LoweringContext {
   bool setup_only_counted_loop_init = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
+  bool shared_bit_mask_helper_calls = false;
   bool compact_bit_mask_helper_body = false;
   bool domain_error_guards = false;
   bool show_read_guarded_transfer = false;

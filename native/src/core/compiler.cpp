@@ -24935,8 +24935,21 @@ bool lower_spatial_hit_helpers(LoweringContext& context) {
     context.emitter.emit_label(
         helper.label,
         {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
-    if (!emit_inline_bit_mask_from_current_x_with_quotient_scratch(context, helper.scratch, 0))
+    if (context.shared_bit_mask_helper_calls) {
+      const std::string label = bit_mask_helper_label(context);
+      if (!emit_bit_mask_helper_call_from_current_x(context, 0))
+        return false;
+      if (!context.emitter.items.empty())
+        context.emitter.items.back().comment = "spatial hit bit_mask";
+      context.optimizations.push_back(OptimizationReport{
+          .name = "spatial-hit-bit-mask-helper-reuse",
+          .detail = "Reused shared bit_mask helper " + label + " inside spatial hit " +
+                    helper.label + ".",
+      });
+    } else if (!emit_inline_bit_mask_from_current_x_with_quotient_scratch(context, helper.scratch,
+                                                                          0)) {
       return false;
+    }
     emit_recall(context, helper.mask);
     if (!context.emitter.items.empty())
       context.emitter.items.back().comment = "spatial hit mask";
@@ -28104,6 +28117,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.setup_only_counted_loop_init = options.setup_only_counted_loop_init;
   context.x_param_value_functions = options.x_param_value_functions;
   context.x_param_y_stack_stored_entry = options.x_param_y_stack_stored_entry;
+  context.shared_bit_mask_helper_calls = options.shared_bit_mask_helper_calls;
   context.compact_bit_mask_helper_body = options.compact_bit_mask_helper_body;
   context.domain_error_guards = options.domain_error_guards;
   context.show_read_guarded_transfer = options.show_read_guarded_transfer;

@@ -3969,6 +3969,48 @@ program CellsSpatial {
                       }),
           "spatial-hit helper should reuse the bit-mask quotient scratch");
 
+  CompileOptions shared_spatial_hit_options;
+  shared_spatial_hit_options.analysis = true;
+  shared_spatial_hit_options.shared_bit_mask_helper_calls = true;
+  const CompileResult shared_spatial_hit = compile_source(R"mkpro(
+program SharedSpatialHitBitMask {
+  field: board(1..4, 1..4)
+  state {
+    cell: coord(field)
+    a: cells(field) = 0
+    b: cells(field) = 0
+    score: counter 0..9 = 0
+  }
+
+  loop {
+    cell = read()
+    if cell in a {
+      score++
+    }
+    if line_count(a, cell) >= 4 {
+      score++
+    }
+    if line_count(b, cell) >= 4 {
+      score++
+    }
+    halt(score)
+  }
+}
+)mkpro",
+                                                          shared_spatial_hit_options);
+  require(shared_spatial_hit.implemented,
+          "native compiler should lower shared spatial-hit bit-mask helpers");
+  require(shared_spatial_hit.diagnostics.empty(),
+          "shared spatial-hit bit-mask compile should not report diagnostics");
+  require(has_optimization(shared_spatial_hit, "spatial-line-count-helper"),
+          "shared spatial-hit bit-mask program should emit line_count helpers");
+  require(has_optimization(shared_spatial_hit, "bit-mask-helper"),
+          "shared spatial-hit bit-mask program should emit the shared bit-mask helper");
+  require(has_optimization(shared_spatial_hit, "spatial-hit-bit-mask-helper-reuse"),
+          "spatial-hit helper should report TS bit-mask helper reuse");
+  require(shared_spatial_hit.listing.find("spatial hit bit_mask") != std::string::npos,
+          "spatial-hit helper should call the shared bit-mask helper");
+
   const CompileResult error_stop = compile_source(R"mkpro(
 program ErrorStop {
   loop {
