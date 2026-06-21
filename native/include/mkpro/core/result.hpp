@@ -35,6 +35,9 @@ struct PreloadReport {
   std::string register_name;
   std::string value;
   bool counts_against_program = false;
+  std::optional<std::string> setup_target_name;
+  bool setup_expression = false;
+  std::optional<int> setup_source_line;
 };
 
 struct OptimizationReport {

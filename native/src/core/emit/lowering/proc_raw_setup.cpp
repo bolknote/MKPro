@@ -2,6 +2,7 @@
 
 #include "mkpro/core/emit/lowering_helpers.hpp"
 #include "mkpro/core/opcodes.hpp"
+#include "mkpro/core/parser.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -32,6 +33,12 @@ std::string normalized_v2_text(std::string_view text) {
       normalized.push_back(ch);
   }
   return normalized;
+}
+
+std::string lower_ascii(std::string value) {
+  std::transform(value.begin(), value.end(), value.begin(),
+                 [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+  return value;
 }
 
 bool has_executable_setup_number_value(std::string_view value) {
@@ -480,6 +487,178 @@ bool emit_stack_preload_setup(MachineEmitter& setup, const PreloadReport& preloa
   return true;
 }
 
+std::optional<std::pair<int, std::string>> setup_unary_opcode(const std::string& name) {
+  static const std::map<std::string, std::pair<int, std::string>> opcodes = {
+      {"abs", {0x31, "К |x|"}},      {"sign", {0x32, "К ЗН"}},     {"int", {0x34, "К [x]"}},
+      {"frac", {0x35, "К {x}"}},     {"sqr", {0x22, "F x²"}},      {"inv", {0x23, "F 1/x"}},
+      {"sqrt", {0x21, "F √"}},       {"lg", {0x17, "F lg"}},       {"ln", {0x18, "F ln"}},
+      {"sin", {0x1c, "F sin"}},      {"cos", {0x1d, "F cos"}},     {"tg", {0x1e, "F tg"}},
+      {"asin", {0x19, "F sin⁻¹"}},   {"acos", {0x1a, "F cos⁻¹"}},  {"atg", {0x1b, "F tg⁻¹"}},
+      {"exp", {0x16, "F eˣ"}},       {"pow10", {0x15, "F 10ˣ"}},   {"bit_not", {0x3a, "К ИНВ"}},
+      {"to_min", {0x26, "К °→′"}},   {"to_sec", {0x2a, "К °→′″"}}, {"from_sec", {0x30, "К °←′″"}},
+      {"from_min", {0x33, "К °←′"}},
+  };
+  const auto it = opcodes.find(lower_ascii(name));
+  return it == opcodes.end() ? std::nullopt
+                             : std::optional<std::pair<int, std::string>>{it->second};
+}
+
+std::optional<std::pair<int, std::string>> setup_binary_opcode(const std::string& op) {
+  if (op == "+")
+    return std::pair{0x10, std::string("+")};
+  if (op == "-")
+    return std::pair{0x11, std::string("-")};
+  if (op == "*")
+    return std::pair{0x12, std::string("×")};
+  if (op == "/")
+    return std::pair{0x13, std::string("÷")};
+  return std::nullopt;
+}
+
+bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expression);
+
+bool lower_setup_random_call_to_x(MachineEmitter& setup, const Expression& expression) {
+  if (expression.args.empty()) {
+    setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
+    return true;
+  }
+  if (expression.args.size() == 1U) {
+    setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
+    if (!lower_setup_expression_to_x(setup, expression.args.front()))
+      return false;
+    setup.emit_op(0x12, "×", "random range", std::nullopt, true);
+    return true;
+  }
+  if (expression.args.size() == 2U) {
+    Expression range = subtract_expression(expression.args.at(1), expression.args.at(0));
+    Expression scaled = multiply_expression(call_expression("random", {}), std::move(range));
+    return lower_setup_expression_to_x(setup,
+                                       add_expression(expression.args.at(0), std::move(scaled)));
+  }
+  return false;
+}
+
+bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expression) {
+  if (expression.kind == "number") {
+    setup.emit_number(expression.raw.empty() ? expression.text : expression.raw);
+    return true;
+  }
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr) {
+    if (!lower_setup_expression_to_x(setup, *expression.expr))
+      return false;
+    setup.emit_op(0x0b, "/-/", "unary minus", std::nullopt, true);
+    return true;
+  }
+  if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
+    const std::optional<std::pair<int, std::string>> opcode = setup_binary_opcode(expression.op);
+    if (!opcode.has_value())
+      return false;
+    if (!lower_setup_expression_to_x(setup, *expression.left) ||
+        !lower_setup_expression_to_x(setup, *expression.right)) {
+      return false;
+    }
+    setup.emit_op(opcode->first, opcode->second, "expr " + expression.op, std::nullopt, true);
+    return true;
+  }
+  if (expression.kind == "call") {
+    const std::string callee = lower_ascii(expression.callee);
+    if (callee == "random")
+      return lower_setup_random_call_to_x(setup, expression);
+    if (expression.args.size() != 1U)
+      return false;
+    const std::optional<std::pair<int, std::string>> opcode = setup_unary_opcode(callee);
+    if (!opcode.has_value() || !lower_setup_expression_to_x(setup, expression.args.front()))
+      return false;
+    setup.emit_op(opcode->first, opcode->second, callee + "()", std::nullopt, true);
+    return true;
+  }
+  return false;
+}
+
+struct IndexedSetupPreloadGroup {
+  std::size_t end = 0;
+  int min_register = 0;
+  int max_register = 0;
+  std::vector<std::string> targets;
+};
+
+std::optional<IndexedSetupPreloadGroup>
+indexed_setup_preload_group_at(const std::vector<PreloadReport>& preloads,
+                               const std::set<std::size_t>& consumed, std::size_t index) {
+  if (index >= preloads.size() || consumed.contains(index))
+    return std::nullopt;
+  const PreloadReport& first = preloads.at(index);
+  if (!first.setup_expression || !first.setup_target_name.has_value())
+    return std::nullopt;
+
+  IndexedSetupPreloadGroup group;
+  group.end = index;
+  group.min_register = register_index(first.register_name);
+  group.max_register = group.min_register;
+  group.targets.push_back(*first.setup_target_name);
+
+  std::size_t cursor = index + 1U;
+  while (cursor < preloads.size() && !consumed.contains(cursor)) {
+    const PreloadReport& candidate = preloads.at(cursor);
+    if (!candidate.setup_expression || !candidate.setup_target_name.has_value() ||
+        candidate.value != first.value) {
+      break;
+    }
+    const int candidate_register = register_index(candidate.register_name);
+    if (candidate_register != group.max_register + 1)
+      break;
+    group.max_register = candidate_register;
+    group.targets.push_back(*candidate.setup_target_name);
+    ++cursor;
+  }
+  group.end = cursor;
+  if (group.targets.size() < 3U || group.min_register < 1 || group.max_register > 14)
+    return std::nullopt;
+  return group;
+}
+
+bool emit_indexed_setup_preload_group(MachineEmitter& setup,
+                                      std::vector<OptimizationReport>& optimizations,
+                                      const PreloadReport& first,
+                                      const IndexedSetupPreloadGroup& group) {
+  const std::string& first_name = group.targets.front();
+  const std::string& last_name = group.targets.back();
+  const std::string label = setup.fresh_label("setup_indexed_bank");
+  setup.emit_number(std::to_string(group.max_register + 1));
+  emit_setup_store(setup, "0", "setup indexed pointer " + first_name + ".." + last_name);
+  setup.emit_label(label, {.hidden = true});
+  const Expression expression = parse_expression(first.value, first.setup_source_line.value_or(0));
+  if (!lower_setup_expression_to_x(setup, expression))
+    return false;
+  setup.emit_op(0xb0, "К X->П 0", "setup indexed " + first_name + ".." + last_name,
+                first.setup_source_line, true);
+  emit_setup_recall(setup, "0", "setup indexed pointer");
+  setup.emit_number(std::to_string(group.min_register));
+  setup.emit_op(0x11, "-", "setup indexed remaining", first.setup_source_line, true);
+  setup.emit_jump(0x5e, "F x=0", label, "setup indexed loop " + first_name + ".." + last_name,
+                  first.setup_source_line);
+  optimizations.push_back(OptimizationReport{
+      .name = "indexed-bank-loop",
+      .detail = "Initialized " + std::to_string(group.targets.size()) + " indexed bank fields (" +
+                first_name + ".." + last_name + ") with one indirect setup loop.",
+  });
+  return true;
+}
+
+bool emit_restore_setup_pointer_r0(MachineEmitter& setup,
+                                   const std::vector<PreloadReport>& preloads) {
+  const auto preload =
+      std::find_if(preloads.begin(), preloads.end(), [](const PreloadReport& item) {
+        return item.register_name == "0" && !item.setup_expression &&
+               has_executable_setup_number_value(item.value);
+      });
+  if (preload == preloads.end())
+    return false;
+  setup.emit_number(preload->value);
+  emit_setup_store(setup, "0", "restore setup R0");
+  return true;
+}
+
 void emit_segmented_bitplane_random_candidate_setup(MachineEmitter& setup,
                                                     const std::string& seed_register,
                                                     const std::string& index_register) {
@@ -874,12 +1053,33 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   MachineEmitter setup;
   std::vector<OptimizationReport> optimizations;
   std::set<std::size_t> consumed;
+  bool setup_r0_dirty = false;
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (consumed.contains(index))
       continue;
     const PreloadReport& preload = preloads.at(index);
     const bool from_stack_x = preload.value == "stack.X";
     const bool from_stack_y = preload.value == "stack.Y";
+    if (const std::optional<IndexedSetupPreloadGroup> group =
+            indexed_setup_preload_group_at(preloads, consumed, index)) {
+      if (emit_indexed_setup_preload_group(setup, optimizations, preload, *group)) {
+        for (std::size_t consumed_index = index; consumed_index < group->end; ++consumed_index)
+          consumed.insert(consumed_index);
+        setup_r0_dirty = true;
+        continue;
+      }
+    }
+    if (preload.setup_expression) {
+      consumed.insert(index);
+      const Expression expression =
+          parse_expression(preload.value, preload.setup_source_line.value_or(0));
+      if (lower_setup_expression_to_x(setup, expression)) {
+        emit_setup_store(setup, preload.register_name,
+                         "setup " +
+                             preload.setup_target_name.value_or("R" + preload.register_name));
+      }
+      continue;
+    }
     if (const std::optional<RandomUniqueCoordListValue> unique =
             parse_random_unique_coord_list_value(preload.value)) {
       std::map<int, std::string> item_registers;
@@ -1041,6 +1241,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     if (from_stack_y)
       setup.emit_op(0x14, "X↔Y", "restore stack.X after stack.Y setup", std::nullopt, true);
   }
+  if (setup_r0_dirty)
+    emit_restore_setup_pointer_r0(setup, preloads);
   setup.emit_op(0x50, "С/П", "setup complete", std::nullopt, true);
 
   const ResolvedProgram resolved = resolve_machine_items(setup.items, options);

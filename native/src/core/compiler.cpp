@@ -25830,7 +25830,10 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
                                                  const V2Program& program,
                                                  const std::vector<MachineItem>& items) {
   std::vector<PreloadReport> preloads;
-  auto add_preload = [&](const std::string& register_name, const std::string& value) {
+  auto add_preload = [&](const std::string& register_name, const std::string& value,
+                         std::optional<std::string> setup_target_name = std::nullopt,
+                         bool setup_expression = false,
+                         std::optional<int> setup_source_line = std::nullopt) {
     const auto duplicate =
         std::find_if(preloads.begin(), preloads.end(), [&](const PreloadReport& preload) {
           return preload.register_name == register_name;
@@ -25841,11 +25844,35 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         .register_name = register_name,
         .value = value,
         .counts_against_program = false,
+        .setup_target_name = std::move(setup_target_name),
+        .setup_expression = setup_expression,
+        .setup_source_line = setup_source_line,
     });
   };
 
-  for (const auto& [unused_name, field] : context.state_fields) {
-    (void)unused_name;
+  auto setup_expression_can_lower = [&](const auto& self, const Expression& expression) -> bool {
+    if (expression.kind == "number")
+      return true;
+    if (expression.kind == "unary")
+      return expression.op == "-" && expression.expr != nullptr && self(self, *expression.expr);
+    if (expression.kind == "binary")
+      return (expression.op == "+" || expression.op == "-" || expression.op == "*" ||
+              expression.op == "/") &&
+             expression.left != nullptr && expression.right != nullptr &&
+             self(self, *expression.left) && self(self, *expression.right);
+    if (expression.kind != "call")
+      return false;
+    const std::string callee = lower_ascii(expression.callee);
+    if (callee == "random")
+      return expression.args.size() <= 2U &&
+             std::all_of(expression.args.begin(), expression.args.end(),
+                         [&](const Expression& arg) { return self(self, arg); });
+    return expression.args.size() == 1U && x_transform_unary_opcode(callee).has_value() &&
+           self(self, expression.args.front());
+  };
+
+  for (const V2StateField& state_field : program.state) {
+    const V2StateField* field = &state_field;
     if (field->type == "coord_list" && field->initial.has_value() && field->domain.has_value() &&
         context.boards.contains(*field->domain) && field->count.has_value()) {
       const std::string initial_text = trim_ascii(*field->initial);
@@ -25886,6 +25913,7 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     }
 
     std::optional<std::string> value;
+    bool setup_expression = false;
     if (field->initial_stack.has_value()) {
       value = "stack." + *field->initial_stack;
     } else if (field->initial.has_value()) {
@@ -25900,8 +25928,13 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         } else {
           const Expression initial = parse_expression(*field->initial, field->line);
           const std::optional<double> numeric = numeric_value_of_expression(context, initial);
-          if (numeric.has_value())
+          if (numeric.has_value()) {
             value = format_number_literal(*numeric);
+          } else if (field->bank.has_value() &&
+                     setup_expression_can_lower(setup_expression_can_lower, initial)) {
+            value = initial_text;
+            setup_expression = true;
+          }
         }
       } catch (const std::exception&) {
         value.reset();
@@ -25912,16 +25945,17 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
 
     if (field->bank.has_value()) {
       for (int index = field->bank->min; index <= field->bank->max; ++index) {
-        const auto register_it = context.registers.find(state_bank_element_name(*field, index));
+        const std::string element = state_bank_element_name(*field, index);
+        const auto register_it = context.registers.find(element);
         if (register_it != context.registers.end())
-          add_preload(register_it->second, *value);
+          add_preload(register_it->second, *value, element, setup_expression, field->line);
       }
       continue;
     }
 
     const auto register_it = context.registers.find(field->name);
     if (register_it != context.registers.end())
-      add_preload(register_it->second, *value);
+      add_preload(register_it->second, *value, field->name, setup_expression, field->line);
   }
 
   if (context.uses_formatted_coord_report) {

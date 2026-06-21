@@ -4372,6 +4372,49 @@ program RepeatedConstantPreload {
   require(repeated_constant_preload.listing.find("preload const 12345") != std::string::npos,
           "main listing should annotate preloaded constant recalls");
 
+  CompileOptions indexed_setup_options;
+  indexed_setup_options.analysis = true;
+  indexed_setup_options.budget = 999;
+  const CompileResult indexed_setup_bank_loop = compile_source(R"mkpro(
+program IndexedSetupBankLoop {
+  state {
+    room: counter 0..6 = 0
+    rows: group(1..4) {
+      row: packed = int(random(9)) + 1
+    }
+  }
+
+  loop {
+    halt(rows[room + 1].row)
+  }
+}
+)mkpro",
+                                                               indexed_setup_options);
+  require(indexed_setup_bank_loop.implemented,
+          "native compiler should lower repeated indexed bank setup expressions");
+  require(indexed_setup_bank_loop.diagnostics.empty(),
+          "indexed setup bank loop compile should not report diagnostics");
+  require(indexed_setup_bank_loop.setup_program.has_value(),
+          "indexed setup bank loop should emit a setup program");
+  const std::vector<ResolvedStep>& indexed_setup_steps =
+      indexed_setup_bank_loop.setup_program->steps;
+  require(has_optimization(indexed_setup_bank_loop, "setup-indexed-bank-loop"),
+          "indexed setup bank loop should report the TS setup-indexed-bank-loop strategy");
+  require(std::count_if(indexed_setup_steps.begin(), indexed_setup_steps.end(),
+                        [](const ResolvedStep& step) { return step.hex == "3B"; }) == 1,
+          "indexed setup bank loop should emit one random draw opcode in the setup loop body");
+  require(std::any_of(indexed_setup_steps.begin(), indexed_setup_steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.mnemonic == "К X->П 0" &&
+                               step.comment == "setup indexed rows_row_1..rows_row_4";
+                      }),
+          "indexed setup bank loop should store through indirect R0");
+  require(std::any_of(indexed_setup_steps.begin(), indexed_setup_steps.end(),
+                      [](const ResolvedStep& step) { return step.comment == "restore setup R0"; }),
+          "indexed setup bank loop should restore R0 after using it as setup pointer");
+  require(indexed_setup_steps.size() < 25U,
+          "indexed setup bank loop should stay compact compared with explicit initialization");
+
   CompileOptions fractional_selector_options;
   fractional_selector_options.analysis = true;
   fractional_selector_options.preloaded_constant_registers["7"] = "36.123456";
