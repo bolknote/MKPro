@@ -5770,6 +5770,7 @@ void collect_expression_use_count(LoweringContext& context, const Expression& ex
       collect_expression_use_count(context, *expression.right);
   }
   if (expression.kind == "call") {
+    ++context.expression_call_counts[lower_ascii(expression.callee)];
     for (const Expression& arg : expression.args)
       collect_expression_use_count(context, arg);
   }
@@ -5794,6 +5795,8 @@ void collect_expression_use_counts(LoweringContext& context,
         collect_expression_use_count_from_text(context, predicate.left, statement.line);
         collect_expression_use_count_from_text(context, predicate.right, statement.line);
       } else if (predicate.kind == "v2_contains") {
+        if (is_segmented_cells_name(context, predicate.collection))
+          ++context.expression_call_counts["__seg_bit_has"];
         collect_expression_use_count_from_text(context, predicate.collection, statement.line);
         collect_expression_use_count_from_text(context, predicate.item, statement.line);
       }
@@ -5820,6 +5823,7 @@ void collect_expression_use_counts(LoweringContext& context,
 
 void collect_expression_use_counts(LoweringContext& context, const V2Program& program) {
   context.expression_use_counts.clear();
+  context.expression_call_counts.clear();
   collect_expression_use_counts(context, program.body);
   for (const V2Rule& rule : program.rules)
     collect_expression_use_counts(context, rule.body);
@@ -9144,9 +9148,21 @@ bool emit_segmented_bitplane_group_dispatch(
   return true;
 }
 
+std::optional<std::string>
+emit_segmented_bitplane_indirect_select_from_current_x(LoweringContext& context, int source_line);
+
+bool emit_segmented_bitplane_hit_with_selector(LoweringContext& context,
+                                               const std::string& collection,
+                                               const std::string& selector, int source_line);
+
 bool emit_segmented_bitplane_hit_from_current_x(LoweringContext& context,
                                                 const std::string& collection, int source_line) {
-  return emit_segmented_bitplane_group_dispatch(
+  if (const std::optional<std::string> selector =
+          emit_segmented_bitplane_indirect_select_from_current_x(context, source_line)) {
+    return emit_segmented_bitplane_hit_with_selector(context, collection, *selector, source_line);
+  }
+
+  if (!emit_segmented_bitplane_group_dispatch(
       context, collection, source_line, [&](int /*group*/, const std::string& plane) {
         Expression hit =
             bit_membership_expression(identifier_expression(plane),
@@ -9156,7 +9172,15 @@ bool emit_segmented_bitplane_hit_from_current_x(LoweringContext& context,
         if (!context.emitter.items.empty())
           context.emitter.items.back().comment = "segmented bitplane hit";
         return true;
-      });
+      })) {
+    return false;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "segmented-bitplane-hit-helper",
+      .detail =
+          "Emitted shared hit helper for " + collection + " through four 25-cell bitplanes.",
+  });
+  return true;
 }
 
 std::string segmented_hit_helper_label(LoweringContext& context, const std::string& collection) {
@@ -9246,35 +9270,55 @@ bool emit_selected_segmented_plane_store(LoweringContext& context, const std::st
   return true;
 }
 
+bool emit_segmented_bitplane_hit_with_selector(LoweringContext& context,
+                                               const std::string& collection,
+                                               const std::string& selector, int source_line) {
+  if (!lower_expression_to_x(
+          context, bit_mask_expression(identifier_expression(std::string(kSegmentedBitplaneIndex)))))
+    return false;
+  if (!emit_selected_segmented_plane_recall(context, selector, "segmented bitplane selected plane",
+                                            source_line))
+    return false;
+  context.emitter.emit_op(0x37, "К ∧", "segmented bitplane hit test", source_line);
+  context.emitter.emit_op(0x35, "К {x}", "segmented bitplane hit fraction", source_line);
+  context.emitter.emit_op(0x32, "К ЗН", "segmented bitplane hit to count", source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "segmented-bitplane-hit-indirect-helper",
+      .detail = "Emitted shared hit helper for " + collection +
+                " with one indirect selected plane.",
+  });
+  return true;
+}
+
+int expression_call_count(const LoweringContext& context, const std::string& name) {
+  const auto it = context.expression_call_counts.find(lower_ascii(name));
+  return it == context.expression_call_counts.end() ? 0 : it->second;
+}
+
+bool should_share_segmented_bitplane_hit_helper(const LoweringContext& context) {
+  return expression_call_count(context, "__seg_bit_has") > 1 ||
+         expression_call_count(context, "line_count") > 0;
+}
+
 bool lower_segmented_bitplane_hit_to_x(LoweringContext& context, const std::string& collection,
                                        const Expression& item, int source_line) {
   if (!ensure_segmented_bitplane_registers(context, collection))
     return false;
   if (!lower_expression_to_x(context, item))
     return false;
-  if (const std::optional<std::string> selector =
-          emit_segmented_bitplane_indirect_select_from_current_x(context, source_line)) {
-    if (!lower_expression_to_x(context, bit_mask_expression(identifier_expression(
-                                            std::string(kSegmentedBitplaneIndex)))))
-      return false;
-    if (!emit_selected_segmented_plane_recall(context, *selector,
-                                              "segmented bitplane selected plane", source_line))
-      return false;
-    context.emitter.emit_op(0x37, "К ∧", "segmented bitplane hit test", source_line);
-    context.emitter.emit_op(0x35, "К {x}", "segmented bitplane hit fraction", source_line);
-    context.emitter.emit_op(0x32, "К ЗН", "segmented bitplane hit to count", source_line);
+  if (should_share_segmented_bitplane_hit_helper(context)) {
+    const std::string label = segmented_hit_helper_label(context, collection);
+    context.emitter.emit_jump(0x53, "ПП", label, "segmented bitplane hit " + collection,
+                              source_line);
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_aliases.clear();
     context.optimizations.push_back(OptimizationReport{
-        .name = "segmented-bitplane-hit-indirect-helper",
-        .detail =
-            "Emitted shared hit helper for " + collection + " with one indirect selected plane.",
+        .name = "segmented-bitplane-hit-helper-call",
+        .detail = "Tested " + collection + " through a shared 25-cell bitplane selector.",
     });
     return true;
   }
-  const std::string label = segmented_hit_helper_label(context, collection);
-  context.emitter.emit_jump(0x53, "ПП", label, "segmented bitplane hit " + collection, source_line);
-  context.emitter.current_x_variable.reset();
-  context.emitter.current_x_aliases.clear();
-  return true;
+  return emit_segmented_bitplane_hit_from_current_x(context, collection, source_line);
 }
 
 bool lower_segmented_bitplane_update(LoweringContext& context, const std::string& collection,

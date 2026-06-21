@@ -165,6 +165,7 @@ struct LoweringContext {
   std::map<std::string, std::string> show_sequence_helper_labels;
   std::vector<ShowSequenceHelperRequest> show_sequence_helpers;
   std::map<std::string, int> expression_use_counts;
+  std::map<std::string, int> expression_call_counts;
   std::map<std::string, std::string> random_cell_helper_labels;
   std::vector<RandomCellHelperRequest> random_cell_helpers;
   std::map<std::string, std::string> expression_helper_labels;

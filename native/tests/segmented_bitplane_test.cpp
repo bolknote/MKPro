@@ -208,6 +208,8 @@ program SegmentedConditionHelper {
           "segmented bitplane condition-helper program should not report diagnostics");
   require(has_optimization(condition_helper, "segmented-bitplane-condition-helper"),
           "segmented membership before line_count should report the TS condition helper");
+  require(has_optimization(condition_helper, "segmented-bitplane-hit-helper-call"),
+          "segmented membership before line_count should route through the shared hit helper");
   require(has_optimization(condition_helper, "segmented-bitplane-line-count-scan"),
           "segmented membership helper program should still use the line_count scan");
   require(!has_optimization(condition_helper, "spatial-hit-condition-helper"),
