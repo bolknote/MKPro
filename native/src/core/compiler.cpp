@@ -9083,14 +9083,12 @@ Expression spatial_count_expression(LoweringContext& context, const std::string&
   const Expression& mask = args.at(0);
   const Expression& cell = args.at(1);
   const V2Board* board = board_for_cells_mask(context, mask);
-  if (mask.kind != "identifier" || board == nullptr)
-    return {};
 
   if (name == "neighbor_count") {
     std::vector<int> offsets;
-    if (board->height == 1) {
+    if (board != nullptr && board->height == 1) {
       offsets = {-1, 1};
-    } else if (board->width == 1) {
+    } else if (board != nullptr && board->width == 1) {
       offsets = {-10, 10};
     } else {
       offsets = {-11, -10, -9, -1, 1, 9, 10, 11};
@@ -9104,6 +9102,8 @@ Expression spatial_count_expression(LoweringContext& context, const std::string&
   }
 
   if (name != "line_count")
+    return {};
+  if (mask.kind != "identifier" || board == nullptr)
     return {};
 
   if (board->width <= 4 && board->height <= 4) {
@@ -13994,6 +13994,10 @@ bool lower_builtin_call_to_x(LoweringContext& context, const Expression& express
         return false;
       if (!context.emitter.items.empty())
         context.emitter.items.back().comment = callee + " result";
+      context.optimizations.push_back(OptimizationReport{
+          .name = "spatial-count-hit-helper",
+          .detail = "Lowered " + callee + "() through shared spatial hit helper calls.",
+      });
       return true;
     }
   }

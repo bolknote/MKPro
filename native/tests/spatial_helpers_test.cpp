@@ -137,6 +137,32 @@ program SegmentedSpatialSumLoopHelperReports {
           "segmented sum-loop helper should report inline segmented bitplane hits");
   require(!has_optimization(segmented_sum, "spatial-hit-inline"),
           "segmented sum-loop helper should not report ordinary spatial hit inlining");
+
+  const CompileResult expression_mask_count = compile_source(R"mkpro(
+program SpatialCountHitHelperFallback {
+  field: board(0..9, 0..9)
+
+  state {
+    cell: coord(field)
+    a: cells(field) = 0
+    b: cells(field) = 0
+    answer: counter 0..9 = 0
+  }
+
+  loop {
+    cell = read()
+    answer = neighbor_count(bit_or(a, b), cell)
+    halt(answer)
+  }
+}
+)mkpro",
+                                                             options);
+  require_clean_compile(expression_mask_count, "spatial count hit-helper fallback");
+  require(has_optimization(expression_mask_count, "spatial-count-hit-helper"),
+          "expression-mask neighbor_count should report the TS hit-helper fallback");
+  require(expression_mask_count.listing.find("spatial hit test") != std::string::npos ||
+              expression_mask_count.listing.find("bit membership to count") != std::string::npos,
+          "expression-mask neighbor_count should lower through spatial hit membership tests");
 }
 
 } // namespace mkpro::tests
