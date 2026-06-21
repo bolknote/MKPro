@@ -2201,6 +2201,47 @@ program SmallSetCalls {
   require(has_optimization(small_set_call, "small-set-primitive-lowering"),
           "near_any()/eq_any() should report the TS strategy name");
 
+  CompileOptions near_any_helper_options;
+  near_any_helper_options.analysis = true;
+  const CompileResult near_any_helper = compile_source(R"mkpro(
+program IndexedSmallSetHelper {
+  cave: board(1..20, 1..1)
+
+  state {
+    room: coord(cave) = 1
+    slots: coord[1..2](cave) = random(cave)
+    clue: counter 0..9 = 0
+  }
+
+  loop {
+    if near_any(room, 1, slots[1], slots[2]) >= 0 {
+      clue = 1
+    }
+    if near_any(room, 1, slots[1], slots[2]) >= 0 {
+      clue = 2
+    }
+    if near_any(room, 1, slots[1], slots[2]) >= 0 {
+      halt(clue)
+    }
+  }
+}
+)mkpro",
+                                                       near_any_helper_options);
+  require(near_any_helper.implemented,
+          "native compiler should lower repeated near_any conditions through a helper");
+  require(near_any_helper.diagnostics.empty(),
+          "near_any helper compile should not report diagnostics");
+  require(has_optimization(near_any_helper, "constant-indexed-state-resolution"),
+          "near_any helper analysis should see constant indexed state elements");
+  require(has_optimization(near_any_helper, "near-any-helper-lowering"),
+          "repeated near_any conditions should report helper-call lowering");
+  require(has_optimization(near_any_helper, "near-any-helper"),
+          "repeated near_any conditions should emit the shared helper body");
+  require(near_any_helper.listing.find("near_any candidate") != std::string::npos,
+          "near_any helper calls should keep candidate comments");
+  require(near_any_helper.listing.find("near_any return") != std::string::npos,
+          "near_any helper should emit a shared return body");
+
   CompileOptions formula_helper_options;
   formula_helper_options.analysis = true;
   const CompileResult formula_helpers = compile_source(R"mkpro(

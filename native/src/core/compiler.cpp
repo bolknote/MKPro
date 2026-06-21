@@ -14388,6 +14388,342 @@ bool lower_negated_zero_false_branch(LoweringContext& context, const V2Predicate
   return true;
 }
 
+struct NearAnyHelperConditionMatch {
+  Expression value;
+  Expression radius;
+  std::vector<Expression> candidates;
+  std::string op;
+};
+
+std::string near_any_helper_key(const Expression& value, const Expression& radius) {
+  return expression_to_json(value) + "|" + expression_to_json(radius);
+}
+
+std::string flip_zero_comparison_operands_op(const std::string& op) {
+  if (op == "<")
+    return ">";
+  if (op == "<=")
+    return ">=";
+  if (op == ">")
+    return "<";
+  if (op == ">=")
+    return "<=";
+  return op;
+}
+
+std::optional<Expression> near_any_simple_stack_load(LoweringContext& context,
+                                                     const Expression& expression,
+                                                     bool report_resolution, int source_line) {
+  if (is_simple_stack_load(expression))
+    return expression;
+  if (expression.kind != "indexed" || expression.index == nullptr)
+    return std::nullopt;
+  const std::string key = bank_member_key(expression.base, expression.field);
+  const auto bank_it = context.state_banks.find(key);
+  if (bank_it == context.state_banks.end())
+    return std::nullopt;
+  const V2StateField& field = *bank_it->second;
+  const std::optional<double> value = numeric_value_of_expression(context, *expression.index);
+  if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
+    return std::nullopt;
+  const int index = static_cast<int>(std::llround(*value));
+  if (index < field.bank->min || index > field.bank->max)
+    return std::nullopt;
+  if (report_resolution)
+    ++context.constant_indexed_state_resolutions;
+  (void)source_line;
+  return identifier_expression(state_bank_element_name(field, index));
+}
+
+int condition_expression_cost(const LoweringContext& context, const Expression& expression) {
+  if (expression.kind == "number" && has_preloaded_number(context, expression.raw))
+    return 1;
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr &&
+      expression.expr->kind == "number" &&
+      has_preloaded_number(context, "-" + expression.expr->raw)) {
+    return 1;
+  }
+  if (expression.kind == "string")
+    return 0;
+  if (expression.kind == "number")
+    return guarded_estimate_number_cost(expression.raw);
+  if (expression.kind == "identifier")
+    return 1;
+  if (expression.kind == "indexed")
+    return (expression.index == nullptr ? 0
+                                        : condition_expression_cost(context, *expression.index)) +
+           2;
+  if (expression.kind == "unary")
+    return (expression.expr == nullptr ? 0 : condition_expression_cost(context, *expression.expr)) +
+           1;
+  if (expression.kind == "binary") {
+    if (expression.op == "*" && expression.left != nullptr && expression.right != nullptr &&
+        expression_equals(*expression.left, *expression.right) &&
+        expression_pure_for_substitution(*expression.left)) {
+      return condition_expression_cost(context, *expression.left) + 1;
+    }
+    if (expression.op == "/" && expression.left != nullptr && expression.right != nullptr &&
+        is_numeric_literal_value(*expression.left, 1)) {
+      return condition_expression_cost(context, *expression.right) + 1;
+    }
+    return (expression.left == nullptr ? 0 : condition_expression_cost(context, *expression.left)) +
+           (expression.right == nullptr ? 0
+                                        : condition_expression_cost(context, *expression.right)) +
+           1;
+  }
+  if (expression.kind == "call") {
+    const std::string name = lower_ascii(expression.callee);
+    if (name == "min" || name == "max" || name == "safe_min" || name == "safe_max" ||
+        name == "bit_and" || name == "bit_or" || name == "bit_xor" || name == "pow") {
+      return (expression.args.empty() ? 0
+                                      : condition_expression_cost(context, expression.args.at(0))) +
+             (expression.args.size() < 2U
+                  ? 0
+                  : condition_expression_cost(context, expression.args.at(1))) +
+             1;
+    }
+    return (expression.args.empty() ? 0
+                                    : condition_expression_cost(context, expression.args.front())) +
+           1;
+  }
+  return guarded_estimate_expression_cost(expression);
+}
+
+int near_any_margin_cost(const LoweringContext& context, const Expression& value,
+                         const Expression& radius, const Expression& candidate) {
+  return condition_expression_cost(context, value) + condition_expression_cost(context, candidate) +
+         1 + 1 + condition_expression_cost(context, radius) + 1;
+}
+
+int near_any_condition_inline_cost(const LoweringContext& context,
+                                   const NearAnyHelperConditionMatch& match) {
+  int cost = 0;
+  for (const Expression& candidate : match.candidates)
+    cost += near_any_margin_cost(context, match.value, match.radius, candidate);
+  cost += static_cast<int>(match.candidates.empty() ? 0U : match.candidates.size() - 1U);
+  cost += 2;
+  return cost;
+}
+
+int near_any_helper_condition_call_cost(const LoweringContext& context,
+                                        const NearAnyHelperConditionMatch& match) {
+  int cost = 0;
+  for (const Expression& candidate : match.candidates)
+    cost += condition_expression_cost(context, candidate) + 2;
+  cost += static_cast<int>(match.candidates.empty() ? 0U : match.candidates.size() - 1U);
+  cost += 2;
+  return cost;
+}
+
+std::optional<NearAnyHelperConditionMatch>
+match_near_any_helper_condition(LoweringContext& context, const V2Predicate& predicate,
+                                int source_line, bool report_resolution) {
+  if (predicate.kind != "v2_compare")
+    return std::nullopt;
+  Expression tested;
+  std::string op;
+  try {
+    const Expression left = parse_expression(predicate.left, source_line);
+    const Expression right = parse_expression(predicate.right, source_line);
+    if (is_zero_expression(context, right)) {
+      tested = left;
+      op = predicate.op;
+    } else if (is_zero_expression(context, left)) {
+      tested = right;
+      op = flip_zero_comparison_operands_op(predicate.op);
+    } else {
+      return std::nullopt;
+    }
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  if (op != ">=" && op != "<")
+    return std::nullopt;
+  if (tested.kind != "call" || lower_ascii(tested.callee) != "near_any" ||
+      tested.args.size() < 3U) {
+    return std::nullopt;
+  }
+
+  std::optional<Expression> value =
+      near_any_simple_stack_load(context, tested.args.at(0), report_resolution, source_line);
+  std::optional<Expression> radius =
+      near_any_simple_stack_load(context, tested.args.at(1), report_resolution, source_line);
+  if (!value.has_value() || !radius.has_value())
+    return std::nullopt;
+
+  std::vector<Expression> candidates;
+  for (std::size_t index = 2; index < tested.args.size(); ++index) {
+    std::optional<Expression> candidate =
+        near_any_simple_stack_load(context, tested.args.at(index), report_resolution, source_line);
+    if (!candidate.has_value())
+      return std::nullopt;
+    candidates.push_back(std::move(*candidate));
+  }
+  if (candidates.empty())
+    return std::nullopt;
+  return NearAnyHelperConditionMatch{
+      .value = std::move(*value),
+      .radius = std::move(*radius),
+      .candidates = std::move(candidates),
+      .op = op,
+  };
+}
+
+void collect_near_any_helper_stats_for_statement(LoweringContext& context,
+                                                 const V2Statement& statement);
+
+void add_near_any_helper_stat(LoweringContext& context, const V2Predicate& predicate,
+                              int source_line, bool negated) {
+  V2Predicate effective_predicate = predicate;
+  if (negated)
+    effective_predicate.op = invert_comparison_op(effective_predicate.op);
+  const auto [selected_predicate, unused_normalized] =
+      select_cheaper_equivalent_condition(context, effective_predicate, source_line);
+  (void)unused_normalized;
+  const std::optional<NearAnyHelperConditionMatch> match =
+      match_near_any_helper_condition(context, selected_predicate, source_line, false);
+  if (!match.has_value())
+    return;
+
+  const std::string key = near_any_helper_key(match->value, match->radius);
+  const int helper_condition_cost = near_any_helper_condition_call_cost(context, *match);
+  const int ordinary_cost = near_any_condition_inline_cost(context, *match);
+  const auto existing = context.near_any_helper_stats.find(key);
+  if (existing == context.near_any_helper_stats.end()) {
+    const int helper_body_cost = condition_expression_cost(context, match->value) +
+                                 condition_expression_cost(context, match->radius) + 5;
+    context.near_any_helper_stats.emplace(
+        key, NearAnyHelperStats{
+                 .candidate_count = static_cast<int>(match->candidates.size()),
+                 .condition_count = 1,
+                 .ordinary_cost = ordinary_cost,
+                 .helper_call_cost = helper_condition_cost,
+                 .helper_cost = helper_body_cost + helper_condition_cost,
+             });
+    return;
+  }
+  NearAnyHelperStats& stats = existing->second;
+  stats.candidate_count += static_cast<int>(match->candidates.size());
+  stats.condition_count += 1;
+  stats.ordinary_cost += ordinary_cost;
+  stats.helper_call_cost += helper_condition_cost;
+  stats.helper_cost += helper_condition_cost;
+}
+
+void collect_near_any_helper_stats_for_statements(LoweringContext& context,
+                                                  const std::vector<V2Statement>& statements) {
+  for (const V2Statement& statement : statements)
+    collect_near_any_helper_stats_for_statement(context, statement);
+}
+
+void collect_near_any_helper_stats_for_statement(LoweringContext& context,
+                                                 const V2Statement& statement) {
+  if ((statement.kind == "v2_if" || statement.kind == "v2_while") &&
+      statement.predicate.has_value()) {
+    add_near_any_helper_stat(context, *statement.predicate, statement.line, statement.negated);
+  }
+  collect_near_any_helper_stats_for_statements(context, statement.body);
+  collect_near_any_helper_stats_for_statements(context, statement.then_body);
+  collect_near_any_helper_stats_for_statements(context, statement.else_body);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_near_any_helper_stats_for_statement(context, *match_case.action);
+  }
+  if (statement.otherwise != nullptr)
+    collect_near_any_helper_stats_for_statement(context, *statement.otherwise);
+}
+
+void collect_near_any_helper_stats(LoweringContext& context, const V2Program& program) {
+  context.near_any_helper_stats.clear();
+  collect_near_any_helper_stats_for_statements(context, program.body);
+  for (const V2Rule& rule : program.rules)
+    collect_near_any_helper_stats_for_statements(context, rule.body);
+}
+
+const NearAnyHelperRequest& ensure_near_any_helper(LoweringContext& context,
+                                                   const NearAnyHelperConditionMatch& match,
+                                                   int source_line) {
+  const std::string key = near_any_helper_key(match.value, match.radius);
+  const auto existing = context.near_any_helper_labels.find(key);
+  if (existing != context.near_any_helper_labels.end()) {
+    const auto helper = std::find_if(
+        context.near_any_helpers.begin(), context.near_any_helpers.end(),
+        [&](const NearAnyHelperRequest& candidate) { return candidate.label == existing->second; });
+    if (helper != context.near_any_helpers.end())
+      return *helper;
+  }
+  const std::string label = "__near_any_" + std::to_string(context.near_any_helpers.size());
+  context.near_any_helper_labels[key] = label;
+  context.near_any_helpers.push_back(NearAnyHelperRequest{
+      .key = key,
+      .label = label,
+      .value = match.value,
+      .radius = match.radius,
+      .line = source_line,
+  });
+  return context.near_any_helpers.back();
+}
+
+bool lower_near_any_candidate_for_helper(LoweringContext& context, const Expression& candidate,
+                                         int source_line) {
+  if (candidate.kind == "identifier" && x_holds_identifier(context, candidate.name)) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "stack-current-x-scheduling",
+        .detail = "Reused " + candidate.name + " already in X for near_any candidate at line " +
+                  std::to_string(source_line) + ".",
+    });
+    return true;
+  }
+  return lower_expression_to_x(context, candidate);
+}
+
+bool lower_near_any_margin_with_helper(LoweringContext& context,
+                                       const NearAnyHelperConditionMatch& match,
+                                       const std::string& label, int source_line) {
+  for (std::size_t index = 0; index < match.candidates.size(); ++index) {
+    if (!lower_near_any_candidate_for_helper(context, match.candidates.at(index), source_line))
+      return false;
+    context.emitter.emit_jump(0x53, "ПП", label, "near_any candidate", source_line);
+    if (index > 0)
+      context.emitter.emit_op(0x36, "К max", "near_any max margin", source_line);
+  }
+  return true;
+}
+
+bool lower_near_any_helper_condition_false_branch(LoweringContext& context,
+                                                  const V2Predicate& predicate,
+                                                  const std::string& false_label, int source_line) {
+  if (context.emitting_near_any_helper)
+    return false;
+  const std::optional<NearAnyHelperConditionMatch> match =
+      match_near_any_helper_condition(context, predicate, source_line, true);
+  if (!match.has_value())
+    return false;
+  const std::string key = near_any_helper_key(match->value, match->radius);
+  const auto stats_it = context.near_any_helper_stats.find(key);
+  if (stats_it == context.near_any_helper_stats.end() ||
+      stats_it->second.helper_cost >= stats_it->second.ordinary_cost) {
+    return false;
+  }
+
+  const NearAnyHelperRequest& helper = ensure_near_any_helper(context, *match, source_line);
+  if (!lower_near_any_margin_with_helper(context, *match, helper.label, source_line))
+    return false;
+  const std::optional<std::pair<int, std::string>> opcode = direct_zero_test_opcode(match->op);
+  if (!opcode.has_value())
+    return false;
+  context.emitter.emit_jump(opcode->first, opcode->second, false_label,
+                            "false branch for " + match->op, source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "near-any-helper-lowering",
+      .detail = "Lowered " + condition_text(predicate) +
+                " through shared near_any helper at line " + std::to_string(source_line) + " (" +
+                std::to_string(stats_it->second.helper_cost) + " vs " +
+                std::to_string(stats_it->second.ordinary_cost) + " estimated group steps).",
+  });
+  return true;
+}
+
 Expression near_any_margin_expression(const Expression& value, const Expression& radius,
                                       const Expression& candidate) {
   return binary_expression(radius, "-",
@@ -14564,6 +14900,12 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
                   ".",
     });
   }
+
+  if (lower_near_any_helper_condition_false_branch(context, selected_predicate, false_label,
+                                                   source_line))
+    return true;
+  if (has_errors(context.diagnostics))
+    return false;
 
   if (lower_small_set_condition_false_branch(context, selected_predicate, false_label, source_line))
     return true;
@@ -24416,6 +24758,36 @@ bool lower_expression_helpers(LoweringContext& context) {
   return true;
 }
 
+bool lower_near_any_helpers(LoweringContext& context) {
+  for (const NearAnyHelperRequest& helper : context.near_any_helpers) {
+    context.emitter.emit_label(
+        helper.label,
+        {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
+    const bool previous = context.emitting_near_any_helper;
+    context.emitting_near_any_helper = true;
+    const bool lowered_value = lower_expression_to_x(context, helper.value);
+    if (lowered_value)
+      context.emitter.emit_op(0x11, "-", "near_any delta", helper.line);
+    if (lowered_value)
+      context.emitter.emit_op(0x31, "К |x|", "near_any distance", helper.line);
+    const bool lowered_radius = lowered_value && lower_expression_to_x(context, helper.radius);
+    if (lowered_radius)
+      context.emitter.emit_op(0x14, "<->", "near_any radius before distance", helper.line);
+    if (lowered_radius)
+      context.emitter.emit_op(0x11, "-", "near_any margin", helper.line);
+    context.emitting_near_any_helper = previous;
+    if (!lowered_radius)
+      return false;
+    context.emitter.emit_op(0x52, "В/О", "near_any return", helper.line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "near-any-helper",
+        .detail = "Emitted shared near_any helper for " + expression_to_source(helper.value) +
+                  " / " + expression_to_source(helper.radius) + ".",
+    });
+  }
+  return true;
+}
+
 bool lower_spatial_hit_helpers(LoweringContext& context) {
   if (!context.spatial_hit_helper_order.empty() && !reserve_bit_mask_helper_preloads(context))
     return false;
@@ -27730,6 +28102,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                                          options.force_fractional_constant_selector_preloads);
         }
         plan_spatial_line_count_preloads(context, *ast.v2);
+        collect_near_any_helper_stats(context, *ast.v2);
       }
       if (!has_errors(context.diagnostics)) {
         const bool lowered_main = lower_statement_block(context, ast.v2->body);
@@ -27742,8 +28115,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               lower_packed_display_helpers(context) && lower_display_byte_helpers(context) &&
               lower_show_sequence_helpers(context) && lower_literal_display_helpers(context) &&
               lower_random_cell_helpers(context) && lower_expression_helpers(context) &&
-              lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
-              lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
+              lower_near_any_helpers(context) && lower_spatial_sum_helpers(context) &&
+              lower_spatial_hit_helpers(context) && lower_bit_mask_helper(context) &&
+              lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
           if (emitted_tail) {

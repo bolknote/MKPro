@@ -77,6 +77,22 @@ struct ExpressionHelperRequest {
   int line = 0;
 };
 
+struct NearAnyHelperRequest {
+  std::string key;
+  std::string label;
+  Expression value;
+  Expression radius;
+  int line = 0;
+};
+
+struct NearAnyHelperStats {
+  int candidate_count = 0;
+  int condition_count = 0;
+  int ordinary_cost = 0;
+  int helper_call_cost = 0;
+  int helper_cost = 0;
+};
+
 struct XParamProcLowering {
   std::string param;
   V2Statement first;
@@ -153,6 +169,9 @@ struct LoweringContext {
   std::vector<RandomCellHelperRequest> random_cell_helpers;
   std::map<std::string, std::string> expression_helper_labels;
   std::vector<ExpressionHelperRequest> expression_helpers;
+  std::map<std::string, NearAnyHelperStats> near_any_helper_stats;
+  std::map<std::string, std::string> near_any_helper_labels;
+  std::vector<NearAnyHelperRequest> near_any_helpers;
   std::optional<std::string> spatial_count_counter_override;
   std::optional<std::string> tail_show_target;
   std::set<std::string> transient_show_targets;
@@ -194,6 +213,7 @@ struct LoweringContext {
   bool emitting_show_sequence_helper = false;
   bool emitting_random_cell_helper = false;
   bool emitting_expression_helper = false;
+  bool emitting_near_any_helper = false;
   bool share_random_cell = false;
   bool aggressive_terminal_direct = false;
   bool invert_branch_order = false;
