@@ -12,24 +12,24 @@ std::string json_escape(std::string_view value) {
   out << '"';
   for (char ch : value) {
     switch (ch) {
-      case '\\':
-        out << "\\\\";
-        break;
-      case '"':
-        out << "\\\"";
-        break;
-      case '\n':
-        out << "\\n";
-        break;
-      case '\r':
-        out << "\\r";
-        break;
-      case '\t':
-        out << "\\t";
-        break;
-      default:
-        out << ch;
-        break;
+    case '\\':
+      out << "\\\\";
+      break;
+    case '"':
+      out << "\\\"";
+      break;
+    case '\n':
+      out << "\\n";
+      break;
+    case '\r':
+      out << "\\r";
+      break;
+    case '\t':
+      out << "\\t";
+      break;
+    default:
+      out << ch;
+      break;
     }
   }
   out << '"';
@@ -41,7 +41,8 @@ std::string json_array(const std::vector<T>& values, Fn item_to_json) {
   std::ostringstream out;
   out << '[';
   for (std::size_t index = 0; index < values.size(); ++index) {
-    if (index > 0) out << ',';
+    if (index > 0)
+      out << ',';
     out << item_to_json(values.at(index));
   }
   out << ']';
@@ -53,7 +54,8 @@ std::string string_array_to_json(const std::vector<std::string>& values) {
 }
 
 void add_field(std::ostringstream& out, bool& first, std::string_view name, std::string value) {
-  if (!first) out << ',';
+  if (!first)
+    out << ',';
   first = false;
   out << json_escape(name) << ':' << value;
 }
@@ -73,12 +75,16 @@ std::string display_item_to_json(const DisplayItem& item) {
   bool first = true;
   out << '{';
   add_field(out, first, "kind", json_escape(item.kind));
-  if (item.kind == "literal") add_field(out, first, "text", json_escape(item.text));
+  if (item.kind == "literal")
+    add_field(out, first, "text", json_escape(item.text));
   if (item.kind == "source") {
     add_field(out, first, "name", json_escape(item.name));
-    if (item.expr.has_value()) add_field(out, first, "expr", expression_to_json(*item.expr));
-    if (item.width.has_value()) add_field(out, first, "width", std::to_string(*item.width));
-    if (item.pad.has_value()) add_field(out, first, "pad", json_escape(*item.pad));
+    if (item.expr.has_value())
+      add_field(out, first, "expr", expression_to_json(*item.expr));
+    if (item.width.has_value())
+      add_field(out, first, "width", std::to_string(*item.width));
+    if (item.pad.has_value())
+      add_field(out, first, "pad", json_escape(*item.pad));
   }
   add_field(out, first, "line", std::to_string(item.line));
   out << '}';
@@ -139,9 +145,8 @@ std::string match_case_to_json(const V2MatchCase& match_case) {
 }
 
 std::string statement_array_to_json(const std::vector<V2Statement>& statements) {
-  return json_array(statements, [](const V2Statement& statement) {
-    return statement_to_json(statement);
-  });
+  return json_array(statements,
+                    [](const V2Statement& statement) { return statement_to_json(statement); });
 }
 
 std::string statement_to_json(const V2Statement& statement) {
@@ -149,37 +154,41 @@ std::string statement_to_json(const V2Statement& statement) {
   bool first = true;
   out << '{';
   add_field(out, first, "kind", json_escape(statement.kind));
-  if (statement.target.has_value()) add_field(out, first, "target", json_escape(*statement.target));
-  if (statement.expr.has_value()) add_field(out, first, "expr", json_escape(*statement.expr));
-  if (statement.op.has_value()) add_field(out, first, "op", json_escape(*statement.op));
-  if (statement.name.has_value()) add_field(out, first, "name", json_escape(*statement.name));
-  if (!statement.args.empty()) add_field(out, first, "args", string_array_to_json(statement.args));
+  if (statement.target.has_value())
+    add_field(out, first, "target", json_escape(*statement.target));
+  if (statement.expr.has_value())
+    add_field(out, first, "expr", json_escape(*statement.expr));
+  if (statement.op.has_value())
+    add_field(out, first, "op", json_escape(*statement.op));
+  if (statement.name.has_value())
+    add_field(out, first, "name", json_escape(*statement.name));
+  if (!statement.args.empty())
+    add_field(out, first, "args", string_array_to_json(statement.args));
   if (statement.predicate.has_value()) {
     add_field(out, first, "predicate", predicate_to_json(*statement.predicate));
   }
-  if (statement.negated) add_field(out, first, "negated", "true");
+  if (statement.negated)
+    add_field(out, first, "negated", "true");
   if (!statement.then_body.empty()) {
     add_field(out, first, "thenBody", statement_array_to_json(statement.then_body));
   }
   if (!statement.else_body.empty()) {
     add_field(out, first, "elseBody", statement_array_to_json(statement.else_body));
   }
-  if (!statement.body.empty()) add_field(out, first, "body", statement_array_to_json(statement.body));
+  if (!statement.body.empty())
+    add_field(out, first, "body", statement_array_to_json(statement.body));
   if (statement.items.has_value()) {
-    add_field(out, first, "items",
-              json_array(*statement.items, [](const DisplayItem& item) {
+    add_field(out, first, "items", json_array(*statement.items, [](const DisplayItem& item) {
                 return display_item_to_json(item);
               }));
   }
   if (!statement.inputs.empty()) {
-    add_field(out, first, "inputs",
-              json_array(statement.inputs, [](const V2RawInput& input) {
+    add_field(out, first, "inputs", json_array(statement.inputs, [](const V2RawInput& input) {
                 return raw_input_to_json(input);
               }));
   }
   if (!statement.outputs.empty()) {
-    add_field(out, first, "outputs",
-              json_array(statement.outputs, [](const V2RawOutput& output) {
+    add_field(out, first, "outputs", json_array(statement.outputs, [](const V2RawOutput& output) {
                 return raw_output_to_json(output);
               }));
   }
@@ -190,14 +199,12 @@ std::string statement_to_json(const V2Statement& statement) {
     add_field(out, first, "preserves", string_array_to_json(statement.preserves));
   }
   if (!statement.lines.empty()) {
-    add_field(out, first, "lines",
-              json_array(statement.lines, [](const RawBlockLine& line) {
+    add_field(out, first, "lines", json_array(statement.lines, [](const RawBlockLine& line) {
                 return raw_line_to_json(line);
               }));
   }
   if (!statement.cases.empty()) {
-    add_field(out, first, "cases",
-              json_array(statement.cases, [](const V2MatchCase& match_case) {
+    add_field(out, first, "cases", json_array(statement.cases, [](const V2MatchCase& match_case) {
                 return match_case_to_json(match_case);
               }));
   }
@@ -214,7 +221,8 @@ std::string state_bank_field_to_json(const V2StateBankField& bank) {
   bool first = true;
   out << '{';
   add_field(out, first, "name", json_escape(bank.name));
-  if (bank.member.has_value()) add_field(out, first, "member", json_escape(*bank.member));
+  if (bank.member.has_value())
+    add_field(out, first, "member", json_escape(*bank.member));
   add_field(out, first, "min", std::to_string(bank.min));
   add_field(out, first, "max", std::to_string(bank.max));
   out << '}';
@@ -228,12 +236,18 @@ std::string state_field_to_json(const V2StateField& field) {
   add_field(out, first, "kind", json_escape(field.kind));
   add_field(out, first, "name", json_escape(field.name));
   add_field(out, first, "type", json_escape(field.type));
-  if (field.bank.has_value()) add_field(out, first, "bank", state_bank_field_to_json(*field.bank));
-  if (field.domain.has_value()) add_field(out, first, "domain", json_escape(*field.domain));
-  if (field.count.has_value()) add_field(out, first, "count", std::to_string(*field.count));
-  if (field.min.has_value()) add_field(out, first, "min", std::to_string(*field.min));
-  if (field.max.has_value()) add_field(out, first, "max", std::to_string(*field.max));
-  if (field.initial.has_value()) add_field(out, first, "initial", json_escape(*field.initial));
+  if (field.bank.has_value())
+    add_field(out, first, "bank", state_bank_field_to_json(*field.bank));
+  if (field.domain.has_value())
+    add_field(out, first, "domain", json_escape(*field.domain));
+  if (field.count.has_value())
+    add_field(out, first, "count", std::to_string(*field.count));
+  if (field.min.has_value())
+    add_field(out, first, "min", std::to_string(*field.min));
+  if (field.max.has_value())
+    add_field(out, first, "max", std::to_string(*field.max));
+  if (field.initial.has_value())
+    add_field(out, first, "initial", json_escape(*field.initial));
   if (field.initial_stack.has_value())
     add_field(out, first, "initialStack", json_escape(*field.initial_stack));
   add_field(out, first, "line", std::to_string(field.line));
@@ -293,6 +307,41 @@ std::string const_to_json(const V2Const& constant) {
   return out.str();
 }
 
+std::string generic_state_field_to_json(const StateFieldAst& field) {
+  std::ostringstream out;
+  bool first = true;
+  out << '{';
+  add_field(out, first, "name", json_escape(field.name));
+  add_field(out, first, "type", json_escape(field.type));
+  if (field.min.has_value())
+    add_field(out, first, "min", std::to_string(*field.min));
+  if (field.max.has_value())
+    add_field(out, first, "max", std::to_string(*field.max));
+  if (field.initial.has_value())
+    add_field(out, first, "initial", expression_to_json(*field.initial));
+  if (field.initial_stack.has_value())
+    add_field(out, first, "initialStack", json_escape(*field.initial_stack));
+  if (field.implicit)
+    add_field(out, first, "implicit", "true");
+  add_field(out, first, "line", std::to_string(field.line));
+  out << '}';
+  return out.str();
+}
+
+std::string generic_state_to_json(const StateAst& state) {
+  std::ostringstream out;
+  bool first = true;
+  out << '{';
+  add_field(out, first, "kind", json_escape(state.kind));
+  add_field(out, first, "name", json_escape(state.name));
+  add_field(out, first, "fields", json_array(state.fields, [](const StateFieldAst& field) {
+              return generic_state_field_to_json(field);
+            }));
+  add_field(out, first, "line", std::to_string(state.line));
+  out << '}';
+  return out.str();
+}
+
 std::string rule_to_json(const V2Rule& rule) {
   std::ostringstream out;
   bool first = true;
@@ -306,19 +355,23 @@ std::string rule_to_json(const V2Rule& rule) {
   return out.str();
 }
 
-}  // namespace
+} // namespace
 
 std::string expression_to_json(const Expression& expression) {
   std::ostringstream out;
   bool first = true;
   out << '{';
   add_field(out, first, "kind", json_escape(expression.kind));
-  if (expression.kind == "number") add_field(out, first, "raw", json_escape(expression.raw));
-  if (expression.kind == "string") add_field(out, first, "text", json_escape(expression.text));
-  if (expression.kind == "identifier") add_field(out, first, "name", json_escape(expression.name));
+  if (expression.kind == "number")
+    add_field(out, first, "raw", json_escape(expression.raw));
+  if (expression.kind == "string")
+    add_field(out, first, "text", json_escape(expression.text));
+  if (expression.kind == "identifier")
+    add_field(out, first, "name", json_escape(expression.name));
   if (expression.kind == "indexed") {
     add_field(out, first, "base", json_escape(expression.base));
-    if (expression.field.has_value()) add_field(out, first, "field", json_escape(*expression.field));
+    if (expression.field.has_value())
+      add_field(out, first, "field", json_escape(*expression.field));
     add_field(out, first, "index", expression_to_json(*expression.index));
   }
   if (expression.kind == "unary") {
@@ -332,8 +385,7 @@ std::string expression_to_json(const Expression& expression) {
   }
   if (expression.kind == "call") {
     add_field(out, first, "callee", json_escape(expression.callee));
-    add_field(out, first, "args",
-              json_array(expression.args, [](const Expression& arg) {
+    add_field(out, first, "args", json_array(expression.args, [](const Expression& arg) {
                 return expression_to_json(arg);
               }));
   }
@@ -347,8 +399,7 @@ std::string v2_program_to_json(const V2Program& program) {
   out << '{';
   add_field(out, first, "kind", json_escape(program.kind));
   add_field(out, first, "name", json_escape(program.name));
-  add_field(out, first, "consts",
-            json_array(program.consts, [](const V2Const& constant) {
+  add_field(out, first, "consts", json_array(program.consts, [](const V2Const& constant) {
               return const_to_json(constant);
             }));
   if (program.angle_mode.has_value()) {
@@ -357,18 +408,13 @@ std::string v2_program_to_json(const V2Program& program) {
                  << ",\"line\":" << program.angle_mode->line << "}}";
     add_field(out, first, "requirements", requirements.str());
   }
-  add_field(out, first, "state",
-            json_array(program.state, [](const V2StateField& field) {
+  add_field(out, first, "state", json_array(program.state, [](const V2StateField& field) {
               return state_field_to_json(field);
             }));
   add_field(out, first, "boards",
-            json_array(program.boards, [](const V2Board& board) {
-              return board_to_json(board);
-            }));
+            json_array(program.boards, [](const V2Board& board) { return board_to_json(board); }));
   add_field(out, first, "worlds",
-            json_array(program.worlds, [](const V2World& world) {
-              return world_to_json(world);
-            }));
+            json_array(program.worlds, [](const V2World& world) { return world_to_json(world); }));
   add_field(out, first, "body", statement_array_to_json(program.body));
   add_field(out, first, "rules",
             json_array(program.rules, [](const V2Rule& rule) { return rule_to_json(rule); }));
@@ -381,10 +427,15 @@ std::string program_to_json(const ProgramAst& program) {
   std::ostringstream out;
   bool first = true;
   out << '{';
-  if (program.reference.has_value()) add_field(out, first, "reference", json_escape(*program.reference));
-  if (program.v2.has_value()) add_field(out, first, "v2", v2_program_to_json(*program.v2));
+  if (program.reference.has_value())
+    add_field(out, first, "reference", json_escape(*program.reference));
+  add_field(out, first, "states", json_array(program.states, [](const StateAst& state) {
+              return generic_state_to_json(state);
+            }));
+  if (program.v2.has_value())
+    add_field(out, first, "v2", v2_program_to_json(*program.v2));
   out << '}';
   return out.str();
 }
 
-}  // namespace mkpro
+} // namespace mkpro

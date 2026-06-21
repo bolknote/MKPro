@@ -22,7 +22,7 @@ void require_throws_contains(const std::string& source, const std::string& expec
   throw std::runtime_error("parse should have failed with: " + expected);
 }
 
-}  // namespace
+} // namespace
 
 void parser_matches_initial_v2_source_contract() {
   require_throws_contains("", "one V2 program block");
@@ -46,6 +46,18 @@ program WithConst {
   require(const_program.v2->consts.at(0).expr == "99", "const expression should parse");
   require(const_program.v2->state.at(0).name == "n", "state field should parse");
   require(const_program.v2->body.at(0).kind == "v2_loop", "loop should parse");
+  require(const_program.states.size() == 1, "parser should project V2 state into generic state");
+  require(const_program.states.at(0).name == "WithConst", "generic state should use program name");
+  require(const_program.states.at(0).fields.at(0).name == "n",
+          "generic state field should preserve name");
+  require(const_program.states.at(0).fields.at(0).type == "range",
+          "counter should lower to generic range state");
+  require(const_program.states.at(0).fields.at(0).min == 0, "generic state should preserve min");
+  require(const_program.states.at(0).fields.at(0).max == 99, "generic state should preserve max");
+  require(const_program.states.at(0).fields.at(0).initial.has_value(),
+          "generic state should preserve parsed initial expression");
+  require(const_program.states.at(0).fields.at(0).initial->kind == "number",
+          "generic initial should parse as expression");
 
   const ProgramAst angle_program = parse_program(R"mkpro(
 # leading comment
@@ -108,6 +120,8 @@ program Demo {
   require(rich_program.v2->state.at(3).count == 3, "coord_list count should parse");
   require(rich_program.v2->state.at(4).initial_stack == "X",
           "stack.X initializer should parse as initialStack");
+  require(rich_program.states.at(0).fields.at(4).initial_stack == "X",
+          "generic state should preserve stack.X initial source");
   const V2Statement& loop = rich_program.v2->body.at(0);
   require(loop.body.at(0).kind == "v2_show", "show should parse");
   require(loop.body.at(0).items->at(0).kind == "literal", "display literal should parse");
@@ -187,8 +201,8 @@ void expression_parser_matches_initial_contract() {
   require(binary.right->kind == "binary", "multiplication should bind tighter");
   require(binary.right->op == "*", "multiplicative op should parse");
 
-  const Expression call = parse_expression(
-      normalize_v2_expression_text("bit_or(slots[3], int(pos.floor))"), 7);
+  const Expression call =
+      parse_expression(normalize_v2_expression_text("bit_or(slots[3], int(pos.floor))"), 7);
   require(call.kind == "call", "call expression should parse");
   require(call.callee == "bit_or", "callee should parse");
   require(call.args.size() == 2, "call args should parse");
@@ -214,7 +228,8 @@ void parser_accepts_all_example_sources() {
   int parsed = 0;
   for (const auto& dir : dirs) {
     for (const auto& entry : std::filesystem::directory_iterator(dir)) {
-      if (!entry.is_regular_file() || entry.path().extension() != ".mkpro") continue;
+      if (!entry.is_regular_file() || entry.path().extension() != ".mkpro")
+        continue;
       std::ifstream input(entry.path());
       require(input.good(), "example should be readable: " + entry.path().string());
       std::ostringstream buffer;
@@ -231,4 +246,4 @@ void parser_accepts_all_example_sources() {
   require(parsed == 31, "native parser should parse all 31 example sources");
 }
 
-}  // namespace mkpro::tests
+} // namespace mkpro::tests

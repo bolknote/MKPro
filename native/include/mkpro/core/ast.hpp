@@ -174,13 +174,32 @@ struct V2Program {
   int line = 0;
 };
 
+struct StateFieldAst {
+  std::string name;
+  std::string type;
+  std::optional<int> min;
+  std::optional<int> max;
+  std::optional<Expression> initial;
+  std::optional<std::string> initial_stack;
+  bool implicit = false;
+  int line = 0;
+};
+
+struct StateAst {
+  std::string kind = "state";
+  std::string name;
+  std::vector<StateFieldAst> fields;
+  int line = 0;
+};
+
 struct ProgramAst {
   std::optional<std::string> reference;
   std::optional<V2Program> v2;
+  std::vector<StateAst> states;
 };
 
 std::string expression_to_json(const Expression& expression);
 std::string program_to_json(const ProgramAst& program);
 std::string v2_program_to_json(const V2Program& program);
 
-}  // namespace mkpro
+} // namespace mkpro

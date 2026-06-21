@@ -848,6 +848,45 @@ V2Predicate parse_predicate(const std::string& text) {
   };
 }
 
+std::string lower_v2_state_field_type(const std::string& type) {
+  if (type == "counter")
+    return "range";
+  if (type == "coord" || type == "cells" || type == "coord_list")
+    return "packed";
+  return type;
+}
+
+StateFieldAst lower_v2_state_field(const V2StateField& field) {
+  StateFieldAst lowered;
+  lowered.name = field.name;
+  lowered.type = lower_v2_state_field_type(field.type);
+  lowered.min = field.min;
+  lowered.max = field.max;
+  lowered.initial_stack = field.initial_stack;
+  lowered.line = field.line;
+  if (field.initial.has_value()) {
+    try {
+      lowered.initial = ExpressionParser(*field.initial, field.line).parse();
+    } catch (const ParseError&) {
+      // V2 indexed/bulk initializers are lowered through setup-specific paths; the generic
+      // state projection must not make otherwise valid V2 programs fail to parse.
+    }
+  }
+  return lowered;
+}
+
+std::vector<StateAst> lower_v2_states(const V2Program& program) {
+  if (program.state.empty())
+    return {};
+  StateAst state;
+  state.name = program.name;
+  state.line = program.line;
+  state.fields.reserve(program.state.size());
+  for (const V2StateField& field : program.state)
+    state.fields.push_back(lower_v2_state_field(field));
+  return {std::move(state)};
+}
+
 class Parser {
 public:
   Parser(std::string source, ParseOptions options)
@@ -879,6 +918,7 @@ public:
       throw ParseError("Program must contain one V2 program block", 1);
     ProgramAst program;
     program.reference = reference;
+    program.states = lower_v2_states(*v2);
     program.v2 = std::move(v2);
     return program;
   }

@@ -29063,6 +29063,40 @@ void run_interprocedural_ast_passes(const CompileOptions& options, V2Program& pr
   }
 }
 
+[[maybe_unused]] bool lower_legacy_initial_state(LoweringContext& context,
+                                                 const std::vector<StateAst>& states) {
+  for (const StateAst& state : states) {
+    for (const StateFieldAst& field : state.fields) {
+      if (field.initial_stack != "Y")
+        continue;
+      context.emitter.emit_op(
+          0x14, "X↔Y", "init " + state.name + "." + field.name + " from stack.Y", field.line);
+      emit_store(context, field.name, "init " + state.name + "." + field.name);
+      context.emitter.emit_op(0x14, "X↔Y", "restore stack.X after " + field.name, field.line);
+    }
+    for (const StateFieldAst& field : state.fields) {
+      if (field.initial_stack != "X")
+        continue;
+      emit_store(context, field.name, "init " + state.name + "." + field.name);
+    }
+    for (const StateFieldAst& field : state.fields) {
+      if (field.initial_stack.has_value() || !field.initial.has_value())
+        continue;
+      if (!lower_expression_to_x(context, *field.initial))
+        return false;
+      emit_store(context, field.name, "init " + state.name + "." + field.name);
+    }
+    if (!state.fields.empty()) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "intent-state-lowering",
+          .detail = "Lowered state " + state.name + " with " + std::to_string(state.fields.size()) +
+                    " fields to register-backed values.",
+      });
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 CompileResult compile_source_once(std::string source, const CompileOptions& options) {
