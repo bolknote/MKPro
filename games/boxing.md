@@ -4,6 +4,10 @@
 - Source: [Lord_BSS](https://lordbss.narod.ru/pmk00.html)
 - Program: [boxing.txt](boxing.txt)
 
+## Listing Note
+
+The listing and play instructions were additionally cross-checked against pages 18-19 of Aleksandr Dolgushin's notebook.
+
 ## Description
 
 ### Registers
