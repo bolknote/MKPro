@@ -171,6 +171,42 @@ program SegmentedClear {
   require(clear.registers.at("__seg_bitplane_selector") == "7",
           "segmented hit-and-clear should keep selector in R7");
 
+  const CompileResult direct = compile_segmented(R"mkpro(
+program SegmentedDirectDispatch {
+  field: board(0..9, 0..9)
+
+  state {
+    reserved: packed[7..7] = 0
+    cell: coord(field)
+    marks: cells(field) = 0
+    answer: counter 0..9 = 0
+  }
+
+  loop {
+    cell = read()
+    marks += cell
+    if cell in marks {
+      marks -= cell
+      answer = 1
+    }
+    answer += reserved[7]
+    halt(answer)
+  }
+}
+)mkpro");
+  require(direct.implemented, "native compiler should lower direct segmented bitplane dispatch");
+  require(direct.diagnostics.empty(), "direct segmented bitplane dispatch should not diagnose");
+  require(direct.registers.at("__seg_bitplane_selector") != "7",
+          "reserved R7 should force direct four-plane segmented dispatch");
+  require(has_optimization(direct, "segmented-bitplane-update"),
+          "direct segmented cells update should report the TS four-plane update strategy");
+  require(has_optimization(direct, "segmented-bitplane-hit-update"),
+          "direct segmented hit-and-clear should report the TS four-plane hit/update strategy");
+  require(!has_optimization(direct, "segmented-bitplane-update-indirect"),
+          "direct segmented update should not use the indirect selected-plane strategy");
+  require(!has_optimization(direct, "segmented-bitplane-hit-update-indirect"),
+          "direct segmented hit-and-clear should not use the indirect selected-plane strategy");
+
   const CompileResult baseline = compile_segmented(kSegmentedLineCountProgram);
   const CompileResult scan = compile_segmented_scan(kSegmentedLineCountProgram);
   require(baseline.implemented, "baseline segmented line_count program should compile");

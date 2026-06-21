@@ -9154,7 +9154,8 @@ bool ensure_segmented_bitplane_registers(LoweringContext& context, const std::st
 
 bool emit_segmented_bitplane_group_dispatch(
     LoweringContext& context, const std::string& collection, int source_line,
-    const std::function<bool(int, const std::string&)>& emit_group) {
+    const std::function<bool(int, const std::string&)>& emit_group,
+    bool emit_group_end_jumps = true) {
   const std::vector<std::string>* planes = segmented_planes_for(context, collection);
   if (planes == nullptr)
     return false;
@@ -9186,7 +9187,7 @@ bool emit_segmented_bitplane_group_dispatch(
     emit_store(context, std::string(kSegmentedBitplaneIndex), "segmented bitplane local index");
     if (!emit_group(group, planes->at(static_cast<std::size_t>(group))))
       return false;
-    if (group < 3)
+    if (emit_group_end_jumps && group < 3)
       context.emitter.emit_jump(0x51, "БП", end_label, "segmented bitplane group end", source_line);
   }
   context.emitter.emit_label(end_label, {.hidden = true});
@@ -9201,6 +9202,16 @@ emit_segmented_bitplane_indirect_select_from_current_x(LoweringContext& context,
 bool emit_segmented_bitplane_hit_with_selector(LoweringContext& context,
                                                const std::string& collection,
                                                const std::string& selector, int source_line);
+
+bool emit_inline_bit_mask_from_current_x_with_quotient_scratch(LoweringContext& context,
+                                                               const std::string& scratch,
+                                                               int source_line);
+
+bool emit_segmented_bitplane_local_mask(LoweringContext& context, int source_line) {
+  emit_recall(context, std::string(kSegmentedBitplaneIndex));
+  return emit_inline_bit_mask_from_current_x_with_quotient_scratch(
+      context, std::string(kSegmentedBitplaneIndex), source_line);
+}
 
 bool emit_segmented_bitplane_hit_from_current_x(LoweringContext& context,
                                                 const std::string& collection, int source_line) {
@@ -9395,22 +9406,36 @@ bool lower_segmented_bitplane_update(LoweringContext& context, const std::string
     });
     return true;
   }
-  return emit_segmented_bitplane_group_dispatch(
-      context, collection, source_line, [&](int /*group*/, const std::string& plane) {
-        Expression mask =
-            bit_mask_expression(identifier_expression(std::string(kSegmentedBitplaneIndex)));
-        Expression update =
-            op == "+="
-                ? call_expression("bit_or", {identifier_expression(plane), std::move(mask)})
-                : call_expression("bit_and", {identifier_expression(plane),
-                                              call_expression("bit_not", {std::move(mask)})});
-        if (!lower_expression_to_x(context, update))
-          return false;
-        emit_store(context, plane,
-                   op == "+=" ? "segmented bitplane set " + collection
-                              : "segmented bitplane clear " + collection);
-        return true;
-      });
+  if (!emit_segmented_bitplane_group_dispatch(
+          context, collection, source_line, [&](int /*group*/, const std::string& plane) {
+            if (!emit_segmented_bitplane_local_mask(context, source_line))
+              return false;
+            if (op == "-=")
+              context.emitter.emit_op(0x3a, "К ИНВ", "segmented bitplane clear mask", source_line);
+            emit_store(context, std::string(kSegmentedBitplaneIndex),
+                       "segmented bitplane update mask");
+            emit_recall(context, plane);
+            if (!context.emitter.items.empty())
+              context.emitter.items.back().comment = "segmented bitplane update plane";
+            emit_recall(context, std::string(kSegmentedBitplaneIndex));
+            if (!context.emitter.items.empty())
+              context.emitter.items.back().comment = "segmented bitplane update mask";
+            context.emitter.emit_op(
+                op == "+=" ? 0x38 : 0x37, op == "+=" ? "К ∨" : "К ∧",
+                op == "+=" ? "segmented bitplane set" : "segmented bitplane clear", source_line);
+            emit_store(context, plane,
+                       op == "+=" ? "segmented bitplane set " + collection
+                                  : "segmented bitplane clear " + collection);
+            return true;
+          })) {
+    return false;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "segmented-bitplane-update",
+      .detail = std::string(op == "+=" ? "Set " : "Cleared ") + collection +
+                " through four 25-cell bitplanes at line " + std::to_string(source_line) + ".",
+  });
+  return true;
 }
 
 bool lower_segmented_bitplane_line_count_scan_to_x(LoweringContext& context,
@@ -17890,32 +17915,69 @@ bool lower_segmented_cells_contains_clear_if(LoweringContext& context,
     return false;
   const std::optional<std::string> selector =
       emit_segmented_bitplane_indirect_select_from_current_x(context, statement.line);
-  if (!selector.has_value())
-    return false;
-  if (!lower_expression_to_x(context, bit_mask_expression(identifier_expression(
-                                          std::string(kSegmentedBitplaneIndex)))))
-    return false;
-  if (!emit_selected_segmented_plane_recall(context, *selector, "segmented bitplane selected plane",
-                                            statement.line))
-    return false;
-  context.emitter.emit_op(0x37, "К ∧", "segmented bitplane probe", statement.line);
-  context.emitter.emit_op(0x35, "К {x}", "segmented bitplane hit fraction", statement.line);
-  context.emitter.emit_jump(0x57, "F x≠0", false_label, "false branch for segmented hit",
-                            statement.line);
-  context.emitter.emit_op(0x3a, "К ИНВ", "segmented bitplane clear matched mask", clear.line);
-  if (!emit_selected_segmented_plane_recall(context, *selector,
-                                            "segmented bitplane clear selected plane", clear.line))
-    return false;
-  context.emitter.emit_op(0x37, "К ∧", "segmented bitplane clear matched bit", clear.line);
-  if (!emit_selected_segmented_plane_store(context, *selector,
-                                           "segmented bitplane store selected plane", clear.line))
-    return false;
-  context.optimizations.push_back(OptimizationReport{
-      .name = "segmented-bitplane-hit-update-indirect",
-      .detail = "Fused " + collection +
-                " probe/update through one indirect selected plane at line " +
-                std::to_string(statement.line) + ".",
-  });
+  std::optional<std::string> then_label;
+  if (selector.has_value()) {
+    if (!lower_expression_to_x(context, bit_mask_expression(identifier_expression(
+                                            std::string(kSegmentedBitplaneIndex)))))
+      return false;
+    if (!emit_selected_segmented_plane_recall(context, *selector,
+                                              "segmented bitplane selected plane", statement.line))
+      return false;
+    context.emitter.emit_op(0x37, "К ∧", "segmented bitplane probe", statement.line);
+    context.emitter.emit_op(0x35, "К {x}", "segmented bitplane hit fraction", statement.line);
+    context.emitter.emit_jump(0x57, "F x≠0", false_label, "false branch for segmented hit",
+                              statement.line);
+    context.emitter.emit_op(0x3a, "К ИНВ", "segmented bitplane clear matched mask", clear.line);
+    if (!emit_selected_segmented_plane_recall(
+            context, *selector, "segmented bitplane clear selected plane", clear.line))
+      return false;
+    context.emitter.emit_op(0x37, "К ∧", "segmented bitplane clear matched bit", clear.line);
+    if (!emit_selected_segmented_plane_store(context, *selector,
+                                             "segmented bitplane store selected plane", clear.line))
+      return false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "segmented-bitplane-hit-update-indirect",
+        .detail = "Fused " + collection +
+                  " probe/update through one indirect selected plane at line " +
+                  std::to_string(statement.line) + ".",
+    });
+  } else {
+    then_label = context.emitter.fresh_label("segmented_bitplane_then");
+    if (!emit_segmented_bitplane_group_dispatch(
+            context, collection, statement.line,
+            [&](int /*group*/, const std::string& plane) {
+              if (!emit_segmented_bitplane_local_mask(context, statement.line))
+                return false;
+              emit_recall(context, plane);
+              if (!context.emitter.items.empty())
+                context.emitter.items.back().comment = "segmented bitplane probe plane";
+              context.emitter.emit_op(0x37, "К ∧", "segmented bitplane probe", statement.line);
+              context.emitter.emit_op(0x35, "К {x}", "segmented bitplane hit fraction",
+                                      statement.line);
+              context.emitter.emit_jump(0x57, "F x≠0", false_label,
+                                        "false branch for segmented hit", statement.line);
+              context.emitter.emit_op(0x3a, "К ИНВ", "segmented bitplane clear matched mask",
+                                      clear.line);
+              emit_recall(context, plane);
+              if (!context.emitter.items.empty())
+                context.emitter.items.back().comment = "segmented bitplane clear plane";
+              context.emitter.emit_op(0x37, "К ∧", "segmented bitplane clear matched bit",
+                                      clear.line);
+              emit_store(context, plane, "segmented bitplane clear plane");
+              context.emitter.emit_jump(0x51, "БП", *then_label, "segmented bitplane hit tail",
+                                        statement.line);
+              return true;
+            },
+            false)) {
+      return false;
+    }
+    context.optimizations.push_back(OptimizationReport{
+        .name = "segmented-bitplane-hit-update",
+        .detail = "Fused " + collection + " membership probe with -= update at line " +
+                  std::to_string(statement.line) + ".",
+    });
+    context.emitter.emit_label(*then_label, {.hidden = true});
+  }
 
   std::vector<V2Statement> rest(then_body.begin() + 1, then_body.end());
   const bool then_stops = statements_always_stop(context, rest);
