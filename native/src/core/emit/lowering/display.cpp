@@ -2,6 +2,7 @@
 
 #include "mkpro/core/emit/lowering_helpers.hpp"
 #include "mkpro/core/machine_profile.hpp"
+#include "mkpro/core/state_banks.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -880,6 +881,12 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
   }
 
   if (row.expr.has_value()) {
+    std::optional<std::string> indexed_row_key;
+    if (row.expr->kind == "indexed") {
+      const std::string key = ::mkpro::core::bank_member_key(row.expr->base, row.expr->field);
+      if (context.state_banks.contains(key))
+        indexed_row_key = key;
+    }
     if (!api.lower_expression_to_x(*row.expr))
       return false;
     if (!api.emitter.items.empty() && !api.emitter.items.back().comment.has_value())
@@ -890,6 +897,13 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
     api.emitter.emit_op(0x0e, "В↑", "display packed row expression copy", source_line);
     api.emitter.emit_op(0x25, "F reverse", "display packed row expression rotate", source_line);
     api.emitter.emit_op(0x14, "<->", "display packed row floor restore", source_line);
+    if (indexed_row_key.has_value()) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "indexed-packed-row-table",
+          .detail = "Read " + *indexed_row_key + "[" + floor.name +
+                    "] through indirect memory for a packed-row display.",
+      });
+    }
   } else {
     api.emit_recall(floor.name);
     api.emitter.items.back().comment = "display packed row floor";

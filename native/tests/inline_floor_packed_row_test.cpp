@@ -62,6 +62,34 @@ program InlineFloorPackedRow {
           "inline floor packed-row expression should not allocate display-expression scratch");
   require(result.listing.find("display packed row expression merge") != std::string::npos,
           "inline floor packed-row expression should splice the computed row");
+
+  const CompileResult indexed = compile_source(R"mkpro(
+program IndexedFloorPackedRow {
+  state {
+    floor: counter 1..9 = 2
+    rows: packed[1..9] = bit_not(5 / 9)
+  }
+
+  loop {
+    show(floor, ".", rows[floor])
+  }
+}
+)mkpro",
+                                               options);
+
+  require(indexed.implemented, "indexed inline floor packed-row expression should compile");
+  require(indexed.diagnostics.empty(),
+          "indexed inline floor packed-row expression should not report diagnostics: " +
+              diagnostics_text(indexed));
+  require(has_optimization(indexed, "indexed-packed-row-table"),
+          "indexed inline floor packed-row expression should report the TS row-table strategy");
+  require(has_optimization(indexed, "floor-packed-row-expression-display"),
+          "indexed inline floor packed-row expression should still use packed-row splicing");
+  require(
+      !has_optimization(indexed, "display-expression-materialization"),
+      "indexed inline floor packed-row expression should skip display-expression materialization");
+  require(indexed.listing.find("indexed recall rows") != std::string::npos,
+          "indexed inline floor packed-row expression should read the row through indexed memory");
 }
 
 } // namespace mkpro::tests
