@@ -5209,6 +5209,7 @@ bool is_segmented_cells_name(const LoweringContext& context, const std::string& 
 }
 
 bool is_board_name(const LoweringContext& context, const std::string& name);
+bool is_domain_name(const LoweringContext& context, const std::string& name);
 
 bool is_dynamic_state_bank_index(const LoweringContext& context, const Expression& expression) {
   if (expression.kind != "indexed" || expression.index == nullptr)
@@ -5301,7 +5302,7 @@ void collect_locals_from_expression_excluding(LoweringContext& context,
       return;
     if (context.constants.contains(expression.name))
       return;
-    if (is_board_name(context, expression.name))
+    if (is_domain_name(context, expression.name))
       return;
     if (is_coord_list_state_name(context, expression.name))
       return;
@@ -5803,18 +5804,23 @@ bool statement_is_unit_increment(const V2Statement& statement,
   if (field_it == state_fields.end())
     return false;
   const V2StateField* field = field_it->second;
-  return field != nullptr && field->type == "range" && field->min.has_value() && *field->min >= 0 &&
-         field->max.has_value();
+  return field != nullptr && (field->type == "range" || field->type == "counter") &&
+         field->min.has_value() && *field->min >= 0 && field->max.has_value();
+}
+
+void append_unique_name(std::vector<std::string>& names, const std::string& name) {
+  if (std::find(names.begin(), names.end(), name) == names.end())
+    names.push_back(name);
 }
 
 void collect_unit_update_targets(const LoweringContext& context, const V2Statement& statement,
-                                 std::set<std::string>& decrements,
-                                 std::set<std::string>& increments) {
+                                 std::vector<std::string>& decrements,
+                                 std::vector<std::string>& increments) {
   if (statement.target.has_value()) {
     if (statement_is_unit_decrement(statement))
-      decrements.insert(*statement.target);
+      append_unique_name(decrements, *statement.target);
     if (statement_is_unit_increment(statement, context.state_fields))
-      increments.insert(*statement.target);
+      append_unique_name(increments, *statement.target);
   }
   for (const V2Statement& child : statement.body)
     collect_unit_update_targets(context, child, decrements, increments);
@@ -5832,8 +5838,8 @@ void collect_unit_update_targets(const LoweringContext& context, const V2Stateme
 
 void apply_unit_update_hints(const LoweringContext& context, const V2Program& program,
                              const RegisterCollection& collection, RegisterHints& hints) {
-  std::set<std::string> decrements;
-  std::set<std::string> increments;
+  std::vector<std::string> decrements;
+  std::vector<std::string> increments;
   for (const V2Statement& statement : program.body)
     collect_unit_update_targets(context, statement, decrements, increments);
   for (const V2Rule& rule : program.rules) {
@@ -6093,6 +6099,8 @@ void index_program_metadata(LoweringContext& context, const V2Program& program) 
     context.state_fields[field.name] = &field;
   for (const V2Board& board : program.boards)
     context.boards[board.name] = &board;
+  for (const V2World& world : program.worlds)
+    context.worlds[world.name] = &world;
   if (!context.segmented_bitplanes)
     return;
   for (const V2StateField& field : program.state) {
@@ -8494,6 +8502,14 @@ bool is_board_name(const LoweringContext& context, const std::string& name) {
   return context.boards.contains(name);
 }
 
+bool is_world_name(const LoweringContext& context, const std::string& name) {
+  return context.worlds.contains(name);
+}
+
+bool is_domain_name(const LoweringContext& context, const std::string& name) {
+  return is_board_name(context, name) || is_world_name(context, name);
+}
+
 std::optional<int> board_random_span(const V2Board& board) {
   if (board.height == 1)
     return board.x_max - board.x_min + 1;
@@ -8514,6 +8530,56 @@ std::optional<int> board_random_base(const V2Board& board) {
   return std::nullopt;
 }
 
+std::optional<int> world_random_span(const V2World& world) {
+  if (!world.position.has_value() || !world.position->encoding.has_value())
+    return 9;
+  const std::string encoding = *world.position->encoding;
+  if (encoding == "pier_to_ship")
+    return 8;
+  if (encoding == "corridor_plan" || encoding == "decimal_player" || encoding == "floor_plan" ||
+      encoding == "packed_decimal_zero_run" || encoding == "row_scan")
+    return 9;
+  return std::nullopt;
+}
+
+std::optional<int> world_random_base(const V2World& world) {
+  if (!world.position.has_value() || !world.position->encoding.has_value())
+    return 1;
+  const std::string encoding = *world.position->encoding;
+  if (encoding == "pier_to_ship" || encoding == "corridor_plan" ||
+      encoding == "decimal_player" || encoding == "floor_plan" ||
+      encoding == "packed_decimal_zero_run" || encoding == "row_scan")
+    return 1;
+  return std::nullopt;
+}
+
+bool lower_random_span_call_to_x(LoweringContext& context, int span, int base,
+                                 std::string_view domain_kind, int source_line) {
+  context.emitter.emit_op(0x3b, "К СЧ", "random()", source_line);
+  emit_number_or_preload(context, std::to_string(span), std::nullopt, source_line);
+  context.emitter.emit_op(0x12, "*", "random range", source_line);
+  context.emitter.emit_op(0x0e, "В↑", "random int keep scaled draw", source_line);
+  context.emitter.emit_op(0x35, "К {x}", "random int fractional part", source_line);
+  context.emitter.emit_op(0x11, "-", "random int floor", source_line);
+  if (base != 0) {
+    emit_number_or_preload(context, std::to_string(base), std::nullopt, source_line);
+    context.emitter.emit_op(0x10, "+", "random domain base", source_line);
+  }
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_aliases.clear();
+  context.optimizations.push_back(OptimizationReport{
+      .name = "random-range-lowering",
+      .detail = "Lowered random(" + std::string(domain_kind) +
+                ") through a bounded random coordinate draw.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = "int-random-range-lowering",
+      .detail = "Lowered random(" + std::string(domain_kind) +
+                ") without К [x] so the MK-61 random sequence keeps moving.",
+  });
+  return true;
+}
+
 bool lower_random_board_call_to_x(LoweringContext& context, const V2Board& board, int source_line) {
   const std::optional<int> span = board_random_span(board);
   const std::optional<int> base = board_random_base(board);
@@ -8523,27 +8589,19 @@ bool lower_random_board_call_to_x(LoweringContext& context, const V2Board& board
         "Native random(board) lowering supports one-dimensional or 0-based digit boards"));
     return false;
   }
-  context.emitter.emit_op(0x3b, "К СЧ", "random()", source_line);
-  emit_number_or_preload(context, std::to_string(*span), std::nullopt, source_line);
-  context.emitter.emit_op(0x12, "*", "random range", source_line);
-  context.emitter.emit_op(0x0e, "В↑", "random int keep scaled draw", source_line);
-  context.emitter.emit_op(0x35, "К {x}", "random int fractional part", source_line);
-  context.emitter.emit_op(0x11, "-", "random int floor", source_line);
-  if (*base != 0) {
-    emit_number_or_preload(context, std::to_string(*base), std::nullopt, source_line);
-    context.emitter.emit_op(0x10, "+", "random board base", source_line);
+  return lower_random_span_call_to_x(context, *span, *base, "board", source_line);
+}
+
+bool lower_random_world_call_to_x(LoweringContext& context, const V2World& world, int source_line) {
+  const std::optional<int> span = world_random_span(world);
+  const std::optional<int> base = world_random_base(world);
+  if (!span.has_value() || !base.has_value()) {
+    context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                             "Native random(world) lowering does not support this "
+                                             "compact board encoding"));
+    return false;
   }
-  context.emitter.current_x_variable.reset();
-  context.emitter.current_x_aliases.clear();
-  context.optimizations.push_back(OptimizationReport{
-      .name = "random-range-lowering",
-      .detail = "Lowered random(board) through a bounded random coordinate draw.",
-  });
-  context.optimizations.push_back(OptimizationReport{
-      .name = "int-random-range-lowering",
-      .detail = "Lowered random(board) without К [x] so the MK-61 random sequence keeps moving.",
-  });
-  return true;
+  return lower_random_span_call_to_x(context, *span, *base, "world", source_line);
 }
 
 bool emit_segmented_line_count_tens_digit(LoweringContext& context, const Expression& expression,
@@ -8749,6 +8807,9 @@ void collect_preload_number_literals_from_statements(const std::vector<V2Stateme
                                                      std::set<std::string>& values,
                                                      std::map<std::string, int>& occurrences) {
   for (const V2Statement& statement : statements) {
+    if (statement.kind == "v2_stop")
+      collect_preload_number_literals_from_text(statement.target, statement.line, values,
+                                                occurrences);
     collect_preload_number_literals_from_text(statement.expr, statement.line, values, occurrences);
     collect_preload_number_literals_from_predicate(statement.predicate, statement.line, values,
                                                    occurrences);
@@ -8965,6 +9026,14 @@ bool constant_is_cheaper_inline_for_startup(const std::string& value, int use_co
   return *inline_cost * use_count <= preload_cost;
 }
 
+int dual_use_address_constant_preload_bonus(const std::string& value) {
+  const std::optional<std::pair<std::string, int>> natural =
+      natural_fractional_selector_preload_value(value);
+  if (!natural.has_value())
+    return 0;
+  return natural->second > 0 && natural->second <= 104 ? 4 : 0;
+}
+
 std::vector<std::string> collect_preload_constant_values(const V2Program& program,
                                                          bool startup_aware) {
   std::set<std::string> values;
@@ -9009,6 +9078,7 @@ std::vector<std::string> collect_preload_constant_values(const V2Program& progra
                                     weights.contains(value) ? weights.at(value) : 1,
                                     occurrences.contains(value) ? occurrences.at(value) : 1);
                                 return startup_aware &&
+                                       dual_use_address_constant_preload_bonus(value) == 0 &&
                                        constant_is_cheaper_inline_for_startup(value, use_count);
                               }),
                ranked.end());
@@ -9016,7 +9086,8 @@ std::vector<std::string> collect_preload_constant_values(const V2Program& progra
   const auto savings = [&](const std::string& value) {
     const int weight = weights.contains(value) ? weights.at(value) : 1;
     const int bonus = bonuses.contains(value) ? bonuses.at(value) : 0;
-    return weight * (number_entry_cost(value) - 1) + bonus;
+    return weight * (number_entry_cost(value) - 1) + bonus +
+           dual_use_address_constant_preload_bonus(value);
   };
   std::stable_sort(ranked.begin(), ranked.end(),
                    [&](const std::string& left, const std::string& right) {
@@ -9130,7 +9201,8 @@ bool reserve_preloaded_number(LoweringContext& context, const std::string& value
     return false;
   if (context.preloaded_numbers.contains(key))
     return true;
-  for (const std::string& name : {preloaded_number_name(key), legacy_preloaded_number_name(key)}) {
+  for (const std::string& name : {preloaded_number_name(key), legacy_preloaded_number_name(key),
+                                  "__display_scale_" + key}) {
     if (context.registers.contains(name)) {
       context.preloaded_numbers[key] = name;
       return true;
@@ -11995,12 +12067,31 @@ bool lower_decrement_update(LoweringContext& context, const std::string& target,
   return true;
 }
 
-bool lower_increment_update(LoweringContext& context, const std::string& target) {
+bool target_range_fits_indirect_increment(const LoweringContext& context,
+                                          const std::string& target) {
+  const auto field_it = context.state_fields.find(target);
+  if (field_it == context.state_fields.end() || field_it->second == nullptr)
+    return false;
+  const V2StateField& field = *field_it->second;
+  return (field.type == "range" || field.type == "counter") && field.min.has_value() &&
+         *field.min >= 0 && field.max.has_value();
+}
+
+bool lower_increment_update(LoweringContext& context, const std::string& target, int source_line) {
+  if (!target_range_fits_indirect_increment(context, target))
+    return false;
   const int index = register_index_for(context, target);
+  if (!core::emit::lowering::is_preincrement_indirect_register(index))
+    return false;
   context.emitter.emit_op(0xd0 + index, "К П->X " + register_text_for(context, target),
-                          "increment " + target);
+                          "increment " + target, source_line);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_aliases.clear();
+  context.optimizations.push_back(OptimizationReport{
+      .name = "indirect-incdec-counter",
+      .detail = "Incremented " + target + " by using К П->X " + register_text_for(context, target) +
+                "'s pre-increment side effect at line " + std::to_string(source_line) + ".",
+  });
   return true;
 }
 
@@ -12056,7 +12147,7 @@ bool lower_tiny_terminal_call(LoweringContext& context, const std::string& name)
 
 bool lower_human_terminal_call(LoweringContext& context, const std::string& name) {
   if (name == "gain")
-    return lower_increment_update(context, "score");
+    return lower_increment_update(context, "score", 0);
   if (name == "spend")
     return lower_decrement_update(context, "food", "set ");
   if (name == "ignored") {
@@ -13868,6 +13959,9 @@ bool lower_random_call_to_x(LoweringContext& context, const Expression& expressi
     const auto board_it = context.boards.find(expression.args.at(0).name);
     if (board_it != context.boards.end())
       return lower_random_board_call_to_x(context, *board_it->second, 0);
+    const auto world_it = context.worlds.find(expression.args.at(0).name);
+    if (world_it != context.worlds.end())
+      return lower_random_world_call_to_x(context, *world_it->second, 0);
   }
 
   context.emitter.emit_op(0x3b, "К СЧ", "random()");
@@ -13933,7 +14027,7 @@ bool is_zero_based_random_range_call(const LoweringContext& context, const Expre
     return false;
   if (expression.args.size() == 1U) {
     if (expression.args.front().kind == "identifier" &&
-        context.boards.contains(expression.args.front().name))
+        is_domain_name(context, expression.args.front().name))
       return true;
     return !expression_contains_random_call(expression.args.front());
   }
@@ -13961,7 +14055,7 @@ bool is_random_scaled_integer(const LoweringContext& context, const Expression& 
 bool is_random_cell_expression_shape(const LoweringContext& context, const Expression& expression) {
   if (expression.kind == "call" && lower_ascii(expression.callee) == "random" &&
       expression.args.size() == 1U && expression.args.front().kind == "identifier" &&
-      context.boards.contains(expression.args.front().name)) {
+      is_domain_name(context, expression.args.front().name)) {
     return true;
   }
   if (is_random_scaled_integer(context, expression))
@@ -14014,6 +14108,11 @@ int random_cell_helper_expression_cost(const LoweringContext& context,
       const auto board_it = context.boards.find(expression.args.front().name);
       if (board_it != context.boards.end()) {
         const std::optional<int> base = board_random_base(*board_it->second);
+        return 6 + (base.has_value() && *base != 0 ? 2 : 0);
+      }
+      const auto world_it = context.worlds.find(expression.args.front().name);
+      if (world_it != context.worlds.end()) {
+        const std::optional<int> base = world_random_base(*world_it->second);
         return 6 + (base.has_value() && *base != 0 ? 2 : 0);
       }
     }
@@ -19510,8 +19609,9 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
     return emit_indexed_store(context, target_expression, statement.line);
   }
 
-  if (statement.op == "+=" && statement.expr == "1")
-    return lower_increment_update(context, *statement.target);
+  if (statement.op == "+=" && statement.expr == "1" &&
+      lower_increment_update(context, *statement.target, statement.line))
+    return true;
   if (statement.op == "-=" && statement.expr == "1")
     return lower_decrement_update(context, *statement.target, "set ");
 
@@ -21008,31 +21108,6 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
     return true;
   }
 
-  if (!rule.body.empty()) {
-    const V2Statement& tail = rule.body.back();
-    if (tail.kind == "v2_invoke" && tail.name.has_value() && tail.args.empty() &&
-        context.rules.contains(*tail.name) &&
-        !context.inline_statement_rules.contains(*tail.name)) {
-      const V2Rule& target = *context.rules.at(*tail.name);
-      if (target.params.empty()) {
-        std::vector<V2Statement> prefix(rule.body.begin(), rule.body.end() - 1);
-        if (!lower_statement_block(context, prefix))
-          return false;
-        context.emitter.emit_jump(0x51, "БП", function_label(*tail.name),
-                                  "tail call function " + *tail.name, tail.line);
-        context.optimizations.push_back(OptimizationReport{
-            .name = rule.name == *tail.name ? "function-tail-recursion" : "function-tail-call",
-            .detail = rule.name == *tail.name
-                          ? "Compiled tail-recursive call in " + rule.name +
-                                " as a direct jump at line " + std::to_string(tail.line) + "."
-                          : "Compiled tail call from " + rule.name + " to " + *tail.name +
-                                " as a direct jump at line " + std::to_string(tail.line) + ".",
-        });
-        return true;
-      }
-    }
-  }
-
   if (!lower_statement_block(context, rule.body))
     return false;
   if (!rule.body.empty() && rule.body.back().kind == "v2_return")
@@ -21812,8 +21887,10 @@ bool lower_ephemeral_input_branch(LoweringContext& context,
   if (guard != nullptr &&
       lower_branch_local_delayed_unit_decrement_guard(context, *branch, *guard)) {
     consumed += 1U;
-  } else if (!lower_if_statement(context, *branch)) {
-    return false;
+  } else {
+    context.emitter.machine_entry_open = true;
+    if (!lower_if_statement(context, *branch))
+      return false;
   }
   context.optimizations.push_back(OptimizationReport{
       .name = "ephemeral-input-branch",
@@ -21865,6 +21942,7 @@ bool lower_ephemeral_input_dispatch(LoweringContext& context,
     context.emitter.emit_op(0x50, "С/П", "read " + *read->target, read->line);
   }
 
+  context.emitter.machine_entry_open = true;
   mark_current_x(context, *read->target);
   if (!lower_match_statement(context, *match))
     return false;
@@ -26521,6 +26599,29 @@ planned_preloaded_constant_registers(const LoweringContext& context) {
   return registers;
 }
 
+std::vector<PreloadReport>
+fractional_selector_setup_preloads(const std::vector<PreloadReport>& setup_preloads,
+                                   const LoweringContext& context) {
+  if (context.fractional_constant_selectors.empty())
+    return {};
+
+  std::set<std::string> registers;
+  for (const auto& [value, name] : context.preloaded_numbers) {
+    if (!fractional_constant_selector_for_value(context, value).has_value())
+      continue;
+    const auto register_it = context.registers.find(name);
+    if (register_it != context.registers.end())
+      registers.insert(register_it->second);
+  }
+
+  std::vector<PreloadReport> result;
+  for (const PreloadReport& preload : setup_preloads) {
+    if (registers.contains(preload.register_name))
+      result.push_back(preload);
+  }
+  return result;
+}
+
 void merge_planned_preloaded_constant_registers(CompileOptions& options,
                                                 const LoweringContext& context) {
   for (const auto& [register_name, value] : planned_preloaded_constant_registers(context)) {
@@ -29472,11 +29573,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         index_rules(context, *ast.v2);
         collect_registers(context, *ast.v2);
         apply_forced_register_shares(context, options.forced_register_shares);
-        if (options.general_constant_preloads || options.startup_aware_constant_preloads ||
-            !options.force_fractional_constant_selector_preloads.empty()) {
-          plan_general_constant_preloads(context, *ast.v2, options.startup_aware_constant_preloads,
-                                         options.force_fractional_constant_selector_preloads);
-        }
+        plan_general_constant_preloads(context, *ast.v2, options.startup_aware_constant_preloads,
+                                       options.force_fractional_constant_selector_preloads);
         plan_spatial_line_count_preloads(context, *ast.v2);
         collect_near_any_helper_stats(context, *ast.v2);
       }
@@ -29586,6 +29684,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
     setup_preloads = build_preload_reports(context, *ast.v2, post_layout_items);
     std::vector<PreloadReport> stop_tail_input = post_layout_flow.preloads;
+    const std::vector<PreloadReport> retargetable_setup_preloads =
+        fractional_selector_setup_preloads(setup_preloads, context);
+    stop_tail_input.insert(stop_tail_input.end(), retargetable_setup_preloads.begin(),
+                           retargetable_setup_preloads.end());
     const core::PostLayoutIndirectFlowResult post_layout_stop_tail =
         core::optimize_post_layout_stop_tail_reuse(post_layout_items, stop_tail_input);
     post_layout_items = post_layout_stop_tail.items;

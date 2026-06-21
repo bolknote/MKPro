@@ -150,6 +150,7 @@ struct LoweringContext {
   std::map<std::string, const V2StateField*> state_fields;
   std::map<std::string, std::set<int>> path_excluded_numeric_values;
   std::map<std::string, const V2Board*> boards;
+  std::map<std::string, const V2World*> worlds;
   std::map<std::string, const V2StateField*> state_banks;
   std::map<std::string, BankSelectorCacheEntry> bank_selector_cache;
   std::map<std::string, std::vector<std::string>> segmented_cells;
