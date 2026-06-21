@@ -17758,14 +17758,27 @@ bool lower_match_statement(LoweringContext& context, const V2Statement& statemen
     return true;
   }
 
-  const std::string scratch = "__match_value_" + std::to_string(lowered_statement.line);
-  assign_register(context, scratch);
-  if (has_errors(context.diagnostics))
-    return false;
   const Expression match_expr = parse_expression(*lowered_statement.expr, lowered_statement.line);
-  if (!lower_expression_to_x(context, match_expr))
-    return false;
-  emit_store(context, scratch, "match value");
+  std::string selector_name;
+  const auto source_register_it = match_expr.kind == "identifier"
+                                      ? context.registers.find(match_expr.name)
+                                      : context.registers.end();
+  if (source_register_it != context.registers.end()) {
+    selector_name = match_expr.name;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "dispatch-source-register",
+        .detail = "Reused R" + source_register_it->second +
+                  " as dispatch scratch for identifier expression.",
+    });
+  } else {
+    selector_name = "__match_value_" + std::to_string(lowered_statement.line);
+    assign_register(context, selector_name);
+    if (has_errors(context.diagnostics))
+      return false;
+    if (!lower_expression_to_x(context, match_expr))
+      return false;
+    emit_store(context, selector_name, "match value");
+  }
 
   const std::string end_label = context.emitter.fresh_label("match_end");
   for (const V2MatchCase& match_case : lowered_statement.cases) {
@@ -17773,7 +17786,7 @@ bool lower_match_statement(LoweringContext& context, const V2Statement& statemen
       const std::string next_label = context.emitter.fresh_label("match_next");
       V2Predicate predicate;
       predicate.kind = "v2_compare";
-      predicate.left = scratch;
+      predicate.left = selector_name;
       predicate.op = "==";
       predicate.right = value;
       if (!lower_condition_false_branch(context, predicate, false, next_label, match_case.line,

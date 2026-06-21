@@ -5116,6 +5116,36 @@ program ScalarMatch {
   require(match_statement.listing.find("increment hits") != std::string::npos,
           "generic scalar match should lower block action statements");
 
+  const CompileResult source_register_dispatch = compile_source(R"mkpro(
+program DispatchSourceRegister {
+  state {
+    key: counter 0..9 = 1
+    target: counter 0..9 = 2
+    result: counter 0..9 = 0
+  }
+
+  loop {
+    match key {
+      target => result = 1
+      otherwise => result = 2
+    }
+    halt(result)
+  }
+}
+)mkpro");
+  require(source_register_dispatch.implemented,
+          "native compiler should reuse source registers for generic dispatch");
+  require(source_register_dispatch.diagnostics.empty(),
+          "source-register dispatch compile should not report diagnostics");
+  require(has_optimization(source_register_dispatch, "dispatch-source-register"),
+          "source-register dispatch should report the TS optimization name");
+  require(std::none_of(source_register_dispatch.registers.begin(),
+                       source_register_dispatch.registers.end(),
+                       [](const auto& item) { return item.first.rfind("__match_value_", 0) == 0; }),
+          "source-register dispatch should not allocate a match scratch");
+  require(source_register_dispatch.listing.find("match value") == std::string::npos,
+          "source-register dispatch should not store the selector to a scratch register");
+
   CompileOptions if_chain_options;
   if_chain_options.canonicalize_if_chains = true;
   const CompileResult canonical_if_chain = compile_source(R"mkpro(
