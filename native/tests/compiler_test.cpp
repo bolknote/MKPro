@@ -2630,6 +2630,46 @@ program DseAcrossCall {
   require(dse_across_call.steps.size() < dse_across_call_unoptimized.steps.size(),
           "interprocedural DSE should shrink the generated program");
 
+  const std::string value_propagation_source = R"mkpro(
+program InterproceduralValuePropagation {
+  state {
+    player: packed = 2
+    turn: packed = 3
+    preview: packed = 0
+    copy: packed = 0
+  }
+
+  fn refresh() {
+    preview = player + turn
+  }
+
+  loop {
+    refresh()
+    show(preview)
+    copy = player + turn
+    halt(copy)
+  }
+}
+)mkpro";
+  const CompileResult value_propagation = compile_source(value_propagation_source);
+  CompileOptions no_interprocedural_value_options;
+  no_interprocedural_value_options.disable_interprocedural_opts = true;
+  const CompileResult value_propagation_unoptimized =
+      compile_source(value_propagation_source, no_interprocedural_value_options);
+  require(value_propagation.implemented,
+          "native compiler should lower interprocedural value-prop program");
+  require(value_propagation.diagnostics.empty(),
+          "interprocedural value-prop compile should not report diagnostics");
+  require(value_propagation_unoptimized.implemented,
+          "native compiler should lower value-prop program with interprocedural opts disabled");
+  require(has_optimization(value_propagation, "interprocedural-value-propagation"),
+          "interprocedural value propagation should report the TS strategy name");
+  require(!has_optimization(value_propagation_unoptimized,
+                            "interprocedural-value-propagation"),
+          "disable_interprocedural_opts should suppress interprocedural value propagation");
+  require(value_propagation.steps.size() < value_propagation_unoptimized.steps.size(),
+          "interprocedural value propagation should shrink the generated program");
+
   const CompileResult read_expression_call = compile_source(R"mkpro(
 program ReadExpression {
   state {

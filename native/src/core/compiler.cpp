@@ -11,6 +11,7 @@
 #include "mkpro/core/format.hpp"
 #include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/interprocedural_dse.hpp"
+#include "mkpro/core/interprocedural_value_propagation.hpp"
 #include "mkpro/core/machine_profile.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/parser.hpp"
@@ -28053,8 +28054,9 @@ void run_interprocedural_ast_passes(const CompileOptions& options, V2Program& pr
   if (options.disable_interprocedural_opts)
     return;
   for (int pass = 0; pass < 4; ++pass) {
+    const int propagated = core::propagate_values_interprocedurally(program, optimizations);
     const int removed = core::eliminate_interprocedural_dead_stores(program, optimizations);
-    if (removed == 0)
+    if (propagated == 0 && removed == 0)
       break;
   }
 }

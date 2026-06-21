@@ -181,12 +181,12 @@ struct Fragment {
 
 class Builder {
 public:
-  explicit Builder(const V2Program& program) : program_(program) {}
+  explicit Builder(V2Program& program) : program_(program) {}
 
   RuleCfg build() {
     routine_entry_[kMainRoutineName] = add(RuleCfgNode{});
     routine_exit_[kMainRoutineName] = add(RuleCfgNode{});
-    for (const V2Rule& rule : program_.rules) {
+    for (V2Rule& rule : program_.rules) {
       routine_entry_[rule.name] = add(RuleCfgNode{});
       routine_exit_[rule.name] = add(RuleCfgNode{});
     }
@@ -195,7 +195,7 @@ public:
     link({routine_entry_.at(kMainRoutineName)}, main.entry);
     link(main.exits, routine_exit_.at(kMainRoutineName));
 
-    for (const V2Rule& rule : program_.rules) {
+    for (V2Rule& rule : program_.rules) {
       Fragment body = build_sequence(rule.body);
       link({routine_entry_.at(rule.name)}, body.entry);
       link(body.exits, routine_exit_.at(rule.name));
@@ -222,10 +222,10 @@ private:
       add_unique_successor(nodes_.at(static_cast<std::size_t>(exit)).succ, target);
   }
 
-  Fragment build_sequence(const std::vector<V2Statement>& statements) {
+  Fragment build_sequence(std::vector<V2Statement>& statements) {
     std::optional<int> entry;
     std::vector<int> pending;
-    for (const V2Statement& statement : statements) {
+    for (V2Statement& statement : statements) {
       Fragment fragment = build_statement(statement);
       if (!entry.has_value())
         entry = fragment.entry;
@@ -240,7 +240,7 @@ private:
     return Fragment{.entry = *entry, .exits = pending};
   }
 
-  Fragment build_statement(const V2Statement& statement) {
+  Fragment build_statement(V2Statement& statement) {
     if (statement.kind == "v2_assign")
       return build_assign(statement);
     if (statement.kind == "v2_update")
@@ -278,7 +278,7 @@ private:
     return Fragment{.entry = node, .exits = {node}};
   }
 
-  Fragment build_assign(const V2Statement& statement) {
+  Fragment build_assign(V2Statement& statement) {
     if (!statement.target.has_value() || !statement.expr.has_value()) {
       const int node = add(RuleCfgNode{.barrier = true});
       return Fragment{.entry = node, .exits = {node}};
@@ -294,7 +294,7 @@ private:
       return build_expression_call_fragment(*expr,
                                             RuleCfgNode{.defs = {target->name},
                                                         .uses = expression_uses(program_, *expr),
-                                                        .assign = &statement});
+                             .assign = &statement});
     }
     if (target->kind == "indexed") {
       std::set<std::string> uses;
@@ -311,7 +311,7 @@ private:
     return Fragment{.entry = node, .exits = {node}};
   }
 
-  Fragment build_update(const V2Statement& statement) {
+  Fragment build_update(V2Statement& statement) {
     if (!statement.target.has_value() || !statement.expr.has_value()) {
       const int node = add(RuleCfgNode{.barrier = true});
       return Fragment{.entry = node, .exits = {node}};
@@ -337,7 +337,7 @@ private:
     return Fragment{.entry = node, .exits = {node}};
   }
 
-  Fragment build_expression_call_statement(const V2Statement& statement, RuleCfgNode final_node) {
+  Fragment build_expression_call_statement(V2Statement& statement, RuleCfgNode final_node) {
     if (statement.target.has_value()) {
       const std::optional<Expression> target =
           parse_expression_safe(*statement.target, statement.line);
@@ -378,7 +378,7 @@ private:
     return Fragment{.entry = entry, .exits = {final}};
   }
 
-  Fragment build_invoke(const V2Statement& statement) {
+  Fragment build_invoke(V2Statement& statement) {
     if (!statement.name.has_value() || !statement.args.empty()) {
       const int node = add(RuleCfgNode{.barrier = true});
       return Fragment{.entry = node, .exits = {node}};
@@ -393,7 +393,7 @@ private:
     return Fragment{.entry = node, .exits = {callee_exit->second}};
   }
 
-  Fragment build_if(const V2Statement& statement) {
+  Fragment build_if(V2Statement& statement) {
     const int test =
         add(RuleCfgNode{.uses = statement.predicate.has_value()
                                     ? predicate_uses(program_, *statement.predicate, statement.line)
@@ -411,7 +411,7 @@ private:
     return Fragment{.entry = test, .exits = exits};
   }
 
-  Fragment build_match(const V2Statement& statement) {
+  Fragment build_match(V2Statement& statement) {
     std::set<std::string> uses;
     if (statement.expr.has_value())
       add_all(uses, expression_text_uses(program_, *statement.expr, statement.line));
@@ -422,8 +422,9 @@ private:
     const int test = add(RuleCfgNode{.uses = sorted_vector(uses)});
     std::vector<int> exits;
     for (const V2MatchCase& match_case : statement.cases) {
+      std::vector<V2Statement> empty;
       Fragment action =
-          match_case.action == nullptr ? build_sequence({}) : build_statement(*match_case.action);
+          match_case.action == nullptr ? build_sequence(empty) : build_statement(*match_case.action);
       link({test}, action.entry);
       exits.insert(exits.end(), action.exits.begin(), action.exits.end());
     }
@@ -437,7 +438,7 @@ private:
     return Fragment{.entry = test, .exits = exits};
   }
 
-  Fragment build_while(const V2Statement& statement) {
+  Fragment build_while(V2Statement& statement) {
     const int test =
         add(RuleCfgNode{.uses = statement.predicate.has_value()
                                     ? predicate_uses(program_, *statement.predicate, statement.line)
@@ -453,7 +454,7 @@ private:
     return Fragment{.entry = id, .exits = {id}};
   }
 
-  const V2Program& program_;
+  V2Program& program_;
   std::vector<RuleCfgNode> nodes_;
   std::map<std::string, int> routine_entry_;
   std::map<std::string, int> routine_exit_;
@@ -508,7 +509,7 @@ bool expression_is_call_free(const Expression& expression) {
   return true;
 }
 
-RuleCfg build_rule_cfg(const V2Program& program) {
+RuleCfg build_rule_cfg(V2Program& program) {
   return Builder(program).build();
 }
 

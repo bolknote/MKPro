@@ -30,6 +30,7 @@ add_library(mkpro_core STATIC
   src/core/format.cpp
   src/core/indirect_addressing.cpp
   src/core/interprocedural_dse.cpp
+  src/core/interprocedural_value_propagation.cpp
   src/core/ir.cpp
   src/core/machine_profile.cpp
   src/core/opcodes.cpp
