@@ -12610,6 +12610,14 @@ bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule&
   context.emitter.emit_op(0x22, "F x^2", "packed-line score helper square", match->line);
   context.emitter.emit_op(0x10, "+", "packed-line score helper accumulate", match->line);
   context.emitter.emit_op(0x52, "В/О", "packed-line score helper return", match->line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "packed-line-family-score-accumulator",
+      .detail = "Accumulated four packed_score() terms through one helper while sharing diagonal "
+                "scoring for " +
+                expression_to_source(add_expression(match->shared, match->partial)) + " and " +
+                expression_to_source(subtract_expression(match->shared, match->partial)) + " in " +
+                rule.name + ".",
+  });
   return true;
 }
 

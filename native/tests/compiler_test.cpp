@@ -1563,6 +1563,8 @@ program PackedLineScoreProc {
   require(packed_line_score_proc.listing.find("packed-line score helper accumulate") !=
               std::string::npos,
           "four-term packed_score procedure should use the packed-line accumulator helper");
+  require(has_optimization(packed_line_score_proc, "packed-line-family-score-accumulator"),
+          "four-term packed_score procedure should report the TS accumulator strategy");
 
   const CompileResult packed_line_stack_score = compile_source(R"mkpro(
 program PackedLineStackScore {
