@@ -1671,6 +1671,8 @@ program PackedLineUpdateProc {
   require(packed_line_update_proc.listing.find("packed-line shared update/check tail") !=
               std::string::npos,
           "four packed-line marker calls should use one shared update/check tail");
+  require(has_optimization(packed_line_update_proc, "indexed-packed-fractional-report-x2-tail"),
+          "packed-line update/check tail should report the TS X2 fractional tail strategy");
   require(packed_line_update_proc.listing.find("call function mark_one") == std::string::npos,
           "consumed packed-line update helper should not be emitted as a separate call body");
 
@@ -1719,6 +1721,10 @@ program PackedLineMutatingUpdateProc {
   require(packed_line_mutating_update_proc.listing.find(
               "packed-line mutating shared update/check tail") != std::string::npos,
           "descending marker calls should use the mutating selector shared tail");
+  require(
+      has_optimization(packed_line_mutating_update_proc,
+                       "indexed-packed-fractional-report-x2-tail"),
+      "mutating packed-line update/check tail should report the TS X2 fractional tail strategy");
   require(packed_line_mutating_update_proc.listing.find("call function mark_one") ==
               std::string::npos,
           "mutating packed-line update helper should not be emitted as a separate call body");

@@ -13444,6 +13444,12 @@ void emit_packed_line_family_update_check_tail(LoweringContext& context,
   context.emitter.emit_op(0x0a, ".", "updated packed fractional report X2 restore",
                           update.branch_line);
   context.emitter.emit_op(0x50, "С/П", "halt", update.halt_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "indexed-packed-fractional-report-x2-tail",
+      .detail = "Restored the terminal fractional packed report through X2 after branching "
+                "directly to the halt path at line " +
+                std::to_string(update.branch_line) + ".",
+  });
   clear_current_x_facts(context);
 }
 
@@ -13518,6 +13524,12 @@ void emit_packed_line_family_mutating_update_check_tail(LoweringContext& context
   context.emitter.emit_op(0x0a, ".", "updated packed fractional report X2 restore",
                           update.branch_line);
   context.emitter.emit_op(0x50, "С/П", "halt", update.halt_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "indexed-packed-fractional-report-x2-tail",
+      .detail = "Restored the terminal fractional packed report through X2 after branching "
+                "directly to the halt path at line " +
+                std::to_string(update.branch_line) + ".",
+  });
   clear_current_x_facts(context);
 }
 
