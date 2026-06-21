@@ -1166,7 +1166,11 @@ std::optional<std::vector<PreloadReport>> retarget_existing_selectors_after_shif
 
 std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deletion(
     const std::vector<MachineItem>& before_items, std::vector<MachineItem> after_items,
-    const std::vector<PreloadReport>& preloads, int removed_address) {
+    const std::vector<PreloadReport>& preloads, int removed_item_index,
+    int replaced_item_index) {
+  const std::vector<MachineCell> before_cells = machine_cells(before_items);
+  const std::map<int, int> after_address_by_item_index =
+      machine_address_by_item_index(after_items);
   std::vector<PreloadReport> next_preloads;
   next_preloads.reserve(preloads.size());
   for (const PreloadReport& preload : preloads) {
@@ -1175,7 +1179,20 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
       return std::nullopt;
     const int target = *decoded->actual_flow_target;
-    const int shifted_target = target > removed_address ? target - 1 : target;
+    const std::optional<MachineCell> before_cell = machine_cell_at(before_cells, target);
+    if (!before_cell.has_value())
+      return std::nullopt;
+    if (before_cell->item_index == removed_item_index ||
+        before_cell->item_index == replaced_item_index) {
+      return std::nullopt;
+    }
+    const int after_item_index =
+        before_cell->item_index > removed_item_index ? before_cell->item_index - 1
+                                                     : before_cell->item_index;
+    const auto shifted_target_it = after_address_by_item_index.find(after_item_index);
+    if (shifted_target_it == after_address_by_item_index.end())
+      return std::nullopt;
+    const int shifted_target = shifted_target_it->second;
     const std::optional<std::string> selector_value =
         shifted_target == target
             ? std::optional<std::string>(preload.value)
@@ -1193,7 +1210,6 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
     });
   }
 
-  (void)before_items;
   return RetargetedMachine{
       .items = std::move(after_items),
       .preloads = std::move(next_preloads),
@@ -1975,15 +1991,14 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
 
     if (const std::optional<EmptyStackTailCallRewrite> rewrite =
             find_empty_stack_tail_call_rewrite(current, current_preloads)) {
-      const auto removed_it = address_by_item.find(rewrite->loop_back_index);
-      if (removed_it == address_by_item.end())
-        break;
       std::vector<MachineItem> candidate = apply_empty_stack_tail_call_rewrite(current, *rewrite);
       if (machine_cell_count(candidate) >= machine_cell_count(current))
         break;
       const std::optional<RetargetedMachine> retargeted =
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
-                                                            current_preloads, removed_it->second);
+                                                            current_preloads,
+                                                            rewrite->loop_back_index,
+                                                            rewrite->call_index);
       if (!retargeted.has_value())
         break;
       current = retargeted->items;
@@ -1994,15 +2009,14 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
 
     if (const std::optional<BranchRewrite> rewrite =
             find_existing_selector_flow_rewrite(current, current_preloads)) {
-      const auto removed_it = address_by_item.find(rewrite->address_index);
-      if (removed_it == address_by_item.end())
-        break;
       std::vector<MachineItem> candidate = apply_branch_rewrite(current, *rewrite);
       if (machine_cell_count(candidate) >= machine_cell_count(current))
         break;
       const std::optional<RetargetedMachine> retargeted =
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
-                                                            current_preloads, removed_it->second);
+                                                            current_preloads,
+                                                            rewrite->address_index,
+                                                            rewrite->branch_index);
       if (!retargeted.has_value())
         break;
       current = retargeted->items;
@@ -2013,15 +2027,14 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
 
     if (const std::optional<BranchRewrite> rewrite =
             find_branch_to_stop_tail_selector_rewrite(current, current_preloads)) {
-      const auto removed_it = address_by_item.find(rewrite->address_index);
-      if (removed_it == address_by_item.end())
-        break;
       std::vector<MachineItem> candidate = apply_branch_rewrite(current, *rewrite);
       if (machine_cell_count(candidate) >= machine_cell_count(current))
         break;
       const std::optional<RetargetedMachine> retargeted =
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
-                                                            current_preloads, removed_it->second);
+                                                            current_preloads,
+                                                            rewrite->address_index,
+                                                            rewrite->branch_index);
       if (!retargeted.has_value())
         break;
       current = retargeted->items;
@@ -2032,15 +2045,13 @@ optimize_post_layout_stop_tail_reuse(const std::vector<MachineItem>& items,
 
     if (const std::optional<StopTailReuseRewrite> rewrite =
             find_stop_tail_reuse_rewrite(current, current_preloads)) {
-      const auto removed_it = address_by_item.find(rewrite->remove_index);
-      if (removed_it == address_by_item.end())
-        break;
       std::vector<MachineItem> candidate = apply_stop_tail_reuse_rewrite(current, *rewrite);
       if (machine_cell_count(candidate) >= machine_cell_count(current))
         break;
       const std::optional<RetargetedMachine> retargeted =
           retarget_selector_preloads_after_machine_deletion(current, std::move(candidate),
-                                                            current_preloads, removed_it->second);
+                                                            current_preloads, rewrite->remove_index,
+                                                            rewrite->replace_index);
       if (!retargeted.has_value())
         break;
       current = retargeted->items;

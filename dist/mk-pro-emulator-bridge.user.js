@@ -398,12 +398,198 @@ var MKProEmulatorBundle = (() => {
     return name.trim().replaceAll("\u2190\u2192", "<->").replaceAll("\u2192", "->").replaceAll("\u2190", "<-").replace(/\^\{([^}]+)\}/gu, "^$1").replaceAll("\u03C0", "pi").replaceAll("\u221A", "sqrt").replaceAll("\u21BB", "reverse").replaceAll("\u2260", "!=").replaceAll("\u2265", ">=").replaceAll("\u2264", "<=").replaceAll("\xD7", "*").replaceAll("\xF7", "/").replaceAll("\u2212", "-").replaceAll("\u2223", "|").replaceAll("\u0425", "X").replaceAll("\u0445", "x").replaceAll("K", "\u041A").replaceAll("k", "\u043A").replace(/^([FfКк])(?=\S)/u, "$1 ").replace(/\s+/g, " ").toLowerCase();
   }
 
+  // src/core/indirect-addressing.ts
+  var MEMORY_TARGET_WITH_ZERO_TENS = [
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "0"
+  ];
+  var MEMORY_TARGET_WITH_NONZERO_TENS = [
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "0",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9"
+  ];
+  function indirectSelectorMutation(register) {
+    const index = registerIndex(register);
+    if (index <= 3) return "pre-decrement";
+    if (index <= 6) return "pre-increment";
+    return "stable";
+  }
+  function isStableIndirectSelector(register) {
+    return indirectSelectorMutation(register) === "stable";
+  }
+  function evaluateIndirectAddress(selector, value, operation) {
+    const mutation = indirectSelectorMutation(selector);
+    const fractional = isPositiveFractional(value);
+    if (selector === "0" && fractional) {
+      const formalAddress = formalAddressInfo(153);
+      return {
+        selector,
+        mutation,
+        operation,
+        transformed: "99",
+        ...operation === "flow" ? { flowTarget: 99, actualFlowTarget: formalAddress.actual, formalAddress } : { memoryTarget: "3" },
+        resultValue: "-99999999"
+      };
+    }
+    const transformed = transformSelectorValue(value, mutation);
+    if (transformed === void 0) return void 0;
+    if (operation === "flow") {
+      const flowTarget = flowTargetFromTransformed(transformed);
+      const formalAddress = formalAddressInfo(formalOpcodeForFlowTarget(transformed, flowTarget));
+      const result = {
+        selector,
+        mutation,
+        operation,
+        transformed,
+        formalAddress,
+        flowTarget,
+        actualFlowTarget: formalAddress.actual,
+        resultValue: transformed
+      };
+      const superDark = superDarkTarget(formalAddress.opcode);
+      if (superDark !== void 0) result.superDark = superDark;
+      return result;
+    }
+    const memoryTarget = memoryTargetFromTransformed(transformed);
+    if (memoryTarget === void 0) return void 0;
+    return {
+      selector,
+      mutation,
+      operation,
+      transformed,
+      memoryTarget,
+      resultValue: transformed
+    };
+  }
+  function memoryTargetFromTransformed(transformed) {
+    const tail = transformedTailPair(transformed);
+    if (tail === void 0) return void 0;
+    const targetTable = tail.tens === 0 ? MEMORY_TARGET_WITH_ZERO_TENS : MEMORY_TARGET_WITH_NONZERO_TENS;
+    return targetTable[tail.ones];
+  }
+  function superDarkTarget(formalTarget) {
+    const info2 = formalAddressInfo(formalTarget);
+    if (info2.kind !== "super-dark" || info2.extra === void 0) return void 0;
+    return {
+      formal: info2.opcode,
+      entryAddress: info2.actual,
+      continuationAddress: info2.extra
+    };
+  }
+  function transformSelectorValue(value, mutation) {
+    if (typeof value === "number") {
+      if (!Number.isFinite(value)) return void 0;
+      return transformDecimalSelectorValue(value, mutation);
+    }
+    const normalized = value.trim().replace(/^0x/iu, "").replace(",", ".").toLowerCase();
+    const exponentMantissa = stableExponentMantissaSelector(normalized, mutation);
+    if (exponentMantissa !== void 0) return exponentMantissa;
+    if (!/^-?[0-9a-f]+(?:\.\d+)?$/iu.test(normalized)) return void 0;
+    if (mutation === "stable" && !normalized.startsWith("-") && /[a-f]/iu.test(normalized)) return normalized;
+    const decimal2 = Number(normalized);
+    if (!Number.isFinite(decimal2)) return void 0;
+    return transformDecimalSelectorValue(decimal2, mutation);
+  }
+  function stableExponentMantissaSelector(normalized, mutation) {
+    if (mutation !== "stable") return void 0;
+    const match = /^([1-9])(?:\.([0-9]*))?e-[0-9]{1,2}$/iu.exec(normalized);
+    if (match === null) return void 0;
+    return `${match[1]}${match[2] ?? ""}`.padEnd(8, "0").slice(0, 8);
+  }
+  function isPositiveFractional(value) {
+    const numeric = typeof value === "number" ? value : Number(value.trim().replace(",", "."));
+    return numeric !== void 0 && numeric > 0 && numeric < 1;
+  }
+  function mutationDelta(mutation) {
+    if (mutation === "pre-decrement") return -1;
+    if (mutation === "pre-increment") return 1;
+    return 0;
+  }
+  function flowTargetFromTransformed(transformed) {
+    const tail = transformedTailPair(transformed);
+    if (tail === void 0) return 0;
+    return tail.hex ? tail.tens * 16 + tail.ones : tail.tens * 10 + tail.ones;
+  }
+  function formalOpcodeForFlowTarget(transformed, flowTarget) {
+    const normalized = transformed.trim().toLowerCase();
+    if (/^-?[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
+      return flowTarget;
+    }
+    return officialAddressToOpcode(flowTarget);
+  }
+  function transformDecimalSelectorValue(value, mutation) {
+    const integer = Math.trunc(value);
+    const delta = mutationDelta(mutation);
+    if (integer >= 0) {
+      if (integer === 0 && delta < 0) return "-99999999";
+      return String(integer + delta);
+    }
+    const transformed = negativeIntegerMantissa(integer);
+    if (delta === 0) return `-${transformed}`;
+    const next = transformed + delta;
+    if (next <= 0) return "0";
+    if (next >= 1e8) return "0";
+    return `-${String(next).padStart(8, "0")}`;
+  }
+  function negativeIntegerMantissa(value) {
+    const digits = String(Math.abs(Math.trunc(value))).slice(-8);
+    const padded = digits.padStart(8, "9");
+    return Number(padded);
+  }
+  function transformedTailPair(transformed) {
+    const normalized = transformed.trim().toLowerCase();
+    if (!/^-?[0-9a-f]+$/iu.test(normalized)) return void 0;
+    const negative = normalized.startsWith("-");
+    const digits = negative ? normalized.slice(1) : normalized;
+    if (digits.length === 0) return void 0;
+    const fill = negative ? "9" : "0";
+    const pair = digits.length === 1 ? `${fill}${digits}` : digits.slice(-2);
+    const tens = Number.parseInt(pair[0], 16);
+    const ones = Number.parseInt(pair[1], 16);
+    if (!Number.isFinite(tens) || !Number.isFinite(ones) || tens < 0 || tens > 15 || ones < 0 || ones > 15) {
+      return void 0;
+    }
+    return { tens, ones, hex: /[a-f]/iu.test(pair) };
+  }
+
   // src/core/constant-folder.ts
   var MAX_FOLDED_SIGNIFICANT_DIGITS = 8;
   var MAX_FOLDED_DECIMAL_SCALE = 12;
   var MAX_LITERAL_EXPONENT = 18;
   var ConstantFolder = class {
     applied = 0;
+    grdAngleAssumptions = 0;
+    options;
+    constructor(options = {}) {
+      this.options = options;
+    }
     foldProgram(ast) {
       for (const state of ast.states) {
         for (const field of state.fields) {
@@ -412,7 +598,7 @@ var MKProEmulatorBundle = (() => {
       }
       for (const entry of ast.entries) this.foldStatements(entry.body);
       for (const proc of ast.procs) this.foldStatements(proc.body);
-      return this.applied;
+      return { applied: this.applied, grdAngleAssumptions: this.grdAngleAssumptions };
     }
     foldStatements(statements) {
       for (const statement of statements) {
@@ -502,8 +688,11 @@ var MKProEmulatorBundle = (() => {
           const args = expr.args.map((arg) => this.foldExpression(arg));
           const changed = args.some((arg, index) => arg !== expr.args[index]);
           const call = changed ? { ...expr, args } : expr;
-          const folded = foldPureConstantCall(expr.callee, args);
-          if (folded !== void 0) return this.folded(folded);
+          const folded = foldPureConstantCall(expr.callee, args, this.options);
+          if (folded !== void 0) {
+            if (folded.usesGrdAngleMode) this.grdAngleAssumptions += 1;
+            return this.folded(folded.expr);
+          }
           return call;
         }
         case "binary": {
@@ -565,7 +754,9 @@ var MKProEmulatorBundle = (() => {
     }
   };
   function foldProgramConstants(ast) {
-    return new ConstantFolder().foldProgram(ast);
+    return new ConstantFolder({
+      grdAngleMode: ast.v2?.requirements?.angleMode?.mode === "grd"
+    }).foldProgram(ast);
   }
   function foldConstExpression(expr) {
     return new ConstantFolder().foldExpressionPublic(expr);
@@ -593,11 +784,19 @@ var MKProEmulatorBundle = (() => {
     const value = decimalFromExpression(expr);
     return value === void 0 ? void 0 : decimalNumberExpression(negateDecimal(value));
   }
-  function foldPureConstantCall(callee, args) {
+  function foldPureConstantCall(callee, args, options = {}) {
     const name = callee.toLowerCase();
     const decimals = args.map(decimalFromExpression);
     if (decimals.some((value) => value === void 0)) return void 0;
     const values = decimals;
+    if (options.grdAngleMode === true && values.length === 1) {
+      if (name === "acos" && isDecimalZero(values[0])) {
+        return { expr: numberExpression(100), usesGrdAngleMode: true };
+      }
+      if (name === "cos" && compareDecimal(values[0], decimal(100)) === 0) {
+        return { expr: numberExpression(0), usesGrdAngleMode: true };
+      }
+    }
     const result = (() => {
       switch (name) {
         case "abs":
@@ -636,7 +835,8 @@ var MKProEmulatorBundle = (() => {
           return void 0;
       }
     })();
-    return result === void 0 ? void 0 : decimalNumberExpression(result);
+    const expr = result === void 0 ? void 0 : decimalNumberExpression(result);
+    return expr === void 0 ? void 0 : { expr };
   }
   function decimalFromExpression(expr) {
     if (expr.kind !== "number") return void 0;
@@ -1265,687 +1465,6 @@ var MKProEmulatorBundle = (() => {
     return offset;
   }
 
-  // src/core/rule-cfg.ts
-  function collectExprVars(expr, out) {
-    switch (expr.kind) {
-      case "number":
-      case "string":
-        return;
-      case "identifier":
-        out.add(expr.name);
-        return;
-      case "indexed":
-        collectExprVars(expr.index, out);
-        return;
-      case "unary":
-        collectExprVars(expr.expr, out);
-        return;
-      case "binary":
-        collectExprVars(expr.left, out);
-        collectExprVars(expr.right, out);
-        return;
-      case "call":
-        for (const arg of expr.args) collectExprVars(arg, out);
-        return;
-    }
-  }
-  function exprVars(expr) {
-    const out = /* @__PURE__ */ new Set();
-    collectExprVars(expr, out);
-    return [...out];
-  }
-  function collectExpressionCallNames(expr, out) {
-    switch (expr.kind) {
-      case "number":
-      case "string":
-      case "identifier":
-      case "indexed":
-        if (expr.kind === "indexed") collectExpressionCallNames(expr.index, out);
-        return;
-      case "unary":
-        collectExpressionCallNames(expr.expr, out);
-        return;
-      case "binary":
-        collectExpressionCallNames(expr.left, out);
-        collectExpressionCallNames(expr.right, out);
-        return;
-      case "call":
-        for (const arg of expr.args) collectExpressionCallNames(arg, out);
-        out.push(expr.callee);
-        return;
-    }
-  }
-  function expressionCallNames(expr) {
-    const out = [];
-    collectExpressionCallNames(expr, out);
-    return out;
-  }
-  function exprIsCallFree(expr) {
-    switch (expr.kind) {
-      case "number":
-      case "string":
-      case "identifier":
-        return true;
-      case "indexed":
-        return exprIsCallFree(expr.index);
-      case "unary":
-        return exprIsCallFree(expr.expr);
-      case "binary":
-        return exprIsCallFree(expr.left) && exprIsCallFree(expr.right);
-      case "call":
-        return false;
-    }
-  }
-  var Builder = class {
-    nodes = [];
-    routineEntry = /* @__PURE__ */ new Map();
-    routineExit = /* @__PURE__ */ new Map();
-    ast;
-    constructor(ast) {
-      this.ast = ast;
-    }
-    add(node) {
-      const id = this.nodes.length;
-      this.nodes.push({ id, succ: node.succ ?? [], defs: node.defs, uses: node.uses, ...node.assign ? { assign: node.assign } : {}, ...node.barrier ? { barrier: true } : {} });
-      return id;
-    }
-    link(exits, target) {
-      for (const exit of exits) {
-        if (!this.nodes[exit].succ.includes(target)) this.nodes[exit].succ.push(target);
-      }
-    }
-    build() {
-      const routines = [
-        ...this.ast.entries.map((entry) => ({ name: entry.name, body: entry.body })),
-        ...this.ast.procs.map((proc) => ({ name: proc.name, body: proc.body }))
-      ];
-      for (const routine of routines) {
-        this.routineEntry.set(routine.name, this.add({ defs: [], uses: [] }));
-        this.routineExit.set(routine.name, this.add({ defs: [], uses: [] }));
-      }
-      for (const routine of routines) {
-        const fragment = this.buildSequence(routine.body);
-        this.link([this.routineEntry.get(routine.name)], fragment.entry);
-        this.link(fragment.exits, this.routineExit.get(routine.name));
-      }
-      const entryNode = this.ast.entries.length > 0 ? this.routineEntry.get(this.ast.entries[0].name) : 0;
-      return {
-        nodes: this.nodes,
-        entryNode,
-        routineEntry: this.routineEntry,
-        routineExit: this.routineExit
-      };
-    }
-    buildSequence(statements) {
-      let entry;
-      let pending = [];
-      for (const statement of statements) {
-        const fragment = this.buildStatement(statement);
-        if (entry === void 0) entry = fragment.entry;
-        else this.link(pending, fragment.entry);
-        pending = fragment.exits;
-      }
-      if (entry === void 0) {
-        const nop = this.add({ defs: [], uses: [] });
-        return { entry: nop, exits: [nop] };
-      }
-      return { entry, exits: pending };
-    }
-    buildStatement(statement) {
-      switch (statement.kind) {
-        case "assign": {
-          const callFragment = this.buildExpressionCallFragment(statement.expr, {
-            defs: [statement.target],
-            uses: []
-          });
-          if (callFragment !== void 0) return callFragment;
-          const node = this.add({ defs: [statement.target], uses: this.exprUses(statement.expr), assign: statement });
-          return { entry: node, exits: [node] };
-        }
-        case "indexed_assign": {
-          const node = this.add({
-            defs: this.indexedTargetDefs(statement.target),
-            uses: [.../* @__PURE__ */ new Set([...this.exprUses(statement.expr), ...exprVars(statement.target.index)])]
-          });
-          return { entry: node, exits: [node] };
-        }
-        case "coord_list_remove": {
-          const node = this.add({
-            defs: statement.items,
-            uses: [.../* @__PURE__ */ new Set([...this.exprUses(statement.item), ...statement.items])]
-          });
-          return { entry: node, exits: [node] };
-        }
-        case "show": {
-          const display = this.ast.displays.find((candidate) => candidate.name === statement.display);
-          const node = this.add({ defs: [], uses: display?.sources ?? [] });
-          return { entry: node, exits: [node] };
-        }
-        case "input": {
-          const node = this.add({ defs: [statement.target], uses: [] });
-          return { entry: node, exits: [node] };
-        }
-        case "pause":
-        case "preview":
-        case "halt":
-        case "return_value": {
-          const display = statement.kind === "halt" && statement.display !== void 0 ? this.ast.displays.find((candidate) => candidate.name === statement.display) : void 0;
-          const uses = [.../* @__PURE__ */ new Set([...this.exprUses(statement.expr), ...display?.sources ?? []])];
-          const callFragment = this.buildExpressionCallFragment(statement.expr, {
-            defs: [],
-            uses
-          });
-          if (callFragment !== void 0) return callFragment;
-          const node = this.add({ defs: [], uses });
-          return { entry: node, exits: [node] };
-        }
-        case "call": {
-          const calleeEntry = this.routineEntry.get(statement.block);
-          const calleeExit = this.routineExit.get(statement.block);
-          if (calleeEntry === void 0 || calleeExit === void 0) {
-            const node2 = this.add({ defs: [], uses: [], barrier: true });
-            return { entry: node2, exits: [node2] };
-          }
-          const node = this.add({ defs: [], uses: [], succ: [calleeEntry] });
-          return { entry: node, exits: [calleeExit] };
-        }
-        case "core": {
-          const node = this.add({ defs: [], uses: [], barrier: true });
-          return { entry: node, exits: [node] };
-        }
-        case "if": {
-          const test = this.add({ defs: [], uses: [...this.exprUses(statement.condition.left), ...this.exprUses(statement.condition.right)] });
-          const thenFragment = this.buildSequence(statement.thenBody);
-          this.link([test], thenFragment.entry);
-          const exits = [...thenFragment.exits];
-          if (statement.elseBody !== void 0) {
-            const elseFragment = this.buildSequence(statement.elseBody);
-            this.link([test], elseFragment.entry);
-            exits.push(...elseFragment.exits);
-          } else {
-            exits.push(test);
-          }
-          return { entry: test, exits };
-        }
-        case "dispatch": {
-          const uses = new Set(this.exprUses(statement.expr));
-          for (const branch of statement.cases) for (const v of this.exprUses(branch.value)) uses.add(v);
-          const test = this.add({ defs: [], uses: [...uses] });
-          const exits = [];
-          for (const branch of statement.cases) {
-            const fragment = this.buildSequence(branch.body);
-            this.link([test], fragment.entry);
-            exits.push(...fragment.exits);
-          }
-          if (statement.defaultBody !== void 0) {
-            const fragment = this.buildSequence(statement.defaultBody);
-            this.link([test], fragment.entry);
-            exits.push(...fragment.exits);
-          } else {
-            exits.push(test);
-          }
-          return { entry: test, exits };
-        }
-        case "loop": {
-          const fragment = this.buildSequence(statement.body);
-          this.link(fragment.exits, fragment.entry);
-          return { entry: fragment.entry, exits: [...fragment.exits] };
-        }
-        case "while": {
-          const test = this.add({ defs: [], uses: [...this.exprUses(statement.condition.left), ...this.exprUses(statement.condition.right)] });
-          const fragment = this.buildSequence(statement.body);
-          this.link([test], fragment.entry);
-          this.link(fragment.exits, test);
-          return { entry: test, exits: [test] };
-        }
-        case "decimal_series": {
-          const node = this.add({ defs: [], uses: [], barrier: true });
-          return { entry: node, exits: [node] };
-        }
-      }
-    }
-    exprUses(expr) {
-      const uses = new Set(exprVars(expr));
-      this.collectIndexedReads(expr, uses);
-      return [...uses];
-    }
-    collectIndexedReads(expr, out) {
-      switch (expr.kind) {
-        case "number":
-        case "string":
-        case "identifier":
-          return;
-        case "indexed": {
-          this.collectIndexedReads(expr.index, out);
-          const resolved = findStateBankMember(this.ast, expr);
-          if (resolved === void 0) return;
-          const constant = numericIndexValue(expr.index);
-          if (constant !== void 0) {
-            const element = stateBankElementForIndex(resolved.member, constant);
-            if (element !== void 0) out.add(element.name);
-            return;
-          }
-          for (const name of stateBankElementNames(resolved.member)) out.add(name);
-          return;
-        }
-        case "unary":
-          this.collectIndexedReads(expr.expr, out);
-          return;
-        case "binary":
-          this.collectIndexedReads(expr.left, out);
-          this.collectIndexedReads(expr.right, out);
-          return;
-        case "call":
-          for (const arg of expr.args) this.collectIndexedReads(arg, out);
-          return;
-      }
-    }
-    indexedTargetDefs(expr) {
-      const resolved = findStateBankMember(this.ast, expr);
-      if (resolved === void 0) return [];
-      const constant = numericIndexValue(expr.index);
-      if (constant !== void 0) {
-        const element = stateBankElementForIndex(resolved.member, constant);
-        return element === void 0 ? [] : [element.name];
-      }
-      return stateBankElementNames(resolved.member);
-    }
-    buildExpressionCallFragment(expr, finalNode) {
-      const calls = expressionCallNames(expr);
-      if (calls.length === 0) return void 0;
-      const entry = this.add({ defs: [], uses: this.exprUses(expr) });
-      let exits = [entry];
-      for (const call of calls) {
-        const calleeEntry = this.routineEntry.get(call);
-        const calleeExit = this.routineExit.get(call);
-        if (calleeEntry === void 0 || calleeExit === void 0) {
-          const barrier = this.add({ defs: [], uses: [], barrier: true });
-          this.link(exits, barrier);
-          exits = [barrier];
-          continue;
-        }
-        const callNode = this.add({ defs: [], uses: [], succ: [calleeEntry] });
-        this.link(exits, callNode);
-        exits = [calleeExit];
-      }
-      const final = this.add(finalNode);
-      this.link(exits, final);
-      return { entry, exits: [final] };
-    }
-  };
-  function buildRuleCfg(ast) {
-    return new Builder(ast).build();
-  }
-  function programStateFields(ast) {
-    return new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
-  }
-
-  // src/core/interprocedural-dse.ts
-  function computeLiveOut(cfg, allVars) {
-    const n = cfg.nodes.length;
-    const liveIn = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
-    const liveOut = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
-    let changed = true;
-    let rounds = 0;
-    while (changed && rounds < 1e3) {
-      changed = false;
-      rounds += 1;
-      for (let i = n - 1; i >= 0; i -= 1) {
-        const node = cfg.nodes[i];
-        const newOut = /* @__PURE__ */ new Set();
-        for (const successor of node.succ) {
-          for (const reg of liveIn[successor]) newOut.add(reg);
-        }
-        const uses = node.barrier ? allVars : node.uses;
-        const defs = node.barrier ? [] : node.defs;
-        const newIn = new Set(uses);
-        for (const reg of newOut) {
-          if (!defs.includes(reg)) newIn.add(reg);
-        }
-        if (!setsEqual(newIn, liveIn[i]) || !setsEqual(newOut, liveOut[i])) {
-          liveIn[i] = newIn;
-          liveOut[i] = newOut;
-          changed = true;
-        }
-      }
-    }
-    return liveOut;
-  }
-  function setsEqual(a, b) {
-    if (a.size !== b.size) return false;
-    for (const value of a) if (!b.has(value)) return false;
-    return true;
-  }
-  function collectAllVars(cfg) {
-    const vars = /* @__PURE__ */ new Set();
-    for (const node of cfg.nodes) {
-      for (const def of node.defs) vars.add(def);
-      for (const use of node.uses) vars.add(use);
-    }
-    return vars;
-  }
-  function pruneStatements(statements, doomed) {
-    return statements.flatMap((statement) => {
-      if (doomed.has(statement)) return [];
-      if (statement.kind === "loop" || statement.kind === "while") {
-        return [{ ...statement, body: pruneStatements(statement.body, doomed) }];
-      }
-      if (statement.kind === "if") {
-        const pruned = {
-          ...statement,
-          thenBody: pruneStatements(statement.thenBody, doomed)
-        };
-        if (statement.elseBody !== void 0) pruned.elseBody = pruneStatements(statement.elseBody, doomed);
-        return [pruned];
-      }
-      if (statement.kind === "dispatch") {
-        return [{
-          ...statement,
-          cases: statement.cases.map((branch) => ({ ...branch, body: pruneStatements(branch.body, doomed) })),
-          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements(statement.defaultBody, doomed) }
-        }];
-      }
-      return [statement];
-    });
-  }
-  function eliminateInterproceduralDeadStores(ast, optimizations) {
-    const fields = programStateFields(ast);
-    if (fields.size === 0) return 0;
-    const cfg = buildRuleCfg(ast);
-    const allVars = collectAllVars(cfg);
-    const liveOut = computeLiveOut(cfg, allVars);
-    const doomed = /* @__PURE__ */ new Set();
-    for (const node of cfg.nodes) {
-      const assign = node.assign;
-      if (assign === void 0) continue;
-      if (!fields.has(assign.target)) continue;
-      if (!exprIsCallFree(assign.expr)) continue;
-      if (liveOut[node.id].has(assign.target)) continue;
-      doomed.add(assign);
-    }
-    if (doomed.size === 0) return 0;
-    for (const entry of ast.entries) entry.body = pruneStatements(entry.body, doomed);
-    for (const proc of ast.procs) proc.body = pruneStatements(proc.body, doomed);
-    optimizations.push({
-      name: "interprocedural-dead-store",
-      detail: `Removed ${doomed.size} store(s) whose value is always overwritten before it can be observed across the rule call graph.`
-    });
-    return doomed.size;
-  }
-
-  // src/core/value-propagation.ts
-  var MAX_ROUNDS = 1e3;
-  var MAX_TERMS = 8;
-  var MAX_MAGNITUDE = 1e6;
-  function gcd2(a, b) {
-    a = Math.abs(a);
-    b = Math.abs(b);
-    while (b !== 0) {
-      [a, b] = [b, a % b];
-    }
-    return a === 0 ? 1 : a;
-  }
-  function rat(n, d = 1) {
-    if (d === 0 || !Number.isFinite(n) || !Number.isFinite(d)) return { n: NaN, d: 1 };
-    if (d < 0) {
-      n = -n;
-      d = -d;
-    }
-    const g = gcd2(n, d);
-    return { n: n / g, d: d / g };
-  }
-  function ratValid(r) {
-    return Number.isFinite(r.n) && Number.isFinite(r.d) && r.d !== 0 && Math.abs(r.n) <= MAX_MAGNITUDE && Math.abs(r.d) <= MAX_MAGNITUDE;
-  }
-  function ratAdd(a, b) {
-    return rat(a.n * b.d + b.n * a.d, a.d * b.d);
-  }
-  function ratMul(a, b) {
-    return rat(a.n * b.n, a.d * b.d);
-  }
-  function ratEq(a, b) {
-    return a.n === b.n && a.d === b.d;
-  }
-  var RAT_ZERO = { n: 0, d: 1 };
-  function constForm(value) {
-    return { constant: value, terms: /* @__PURE__ */ new Map() };
-  }
-  function singleVar(name) {
-    return { constant: RAT_ZERO, terms: /* @__PURE__ */ new Map([[name, rat(1)]]) };
-  }
-  function formValid(form) {
-    if (!ratValid(form.constant)) return false;
-    if (form.terms.size > MAX_TERMS) return false;
-    for (const coeff of form.terms.values()) if (!ratValid(coeff)) return false;
-    return true;
-  }
-  function addForms(a, b) {
-    const terms = new Map(a.terms);
-    for (const [name, coeff] of b.terms) {
-      const next = ratAdd(terms.get(name) ?? RAT_ZERO, coeff);
-      if (next.n === 0) terms.delete(name);
-      else terms.set(name, next);
-    }
-    return { constant: ratAdd(a.constant, b.constant), terms };
-  }
-  function scaleForm(form, factor) {
-    const terms = /* @__PURE__ */ new Map();
-    for (const [name, coeff] of form.terms) {
-      const next = ratMul(coeff, factor);
-      if (next.n !== 0) terms.set(name, next);
-    }
-    return { constant: ratMul(form.constant, factor), terms };
-  }
-  function formsEqual(a, b) {
-    if (!ratEq(a.constant, b.constant)) return false;
-    if (a.terms.size !== b.terms.size) return false;
-    for (const [name, coeff] of a.terms) {
-      const other = b.terms.get(name);
-      if (other === void 0 || !ratEq(coeff, other)) return false;
-    }
-    return true;
-  }
-  function decimalToRat(raw) {
-    const trimmed = raw.trim();
-    if (!/^[+-]?\d+(?:\.\d+)?$/u.test(trimmed)) return void 0;
-    const negative = trimmed.startsWith("-");
-    const body = trimmed.replace(/^[+-]/u, "");
-    const [intPart, fracPart] = body.split(".");
-    if (fracPart === void 0) {
-      const value = Number(body);
-      return Number.isFinite(value) ? rat(negative ? -value : value) : void 0;
-    }
-    const denom = 10 ** fracPart.length;
-    const numer = Number(intPart) * denom + Number(fracPart);
-    if (!Number.isFinite(numer) || !Number.isFinite(denom)) return void 0;
-    return rat(negative ? -numer : numer, denom);
-  }
-  function valueOf(state, name) {
-    return state.get(name) ?? singleVar(name);
-  }
-  function affineForm(expr, state) {
-    switch (expr.kind) {
-      case "string":
-        return void 0;
-      case "number": {
-        const value = decimalToRat(expr.raw);
-        return value === void 0 ? void 0 : constForm(value);
-      }
-      case "identifier":
-        return valueOf(state, expr.name);
-      case "unary": {
-        const inner = affineForm(expr.expr, state);
-        if (inner === void 0) return void 0;
-        return scaleForm(inner, rat(-1));
-      }
-      case "binary": {
-        const left = affineForm(expr.left, state);
-        const right = affineForm(expr.right, state);
-        if (left === void 0 || right === void 0) return void 0;
-        let result;
-        switch (expr.op) {
-          case "+":
-            result = addForms(left, right);
-            break;
-          case "-":
-            result = addForms(left, scaleForm(right, rat(-1)));
-            break;
-          case "*":
-            if (left.terms.size === 0) result = scaleForm(right, left.constant);
-            else if (right.terms.size === 0) result = scaleForm(left, right.constant);
-            else return void 0;
-            break;
-          case "/":
-            if (right.terms.size === 0 && right.constant.n !== 0) {
-              result = scaleForm(left, rat(right.constant.d, right.constant.n));
-            } else {
-              return void 0;
-            }
-            break;
-        }
-        return result !== void 0 && formValid(result) ? result : void 0;
-      }
-      case "call":
-        return void 0;
-    }
-  }
-  function applyDef(state, name, form) {
-    const next = /* @__PURE__ */ new Map();
-    for (const [key, value] of state) {
-      if (key === name) continue;
-      if (value.terms.has(name)) continue;
-      next.set(key, value);
-    }
-    if (form !== void 0 && !form.terms.has(name) && formValid(form)) {
-      next.set(name, form);
-    }
-    return next;
-  }
-  function transfer(state, node) {
-    if (node.barrier) return /* @__PURE__ */ new Map();
-    const assign = node.assign;
-    if (assign !== void 0) {
-      const form = exprIsCallFree(assign.expr) ? affineForm(assign.expr, state) : void 0;
-      return applyDef(state, assign.target, form);
-    }
-    if (node.defs.length > 0) {
-      let next = state;
-      for (const def of node.defs) next = applyDef(next, def, void 0);
-      return next;
-    }
-    return state;
-  }
-  function holdsIn(state, name, form) {
-    const lhs = valueOf(state, name);
-    let rhs = constForm(form.constant);
-    for (const [term, coeff] of form.terms) {
-      rhs = addForms(rhs, scaleForm(valueOf(state, term), coeff));
-    }
-    return formsEqual(lhs, rhs);
-  }
-  function meet(states) {
-    const reached = states.filter((state) => state !== void 0);
-    if (reached.length === 0) return void 0;
-    const result = /* @__PURE__ */ new Map();
-    for (const state of reached) {
-      for (const [name, form] of state) {
-        if (result.has(name)) continue;
-        if (reached.every((other) => holdsIn(other, name, form))) {
-          result.set(name, form);
-        }
-      }
-    }
-    return result;
-  }
-  function statesEqual(a, b) {
-    if (a === void 0 || b === void 0) return a === b;
-    if (a.size !== b.size) return false;
-    for (const [name, form] of a) {
-      const other = b.get(name);
-      if (other === void 0 || !formsEqual(form, other)) return false;
-    }
-    return true;
-  }
-  function buildPredecessors(cfg) {
-    const preds = Array.from({ length: cfg.nodes.length }, () => []);
-    for (const node of cfg.nodes) {
-      for (const successor of node.succ) preds[successor].push(node.id);
-    }
-    return preds;
-  }
-  function expressionCost(expr) {
-    switch (expr.kind) {
-      case "number":
-      case "string":
-      case "identifier":
-        return 1;
-      case "indexed":
-        return 2 + expressionCost(expr.index);
-      case "unary":
-        return 1 + expressionCost(expr.expr);
-      case "binary":
-        return 1 + expressionCost(expr.left) + expressionCost(expr.right);
-      case "call":
-        return 100;
-    }
-  }
-  function propagateValuesInterprocedurally(ast, optimizations) {
-    const fields = programStateFields(ast);
-    if (fields.size === 0) return 0;
-    const cfg = buildRuleCfg(ast);
-    const preds = buildPredecessors(cfg);
-    const n = cfg.nodes.length;
-    const out = Array.from({ length: n }, () => void 0);
-    let changed = true;
-    let rounds = 0;
-    while (changed && rounds < MAX_ROUNDS) {
-      changed = false;
-      rounds += 1;
-      for (let i = 0; i < n; i += 1) {
-        const incoming = preds[i].map((p) => out[p]);
-        if (i === cfg.entryNode) incoming.push(/* @__PURE__ */ new Map());
-        const inState = meet(incoming);
-        const newOut = inState === void 0 ? void 0 : transfer(inState, cfg.nodes[i]);
-        if (!statesEqual(newOut, out[i])) {
-          out[i] = newOut;
-          changed = true;
-        }
-      }
-    }
-    if (rounds >= MAX_ROUNDS) return 0;
-    let rewrites = 0;
-    for (const node of cfg.nodes) {
-      const assign = node.assign;
-      if (assign === void 0) continue;
-      if (!exprIsCallFree(assign.expr)) continue;
-      if (assign.expr.kind !== "binary" && assign.expr.kind !== "unary") continue;
-      const incoming = preds[node.id].map((p) => out[p]);
-      if (node.id === cfg.entryNode) incoming.push(/* @__PURE__ */ new Map());
-      const inState = meet(incoming);
-      if (inState === void 0) continue;
-      const target = affineForm(assign.expr, inState);
-      if (target === void 0) continue;
-      let replacement;
-      for (const candidate of fields) {
-        if (candidate === assign.target) continue;
-        if (formsEqual(valueOf(inState, candidate), target) && formValid(target)) {
-          replacement = candidate;
-          break;
-        }
-      }
-      if (replacement === void 0) continue;
-      if (expressionCost(assign.expr) <= 1) continue;
-      assign.expr = { kind: "identifier", name: replacement };
-      rewrites += 1;
-    }
-    if (rewrites === 0) return 0;
-    optimizations.push({
-      name: "interprocedural-value-propagation",
-      detail: `Replaced ${rewrites} recomputed expression(s) with an equal live variable proved equivalent on every path.`
-    });
-    return rewrites;
-  }
-
   // src/core/machineProfile.ts
   var MK61_PROFILE = {
     id: "mk61",
@@ -2016,6 +1535,11 @@ var MKProEmulatorBundle = (() => {
         detail: "Negative-zero exponent values such as 1|-00 can act as constants or threshold sentinels when X2-normalization boundaries are controlled."
       },
       {
+        id: "grd-angle-mode",
+        source: "machine",
+        detail: "Trigonometric identities that depend on the \u0420-\u0413\u0420\u0414-\u0413 switch are valid only when the source program explicitly requires \u0413\u0420\u0414 angle mode."
+      },
+      {
         id: "extra-cells",
         source: "machine",
         detail: "Extra physical cells are tracked separately from official program cells."
@@ -2083,6 +1607,11 @@ var MKProEmulatorBundle = (() => {
         detail: "With 1|-00 in Y, multiplying by X and then normalizing through \u0412\u2191 yields a zero/nonzero threshold at |X|=1."
       },
       {
+        id: "grd-angle-trig-identities",
+        status: "documented",
+        detail: "In \u0413\u0420\u0414 angle mode, cos(100) is zero and acos(0) is 100; optimizer use must be guarded by an explicit angle-mode requirement."
+      },
+      {
         id: "step-vs-run-delta",
         status: "probed",
         detail: "Continuous-run behavior is the default profile; step-only divergences are explicit exact-machine facts."
@@ -2102,11 +1631,16 @@ var MKProEmulatorBundle = (() => {
   var DISPATCH_SCRATCH_PREFIX = "__dispatch_";
   var GRID4_MASK_SCRATCH_PREFIX = "__grid4_mask_";
   var BIT_MASK_SCRATCH_PREFIX = "__bit_mask_";
+  var SEGMENTED_BITPLANE_PREFIX = "__seg_bitplane_";
+  var SEGMENTED_BITPLANE_INDEX = "__seg_bitplane_index";
+  var SEGMENTED_BITPLANE_SELECTOR = "__seg_bitplane_selector";
   var REPEATED_UNARY_UPDATE_ARG_PREFIX = "__mkpro_unary_arg_";
   var IF_SELECTOR_SCRATCH_PREFIX = "__if_selector_";
   var DISPLAY_EXPR_PREFIX = "__display_expr_";
   var SPATIAL_HIT_SCRATCH_PREFIX = "__spatial_hit_";
   var SPATIAL_COUNT_SCRATCH_PREFIX = "__spatial_count_";
+  var SEGMENTED_BITPLANE_COUNTER = `${SPATIAL_COUNT_SCRATCH_PREFIX}line`;
+  var SEGMENTED_BITPLANE_SEED = `${SPATIAL_COUNT_SCRATCH_PREFIX}offset`;
   var PACKED_COUNTER_PREFIX = "__packed_counter_";
   var COORD_LIST_ITEM_PREFIX = "__coord_list_";
   var COORD_LIST_POINTER = "__coord_list_pointer";
@@ -3449,8 +2983,8 @@ var MKProEmulatorBundle = (() => {
         );
       case "packed_add":
         return addExpressions2(
-          args[0],
-          multiplyExpressions2(args[2], pow10Expression(args[1]))
+          multiplyExpressions2(args[2], pow10Expression(args[1])),
+          args[0]
         );
       case "digit_set":
         return digitSetExpression(args[0], args[1], args[2]);
@@ -3818,6 +3352,39 @@ var MKProEmulatorBundle = (() => {
       return current !== void 0 && current.xMin === placement.xMin && current.width === placement.width && current.yMin === placement.yMin && current.height === placement.height && current.count === placement.count;
     }).sort((left, right) => coordListItemInfo(left.name).index - coordListItemInfo(right.name).index);
   }
+  function segmentedBitplaneRandomUniqueInitial(collection, countSource, planeIndex) {
+    return {
+      kind: "call",
+      callee: "__seg_bitplane_random_unique",
+      args: [
+        { kind: "string", text: collection },
+        { kind: "identifier", name: countSource },
+        numberExpression2(planeIndex)
+      ]
+    };
+  }
+  function segmentedBitplaneRandomUniquePlacement(fieldName, expr) {
+    const plane = segmentedBitplanePlaneInfo(fieldName);
+    if (plane === void 0) return void 0;
+    if (expr.kind !== "call" || expr.callee !== "__seg_bitplane_random_unique" || expr.args.length !== 3) {
+      return void 0;
+    }
+    const [collection, countSource, planeIndex] = expr.args;
+    if (collection?.kind !== "string" || collection.text !== plane.collection || countSource?.kind !== "identifier" || numericLiteralValue2(planeIndex) !== plane.index) {
+      return void 0;
+    }
+    return {
+      collection: plane.collection,
+      countSource: countSource.name
+    };
+  }
+  function segmentedBitplaneRandomUniqueSetupFields(fields, placement) {
+    return fields.filter((field) => {
+      if (field.initial === void 0) return false;
+      const current = segmentedBitplaneRandomUniquePlacement(field.name, field.initial);
+      return current !== void 0 && current.collection === placement.collection && current.countSource === placement.countSource;
+    }).sort((left, right) => segmentedBitplanePlaneInfo(left.name).index - segmentedBitplanePlaneInfo(right.name).index);
+  }
   function bitMaskExpression(index) {
     const nibble = intExpression(divideExpressions(index, numberExpression2(4)));
     const offset = subtractExpressions2(index, multiplyExpressions2(nibble, numberExpression2(4)));
@@ -4069,6 +3636,29 @@ var MKProEmulatorBundle = (() => {
   function spatialHitScratchName(mask) {
     return `${SPATIAL_HIT_SCRATCH_PREFIX}${mask}`;
   }
+  function isSegmentedBitplaneBoard(board) {
+    return board !== void 0 && board.xMin === 0 && board.xMax === 9 && board.yMin === 0 && board.yMax === 9 && board.width === 10 && board.height === 10;
+  }
+  function segmentedBitplaneNames(collection) {
+    return [0, 1, 2, 3].map((index) => `${SEGMENTED_BITPLANE_PREFIX}${collection}_${index}`);
+  }
+  function segmentedBitplanePlaneInfo(fieldName) {
+    if (!fieldName.startsWith(SEGMENTED_BITPLANE_PREFIX)) return void 0;
+    const suffix = fieldName.slice(SEGMENTED_BITPLANE_PREFIX.length);
+    const match = /^(.*)_([0-3])$/u.exec(suffix);
+    if (match === null) return void 0;
+    return { collection: match[1], index: Number(match[2]) };
+  }
+  function segmentedBitplaneCollectionInfo(ast, collection) {
+    if (ast.v2 === void 0) return void 0;
+    const field = ast.v2.state.find((candidate) => candidate.name === collection && candidate.type === "cells");
+    if (field?.domain === void 0) return void 0;
+    const board = ast.v2.boards.find((candidate) => candidate.name === field.domain);
+    if (!isSegmentedBitplaneBoard(board)) return void 0;
+    const planes = segmentedBitplaneNames(collection);
+    const stateFields = new Set(ast.states.flatMap((state) => state.fields.map((stateField) => stateField.name)));
+    return planes.every((plane) => stateFields.has(plane)) ? { board, planes } : void 0;
+  }
   function spatialCountScratchNames() {
     return [
       `${SPATIAL_COUNT_SCRATCH_PREFIX}total`,
@@ -4286,6 +3876,84 @@ var MKProEmulatorBundle = (() => {
     if (risk === void 0) return void 0;
     return { param, display: show.display, showLine: show.line, line: ret.line, risk };
   }
+  function countExpressionCalls(program, name) {
+    const target = name.toLowerCase();
+    let count = 0;
+    const visitExpr = (expr) => {
+      switch (expr.kind) {
+        case "indexed":
+          visitExpr(expr.index);
+          return;
+        case "unary":
+          visitExpr(expr.expr);
+          return;
+        case "binary":
+          visitExpr(expr.left);
+          visitExpr(expr.right);
+          return;
+        case "call":
+          if (expr.callee.toLowerCase() === target) count += 1;
+          for (const arg of expr.args) visitExpr(arg);
+          return;
+        default:
+          return;
+      }
+    };
+    const visitCondition = (condition) => {
+      visitExpr(condition.left);
+      visitExpr(condition.right);
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        switch (statement.kind) {
+          case "pause":
+          case "preview":
+          case "halt":
+          case "return_value":
+            visitExpr(statement.expr);
+            break;
+          case "assign":
+            visitExpr(statement.expr);
+            break;
+          case "indexed_assign":
+            visitExpr(statement.target.index);
+            visitExpr(statement.expr);
+            break;
+          case "coord_list_remove":
+            visitExpr(statement.item);
+            break;
+          case "if":
+            visitCondition(statement.condition);
+            visitStatements(statement.thenBody);
+            if (statement.elseBody !== void 0) visitStatements(statement.elseBody);
+            break;
+          case "while":
+            visitCondition(statement.condition);
+            visitStatements(statement.body);
+            break;
+          case "loop":
+            visitStatements(statement.body);
+            break;
+          case "dispatch":
+            visitExpr(statement.expr);
+            for (const dispatchCase of statement.cases) {
+              visitExpr(dispatchCase.value);
+              visitStatements(dispatchCase.body);
+            }
+            if (statement.defaultBody !== void 0) visitStatements(statement.defaultBody);
+            break;
+          case "core":
+            for (const input of statement.inputs ?? []) visitExpr(input.expr);
+            break;
+          default:
+            break;
+        }
+      }
+    };
+    for (const entry of program.entries) visitStatements(entry.body);
+    for (const proc of program.procs) visitStatements(proc.body);
+    return count;
+  }
   function matchXParamValueFunction(proc) {
     const params = proc.params ?? [];
     const [param] = params;
@@ -4306,14 +3974,6 @@ var MKProEmulatorBundle = (() => {
     }
     if (ret?.kind !== "return_value" || !identifierExpressionIs(ret.expr, param)) return void 0;
     return { param, width, line: assign.line };
-  }
-  function xParamValueFunctionParamNames(ast) {
-    const names = /* @__PURE__ */ new Set();
-    for (const proc of ast.procs) {
-      const match = matchXParamValueFunction(proc);
-      if (match !== void 0) names.add(match.param);
-    }
-    return names;
   }
   function xParamValueScratchName(ast) {
     return ast.states.flatMap((state) => state.fields).find((field) => field.name.startsWith(REPEATED_UNARY_UPDATE_ARG_PREFIX))?.name;
@@ -4491,9 +4151,10 @@ var MKProEmulatorBundle = (() => {
     if (additive !== void 0) match.additive = additive;
     return match;
   }
-  function optimizeDispatchDefaultCases(statement) {
+  function optimizeDispatchDefaultCases(statement, options = {}) {
     if (statement.cases.length === 0) return { statement, removed: 0, reordered: 0 };
     if (!statement.defaultBody) {
+      if (options.preserveCaseOrder === true) return { statement, removed: 0, reordered: 0 };
       const ordered2 = orderNumericDispatchCasesForResidual(statement.cases);
       return {
         statement: ordered2.reordered === 0 ? statement : { ...statement, cases: ordered2.cases },
@@ -4514,7 +4175,7 @@ var MKProEmulatorBundle = (() => {
       }
       kept.push(dispatchCase);
     }
-    const ordered = orderNumericDispatchCasesForResidual(kept);
+    const ordered = options.preserveCaseOrder === true ? { cases: kept, reordered: 0 } : orderNumericDispatchCasesForResidual(kept);
     const nextStatement = removed === 0 && ordered.reordered === 0 ? statement : { ...statement, cases: ordered.cases };
     return { statement: nextStatement, removed, reordered: ordered.reordered };
   }
@@ -4604,6 +4265,8 @@ var MKProEmulatorBundle = (() => {
         return expressionEquals(left.target, right.target) && expressionEquals(left.expr, right.expr);
       case "coord_list_remove":
         return left.list === right.list && expressionEquals(left.item, right.item) && JSON.stringify(left.items) === JSON.stringify(right.items);
+      case "segmented_bitplane_update":
+        return left.collection === right.collection && left.op === right.op && expressionEquals(left.item, right.item);
       case "loop":
         return statementListsEqual(left.body, right.body);
       case "while":
@@ -5102,6 +4765,693 @@ var MKProEmulatorBundle = (() => {
     return op2 === "+" ? 16 : op2 === "-" ? 17 : op2 === "*" ? 18 : 19;
   }
 
+  // src/core/rule-cfg.ts
+  function collectExprVars(expr, out) {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+        return;
+      case "identifier":
+        out.add(expr.name);
+        return;
+      case "indexed":
+        collectExprVars(expr.index, out);
+        return;
+      case "unary":
+        collectExprVars(expr.expr, out);
+        return;
+      case "binary":
+        collectExprVars(expr.left, out);
+        collectExprVars(expr.right, out);
+        return;
+      case "call":
+        for (const arg of expr.args) collectExprVars(arg, out);
+        return;
+    }
+  }
+  function exprVars(expr) {
+    const out = /* @__PURE__ */ new Set();
+    collectExprVars(expr, out);
+    return [...out];
+  }
+  function collectExpressionCallNames(expr, out) {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+      case "indexed":
+        if (expr.kind === "indexed") collectExpressionCallNames(expr.index, out);
+        return;
+      case "unary":
+        collectExpressionCallNames(expr.expr, out);
+        return;
+      case "binary":
+        collectExpressionCallNames(expr.left, out);
+        collectExpressionCallNames(expr.right, out);
+        return;
+      case "call":
+        for (const arg of expr.args) collectExpressionCallNames(arg, out);
+        out.push(expr.callee);
+        return;
+    }
+  }
+  function expressionCallNames(expr) {
+    const out = [];
+    collectExpressionCallNames(expr, out);
+    return out;
+  }
+  function exprIsCallFree(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return true;
+      case "indexed":
+        return exprIsCallFree(expr.index);
+      case "unary":
+        return exprIsCallFree(expr.expr);
+      case "binary":
+        return exprIsCallFree(expr.left) && exprIsCallFree(expr.right);
+      case "call":
+        return false;
+    }
+  }
+  var Builder = class {
+    nodes = [];
+    routineEntry = /* @__PURE__ */ new Map();
+    routineExit = /* @__PURE__ */ new Map();
+    ast;
+    constructor(ast) {
+      this.ast = ast;
+    }
+    add(node) {
+      const id = this.nodes.length;
+      this.nodes.push({ id, succ: node.succ ?? [], defs: node.defs, uses: node.uses, ...node.assign ? { assign: node.assign } : {}, ...node.barrier ? { barrier: true } : {} });
+      return id;
+    }
+    link(exits, target) {
+      for (const exit of exits) {
+        if (!this.nodes[exit].succ.includes(target)) this.nodes[exit].succ.push(target);
+      }
+    }
+    build() {
+      const routines = [
+        ...this.ast.entries.map((entry) => ({ name: entry.name, body: entry.body })),
+        ...this.ast.procs.map((proc) => ({ name: proc.name, body: proc.body }))
+      ];
+      for (const routine of routines) {
+        this.routineEntry.set(routine.name, this.add({ defs: [], uses: [] }));
+        this.routineExit.set(routine.name, this.add({ defs: [], uses: [] }));
+      }
+      for (const routine of routines) {
+        const fragment = this.buildSequence(routine.body);
+        this.link([this.routineEntry.get(routine.name)], fragment.entry);
+        this.link(fragment.exits, this.routineExit.get(routine.name));
+      }
+      const entryNode = this.ast.entries.length > 0 ? this.routineEntry.get(this.ast.entries[0].name) : 0;
+      return {
+        nodes: this.nodes,
+        entryNode,
+        routineEntry: this.routineEntry,
+        routineExit: this.routineExit
+      };
+    }
+    buildSequence(statements) {
+      let entry;
+      let pending = [];
+      for (const statement of statements) {
+        const fragment = this.buildStatement(statement);
+        if (entry === void 0) entry = fragment.entry;
+        else this.link(pending, fragment.entry);
+        pending = fragment.exits;
+      }
+      if (entry === void 0) {
+        const nop = this.add({ defs: [], uses: [] });
+        return { entry: nop, exits: [nop] };
+      }
+      return { entry, exits: pending };
+    }
+    buildStatement(statement) {
+      switch (statement.kind) {
+        case "assign": {
+          const callFragment = this.buildExpressionCallFragment(statement.expr, {
+            defs: [statement.target],
+            uses: []
+          });
+          if (callFragment !== void 0) return callFragment;
+          const node = this.add({ defs: [statement.target], uses: this.exprUses(statement.expr), assign: statement });
+          return { entry: node, exits: [node] };
+        }
+        case "indexed_assign": {
+          const node = this.add({
+            defs: this.indexedTargetDefs(statement.target),
+            uses: [.../* @__PURE__ */ new Set([...this.exprUses(statement.expr), ...exprVars(statement.target.index)])]
+          });
+          return { entry: node, exits: [node] };
+        }
+        case "coord_list_remove": {
+          const node = this.add({
+            defs: statement.items,
+            uses: [.../* @__PURE__ */ new Set([...this.exprUses(statement.item), ...statement.items])]
+          });
+          return { entry: node, exits: [node] };
+        }
+        case "show": {
+          const display = this.ast.displays.find((candidate) => candidate.name === statement.display);
+          const node = this.add({ defs: [], uses: display?.sources ?? [] });
+          return { entry: node, exits: [node] };
+        }
+        case "input": {
+          const node = this.add({ defs: [statement.target], uses: [] });
+          return { entry: node, exits: [node] };
+        }
+        case "pause":
+        case "preview":
+        case "halt":
+        case "return_value": {
+          const display = statement.kind === "halt" && statement.display !== void 0 ? this.ast.displays.find((candidate) => candidate.name === statement.display) : void 0;
+          const uses = [.../* @__PURE__ */ new Set([...this.exprUses(statement.expr), ...display?.sources ?? []])];
+          const callFragment = this.buildExpressionCallFragment(statement.expr, {
+            defs: [],
+            uses
+          });
+          if (callFragment !== void 0) return callFragment;
+          const node = this.add({ defs: [], uses });
+          return { entry: node, exits: [node] };
+        }
+        case "call": {
+          const calleeEntry = this.routineEntry.get(statement.block);
+          const calleeExit = this.routineExit.get(statement.block);
+          if (calleeEntry === void 0 || calleeExit === void 0) {
+            const node2 = this.add({ defs: [], uses: [], barrier: true });
+            return { entry: node2, exits: [node2] };
+          }
+          const node = this.add({ defs: [], uses: [], succ: [calleeEntry] });
+          return { entry: node, exits: [calleeExit] };
+        }
+        case "core": {
+          const node = this.add({ defs: [], uses: [], barrier: true });
+          return { entry: node, exits: [node] };
+        }
+        case "segmented_bitplane_update": {
+          const planes = segmentedBitplaneCollectionInfo(this.ast, statement.collection)?.planes ?? [];
+          const uses = [.../* @__PURE__ */ new Set([...this.exprUses(statement.item), ...planes])];
+          const node = this.add({ defs: planes, uses });
+          return { entry: node, exits: [node] };
+        }
+        case "if": {
+          const test = this.add({ defs: [], uses: [...this.exprUses(statement.condition.left), ...this.exprUses(statement.condition.right)] });
+          const thenFragment = this.buildSequence(statement.thenBody);
+          this.link([test], thenFragment.entry);
+          const exits = [...thenFragment.exits];
+          if (statement.elseBody !== void 0) {
+            const elseFragment = this.buildSequence(statement.elseBody);
+            this.link([test], elseFragment.entry);
+            exits.push(...elseFragment.exits);
+          } else {
+            exits.push(test);
+          }
+          return { entry: test, exits };
+        }
+        case "dispatch": {
+          const uses = new Set(this.exprUses(statement.expr));
+          for (const branch of statement.cases) for (const v of this.exprUses(branch.value)) uses.add(v);
+          const test = this.add({ defs: [], uses: [...uses] });
+          const exits = [];
+          for (const branch of statement.cases) {
+            const fragment = this.buildSequence(branch.body);
+            this.link([test], fragment.entry);
+            exits.push(...fragment.exits);
+          }
+          if (statement.defaultBody !== void 0) {
+            const fragment = this.buildSequence(statement.defaultBody);
+            this.link([test], fragment.entry);
+            exits.push(...fragment.exits);
+          } else {
+            exits.push(test);
+          }
+          return { entry: test, exits };
+        }
+        case "loop": {
+          const fragment = this.buildSequence(statement.body);
+          this.link(fragment.exits, fragment.entry);
+          return { entry: fragment.entry, exits: [...fragment.exits] };
+        }
+        case "while": {
+          const test = this.add({ defs: [], uses: [...this.exprUses(statement.condition.left), ...this.exprUses(statement.condition.right)] });
+          const fragment = this.buildSequence(statement.body);
+          this.link([test], fragment.entry);
+          this.link(fragment.exits, test);
+          return { entry: test, exits: [test] };
+        }
+        case "decimal_series": {
+          const node = this.add({ defs: [], uses: [], barrier: true });
+          return { entry: node, exits: [node] };
+        }
+      }
+    }
+    exprUses(expr) {
+      const uses = new Set(exprVars(expr));
+      this.collectIndexedReads(expr, uses);
+      return [...uses];
+    }
+    collectIndexedReads(expr, out) {
+      switch (expr.kind) {
+        case "number":
+        case "string":
+        case "identifier":
+          return;
+        case "indexed": {
+          this.collectIndexedReads(expr.index, out);
+          const resolved = findStateBankMember(this.ast, expr);
+          if (resolved === void 0) return;
+          const constant = numericIndexValue(expr.index);
+          if (constant !== void 0) {
+            const element = stateBankElementForIndex(resolved.member, constant);
+            if (element !== void 0) out.add(element.name);
+            return;
+          }
+          for (const name of stateBankElementNames(resolved.member)) out.add(name);
+          return;
+        }
+        case "unary":
+          this.collectIndexedReads(expr.expr, out);
+          return;
+        case "binary":
+          this.collectIndexedReads(expr.left, out);
+          this.collectIndexedReads(expr.right, out);
+          return;
+        case "call":
+          for (const arg of expr.args) this.collectIndexedReads(arg, out);
+          return;
+      }
+    }
+    indexedTargetDefs(expr) {
+      const resolved = findStateBankMember(this.ast, expr);
+      if (resolved === void 0) return [];
+      const constant = numericIndexValue(expr.index);
+      if (constant !== void 0) {
+        const element = stateBankElementForIndex(resolved.member, constant);
+        return element === void 0 ? [] : [element.name];
+      }
+      return stateBankElementNames(resolved.member);
+    }
+    buildExpressionCallFragment(expr, finalNode) {
+      const calls = expressionCallNames(expr);
+      if (calls.length === 0) return void 0;
+      const entry = this.add({ defs: [], uses: this.exprUses(expr) });
+      let exits = [entry];
+      for (const call of calls) {
+        const calleeEntry = this.routineEntry.get(call);
+        const calleeExit = this.routineExit.get(call);
+        if (calleeEntry === void 0 || calleeExit === void 0) {
+          const barrier = this.add({ defs: [], uses: [], barrier: true });
+          this.link(exits, barrier);
+          exits = [barrier];
+          continue;
+        }
+        const callNode = this.add({ defs: [], uses: [], succ: [calleeEntry] });
+        this.link(exits, callNode);
+        exits = [calleeExit];
+      }
+      const final = this.add(finalNode);
+      this.link(exits, final);
+      return { entry, exits: [final] };
+    }
+  };
+  function buildRuleCfg(ast) {
+    return new Builder(ast).build();
+  }
+  function programStateFields(ast) {
+    return new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
+  }
+
+  // src/core/interprocedural-dse.ts
+  function computeLiveOut(cfg, allVars) {
+    const n = cfg.nodes.length;
+    const liveIn = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
+    const liveOut = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
+    let changed = true;
+    let rounds = 0;
+    while (changed && rounds < 1e3) {
+      changed = false;
+      rounds += 1;
+      for (let i = n - 1; i >= 0; i -= 1) {
+        const node = cfg.nodes[i];
+        const newOut = /* @__PURE__ */ new Set();
+        for (const successor of node.succ) {
+          for (const reg of liveIn[successor]) newOut.add(reg);
+        }
+        const uses = node.barrier ? allVars : node.uses;
+        const defs = node.barrier ? [] : node.defs;
+        const newIn = new Set(uses);
+        for (const reg of newOut) {
+          if (!defs.includes(reg)) newIn.add(reg);
+        }
+        if (!setsEqual(newIn, liveIn[i]) || !setsEqual(newOut, liveOut[i])) {
+          liveIn[i] = newIn;
+          liveOut[i] = newOut;
+          changed = true;
+        }
+      }
+    }
+    return liveOut;
+  }
+  function setsEqual(a, b) {
+    if (a.size !== b.size) return false;
+    for (const value of a) if (!b.has(value)) return false;
+    return true;
+  }
+  function collectAllVars(cfg) {
+    const vars = /* @__PURE__ */ new Set();
+    for (const node of cfg.nodes) {
+      for (const def of node.defs) vars.add(def);
+      for (const use of node.uses) vars.add(use);
+    }
+    return vars;
+  }
+  function pruneStatements(statements, doomed) {
+    return statements.flatMap((statement) => {
+      if (doomed.has(statement)) return [];
+      if (statement.kind === "loop" || statement.kind === "while") {
+        return [{ ...statement, body: pruneStatements(statement.body, doomed) }];
+      }
+      if (statement.kind === "if") {
+        const pruned = {
+          ...statement,
+          thenBody: pruneStatements(statement.thenBody, doomed)
+        };
+        if (statement.elseBody !== void 0) pruned.elseBody = pruneStatements(statement.elseBody, doomed);
+        return [pruned];
+      }
+      if (statement.kind === "dispatch") {
+        return [{
+          ...statement,
+          cases: statement.cases.map((branch) => ({ ...branch, body: pruneStatements(branch.body, doomed) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: pruneStatements(statement.defaultBody, doomed) }
+        }];
+      }
+      return [statement];
+    });
+  }
+  function eliminateInterproceduralDeadStores(ast, optimizations) {
+    const fields = programStateFields(ast);
+    if (fields.size === 0) return 0;
+    const cfg = buildRuleCfg(ast);
+    const allVars = collectAllVars(cfg);
+    const liveOut = computeLiveOut(cfg, allVars);
+    const doomed = /* @__PURE__ */ new Set();
+    for (const node of cfg.nodes) {
+      const assign = node.assign;
+      if (assign === void 0) continue;
+      if (!fields.has(assign.target)) continue;
+      if (!exprIsCallFree(assign.expr)) continue;
+      if (liveOut[node.id].has(assign.target)) continue;
+      doomed.add(assign);
+    }
+    if (doomed.size === 0) return 0;
+    for (const entry of ast.entries) entry.body = pruneStatements(entry.body, doomed);
+    for (const proc of ast.procs) proc.body = pruneStatements(proc.body, doomed);
+    optimizations.push({
+      name: "interprocedural-dead-store",
+      detail: `Removed ${doomed.size} store(s) whose value is always overwritten before it can be observed across the rule call graph.`
+    });
+    return doomed.size;
+  }
+
+  // src/core/value-propagation.ts
+  var MAX_ROUNDS = 1e3;
+  var MAX_TERMS = 8;
+  var MAX_MAGNITUDE = 1e6;
+  function gcd2(a, b) {
+    a = Math.abs(a);
+    b = Math.abs(b);
+    while (b !== 0) {
+      [a, b] = [b, a % b];
+    }
+    return a === 0 ? 1 : a;
+  }
+  function rat(n, d = 1) {
+    if (d === 0 || !Number.isFinite(n) || !Number.isFinite(d)) return { n: NaN, d: 1 };
+    if (d < 0) {
+      n = -n;
+      d = -d;
+    }
+    const g = gcd2(n, d);
+    return { n: n / g, d: d / g };
+  }
+  function ratValid(r) {
+    return Number.isFinite(r.n) && Number.isFinite(r.d) && r.d !== 0 && Math.abs(r.n) <= MAX_MAGNITUDE && Math.abs(r.d) <= MAX_MAGNITUDE;
+  }
+  function ratAdd(a, b) {
+    return rat(a.n * b.d + b.n * a.d, a.d * b.d);
+  }
+  function ratMul(a, b) {
+    return rat(a.n * b.n, a.d * b.d);
+  }
+  function ratEq(a, b) {
+    return a.n === b.n && a.d === b.d;
+  }
+  var RAT_ZERO = { n: 0, d: 1 };
+  function constForm(value) {
+    return { constant: value, terms: /* @__PURE__ */ new Map() };
+  }
+  function singleVar(name) {
+    return { constant: RAT_ZERO, terms: /* @__PURE__ */ new Map([[name, rat(1)]]) };
+  }
+  function formValid(form) {
+    if (!ratValid(form.constant)) return false;
+    if (form.terms.size > MAX_TERMS) return false;
+    for (const coeff of form.terms.values()) if (!ratValid(coeff)) return false;
+    return true;
+  }
+  function addForms(a, b) {
+    const terms = new Map(a.terms);
+    for (const [name, coeff] of b.terms) {
+      const next = ratAdd(terms.get(name) ?? RAT_ZERO, coeff);
+      if (next.n === 0) terms.delete(name);
+      else terms.set(name, next);
+    }
+    return { constant: ratAdd(a.constant, b.constant), terms };
+  }
+  function scaleForm(form, factor) {
+    const terms = /* @__PURE__ */ new Map();
+    for (const [name, coeff] of form.terms) {
+      const next = ratMul(coeff, factor);
+      if (next.n !== 0) terms.set(name, next);
+    }
+    return { constant: ratMul(form.constant, factor), terms };
+  }
+  function formsEqual(a, b) {
+    if (!ratEq(a.constant, b.constant)) return false;
+    if (a.terms.size !== b.terms.size) return false;
+    for (const [name, coeff] of a.terms) {
+      const other = b.terms.get(name);
+      if (other === void 0 || !ratEq(coeff, other)) return false;
+    }
+    return true;
+  }
+  function decimalToRat(raw) {
+    const trimmed = raw.trim();
+    if (!/^[+-]?\d+(?:\.\d+)?$/u.test(trimmed)) return void 0;
+    const negative = trimmed.startsWith("-");
+    const body = trimmed.replace(/^[+-]/u, "");
+    const [intPart, fracPart] = body.split(".");
+    if (fracPart === void 0) {
+      const value = Number(body);
+      return Number.isFinite(value) ? rat(negative ? -value : value) : void 0;
+    }
+    const denom = 10 ** fracPart.length;
+    const numer = Number(intPart) * denom + Number(fracPart);
+    if (!Number.isFinite(numer) || !Number.isFinite(denom)) return void 0;
+    return rat(negative ? -numer : numer, denom);
+  }
+  function valueOf(state, name) {
+    return state.get(name) ?? singleVar(name);
+  }
+  function affineForm(expr, state) {
+    switch (expr.kind) {
+      case "string":
+        return void 0;
+      case "number": {
+        const value = decimalToRat(expr.raw);
+        return value === void 0 ? void 0 : constForm(value);
+      }
+      case "identifier":
+        return valueOf(state, expr.name);
+      case "unary": {
+        const inner = affineForm(expr.expr, state);
+        if (inner === void 0) return void 0;
+        return scaleForm(inner, rat(-1));
+      }
+      case "binary": {
+        const left = affineForm(expr.left, state);
+        const right = affineForm(expr.right, state);
+        if (left === void 0 || right === void 0) return void 0;
+        let result;
+        switch (expr.op) {
+          case "+":
+            result = addForms(left, right);
+            break;
+          case "-":
+            result = addForms(left, scaleForm(right, rat(-1)));
+            break;
+          case "*":
+            if (left.terms.size === 0) result = scaleForm(right, left.constant);
+            else if (right.terms.size === 0) result = scaleForm(left, right.constant);
+            else return void 0;
+            break;
+          case "/":
+            if (right.terms.size === 0 && right.constant.n !== 0) {
+              result = scaleForm(left, rat(right.constant.d, right.constant.n));
+            } else {
+              return void 0;
+            }
+            break;
+        }
+        return result !== void 0 && formValid(result) ? result : void 0;
+      }
+      case "call":
+        return void 0;
+    }
+  }
+  function applyDef(state, name, form) {
+    const next = /* @__PURE__ */ new Map();
+    for (const [key, value] of state) {
+      if (key === name) continue;
+      if (value.terms.has(name)) continue;
+      next.set(key, value);
+    }
+    if (form !== void 0 && !form.terms.has(name) && formValid(form)) {
+      next.set(name, form);
+    }
+    return next;
+  }
+  function transfer(state, node) {
+    if (node.barrier) return /* @__PURE__ */ new Map();
+    const assign = node.assign;
+    if (assign !== void 0) {
+      const form = exprIsCallFree(assign.expr) ? affineForm(assign.expr, state) : void 0;
+      return applyDef(state, assign.target, form);
+    }
+    if (node.defs.length > 0) {
+      let next = state;
+      for (const def of node.defs) next = applyDef(next, def, void 0);
+      return next;
+    }
+    return state;
+  }
+  function holdsIn(state, name, form) {
+    const lhs = valueOf(state, name);
+    let rhs = constForm(form.constant);
+    for (const [term, coeff] of form.terms) {
+      rhs = addForms(rhs, scaleForm(valueOf(state, term), coeff));
+    }
+    return formsEqual(lhs, rhs);
+  }
+  function meet(states) {
+    const reached = states.filter((state) => state !== void 0);
+    if (reached.length === 0) return void 0;
+    const result = /* @__PURE__ */ new Map();
+    for (const state of reached) {
+      for (const [name, form] of state) {
+        if (result.has(name)) continue;
+        if (reached.every((other) => holdsIn(other, name, form))) {
+          result.set(name, form);
+        }
+      }
+    }
+    return result;
+  }
+  function statesEqual(a, b) {
+    if (a === void 0 || b === void 0) return a === b;
+    if (a.size !== b.size) return false;
+    for (const [name, form] of a) {
+      const other = b.get(name);
+      if (other === void 0 || !formsEqual(form, other)) return false;
+    }
+    return true;
+  }
+  function buildPredecessors(cfg) {
+    const preds = Array.from({ length: cfg.nodes.length }, () => []);
+    for (const node of cfg.nodes) {
+      for (const successor of node.succ) preds[successor].push(node.id);
+    }
+    return preds;
+  }
+  function expressionCost(expr) {
+    switch (expr.kind) {
+      case "number":
+      case "string":
+      case "identifier":
+        return 1;
+      case "indexed":
+        return 2 + expressionCost(expr.index);
+      case "unary":
+        return 1 + expressionCost(expr.expr);
+      case "binary":
+        return 1 + expressionCost(expr.left) + expressionCost(expr.right);
+      case "call":
+        return 100;
+    }
+  }
+  function propagateValuesInterprocedurally(ast, optimizations) {
+    const fields = programStateFields(ast);
+    if (fields.size === 0) return 0;
+    const cfg = buildRuleCfg(ast);
+    const preds = buildPredecessors(cfg);
+    const n = cfg.nodes.length;
+    const out = Array.from({ length: n }, () => void 0);
+    let changed = true;
+    let rounds = 0;
+    while (changed && rounds < MAX_ROUNDS) {
+      changed = false;
+      rounds += 1;
+      for (let i = 0; i < n; i += 1) {
+        const incoming = preds[i].map((p) => out[p]);
+        if (i === cfg.entryNode) incoming.push(/* @__PURE__ */ new Map());
+        const inState = meet(incoming);
+        const newOut = inState === void 0 ? void 0 : transfer(inState, cfg.nodes[i]);
+        if (!statesEqual(newOut, out[i])) {
+          out[i] = newOut;
+          changed = true;
+        }
+      }
+    }
+    if (rounds >= MAX_ROUNDS) return 0;
+    let rewrites = 0;
+    for (const node of cfg.nodes) {
+      const assign = node.assign;
+      if (assign === void 0) continue;
+      if (!exprIsCallFree(assign.expr)) continue;
+      if (assign.expr.kind !== "binary" && assign.expr.kind !== "unary") continue;
+      const incoming = preds[node.id].map((p) => out[p]);
+      if (node.id === cfg.entryNode) incoming.push(/* @__PURE__ */ new Map());
+      const inState = meet(incoming);
+      if (inState === void 0) continue;
+      const target = affineForm(assign.expr, inState);
+      if (target === void 0) continue;
+      let replacement;
+      for (const candidate of fields) {
+        if (candidate === assign.target) continue;
+        if (formsEqual(valueOf(inState, candidate), target) && formValid(target)) {
+          replacement = candidate;
+          break;
+        }
+      }
+      if (replacement === void 0) continue;
+      if (expressionCost(assign.expr) <= 1) continue;
+      assign.expr = { kind: "identifier", name: replacement };
+      rewrites += 1;
+    }
+    if (rewrites === 0) return 0;
+    optimizations.push({
+      name: "interprocedural-value-propagation",
+      detail: `Replaced ${rewrites} recomputed expression(s) with an equal live variable proved equivalent on every path.`
+    });
+    return rewrites;
+  }
+
   // src/core/v2-const.ts
   function buildV2ConstContext(v2) {
     const bindings = /* @__PURE__ */ new Map();
@@ -5202,6 +5552,9 @@ var MKProEmulatorBundle = (() => {
         for (const matchCase of statement.cases) visit([matchCase.action]);
         if (statement.otherwise !== void 0) visit([statement.otherwise]);
         return;
+      case "v2_block":
+        visit(statement.body);
+        return;
       default:
         return;
     }
@@ -5219,6 +5572,7 @@ var MKProEmulatorBundle = (() => {
     "otherwise",
     "program",
     "read",
+    "requires",
     "return",
     "rule",
     "screen",
@@ -5303,6 +5657,7 @@ var MKProEmulatorBundle = (() => {
       const match = /^program\s+([A-Za-z_][\w]*)\s*\{$/u.exec(header.text);
       if (!match) throw new ParseError("Program must look like 'program Name {'", header.line);
       const consts = [];
+      const requirements = {};
       const state = [];
       const boards = [];
       const worlds = [];
@@ -5323,7 +5678,13 @@ var MKProEmulatorBundle = (() => {
             rules,
             line: header.line
           };
+          if (Object.keys(requirements).length > 0) program.requirements = requirements;
           return program;
+        }
+        if (line.text.startsWith("requires ")) {
+          this.index += 1;
+          parseV2ProgramRequirement(line, requirements);
+          continue;
         }
         if (line.text.startsWith("const ")) {
           this.index += 1;
@@ -5627,14 +5988,15 @@ var MKProEmulatorBundle = (() => {
           return statement;
         }
         const arrow = /^(.+?)\s*=>\s*(.+)$/u.exec(bodyLine.text);
-        if (!arrow) throw new ParseError("Match cases must look like 'value => action'", bodyLine.line);
+        if (!arrow) throw new ParseError("Match cases must look like 'value => action' or 'value => {'", bodyLine.line);
         const left = arrow[1].trim();
-        const action = parseV2InlineStatement(arrow[2].trim(), bodyLine.line);
+        const right = arrow[2].trim();
+        const action = right === "{" ? { kind: "v2_block", body: this.parseV2StatementBlock(), line: bodyLine.line } : parseV2InlineStatement(right, bodyLine.line);
         if (left === "otherwise") {
           otherwise = action;
         } else {
           cases.push({
-            values: left.split(",").map((part) => part.trim()).filter(Boolean),
+            values: expandV2MatchCaseValues(left, bodyLine.line),
             action,
             line: bodyLine.line
           });
@@ -5786,6 +6148,25 @@ var MKProEmulatorBundle = (() => {
       "pier_to_ship",
       "row_scan"
     ].includes(encoding);
+  }
+  var MATCH_CASE_RANGE_LIMIT = 100;
+  function expandV2MatchCaseValues(left, line) {
+    const values = [];
+    for (const part of left.split(",").map((item) => item.trim()).filter(Boolean)) {
+      const range3 = /^(-?\d+)\s*\.\.\s*(-?\d+)$/u.exec(part);
+      if (!range3) {
+        values.push(part);
+        continue;
+      }
+      const min = Number(range3[1]);
+      const max = Number(range3[2]);
+      if (min > max) throw new ParseError(`Match range '${part}' must be ascending`, line);
+      if (max - min + 1 > MATCH_CASE_RANGE_LIMIT) {
+        throw new ParseError(`Match range '${part}' expands to more than ${MATCH_CASE_RANGE_LIMIT} values`, line);
+      }
+      for (let value = min; value <= max; value += 1) values.push(String(value));
+    }
+    return values;
   }
   function parseV2InlineStatement(text, line) {
     const showCall = parseNamedCall(text, "show");
@@ -6069,6 +6450,9 @@ var MKProEmulatorBundle = (() => {
     );
     const coordLists = collectV2CoordLists(v2);
     const cellMapNames = collectV2CellMapNames(v2, stateDomains);
+    const boards = new Map(v2.boards.map((board) => [board.name, board]));
+    const worlds = new Map(v2.worlds.map((world) => [world.name, world]));
+    const segmentedCells = options.segmentedBitplanes === true ? collectSegmentedBitplaneCells(v2, boards) : /* @__PURE__ */ new Map();
     validateV2Domains(v2);
     validateV2References(v2, { ruleParams });
     validateV2Functions(v2, functionRules);
@@ -6085,8 +6469,9 @@ var MKProEmulatorBundle = (() => {
       stateRanges: collectV2StateRanges(v2),
       coordLists,
       cellMapNames,
-      boards: new Map(v2.boards.map((board) => [board.name, board])),
-      worlds: new Map(v2.worlds.map((world) => [world.name, world]))
+      segmentedCells,
+      boards,
+      worlds
     };
     rewriteV2DisplayExpressions(v2, context);
     const inlineScreens = collectV2InlineScreens(v2);
@@ -6171,6 +6556,18 @@ var MKProEmulatorBundle = (() => {
     }
     return lists;
   }
+  function collectSegmentedBitplaneCells(v2, boards) {
+    const segmented = /* @__PURE__ */ new Map();
+    for (const field of v2.state) {
+      if (field.type !== "cells" || field.domain === void 0) continue;
+      if (!isSegmentedBitplaneBoard(boards.get(field.domain))) continue;
+      segmented.set(field.name, {
+        domain: field.domain,
+        planes: segmentedBitplaneNames(field.name)
+      });
+    }
+    return segmented;
+  }
   function collectV2RuleParams(v2) {
     const ruleParams = /* @__PURE__ */ new Map();
     for (const rule of v2.rules) {
@@ -6203,6 +6600,8 @@ var MKProEmulatorBundle = (() => {
         return v2StatementsContainReturn(statement.body);
       case "v2_match":
         return statement.cases.some((matchCase) => v2StatementContainsReturn(matchCase.action)) || statement.otherwise !== void 0 && v2StatementContainsReturn(statement.otherwise);
+      case "v2_block":
+        return v2StatementsContainReturn(statement.body);
       default:
         return false;
     }
@@ -6221,6 +6620,8 @@ var MKProEmulatorBundle = (() => {
         return statement.elseBody !== void 0 && v2StatementsAlwaysReturn(statement.thenBody) && v2StatementsAlwaysReturn(statement.elseBody);
       case "v2_match":
         return statement.otherwise !== void 0 && statement.cases.every((matchCase) => v2StatementAlwaysReturns(matchCase.action)) && v2StatementAlwaysReturns(statement.otherwise);
+      case "v2_block":
+        return v2StatementsAlwaysReturn(statement.body);
       default:
         return false;
     }
@@ -6271,6 +6672,8 @@ var MKProEmulatorBundle = (() => {
           ...statement.cases.flatMap((matchCase) => [...matchCase.values, ...v2StatementExprTexts(matchCase.action)]),
           ...statement.otherwise ? v2StatementExprTexts(statement.otherwise) : []
         ];
+      case "v2_block":
+        return statement.body.flatMap(v2StatementExprTexts);
       case "v2_raw":
         return statement.inputs.map((input) => input.expr);
       default:
@@ -6342,6 +6745,9 @@ var MKProEmulatorBundle = (() => {
             for (const matchCase of statement.cases) visit([matchCase.action]);
             if (statement.otherwise) visit([statement.otherwise]);
             break;
+          case "v2_block":
+            visit(statement.body);
+            break;
           case "v2_invoke":
             texts.push(...statement.args);
             break;
@@ -6395,6 +6801,9 @@ var MKProEmulatorBundle = (() => {
           for (const matchCase of statement.cases) visit([matchCase.action], currentRule);
           if (statement.otherwise) visit([statement.otherwise], currentRule);
         }
+        if (statement.kind === "v2_block") {
+          visit(statement.body, currentRule);
+        }
       }
     };
     if (v2.body.length > 0) visit(v2.body);
@@ -6436,6 +6845,8 @@ var MKProEmulatorBundle = (() => {
           rewritten.cases = synthesizeV2ParametricSiblingMatchCases(v2, rewritten.cases, rules, callCounts, consumed);
           return rewritten;
         }
+        case "v2_block":
+          return { ...statement, body: rewriteStatements(statement.body) };
         default:
           return statement;
       }
@@ -6602,6 +7013,8 @@ var MKProEmulatorBundle = (() => {
           return v2StatementsContainRaw(statement.body);
         case "v2_match":
           return statement.cases.some((matchCase) => v2StatementsContainRaw([matchCase.action])) || statement.otherwise !== void 0 && v2StatementsContainRaw([statement.otherwise]);
+        case "v2_block":
+          return v2StatementsContainRaw(statement.body);
         default:
           return false;
       }
@@ -6675,6 +7088,9 @@ var MKProEmulatorBundle = (() => {
           case "v2_match":
             for (const matchCase of statement.cases) visit([matchCase.action]);
             if (statement.otherwise !== void 0) visit([statement.otherwise]);
+            break;
+          case "v2_block":
+            visit(statement.body);
             break;
           case "v2_invoke":
             used.add(statement.name);
@@ -6785,6 +7201,7 @@ var MKProEmulatorBundle = (() => {
           for (const matchCase of statement.cases) visit([matchCase.action]);
           if (statement.otherwise) visit([statement.otherwise]);
         }
+        if (statement.kind === "v2_block") visit(statement.body);
       }
     };
     if (v2.body.length > 0) visit(v2.body);
@@ -6863,6 +7280,9 @@ var MKProEmulatorBundle = (() => {
         for (const matchCase of statement.cases) visit([matchCase.action]);
         if (statement.otherwise) visit([statement.otherwise]);
         return;
+      case "v2_block":
+        visit(statement.body);
+        return;
       default:
         return;
     }
@@ -6940,6 +7360,9 @@ var MKProEmulatorBundle = (() => {
               visit([matchCase.action]);
             }
             if (statement.otherwise !== void 0) visit([statement.otherwise]);
+            break;
+          case "v2_block":
+            visit(statement.body);
             break;
           case "v2_invoke":
             texts.push(...statement.args);
@@ -7022,6 +7445,10 @@ var MKProEmulatorBundle = (() => {
       }
       if (field.type === "coord_list") {
         fields.push(...lowerV2CoordListState(field, context));
+        continue;
+      }
+      if (field.type === "cells" && context.segmentedCells.has(field.name)) {
+        fields.push(...lowerV2SegmentedBitplaneState(v2, field, context));
         continue;
       }
       const lowered = {
@@ -7208,10 +7635,41 @@ var MKProEmulatorBundle = (() => {
       return lowered;
     });
   }
+  function lowerV2SegmentedBitplaneState(v2, field, context) {
+    const segmented = context.segmentedCells.get(field.name);
+    if (segmented === void 0) return [];
+    const initial = field.initial?.trim() ?? "0";
+    if (initial !== "0" && initial !== "random()") {
+      throw new ParseError("segmented cells currently support only '= 0' or '= random()' initializers", field.line);
+    }
+    const randomUniqueCount = initial === "random()" ? segmentedBitplaneRandomUniqueCountSource(v2, field) : void 0;
+    return segmented.planes.map((name) => {
+      const lowered = {
+        name,
+        type: "packed",
+        line: field.line
+      };
+      if (randomUniqueCount !== void 0) {
+        const planeIndex = segmented.planes.indexOf(name);
+        lowered.initial = segmentedBitplaneRandomUniqueInitial(field.name, randomUniqueCount, planeIndex);
+      } else if (initial === "random()") {
+        lowered.initial = lowerV2Expression("int(random() * 9999999) + 1", field.line, context);
+      }
+      return lowered;
+    });
+  }
+  function segmentedBitplaneRandomUniqueCountSource(v2, field) {
+    for (const candidate of v2.state) {
+      if (candidate.name === field.name || candidate.initial === void 0) continue;
+      if (candidate.type !== "counter" && candidate.type !== "packed") continue;
+      if (parseStackSource(candidate.initial, candidate.line) === "Y") return candidate.name;
+    }
+    return void 0;
+  }
   function collectV2ScratchFields(v2, specializedRules) {
     const fields = [];
-    const add = (name, line) => {
-      fields.push({ name, type: "packed", line });
+    const add = (name, line, implicit = false) => {
+      fields.push({ name, type: "packed", ...implicit ? { implicit } : {}, line });
     };
     for (const rule of v2.rules) {
       if (!specializedRules.has(rule.name)) {
@@ -7237,7 +7695,8 @@ var MKProEmulatorBundle = (() => {
           for (const matchCase of statement.cases) visit([matchCase.action]);
           if (statement.otherwise) visit([statement.otherwise]);
         }
-        if (statement.kind === "v2_read") add(statement.target, statement.line);
+        if (statement.kind === "v2_block") visit(statement.body);
+        if (statement.kind === "v2_read") add(statement.target, statement.line, true);
       }
     }
   }
@@ -7547,6 +8006,8 @@ var MKProEmulatorBundle = (() => {
           }];
         }
         if (context.stateTypes.get(statement.target) === "cells") {
+          const segmented = lowerSegmentedBitplaneUpdate(statement, context);
+          if (segmented !== void 0) return segmented;
           return [{
             kind: "assign",
             target: statement.target,
@@ -7599,6 +8060,8 @@ var MKProEmulatorBundle = (() => {
         }];
       case "v2_match":
         return lowerV2MatchStatements(statement, context);
+      case "v2_block":
+        return lowerV2Statements(statement.body, context);
       case "v2_return":
         return [{
           kind: "return_value",
@@ -7639,7 +8102,20 @@ var MKProEmulatorBundle = (() => {
     }
     return op2 === "+=" ? `bit_or(${collection}, ${mask})` : `bit_and(${collection}, bit_not(${mask}))`;
   }
+  function lowerSegmentedBitplaneUpdate(statement, context) {
+    const segmented = context.segmentedCells.get(statement.target);
+    if (segmented === void 0) return void 0;
+    const item = lowerV2Expression(statement.expr, statement.line, context);
+    return [{
+      kind: "segmented_bitplane_update",
+      collection: statement.target,
+      item,
+      op: statement.op,
+      line: statement.line
+    }];
+  }
   function cellMembershipExpression(collection, item, context) {
+    if (context.segmentedCells.has(collection.trim())) return `__seg_bit_has(${collection}, ${item})`;
     const list = context.coordLists.get(collection.trim());
     if (list !== void 0) return `coord_list_has(${item}, ${list.items.join(", ")})`;
     const digitIndex = decimalPlayerPackedCellsIndex(collection, item, context);
@@ -7964,6 +8440,8 @@ var MKProEmulatorBundle = (() => {
         return 2 + estimateLoweredExpressionCost(statement.target.index) + estimateLoweredExpressionCost(statement.expr);
       case "coord_list_remove":
         return 4 + estimateLoweredExpressionCost(statement.item);
+      case "segmented_bitplane_update":
+        return 24 + estimateLoweredExpressionCost(statement.item);
       case "preview":
         return estimateLoweredExpressionCost(statement.expr);
       case "pause":
@@ -8083,6 +8561,7 @@ var MKProEmulatorBundle = (() => {
     ];
   }
   function resolveV2ActionBody(action, context) {
+    if (action.kind === "v2_block") return action.body;
     if (action.kind !== "v2_invoke") return [action];
     const rule = context.rules.get(action.name);
     if (rule === void 0) return void 0;
@@ -8134,6 +8613,7 @@ var MKProEmulatorBundle = (() => {
     }
   }
   function lowerV2MatchAction(action, context, line) {
+    if (action.kind === "v2_block") return lowerV2Statements(action.body, context);
     if (action.kind !== "v2_invoke") return lowerV2Statement(action, context);
     const rule = context.rules.get(action.name);
     if (rule !== void 0 && context.specializedRules.has(rule.name)) {
@@ -8233,6 +8713,8 @@ var MKProEmulatorBundle = (() => {
         }
         return substituted;
       }
+      case "v2_block":
+        return { ...statement, body: substituteV2Statements(statement.body, replacements) };
       case "v2_invoke":
         return { ...statement, args: statement.args.map((arg) => substituteV2Text(arg, replacements)) };
       case "v2_stop":
@@ -8352,6 +8834,17 @@ var MKProEmulatorBundle = (() => {
     }
     return context === void 0 ? expr : lowerDomainRandomCalls(expr, context, line);
   }
+  function parseV2ProgramRequirement(line, requirements) {
+    const match = /^requires\s+angle_mode\(\s*(grd)\s*\)$/iu.exec(line.text);
+    if (match === null) {
+      throw new ParseError("Requirement must look like 'requires angle_mode(grd)'", line.line);
+    }
+    if (requirements === void 0) return;
+    if (requirements.angleMode !== void 0) {
+      throw new ParseError("angle_mode requirement may be declared only once", line.line);
+    }
+    requirements.angleMode = { mode: "grd", line: line.line };
+  }
   function parseV2ConstLine(line) {
     const match = /^const\s+([A-Za-z_][\w]*)\s*=\s*(.+)$/u.exec(line.text);
     if (!match) {
@@ -8469,10 +8962,17 @@ var MKProEmulatorBundle = (() => {
   function cellMaskExpressionForCollection(mask, cell, context) {
     const oneDimensional = oneDimensionalCellMaskExpression(mask, cell, context);
     if (oneDimensional !== void 0) return oneDimensional;
+    const board = boardForCells(mask, context);
+    if (board !== void 0 && isSourceShapedFourByFourBoard(board)) {
+      return `cell_mask(${decimalOnesExpression(cell)}, int((${cell}) / 10))`;
+    }
     const domain = context.stateDomains.get(mask.trim());
     const world = domain === void 0 ? void 0 : context.worlds.get(domain);
     if (world?.position?.encoding === "packed_decimal_zero_run") return `frac(${cell})`;
     return void 0;
+  }
+  function isSourceShapedFourByFourBoard(board) {
+    return board.xMin === 1 && board.xMax === 4 && board.yMin === 1 && board.yMax === 4 && board.width === 4 && board.height === 4;
   }
   function decimalPlayerPackedCellsIndex(collection, cell, context) {
     const name = collection.trim();
@@ -9282,180 +9782,20 @@ var MKProEmulatorBundle = (() => {
     return result;
   }
 
-  // src/core/indirect-addressing.ts
-  var MEMORY_TARGET_WITH_ZERO_TENS = [
-    "0",
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9",
-    "a",
-    "b",
-    "c",
-    "d",
-    "e",
-    "0"
-  ];
-  var MEMORY_TARGET_WITH_NONZERO_TENS = [
-    "a",
-    "b",
-    "c",
-    "d",
-    "e",
-    "0",
-    "0",
-    "1",
-    "2",
-    "3",
-    "4",
-    "5",
-    "6",
-    "7",
-    "8",
-    "9"
-  ];
-  function indirectSelectorMutation(register) {
-    const index = registerIndex(register);
-    if (index <= 3) return "pre-decrement";
-    if (index <= 6) return "pre-increment";
-    return "stable";
-  }
-  function isStableIndirectSelector(register) {
-    return indirectSelectorMutation(register) === "stable";
-  }
-  function evaluateIndirectAddress(selector, value, operation) {
-    const mutation = indirectSelectorMutation(selector);
-    const fractional = isPositiveFractional(value);
-    if (selector === "0" && fractional) {
-      const formalAddress = formalAddressInfo(153);
-      return {
-        selector,
-        mutation,
-        operation,
-        transformed: "99",
-        ...operation === "flow" ? { flowTarget: 99, actualFlowTarget: formalAddress.actual, formalAddress } : { memoryTarget: "3" },
-        resultValue: "-99999999"
-      };
-    }
-    const transformed = transformSelectorValue(value, mutation);
-    if (transformed === void 0) return void 0;
-    if (operation === "flow") {
-      const flowTarget = flowTargetFromTransformed(transformed);
-      const formalAddress = formalAddressInfo(formalOpcodeForFlowTarget(transformed, flowTarget));
-      const result = {
-        selector,
-        mutation,
-        operation,
-        transformed,
-        formalAddress,
-        flowTarget,
-        actualFlowTarget: formalAddress.actual,
-        resultValue: transformed
-      };
-      const superDark = superDarkTarget(formalAddress.opcode);
-      if (superDark !== void 0) result.superDark = superDark;
-      return result;
-    }
-    const memoryTarget = memoryTargetFromTransformed(transformed);
-    if (memoryTarget === void 0) return void 0;
-    return {
-      selector,
-      mutation,
-      operation,
-      transformed,
-      memoryTarget,
-      resultValue: transformed
-    };
-  }
-  function memoryTargetFromTransformed(transformed) {
-    const tail = transformedTailPair(transformed);
-    if (tail === void 0) return void 0;
-    const targetTable = tail.tens === 0 ? MEMORY_TARGET_WITH_ZERO_TENS : MEMORY_TARGET_WITH_NONZERO_TENS;
-    return targetTable[tail.ones];
-  }
-  function superDarkTarget(formalTarget) {
-    const info2 = formalAddressInfo(formalTarget);
-    if (info2.kind !== "super-dark" || info2.extra === void 0) return void 0;
-    return {
-      formal: info2.opcode,
-      entryAddress: info2.actual,
-      continuationAddress: info2.extra
-    };
-  }
-  function transformSelectorValue(value, mutation) {
-    if (typeof value === "number") {
-      if (!Number.isFinite(value)) return void 0;
-      return transformDecimalSelectorValue(value, mutation);
-    }
-    const normalized = value.trim().replace(/^0x/iu, "").replace(",", ".").toLowerCase();
-    if (!/^-?[0-9a-f]+(?:\.\d+)?$/iu.test(normalized)) return void 0;
-    if (mutation === "stable" && !normalized.startsWith("-") && /[a-f]/iu.test(normalized)) return normalized;
-    const decimal2 = Number(normalized);
-    if (!Number.isFinite(decimal2)) return void 0;
-    return transformDecimalSelectorValue(decimal2, mutation);
-  }
-  function isPositiveFractional(value) {
-    const numeric = typeof value === "number" ? value : Number(value.trim().replace(",", "."));
-    return numeric !== void 0 && numeric > 0 && numeric < 1;
-  }
-  function mutationDelta(mutation) {
-    if (mutation === "pre-decrement") return -1;
-    if (mutation === "pre-increment") return 1;
-    return 0;
-  }
-  function flowTargetFromTransformed(transformed) {
-    const tail = transformedTailPair(transformed);
-    if (tail === void 0) return 0;
-    return tail.hex ? tail.tens * 16 + tail.ones : tail.tens * 10 + tail.ones;
-  }
-  function formalOpcodeForFlowTarget(transformed, flowTarget) {
-    const normalized = transformed.trim().toLowerCase();
-    if (/^-?[0-9a-f]+$/iu.test(normalized) && /[a-f]/iu.test(normalized)) {
-      return flowTarget;
-    }
-    return officialAddressToOpcode(flowTarget);
-  }
-  function transformDecimalSelectorValue(value, mutation) {
-    const integer = Math.trunc(value);
-    const delta = mutationDelta(mutation);
-    if (integer >= 0) {
-      if (integer === 0 && delta < 0) return "-99999999";
-      return String(integer + delta);
-    }
-    const transformed = negativeIntegerMantissa(integer);
-    if (delta === 0) return `-${transformed}`;
-    const next = transformed + delta;
-    if (next <= 0) return "0";
-    if (next >= 1e8) return "0";
-    return `-${String(next).padStart(8, "0")}`;
-  }
-  function negativeIntegerMantissa(value) {
-    const digits = String(Math.abs(Math.trunc(value))).slice(-8);
-    const padded = digits.padStart(8, "9");
-    return Number(padded);
-  }
-  function transformedTailPair(transformed) {
-    const normalized = transformed.trim().toLowerCase();
-    if (!/^-?[0-9a-f]+$/iu.test(normalized)) return void 0;
-    const negative = normalized.startsWith("-");
-    const digits = negative ? normalized.slice(1) : normalized;
-    if (digits.length === 0) return void 0;
-    const fill = negative ? "9" : "0";
-    const pair = digits.length === 1 ? `${fill}${digits}` : digits.slice(-2);
-    const tens = Number.parseInt(pair[0], 16);
-    const ones = Number.parseInt(pair[1], 16);
-    if (!Number.isFinite(tens) || !Number.isFinite(ones) || tens < 0 || tens > 15 || ones < 0 || ones > 15) {
-      return void 0;
-    }
-    return { tens, ones, hex: /[a-f]/iu.test(pair) };
-  }
-
   // src/core/passes/helpers.ts
+  var X2_SHAPE_DATA_MODEL_CACHE = /* @__PURE__ */ new Map();
+  var CANONICAL_SHAPE_RAW_CACHE = /* @__PURE__ */ new Map();
+  var NORMALIZE_PLAIN_DECIMAL_CACHE = /* @__PURE__ */ new Map();
+  var SIGNIFICANT_DECIMAL_DIGITS_CACHE = /* @__PURE__ */ new Map();
+  var NO_SHAPE_SET_CACHE_KEY = /* @__PURE__ */ new Set();
+  var NO_VALUE_SET_CACHE_KEY = /* @__PURE__ */ new Set();
+  var STABLE_EXPRESSION_VALUE_SET_CACHE = /* @__PURE__ */ new Map();
+  var STABLE_EXPRESSION_SHAPE_SET_CACHE = /* @__PURE__ */ new Map();
+  var SHAPE_SET_WITH_STABLE_VALUE_SHAPES_CACHE = /* @__PURE__ */ new WeakMap();
+  var SHAPE_SET_WITH_STABLE_VALUE_SYNC_SHAPES_CACHE = /* @__PURE__ */ new WeakMap();
+  var SHAPE_SET_WITH_VALUE_DISPLAY_SHAPES_CACHE = /* @__PURE__ */ new WeakMap();
+  var SHAPE_SET_WITH_FALLBACK_VALUE_DISPLAY_SHAPES_CACHE = /* @__PURE__ */ new WeakMap();
+  var SHAPE_SET_WITH_FALLBACK_VALUE_SYNC_DISPLAY_SHAPES_CACHE = /* @__PURE__ */ new WeakMap();
   var NORMALIZED_DECIMAL_ZERO = "decimal:0:normalized";
   var SAME_UNKNOWN_VALUE = "same:unknown";
   var X2_SIGN_CHANGE_OPCODE = 11;
@@ -9610,6 +9950,7 @@ var MKProEmulatorBundle = (() => {
     "d",
     "e"
   ];
+  var MAX_STABLE_BINARY_SOURCE_KEY_PAIRS = 16;
   function isKnownReturnCallOp(op2) {
     return op2.kind === "call" || op2.kind === "indirect-call";
   }
@@ -9667,6 +10008,14 @@ var MKProEmulatorBundle = (() => {
     const match = /\bindirect-memory-target=([0-9a-e])\b/iu.exec(op2.meta.comment ?? "");
     if (!match) return void 0;
     return match[1].toLowerCase();
+  }
+  function knownIndirectMemoryTargets(op2) {
+    const single = knownIndirectMemoryTarget(op2);
+    if (single !== void 0) return /* @__PURE__ */ new Set([single]);
+    if (op2.kind !== "indirect-recall" && op2.kind !== "indirect-store") return void 0;
+    const match = /\bindirect-memory-targets=([0-9a-e](?:,[0-9a-e])*)\b/iu.exec(op2.meta.comment ?? "");
+    if (!match) return void 0;
+    return new Set(match[1].split(",").map((register) => register.toLowerCase()));
   }
   function knownIndirectFlowTarget(op2) {
     if (op2.kind !== "indirect-jump" && op2.kind !== "indirect-call" && op2.kind !== "indirect-cjump") {
@@ -9816,7 +10165,7 @@ var MKProEmulatorBundle = (() => {
     }
     return expressionValueFact(producerIndex);
   }
-  function plainProducesStableExpressionValues(op2, x, y, xShape = void 0, yShape = void 0) {
+  function plainProducesStableExpressionValues(op2, x, y, xShape = void 0, yShape = void 0, directYShape = void 0, directXShape = void 0) {
     const constants = plainProducesStableConstantExpressionValues(op2);
     if (constants.size > 0) return constants;
     if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2) || hasIrRoles(op2)) return /* @__PURE__ */ new Set();
@@ -9827,16 +10176,30 @@ var MKProEmulatorBundle = (() => {
     }
     const opcode = op2.opcode.toString(16).toUpperCase().padStart(2, "0");
     const options = concreteEvaluationOptionsForStableExpressionOpcode(op2.opcode);
-    const output = plainProducesConcreteDecimalValues(op2, x, xShape, options);
+    const output = plainProducesConcreteDecimalValues(op2, x, xShape, options, directXShape);
+    const directConcreteKeys = directStructuralUnaryConcreteStableSourceKeys(op2, directXShape);
     if (info2.stackEffect === "preserves") {
       for (const key of stableExpressionSourceKeys(x, xShape)) {
         if (stableExpressionKeyHasConcreteDecimalResult(op2, key)) continue;
+        if (directConcreteKeys !== void 0 && directConcreteKeys.has(key)) continue;
         output.add(stableExpressionValueFact(opcode, key));
       }
     } else if (info2.stackEffect === "consume-y-drop" || info2.stackEffect === "consume-y-keep") {
-      for (const fact of plainProducesConcreteBinaryDecimalValues(op2, y, x, yShape, xShape, options)) output.add(fact);
-      for (const yKey of stableExpressionSourceKeys(y, yShape)) {
-        for (const xKey of stableExpressionSourceKeys(x, xShape)) {
+      for (const fact of plainProducesConcreteBinaryDecimalValues(
+        op2,
+        y,
+        x,
+        yShape,
+        xShape,
+        options,
+        directYShape,
+        directXShape
+      )) {
+        output.add(fact);
+      }
+      const [yKeys, xKeys] = stableBinaryExpressionSourceKeySets(op2.opcode, y, yShape, x, xShape);
+      for (const yKey of yKeys) {
+        for (const xKey of xKeys) {
           if (stableBinaryExpressionKeyHasConcreteDecimalResult(op2, yKey, xKey)) continue;
           output.add(stableBinaryExpressionValueFact(op2, opcode, yKey, xKey));
         }
@@ -9844,13 +10207,26 @@ var MKProEmulatorBundle = (() => {
     }
     return output;
   }
+  function stableBinaryExpressionSourceKeySets(opcode, y, yShape, x, xShape) {
+    const yKeys = stableExpressionSourceKeysForOperand(opcode, y, yShape);
+    const xKeys = stableExpressionSourceKeysForOperand(opcode, x, xShape);
+    const yStableKeys = stableExpressionSourceKeysForOperand(opcode, y, yShape, { includeOpaqueExpr: false });
+    const xStableKeys = stableExpressionSourceKeysForOperand(opcode, x, xShape, { includeOpaqueExpr: false });
+    const boundedYKeys = yStableKeys.size === 0 ? yKeys : yStableKeys;
+    const boundedXKeys = xStableKeys.size === 0 ? xKeys : xStableKeys;
+    if (boundedYKeys.size * boundedXKeys.size <= MAX_STABLE_BINARY_SOURCE_KEY_PAIRS) {
+      return [boundedYKeys, boundedXKeys];
+    }
+    return [yStableKeys, xStableKeys];
+  }
   function stableExpressionKeyHasConcreteDecimalResult(op2, key) {
     const options = concreteEvaluationOptionsForStableExpressionOpcode(op2.opcode);
     const values = plainProducesConcreteDecimalValues(
       op2,
       stableExpressionKeyValueSetForOperand(op2.opcode, key, /* @__PURE__ */ new Set()),
-      stableExpressionKeyShapeSet(key),
-      options
+      stableExpressionKeyShapeSetForOperand(op2.opcode, key, /* @__PURE__ */ new Set()),
+      options,
+      stableExpressionKeyDirectShapeSet(key)
     );
     return values.size > 0 && !stableUnaryExpressionKeyHasAdditionalShapeResult(op2, key, values, options);
   }
@@ -9860,9 +10236,11 @@ var MKProEmulatorBundle = (() => {
       op2,
       stableExpressionKeyValueSetForOperand(op2.opcode, yKey, /* @__PURE__ */ new Set()),
       stableExpressionKeyValueSetForOperand(op2.opcode, xKey, /* @__PURE__ */ new Set()),
-      stableExpressionKeyShapeSet(yKey),
-      stableExpressionKeyShapeSet(xKey),
-      options
+      stableExpressionKeyShapeSetForOperand(op2.opcode, yKey, /* @__PURE__ */ new Set()),
+      stableExpressionKeyShapeSetForOperand(op2.opcode, xKey, /* @__PURE__ */ new Set()),
+      options,
+      stableExpressionKeyDirectShapeSet(yKey),
+      stableExpressionKeyDirectShapeSet(xKey)
     );
     return values.size > 0 && !stableBinaryExpressionKeyHasAdditionalShapeResult(op2, yKey, xKey, values, options);
   }
@@ -9872,9 +10250,11 @@ var MKProEmulatorBundle = (() => {
         op2,
         stableExpressionKeyValueSetForOperand(op2.opcode, key, /* @__PURE__ */ new Set()),
         void 0,
-        stableExpressionKeyShapeSet(key),
+        stableExpressionKeyShapeSetForOperand(op2.opcode, key, /* @__PURE__ */ new Set()),
         void 0,
-        options
+        options,
+        void 0,
+        stableExpressionKeyDirectShapeSet(key)
       ),
       values
     );
@@ -9885,9 +10265,11 @@ var MKProEmulatorBundle = (() => {
         op2,
         stableExpressionKeyValueSetForOperand(op2.opcode, xKey, /* @__PURE__ */ new Set()),
         stableExpressionKeyValueSetForOperand(op2.opcode, yKey, /* @__PURE__ */ new Set()),
-        stableExpressionKeyShapeSet(xKey),
-        stableExpressionKeyShapeSet(yKey),
-        options
+        stableExpressionKeyShapeSetForOperand(op2.opcode, xKey, /* @__PURE__ */ new Set()),
+        stableExpressionKeyShapeSetForOperand(op2.opcode, yKey, /* @__PURE__ */ new Set()),
+        options,
+        stableExpressionKeyDirectShapeSet(yKey),
+        stableExpressionKeyDirectShapeSet(xKey)
       ),
       values
     );
@@ -9905,13 +10287,22 @@ var MKProEmulatorBundle = (() => {
     return /^mantissa:-0(?:\.0*)?:decimal$/u.test(fact);
   }
   function concreteEvaluationOptionsForStableExpressionOpcode(opcode) {
-    return opcodeHasStructuralOperandSemantics(opcode) ? { includeStructuralShapeDecimals: false } : {};
+    return concreteEvaluationOptionsForOpcode(opcode);
+  }
+  function concreteEvaluationOptionsForOpcode(opcode, options = {}) {
+    if (!opcodeHasStructuralOperandSemantics(opcode)) return options;
+    return {
+      ...options,
+      includeStructuralShapeDecimals: options.includeStructuralShapeDecimals ?? false,
+      includeStructuralExponentClosureDecimals: options.includeStructuralExponentClosureDecimals ?? false
+    };
   }
   function opcodeHasStructuralOperandSemantics(opcode) {
     return opcode === 16 || opcode === 17 || opcode === 18 || opcode === 19 || opcode === 34 || opcode === 50 || opcode === 55 || opcode === 56 || opcode === 57 || opcode === 58;
   }
-  function plainProducesConcreteDecimalValues(op2, x, xShape = void 0, options = {}) {
+  function plainProducesConcreteDecimalValues(op2, x, xShape = void 0, options = {}, directXShape = void 0) {
     const output = /* @__PURE__ */ new Set();
+    const effectiveOptions = concreteEvaluationOptionsForOpcode(op2.opcode, options);
     const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
     if (op2.opcode !== 21 && op2.opcode !== 22 && op2.opcode !== 23 && op2.opcode !== 24 && op2.opcode !== 25 && op2.opcode !== 26 && op2.opcode !== 27 && op2.opcode !== 28 && op2.opcode !== 29 && op2.opcode !== 30 && op2.opcode !== 33 && op2.opcode !== 34 && op2.opcode !== 35 && op2.opcode !== 38 && op2.opcode !== 42 && op2.opcode !== 48 && op2.opcode !== 49 && op2.opcode !== 50 && op2.opcode !== 51 && op2.opcode !== 52 && op2.opcode !== 53 && op2.opcode !== 58) return output;
     for (const fact of x ?? []) {
@@ -9919,29 +10310,36 @@ var MKProEmulatorBundle = (() => {
       const concrete = value === void 0 ? void 0 : concreteDecimalUnaryValue(op2.opcode, value);
       if (concrete !== void 0) output.add(decimalValueFact(concrete, "normalized"));
     }
-    for (const value of computationDecimalShapeValues(effectiveXShape, options)) {
+    for (const value of computationDecimalShapeValues(effectiveXShape, effectiveOptions)) {
       const concrete = concreteDecimalUnaryValue(op2.opcode, value);
       if (concrete !== void 0) output.add(decimalValueFact(concrete, "normalized"));
     }
     for (const value of plainProducesConcreteStructuralUnaryDecimalValues(op2, effectiveXShape)) {
       output.add(decimalValueFact(value, "normalized"));
     }
+    for (const value of plainProducesConcreteDirectStructuralUnaryDecimalValues(op2, directXShape)) {
+      output.add(decimalValueFact(value, "normalized"));
+    }
     return output;
   }
-  function plainProducesConcreteDecimalShapeFacts(op2, x, xShape = void 0, options = {}) {
+  function plainProducesConcreteDecimalShapeFacts(op2, x, xShape = void 0, options = {}, directXShape = void 0) {
     const output = plainProducesStableConstantShapeFacts(op2);
+    const effectiveOptions = concreteEvaluationOptionsForOpcode(op2.opcode, options);
     const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
     for (const fact of x ?? []) {
       const value = computationDecimalValueFromFact(fact);
       const concrete = value === void 0 ? void 0 : concreteDecimalUnaryDisplayShapeFact(op2.opcode, value);
       if (concrete !== void 0) output.add(concrete);
     }
-    for (const value of computationDecimalShapeValues(effectiveXShape, options)) {
+    for (const value of computationDecimalShapeValues(effectiveXShape, effectiveOptions)) {
       const concrete = concreteDecimalUnaryDisplayShapeFact(op2.opcode, value);
       if (concrete !== void 0) output.add(concrete);
     }
     for (const fact of plainProducesConcreteStructuralUnaryDecimalShapeFacts(op2, effectiveXShape)) {
       if (fact !== void 0) output.add(fact);
+    }
+    for (const fact of plainProducesConcreteDirectStructuralUnaryDecimalShapeFacts(op2, directXShape)) {
+      output.add(fact);
     }
     return output;
   }
@@ -9957,18 +10355,27 @@ var MKProEmulatorBundle = (() => {
     if (decimalMantissaDigitCount(normalized) > 8) return void 0;
     return decimalMantissaShapeFact(normalized);
   }
-  function plainProducesConcreteBinaryDecimalValues(op2, y, x, yShape = void 0, xShape = void 0, options = {}) {
+  function plainProducesConcreteBinaryDecimalValues(op2, y, x, yShape = void 0, xShape = void 0, options = {}, directYShape = void 0, directXShape = void 0) {
     const output = /* @__PURE__ */ new Set();
+    const effectiveOptions = concreteEvaluationOptionsForOpcode(op2.opcode, options);
     const effectiveYShape = shapeSetWithStableExpressionValueShapes(yShape, y);
     const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
     if ((op2.opcode < 16 || op2.opcode > 19) && op2.opcode !== 36 && op2.opcode !== 54 && op2.opcode !== 55 && op2.opcode !== 56 && op2.opcode !== 57) return output;
-    for (const yValue of normalizedDecimalValues(y, effectiveYShape, options)) {
-      for (const xValue of normalizedDecimalValues(x, effectiveXShape, options)) {
+    for (const yValue of normalizedDecimalValues(y, effectiveYShape, effectiveOptions)) {
+      for (const xValue of normalizedDecimalValues(x, effectiveXShape, effectiveOptions)) {
         const concrete = concreteDecimalBinaryValue(op2.opcode, yValue, xValue);
         if (concrete !== void 0) output.add(decimalValueFact(concrete, "normalized"));
       }
     }
-    for (const fact of plainProducesStructuralBinaryDecimalValues(op2, y, x, effectiveYShape, effectiveXShape)) {
+    for (const fact of plainProducesStructuralBinaryDecimalValues(
+      op2,
+      y,
+      x,
+      effectiveYShape,
+      effectiveXShape,
+      directYShape,
+      directXShape
+    )) {
       output.add(fact);
     }
     return output;
@@ -10019,6 +10426,45 @@ var MKProEmulatorBundle = (() => {
     }
     return output;
   }
+  function plainProducesConcreteDirectStructuralUnaryDecimalValues(op2, directXShape) {
+    const output = /* @__PURE__ */ new Set();
+    if (op2.opcode !== 50) return output;
+    for (const fact of canonicalStructuralShapeFacts(directXShape)) {
+      const value = directStructuralSignDecimalValue(fact);
+      if (value !== void 0) output.add(value);
+    }
+    return output;
+  }
+  function plainProducesConcreteDirectStructuralUnaryDecimalShapeFacts(op2, directXShape) {
+    const output = /* @__PURE__ */ new Set();
+    for (const value of plainProducesConcreteDirectStructuralUnaryDecimalValues(op2, directXShape)) {
+      const fact = exactPlainIntegerDecimalMantissaShapeFact(value);
+      if (fact !== void 0) output.add(fact);
+    }
+    return output;
+  }
+  function directStructuralUnaryConcreteStableSourceKeys(op2, directXShape) {
+    if (!directStructuralUnaryDecimalProofIsComplete(op2, directXShape)) return void 0;
+    const keys = /* @__PURE__ */ new Set();
+    for (const key of stableExpressionDisplayShapeSourceKeys(void 0, directXShape)) keys.add(key);
+    for (const register of REGISTER_NAMES) keys.add(registerValueFact(register));
+    return keys;
+  }
+  function directStructuralUnaryDecimalProofIsComplete(op2, directXShape) {
+    const facts = canonicalStructuralShapeFacts(directXShape);
+    if (facts.size === 0) return false;
+    for (const fact of facts) {
+      if (directStructuralSignDecimalValueForOp(op2, fact) === void 0) return false;
+    }
+    return true;
+  }
+  function directStructuralSignDecimalValueForOp(op2, fact) {
+    return op2.opcode === 50 ? directStructuralSignDecimalValue(fact) : void 0;
+  }
+  function directStructuralSignDecimalValue(fact) {
+    const model = x2ShapeDataModelForFact(fact);
+    return model.kind === "exponent-entry" && model.mantissa.radix === "super" && model.exponentSign === "" ? "0" : void 0;
+  }
   function structuralAbsDecimalValue(fact) {
     const abs = structuralAbsMantissaShapeFact(fact);
     return abs === void 0 ? void 0 : x2ShapeFactExactNonNegativeDisplayDecimal(abs);
@@ -10037,7 +10483,8 @@ var MKProEmulatorBundle = (() => {
   }
   function structuralHexSignDecimalValue(fact) {
     const model = x2ShapeDataModelForFact(fact);
-    if (model.kind !== "mantissa" || model.radix !== "hex") return void 0;
+    if (model.kind !== "mantissa" || model.radix !== "hex" && model.radix !== "super") return void 0;
+    if (model.radix === "super") return "0";
     for (const digit of model.digits) {
       const value = structuralHexNibbleValue(digit);
       if (value === void 0) return void 0;
@@ -10093,12 +10540,8 @@ var MKProEmulatorBundle = (() => {
   }
   function structuralScaledHexZeroSquareOperandFromShapeModel(model) {
     if (model.kind === "exponent-entry") {
-      if (model.mantissa.radix !== "hex" || model.mantissa.hasDecimalPoint || model.mantissa.digits.length !== 1) {
-        return void 0;
-      }
-      const digit = structuralHexNibbleValue(model.mantissa.digits[0]);
       const exponent = structuralHexSquareExponentNumber(model.exponentRaw);
-      return digit === void 0 || exponent === void 0 || !isVerifiedScaledHexZeroSquareDigit(digit) ? void 0 : { digit, exponent };
+      return exponent === void 0 ? void 0 : structuralHexSquareExponentOperandFromMantissa(model.mantissa, exponent, isVerifiedScaledHexZeroSquareDigit);
     }
     if (model.kind !== "mantissa" || model.radix !== "hex") return void 0;
     const raw = model.sign === "" ? model.canonical : model.canonical.slice(1);
@@ -10107,16 +10550,12 @@ var MKProEmulatorBundle = (() => {
       const digit = structuralHexNibbleValue(integer[1]);
       return digit === void 0 || !isVerifiedScaledHexZeroSquareDigit(digit) ? void 0 : { digit, exponent: integer[2].length };
     }
-    return void 0;
+    return structuralFractionalHexSquareOperandFromRaw(raw, 0, isVerifiedScaledHexZeroSquareDigit);
   }
   function structuralScaledHexSquareOperandFromShapeModel(model) {
     if (model.kind === "exponent-entry") {
-      if (model.mantissa.radix !== "hex" || model.mantissa.hasDecimalPoint || model.mantissa.digits.length !== 1) {
-        return void 0;
-      }
-      const digit = structuralHexNibbleValue(model.mantissa.digits[0]);
       const exponent = structuralHexSquareExponentNumber(model.exponentRaw);
-      return digit === void 0 || exponent === void 0 || !isVerifiedScaledHexSquareDigit(digit) ? void 0 : { digit, exponent };
+      return exponent === void 0 ? void 0 : structuralHexSquareExponentOperandFromMantissa(model.mantissa, exponent, isVerifiedScaledHexSquareDigit);
     }
     if (model.kind !== "mantissa" || model.radix !== "hex") return void 0;
     const raw = model.sign === "" ? model.canonical : model.canonical.slice(1);
@@ -10125,12 +10564,23 @@ var MKProEmulatorBundle = (() => {
       const digit = structuralHexNibbleValue(integer[1]);
       return digit === void 0 || !isVerifiedScaledHexSquareDigit(digit) ? void 0 : { digit, exponent: integer[2].length };
     }
-    const fraction = /^(?:0)?\.(0*)([BСГD])$/u.exec(raw);
-    if (fraction !== null) {
-      const digit = structuralHexNibbleValue(fraction[2]);
-      return digit === void 0 || !isVerifiedScaledHexSquareDigit(digit) ? void 0 : { digit, exponent: -(fraction[1].length + 1) };
+    return structuralFractionalHexSquareOperandFromRaw(raw, 0, isVerifiedScaledHexSquareDigit);
+  }
+  function structuralHexSquareExponentOperandFromMantissa(mantissa, exponent, isVerifiedDigit) {
+    if (mantissa.radix !== "hex") return void 0;
+    const raw = mantissa.sign === "" ? mantissa.canonical : mantissa.canonical.slice(1);
+    const integer = /^0*([A-FСГЕ])$/u.exec(raw);
+    if (integer !== null) {
+      const digit = structuralHexNibbleValue(integer[1]);
+      return digit === void 0 || !isVerifiedDigit(digit) ? void 0 : { digit, exponent };
     }
-    return void 0;
+    return structuralFractionalHexSquareOperandFromRaw(raw, exponent, isVerifiedDigit);
+  }
+  function structuralFractionalHexSquareOperandFromRaw(raw, exponent, isVerifiedDigit) {
+    const fraction = /^(?:0)?\.(0*)([A-FСГЕ])$/u.exec(raw);
+    if (fraction === null) return void 0;
+    const digit = structuralHexNibbleValue(fraction[2]);
+    return digit === void 0 || !isVerifiedDigit(digit) ? void 0 : { digit, exponent: exponent - (fraction[1].length + 1) };
   }
   function structuralHexSquareExponentNumber(exponentRaw) {
     const exponent = canonicalExponentShapeRaw(exponentRaw);
@@ -10161,14 +10611,30 @@ var MKProEmulatorBundle = (() => {
         return void 0;
     }
   }
-  function plainProducesConcreteBinaryShapeFacts(op2, y, x, yShape, xShape, options = {}) {
+  function plainProducesConcreteBinaryShapeFacts(op2, y, x, yShape, xShape, options = {}, directYShape = void 0, directXShape = void 0) {
     const output = /* @__PURE__ */ new Set();
+    const effectiveOptions = concreteEvaluationOptionsForOpcode(op2.opcode, options);
     const effectiveYShape = shapeSetWithStableExpressionValueShapes(yShape, y);
     const effectiveXShape = shapeSetWithStableExpressionValueShapes(xShape, x);
-    for (const fact of plainProducesConcreteDecimalBinaryShapeFacts(op2, y, x, effectiveYShape, effectiveXShape, options)) {
+    for (const fact of plainProducesConcreteDecimalBinaryShapeFacts(
+      op2,
+      y,
+      x,
+      effectiveYShape,
+      effectiveXShape,
+      effectiveOptions
+    )) {
       output.add(fact);
     }
-    for (const fact of plainProducesStructuralBinaryDecimalShapes(op2, y, x, effectiveYShape, effectiveXShape)) {
+    for (const fact of plainProducesStructuralBinaryDecimalShapes(
+      op2,
+      y,
+      x,
+      effectiveYShape,
+      effectiveXShape,
+      directYShape,
+      directXShape
+    )) {
       output.add(fact);
     }
     if (op2.opcode < 55 || op2.opcode > 57) return output;
@@ -10194,149 +10660,127 @@ var MKProEmulatorBundle = (() => {
     }
     return output;
   }
-  function plainProducesStructuralBinaryDecimalShapes(op2, y, x, yShape, xShape) {
+  function plainProducesStructuralBinaryDecimalShapes(op2, y, x, yShape, xShape, directYShape = void 0, directXShape = void 0) {
     const output = /* @__PURE__ */ new Set();
-    for (const fact of structuralHexBinaryDecimalDisplayShapes(op2, y, x, yShape, xShape)) output.add(fact);
+    for (const fact of structuralHexBinaryDecimalDisplayShapes(
+      op2,
+      y,
+      x,
+      yShape,
+      xShape,
+      directYShape,
+      directXShape
+    )) output.add(fact);
     for (const fact of structuralBitwiseDecimalDisplayShapes(op2, y, x, yShape, xShape)) output.add(fact);
     return output;
   }
-  function plainProducesStructuralBinaryDecimalValues(op2, y, x, yShape, xShape) {
+  function plainProducesStructuralBinaryDecimalValues(op2, y, x, yShape, xShape, directYShape = void 0, directXShape = void 0) {
     const output = /* @__PURE__ */ new Set();
-    for (const value of structuralHexBinaryDecimalValues(op2, y, x, yShape, xShape)) {
+    for (const value of structuralHexBinaryDecimalValues(op2, y, x, yShape, xShape, directYShape, directXShape)) {
       output.add(decimalValueFact(value, "normalized"));
     }
     return output;
   }
-  function structuralHexBinaryDecimalValues(op2, y, x, yShape, xShape) {
+  function structuralHexBinaryDecimalValues(op2, y, x, yShape, xShape, directYShape = void 0, directXShape = void 0) {
     const output = /* @__PURE__ */ new Set();
-    for (const product of structuralHexBinaryDecimalProducts(op2, y, x, yShape, xShape)) output.add(product.value);
+    for (const product of structuralHexBinaryDecimalProducts(op2, y, x, yShape, xShape, directYShape, directXShape)) {
+      output.add(product.value);
+    }
     for (const value of structuralBitwiseDecimalValues(op2, y, x, yShape, xShape)) output.add(value);
     return output;
   }
-  function structuralHexBinaryDecimalProducts(op2, y, x, yShape, xShape) {
+  function structuralHexBinaryDecimalProducts(op2, y, x, yShape, xShape, directYShape = void 0, directXShape = void 0) {
     const output = [];
     if (op2.opcode >= 55 && op2.opcode <= 57) {
       return output;
     }
     if (op2.opcode === 16) {
-      for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      const leftOperands = structuralHexArithmeticOperands(yShape, { carryShapes: directYShape });
+      const rightOperands = structuralHexArithmeticOperands(xShape, { carryShapes: directXShape });
+      for (const leftOperand of leftOperands) {
         for (const right of normalizedDecimalValues(x, xShape)) {
-          addStructuralHexDecimalProduct(output, structuralHexDigitPlusDecimalProduct(leftDigit, right));
+          addStructuralHexDecimalProduct(output, structuralHexOperandPlusDecimalProduct(leftOperand, right));
         }
       }
       for (const left of normalizedDecimalValues(y, yShape)) {
-        for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
-          addStructuralHexDecimalProduct(output, decimalPlusStructuralHexDigitProduct(left, rightDigit));
+        for (const rightOperand of rightOperands) {
+          addStructuralHexDecimalProduct(output, decimalPlusStructuralHexOperandProduct(left, rightOperand));
         }
       }
-      for (const leftExponent of structuralSingleHexExponentOperands(yShape)) {
-        for (const right of normalizedDecimalValues(x, xShape)) {
-          addStructuralHexDecimalProduct(output, structuralHexExponentPlusDecimalProduct(leftExponent, right));
-        }
-      }
-      for (const left of normalizedDecimalValues(y, yShape)) {
-        for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
-          addStructuralHexDecimalProduct(output, decimalPlusStructuralHexExponentProduct(left, rightExponent));
-        }
-      }
-      for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
-        for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+      for (const leftOperand of leftOperands) {
+        for (const rightOperand of rightOperands) {
           addStructuralHexDecimalProduct(
             output,
-            structuralHexDigitPlusStructuralHexDigitProduct(leftDigit, rightDigit)
+            structuralHexOperandPlusStructuralHexOperandProduct(leftOperand, rightOperand)
           );
         }
       }
       return output;
     }
     if (op2.opcode === 17) {
-      for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      const leftOperands = structuralHexArithmeticOperands(yShape, { carryShapes: directYShape });
+      const rightOperands = structuralHexArithmeticOperands(xShape, { carryShapes: directXShape });
+      for (const leftOperand of leftOperands) {
         for (const right of normalizedDecimalValues(x, xShape)) {
-          addStructuralHexDecimalProduct(output, structuralHexDigitMinusDecimalProduct(leftDigit, right));
+          addStructuralHexDecimalProduct(output, structuralHexOperandMinusDecimalProduct(leftOperand, right));
         }
       }
       for (const left of normalizedDecimalValues(y, yShape)) {
-        for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
-          addStructuralHexDecimalProduct(output, decimalMinusStructuralHexDigitProduct(left, rightDigit));
+        for (const rightOperand of rightOperands) {
+          addStructuralHexDecimalProduct(output, decimalMinusStructuralHexOperandProduct(left, rightOperand));
         }
       }
-      for (const leftExponent of structuralSingleHexExponentOperands(yShape)) {
-        for (const right of normalizedDecimalValues(x, xShape)) {
-          addStructuralHexDecimalProduct(output, structuralHexExponentMinusDecimalProduct(leftExponent, right));
-        }
-      }
-      for (const left of normalizedDecimalValues(y, yShape)) {
-        for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
-          addStructuralHexDecimalProduct(output, decimalMinusStructuralHexExponentProduct(left, rightExponent));
-        }
-      }
-      for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
-        for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+      for (const leftOperand of leftOperands) {
+        for (const rightOperand of rightOperands) {
           addStructuralHexDecimalProduct(
             output,
-            structuralHexDigitMinusStructuralHexDigitProduct(leftDigit, rightDigit)
+            structuralHexOperandMinusStructuralHexOperandProduct(leftOperand, rightOperand)
           );
         }
       }
       return output;
     }
     if (op2.opcode === 18) {
-      for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      const leftOperands = structuralHexArithmeticOperands(yShape, { carryShapes: directYShape });
+      const rightOperands = structuralHexArithmeticOperands(xShape, { carryShapes: directXShape });
+      for (const leftOperand of leftOperands) {
         for (const right of normalizedDecimalValues(x, xShape)) {
-          addStructuralHexDecimalProduct(output, structuralHexDigitTimesDecimalProduct(leftDigit, right));
+          addStructuralHexDecimalProduct(output, structuralHexOperandTimesDecimalProduct(leftOperand, right));
         }
       }
       for (const left of normalizedDecimalValues(y, yShape)) {
-        for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
-          addStructuralHexDecimalProduct(output, decimalTimesStructuralHexDigitProduct(left, rightDigit));
+        for (const rightOperand of rightOperands) {
+          addStructuralHexDecimalProduct(output, decimalTimesStructuralHexOperandProduct(left, rightOperand));
         }
       }
-      for (const leftExponent of structuralSingleHexExponentOperands(yShape)) {
-        for (const right of normalizedDecimalValues(x, xShape)) {
-          addStructuralHexDecimalProduct(output, structuralHexExponentTimesDecimalProduct(leftExponent, right));
-        }
-      }
-      for (const left of normalizedDecimalValues(y, yShape)) {
-        for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
-          addStructuralHexDecimalProduct(output, decimalTimesStructuralHexExponentProduct(left, rightExponent));
-        }
-      }
-      for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
-        for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+      for (const leftOperand of leftOperands) {
+        for (const rightOperand of rightOperands) {
           addStructuralHexDecimalProduct(
             output,
-            structuralHexDigitTimesStructuralHexDigitProduct(leftDigit, rightDigit)
+            structuralHexOperandTimesStructuralHexOperandProduct(leftOperand, rightOperand)
           );
         }
       }
       return output;
     }
     if (op2.opcode === 19) {
-      for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
+      const leftOperands = structuralHexArithmeticOperands(yShape, { carryShapes: directYShape });
+      const rightOperands = structuralHexArithmeticOperands(xShape, { carryShapes: directXShape });
+      for (const leftOperand of leftOperands) {
         for (const right of normalizedDecimalValues(x, xShape)) {
-          addStructuralHexDecimalProduct(output, structuralHexDigitDivideDecimalProduct(leftDigit, right));
-        }
-      }
-      for (const leftExponent of structuralSingleHexExponentOperands(yShape)) {
-        for (const right of normalizedDecimalValues(x, xShape)) {
-          addStructuralHexDecimalProduct(output, structuralHexExponentDivideDecimalProduct(leftExponent, right));
+          addStructuralHexDecimalProduct(output, structuralHexOperandDivideDecimalProduct(leftOperand, right));
         }
       }
       for (const left of normalizedDecimalValues(y, yShape)) {
-        for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
-          addStructuralHexDecimalProduct(output, decimalDivideStructuralHexDigitProduct(left, rightDigit));
+        for (const rightOperand of rightOperands) {
+          addStructuralHexDecimalProduct(output, decimalDivideStructuralHexOperandProduct(left, rightOperand));
         }
       }
-      for (const left of normalizedDecimalValues(y, yShape)) {
-        for (const rightExponent of structuralSingleHexExponentOperands(xShape)) {
-          addStructuralHexDecimalProduct(output, decimalDivideStructuralHexExponentProduct(left, rightExponent));
-        }
-      }
-      for (const leftDigit of structuralSingleHexDigitValues(yShape)) {
-        for (const rightDigit of structuralSingleHexDigitValues(xShape)) {
+      for (const leftOperand of leftOperands) {
+        for (const rightOperand of rightOperands) {
           addStructuralHexDecimalProduct(
             output,
-            structuralHexDigitDivideStructuralHexDigitProduct(leftDigit, rightDigit)
+            structuralHexOperandDivideStructuralHexOperandProduct(leftOperand, rightOperand)
           );
         }
       }
@@ -10344,9 +10788,9 @@ var MKProEmulatorBundle = (() => {
     }
     return output;
   }
-  function structuralHexBinaryDecimalDisplayShapes(op2, y, x, yShape, xShape) {
+  function structuralHexBinaryDecimalDisplayShapes(op2, y, x, yShape, xShape, directYShape = void 0, directXShape = void 0) {
     const output = /* @__PURE__ */ new Set();
-    for (const product of structuralHexBinaryDecimalProducts(op2, y, x, yShape, xShape)) {
+    for (const product of structuralHexBinaryDecimalProducts(op2, y, x, yShape, xShape, directYShape, directXShape)) {
       const shape = structuralHexDecimalProductDisplayShape(product);
       if (shape !== void 0) output.add(shape);
     }
@@ -10366,7 +10810,7 @@ var MKProEmulatorBundle = (() => {
   }
   function computationDecimalShapeValues(shapes, options = {}) {
     const output = normalizedDecimalShapeValues(shapes, options);
-    for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
+    for (const fact of computationStructuralRestoreShapeFacts(shapes, options)) {
       const value = x2ShapeFactShapeOnlyExactDecimalDisplay(fact);
       if (value !== void 0) output.add(value);
     }
@@ -10375,7 +10819,7 @@ var MKProEmulatorBundle = (() => {
   function normalizedDecimalShapeValues(shapes, options = {}) {
     if (options.includeStructuralShapeDecimals === false) {
       const output = x2ShapeSetRestoredVisibleDecimals(decimalDisplayShapeFacts(shapes));
-      for (const fact of canonicalStructuralRestoreSourceKeyFacts(shapes)) {
+      for (const fact of canonicalStructuralRestoreSourceKeyFactsForDecimalization(shapes, options)) {
         const decimal2 = structuralShapeFactRestoredVisibleDecimal(fact);
         if (decimal2 !== void 0) output.add(decimal2);
       }
@@ -10383,7 +10827,50 @@ var MKProEmulatorBundle = (() => {
     }
     return x2ShapeSetRestoredVisibleDecimals(shapes);
   }
+  function computationStructuralRestoreShapeFacts(shapes, options = {}) {
+    const canonical = canonicalStructuralShapeFacts(shapes);
+    return options.includeStructuralExponentClosureDecimals === false ? structuralRestoreShapeFactsWithoutExponentClosureDecimals(canonical) : structuralRestoreShapeFacts(canonical);
+  }
+  function canonicalStructuralRestoreSourceKeyFactsForDecimalization(shapes, options = {}) {
+    const restored = options.includeStructuralExponentClosureDecimals === false ? structuralRestoreShapeFactsWithoutExponentClosureDecimals(canonicalStructuralShapeFacts(shapes)) : x2StructuralRestoreShapeFacts(shapes);
+    const output = /* @__PURE__ */ new Set();
+    for (const fact of restored) {
+      const model = x2ShapeDataModelForFact(fact);
+      if (model.kind === "exponent-entry" && model.closedStructuralMantissa !== void 0) {
+        const closed = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+        if (closed !== void 0 && restored.has(closed)) continue;
+      }
+      output.add(fact);
+    }
+    return output;
+  }
+  function structuralRestoreShapeFactsWithoutExponentClosureDecimals(input) {
+    const restored = structuralRestoreShapeFacts(input);
+    const blocked = /* @__PURE__ */ new Set();
+    for (const fact of input) {
+      const model = x2ShapeDataModelForFact(fact);
+      if (model.kind !== "exponent-entry" || model.closedStructuralMantissa === void 0) continue;
+      if (!hasStructuralNonDecimalDigit(model.mantissa.canonical)) continue;
+      const canonical = x2ShapeFactFromDataModel(model);
+      if (canonical !== void 0) blocked.add(canonical);
+      const closed = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+      if (closed !== void 0 && !input.has(closed)) blocked.add(closed);
+    }
+    const output = /* @__PURE__ */ new Set();
+    for (const fact of restored) {
+      if (!blocked.has(fact)) output.add(fact);
+    }
+    return output;
+  }
   function shapeSetWithStableExpressionValueShapes(shapes, values) {
+    return cachedShapeValueResult(
+      SHAPE_SET_WITH_STABLE_VALUE_SHAPES_CACHE,
+      shapes,
+      values,
+      () => shapeSetWithStableExpressionValueShapesImpl(shapes, values)
+    );
+  }
+  function shapeSetWithStableExpressionValueShapesImpl(shapes, values) {
     const output = cloneOptionalShapeSet(shapes);
     for (const value of values ?? []) {
       if (!value.startsWith("expr-key:")) continue;
@@ -10392,6 +10879,14 @@ var MKProEmulatorBundle = (() => {
     return output.size === 0 ? void 0 : output;
   }
   function shapeSetWithStableExpressionValueShapesForX2Sync(shapes, values) {
+    return cachedShapeValueResult(
+      SHAPE_SET_WITH_STABLE_VALUE_SYNC_SHAPES_CACHE,
+      shapes,
+      values,
+      () => shapeSetWithStableExpressionValueShapesForX2SyncImpl(shapes, values)
+    );
+  }
+  function shapeSetWithStableExpressionValueShapesForX2SyncImpl(shapes, values) {
     const output = cloneOptionalShapeSet(shapes);
     const stableShapes = /* @__PURE__ */ new Set();
     for (const value of values ?? []) {
@@ -10402,6 +10897,14 @@ var MKProEmulatorBundle = (() => {
     return output.size === 0 ? void 0 : output;
   }
   function shapeSetWithValueDerivedDisplayShapes(shapes, values) {
+    return cachedShapeValueResult(
+      SHAPE_SET_WITH_VALUE_DISPLAY_SHAPES_CACHE,
+      shapes,
+      values,
+      () => shapeSetWithValueDerivedDisplayShapesImpl(shapes, values)
+    );
+  }
+  function shapeSetWithValueDerivedDisplayShapesImpl(shapes, values) {
     const output = cloneOptionalShapeSet(shapes);
     if (values !== void 0) {
       for (const fact of x2ShapesFromValueFacts(values)) output.add(fact);
@@ -10409,10 +10912,26 @@ var MKProEmulatorBundle = (() => {
     return output.size === 0 ? void 0 : output;
   }
   function shapeSetWithFallbackValueDerivedDisplayShapes(shapes, values) {
+    return cachedShapeValueResult(
+      SHAPE_SET_WITH_FALLBACK_VALUE_DISPLAY_SHAPES_CACHE,
+      shapes,
+      values,
+      () => shapeSetWithFallbackValueDerivedDisplayShapesImpl(shapes, values)
+    );
+  }
+  function shapeSetWithFallbackValueDerivedDisplayShapesImpl(shapes, values) {
     const stable = shapeSetWithStableExpressionValueShapes(shapes, values);
     return stable === void 0 || stable.size === 0 ? shapeSetWithValueDerivedDisplayShapes(void 0, values) : stable;
   }
   function shapeSetWithFallbackValueDerivedDisplayShapesForX2Sync(shapes, values) {
+    return cachedShapeValueResult(
+      SHAPE_SET_WITH_FALLBACK_VALUE_SYNC_DISPLAY_SHAPES_CACHE,
+      shapes,
+      values,
+      () => shapeSetWithFallbackValueDerivedDisplayShapesForX2SyncImpl(shapes, values)
+    );
+  }
+  function shapeSetWithFallbackValueDerivedDisplayShapesForX2SyncImpl(shapes, values) {
     const stable = shapeSetWithStableExpressionValueShapesForX2Sync(shapes, values);
     if (stable !== void 0 && stable.size > 0) return stable;
     const fallback = shapeSetWithValueDerivedDisplayShapes(void 0, values);
@@ -10422,6 +10941,20 @@ var MKProEmulatorBundle = (() => {
   }
   function vpSpliceShapeSetWithValueShapes(shapes, values) {
     return shapeSetWithValueDerivedDisplayShapes(shapes, values);
+  }
+  function cachedShapeValueResult(cache, shapes, values, compute) {
+    const shapeKey = shapes ?? NO_SHAPE_SET_CACHE_KEY;
+    const valueKey = values ?? NO_VALUE_SET_CACHE_KEY;
+    let byValue = cache.get(shapeKey);
+    if (byValue === void 0) {
+      byValue = /* @__PURE__ */ new WeakMap();
+      cache.set(shapeKey, byValue);
+    } else if (byValue.has(valueKey)) {
+      return byValue.get(valueKey);
+    }
+    const result = compute();
+    byValue.set(valueKey, result);
+    return result;
   }
   function structuralSingleHexDigitValues(shapes) {
     const output = /* @__PURE__ */ new Set();
@@ -10434,6 +10967,141 @@ var MKProEmulatorBundle = (() => {
       if (value !== void 0) output.add(value);
     }
     return output;
+  }
+  function structuralHexArithmeticOperands(shapes, options = {}) {
+    const output = /* @__PURE__ */ new Map();
+    for (const digit of structuralSingleHexDigitValues(shapes)) {
+      output.set(`digit:${digit}`, { kind: "digit", digit });
+    }
+    for (const exponent of structuralSingleHexExponentOperands(shapes)) {
+      output.set(`exponent:${exponent.digit}:${exponent.exponent}`, {
+        kind: "exponent",
+        digit: exponent.digit,
+        exponent: exponent.exponent
+      });
+    }
+    for (const product of structuralHexCarryNormalizedIntegerProducts(options.carryShapes)) {
+      output.set(structuralHexCarryNormalizedOperandKey(product), {
+        kind: "carry-normalized",
+        product
+      });
+    }
+    return [...output.values()];
+  }
+  function structuralHexCarryNormalizedOperandKey(product) {
+    return `carry:${product.value}:${product.display ?? ""}:${product.displayShape ?? ""}`;
+  }
+  function structuralHexOperandPlusDecimalProduct(left, right) {
+    switch (left.kind) {
+      case "digit":
+        return structuralHexDigitPlusDecimalProduct(left.digit, right);
+      case "exponent":
+        return structuralHexExponentPlusDecimalProduct(left, right);
+      case "carry-normalized":
+        return structuralHexCarryNormalizedPlusDecimalProduct(left.product, right);
+    }
+  }
+  function decimalPlusStructuralHexOperandProduct(left, right) {
+    switch (right.kind) {
+      case "digit":
+        return decimalPlusStructuralHexDigitProduct(left, right.digit);
+      case "exponent":
+        return decimalPlusStructuralHexExponentProduct(left, right);
+      case "carry-normalized":
+        return structuralHexCarryNormalizedPlusDecimalProduct(right.product, left);
+    }
+  }
+  function structuralHexOperandMinusDecimalProduct(left, right) {
+    switch (left.kind) {
+      case "digit":
+        return structuralHexDigitMinusDecimalProduct(left.digit, right);
+      case "exponent":
+        return structuralHexExponentMinusDecimalProduct(left, right);
+      case "carry-normalized":
+        return structuralHexCarryNormalizedBinaryDecimalProduct(left.product, right, 17);
+    }
+  }
+  function decimalMinusStructuralHexOperandProduct(left, right) {
+    switch (right.kind) {
+      case "digit":
+        return decimalMinusStructuralHexDigitProduct(left, right.digit);
+      case "exponent":
+        return decimalMinusStructuralHexExponentProduct(left, right);
+      case "carry-normalized":
+        return decimalBinaryStructuralHexCarryNormalizedProduct(left, right.product, 17);
+    }
+  }
+  function structuralHexOperandTimesDecimalProduct(left, right) {
+    switch (left.kind) {
+      case "digit":
+        return structuralHexDigitTimesDecimalProduct(left.digit, right);
+      case "exponent":
+        return structuralHexExponentTimesDecimalProduct(left, right);
+      case "carry-normalized":
+        return structuralHexCarryNormalizedBinaryDecimalProduct(left.product, right, 18);
+    }
+  }
+  function decimalTimesStructuralHexOperandProduct(left, right) {
+    switch (right.kind) {
+      case "digit":
+        return decimalTimesStructuralHexDigitProduct(left, right.digit);
+      case "exponent":
+        return decimalTimesStructuralHexExponentProduct(left, right);
+      case "carry-normalized":
+        return decimalBinaryStructuralHexCarryNormalizedProduct(left, right.product, 18);
+    }
+  }
+  function structuralHexOperandDivideDecimalProduct(left, right) {
+    switch (left.kind) {
+      case "digit":
+        return structuralHexDigitDivideDecimalProduct(left.digit, right);
+      case "exponent":
+        return structuralHexExponentDivideDecimalProduct(left, right);
+      case "carry-normalized":
+        return structuralHexCarryNormalizedBinaryDecimalProduct(left.product, right, 19);
+    }
+  }
+  function decimalDivideStructuralHexOperandProduct(left, right) {
+    switch (right.kind) {
+      case "digit":
+        return decimalDivideStructuralHexDigitProduct(left, right.digit);
+      case "exponent":
+        return decimalDivideStructuralHexExponentProduct(left, right);
+      case "carry-normalized":
+        return decimalBinaryStructuralHexCarryNormalizedProduct(left, right.product, 19);
+    }
+  }
+  function structuralHexOperandPlusStructuralHexOperandProduct(left, right) {
+    if (left.kind === "digit" && right.kind === "digit") {
+      return structuralHexDigitPlusStructuralHexDigitProduct(left.digit, right.digit);
+    }
+    if (left.kind === "carry-normalized") return decimalPlusStructuralHexOperandProduct(left.product.value, right);
+    if (right.kind === "carry-normalized") return structuralHexOperandPlusDecimalProduct(left, right.product.value);
+    return void 0;
+  }
+  function structuralHexOperandMinusStructuralHexOperandProduct(left, right) {
+    if (left.kind === "digit" && right.kind === "digit") {
+      return structuralHexDigitMinusStructuralHexDigitProduct(left.digit, right.digit);
+    }
+    if (left.kind === "carry-normalized") return decimalMinusStructuralHexOperandProduct(left.product.value, right);
+    if (right.kind === "carry-normalized") return structuralHexOperandMinusDecimalProduct(left, right.product.value);
+    return void 0;
+  }
+  function structuralHexOperandTimesStructuralHexOperandProduct(left, right) {
+    if (left.kind === "digit" && right.kind === "digit") {
+      return structuralHexDigitTimesStructuralHexDigitProduct(left.digit, right.digit);
+    }
+    if (left.kind === "carry-normalized") return decimalTimesStructuralHexOperandProduct(left.product.value, right);
+    if (right.kind === "carry-normalized") return structuralHexOperandTimesDecimalProduct(left, right.product.value);
+    return void 0;
+  }
+  function structuralHexOperandDivideStructuralHexOperandProduct(left, right) {
+    if (left.kind === "digit" && right.kind === "digit") {
+      return structuralHexDigitDivideStructuralHexDigitProduct(left.digit, right.digit);
+    }
+    if (left.kind === "carry-normalized") return decimalDivideStructuralHexOperandProduct(left.product.value, right);
+    if (right.kind === "carry-normalized") return structuralHexOperandDivideDecimalProduct(left, right.product.value);
+    return void 0;
   }
   function structuralSingleHexExponentOperands(shapes) {
     const output = /* @__PURE__ */ new Map();
@@ -10468,6 +11136,77 @@ var MKProEmulatorBundle = (() => {
       return { digit, exponent: `-${fraction[1].length + 1}` };
     }
     return void 0;
+  }
+  function structuralHexCarryNormalizedIntegerProducts(shapes) {
+    const output = /* @__PURE__ */ new Map();
+    for (const fact of structuralHexCarrySourceShapeFacts(shapes)) {
+      const product = structuralHexCarryNormalizedIntegerProduct(fact);
+      if (product === void 0) continue;
+      output.set(`${product.value}:${product.display ?? ""}:${product.displayShape ?? ""}`, product);
+    }
+    return [...output.values()];
+  }
+  function structuralHexCarrySourceShapeFacts(shapes) {
+    const canonical = canonicalStructuralShapeFacts(shapes);
+    const restoredFromExponent = /* @__PURE__ */ new Set();
+    for (const fact of canonical) {
+      const model = x2ShapeDataModelForFact(fact);
+      if (model.kind !== "exponent-entry" || model.closedStructuralMantissa === void 0) continue;
+      const restored = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+      if (restored !== void 0) restoredFromExponent.add(restored);
+    }
+    const output = /* @__PURE__ */ new Set();
+    for (const fact of canonical) {
+      if (!restoredFromExponent.has(fact)) output.add(fact);
+    }
+    return output;
+  }
+  function structuralHexCarryNormalizedIntegerProduct(fact) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "mantissa" || model.radix !== "hex" || model.sign !== "" || model.hasDecimalPoint || model.digits.length <= 1 || !hasStructuralNonDecimalDigit(model.canonical)) {
+      return void 0;
+    }
+    const display = structuralHexCarryNormalizedIntegerDisplay(model.canonical);
+    if (display === void 0) return void 0;
+    const value = normalizePlainDecimal(display);
+    return value === void 0 ? void 0 : { value, display };
+  }
+  function structuralHexCarryNormalizedIntegerDisplay(raw) {
+    const digits = shapeDigits(raw);
+    if (digits.length === 0 || digits.length > 8 || digits.length !== raw.length) return void 0;
+    let carry = 0;
+    let display = "";
+    for (let index = digits.length - 1; index >= 0; index -= 1) {
+      const nibble = structuralHexNibbleValue(digits[index]);
+      if (nibble === void 0 || nibble > 14) return void 0;
+      const value = nibble + carry;
+      display = String(value % 10) + display;
+      carry = value >= 10 ? 1 : 0;
+    }
+    if (carry > 0) display = `${carry}${display}`;
+    return display.length <= 8 ? display : void 0;
+  }
+  function structuralHexCarryNormalizedPlusDecimalProduct(left, right) {
+    return structuralHexCarryNormalizedBinaryDecimalProduct(left, right, 16);
+  }
+  function structuralHexCarryNormalizedBinaryDecimalProduct(left, right, opcode) {
+    if (!/^[0-9]+$/u.test(left.value)) return void 0;
+    if (parseExactDecimal(right) === void 0) return void 0;
+    return structuralHexDecimalProductFromConcreteDecimalValue(
+      concreteDecimalBinaryValue(opcode, left.value, right)
+    );
+  }
+  function decimalBinaryStructuralHexCarryNormalizedProduct(left, right, opcode) {
+    if (!/^[0-9]+$/u.test(right.value)) return void 0;
+    if (parseExactDecimal(left) === void 0) return void 0;
+    return structuralHexDecimalProductFromConcreteDecimalValue(
+      concreteDecimalBinaryValue(opcode, left, right.value)
+    );
+  }
+  function structuralHexDecimalProductFromConcreteDecimalValue(value) {
+    if (value === void 0) return void 0;
+    const displayShape = exactDecimalDisplayShapeFact(value);
+    return displayShape === void 0 ? void 0 : { value, displayShape };
   }
   function structuralHexDigitPlusDecimalProduct(leftDigit, right) {
     if (!isVerifiedArithmeticHexDigit(leftDigit)) return void 0;
@@ -11788,19 +12527,26 @@ var MKProEmulatorBundle = (() => {
   }
   function stableBinaryExpressionValueFact(op2, opcode, yKey, xKey) {
     const structuralOperand = opcodeHasStructuralOperandSemantics(op2.opcode) && (stableExpressionKeyHasStructuralShapeEvidence(yKey, /* @__PURE__ */ new Set()) || stableExpressionKeyHasStructuralShapeEvidence(xKey, /* @__PURE__ */ new Set()));
-    const operands = COMMUTATIVE_STABLE_EXPR_OPCODES.has(op2.opcode) && !structuralOperand ? [yKey, xKey].sort() : [yKey, xKey];
+    const operands = stableExpressionCanCanonicalizeBinaryOperandOrder(op2.opcode, structuralOperand) ? [yKey, xKey].sort() : [yKey, xKey];
     return stableExpressionValueFact(opcode, operands.join(","));
   }
-  function plainXValueAfterNonPreservingOp(op2, producerIndex, x = void 0, y = void 0, xShape = void 0, yShape = void 0) {
-    const output = plainProducesStableExpressionValues(op2, x, y, xShape, yShape);
+  function stableExpressionCanCanonicalizeBinaryOperandOrder(opcode, structuralOperand) {
+    if (!COMMUTATIVE_STABLE_EXPR_OPCODES.has(opcode)) return false;
+    if (!structuralOperand) return true;
+    return opcode === 55 || opcode === 56 || opcode === 57;
+  }
+  function plainXValueAfterNonPreservingOp(op2, producerIndex, x = void 0, y = void 0, xShape = void 0, yShape = void 0, directYShape = void 0, directXShape = void 0) {
+    const output = plainProducesStableExpressionValues(op2, x, y, xShape, yShape, directYShape, directXShape);
     const opaque = plainProducesOpaqueExpressionValue(op2, producerIndex);
     if (opaque !== void 0) output.add(opaque);
     return output;
   }
-  function plainXShapeAfterNonPreservingOp(op2, x = void 0, y = void 0, xShape = void 0, yShape = void 0, options = {}) {
-    const output = plainProducesConcreteDecimalShapeFacts(op2, x, xShape, options);
+  function plainXShapeAfterNonPreservingOp(op2, x = void 0, y = void 0, xShape = void 0, yShape = void 0, options = {}, directYShape = void 0, directXShape = void 0) {
+    const output = plainProducesConcreteDecimalShapeFacts(op2, x, xShape, options, directXShape);
     for (const fact of plainProducesConcreteUnaryShapeFacts(op2, x, xShape)) output.add(fact);
-    for (const fact of plainProducesConcreteBinaryShapeFacts(op2, y, x, yShape, xShape, options)) output.add(fact);
+    for (const fact of plainProducesConcreteBinaryShapeFacts(op2, y, x, yShape, xShape, options, directYShape, directXShape)) {
+      output.add(fact);
+    }
     return output;
   }
   function analyzeX2StackEffect(op2) {
@@ -11903,6 +12649,152 @@ var MKProEmulatorBundle = (() => {
       if (!x2IsBackwardStackLiftX2SyncGapOp(ops, op2, index, context)) return void 0;
     }
     return void 0;
+  }
+  function x2PreviousStackLiftDuplicateYProducerIndex(ops, start, stackExposureEnd, state, context) {
+    if (!x2StateHasSameVisibleXAndY(state)) return void 0;
+    const producerIndex = x2PreviousStackLiftDuplicateYStackProducerIndex(ops, start, context);
+    if (producerIndex === void 0) return void 0;
+    return removingPreShiftLiftCanExposeStack(ops, stackExposureEnd) ? void 0 : producerIndex;
+  }
+  function x2PreviousStackLiftDuplicateYStackProducerIndex(ops, end, context) {
+    for (let index = end - 1; index >= 0; index -= 1) {
+      const op2 = ops[index];
+      if (x2IsStackLiftAndX2SyncProducer(op2)) return index;
+      if (isKnownReturnCallOp(op2) && x2KnownReturnCallReachesStackLiftAndX2Sync(ops, op2, context)) return index;
+      if (!x2IsBackwardDuplicateYStackGapOp(ops, op2, index, context)) return void 0;
+    }
+    return void 0;
+  }
+  function x2IsBackwardDuplicateYStackGapOp(ops, op2, index, context) {
+    if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) return false;
+    if (op2.kind === "label") return !context.labelEntries.has(index);
+    if (isKnownReturnCallOp(op2)) return x2SimpleDirectReturnPreservesStack(ops, op2, context);
+    if (x2IsKnownFallthroughStackPreservingConditional(op2)) return true;
+    switch (op2.kind) {
+      case "store":
+      case "indirect-store":
+      case "orphan-address":
+        return true;
+      case "plain":
+        return analyzeX2StackEffect(op2).stackPreserves;
+      default:
+        return false;
+    }
+  }
+  function x2IsKnownFallthroughStackPreservingConditional(op2) {
+    if (op2.kind !== "cjump" && op2.kind !== "loop" && op2.kind !== "indirect-cjump") return false;
+    if (op2.kind === "indirect-cjump" && knownIndirectFlowTarget(op2) === void 0) return false;
+    if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) return false;
+    return analyzeX2StackEffect(op2).stackPreserves;
+  }
+  function planX2ReplacementStackLift(ops, replacementStart, stackExposureEnd, state, context, initiallyExposesStackLift, options = {}) {
+    const stackLiftProducerIndex = initiallyExposesStackLift && options.allowDuplicateYStackProof !== false ? x2PreviousStackLiftDuplicateYProducerIndex(
+      ops,
+      replacementStart,
+      stackExposureEnd,
+      state,
+      context
+    ) : void 0;
+    const stackLiftAlreadySupplied = stackLiftProducerIndex !== void 0 && options.invalidatedProducerIndexes?.has(stackLiftProducerIndex) !== true;
+    return {
+      initiallyExposesStackLift,
+      stackLiftProducerIndex,
+      stackLiftAlreadySupplied,
+      exposesStackLift: initiallyExposesStackLift && !stackLiftAlreadySupplied
+    };
+  }
+  function planRecallRemovalWithStackScheduler(ops, recallIndex, x2RegisterState, x2ValueState, context, options = {}) {
+    const stackSchedulerStart = options.stackSchedulerStart ?? recallIndex;
+    const stackExposureEnd = options.stackExposureEnd ?? recallIndex;
+    const stackSchedulerState = options.stackSchedulerState ?? x2ValueState;
+    const canUseCache = (options.removedIndexes?.size ?? 0) === 0;
+    if (canUseCache) {
+      const cached = cachedRecallRemovalStackSchedulerPlan(
+        ops,
+        recallIndex,
+        x2RegisterState,
+        x2ValueState,
+        context,
+        stackSchedulerStart,
+        stackExposureEnd,
+        stackSchedulerState
+      );
+      if (cached !== void 0) return cached.result;
+    }
+    const analysis = analyzeRecallRemoval(ops, recallIndex, x2RegisterState, x2ValueState, context);
+    if (analysis === void 0) {
+      if (canUseCache) {
+        cacheRecallRemovalStackSchedulerPlan(
+          ops,
+          recallIndex,
+          x2RegisterState,
+          x2ValueState,
+          context,
+          stackSchedulerStart,
+          stackExposureEnd,
+          stackSchedulerState,
+          void 0
+        );
+      }
+      return void 0;
+    }
+    const stackLift = planX2ReplacementStackLift(
+      ops,
+      stackSchedulerStart,
+      stackExposureEnd,
+      stackSchedulerState,
+      context,
+      analysis.exposesStackLift === true && analysis.exposesX2Restore !== true,
+      { invalidatedProducerIndexes: options.removedIndexes }
+    );
+    const result = {
+      analysis,
+      stackLiftProducerIndex: stackLift.stackLiftProducerIndex,
+      stackLiftAlreadySupplied: stackLift.stackLiftAlreadySupplied,
+      removable: analysis.removable || stackLift.stackLiftAlreadySupplied
+    };
+    if (canUseCache) {
+      cacheRecallRemovalStackSchedulerPlan(
+        ops,
+        recallIndex,
+        x2RegisterState,
+        x2ValueState,
+        context,
+        stackSchedulerStart,
+        stackExposureEnd,
+        stackSchedulerState,
+        result
+      );
+    }
+    return result;
+  }
+  function cachedRecallRemovalStackSchedulerPlan(ops, recallIndex, x2RegisterState, x2ValueState, context, stackSchedulerStart, stackExposureEnd, stackSchedulerState) {
+    for (const entry of recallRemovalStackSchedulerPlanCache.get(ops)?.get(recallIndex) ?? []) {
+      if (entry.x2RegisterState === x2RegisterState && entry.x2ValueState === x2ValueState && entry.context === context && entry.stackSchedulerStart === stackSchedulerStart && entry.stackExposureEnd === stackExposureEnd && entry.stackSchedulerState === stackSchedulerState) return entry;
+    }
+    return void 0;
+  }
+  function cacheRecallRemovalStackSchedulerPlan(ops, recallIndex, x2RegisterState, x2ValueState, context, stackSchedulerStart, stackExposureEnd, stackSchedulerState, result) {
+    let byIndex = recallRemovalStackSchedulerPlanCache.get(ops);
+    if (byIndex === void 0) {
+      byIndex = /* @__PURE__ */ new Map();
+      recallRemovalStackSchedulerPlanCache.set(ops, byIndex);
+    }
+    const entry = {
+      x2RegisterState,
+      x2ValueState,
+      context,
+      stackSchedulerStart,
+      stackExposureEnd,
+      stackSchedulerState,
+      result
+    };
+    const entries = byIndex.get(recallIndex);
+    if (entries === void 0) {
+      byIndex.set(recallIndex, [entry]);
+    } else {
+      entries.push(entry);
+    }
   }
   function x2KnownReturnCallReachesStackLiftAndX2Sync(ops, call, context) {
     return x2KnownReturnCallStackLiftAndX2SyncState(
@@ -12065,6 +12957,66 @@ var MKProEmulatorBundle = (() => {
       /* @__PURE__ */ new Set()
     );
   }
+  function transferX2ValueStateThroughKnownTransparentReturnCall(ops, call, input, context, options = {}, producerIndex) {
+    if (input === void 0 || !x2KnownReturnCallPreservesStackXAndX2(ops, call, context)) return void 0;
+    const targetIndex = knownReturnCallTargetIndex(call, context);
+    if (targetIndex === void 0) return void 0;
+    const entered = transferX2ValueStateForEdge(input, call, "jump", options, producerIndex);
+    return transferX2ValueStateThroughTransparentReturnRange(
+      ops,
+      targetIndex,
+      entered,
+      context,
+      options,
+      /* @__PURE__ */ new Set()
+    );
+  }
+  function transferX2ValueStateThroughTransparentReturnRange(ops, targetIndex, input, context, options, active) {
+    if (input === void 0 || active.has(targetIndex)) return void 0;
+    const startIndex = ops[targetIndex]?.kind === "label" ? targetIndex + 1 : targetIndex;
+    active.add(targetIndex);
+    let state = input;
+    for (let index = startIndex; index < ops.length; index += 1) {
+      const op2 = ops[index];
+      if (op2.kind === "label") {
+        if (context.labelEntries.has(index)) {
+          active.delete(targetIndex);
+          return void 0;
+        }
+        state = transferX2ValueStateForEdge(state, op2, "normal", options, index);
+        continue;
+      }
+      if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) {
+        active.delete(targetIndex);
+        return void 0;
+      }
+      if (op2.kind === "return") {
+        active.delete(targetIndex);
+        return transferX2ValueStateForEdge(state, op2, "normal", options, index);
+      }
+      if (isKnownReturnCallOp(op2)) {
+        if (!x2KnownReturnCallPreservesStackXAndX2(ops, op2, context)) {
+          active.delete(targetIndex);
+          return void 0;
+        }
+        const nestedTarget = knownReturnCallTargetIndex(op2, context);
+        const entered = transferX2ValueStateForEdge(state, op2, "jump", options, index);
+        state = nestedTarget === void 0 ? void 0 : transferX2ValueStateThroughTransparentReturnRange(ops, nestedTarget, entered, context, options, active);
+        if (state === void 0) {
+          active.delete(targetIndex);
+          return void 0;
+        }
+        continue;
+      }
+      if (!x2IsStackXAndX2PreservingLinearOp(op2)) {
+        active.delete(targetIndex);
+        return void 0;
+      }
+      state = transferX2ValueStateForEdge(state, op2, "normal", options, index);
+    }
+    active.delete(targetIndex);
+    return void 0;
+  }
   function x2IsFallthroughX2PreservingGapOp(op2) {
     if (op2.kind !== "cjump" && op2.kind !== "loop" && op2.kind !== "indirect-cjump") return false;
     if (op2.kind === "indirect-cjump" && knownIndirectFlowTarget(op2) === void 0) return false;
@@ -12200,6 +13152,7 @@ var MKProEmulatorBundle = (() => {
   var x2DotRestoreGapStatesCache = /* @__PURE__ */ new WeakMap();
   var x2ImmediateSyncStatesCache = /* @__PURE__ */ new WeakMap();
   var recallRemovalAnalysisCache = /* @__PURE__ */ new WeakMap();
+  var recallRemovalStackSchedulerPlanCache = /* @__PURE__ */ new WeakMap();
   function computeX2RegisterStates(ops) {
     if (ops.length === 0) return [];
     const cached = x2RegisterStatesCache.get(ops);
@@ -12480,20 +13433,23 @@ var MKProEmulatorBundle = (() => {
     return false;
   }
   function x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, context) {
+    return x2PreviousNormalizedDecimalRestoreGapSyncIndex(ops, index, context) !== void 0;
+  }
+  function x2PreviousNormalizedDecimalRestoreGapSyncIndex(ops, index, context) {
     for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
       const op2 = ops[cursor];
       if (op2.kind === "label") continue;
-      if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) return false;
+      if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) return void 0;
       switch (op2.kind) {
         case "plain": {
           const effect = plainX2Effect(op2);
-          if (effect === "affects" || effect === "restores") return true;
+          if (effect === "affects" || effect === "restores") return cursor;
           if (effect === "preserves") continue;
-          return false;
+          return void 0;
         }
         case "recall":
         case "indirect-recall":
-          return true;
+          return cursor;
         case "store":
         case "indirect-store":
         case "orphan-address":
@@ -12502,18 +13458,27 @@ var MKProEmulatorBundle = (() => {
           continue;
         case "indirect-cjump":
           if (knownIndirectFlowTarget(op2) !== void 0) continue;
-          return false;
+          return void 0;
         case "call":
         case "indirect-call":
-          if (context !== void 0 && isKnownReturnCallOp(op2) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op2, context)) continue;
-          return false;
+          if (context !== void 0 && isKnownReturnCallOp(op2) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op2, context)) {
+            continue;
+          }
+          return void 0;
         default:
-          return false;
+          return void 0;
       }
     }
-    return false;
+    return void 0;
   }
   function x2ShapeDataModelForFact(fact) {
+    const cached = X2_SHAPE_DATA_MODEL_CACHE.get(fact);
+    if (cached !== void 0) return cached;
+    const result = x2ShapeDataModelForFactImpl(fact);
+    X2_SHAPE_DATA_MODEL_CACHE.set(fact, result);
+    return result;
+  }
+  function x2ShapeDataModelForFactImpl(fact) {
     const mantissa = /^mantissa:(.*):decimal$/u.exec(fact);
     if (mantissa !== null) {
       return decimalMantissaShapeRawIsValid(mantissa[1]) ? decimalMantissaDataModel(mantissa[1]) : { kind: "unknown", raw: fact, safety: "unknown" };
@@ -12643,10 +13608,19 @@ var MKProEmulatorBundle = (() => {
   }
   function x2ClosedExponentDisplayShapeFact(fact) {
     const model = x2ShapeDataModelForFact(fact);
+    const closed = x2ClosedExponentDisplayDataModel(model);
+    return closed === void 0 ? void 0 : x2ShapeFactFromDataModel(closed);
+  }
+  function x2ClosedExponentDisplayDataModel(model) {
     if (model.kind !== "exponent-entry") return void 0;
-    if (model.mantissa.radix === "decimal") return model.closedDecimalDisplay;
-    if (model.closedStructuralMantissa === void 0) return void 0;
-    return x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+    if (model.mantissa.radix !== "decimal") return model.closedStructuralMantissa;
+    const fact = model.closedDecimalDisplay;
+    return fact === void 0 ? void 0 : x2ShapeDataModelForFact(fact);
+  }
+  function x2StructuralMantissaDropFirstDigitShapeModel(model) {
+    if (model.radix !== "hex" && model.radix !== "super") return void 0;
+    const dropped = dropFirstStructuralMantissaDigit(model.canonical);
+    return dropped === void 0 ? void 0 : structuralMantissaDataModel("hex", dropped, "structuralOnly");
   }
   function pureMantissaDigitRunFromShapeFact(fact) {
     const model = x2ShapeDataModelForFact(fact);
@@ -12655,18 +13629,59 @@ var MKProEmulatorBundle = (() => {
     }
     return model.digits.join("");
   }
-  function x2StructuralMantissaFirstDigitSpliceShapeFact(source, target) {
-    const sourceDigit = x2FirstMantissaDigitFromShapeFact(source);
-    if (sourceDigit === void 0) return void 0;
-    const targetModel = firstDigitSpliceTargetMantissaModel(target);
-    if (targetModel === void 0 || targetModel.radix !== "decimal" && targetModel.radix !== "hex" && targetModel.radix !== "super" || targetModel.sign !== "" || targetModel.digits.length === 0) {
+  function x2StructuralMantissaFirstDigitSpliceDataModel(source, target) {
+    const sourceDigit = structuralVpFirstDigitSourceDigitFromModel(source);
+    if (sourceDigit === void 0 || target.radix !== "decimal" && target.radix !== "hex" && target.radix !== "super" || target.sign !== "" || target.digits.length === 0) {
       return void 0;
     }
-    const spliced = replaceFirstShapeDigit(targetModel.canonical, sourceDigit);
+    const spliced = replaceFirstShapeDigit(target.canonical, sourceDigit);
     if (spliced === void 0) return void 0;
-    const radix = structuralFirstDigitSpliceRadix(targetModel, sourceDigit, spliced);
+    const radix = structuralFirstDigitSpliceRadix(target, sourceDigit, spliced);
     if (radix === void 0) return void 0;
-    return x2MantissaShapeFactFromModel(structuralMantissaDataModel(radix, spliced, "structuralOnly"));
+    return structuralMantissaDataModel(radix, spliced, "structuralOnly");
+  }
+  function x2MantissaFirstDigitSpliceModel(source, target) {
+    const decimal2 = x2DecimalMantissaFirstDigitSpliceModel(source, target);
+    const structural = x2StructuralMantissaFirstDigitSpliceDataModel(source, target);
+    return decimal2 === void 0 && structural === void 0 ? void 0 : { decimal: decimal2, structural };
+  }
+  function x2DecimalMantissaFirstDigitSpliceModel(source, target) {
+    const sourceDigit = decimalVpFirstDigitSourceDigitFromModel(source);
+    if (sourceDigit === void 0 || target.radix !== "decimal" || target.sign !== "" || target.digits.length === 0) {
+      return void 0;
+    }
+    const spliced = replaceFirstShapeDigit(target.canonical, sourceDigit);
+    if (spliced === void 0 || decimalMantissaDigitCount(spliced) > 8) return void 0;
+    return normalizeDecimalMantissaEntry(spliced) === void 0 ? void 0 : decimalMantissaDataModel(spliced);
+  }
+  function x2MantissaStoreVpSpliceModel(source) {
+    const decimal2 = x2DecimalStoreVpSpliceModel(source);
+    const structural = x2StructuralStoreVpSpliceModel(source);
+    return decimal2 === void 0 && structural === void 0 ? void 0 : { decimal: decimal2, structural };
+  }
+  function x2DecimalStoreVpSpliceModel(source) {
+    if (source.radix !== "decimal") return void 0;
+    const spliced = decimalStoreVpSpliceMantissa(source.canonical);
+    return spliced === void 0 ? void 0 : decimalMantissaDataModel(spliced);
+  }
+  function x2StructuralStoreVpSpliceModel(source) {
+    return x2StructuralMantissaDropFirstDigitShapeModel(source);
+  }
+  function x2MantissaIndirectFlowVpSpliceModel(source) {
+    const decimal2 = x2DecimalIndirectFlowVpSpliceModel(source);
+    const structural = x2StructuralIndirectFlowVpSpliceModel(source);
+    return decimal2 === void 0 && structural === void 0 ? void 0 : { decimal: decimal2, structural };
+  }
+  function x2DecimalIndirectFlowVpSpliceModel(source) {
+    const spliced = indirectFlowVpSpliceMantissa(source);
+    return spliced === void 0 ? void 0 : decimalMantissaDataModel(spliced);
+  }
+  function x2StructuralIndirectFlowVpSpliceModel(source) {
+    if (source.radix !== "hex" && source.radix !== "super") return void 0;
+    if (source.digits.length === 0) return void 0;
+    const spliced = replaceFirstShapeDigit(source.canonical, indirectFlowVpFirstDigit(source));
+    if (spliced === void 0 || shapeDigits(spliced).length > 8) return void 0;
+    return structuralMantissaDataModel("hex", spliced, "structuralOnly");
   }
   function firstDigitSpliceTargetMantissaModel(fact) {
     const model = x2ShapeDataModelForFact(fact);
@@ -12710,7 +13725,7 @@ var MKProEmulatorBundle = (() => {
     return state !== void 0 && !x2ValueSetHasConcreteDecimal(state.x2) && x2ShapeSetHasOnlyDotSafeStructuralMantissas(effectiveX2StateShape(state));
   }
   function x2CanUseVpDotRestoreAt(ops, index, state) {
-    return x2StateHasVpDotSafeStructuralContextX2(state) && x2VpDotRestoreGapIsSafe(ops, index);
+    return x2StateHasVpDotSafeStructuralContextX2(state) && x2VpDotRestoreGapBeforeIndex(ops, index).vpIndex !== void 0;
   }
   function x2StateHasVpDotSafeStructuralContextX2(state) {
     if (state === void 0 || state.structuralVpContext?.kind !== "exponent") return false;
@@ -12739,20 +13754,30 @@ var MKProEmulatorBundle = (() => {
     }
     return false;
   }
-  function x2VpDotRestoreGapIsSafe(ops, index) {
+  function x2VpDotRestoreGapBeforeIndex(ops, index) {
     let preservingNonEmpty = 0;
     for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
       const op2 = ops[cursor];
       if (op2.kind === "label" || op2.kind === "orphan-address") continue;
-      if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) return false;
-      if (op2.kind !== "plain") return false;
-      if (op2.opcode === 12) return preservingNonEmpty <= 1;
+      if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) {
+        return { vpIndex: void 0, blockedIndex: cursor, preservingNonEmptyCount: preservingNonEmpty };
+      }
+      if (op2.kind !== "plain") {
+        return { vpIndex: void 0, blockedIndex: cursor, preservingNonEmptyCount: preservingNonEmpty };
+      }
+      if (op2.opcode === 12) {
+        return preservingNonEmpty <= 1 ? { vpIndex: cursor, blockedIndex: void 0, preservingNonEmptyCount: preservingNonEmpty } : { vpIndex: void 0, blockedIndex: cursor, preservingNonEmptyCount: preservingNonEmpty };
+      }
       if (isFreeStandingX2EmptyOp(op2)) continue;
-      if (plainX2Effect(op2) !== "preserves" || hasIrRoles(op2)) return false;
+      if (plainX2Effect(op2) !== "preserves" || hasIrRoles(op2)) {
+        return { vpIndex: void 0, blockedIndex: cursor, preservingNonEmptyCount: preservingNonEmpty };
+      }
       preservingNonEmpty += 1;
-      if (preservingNonEmpty > 1) return false;
+      if (preservingNonEmpty > 1) {
+        return { vpIndex: void 0, blockedIndex: cursor, preservingNonEmptyCount: preservingNonEmpty };
+      }
     }
-    return false;
+    return { vpIndex: void 0, blockedIndex: void 0, preservingNonEmptyCount: preservingNonEmpty };
   }
   function x2StateHasUnsafeDotRestoreShapeX2(state) {
     const safety = x2RestoreSafety(state);
@@ -12796,6 +13821,19 @@ var MKProEmulatorBundle = (() => {
       if (rightShapes.has(shape)) return true;
     }
     return false;
+  }
+  function x2SharedStructuralRestoreShapeFacts(visible, source) {
+    const visibleRestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(visible));
+    const visibleExactDisplays = x2ShapeSetExactDecimalDisplays(visible);
+    const output = /* @__PURE__ */ new Set();
+    for (const sourceFact of canonicalStructuralShapeFacts(source)) {
+      const sourceRestoreShapes = structuralRestoreShapeFacts(/* @__PURE__ */ new Set([sourceFact]));
+      if (!structuralShapeSetHasIntersection(visibleRestoreShapes, sourceRestoreShapes) && !structuralShapeSetHasExactDecimalDisplayIntersection(visibleExactDisplays, sourceRestoreShapes)) {
+        continue;
+      }
+      for (const fact of structuralMantissaShapeFacts(sourceRestoreShapes)) output.add(fact);
+    }
+    return output;
   }
   function x2StructuralRestoreShapeFacts(input) {
     return structuralRestoreShapeFacts(canonicalStructuralShapeFacts(input));
@@ -12881,6 +13919,53 @@ var MKProEmulatorBundle = (() => {
   function x2StateIsClosedPlainContext(state) {
     return state?.entry.kind === "closed" && (state.vpContext === void 0 || state.vpContext.kind === "none") && (state.structuralVpContext === void 0 || state.structuralVpContext.kind === "none");
   }
+  function x2StateIsClosedDotRestoreValueContext(state) {
+    if (state?.entry.kind !== "closed") return false;
+    const structuralEntry = state.structuralEntry?.kind ?? "none";
+    if (structuralEntry !== "none") return false;
+    const decimalVpContext = state.vpContext?.kind ?? "none";
+    if (decimalVpContext !== "none" && decimalVpContext !== "exponent") return false;
+    const structuralVpContext = state.structuralVpContext?.kind ?? "none";
+    return structuralVpContext === "none" || structuralVpContext === "exponent";
+  }
+  var X2_UNARY_ABS = 49;
+  var X2_UNARY_SIGN = 50;
+  var X2_UNARY_INTEGER = 52;
+  var X2_UNARY_FRACTION = 53;
+  function x2StateHasVisibleUnaryNoop(state, opcode) {
+    if (state === void 0 || !x2StateIsClosedDotRestoreValueContext(state)) return false;
+    switch (opcode) {
+      case X2_UNARY_FRACTION:
+        return x2StateHasFractionalNoopVisibleX(state);
+      case X2_UNARY_INTEGER:
+        return x2ShapeSetHasExactIntegerDisplay(effectiveVisibleXStateShape(state));
+      case X2_UNARY_ABS:
+        return x2ShapeSetHasExactNonNegativeDisplay(effectiveVisibleXStateShape(state));
+      case X2_UNARY_SIGN:
+        return x2StateHasSignNoopVisibleX(state);
+      default:
+        return false;
+    }
+  }
+  function x2StateHasFractionalNoopVisibleX(state) {
+    for (const fact of state.x) {
+      const visible = x2ValueFactRestoredVisibleDecimal(fact);
+      if (visible !== void 0 && isFractionalNoopVisibleDecimal(visible)) return true;
+    }
+    for (const visible of x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(state))) {
+      if (isFractionalNoopVisibleDecimal(visible)) return true;
+    }
+    return false;
+  }
+  function x2StateHasSignNoopVisibleX(state) {
+    for (const visible of x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(state))) {
+      if (visible === "-1" || visible === "0" || visible === "1") return true;
+    }
+    return false;
+  }
+  function isFractionalNoopVisibleDecimal(value) {
+    return value === "0" || /^-?0\.[0-9]+$/u.test(value);
+  }
   function x2StateHasSameDotRestoreValueInXAndX2(state) {
     return x2ValueSetHasIntersection(state?.x, state?.x2) || x2StateHasSameDotSafeDecimalInXAndX2(state) || x2StateHasSameDotSafeStructuralMantissaInXAndX2(state);
   }
@@ -12913,15 +13998,7 @@ var MKProEmulatorBundle = (() => {
     return x2CanUseDotRestoreAt(ops, index, state, dotSafe, immediateSync, context) || sourceProvesFreeStandingRestore && x2NormalizedDecimalRestoreGapIsFreeStanding(ops, index, context);
   }
   function x2CanUseClosedSignChangeDotSourceAt(ops, index, state, context) {
-    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-      const op2 = ops[cursor];
-      if (op2.kind === "label" || op2.kind === "orphan-address") continue;
-      if (isFreeStandingX2EmptyOp(op2)) continue;
-      if (context !== void 0 && isKnownReturnCallOp(op2) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op2, context)) continue;
-      if (hasRewriteBarrier(op2)) return false;
-      return isFreeStandingX2SignChangeOp(op2) && x2StateIsClosedPlainContext(state) && (!x2StateHasUnsafeDotRestoreShapeX2(state) || x2StateHasOnlyDotSafeStructuralMantissaX2(state)) && x2StateHasSameClosedSignChangeSourceInXAndX2(state);
-    }
-    return false;
+    return x2RestoreRunBeforeIndex(ops, index, context).sawSignRestore && x2StateIsClosedPlainContext(state) && (!x2StateHasUnsafeDotRestoreShapeX2(state) || x2StateHasOnlyDotSafeStructuralMantissaX2(state)) && x2StateHasSameClosedSignChangeSourceInXAndX2(state);
   }
   function isFreeStandingX2SignChangeOp(op2) {
     return op2.kind === "plain" && op2.opcode === X2_SIGN_CHANGE_OPCODE && !hasRewriteBarrier(op2) && !isDisplayFocusSensitive(op2) && !hasIrRoles(op2);
@@ -12941,73 +14018,816 @@ var MKProEmulatorBundle = (() => {
   function x2StatesHaveSameVpEntrySource(left, right) {
     return stringSetsHaveIntersection(vpEntrySourceKeys(left), vpEntrySourceKeys(right));
   }
-  function x2StatesHaveSameVpEntrySignSource(left, right) {
-    if (left === void 0 || right === void 0) return false;
-    return stringSetsHaveIntersection(
-      vpEntrySignSourceKeys(left),
-      mergeStringSets(vpEntrySourceKeys(right), vpEntrySignSourceKeys(right))
-    );
-  }
-  function x2StatesHaveSameExplicitVpEntrySignSource(left, right) {
-    if (left === void 0 || right === void 0) return false;
-    return stringSetsHaveIntersection(
-      explicitVpEntrySignSourceKeys(left),
-      explicitVpEntrySignSourceKeys(right)
-    );
-  }
-  function x2StateHasExplicitVpEntrySignSourceForProvedVp(beforeRun, beforeVp) {
-    if (beforeRun === void 0 || beforeVp === void 0) return false;
-    return stringSetsHaveIntersection(
-      explicitVpEntrySignSourceKeys(beforeRun),
-      mergeStringSets(vpEntrySourceKeys(beforeVp), explicitVpEntrySignSourceKeys(beforeVp))
-    );
-  }
-  function x2StateCanDiscardRestoreRunBeforeProvedVp(beforeRun, beforeVp, options = {}) {
+  function analyzeX2VpSourceMatch(beforeRun, beforeVp, options = {}) {
     const context = analyzeX2VpShapeContext(beforeRun);
+    const beforeVpContext = analyzeX2VpShapeContext(beforeVp);
+    const beforeRunSource = x2VpEntrySourceModel(beforeRun);
+    const beforeVpSource = x2VpEntrySourceModel(beforeVp);
+    const beforeRunSignSource = x2VpEntrySignSourceModel(beforeRun);
+    const beforeVpSignSource = x2VpEntrySignSourceModel(beforeVp);
+    const beforeRunExplicitSignSource = x2ExplicitVpEntrySignSourceModel(beforeRun);
+    const beforeVpExplicitSignSource = x2ExplicitVpEntrySignSourceModel(beforeVp);
+    const result = (canDiscardRestoreRun, reason) => ({
+      canDiscardRestoreRun,
+      reason,
+      beforeRunSource,
+      beforeVpSource,
+      beforeRunSignSource,
+      beforeVpSignSource,
+      beforeRunExplicitSignSource,
+      beforeVpExplicitSignSource
+    });
+    if (sameX2ExponentShapeContext(context, beforeVpContext)) return result(true, "same-exponent-context");
     if (context.kind === "active-mantissa") {
-      if (stringSetsHaveIntersection(activeMantissaVpSourceKeys(context), vpEntrySourceKeys(beforeVp))) return true;
-    } else if (x2StatesHaveSameVpEntrySource(beforeRun, beforeVp)) {
-      return true;
+      const activeSource = x2VpSourceModel(context.mantissa, void 0);
+      if (stringSetsHaveIntersection(activeSource.keys, beforeVpSource.keys)) {
+        return result(true, "active-mantissa-source");
+      }
+    } else if (stringSetsHaveIntersection(beforeRunSource.keys, beforeVpSource.keys)) {
+      return result(true, "entry-source");
     }
-    return options.hasSignRestore === true && x2StateHasExplicitVpEntrySignSourceForProvedVp(beforeRun, beforeVp);
-  }
-  function x2HasOnlyRestoreGapBeforeVp(ops, start, context) {
-    const scan = x2RestoreGapBeforeVp(ops, start, context);
-    return scan.sawRestoreGap && scan.vpIndex !== void 0;
-  }
-  function x2ReplacementDotHasOnlyRestoreGapBeforeVp(ops, start, context) {
-    return x2RestoreGapBeforeVp(ops, start, context).vpIndex !== void 0;
-  }
-  function x2HasSignRestoreGapBeforeVp(ops, start, context) {
-    const scan = x2RestoreGapBeforeVp(ops, start, context);
-    return scan.sawSignRestore && scan.vpIndex !== void 0;
+    if (options.hasSignRestore === true) {
+      const rightSignKeys = mergeStringSets(beforeVpSource.keys, beforeVpSignSource.keys);
+      if (stringSetsHaveIntersection(
+        nonZeroVpSourceKeys(beforeRunSignSource.keys),
+        nonZeroVpSourceKeys(rightSignKeys)
+      )) {
+        return result(true, "nonzero-sign-source");
+      }
+      const rightExplicitSignKeys = mergeStringSets(beforeVpSource.keys, beforeVpExplicitSignSource.keys);
+      if (stringSetsHaveIntersection(beforeRunExplicitSignSource.keys, rightExplicitSignKeys)) {
+        return result(true, "explicit-sign-source");
+      }
+    }
+    return result(false, "source-mismatch");
   }
   function x2RestoreGapBeforeVp(ops, start, context) {
-    let sawRestoreGap = false;
-    let sawSign = false;
-    for (let index = start; index < ops.length; index += 1) {
-      const op2 = ops[index];
-      if (op2.kind === "label" || op2.kind === "orphan-address") continue;
-      if (isFreeStandingX2RestoreGapOp(op2)) {
-        sawRestoreGap = true;
-        if (isFreeStandingX2SignChangeOp(op2)) sawSign = true;
-        continue;
-      }
-      if (context !== void 0 && isKnownReturnCallOp(op2) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op2, context)) continue;
-      const isVp = isFreeStandingX2VpOp(op2);
+    const scan = x2ScanRestoreRunBeforeTerminal(
+      ops,
+      start,
+      context,
+      (op2) => {
+        if (isFreeStandingX2RestoreGapOp(op2)) return "remove";
+        return isFreeStandingX2VpOp(op2) ? "terminal" : "block";
+      },
+      { allowEmptyRunTerminal: true }
+    );
+    return {
+      vpIndex: scan.terminalIndex,
+      blockedIndex: scan.blockedIndex,
+      sawRestoreGap: scan.sawRestoreGap,
+      sawSignRestore: scan.sawSignRestore
+    };
+  }
+  function analyzeX2VpRestoreGapSource(ops, start, beforeRun, beforeVp, context, options = {}) {
+    const scan = x2RestoreGapBeforeVp(ops, start, context);
+    const hasSignRestore = options.useScannedSignRestores !== false && scan.sawSignRestore || options.includesLeadingSignRestore === true;
+    const transition = analyzeX2VpShapeTransition(
+      beforeRun,
+      "proved-vp",
+      { beforeVp, hasSignRestore }
+    );
+    const sourceMatch = transition.sourceMatch ?? analyzeX2VpSourceMatch(beforeRun, beforeVp, { hasSignRestore });
+    const signRestoreSourceProof = x2VpSignRestoreSourceProof(
+      sourceMatch,
+      transition,
+      { hasSignRestore, hasVp: scan.vpIndex !== void 0 }
+    );
+    return {
+      hasOnlyRestoreGapBeforeVp: scan.sawRestoreGap && scan.vpIndex !== void 0,
+      replacementDotHasOnlyRestoreGapBeforeVp: scan.vpIndex !== void 0,
+      hasSignRestoreGapBeforeVp: hasSignRestore && scan.vpIndex !== void 0,
+      sourceMatch,
+      signRestoreSourceProof,
+      beforeRunSource: sourceMatch.beforeRunSource,
+      beforeVpSource: sourceMatch.beforeVpSource,
+      beforeRunSignSource: sourceMatch.beforeRunSignSource,
+      beforeVpSignSource: sourceMatch.beforeVpSignSource,
+      canDiscardRestoreRunBeforeProvedVp: transition.canDiscardRestoreRun,
+      canDiscardShapeSignPairBeforeProvedVp: transition.canDiscardSignPair,
+      canDiscardSignRestoreRunBeforeProvedVp: signRestoreSourceProof.canDiscard,
+      hasSameExplicitVpEntrySignSource: stringSetsHaveIntersection(
+        explicitVpEntrySignSourceKeys(beforeRun),
+        explicitVpEntrySignSourceKeys(beforeVp)
+      )
+    };
+  }
+  function x2VpSignRestoreSourceProof(sourceMatch, transition, options) {
+    if (transition.canDiscardSignPair) return { canDiscard: true, reason: "shape-transition" };
+    if (!options.hasSignRestore || !options.hasVp) {
+      return { canDiscard: false, reason: "no-sign-restore-source" };
+    }
+    if (sourceMatch.reason === "nonzero-sign-source") {
+      return { canDiscard: true, reason: "source-match-nonzero-sign" };
+    }
+    if (sourceMatch.reason === "explicit-sign-source") {
+      return { canDiscard: true, reason: "source-match-explicit-sign" };
+    }
+    const signTargets = mergeStringSets(sourceMatch.beforeVpSource.keys, sourceMatch.beforeVpSignSource.keys);
+    if (stringSetsHaveIntersection(
+      nonZeroVpSourceKeys(sourceMatch.beforeRunSignSource.keys),
+      nonZeroVpSourceKeys(signTargets)
+    )) {
+      return { canDiscard: true, reason: "shared-sign-source" };
+    }
+    return { canDiscard: false, reason: "no-sign-restore-source" };
+  }
+  function x2PlanRestoreRunBeforeProvedVp(ops, vpIndex, states, context, options = {}) {
+    const scan = x2RestoreRunBeforeIndex(ops, vpIndex, context);
+    const firstRunIndex = scan.removableIndexes[0];
+    if (firstRunIndex === void 0) {
       return {
-        vpIndex: isVp ? index : void 0,
-        blockedIndex: isVp ? void 0 : index,
-        sawRestoreGap,
-        sawSignRestore: sawSign
+        removableIndexes: [],
+        firstRunIndex,
+        scan,
+        source: void 0,
+        reason: "no-restore-run"
+      };
+    }
+    if (options.requireSignRestore !== false && !scan.sawSignRestore) {
+      return {
+        removableIndexes: [],
+        firstRunIndex,
+        scan,
+        source: void 0,
+        reason: "no-sign-restore"
+      };
+    }
+    const beforeRun = states[firstRunIndex];
+    const source = analyzeX2VpRestoreGapSource(
+      ops,
+      firstRunIndex,
+      beforeRun,
+      states[vpIndex],
+      context,
+      {
+        useScannedSignRestores: options.useScannedSignRestores ?? !x2StateIsClosedPlainContext(beforeRun)
+      }
+    );
+    if (!source.canDiscardRestoreRunBeforeProvedVp) {
+      return {
+        removableIndexes: [],
+        firstRunIndex,
+        scan,
+        source,
+        reason: "source-mismatch"
       };
     }
     return {
-      vpIndex: void 0,
-      blockedIndex: void 0,
-      sawRestoreGap,
-      sawSignRestore: sawSign
+      removableIndexes: scan.removableIndexes,
+      firstRunIndex,
+      scan,
+      source,
+      reason: "proved-vp-source"
     };
+  }
+  function x2PlanRestoreRunBeforeTerminal(ops, startIndex, state, context, operation, isTerminal) {
+    const transition = analyzeX2VpShapeTransition(state, operation);
+    let reason = "vp-context-overwritten";
+    let previousRestoreIndex;
+    let canScan = transition.canDiscardRestoreRun;
+    if (!canScan && (operation === "fresh-digit" || operation === "hard-overwrite")) {
+      previousRestoreIndex = x2PreviousFreeStandingRestoreExecutableIndex(ops, startIndex);
+      if (!x2StateIsClosedPlainContext(state)) {
+        reason = "transition-blocked";
+      } else if (previousRestoreIndex !== void 0) {
+        reason = "previous-restore-source";
+      } else {
+        canScan = true;
+        reason = operation === "fresh-digit" ? "closed-context-fresh-digit" : "closed-context-hard-overwrite";
+      }
+    } else if (!canScan) {
+      reason = "transition-blocked";
+    }
+    if (!canScan) {
+      return {
+        operation,
+        removableIndexes: [],
+        scan: void 0,
+        transition,
+        previousRestoreIndex,
+        reason
+      };
+    }
+    const scan = x2RestoreRunBeforeTerminal(ops, startIndex, context, isTerminal);
+    if (scan.terminalIndex === void 0) {
+      return {
+        operation,
+        removableIndexes: [],
+        scan,
+        transition,
+        previousRestoreIndex,
+        reason: "terminal-missing"
+      };
+    }
+    return {
+      operation,
+      removableIndexes: scan.removableIndexes,
+      scan,
+      transition,
+      previousRestoreIndex,
+      reason
+    };
+  }
+  function x2PlanTerminalRestoreSpliceAt(ops, startIndex, states, context, plannerOptions, options = {}) {
+    if (startIndex < 0 || startIndex >= ops.length) {
+      return emptyX2TerminalRestoreSplicePlan("not-restore-start");
+    }
+    const cur = ops[startIndex];
+    if (!isFreeStandingX2EmptyOp(cur) && !isFreeStandingX2SignChangeOp(cur)) {
+      return emptyX2TerminalRestoreSplicePlan("not-restore-start");
+    }
+    let hardOverwritePlan;
+    if (options.includeHardOverwrite !== false) {
+      hardOverwritePlan = x2PlanRestoreRunBeforeTerminal(
+        ops,
+        startIndex,
+        states[startIndex],
+        context,
+        "hard-overwrite",
+        plannerOptions.isHardX2OverwriteWithoutStackUse
+      );
+      if (hardOverwritePlan.removableIndexes.length > 0) {
+        return {
+          removableIndexes: hardOverwritePlan.removableIndexes,
+          reason: "hard-overwrite-restore-run",
+          hardOverwritePlan,
+          freshDigitPlan: void 0
+        };
+      }
+    }
+    let freshDigitPlan;
+    if (options.includeFreshDigit !== false) {
+      freshDigitPlan = x2PlanRestoreRunBeforeTerminal(
+        ops,
+        startIndex,
+        states[startIndex],
+        context,
+        "fresh-digit",
+        plannerOptions.isDecimalDigit
+      );
+      if (freshDigitPlan.removableIndexes.length > 0) {
+        return {
+          removableIndexes: freshDigitPlan.removableIndexes,
+          reason: "fresh-digit-restore-run",
+          hardOverwritePlan,
+          freshDigitPlan
+        };
+      }
+    }
+    return {
+      removableIndexes: [],
+      reason: "no-terminal-splice",
+      hardOverwritePlan,
+      freshDigitPlan
+    };
+  }
+  function emptyX2TerminalRestoreSplicePlan(reason) {
+    return {
+      removableIndexes: [],
+      reason,
+      hardOverwritePlan: void 0,
+      freshDigitPlan: void 0
+    };
+  }
+  function x2PlanVpSpliceCandidatesAt(ops, index, states, context, options) {
+    if (index <= 0 || index >= ops.length) return [];
+    const candidates = [];
+    const duplicateVp = x2PlanAdjacentVpBoundaryAt(
+      ops,
+      index,
+      states,
+      options,
+      {
+        includeExponentSeparator: false,
+        includeEmptyBeforeSignChange: false
+      }
+    );
+    candidates.push(x2VpSpliceCandidatePlan(
+      "duplicate-vp",
+      duplicateVp.reason === "duplicate-vp" ? x2VpSplicePlan(duplicateVp.removableIndexes, "duplicate-vp") : emptyX2VpSplicePlan(),
+      { boundaryPlan: duplicateVp }
+    ));
+    const provedVp = x2PlanProvedVpSpliceAt(ops, index, states, context);
+    candidates.push(x2VpSpliceCandidatePlan(
+      "proved-vp",
+      provedVp.reason === "proved-vp-restore-run" || provedVp.reason === "empty-run-before-proved-vp" ? x2VpSplicePlan(provedVp.removableIndexes, provedVp.reason) : emptyX2VpSplicePlan(),
+      { provedVpPlan: provedVp }
+    ));
+    const exponentBoundary = x2PlanAdjacentVpBoundaryAt(
+      ops,
+      index,
+      states,
+      options,
+      { includeDuplicateVp: false }
+    );
+    candidates.push(x2VpSpliceCandidatePlan(
+      "exponent-boundary",
+      exponentBoundary.reason === "exponent-separator" || exponentBoundary.reason === "exponent-empty-before-sign" ? x2VpSplicePlan(exponentBoundary.removableIndexes, exponentBoundary.reason) : emptyX2VpSplicePlan(),
+      { boundaryPlan: exponentBoundary }
+    ));
+    const hardOverwriteTerminal = x2PlanTerminalRestoreSpliceAt(
+      ops,
+      index,
+      states,
+      context,
+      options,
+      { includeFreshDigit: false }
+    );
+    candidates.push(x2VpSpliceCandidatePlan(
+      "hard-overwrite-terminal",
+      hardOverwriteTerminal.reason === "hard-overwrite-restore-run" ? x2VpSplicePlan(hardOverwriteTerminal.removableIndexes, "hard-overwrite-restore-run") : emptyX2VpSplicePlan(),
+      { terminalPlan: hardOverwriteTerminal }
+    ));
+    const signPairBeforeFreshDigit = x2PlanAdjacentSignPairAt(
+      ops,
+      index,
+      states,
+      context,
+      { includeClosedContext: false }
+    );
+    candidates.push(x2VpSpliceCandidatePlan(
+      "sign-pair-before-fresh-digit",
+      signPairBeforeFreshDigit.reason === "exponent-sign-pair" || signPairBeforeFreshDigit.reason === "open-mantissa-sign-pair-before-proved-vp" ? x2VpSplicePlan(signPairBeforeFreshDigit.removableIndexes, signPairBeforeFreshDigit.reason) : emptyX2VpSplicePlan(),
+      { signPairPlan: signPairBeforeFreshDigit }
+    ));
+    const freshDigitTerminal = x2PlanTerminalRestoreSpliceAt(
+      ops,
+      index,
+      states,
+      context,
+      options,
+      {
+        includeHardOverwrite: false,
+        includeFreshDigit: true
+      }
+    );
+    candidates.push(x2VpSpliceCandidatePlan(
+      "fresh-digit-terminal",
+      freshDigitTerminal.reason === "fresh-digit-restore-run" ? x2VpSplicePlan(freshDigitTerminal.removableIndexes, "fresh-digit-restore-run") : emptyX2VpSplicePlan(),
+      { terminalPlan: freshDigitTerminal }
+    ));
+    const closedSignPair = x2PlanAdjacentSignPairAt(
+      ops,
+      index,
+      states,
+      context,
+      {
+        includeExponentSignPair: false,
+        includeOpenMantissaBeforeProvedVp: false,
+        includeClosedContext: true
+      }
+    );
+    candidates.push(x2VpSpliceCandidatePlan(
+      "closed-sign-pair",
+      closedSignPair.reason === "closed-context-sign-pair" ? x2VpSplicePlan(closedSignPair.removableIndexes, "closed-context-sign-pair") : emptyX2VpSplicePlan(),
+      { signPairPlan: closedSignPair }
+    ));
+    return candidates;
+  }
+  function emptyX2VpSplicePlan() {
+    return { removableIndexes: [], reason: "none" };
+  }
+  function x2VpSplicePlan(removableIndexes, reason) {
+    return { removableIndexes, reason };
+  }
+  function x2VpSpliceCandidatePlan(stage, splice, details = {}) {
+    return {
+      stage,
+      splice,
+      sourceMatchReason: x2VpSpliceCandidateSourceMatchReason(details),
+      signRestoreSourceProofReason: x2VpSpliceCandidateSignRestoreSourceProofReason(details),
+      boundaryPlan: details.boundaryPlan,
+      provedVpPlan: details.provedVpPlan,
+      terminalPlan: details.terminalPlan,
+      signPairPlan: details.signPairPlan
+    };
+  }
+  function x2VpSpliceCandidateSourceMatchReason(details) {
+    return details.provedVpPlan?.restoreRunPlan?.source?.sourceMatch.reason ?? details.signPairPlan?.sourcePlan?.source.sourceMatch.reason;
+  }
+  function x2VpSpliceCandidateSignRestoreSourceProofReason(details) {
+    return details.provedVpPlan?.restoreRunPlan?.source?.signRestoreSourceProof.reason ?? details.signPairPlan?.sourcePlan?.source.signRestoreSourceProof.reason;
+  }
+  function x2PlanProvedVpSpliceAt(ops, vpIndex, states, context) {
+    if (vpIndex < 0 || vpIndex >= ops.length || !isFreeStandingX2VpOp(ops[vpIndex])) {
+      return emptyX2ProvedVpSplicePlan("not-vp");
+    }
+    const restoreRunPlan = x2PlanRestoreRunBeforeProvedVp(
+      ops,
+      vpIndex,
+      states,
+      context,
+      { requireSignRestore: true }
+    );
+    if (restoreRunPlan.removableIndexes.length > 0) {
+      return {
+        removableIndexes: restoreRunPlan.removableIndexes,
+        reason: "proved-vp-restore-run",
+        restoreRunPlan,
+        emptyRunPlan: void 0
+      };
+    }
+    const emptyRunPlan = x2PlanEmptyRunBeforeProvedVp(ops, vpIndex, states, context);
+    if (emptyRunPlan.removableIndexes.length > 0) {
+      return {
+        removableIndexes: emptyRunPlan.removableIndexes,
+        reason: "empty-run-before-proved-vp",
+        restoreRunPlan,
+        emptyRunPlan
+      };
+    }
+    return {
+      removableIndexes: [],
+      reason: "no-proved-vp-splice",
+      restoreRunPlan,
+      emptyRunPlan
+    };
+  }
+  function emptyX2ProvedVpSplicePlan(reason) {
+    return {
+      removableIndexes: [],
+      reason,
+      restoreRunPlan: void 0,
+      emptyRunPlan: void 0
+    };
+  }
+  function x2PlanAdjacentVpBoundaryAt(ops, index, states, plannerOptions, options = {}) {
+    if (index <= 0 || index >= ops.length) {
+      return emptyX2AdjacentVpBoundaryPlan("not-boundary");
+    }
+    const prev = ops[index - 1];
+    const cur = ops[index];
+    if (options.includeDuplicateVp !== false && isFreeStandingX2VpOp(prev) && isFreeStandingX2VpOp(cur)) {
+      const transition = analyzeX2VpShapeTransition(states[index - 1], "vp");
+      if (transition.canDiscardCurrentOp) {
+        return x2AdjacentVpBoundaryPlan([index], "duplicate-vp", transition);
+      }
+      return x2AdjacentVpBoundaryRefusal("no-boundary-proof", transition);
+    }
+    if (options.includeExponentSeparator !== false && isFreeStandingX2EmptyOp(cur)) {
+      const separatorRun = x2PlanExponentSeparatorRun(ops, index, states[index], plannerOptions);
+      if (separatorRun.removableIndexes.length > 0 && separatorRun.transition !== void 0) {
+        return x2AdjacentVpBoundaryPlan(
+          separatorRun.removableIndexes,
+          "exponent-separator",
+          separatorRun.transition
+        );
+      }
+      if (separatorRun.transition !== void 0) {
+        return x2AdjacentVpBoundaryRefusal("no-boundary-proof", separatorRun.transition);
+      }
+    }
+    if (options.includeEmptyBeforeSignChange !== false && isFreeStandingX2EmptyOp(prev) && isFreeStandingX2SignChangeOp(cur)) {
+      const transition = analyzeX2VpShapeTransition(states[index - 1], "empty-before-sign-change");
+      if (transition.canDiscardCurrentOp) {
+        return x2AdjacentVpBoundaryPlan([index - 1], "exponent-empty-before-sign", transition);
+      }
+      return x2AdjacentVpBoundaryRefusal("no-boundary-proof", transition);
+    }
+    return emptyX2AdjacentVpBoundaryPlan("not-boundary");
+  }
+  function emptyX2AdjacentVpBoundaryPlan(reason) {
+    return {
+      removableIndexes: [],
+      reason,
+      transition: void 0
+    };
+  }
+  function x2AdjacentVpBoundaryPlan(removableIndexes, reason, transition) {
+    return {
+      removableIndexes,
+      reason,
+      transition
+    };
+  }
+  function x2AdjacentVpBoundaryRefusal(reason, transition) {
+    return {
+      removableIndexes: [],
+      reason,
+      transition
+    };
+  }
+  function x2PlanAdjacentSignPairAt(ops, secondSignIndex, states, context, options = {}) {
+    if (secondSignIndex <= 0 || secondSignIndex >= ops.length) {
+      return emptyX2AdjacentSignPairPlan("not-sign-pair");
+    }
+    const prev = ops[secondSignIndex - 1];
+    const cur = ops[secondSignIndex];
+    if (!isFreeStandingX2SignChangeOp(prev) || !isFreeStandingX2SignChangeOp(cur)) {
+      return emptyX2AdjacentSignPairPlan("not-sign-pair");
+    }
+    const state = states[secondSignIndex - 1];
+    const stateAfterPair = states[secondSignIndex + 1];
+    const transition = analyzeX2VpShapeTransition(state, "sign-pair");
+    if (options.includeExponentSignPair !== false && transition.canDiscardSignPair) {
+      return x2AdjacentSignPairPlan(
+        secondSignIndex,
+        "exponent-sign-pair",
+        transition,
+        void 0
+      );
+    }
+    if (options.includeOpenMantissaBeforeProvedVp !== false && analyzeX2VpShapeContext(state).kind === "active-mantissa") {
+      const sourcePlan = x2PlanDotReplacementVpSource(
+        ops,
+        secondSignIndex,
+        state,
+        stateAfterPair,
+        context,
+        { includesLeadingSignRestore: true }
+      );
+      if (sourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp && sourcePlan.source.canDiscardShapeSignPairBeforeProvedVp) {
+        return x2AdjacentSignPairPlan(
+          secondSignIndex,
+          "open-mantissa-sign-pair-before-proved-vp",
+          transition,
+          sourcePlan
+        );
+      }
+      return x2AdjacentSignPairRefusal("source-mismatch", transition, sourcePlan);
+    }
+    if (options.includeClosedContext !== false && x2StateIsClosedPlainContext(state)) {
+      if (state === void 0 || !x2StateHasSameClosedSignChangeSourceInXAndX2(state)) {
+        return x2AdjacentSignPairRefusal("no-shared-closed-source", transition, void 0);
+      }
+      if (!removingRecallCanExposeX2Restore(ops, secondSignIndex)) {
+        return x2AdjacentSignPairPlan(
+          secondSignIndex,
+          "closed-context-sign-pair",
+          transition,
+          void 0
+        );
+      }
+      const sourcePlan = x2PlanDotReplacementVpSource(
+        ops,
+        secondSignIndex,
+        state,
+        stateAfterPair,
+        context
+      );
+      if (sourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp && sourcePlan.source.canDiscardRestoreRunBeforeProvedVp) {
+        return x2AdjacentSignPairPlan(
+          secondSignIndex,
+          "closed-context-sign-pair",
+          transition,
+          sourcePlan
+        );
+      }
+      return x2AdjacentSignPairRefusal("source-mismatch", transition, sourcePlan);
+    }
+    return x2AdjacentSignPairRefusal("no-sign-pair-proof", transition, void 0);
+  }
+  function emptyX2AdjacentSignPairPlan(reason) {
+    return {
+      removableIndexes: [],
+      reason,
+      transition: void 0,
+      sourcePlan: void 0
+    };
+  }
+  function x2AdjacentSignPairPlan(secondSignIndex, reason, transition, sourcePlan) {
+    return {
+      removableIndexes: [secondSignIndex - 1, secondSignIndex],
+      reason,
+      transition,
+      sourcePlan
+    };
+  }
+  function x2AdjacentSignPairRefusal(reason, transition, sourcePlan) {
+    return {
+      removableIndexes: [],
+      reason,
+      transition,
+      sourcePlan
+    };
+  }
+  function x2PlanEmptyRunBeforeProvedVp(ops, index, states, context) {
+    const scan = x2RestoreRunBeforeIndex(ops, index, context, { includeSignRestores: false });
+    const emptyRunIndexes = scan.removableIndexes;
+    const firstEmptyIndex = emptyRunIndexes[0];
+    if (firstEmptyIndex === void 0) {
+      return {
+        removableIndexes: [],
+        emptyRunIndexes,
+        firstEmptyIndex,
+        scan,
+        removesVp: false,
+        reason: "no-empty-run"
+      };
+    }
+    const removesVp = firstEmptyIndex === index - emptyRunIndexes.length && firstEmptyIndex > 0 && isFreeStandingX2VpOp(ops[firstEmptyIndex - 1]) && x2CanRemoveSecondVpAfterPreviousVp(states[firstEmptyIndex - 1]);
+    return {
+      removableIndexes: removesVp ? [...emptyRunIndexes, index] : emptyRunIndexes,
+      emptyRunIndexes,
+      firstEmptyIndex,
+      scan,
+      removesVp,
+      reason: removesVp ? "duplicate-vp-after-empty-run" : "empty-run"
+    };
+  }
+  function x2PlanExponentSeparatorRun(ops, startIndex, state, options) {
+    const beforeNonDigit = analyzeX2VpShapeTransition(state, "empty-before-non-digit");
+    const beforeSignChange = analyzeX2VpShapeTransition(state, "empty-before-sign-change");
+    if (!beforeNonDigit.canDiscardCurrentOp && !beforeSignChange.canDiscardCurrentOp) {
+      return { removableIndexes: [], transition: beforeNonDigit };
+    }
+    const run35 = [];
+    for (let index = startIndex; index < ops.length; index += 1) {
+      const op2 = ops[index];
+      if (x2TransparentVpGapOp(op2)) continue;
+      if (isFreeStandingX2EmptyOp(op2)) {
+        run35.push(index);
+        continue;
+      }
+      if (run35.length === 0) return { removableIndexes: [], transition: void 0 };
+      if (options.isDecimalDigit(op2, index)) return { removableIndexes: [], transition: beforeNonDigit };
+      if (isFreeStandingX2SignChangeOp(op2)) {
+        return {
+          removableIndexes: beforeSignChange.canDiscardCurrentOp ? run35 : [],
+          transition: beforeSignChange
+        };
+      }
+      return {
+        removableIndexes: beforeNonDigit.canDiscardCurrentOp ? run35 : [],
+        transition: beforeNonDigit
+      };
+    }
+    return { removableIndexes: [], transition: void 0 };
+  }
+  function x2TransparentVpGapOp(op2) {
+    return op2.kind === "label" || op2.kind === "orphan-address";
+  }
+  function x2CanRemoveSecondVpAfterPreviousVp(stateBeforePreviousVp) {
+    return analyzeX2VpShapeTransition(stateBeforePreviousVp, "vp").canDiscardCurrentOp;
+  }
+  function x2PlanDotReplacementVpSource(ops, dotIndex, stateBeforeDot, stateAfterDot, context, options = {}) {
+    const source = analyzeX2VpRestoreGapSource(
+      ops,
+      dotIndex + 1,
+      stateBeforeDot,
+      stateAfterDot,
+      context,
+      options
+    );
+    if (source.hasOnlyRestoreGapBeforeVp) {
+      if (source.canDiscardRestoreRunBeforeProvedVp) {
+        return {
+          preservesVpEntrySource: true,
+          source,
+          previousSignSourceIndex: void 0,
+          reason: "restore-gap-source"
+        };
+      }
+      if (source.signRestoreSourceProof.canDiscard) {
+        return {
+          preservesVpEntrySource: true,
+          source,
+          previousSignSourceIndex: void 0,
+          reason: "sign-restore-gap-source"
+        };
+      }
+      return {
+        preservesVpEntrySource: false,
+        source,
+        previousSignSourceIndex: void 0,
+        reason: "source-mismatch"
+      };
+    }
+    if (!source.replacementDotHasOnlyRestoreGapBeforeVp) {
+      return {
+        preservesVpEntrySource: false,
+        source,
+        previousSignSourceIndex: void 0,
+        reason: "no-vp-restore"
+      };
+    }
+    const previousSignSourceIndex = x2PreviousFreeStandingRestoreExecutableIndex(
+      ops,
+      dotIndex,
+      { skipEmptyRestores: true }
+    );
+    if (previousSignSourceIndex !== void 0 && isFreeStandingX2SignChangeOp(ops[previousSignSourceIndex])) {
+      return {
+        preservesVpEntrySource: false,
+        source,
+        previousSignSourceIndex,
+        reason: "previous-sign-source"
+      };
+    }
+    if (source.canDiscardRestoreRunBeforeProvedVp && source.hasSameExplicitVpEntrySignSource) {
+      return {
+        preservesVpEntrySource: true,
+        source,
+        previousSignSourceIndex: void 0,
+        reason: "replacement-dot-explicit-sign-source"
+      };
+    }
+    return {
+      preservesVpEntrySource: false,
+      source,
+      previousSignSourceIndex: void 0,
+      reason: "source-mismatch"
+    };
+  }
+  function x2RestoreRunBeforeTerminal(ops, start, context, isTerminal) {
+    return x2ScanRestoreRunBeforeTerminal(
+      ops,
+      start,
+      context,
+      (op2, index) => {
+        if (isFreeStandingX2RestoreGapOp(op2)) return "remove";
+        return isTerminal(op2, index) ? "terminal" : "block";
+      }
+    );
+  }
+  function x2ScanRestoreRunBeforeTerminal(ops, start, context, classify, options = {}) {
+    const removableIndexes = [];
+    let sawRestoreGap = false;
+    let sawSignRestore = false;
+    for (let index = start; index < ops.length; index += 1) {
+      const op2 = ops[index];
+      if (op2.kind === "label" || op2.kind === "orphan-address") {
+        options.onTransparentGap?.(op2, index);
+        continue;
+      }
+      if (context !== void 0 && isKnownReturnCallOp(op2) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op2, context)) {
+        options.onTransparentGap?.(op2, index);
+        continue;
+      }
+      const decision = classify(op2, index);
+      if (decision === "remove") {
+        removableIndexes.push(index);
+        sawRestoreGap = true;
+        if (isFreeStandingX2SignChangeOp(op2)) sawSignRestore = true;
+        continue;
+      }
+      if (decision === "transparent") continue;
+      if (decision === "terminal" && (removableIndexes.length > 0 || options.allowEmptyRunTerminal === true)) {
+        return {
+          terminalIndex: index,
+          blockedIndex: void 0,
+          removableIndexes,
+          sawRestoreGap,
+          sawSignRestore
+        };
+      }
+      return {
+        terminalIndex: void 0,
+        blockedIndex: index,
+        removableIndexes: [],
+        sawRestoreGap,
+        sawSignRestore
+      };
+    }
+    return {
+      terminalIndex: void 0,
+      blockedIndex: void 0,
+      removableIndexes: [],
+      sawRestoreGap,
+      sawSignRestore
+    };
+  }
+  function x2RestoreRunBeforeIndex(ops, terminalIndex, context, options = {}) {
+    const removableIndexes = [];
+    let sawSignRestore = false;
+    const includeSignRestores = options.includeSignRestores !== false;
+    for (let index = terminalIndex - 1; index >= 0; index -= 1) {
+      const op2 = ops[index];
+      if (op2.kind === "label" || op2.kind === "orphan-address") continue;
+      if (isFreeStandingX2EmptyOp(op2)) {
+        removableIndexes.push(index);
+        continue;
+      }
+      if (includeSignRestores && isFreeStandingX2SignChangeOp(op2)) {
+        removableIndexes.push(index);
+        sawSignRestore = true;
+        continue;
+      }
+      if (context !== void 0 && isKnownReturnCallOp(op2) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op2, context)) continue;
+      removableIndexes.reverse();
+      return {
+        blockedIndex: index,
+        removableIndexes,
+        sawSignRestore
+      };
+    }
+    removableIndexes.reverse();
+    return {
+      blockedIndex: void 0,
+      removableIndexes,
+      sawSignRestore
+    };
+  }
+  function x2PreviousFreeStandingRestoreExecutableIndex(ops, index, options = {}) {
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const op2 = ops[cursor];
+      if (op2.kind === "label" || op2.kind === "orphan-address") continue;
+      if (options.skipEmptyRestores === true && isFreeStandingX2EmptyOp(op2)) continue;
+      if (isFreeStandingX2RestoreGapOp(op2)) return cursor;
+      return void 0;
+    }
+    return void 0;
   }
   function x2RestoreGapDirectReturnDoesNotObserveRestore(ops, call, context) {
     return nestedReturnCallRangeIsTransparent(
@@ -13115,6 +14935,86 @@ var MKProEmulatorBundle = (() => {
     }
     return emptyX2VpShapeContextAnalysis("unknown");
   }
+  function analyzeX2VpShapeTransition(state, operation, options = {}) {
+    const context = analyzeX2VpShapeContext(state);
+    switch (operation) {
+      case "vp": {
+        const canDiscardCurrentOp = context.kind === "active-mantissa" || context.kind === "active-exponent" || context.kind === "active-structural-exponent";
+        return {
+          operation,
+          context,
+          canDiscardCurrentOp,
+          canDiscardRestoreRun: false,
+          canDiscardSignPair: false,
+          reason: canDiscardCurrentOp ? "duplicate-vp" : "none"
+        };
+      }
+      case "proved-vp": {
+        const sourceMatch = options.beforeVp === void 0 ? void 0 : analyzeX2VpSourceMatch(
+          state,
+          options.beforeVp,
+          { hasSignRestore: options.hasSignRestore }
+        );
+        const canDiscardRestoreRun = sourceMatch?.canDiscardRestoreRun === true;
+        return {
+          operation,
+          context,
+          sourceMatch,
+          canDiscardCurrentOp: false,
+          canDiscardRestoreRun,
+          canDiscardSignPair: canDiscardRestoreRun && options.hasSignRestore === true,
+          reason: canDiscardRestoreRun ? "proved-vp-source" : "none"
+        };
+      }
+      case "empty-before-non-digit":
+        return {
+          operation,
+          context,
+          canDiscardCurrentOp: context.canDiscardSeparatorBeforeNonDigit,
+          canDiscardRestoreRun: false,
+          canDiscardSignPair: false,
+          reason: context.canDiscardSeparatorBeforeNonDigit ? "exponent-separator" : "none"
+        };
+      case "empty-before-sign-change": {
+        const canDiscardCurrentOp = context.canDiscardSeparatorBeforeSignChange || context.canDiscardSeparatorBeforeNonDigit;
+        return {
+          operation,
+          context,
+          canDiscardCurrentOp,
+          canDiscardRestoreRun: false,
+          canDiscardSignPair: false,
+          reason: canDiscardCurrentOp ? "exponent-separator" : "none"
+        };
+      }
+      case "fresh-digit":
+        return {
+          operation,
+          context,
+          canDiscardCurrentOp: false,
+          canDiscardRestoreRun: context.canDiscardRestoreBeforeFreshDigit,
+          canDiscardSignPair: false,
+          reason: context.canDiscardRestoreBeforeFreshDigit ? "vp-context-overwritten" : "none"
+        };
+      case "hard-overwrite":
+        return {
+          operation,
+          context,
+          canDiscardCurrentOp: false,
+          canDiscardRestoreRun: context.restoresX2,
+          canDiscardSignPair: false,
+          reason: context.restoresX2 ? "vp-context-overwritten" : "none"
+        };
+      case "sign-pair":
+        return {
+          operation,
+          context,
+          canDiscardCurrentOp: false,
+          canDiscardRestoreRun: false,
+          canDiscardSignPair: context.canCancelExponentSignPair,
+          reason: context.canCancelExponentSignPair ? "exponent-sign-pair" : "none"
+        };
+    }
+  }
   function emptyX2VpShapeContextAnalysis(kind) {
     return {
       kind,
@@ -13138,6 +15038,9 @@ var MKProEmulatorBundle = (() => {
   }
   function x2StateHasX2RestoreContext(state) {
     return analyzeX2VpShapeContext(state).restoresX2;
+  }
+  function sameX2ExponentShapeContext(left, right) {
+    return left.kind !== "none" && left.kind !== "unknown" && right.kind !== "none" && right.kind !== "unknown" && left.source === right.source && left.hasExponentDigit === right.hasExponentDigit && (sameNonEmptyStringSet(left.mantissa, right.mantissa) || sameNonEmptyShapeSet(left.shape, right.shape)) && sameNonEmptyStringSet(left.exponent, right.exponent);
   }
   function computeX2DotRestoreGapStates(ops) {
     if (ops.length === 0) return [];
@@ -13359,8 +15262,22 @@ var MKProEmulatorBundle = (() => {
     const recalledValues = recallX2ValueFacts(state, valueProof.register, true, op2);
     const recalledMantissas = vpEntryMantissasFromValueFacts(recalledValues);
     const recalledShapes = recallVpEntryShapeSourceFacts(op2, state, valueProof.register);
-    const recalledSourceKeys = vpSourceKeys(recalledMantissas, recalledShapes);
-    if (x2HasSignRestoreGapBeforeVp(ops, recallIndex + 1, context) && x2HasOnlyRestoreGapBeforeVp(ops, recallIndex + 1, context) && stringSetsHaveIntersection(vpEntrySignSourceKeys(state), recalledSourceKeys)) return true;
+    const recalledSourceKeys = x2VpSourceModel(recalledMantissas, recalledShapes).keys;
+    const recalledState = transferX2ValueStateForEdge(
+      state,
+      op2,
+      "normal",
+      { trackRegisterMemory: true },
+      recallIndex
+    );
+    const vpSource = x2PlanDotReplacementVpSource(
+      ops,
+      recallIndex,
+      state,
+      recalledState,
+      context
+    ).source;
+    if (vpSource.hasSignRestoreGapBeforeVp && vpSource.hasOnlyRestoreGapBeforeVp && (vpSource.canDiscardSignRestoreRunBeforeProvedVp || stringSetsHaveIntersection(vpEntrySignSourceKeys(state), recalledSourceKeys))) return true;
     const nextRestore = nextImmediateX2RestoreOp(ops, recallIndex + 1);
     if (nextRestore?.kind !== "plain" || nextRestore.opcode !== 12) return false;
     const vpContext = analyzeX2VpShapeContext(state);
@@ -13386,6 +15303,8 @@ var MKProEmulatorBundle = (() => {
       xShape: /* @__PURE__ */ new Set(),
       yShape: /* @__PURE__ */ new Set(),
       x2Shape: /* @__PURE__ */ new Set(),
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: /* @__PURE__ */ new Set(),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -13405,6 +15324,8 @@ var MKProEmulatorBundle = (() => {
       xShape: cloneOptionalShapeSet(input.xShape),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: cloneOptionalShapeSet(input.x2Shape),
+      xDirectShape: cloneOptionalShapeSet(input.xDirectShape),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: cloneX2EntryState(input.entry),
       vpContext: cloneX2VpContextState(input.vpContext),
       structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
@@ -13503,6 +15424,8 @@ var MKProEmulatorBundle = (() => {
           xShape: cloneOptionalShapeSet(stable.xShape),
           yShape: cloneOptionalShapeSet(stable.yShape),
           x2Shape: cloneOptionalShapeSet(stable.x2Shape),
+          xDirectShape: cloneOptionalShapeSet(stable.xDirectShape),
+          yDirectShape: cloneOptionalShapeSet(stable.yDirectShape),
           entry: closedX2EntryState(),
           vpContext: cloneX2VpContextState(stable.vpContext),
           structuralEntry: noneX2StructuralEntryState(),
@@ -13521,7 +15444,9 @@ var MKProEmulatorBundle = (() => {
       case "recall": {
         const closed = closeX2ValueEntry(input);
         const value = recallX2ValueFacts(input, op2.register, trackRegisterMemory, op2);
-        const shape = recallX2ShapeFacts(value, op2, trackRegisterMemory ? input.shapeMemory?.[op2.register] : void 0);
+        const memoryShape = trackRegisterMemory ? input.shapeMemory?.[op2.register] : void 0;
+        const shape = recallX2ShapeFacts(value, op2, memoryShape);
+        const directShape = recallDirectShapeFacts(op2, memoryShape);
         return {
           x: canonicalX2ValueSet(value),
           y: cloneOptionalValueSet(closed.x),
@@ -13529,6 +15454,8 @@ var MKProEmulatorBundle = (() => {
           xShape: new Set(shape),
           yShape: cloneOptionalShapeSet(closed.xShape),
           x2Shape: new Set(shape),
+          xDirectShape: new Set(directShape),
+          yDirectShape: cloneOptionalShapeSet(closed.xDirectShape),
           entry: closedX2EntryState(),
           vpContext: noneX2VpContextState(),
           structuralEntry: noneX2StructuralEntryState(),
@@ -13542,12 +15469,10 @@ var MKProEmulatorBundle = (() => {
       case "indirect-recall": {
         const closed = closeX2ValueEntry(input);
         const target = knownIndirectMemoryTarget(op2);
+        const memoryShape = target === void 0 || !trackRegisterMemory ? void 0 : input.shapeMemory?.[target];
         const values = target === void 0 ? /* @__PURE__ */ new Set([SAME_UNKNOWN_VALUE]) : recallX2ValueFacts(input, target, trackRegisterMemory, op2);
-        const shape = recallX2ShapeFacts(
-          values,
-          op2,
-          target === void 0 || !trackRegisterMemory ? void 0 : input.shapeMemory?.[target]
-        );
+        const shape = recallX2ShapeFacts(values, op2, memoryShape);
+        const directShape = target === void 0 ? /* @__PURE__ */ new Set() : recallDirectShapeFacts(op2, memoryShape);
         return {
           x: canonicalX2ValueSet(values),
           y: cloneOptionalValueSet(closed.x),
@@ -13555,6 +15480,8 @@ var MKProEmulatorBundle = (() => {
           xShape: new Set(shape),
           yShape: cloneOptionalShapeSet(closed.xShape),
           x2Shape: new Set(shape),
+          xDirectShape: new Set(directShape),
+          yDirectShape: cloneOptionalShapeSet(closed.xDirectShape),
           entry: closedX2EntryState(),
           vpContext: noneX2VpContextState(),
           structuralEntry: noneX2StructuralEntryState(),
@@ -13580,6 +15507,8 @@ var MKProEmulatorBundle = (() => {
           xShape,
           yShape: cloneOptionalShapeSet(closed.yShape),
           x2Shape,
+          xDirectShape: cloneOptionalShapeSet(closed.xDirectShape),
+          yDirectShape: cloneOptionalShapeSet(closed.yDirectShape),
           entry: closedX2EntryState(),
           vpContext: transferConditionalX2VpContextState(closed, effect),
           structuralEntry: noneX2StructuralEntryState(),
@@ -13609,6 +15538,8 @@ var MKProEmulatorBundle = (() => {
           xShape,
           yShape: cloneOptionalShapeSet(stable.yShape),
           x2Shape,
+          xDirectShape: cloneOptionalShapeSet(stable.xDirectShape),
+          yDirectShape: cloneOptionalShapeSet(stable.yDirectShape),
           entry: closedX2EntryState(),
           vpContext: transferConditionalX2VpContextState(stable, effect),
           structuralEntry: noneX2StructuralEntryState(),
@@ -13641,6 +15572,8 @@ var MKProEmulatorBundle = (() => {
           xShape,
           yShape: cloneOptionalShapeSet(closed.yShape),
           x2Shape,
+          xDirectShape: cloneOptionalShapeSet(closed.xDirectShape),
+          yDirectShape: cloneOptionalShapeSet(closed.yDirectShape),
           entry: closedX2EntryState(),
           vpContext: noneX2VpContextState(),
           structuralEntry: noneX2StructuralEntryState(),
@@ -13862,6 +15795,8 @@ var MKProEmulatorBundle = (() => {
         xShape: /* @__PURE__ */ new Set([decimalMantissaShapeFact("0")]),
         yShape: cloneOptionalShapeSet(input.yShape),
         x2Shape: /* @__PURE__ */ new Set([decimalMantissaShapeFact("0")]),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         structuralEntry: noneX2StructuralEntryState(),
@@ -13877,14 +15812,32 @@ var MKProEmulatorBundle = (() => {
       return transferCopyYToXX2ValueState(input, op2);
     }
     const effect = plainX2Effect(op2);
+    const directYShape = input.yDirectShape;
     const closedExponentValues = closedExponentEntryDecimalFacts(input.entry);
     if (closedExponentValues.size > 0) {
       const sourceX = new Set(closedExponentValues);
       const closedExponentShapes2 = closedExponentEntryShapeFacts(input.entry);
-      const x3 = plainPreservesXValue(op2) ? new Set(sourceX) : plainXValueAfterNonPreservingOp(op2, producerIndex, sourceX, input.y, closedExponentShapes2, input.yShape);
-      const xShape2 = plainPreservesXValue(op2) ? new Set(closedExponentShapes2) : plainXShapeAfterNonPreservingOp(op2, sourceX, input.y, closedExponentShapes2, input.yShape);
+      const x3 = plainPreservesXValue(op2) ? new Set(sourceX) : plainXValueAfterNonPreservingOp(
+        op2,
+        producerIndex,
+        sourceX,
+        input.y,
+        closedExponentShapes2,
+        input.yShape,
+        directYShape
+      );
+      const xShape2 = plainPreservesXValue(op2) ? new Set(closedExponentShapes2) : plainXShapeAfterNonPreservingOp(
+        op2,
+        sourceX,
+        input.y,
+        closedExponentShapes2,
+        input.yShape,
+        {},
+        directYShape
+      );
       const x22 = effect === "preserves" ? new Set(closedExponentValues) : effect === "affects" ? new Set(x3) : /* @__PURE__ */ new Set();
       const x2Shape2 = transferPlainX2ShapeSet(input, x3, xShape2, effect, closedExponentShapes2);
+      const xDirectShape2 = plainDirectShapeAfterPlainOp(op2, closedExponentShapes2, xShape2);
       return {
         x: x3,
         y: transferPlainYValueSet(input, sourceX, op2),
@@ -13892,6 +15845,8 @@ var MKProEmulatorBundle = (() => {
         xShape: xShape2,
         yShape: transferPlainYShapeSet(input, closedExponentShapes2, op2),
         x2Shape: x2Shape2,
+        xDirectShape: xDirectShape2,
+        yDirectShape: transferPlainYDirectShapeSet(input, closedExponentShapes2, op2),
         entry: nextX2EntryStateForPlainEffect(effect),
         vpContext: transferPlainX2VpContextState(input, effect),
         structuralEntry: noneX2StructuralEntryState(),
@@ -13931,6 +15886,7 @@ var MKProEmulatorBundle = (() => {
           effect,
           closedExponentShapes2,
           closedExponentShapes2,
+          false,
           sourceX,
           closedExponentValues
         ),
@@ -13939,6 +15895,7 @@ var MKProEmulatorBundle = (() => {
           effect,
           closedExponentShapes2,
           closedExponentShapes2,
+          false,
           sourceX,
           closedExponentValues
         ),
@@ -13948,10 +15905,27 @@ var MKProEmulatorBundle = (() => {
     const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
     if (closedExponentShapes.size > 0) {
       const sourceX = /* @__PURE__ */ new Set();
-      const x3 = plainPreservesXValue(op2) ? /* @__PURE__ */ new Set() : plainXValueAfterNonPreservingOp(op2, producerIndex, sourceX, input.y, closedExponentShapes, input.yShape);
-      const xShape2 = plainPreservesXValue(op2) ? new Set(closedExponentShapes) : plainXShapeAfterNonPreservingOp(op2, sourceX, input.y, closedExponentShapes, input.yShape);
+      const x3 = plainPreservesXValue(op2) ? /* @__PURE__ */ new Set() : plainXValueAfterNonPreservingOp(
+        op2,
+        producerIndex,
+        sourceX,
+        input.y,
+        closedExponentShapes,
+        input.yShape,
+        directYShape
+      );
+      const xShape2 = plainPreservesXValue(op2) ? new Set(closedExponentShapes) : plainXShapeAfterNonPreservingOp(
+        op2,
+        sourceX,
+        input.y,
+        closedExponentShapes,
+        input.yShape,
+        {},
+        directYShape
+      );
       const x2Shape2 = transferPlainX2ShapeSet(input, x3, xShape2, effect, closedExponentShapes);
       const x22 = transferPlainX2ValueSet(input, x3, xShape2, effect);
+      const xDirectShape2 = plainDirectShapeAfterPlainOp(op2, closedExponentShapes, xShape2);
       return {
         x: x3,
         y: transferPlainYValueSet(input, sourceX, op2),
@@ -13959,6 +15933,8 @@ var MKProEmulatorBundle = (() => {
         xShape: xShape2,
         yShape: transferPlainYShapeSet(input, closedExponentShapes, op2),
         x2Shape: x2Shape2,
+        xDirectShape: xDirectShape2,
+        yDirectShape: transferPlainYDirectShapeSet(input, closedExponentShapes, op2),
         entry: nextX2EntryStateForPlainEffect(effect),
         vpContext: transferPlainX2VpContextState(input, effect),
         structuralEntry: noneX2StructuralEntryState(),
@@ -13998,6 +15974,7 @@ var MKProEmulatorBundle = (() => {
           effect,
           closedExponentShapes,
           closedExponentShapes,
+          false,
           sourceX,
           void 0
         ),
@@ -14006,27 +15983,64 @@ var MKProEmulatorBundle = (() => {
           effect,
           closedExponentShapes,
           closedExponentShapes,
+          false,
           sourceX,
           void 0
         ),
         ...cloneX2MemoryFields(input)
       };
     }
+    const sourceXDirectShape = cloneOptionalShapeSet(input.xDirectShape);
     const x = syncUnknownSameValue(
-      plainPreservesXValue(op2) ? new Set(input.x) : plainXValueAfterNonPreservingOp(op2, producerIndex, input.x, input.y, input.xShape, input.yShape),
+      plainPreservesXValue(op2) ? new Set(input.x) : plainXValueAfterNonPreservingOp(
+        op2,
+        producerIndex,
+        input.x,
+        input.y,
+        input.xShape,
+        input.yShape,
+        directYShape,
+        sourceXDirectShape
+      ),
       effect,
       producerIndex
     );
     const inputXShape = effectiveInputXShape(input);
-    const xShape = plainPreservesXValue(op2) ? cloneOptionalShapeSet(inputXShape) : plainXShapeAfterNonPreservingOp(op2, input.x, input.y, input.xShape, input.yShape);
+    const xShape = plainPreservesXValue(op2) ? cloneOptionalShapeSet(inputXShape) : plainXShapeAfterNonPreservingOp(
+      op2,
+      input.x,
+      input.y,
+      input.xShape,
+      input.yShape,
+      {},
+      directYShape,
+      sourceXDirectShape
+    );
     const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
     const x2Shape = transferPlainX2ShapeSet(input, x, xShape, effect);
+    const xDirectShape = plainDirectShapeAfterPlainOp(op2, sourceXDirectShape, xShape);
     const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
     if (structuralEntry.kind === "exponent") {
       const closedStructuralShapes = structuralExponentEntryShapeFacts(structuralEntry);
       const sourceX = /* @__PURE__ */ new Set();
-      const structuralXValue = plainPreservesXValue(op2) ? /* @__PURE__ */ new Set() : plainXValueAfterNonPreservingOp(op2, producerIndex, sourceX, input.y, closedStructuralShapes, input.yShape);
-      const structuralXShape = plainPreservesXValue(op2) ? new Set(closedStructuralShapes) : plainXShapeAfterNonPreservingOp(op2, sourceX, input.y, closedStructuralShapes, input.yShape);
+      const structuralXValue = plainPreservesXValue(op2) ? /* @__PURE__ */ new Set() : plainXValueAfterNonPreservingOp(
+        op2,
+        producerIndex,
+        sourceX,
+        input.y,
+        closedStructuralShapes,
+        input.yShape,
+        directYShape
+      );
+      const structuralXShape = plainPreservesXValue(op2) ? new Set(closedStructuralShapes) : plainXShapeAfterNonPreservingOp(
+        op2,
+        sourceX,
+        input.y,
+        closedStructuralShapes,
+        input.yShape,
+        {},
+        directYShape
+      );
       const structuralX2Shape = transferPlainX2ShapeSet(
         input,
         structuralXValue,
@@ -14035,6 +16049,7 @@ var MKProEmulatorBundle = (() => {
         closedStructuralShapes
       );
       const structuralX2Value = transferPlainX2ValueSet(input, structuralXValue, structuralXShape, effect);
+      const structuralXDirectShape = plainDirectShapeAfterPlainOp(op2, closedStructuralShapes, structuralXShape);
       return {
         x: structuralXValue,
         y: transferPlainYValueSet(input, sourceX, op2),
@@ -14042,6 +16057,8 @@ var MKProEmulatorBundle = (() => {
         xShape: structuralXShape,
         yShape: transferPlainYShapeSet(input, closedStructuralShapes, op2),
         x2Shape: structuralX2Shape,
+        xDirectShape: structuralXDirectShape,
+        yDirectShape: transferPlainYDirectShapeSet(input, closedStructuralShapes, op2),
         entry: nextX2EntryStateForPlainEffect(effect),
         vpContext: transferPlainX2VpContextState(input, effect),
         structuralEntry: noneX2StructuralEntryState(),
@@ -14089,6 +16106,7 @@ var MKProEmulatorBundle = (() => {
           effect,
           closedStructuralShapes,
           closedStructuralShapes,
+          false,
           sourceX,
           void 0
         ),
@@ -14097,6 +16115,7 @@ var MKProEmulatorBundle = (() => {
           effect,
           closedStructuralShapes,
           closedStructuralShapes,
+          false,
           sourceX,
           void 0
         ),
@@ -14110,6 +16129,8 @@ var MKProEmulatorBundle = (() => {
       xShape,
       yShape: transferPlainYShapeSet(input, inputXShape, op2),
       x2Shape,
+      xDirectShape,
+      yDirectShape: transferPlainYDirectShapeSet(input, sourceXDirectShape, op2),
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(input, effect),
       structuralEntry: noneX2StructuralEntryState(),
@@ -14149,6 +16170,7 @@ var MKProEmulatorBundle = (() => {
         effect,
         inputXShape,
         input.x2Shape,
+        input.vpContext?.kind === "exponent" || input.structuralVpContext?.kind === "exponent",
         input.x,
         input.x2
       ),
@@ -14157,6 +16179,7 @@ var MKProEmulatorBundle = (() => {
         effect,
         inputXShape,
         input.x2Shape,
+        input.vpContext?.kind === "exponent" || input.structuralVpContext?.kind === "exponent",
         input.x,
         input.x2
       ),
@@ -14252,11 +16275,18 @@ var MKProEmulatorBundle = (() => {
   function transferDecimalDigitX2ValueState(input, digit) {
     if (input.structuralEntry?.kind === "exponent") {
       const entry2 = advanceStructuralExponentDigitEntry(input.structuralEntry, digit);
-      return x2ValueStateFromStructuralExponentEntry(entry2, input.memory, input.shapeMemory, input.y, input.yShape);
+      return x2ValueStateFromStructuralExponentEntry(
+        entry2,
+        input.memory,
+        input.shapeMemory,
+        input.y,
+        input.yShape,
+        input.yDirectShape
+      );
     }
     if (input.entry.kind === "exponent") {
       const entry2 = advanceExponentDigitEntry(input.entry, digit);
-      return x2ValueStateFromExponentEntry(entry2, input.memory, input.shapeMemory, input.y, input.yShape);
+      return x2ValueStateFromExponentEntry(entry2, input.memory, input.shapeMemory, input.y, input.yShape, input.yDirectShape);
     }
     const entry = advanceDecimalDigitEntry(input.entry, digit);
     if (entry.kind !== "open") {
@@ -14267,6 +16297,8 @@ var MKProEmulatorBundle = (() => {
         xShape: /* @__PURE__ */ new Set(),
         yShape: cloneOptionalShapeSet(input.yShape),
         x2Shape: /* @__PURE__ */ new Set(),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry,
         vpContext: noneX2VpContextState(),
         structuralEntry: noneX2StructuralEntryState(),
@@ -14274,9 +16306,16 @@ var MKProEmulatorBundle = (() => {
         ...cloneX2MemoryFields(input)
       };
     }
-    return x2ValueStateFromOpenDecimalEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
+    return x2ValueStateFromOpenDecimalEntry(
+      entry,
+      input.memory,
+      input.shapeMemory,
+      input.y,
+      input.yShape,
+      input.yDirectShape
+    );
   }
-  function x2ValueStateFromOpenDecimalEntry(entry, memory, shapeMemory, y = void 0, yShape = void 0) {
+  function x2ValueStateFromOpenDecimalEntry(entry, memory, shapeMemory, y = void 0, yShape = void 0, yDirectShape = void 0) {
     const x = /* @__PURE__ */ new Set();
     const x2 = /* @__PURE__ */ new Set();
     const xShape = /* @__PURE__ */ new Set();
@@ -14298,6 +16337,8 @@ var MKProEmulatorBundle = (() => {
       xShape,
       yShape: cloneOptionalShapeSet(yShape),
       x2Shape,
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(yDirectShape),
       entry,
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -14309,7 +16350,14 @@ var MKProEmulatorBundle = (() => {
     if (input.entry.kind === "open") {
       const entry = advanceDecimalPointEntry(input.entry);
       if (entry.kind === "open") {
-        return x2ValueStateFromOpenDecimalEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
+        return x2ValueStateFromOpenDecimalEntry(
+          entry,
+          input.memory,
+          input.shapeMemory,
+          input.y,
+          input.yShape,
+          input.yDirectShape
+        );
       }
       return {
         x: /* @__PURE__ */ new Set(),
@@ -14318,6 +16366,8 @@ var MKProEmulatorBundle = (() => {
         xShape: /* @__PURE__ */ new Set(),
         yShape: cloneOptionalShapeSet(input.yShape),
         x2Shape: /* @__PURE__ */ new Set(),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry,
         vpContext: noneX2VpContextState(),
         structuralEntry: noneX2StructuralEntryState(),
@@ -14331,6 +16381,8 @@ var MKProEmulatorBundle = (() => {
         y: cloneOptionalValueSet(input.y),
         x2: /* @__PURE__ */ new Set(),
         yShape: cloneOptionalShapeSet(input.yShape),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry: { kind: "unknown" },
         vpContext: { kind: "unknown" },
         structuralEntry: { kind: "unknown" },
@@ -14339,13 +16391,16 @@ var MKProEmulatorBundle = (() => {
       };
     }
     const restoredX2Shape = effectiveInputX2Shape(input);
+    const xShape = normalizeX2RestoreShapesForX(restoredX2Shape);
     return {
       x: normalizeX2RestoreFactsForX(input.x2),
       y: cloneOptionalValueSet(input.y),
       x2: cloneOptionalValueSet(input.x2),
-      xShape: normalizeX2RestoreShapesForX(restoredX2Shape),
+      xShape,
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: cloneOptionalShapeSet(input.x2Shape),
+      xDirectShape: dotRestoreDirectShapeFacts(xShape),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -14360,11 +16415,18 @@ var MKProEmulatorBundle = (() => {
   function transferSignChangeX2ValueState(input, producerIndex) {
     if (input.structuralEntry?.kind === "exponent") {
       const entry = signChangeStructuralExponentEntry(input.structuralEntry);
-      return x2ValueStateFromStructuralExponentEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
+      return x2ValueStateFromStructuralExponentEntry(
+        entry,
+        input.memory,
+        input.shapeMemory,
+        input.y,
+        input.yShape,
+        input.yDirectShape
+      );
     }
     if (input.entry.kind === "exponent") {
       const entry = signChangeExponentEntry(input.entry);
-      return x2ValueStateFromExponentEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape);
+      return x2ValueStateFromExponentEntry(entry, input.memory, input.shapeMemory, input.y, input.yShape, input.yDirectShape);
     }
     if (input.entry.kind === "closed" && input.structuralVpContext?.kind === "exponent") {
       const context = signChangeStructuralExponentEntry(input.structuralVpContext);
@@ -14386,6 +16448,8 @@ var MKProEmulatorBundle = (() => {
         xShape: /* @__PURE__ */ new Set(),
         yShape: cloneOptionalShapeSet(input.yShape),
         x2Shape: /* @__PURE__ */ new Set(),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry: { kind: "unknown" },
         vpContext: { kind: "unknown" },
         structuralEntry: { kind: "unknown" },
@@ -14415,6 +16479,8 @@ var MKProEmulatorBundle = (() => {
       xShape,
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape,
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -14436,6 +16502,8 @@ var MKProEmulatorBundle = (() => {
           mantissa: input.entry.raw,
           exponent: /* @__PURE__ */ new Set([""])
         }),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry: {
           kind: "exponent",
           mantissa: new Set(input.entry.raw),
@@ -14452,7 +16520,14 @@ var MKProEmulatorBundle = (() => {
       };
     }
     if (input.entry.kind === "exponent") {
-      return x2ValueStateFromExponentEntry(input.entry, input.memory, input.shapeMemory, input.y, input.yShape);
+      return x2ValueStateFromExponentEntry(
+        input.entry,
+        input.memory,
+        input.shapeMemory,
+        input.y,
+        input.yShape,
+        input.yDirectShape
+      );
     }
     if (input.structuralEntry?.kind === "exponent") {
       return x2ValueStateFromStructuralExponentEntry(
@@ -14460,7 +16535,8 @@ var MKProEmulatorBundle = (() => {
         input.memory,
         input.shapeMemory,
         input.y,
-        input.yShape
+        input.yShape,
+        input.yDirectShape
       );
     }
     if (input.entry.kind === "closed" && input.vpContext?.kind === "exponent" && input.vpEntryMantissa !== void 0) {
@@ -14470,7 +16546,8 @@ var MKProEmulatorBundle = (() => {
         input.memory,
         input.shapeMemory,
         input.y,
-        input.yShape
+        input.yShape,
+        input.yDirectShape
       );
     }
     if (input.entry.kind === "closed" && input.vpEntryMantissa !== void 0) {
@@ -14485,6 +16562,8 @@ var MKProEmulatorBundle = (() => {
           mantissa: input.vpEntryMantissa,
           exponent: /* @__PURE__ */ new Set([""])
         }),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry: {
           kind: "exponent",
           mantissa: new Set(input.vpEntryMantissa),
@@ -14502,11 +16581,25 @@ var MKProEmulatorBundle = (() => {
     }
     if (input.entry.kind === "closed" && input.structuralVpContext?.kind === "exponent" && input.vpEntryShape !== void 0 && input.vpEntryShape.size > 0) {
       const structuralEntry = x2StructuralEntryStateFromParts(input.vpEntryShape, input.structuralVpContext.exponent);
-      return x2ValueStateFromStructuralExponentEntry(structuralEntry, input.memory, input.shapeMemory, input.y, input.yShape);
+      return x2ValueStateFromStructuralExponentEntry(
+        structuralEntry,
+        input.memory,
+        input.shapeMemory,
+        input.y,
+        input.yShape,
+        input.yDirectShape
+      );
     }
     if (input.entry.kind === "closed" && input.vpEntryShape !== void 0 && input.vpEntryShape.size > 0) {
       const structuralEntry = structuralExponentEntryFromVpEntryShapes(input.vpEntryShape);
-      return x2ValueStateFromStructuralExponentEntry(structuralEntry, input.memory, input.shapeMemory, input.y, input.yShape);
+      return x2ValueStateFromStructuralExponentEntry(
+        structuralEntry,
+        input.memory,
+        input.shapeMemory,
+        input.y,
+        input.yShape,
+        input.yDirectShape
+      );
     }
     return {
       x: /* @__PURE__ */ new Set(),
@@ -14515,6 +16608,8 @@ var MKProEmulatorBundle = (() => {
       xShape: /* @__PURE__ */ new Set(),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: /* @__PURE__ */ new Set(),
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: { kind: "unknown" },
       vpContext: { kind: "unknown" },
       structuralEntry: { kind: "unknown" },
@@ -14541,6 +16636,8 @@ var MKProEmulatorBundle = (() => {
       xShape,
       yShape: cloneOptionalShapeSet(closed.yShape),
       x2Shape,
+      xDirectShape: cloneOptionalShapeSet(closed.xDirectShape),
+      yDirectShape: cloneOptionalShapeSet(closed.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: transferConditionalX2VpContextState(closed, effect),
       structuralEntry: noneX2StructuralEntryState(),
@@ -14574,6 +16671,8 @@ var MKProEmulatorBundle = (() => {
       xShape: cloneOptionalShapeSet(stable.xShape),
       yShape: cloneOptionalShapeSet(stable.yShape),
       x2Shape: cloneOptionalShapeSet(stable.x2Shape),
+      xDirectShape: cloneOptionalShapeSet(stable.xDirectShape),
+      yDirectShape: cloneOptionalShapeSet(stable.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: cloneX2VpContextState(stable.vpContext),
       structuralEntry: noneX2StructuralEntryState(),
@@ -14622,6 +16721,7 @@ var MKProEmulatorBundle = (() => {
     const effect = plainX2Effect(op2);
     const sourceX = visibleX2ValueFactsForStack(input);
     const sourceXShape = visibleX2ShapeFactsForStack(input);
+    const sourceXDirectShape = visibleX2DirectShapeFactsForStack(input);
     const x = cloneOptionalValueSet(input.y);
     const xShape = cloneOptionalShapeSet(input.yShape);
     const x2 = transferPlainX2ValueSet(input, x, xShape, effect);
@@ -14633,6 +16733,8 @@ var MKProEmulatorBundle = (() => {
       xShape,
       yShape: new Set(sourceXShape),
       x2Shape,
+      xDirectShape: cloneOptionalShapeSet(input.yDirectShape),
+      yDirectShape: new Set(sourceXDirectShape),
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(input, effect),
       structuralEntry: noneX2StructuralEntryState(),
@@ -14672,6 +16774,7 @@ var MKProEmulatorBundle = (() => {
         effect,
         sourceXShape,
         input.x2Shape,
+        false,
         sourceX,
         input.x2
       ),
@@ -14680,6 +16783,7 @@ var MKProEmulatorBundle = (() => {
         effect,
         sourceXShape,
         input.x2Shape,
+        false,
         sourceX,
         input.x2
       ),
@@ -14689,10 +16793,13 @@ var MKProEmulatorBundle = (() => {
   function transferCopyYToXX2ValueState(input, op2) {
     const closed = closeX2ValueEntry(input);
     const effect = plainX2Effect(op2);
+    const sourceX = visibleX2ValueFactsForStack(closed);
+    const sourceXShape = visibleX2ShapeFactsForStack(closed);
     const x = cloneOptionalValueSet(closed.y);
     const xShape = cloneOptionalShapeSet(closed.yShape);
     const x2 = transferPlainX2ValueSet(closed, x, xShape, effect);
     const x2Shape = transferPlainX2ShapeSet(closed, x, xShape, effect);
+    const yDirectShape = cloneOptionalShapeSet(closed.yDirectShape);
     return {
       x,
       y: cloneOptionalValueSet(closed.y),
@@ -14700,6 +16807,8 @@ var MKProEmulatorBundle = (() => {
       xShape,
       yShape: cloneOptionalShapeSet(closed.yShape),
       x2Shape,
+      xDirectShape: new Set(yDirectShape),
+      yDirectShape,
       entry: nextX2EntryStateForPlainEffect(effect),
       vpContext: transferPlainX2VpContextState(closed, effect),
       structuralEntry: noneX2StructuralEntryState(),
@@ -14712,19 +16821,19 @@ var MKProEmulatorBundle = (() => {
         xShape,
         x2Shape,
         effect,
-        closed.xShape,
+        sourceXShape,
         closed.x2Shape,
         false,
-        closed.x,
+        sourceX,
         closed.x2
       ),
       vpEntryMantissaTransient: transferPlainX2VpEntryMantissaTransientState(
         op2,
         effect,
-        closed.xShape,
+        sourceXShape,
         closed.x2Shape,
         false,
-        closed.x,
+        sourceX,
         closed.x2
       ),
       vpEntrySignMantissa: transferPlainX2VpEntrySignMantissaState(closed, op2, effect),
@@ -14737,17 +16846,19 @@ var MKProEmulatorBundle = (() => {
         xShape,
         x2Shape,
         effect,
-        closed.xShape,
+        sourceXShape,
         closed.x2Shape,
-        closed.x,
+        false,
+        sourceX,
         closed.x2
       ),
       vpEntryShapeTransient: transferPlainX2VpEntryShapeTransientState(
         op2,
         effect,
-        closed.xShape,
+        sourceXShape,
         closed.x2Shape,
-        closed.x,
+        false,
+        sourceX,
         closed.x2
       ),
       ...cloneX2MemoryFields(closed)
@@ -14764,6 +16875,13 @@ var MKProEmulatorBundle = (() => {
     if (structuralEntry.kind === "exponent") return structuralExponentEntryShapeFacts(structuralEntry);
     return cloneOptionalShapeSet(effectiveInputXShape(input));
   }
+  function visibleX2DirectShapeFactsForStack(input) {
+    const closedExponentShapes = closedExponentEntryShapeFacts(input.entry);
+    if (closedExponentShapes.size > 0) return closedExponentShapes;
+    const structuralEntry = input.structuralEntry ?? noneX2StructuralEntryState();
+    if (structuralEntry.kind === "exponent") return structuralExponentEntryShapeFacts(structuralEntry);
+    return cloneOptionalShapeSet(input.xDirectShape);
+  }
   function transferPlainYValueSet(input, sourceX, op2) {
     const info2 = getOpcode(op2.opcode);
     if (info2.stackEffect === "shifts") return cloneOptionalValueSet(sourceX);
@@ -14779,6 +16897,18 @@ var MKProEmulatorBundle = (() => {
       return cloneOptionalShapeSet(input.yShape);
     }
     return /* @__PURE__ */ new Set();
+  }
+  function transferPlainYDirectShapeSet(input, sourceXDirectShape, op2) {
+    const info2 = getOpcode(op2.opcode);
+    if (info2.stackEffect === "shifts") return cloneOptionalShapeSet(sourceXDirectShape);
+    if (info2.stackEffect === "preserves") return cloneOptionalShapeSet(input.yDirectShape);
+    if (info2.stackEffect === "consume-y-keep" && info2.risk === "documented") {
+      return cloneOptionalShapeSet(input.yDirectShape);
+    }
+    return /* @__PURE__ */ new Set();
+  }
+  function plainDirectShapeAfterPlainOp(op2, sourceXDirectShape, resultXShape) {
+    return plainPreservesXValue(op2) ? cloneOptionalShapeSet(sourceXDirectShape) : cloneOptionalShapeSet(resultXShape);
   }
   function transferPlainX2ShapeSet(input, x, xShape, effect, closedEntryShape = void 0) {
     if (effect === "preserves") return cloneOptionalShapeSet(closedEntryShape ?? input.x2Shape);
@@ -14832,7 +16962,7 @@ var MKProEmulatorBundle = (() => {
     if (effect === "preserves" && isEmptyPlainOp(op2)) return cloneOptionalShapeSet(input.vpEntrySignShape);
     return void 0;
   }
-  function transferPlainX2VpEntryShapeState(input, op2, x, x2, xShape, x2Shape, effect, firstDigitSourceShape = xShape, firstDigitTargetShape = x2Shape, firstDigitSourceValues = x, firstDigitTargetValues = x2) {
+  function transferPlainX2VpEntryShapeState(input, op2, x, x2, xShape, x2Shape, effect, firstDigitSourceShape = xShape, firstDigitTargetShape = x2Shape, includeExponentTargets = false, firstDigitSourceValues = x, firstDigitTargetValues = x2) {
     if (effect === "affects") return sharedStructuralShapeFacts({ x, x2, xShape, x2Shape });
     if (effect === "preserves") {
       const inherited = isEmptyPlainOp(op2) && input.vpEntryShapeTransient !== true ? input.vpEntryShape : void 0;
@@ -14840,16 +16970,16 @@ var MKProEmulatorBundle = (() => {
       const targetShape = vpSpliceShapeSetWithValueShapes(firstDigitTargetShape, firstDigitTargetValues);
       return mergeOptionalShapeSources(
         inherited,
-        structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape)
+        structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape, includeExponentTargets)
       );
     }
     return void 0;
   }
-  function transferPlainX2VpEntryShapeTransientState(op2, effect, firstDigitSourceShape, firstDigitTargetShape, firstDigitSourceValues, firstDigitTargetValues) {
+  function transferPlainX2VpEntryShapeTransientState(op2, effect, firstDigitSourceShape, firstDigitTargetShape, includeExponentTargets = false, firstDigitSourceValues, firstDigitTargetValues) {
     if (effect !== "preserves" || isEmptyPlainOp(op2)) return void 0;
     const sourceShape = vpSpliceShapeSetWithValueShapes(firstDigitSourceShape, firstDigitSourceValues);
     const targetShape = vpSpliceShapeSetWithValueShapes(firstDigitTargetShape, firstDigitTargetValues);
-    return structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape) === void 0 ? void 0 : true;
+    return structuralFirstDigitVpSpliceShapeFacts(sourceShape, targetShape, includeExponentTargets) === void 0 ? void 0 : true;
   }
   function nextX2EntryStateForPlainEffect(effect) {
     if (effect === "restores") return { kind: "unknown" };
@@ -14914,6 +17044,8 @@ var MKProEmulatorBundle = (() => {
       xShape: cloneOptionalShapeSet(incoming.xShape),
       yShape: cloneOptionalShapeSet(incoming.yShape),
       x2Shape: cloneOptionalShapeSet(incoming.x2Shape),
+      xDirectShape: cloneOptionalShapeSet(incoming.xDirectShape),
+      yDirectShape: cloneOptionalShapeSet(incoming.yDirectShape),
       entry: cloneX2EntryState(incoming.entry),
       vpContext: cloneX2VpContextState(incoming.vpContext),
       structuralEntry: cloneX2StructuralEntryState(incoming.structuralEntry),
@@ -14931,9 +17063,11 @@ var MKProEmulatorBundle = (() => {
       x: joinX2ValueSets(current.x, incoming.x),
       y: joinX2ValueSets(current.y ?? /* @__PURE__ */ new Set(), incoming.y ?? /* @__PURE__ */ new Set()),
       x2: joinX2ValueSets(current.x2, incoming.x2),
-      xShape: joinX2ShapeSetsWithValues(current.xShape, current.x, incoming.xShape, incoming.x),
-      yShape: joinX2ShapeSetsWithValues(current.yShape, current.y, incoming.yShape, incoming.y),
+      xShape: joinVisibleX2ShapeSetsWithValues(current.xShape, current.x, incoming.xShape, incoming.x),
+      yShape: joinVisibleX2ShapeSetsWithValues(current.yShape, current.y, incoming.yShape, incoming.y),
       x2Shape: joinX2SyncedShapeSetsWithValues(current.x2Shape, current.x2, incoming.x2Shape, incoming.x2),
+      xDirectShape: joinDirectShapeSets(current.xDirectShape, incoming.xDirectShape),
+      yDirectShape: joinDirectShapeSets(current.yDirectShape, incoming.yDirectShape),
       entry: joinX2EntryStates(current.entry, incoming.entry),
       vpContext: joinX2VpContextStates(current.vpContext, incoming.vpContext),
       structuralEntry: joinX2StructuralEntryStates(current.structuralEntry, incoming.structuralEntry),
@@ -14976,7 +17110,7 @@ var MKProEmulatorBundle = (() => {
   }
   function sameX2ValueDataflowState(left, right) {
     if (left === void 0 || right === void 0) return left === right;
-    return sameX2ValueSet(left.x, right.x) && sameX2ValueSet(left.y, right.y) && sameX2ValueSet(left.x2, right.x2) && sameOptionalShapeSet(left.xShape, right.xShape) && sameOptionalShapeSet(left.yShape, right.yShape) && sameOptionalShapeSet(left.x2Shape, right.x2Shape) && sameX2EntryState(left.entry, right.entry) && sameX2VpContextState(left.vpContext, right.vpContext) && sameX2StructuralEntryState(left.structuralEntry, right.structuralEntry) && sameX2StructuralEntryState(left.structuralVpContext, right.structuralVpContext) && sameOptionalStringSet(left.vpEntryMantissa, right.vpEntryMantissa) && left.vpEntryMantissaTransient === right.vpEntryMantissaTransient && sameOptionalStringSet(left.vpEntrySignMantissa, right.vpEntrySignMantissa) && sameOptionalShapeSet(left.vpEntryShape, right.vpEntryShape) && sameOptionalShapeSet(left.vpEntrySignShape, right.vpEntrySignShape) && left.vpEntryShapeTransient === right.vpEntryShapeTransient && sameX2ValueMemory(left.memory, right.memory) && sameX2ShapeMemory(left.shapeMemory, right.shapeMemory);
+    return sameX2ValueSet(left.x, right.x) && sameX2ValueSet(left.y, right.y) && sameX2ValueSet(left.x2, right.x2) && sameOptionalShapeSet(left.xShape, right.xShape) && sameOptionalShapeSet(left.yShape, right.yShape) && sameOptionalShapeSet(left.x2Shape, right.x2Shape) && sameOptionalShapeSet(left.xDirectShape, right.xDirectShape) && sameOptionalShapeSet(left.yDirectShape, right.yDirectShape) && sameX2EntryState(left.entry, right.entry) && sameX2VpContextState(left.vpContext, right.vpContext) && sameX2StructuralEntryState(left.structuralEntry, right.structuralEntry) && sameX2StructuralEntryState(left.structuralVpContext, right.structuralVpContext) && sameOptionalStringSet(left.vpEntryMantissa, right.vpEntryMantissa) && left.vpEntryMantissaTransient === right.vpEntryMantissaTransient && sameOptionalStringSet(left.vpEntrySignMantissa, right.vpEntrySignMantissa) && sameOptionalShapeSet(left.vpEntryShape, right.vpEntryShape) && sameOptionalShapeSet(left.vpEntrySignShape, right.vpEntrySignShape) && left.vpEntryShapeTransient === right.vpEntryShapeTransient && sameX2ValueMemory(left.memory, right.memory) && sameX2ShapeMemory(left.shapeMemory, right.shapeMemory);
   }
   function joinRegisterValueSets(current, incoming) {
     if (current === void 0) return new Set(incoming);
@@ -15084,8 +17218,14 @@ var MKProEmulatorBundle = (() => {
       shapeSetWithFallbackValueDerivedDisplayShapesForX2Sync(incoming, incomingValues)
     );
   }
-  function joinX2ShapeSetsWithValues(current, currentValues, incoming, incomingValues) {
-    return intersectKnownX2ShapeSetsWithValues(current, currentValues, incoming, incomingValues);
+  function joinVisibleX2ShapeSetsWithValues(current, currentValues, incoming, incomingValues) {
+    const currentShapes = shapeSetWithFallbackValueDerivedDisplayShapes(current, currentValues);
+    const incomingShapes = shapeSetWithFallbackValueDerivedDisplayShapes(incoming, incomingValues);
+    const output = intersectX2ShapeSets(currentShapes, incomingShapes);
+    if (output.size === 0) {
+      for (const shape of commonDecimalDisplayShapeFacts(current, incoming)) output.add(shape);
+    }
+    return output;
   }
   function joinX2SyncedShapeSetsWithValues(current, currentValues, incoming, incomingValues) {
     return intersectKnownX2SyncedShapeSetsWithValues(current, currentValues, incoming, incomingValues);
@@ -15114,6 +17254,14 @@ var MKProEmulatorBundle = (() => {
       if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) {
         output.add(fact);
       }
+    }
+    return output;
+  }
+  function commonDecimalDisplayShapeFacts(left, right) {
+    const leftDisplays = decimalDisplayShapeFacts(left);
+    const output = /* @__PURE__ */ new Set();
+    for (const shape of decimalDisplayShapeFacts(right)) {
+      if (leftDisplays.has(shape)) output.add(shape);
     }
     return output;
   }
@@ -15179,6 +17327,8 @@ var MKProEmulatorBundle = (() => {
       xShape: cloneOptionalShapeSet(input.xShape),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: cloneOptionalShapeSet(input.x2Shape),
+      xDirectShape: cloneOptionalShapeSet(input.xDirectShape),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: cloneX2EntryState(input.entry),
       vpContext: cloneX2VpContextState(input.vpContext),
       structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
@@ -15204,6 +17354,8 @@ var MKProEmulatorBundle = (() => {
       xShape: cloneOptionalShapeSet(input.xShape),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: cloneOptionalShapeSet(input.x2Shape),
+      xDirectShape: cloneOptionalShapeSet(input.xDirectShape),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: cloneX2EntryState(input.entry),
       vpContext: cloneX2VpContextState(input.vpContext),
       structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
@@ -15281,6 +17433,8 @@ var MKProEmulatorBundle = (() => {
       xShape: cloneOptionalShapeSet(input.xShape),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: cloneOptionalShapeSet(input.x2Shape),
+      xDirectShape: cloneOptionalShapeSet(input.xDirectShape),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: cloneX2EntryState(input.entry),
       vpContext: cloneX2VpContextState(input.vpContext),
       structuralEntry: cloneX2StructuralEntryState(input.structuralEntry),
@@ -15349,6 +17503,18 @@ var MKProEmulatorBundle = (() => {
     for (const fact of memoryShapes ?? []) output.add(fact);
     for (const fact of preloadedConstantShapeFacts(op2)) output.add(fact);
     return canonicalShapeSet(output);
+  }
+  function recallDirectShapeFacts(op2, memoryShapes) {
+    const output = preloadedConstantShapeFacts(op2);
+    for (const fact of directStructuralMantissaShapeFacts(memoryShapes)) output.add(fact);
+    return output;
+  }
+  function dotRestoreDirectShapeFacts(shapes) {
+    const canonical = canonicalShapeSet(shapes);
+    if (canonical.size === 0) return /* @__PURE__ */ new Set();
+    const direct = directStructuralMantissaShapeFacts(canonical);
+    if (direct.size !== canonical.size) return /* @__PURE__ */ new Set();
+    return x2ShapeSetHasOnlyDotSafeStructuralMantissas(direct) ? direct : /* @__PURE__ */ new Set();
   }
   function recallStructuralShapeFacts(op2, state, register) {
     const output = /* @__PURE__ */ new Set();
@@ -15528,10 +17694,18 @@ var MKProEmulatorBundle = (() => {
     if (shapeDigits(shifted).length > 8) return void 0;
     return `${sign}${shifted}`;
   }
-  function x2FirstMantissaDigitFromShapeFact(fact) {
+  function firstDigitSpliceSourceMantissaModel(fact) {
     const model = x2ShapeDataModelForFact(fact);
-    const mantissa = model.kind === "mantissa" ? model : model.kind === "exponent-entry" ? model.mantissa : void 0;
-    if (mantissa === void 0 || mantissa.sign !== "" || mantissa.digits.length === 0) return void 0;
+    return model.kind === "mantissa" ? model : model.kind === "exponent-entry" ? model.mantissa : void 0;
+  }
+  function decimalVpFirstDigitSourceDigitFromModel(mantissa) {
+    if (mantissa.radix === "decimal") return mantissa.digits.find((digit) => digit !== "0");
+    if (mantissa.sign !== "" || mantissa.digits.length === 0) return void 0;
+    const sourceDigit = mantissa.digits[0];
+    return sourceDigit !== void 0 && /^[0-9]$/u.test(sourceDigit) ? sourceDigit : void 0;
+  }
+  function structuralVpFirstDigitSourceDigitFromModel(mantissa) {
+    if (mantissa.sign !== "" || mantissa.digits.length === 0) return void 0;
     return mantissa.digits[0];
   }
   function replaceFirstShapeDigit(raw, digit) {
@@ -15561,7 +17735,11 @@ var MKProEmulatorBundle = (() => {
     return void 0;
   }
   function canonicalShapeRaw(raw) {
-    return raw.trim().replace(/\s+/gu, "").replace(/,/gu, ".").toUpperCase();
+    const cached = CANONICAL_SHAPE_RAW_CACHE.get(raw);
+    if (cached !== void 0) return cached;
+    const result = raw.trim().replace(/\s+/gu, "").replace(/,/gu, ".").toUpperCase();
+    CANONICAL_SHAPE_RAW_CACHE.set(raw, result);
+    return result;
   }
   function canonicalExponentShapeRaw(raw) {
     const canonical = canonicalShapeRaw(raw);
@@ -15730,9 +17908,9 @@ var MKProEmulatorBundle = (() => {
     const mantissas = /* @__PURE__ */ new Set();
     for (const fact of shapes ?? []) {
       const model = x2ShapeDataModelForFact(fact);
-      if (model.kind !== "mantissa" || model.radix !== "decimal") continue;
-      const spliced = decimalStoreVpSpliceMantissa(model.canonical);
-      if (spliced !== void 0) mantissas.add(spliced);
+      if (model.kind !== "mantissa") continue;
+      const spliced = x2MantissaStoreVpSpliceModel(model)?.decimal;
+      if (spliced !== void 0) mantissas.add(spliced.canonical);
     }
     return mantissas.size === 0 ? void 0 : mantissas;
   }
@@ -15753,8 +17931,11 @@ var MKProEmulatorBundle = (() => {
   function vpEntryShapesFromStoreSplice(shapes) {
     const output = /* @__PURE__ */ new Set();
     for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
-      const spliced = structuralStoreVpSpliceShapeFact(fact);
-      if (spliced !== void 0) output.add(spliced);
+      const model = x2ShapeDataModelForFact(fact);
+      if (model.kind !== "mantissa") continue;
+      const spliced = x2MantissaStoreVpSpliceModel(model)?.structural;
+      const shape = spliced === void 0 ? void 0 : x2MantissaShapeFactFromModel(spliced);
+      if (shape !== void 0) output.add(shape);
     }
     return output.size === 0 ? void 0 : output;
   }
@@ -15762,17 +17943,20 @@ var MKProEmulatorBundle = (() => {
     const mantissas = /* @__PURE__ */ new Set();
     for (const fact of shapes ?? []) {
       const model = x2ShapeDataModelForFact(fact);
-      if (model.kind !== "mantissa" || model.radix !== "decimal") continue;
-      const spliced = indirectFlowVpSpliceMantissa(model);
-      if (spliced !== void 0) mantissas.add(spliced);
+      if (model.kind !== "mantissa") continue;
+      const spliced = x2MantissaIndirectFlowVpSpliceModel(model)?.decimal;
+      if (spliced !== void 0) mantissas.add(spliced.canonical);
     }
     return mantissas.size === 0 ? void 0 : mantissas;
   }
   function vpEntryShapesFromIndirectFlowSplice(shapes) {
     const output = /* @__PURE__ */ new Set();
     for (const fact of structuralRestoreShapeFacts(canonicalStructuralShapeFacts(shapes))) {
-      const spliced = indirectFlowStructuralVpSpliceShapeFact(fact);
-      if (spliced !== void 0) output.add(spliced);
+      const model = x2ShapeDataModelForFact(fact);
+      if (model.kind !== "mantissa") continue;
+      const spliced = x2MantissaIndirectFlowVpSpliceModel(model)?.structural;
+      const shape = spliced === void 0 ? void 0 : x2MantissaShapeFactFromModel(spliced);
+      if (shape !== void 0) output.add(shape);
     }
     return output.size === 0 ? void 0 : output;
   }
@@ -15806,15 +17990,6 @@ var MKProEmulatorBundle = (() => {
     if (spliced === void 0 || decimalMantissaDigitCount(spliced) > 8) return void 0;
     return normalizeDecimalMantissaEntry(spliced) === void 0 ? void 0 : spliced;
   }
-  function indirectFlowStructuralVpSpliceShapeFact(fact) {
-    const model = x2ShapeDataModelForFact(fact);
-    if (model.kind !== "mantissa" || model.radix !== "hex" && model.radix !== "super" || model.digits.length === 0) {
-      return void 0;
-    }
-    const spliced = replaceFirstShapeDigit(model.canonical, indirectFlowVpFirstDigit(model));
-    if (spliced === void 0 || shapeDigits(spliced).length > 8) return void 0;
-    return x2MantissaShapeFactFromModel(structuralMantissaDataModel("hex", spliced, "structuralOnly"));
-  }
   function indirectFlowVpFirstDigit(model) {
     return model.digits.every((digit) => digit === "0") ? "8" : "7";
   }
@@ -15833,14 +18008,7 @@ var MKProEmulatorBundle = (() => {
     if (!replaced) return "-1";
     return normalizeDecimalMantissaEntry(`-${spliced}`);
   }
-  function structuralStoreVpSpliceShapeFact(fact) {
-    const model = x2ShapeDataModelForFact(fact);
-    if (model.kind !== "mantissa" || model.radix !== "hex" && model.radix !== "super") return void 0;
-    const spliced = removeFirstStructuralMantissaDigit(model.canonical);
-    if (spliced === void 0) return void 0;
-    return x2MantissaShapeFactFromModel(structuralMantissaDataModel("hex", spliced, "structuralOnly"));
-  }
-  function removeFirstStructuralMantissaDigit(raw) {
+  function dropFirstStructuralMantissaDigit(raw) {
     const sign = raw.startsWith("-") ? "-" : "";
     const unsigned = sign === "" ? raw : raw.slice(1);
     let removed = false;
@@ -15877,10 +18045,22 @@ var MKProEmulatorBundle = (() => {
   function joinOptionalShapeSets(current, incoming) {
     return intersectX2ShapeSets(current, incoming);
   }
+  function joinDirectShapeSets(current, incoming) {
+    return intersectX2ShapeSets(current, incoming);
+  }
   function sameOptionalShapeSet(left, right) {
     const leftSet = canonicalShapeSet(left);
     const rightSet = canonicalShapeSet(right);
     if (leftSet.size !== rightSet.size) return false;
+    for (const value of leftSet) {
+      if (!rightSet.has(value)) return false;
+    }
+    return true;
+  }
+  function sameNonEmptyShapeSet(left, right) {
+    const leftSet = canonicalShapeSet(left);
+    const rightSet = canonicalShapeSet(right);
+    if (leftSet.size === 0 || leftSet.size !== rightSet.size) return false;
     for (const value of leftSet) {
       if (!rightSet.has(value)) return false;
     }
@@ -15916,33 +18096,69 @@ var MKProEmulatorBundle = (() => {
     return false;
   }
   function activeMantissaVpSourceKeys(context) {
-    return vpSourceKeys(context.mantissa, void 0);
+    return new Set(x2VpSourceModel(context.mantissa, void 0).keys);
   }
   function vpEntrySourceKeys(state) {
-    return vpSourceKeys(state?.vpEntryMantissa, state?.vpEntryShape);
+    return x2VpEntrySourceModel(state).keys;
   }
   function vpEntrySignSourceKeys(state) {
-    const mantissas = state === void 0 ? void 0 : vpEntrySignSourceMantissas(state);
-    const shapes = state === void 0 ? void 0 : vpEntrySignSourceShapes(state);
-    return vpSourceKeys(mantissas, shapes);
+    return x2VpEntrySignSourceModel(state).keys;
   }
   function explicitVpEntrySignSourceKeys(state) {
-    return vpSourceKeys(state?.vpEntrySignMantissa, state?.vpEntrySignShape);
+    return x2ExplicitVpEntrySignSourceModel(state).keys;
   }
-  function vpSourceKeys(mantissas, shapes) {
+  function x2VpEntrySourceModel(state) {
+    return x2VpSourceModel(state?.vpEntryMantissa, state?.vpEntryShape);
+  }
+  function x2VpEntrySignSourceModel(state) {
+    return state === void 0 ? x2VpSourceModel(void 0, void 0) : x2VpSourceModel(vpEntrySignSourceMantissas(state), vpEntrySignSourceShapes(state));
+  }
+  function x2ExplicitVpEntrySignSourceModel(state) {
+    return x2VpSourceModel(state?.vpEntrySignMantissa, state?.vpEntrySignShape);
+  }
+  function x2VpSourceModel(mantissas, shapes) {
+    return {
+      mantissas,
+      shapes,
+      keys: vpSourceKeysFromFields(mantissas, shapes)
+    };
+  }
+  function vpSourceKeysFromFields(mantissas, shapes) {
     const keys = /* @__PURE__ */ new Set();
     addVpEntryRawMantissaSourceKeys(keys, mantissas);
     addVpEntryDisplaySourceKeys(keys, mantissas, shapes);
     return keys;
   }
+  function nonZeroVpSourceKeys(input) {
+    const output = /* @__PURE__ */ new Set();
+    for (const key of input) {
+      if (!vpSourceKeyIsZeroDecimal(key)) output.add(key);
+    }
+    return output;
+  }
+  function vpSourceKeyIsZeroDecimal(key) {
+    const rawMantissa = /^decimal:([^:]+)$/u.exec(key)?.[1];
+    if (rawMantissa !== void 0) return normalizeDecimalMantissaEntry(rawMantissa) === "0";
+    const valueFact = /^decimal:([^:]+):(?:normalized|unnormalized)$/u.exec(key)?.[1];
+    if (valueFact !== void 0) return normalizePlainDecimal(valueFact) === "0";
+    const shapeRaw = /^shape:(.*)$/u.exec(key)?.[1];
+    if (shapeRaw === void 0) return false;
+    for (const fact of x2RestoredDisplayShapeFactsFromSourceKey(key) ?? []) {
+      const visible = x2ShapeFactRestoredVisibleDecimal(fact);
+      if (visible !== void 0 && normalizePlainDecimal(visible) === "0") return true;
+      const model2 = x2ShapeDataModelForFact(fact);
+      if (model2.kind === "mantissa" && model2.radix === "decimal" && model2.normalizedDecimal === "0") return true;
+    }
+    const model = x2ShapeDataModelForFact(shapeRaw);
+    return model.kind === "mantissa" && model.radix === "decimal" && model.normalizedDecimal === "0";
+  }
   function joinVpSourceMantissas(leftMantissas, leftShapes, rightMantissas, rightShapes) {
+    const left = x2VpSourceModel(leftMantissas, leftShapes);
+    const right = x2VpSourceModel(rightMantissas, rightShapes);
     const direct = joinOptionalStringSets(leftMantissas, rightMantissas);
     if (direct !== void 0 && (leftShapes?.size ?? 0) === 0 && (rightShapes?.size ?? 0) === 0) return direct;
     const mantissas = new Set(direct);
-    const sharedKeys = joinStringSets(
-      vpSourceKeys(leftMantissas, leftShapes),
-      vpSourceKeys(rightMantissas, rightShapes)
-    );
+    const sharedKeys = joinStringSets(left.keys, right.keys);
     for (const key of sharedKeys) {
       const mantissa = vpMantissaFromSourceKey(key);
       if (mantissa !== void 0) mantissas.add(mantissa);
@@ -15965,11 +18181,10 @@ var MKProEmulatorBundle = (() => {
     const direct = joinOptionalShapeSets(leftShapes, rightShapes);
     if (direct.size > 0 && !includeDecimal) return direct;
     if (direct.size > 0 && (leftMantissas?.size ?? 0) === 0 && (rightMantissas?.size ?? 0) === 0 && !shapeSetHasDecimalDisplaySource(leftShapes) && !shapeSetHasDecimalDisplaySource(rightShapes)) return direct;
+    const left = x2VpSourceModel(leftMantissas, leftShapes);
+    const right = x2VpSourceModel(rightMantissas, rightShapes);
     const shapes = new Set(direct);
-    const sharedKeys = joinStringSets(
-      vpSourceKeys(leftMantissas, leftShapes),
-      vpSourceKeys(rightMantissas, rightShapes)
-    );
+    const sharedKeys = joinStringSets(left.keys, right.keys);
     for (const key of sharedKeys) {
       for (const fact of x2RestoredDisplayShapeFactsFromSourceKey(key) ?? []) {
         const safety = x2ShapeFactSafety(fact);
@@ -16008,6 +18223,9 @@ var MKProEmulatorBundle = (() => {
   function cloneOptionalValueSet(input) {
     return input === void 0 ? /* @__PURE__ */ new Set() : canonicalX2ValueSet(input);
   }
+  function sameNonEmptyStringSet(left, right) {
+    return left !== void 0 && right !== void 0 && left.size > 0 && left.size === right.size && sameStringSet(left, right);
+  }
   function cloneOptionalStringSet(input) {
     return input === void 0 ? void 0 : new Set(input);
   }
@@ -16029,8 +18247,56 @@ var MKProEmulatorBundle = (() => {
   function stableExpressionValueFact(opcode, source) {
     return canonicalStableExpressionValueFact(`expr-key:${opcode}(${source})`);
   }
-  function stableExpressionSourceKey(fact) {
+  function x2StableUnaryExpressionValueFact(op2, source) {
+    if (op2.kind !== "plain") return void 0;
+    if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2) || hasIrRoles(op2)) return void 0;
+    if (stableExpressionOpcodeArity(op2.opcode) !== 1) return void 0;
+    const key = stableExpressionSourceKey(source);
+    if (key === void 0) return void 0;
+    if (stableExpressionKeyHasConcreteDecimalResult(op2, key)) return void 0;
+    const opcode = op2.opcode.toString(16).toUpperCase().padStart(2, "0");
+    return stableExpressionValueFact(opcode, key);
+  }
+  function x2UnaryExpressionValueFacts(op2, source) {
+    if (op2.kind !== "plain") return /* @__PURE__ */ new Set();
+    if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2) || hasIrRoles(op2)) return /* @__PURE__ */ new Set();
+    if (stableExpressionOpcodeArity(op2.opcode) !== 1) return /* @__PURE__ */ new Set();
+    const output = plainProducesConcreteDecimalValues(op2, /* @__PURE__ */ new Set([source]));
+    const stable = x2StableUnaryExpressionValueFact(op2, source);
+    if (stable !== void 0) output.add(stable);
+    return output;
+  }
+  function x2StableBinaryExpressionValueFact(op2, ySource, xSource) {
+    if (op2.kind !== "plain") return void 0;
+    if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2) || hasIrRoles(op2)) return void 0;
+    if (stableExpressionOpcodeArity(op2.opcode) !== 2) return void 0;
+    const yKey = stableExpressionSourceKey(ySource);
+    const xKey = stableExpressionSourceKey(xSource);
+    if (yKey === void 0 || xKey === void 0) return void 0;
+    if (stableBinaryExpressionKeyHasConcreteDecimalResult(op2, yKey, xKey)) return void 0;
+    const opcode = op2.opcode.toString(16).toUpperCase().padStart(2, "0");
+    return stableBinaryExpressionValueFact(op2, opcode, yKey, xKey);
+  }
+  function x2BinaryExpressionValueFacts(op2, ySource, xSource) {
+    if (op2.kind !== "plain") return /* @__PURE__ */ new Set();
+    if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2) || hasIrRoles(op2)) return /* @__PURE__ */ new Set();
+    if (stableExpressionOpcodeArity(op2.opcode) !== 2) return /* @__PURE__ */ new Set();
+    const output = plainProducesConcreteBinaryDecimalValues(
+      op2,
+      /* @__PURE__ */ new Set([ySource]),
+      /* @__PURE__ */ new Set([xSource])
+    );
+    const stable = x2StableBinaryExpressionValueFact(op2, ySource, xSource);
+    if (stable !== void 0) output.add(stable);
+    return output;
+  }
+  function x2StableConstantExpressionValueFacts(op2) {
+    if (op2.kind !== "plain") return /* @__PURE__ */ new Set();
+    return plainProducesStableConstantExpressionValues(op2);
+  }
+  function stableExpressionSourceKey(fact, options = {}) {
     if (fact.startsWith("reg:")) return fact;
+    if (options.includeOpaqueExpr !== false && /^expr:\d+$/u.test(fact)) return fact;
     if (fact.startsWith("expr-key:")) return canonicalStableExpressionValueFactIfValid(fact);
     const decimal2 = computationDecimalValueFromFact(fact);
     if (decimal2 !== void 0) return decimalValueFact(decimal2, "normalized");
@@ -16042,8 +18308,10 @@ var MKProEmulatorBundle = (() => {
   function canonicalStableExpressionValueFactIfValid(fact) {
     if (!fact.startsWith("expr-key:")) return fact;
     if (stableExpressionValueFactHasInvalidShapeSource(fact)) return void 0;
+    const opcode = stableExpressionValueFactOpcode(fact);
+    const preservePinnedExponent = opcode !== void 0 && opcodePreservesPinnedStructuralExponentSource(opcode);
     return fact.replace(/shape:([^,()]+)/gu, (source, raw) => {
-      const canonical = canonicalStableShapeSourceKey(raw);
+      const canonical = canonicalStableShapeSourceKey(raw, preservePinnedExponent);
       return canonical ?? source;
     });
   }
@@ -16067,18 +18335,65 @@ var MKProEmulatorBundle = (() => {
   function canonicalX2ValueFactIfValid(fact) {
     return fact.startsWith("expr-key:") ? canonicalStableExpressionValueFactIfValid(fact) : fact;
   }
-  function canonicalStableShapeSourceKey(fact) {
+  function stableExpressionValueFactOpcode(fact) {
+    const opcode = /^expr-key:([0-9A-F]{2})\(/u.exec(fact)?.[1];
+    return opcode === void 0 ? void 0 : Number.parseInt(opcode, 16);
+  }
+  function opcodePreservesPinnedStructuralExponentSource(opcode) {
+    return opcode === 16 || opcode === 17 || opcode === 18 || opcode === 19 || opcode === 50;
+  }
+  function canonicalStableShapeSourceKey(fact, preservePinnedStructuralExponentSource = false) {
+    if (preservePinnedStructuralExponentSource) {
+      const direct = pinnedStructuralExponentStableShapeSourceKey(fact);
+      if (direct !== void 0) return direct;
+    }
     const facts = x2RestoredDisplaySourceKeyShapeFacts(/* @__PURE__ */ new Set([fact]));
     return facts.size === 1 ? stableExpressionShapeSourceKey([...facts][0]) : void 0;
   }
-  function stableExpressionSourceKeys(values, shapes) {
+  function pinnedStructuralExponentStableShapeSourceKey(fact) {
+    const canonical = x2CanonicalShapeFactIfValid(fact);
+    if (canonical === void 0) return void 0;
+    const model = x2ShapeDataModelForFact(canonical);
+    if (model.kind !== "exponent-entry" || model.mantissa.radix !== "hex" && model.mantissa.radix !== "super" || !hasStructuralNonDecimalDigit(model.mantissa.canonical)) {
+      return void 0;
+    }
+    return stableStructuralExpressionSourceKey(canonical);
+  }
+  function stableExpressionSourceKeys(values, shapes, options = {}) {
     const keys = /* @__PURE__ */ new Set();
     for (const fact of values ?? []) {
-      const key = stableExpressionSourceKey(fact);
+      const key = stableExpressionSourceKey(fact, options);
       if (key !== void 0) keys.add(key);
     }
     for (const key of stableExpressionDisplayShapeSourceKeys(values, shapes)) keys.add(key);
     return keys;
+  }
+  function stableExpressionSourceKeysForOperand(opcode, values, shapes, options = {}) {
+    const keys = stableExpressionSourceKeys(values, shapes, options);
+    if (!opcodePreservesPinnedStructuralExponentSource(opcode)) return keys;
+    const direct = pinnedStructuralExponentStableShapeSourceKeys(shapes);
+    if (direct.keys.size === 0) return keys;
+    const output = /* @__PURE__ */ new Set();
+    for (const key of stableExpressionSourceKeys(values, void 0, options)) output.add(key);
+    for (const key of stableExpressionDisplayShapeSourceKeys(values, shapes)) {
+      if (!direct.blockedRestoreKeys.has(key)) output.add(key);
+    }
+    for (const key of direct.keys) output.add(key);
+    return output;
+  }
+  function pinnedStructuralExponentStableShapeSourceKeys(shapes) {
+    const keys = /* @__PURE__ */ new Set();
+    const blockedRestoreKeys = /* @__PURE__ */ new Set();
+    for (const fact of canonicalStructuralShapeFacts(shapes)) {
+      const key = pinnedStructuralExponentStableShapeSourceKey(fact);
+      if (key === void 0) continue;
+      keys.add(key);
+      const model = x2ShapeDataModelForFact(fact);
+      if (model.kind !== "exponent-entry" || model.closedStructuralMantissa === void 0) continue;
+      const closed = x2MantissaShapeFactFromModel(model.closedStructuralMantissa);
+      if (closed !== void 0) blockedRestoreKeys.add(stableExpressionShapeSourceKey(closed));
+    }
+    return { keys, blockedRestoreKeys };
   }
   function stableExpressionDisplayShapeSourceKeys(values, shapes) {
     const keys = /* @__PURE__ */ new Set();
@@ -16101,6 +18416,12 @@ var MKProEmulatorBundle = (() => {
     const facts = x2RestoredDisplaySourceKeyShapeFacts(/* @__PURE__ */ new Set([raw]));
     return facts.size === 0 ? void 0 : facts;
   }
+  function stableExpressionKeyDirectShapeSet(key) {
+    const raw = /^shape:(.*)$/u.exec(key)?.[1];
+    if (raw === void 0) return void 0;
+    const canonical = x2CanonicalShapeFactIfValid(raw);
+    return canonical === void 0 ? void 0 : /* @__PURE__ */ new Set([canonical]);
+  }
   function normalizedDecimalValueSet(values) {
     const output = /* @__PURE__ */ new Set();
     for (const fact of values ?? []) {
@@ -16117,8 +18438,11 @@ var MKProEmulatorBundle = (() => {
     return decimal2 === void 0 ? stableStructuralExpressionSourceKey(fact) : decimalValueFact(decimal2, "normalized");
   }
   function stableExpressionKeyValueSet(key) {
+    if (STABLE_EXPRESSION_VALUE_SET_CACHE.has(key)) return STABLE_EXPRESSION_VALUE_SET_CACHE.get(key);
     const values = stableExpressionKeyValueSetForEvaluation(key, /* @__PURE__ */ new Set());
-    return values.size === 0 ? void 0 : values;
+    const result = values.size === 0 ? void 0 : values;
+    STABLE_EXPRESSION_VALUE_SET_CACHE.set(key, result);
+    return result;
   }
   function stableExpressionKeyValueSetForOperand(opcode, key, seen) {
     if (opcodeHasStructuralOperandSemantics(opcode) && stableExpressionKeyHasStructuralShapeEvidence(key, seen)) {
@@ -16134,7 +18458,16 @@ var MKProEmulatorBundle = (() => {
     return false;
   }
   function stableExpressionKeyShapeSet(key) {
+    if (STABLE_EXPRESSION_SHAPE_SET_CACHE.has(key)) return STABLE_EXPRESSION_SHAPE_SET_CACHE.get(key);
     const shapes = stableExpressionKeyShapeSetForEvaluation(key, /* @__PURE__ */ new Set());
+    const result = shapes.size === 0 ? void 0 : shapes;
+    STABLE_EXPRESSION_SHAPE_SET_CACHE.set(key, result);
+    return result;
+  }
+  function stableExpressionKeyShapeSetForOperand(opcode, key, seen) {
+    const direct = opcodeHasStructuralOperandSemantics(opcode) ? stableExpressionKeyDirectShapeSet(key) : void 0;
+    if (direct !== void 0 && direct.size > 0) return direct;
+    const shapes = stableExpressionKeyShapeSetForEvaluation(key, seen);
     return shapes.size === 0 ? void 0 : shapes;
   }
   function stableExpressionKeyValueSetForEvaluation(key, seen) {
@@ -16185,8 +18518,9 @@ var MKProEmulatorBundle = (() => {
       for (const fact of plainProducesConcreteDecimalValues(
         op2,
         stableExpressionKeyValueSetForOperand(parsed.opcode, xKey, seen),
-        stableExpressionKeyShapeSetForEvaluation(xKey, seen),
-        options
+        stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey, seen),
+        options,
+        stableExpressionKeyDirectShapeSet(xKey)
       )) {
         const value = normalizedDecimalValueFromFact(fact);
         if (value !== void 0) output.add(value);
@@ -16197,9 +18531,11 @@ var MKProEmulatorBundle = (() => {
         op2,
         stableExpressionKeyValueSetForOperand(parsed.opcode, yKey, seen),
         stableExpressionKeyValueSetForOperand(parsed.opcode, xKey, seen),
-        stableExpressionKeyShapeSetForEvaluation(yKey, seen),
-        stableExpressionKeyShapeSetForEvaluation(xKey, seen),
-        options
+        stableExpressionKeyShapeSetForOperand(parsed.opcode, yKey, seen),
+        stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey, seen),
+        options,
+        stableExpressionKeyDirectShapeSet(yKey),
+        stableExpressionKeyDirectShapeSet(xKey)
       )) {
         const value = normalizedDecimalValueFromFact(fact);
         if (value !== void 0) output.add(value);
@@ -16221,6 +18557,26 @@ var MKProEmulatorBundle = (() => {
     }
     return output;
   }
+  function stableSignChangeExpressionShapeFacts(operand, seen) {
+    const output = /* @__PURE__ */ new Set();
+    for (const fact of stableExpressionKeyShapeSetForEvaluation(operand, seen)) {
+      if (x2ShapeFactSafety(fact) !== "structuralOnly") continue;
+      if (structuralSignChangeShapeKeyMayHideExponentContext(fact)) continue;
+      const signed = x2ExponentMantissaSignChangedShapeFact(fact) ?? x2MantissaSignChangedShapeFact(fact);
+      if (signed === void 0) continue;
+      const canonical = x2CanonicalShapeFactIfValid(signed);
+      if (canonical !== void 0 && x2ShapeFactSafety(canonical) === "structuralOnly") output.add(canonical);
+    }
+    return output;
+  }
+  function structuralSignChangeShapeKeyMayHideExponentContext(fact) {
+    const model = x2ShapeDataModelForFact(fact);
+    if (model.kind !== "mantissa" || model.radix !== "hex" || model.hasDecimalPoint || !hasStructuralNonDecimalDigit(model.canonical)) {
+      return false;
+    }
+    const unsigned = model.sign === "" ? model.canonical : model.canonical.slice(1);
+    return /0+$/u.test(unsigned);
+  }
   function stableExpressionKeyConcreteShapeFacts(key, seen) {
     const output = /* @__PURE__ */ new Set();
     const parsed = parseStableExpressionKey(key);
@@ -16231,6 +18587,9 @@ var MKProEmulatorBundle = (() => {
         for (const value of stableSignChangeExpressionDecimalValues(parsed.operands[0], seen)) {
           const shape = exactDecimalDisplayShapeFact(value);
           if (shape !== void 0) output.add(shape);
+        }
+        for (const shape of stableSignChangeExpressionShapeFacts(parsed.operands[0], seen)) {
+          output.add(shape);
         }
       }
       seen.delete(key);
@@ -16250,9 +18609,11 @@ var MKProEmulatorBundle = (() => {
         op2,
         stableExpressionKeyValueSetForOperand(parsed.opcode, xKey, seen),
         void 0,
-        stableExpressionKeyShapeSetForEvaluation(xKey, seen),
+        stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey, seen),
         void 0,
-        options
+        options,
+        void 0,
+        stableExpressionKeyDirectShapeSet(xKey)
       )) output.add(fact);
     } else if (parsed.operands.length === 2) {
       const [yKey, xKey] = parsed.operands;
@@ -16260,9 +18621,11 @@ var MKProEmulatorBundle = (() => {
         op2,
         stableExpressionKeyValueSetForOperand(parsed.opcode, xKey, seen),
         stableExpressionKeyValueSetForOperand(parsed.opcode, yKey, seen),
-        stableExpressionKeyShapeSetForEvaluation(xKey, seen),
-        stableExpressionKeyShapeSetForEvaluation(yKey, seen),
-        options
+        stableExpressionKeyShapeSetForOperand(parsed.opcode, xKey, seen),
+        stableExpressionKeyShapeSetForOperand(parsed.opcode, yKey, seen),
+        options,
+        stableExpressionKeyDirectShapeSet(yKey),
+        stableExpressionKeyDirectShapeSet(xKey)
       )) output.add(fact);
     }
     seen.delete(key);
@@ -16468,6 +18831,13 @@ var MKProEmulatorBundle = (() => {
     return decimalExponentShapeFact(mantissa, String(exponent));
   }
   function normalizePlainDecimal(raw) {
+    const cached = NORMALIZE_PLAIN_DECIMAL_CACHE.get(raw);
+    if (cached !== void 0 || NORMALIZE_PLAIN_DECIMAL_CACHE.has(raw)) return cached;
+    const result = normalizePlainDecimalImpl(raw);
+    NORMALIZE_PLAIN_DECIMAL_CACHE.set(raw, result);
+    return result;
+  }
+  function normalizePlainDecimalImpl(raw) {
     const match = /^(-?)(?:([0-9]+)(?:\.([0-9]+))?|\.(\d+))$/u.exec(raw);
     if (match === null) return void 0;
     const sign = match[1];
@@ -16478,11 +18848,15 @@ var MKProEmulatorBundle = (() => {
     return `${sign}${normalized}`;
   }
   function significantDecimalDigits(input) {
+    const cached = SIGNIFICANT_DECIMAL_DIGITS_CACHE.get(input);
+    if (cached !== void 0) return cached;
     const unsigned = input.startsWith("-") ? input.slice(1) : input;
     const [integer, fraction] = unsigned.split(".");
     const digits = `${integer ?? ""}${fraction ?? ""}`.replace(/^0+/u, "");
     const significant = fraction === void 0 ? digits.replace(/0+$/u, "") : digits;
-    return significant.length === 0 ? 1 : significant.length;
+    const result = significant.length === 0 ? 1 : significant.length;
+    SIGNIFICANT_DECIMAL_DIGITS_CACHE.set(input, result);
+    return result;
   }
   function normalizeDecimalMantissaEntry(raw) {
     const match = /^(-?)([0-9]{1,8})(?:\.([0-9]*))?$/u.exec(raw);
@@ -16565,11 +18939,25 @@ var MKProEmulatorBundle = (() => {
     if (exponentShapeBacked !== void 0) return exponentShapeBacked;
     const shaped = signChangedVpEntryMantissas(input);
     if (shaped !== void 0) {
-      return x2ValueStateFromMantissaShapes(shaped, input.memory, input.shapeMemory, input.y, input.yShape);
+      return x2ValueStateFromMantissaShapes(
+        shaped,
+        input.memory,
+        input.shapeMemory,
+        input.y,
+        input.yShape,
+        input.yDirectShape
+      );
     }
     const shapeBacked = signChangedClosedShapeMantissas(input);
     if (shapeBacked !== void 0) {
-      return x2ValueStateFromMantissaShapes(shapeBacked, input.memory, input.shapeMemory, input.y, input.yShape);
+      return x2ValueStateFromMantissaShapes(
+        shapeBacked,
+        input.memory,
+        input.shapeMemory,
+        input.y,
+        input.yShape,
+        input.yDirectShape
+      );
     }
     const decimalShapeSource = signChangedVpEntryDecimalShapeState(input);
     if (decimalShapeSource !== void 0) return decimalShapeSource;
@@ -16582,7 +18970,8 @@ var MKProEmulatorBundle = (() => {
         input.memory,
         input.shapeMemory,
         input.y,
-        input.yShape
+        input.yShape,
+        input.yDirectShape
       );
     }
     const values = /* @__PURE__ */ new Set();
@@ -16619,6 +19008,8 @@ var MKProEmulatorBundle = (() => {
       xShape: shapes,
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(shapes),
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       vpEntryMantissa: vpEntryMantissasFromValueFacts(values),
@@ -16709,6 +19100,8 @@ var MKProEmulatorBundle = (() => {
       xShape: shapes,
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(shapes),
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -16751,6 +19144,8 @@ var MKProEmulatorBundle = (() => {
       xShape: shapes,
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(shapes),
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -16779,7 +19174,8 @@ var MKProEmulatorBundle = (() => {
       input.memory,
       input.shapeMemory,
       input.y,
-      input.yShape
+      input.yShape,
+      input.yDirectShape
     );
     const values = /* @__PURE__ */ new Set();
     if (producerIndex !== void 0) values.add(expressionValueFact(producerIndex));
@@ -16890,14 +19286,7 @@ var MKProEmulatorBundle = (() => {
     return mantissas.size === 0 ? void 0 : mantissas;
   }
   function sharedStructuralShapeFacts(input) {
-    const xRestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(effectiveInputXShape(input)));
-    const x2RestoreShapes = structuralRestoreShapeFacts(canonicalStructuralShapeFacts(effectiveInputX2Shape(input)));
-    const shapes = /* @__PURE__ */ new Set();
-    for (const fact of x2RestoreShapes) {
-      if (!xRestoreShapes.has(fact)) continue;
-      const model = x2ShapeDataModelForFact(fact);
-      if (model.kind === "mantissa" && (model.radix === "hex" || model.radix === "super")) shapes.add(fact);
-    }
+    const shapes = x2SharedStructuralRestoreShapeFacts(effectiveInputXShape(input), effectiveInputX2Shape(input));
     return shapes.size === 0 ? void 0 : shapes;
   }
   function sharedVpEntrySignShapeFacts(input) {
@@ -16912,15 +19301,13 @@ var MKProEmulatorBundle = (() => {
   function effectiveInputX2Shape(input) {
     return shapeSetWithFallbackValueDerivedDisplayShapes(input.x2Shape, input.x2);
   }
-  function structuralFirstDigitVpSpliceShapeFacts(xShape, x2Shape) {
-    const shapes = /* @__PURE__ */ new Set();
+  function structuralFirstDigitVpSpliceShapeFacts(xShape, x2Shape, includeExponentTargets = false) {
     const sources = restoredVpFirstDigitSourceShapeFacts(xShape);
-    const targets = vpFirstDigitSpliceTargetShapeFacts(x2Shape);
-    for (const source of sources) {
-      for (const target of targets) {
-        const spliced = x2StructuralMantissaFirstDigitSpliceShapeFact(source, target);
-        if (spliced !== void 0) shapes.add(spliced);
-      }
+    const targets = vpFirstDigitSpliceTargetShapeFacts(x2Shape, includeExponentTargets);
+    const shapes = /* @__PURE__ */ new Set();
+    for (const model of firstDigitVpSpliceModels(sources, targets)) {
+      const fact = model.structural === void 0 ? void 0 : x2MantissaShapeFactFromModel(model.structural);
+      if (fact !== void 0) shapes.add(fact);
     }
     return shapes.size === 0 ? void 0 : shapes;
   }
@@ -16928,15 +19315,24 @@ var MKProEmulatorBundle = (() => {
     const mantissas = /* @__PURE__ */ new Set();
     const sources = restoredVpFirstDigitSourceShapeFacts(xShape);
     const targets = decimalVpFirstDigitSpliceTargetShapeFacts(x2Shape, includeExponentTargets);
-    for (const source of sources) {
-      const sourceDigit = x2FirstMantissaDigitFromShapeFact(source);
-      if (sourceDigit === void 0 || !/^[0-9]$/u.test(sourceDigit)) continue;
-      for (const target of targets) {
-        const spliced = decimalFirstDigitVpSpliceMantissa(sourceDigit, target);
-        if (spliced !== void 0) mantissas.add(spliced);
-      }
+    for (const model of firstDigitVpSpliceModels(sources, targets)) {
+      if (model.decimal !== void 0) mantissas.add(model.decimal.canonical);
     }
     return mantissas.size === 0 ? void 0 : mantissas;
+  }
+  function firstDigitVpSpliceModels(sources, targets) {
+    const output = [];
+    for (const source of sources) {
+      const sourceModel = firstDigitSpliceSourceMantissaModel(source);
+      if (sourceModel === void 0) continue;
+      for (const target of targets) {
+        const targetModel = firstDigitSpliceTargetMantissaModel(target);
+        if (targetModel === void 0) continue;
+        const spliced = x2MantissaFirstDigitSpliceModel(sourceModel, targetModel);
+        if (spliced !== void 0) output.push(spliced);
+      }
+    }
+    return output;
   }
   function decimalVpFirstDigitSpliceTargetShapeFacts(shapes, includeExponentTargets) {
     const output = decimalMantissaShapeFacts(shapes);
@@ -16961,29 +19357,26 @@ var MKProEmulatorBundle = (() => {
     }
     return output;
   }
-  function decimalFirstDigitVpSpliceMantissa(sourceDigit, target) {
-    const targetModel = x2ShapeDataModelForFact(target);
-    if (targetModel.kind !== "mantissa" || targetModel.radix !== "decimal" || targetModel.sign !== "" || targetModel.digits.length === 0) {
-      return void 0;
-    }
-    const spliced = replaceFirstShapeDigit(targetModel.canonical, sourceDigit);
-    if (spliced === void 0 || decimalMantissaDigitCount(spliced) > 8) return void 0;
-    return normalizeDecimalMantissaEntry(spliced) === void 0 ? void 0 : spliced;
-  }
-  function vpFirstDigitSpliceTargetShapeFacts(shapes) {
+  function vpFirstDigitSpliceTargetShapeFacts(shapes, includeExponentTargets) {
     const output = structuralMantissaShapeFacts(x2StructuralRestoreShapeFacts(shapes));
     for (const fact of decimalMantissaShapeFacts(shapes)) output.add(fact);
     for (const fact of closedExponentMantissaDisplayShapeFacts(shapes)) output.add(fact);
+    if (!includeExponentTargets) return output;
+    for (const fact of shapes ?? []) {
+      const model = x2ShapeDataModelForFact(fact);
+      if (model.kind !== "exponent-entry") continue;
+      if (model.exponentRaw.startsWith("-")) continue;
+      const mantissa = x2MantissaShapeFactFromModel(model.mantissa);
+      if (mantissa !== void 0) output.add(mantissa);
+    }
     return output;
   }
   function closedExponentMantissaDisplayShapeFacts(shapes) {
     const output = /* @__PURE__ */ new Set();
     for (const fact of shapes ?? []) {
-      const closed = x2ClosedExponentDisplayShapeFact(fact);
-      if (closed === void 0) continue;
-      const model = x2ShapeDataModelForFact(closed);
-      if (model.kind !== "mantissa") continue;
-      const canonical = x2ShapeFactFromDataModel(model);
+      const closed = x2ClosedExponentDisplayDataModel(x2ShapeDataModelForFact(fact));
+      if (closed?.kind !== "mantissa") continue;
+      const canonical = x2ShapeFactFromDataModel(closed);
       if (canonical !== void 0) output.add(canonical);
     }
     return output;
@@ -17077,7 +19470,7 @@ var MKProEmulatorBundle = (() => {
     if (normalized === "0") return "-0";
     return raw.startsWith("-") ? raw.slice(1) : `-${raw}`;
   }
-  function x2ValueStateFromMantissaShapes(mantissas, memory = void 0, shapeMemory = void 0, y = void 0, yShape = void 0) {
+  function x2ValueStateFromMantissaShapes(mantissas, memory = void 0, shapeMemory = void 0, y = void 0, yShape = void 0, yDirectShape = void 0) {
     const x = /* @__PURE__ */ new Set();
     const x2 = /* @__PURE__ */ new Set();
     const xShape = /* @__PURE__ */ new Set();
@@ -17098,6 +19491,8 @@ var MKProEmulatorBundle = (() => {
       xShape,
       yShape: cloneOptionalShapeSet(yShape),
       x2Shape,
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -17108,7 +19503,7 @@ var MKProEmulatorBundle = (() => {
       ...cloneX2MemoryFields({ memory, shapeMemory })
     };
   }
-  function x2ValueStateFromStructuralShapes(shapes, memory = void 0, shapeMemory = void 0, y = void 0, yShape = void 0) {
+  function x2ValueStateFromStructuralShapes(shapes, memory = void 0, shapeMemory = void 0, y = void 0, yShape = void 0, yDirectShape = void 0) {
     const shapeSet = canonicalStructuralShapeFacts(shapes);
     return {
       x: /* @__PURE__ */ new Set(),
@@ -17117,6 +19512,8 @@ var MKProEmulatorBundle = (() => {
       xShape: shapeSet,
       yShape: cloneOptionalShapeSet(yShape),
       x2Shape: new Set(shapeSet),
+      xDirectShape: directStructuralMantissaShapeFacts(shapeSet),
+      yDirectShape: cloneOptionalShapeSet(yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -17126,7 +19523,10 @@ var MKProEmulatorBundle = (() => {
       ...cloneX2MemoryFields({ memory, shapeMemory })
     };
   }
-  function x2ValueStateFromStructuralExponentEntry(input, memory = void 0, shapeMemory = void 0, y = void 0, yShape = void 0) {
+  function directStructuralMantissaShapeFacts(shapes) {
+    return structuralMantissaShapeFacts(canonicalStructuralShapeFacts(shapes));
+  }
+  function x2ValueStateFromStructuralExponentEntry(input, memory = void 0, shapeMemory = void 0, y = void 0, yShape = void 0, yDirectShape = void 0) {
     if (input.kind !== "exponent") {
       return {
         x: /* @__PURE__ */ new Set(),
@@ -17135,6 +19535,8 @@ var MKProEmulatorBundle = (() => {
         xShape: /* @__PURE__ */ new Set(),
         yShape: cloneOptionalShapeSet(yShape),
         x2Shape: /* @__PURE__ */ new Set(),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(yDirectShape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         structuralEntry: cloneX2StructuralEntryState(input),
@@ -17150,6 +19552,8 @@ var MKProEmulatorBundle = (() => {
       xShape: new Set(shapes),
       yShape: cloneOptionalShapeSet(yShape),
       x2Shape: new Set(shapes),
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: cloneX2StructuralEntryState(input),
@@ -17167,6 +19571,8 @@ var MKProEmulatorBundle = (() => {
         xShape: /* @__PURE__ */ new Set(),
         yShape: cloneOptionalShapeSet(input.yShape),
         x2Shape: /* @__PURE__ */ new Set(),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry: closedX2EntryState(),
         vpContext: noneX2VpContextState(),
         structuralEntry: noneX2StructuralEntryState(),
@@ -17182,6 +19588,8 @@ var MKProEmulatorBundle = (() => {
       xShape: new Set(shapes),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(shapes),
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: noneX2VpContextState(),
       structuralEntry: noneX2StructuralEntryState(),
@@ -17191,7 +19599,7 @@ var MKProEmulatorBundle = (() => {
       ...cloneX2MemoryFields(input)
     };
   }
-  function x2ValueStateFromExponentEntry(input, memory = void 0, shapeMemory = void 0, y = void 0, yShape = void 0) {
+  function x2ValueStateFromExponentEntry(input, memory = void 0, shapeMemory = void 0, y = void 0, yShape = void 0, yDirectShape = void 0) {
     if (input.kind !== "exponent") {
       return {
         x: /* @__PURE__ */ new Set(),
@@ -17200,6 +19608,8 @@ var MKProEmulatorBundle = (() => {
         xShape: /* @__PURE__ */ new Set(),
         yShape: cloneOptionalShapeSet(yShape),
         x2Shape: /* @__PURE__ */ new Set(),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(yDirectShape),
         entry: cloneX2EntryState(input),
         vpContext: { kind: "unknown" },
         structuralEntry: noneX2StructuralEntryState(),
@@ -17219,6 +19629,8 @@ var MKProEmulatorBundle = (() => {
       xShape: new Set(shapes),
       yShape: cloneOptionalShapeSet(yShape),
       x2Shape: new Set(shapes),
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(yDirectShape),
       entry: cloneX2EntryState(input),
       vpContext: x2VpContextFromExponentEntry(input),
       structuralEntry: noneX2StructuralEntryState(),
@@ -17236,6 +19648,8 @@ var MKProEmulatorBundle = (() => {
         xShape: /* @__PURE__ */ new Set(),
         yShape: cloneOptionalShapeSet(input.yShape),
         x2Shape: /* @__PURE__ */ new Set(),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry: closedX2EntryState(),
         vpContext: cloneX2VpContextState(context),
         structuralEntry: noneX2StructuralEntryState(),
@@ -17252,6 +19666,8 @@ var MKProEmulatorBundle = (() => {
         xShape: /* @__PURE__ */ new Set(),
         yShape: cloneOptionalShapeSet(input.yShape),
         x2Shape: /* @__PURE__ */ new Set(),
+        xDirectShape: /* @__PURE__ */ new Set(),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry: closedX2EntryState(),
         vpContext: cloneX2VpContextState(context),
         structuralEntry: noneX2StructuralEntryState(),
@@ -17268,6 +19684,8 @@ var MKProEmulatorBundle = (() => {
       xShape: new Set(shapes),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: new Set(shapes),
+      xDirectShape: /* @__PURE__ */ new Set(),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: x2VpContextFromExponentEntry(entry),
       structuralEntry: noneX2StructuralEntryState(),
@@ -17368,6 +19786,8 @@ var MKProEmulatorBundle = (() => {
         xShape: new Set(closedExponentShapes),
         yShape: cloneOptionalShapeSet(input.yShape),
         x2Shape: new Set(closedExponentShapes),
+        xDirectShape: new Set(closedExponentShapes),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry: closedX2EntryState(),
         vpContext: cloneX2VpContextState(input.vpContext),
         structuralEntry: noneX2StructuralEntryState(),
@@ -17388,6 +19808,8 @@ var MKProEmulatorBundle = (() => {
         xShape: new Set(shapes),
         yShape: cloneOptionalShapeSet(input.yShape),
         x2Shape: new Set(shapes),
+        xDirectShape: new Set(shapes),
+        yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
         entry: closedX2EntryState(),
         vpContext: cloneX2VpContextState(input.vpContext),
         structuralEntry: noneX2StructuralEntryState(),
@@ -17404,6 +19826,8 @@ var MKProEmulatorBundle = (() => {
       xShape: cloneOptionalShapeSet(input.xShape),
       yShape: cloneOptionalShapeSet(input.yShape),
       x2Shape: cloneOptionalShapeSet(input.x2Shape),
+      xDirectShape: cloneOptionalShapeSet(input.xDirectShape),
+      yDirectShape: cloneOptionalShapeSet(input.yDirectShape),
       entry: closedX2EntryState(),
       vpContext: cloneX2VpContextState(input.vpContext),
       structuralEntry: noneX2StructuralEntryState(),
@@ -17608,13 +20032,16 @@ var MKProEmulatorBundle = (() => {
       const normal = (target) => {
         successors[index].push({ target, kind: "normal" });
       };
-      const jumpTo = (target) => {
-        if (typeof target !== "string") return;
-        const targetIndex = labels.get(target);
-        if (targetIndex !== void 0) successors[index].push({ target: targetIndex, kind: "jump" });
-      };
       const jumpToAddress = (target) => {
         const targetIndex = addresses.get(target);
+        if (targetIndex !== void 0) successors[index].push({ target: targetIndex, kind: "jump" });
+      };
+      const jumpTo = (target) => {
+        if (typeof target === "number") {
+          jumpToAddress(target);
+          return;
+        }
+        const targetIndex = labels.get(target);
         if (targetIndex !== void 0) successors[index].push({ target: targetIndex, kind: "jump" });
       };
       switch (op2.kind) {
@@ -17625,8 +20052,10 @@ var MKProEmulatorBundle = (() => {
         case "indirect-recall":
         case "plain":
         case "orphan-address":
-        case "stop":
           fallthrough();
+          break;
+        case "stop":
+          if (op2.semantic !== "halt" && op2.semantic !== "unknown") fallthrough();
           break;
         case "jump":
           jumpTo(op2.target);
@@ -17672,11 +20101,13 @@ var MKProEmulatorBundle = (() => {
     if (depth === 2) return 1;
     return 2;
   }
-  function stackDifferenceCanReachConsumer(ops, start, initialDepth) {
+  function stackDifferenceCanReachConsumer(ops, start, initialDepth, options = {}) {
     const labels = labelIndexes(ops);
     const addresses = addressIndexes(ops);
     const callReturnIndexes = stackDifferenceCallReturnIndexes(ops);
     const visited = /* @__PURE__ */ new Set();
+    const directNumericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex ?? start;
+    const indirectNumericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex;
     const visit = (start2, initialDepth2, returnStack = []) => {
       let depth = initialDepth2;
       for (let i = start2; i < ops.length; i += 1) {
@@ -17699,7 +20130,10 @@ var MKProEmulatorBundle = (() => {
           case "plain": {
             const effect = analyzeX2StackEffect(op2);
             if (effect.stackEffect === "unknown" || effect.stackExposes) return true;
-            if (effect.stackEffect === "barrier") return false;
+            if (effect.stackEffect === "barrier") {
+              if (depth === 1) return false;
+              break;
+            }
             if (effect.stackShifts) {
               depth = shiftDifference(depth);
               break;
@@ -17716,36 +20150,39 @@ var MKProEmulatorBundle = (() => {
             break;
           }
           case "jump": {
-            if (typeof op2.target !== "string") return true;
+            if (typeof op2.target !== "string") {
+              const targetIndex = addresses.get(op2.target);
+              return targetIndex === void 0 || targetIndex >= directNumericTargetMustBeBeforeIndex ? true : visit(targetIndex, depth, returnStack);
+            }
             const target = labels.get(op2.target);
             return target === void 0 ? true : visit(target + 1, depth, returnStack);
           }
           case "cjump":
           case "loop": {
-            if (typeof op2.target !== "string") return true;
-            const target = labels.get(op2.target);
-            return (target === void 0 ? true : visit(target + 1, depth, returnStack)) || visit(i + 1, depth, returnStack);
+            const target = typeof op2.target === "string" ? labels.get(op2.target) : addresses.get(op2.target);
+            if (typeof op2.target !== "string" && (target === void 0 || target >= directNumericTargetMustBeBeforeIndex)) return true;
+            return (target === void 0 ? true : visit(typeof op2.target === "string" ? target + 1 : target, depth, returnStack)) || visit(i + 1, depth, returnStack);
           }
           case "call": {
-            if (typeof op2.target !== "string") return true;
-            const target = labels.get(op2.target);
+            const target = typeof op2.target === "string" ? labels.get(op2.target) : addresses.get(op2.target);
+            if (typeof op2.target !== "string" && (target === void 0 || target >= directNumericTargetMustBeBeforeIndex)) return true;
             if (target === void 0 || returnStack.length >= 5) return true;
-            return visit(target + 1, depth, [i + 1, ...returnStack]);
+            return visit(typeof op2.target === "string" ? target + 1 : target, depth, [i + 1, ...returnStack]);
           }
           case "indirect-jump": {
             const target = knownIndirectFlowTarget(op2);
-            const targetIndex = target === void 0 ? void 0 : addresses.get(target);
+            const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
             return targetIndex === void 0 ? true : visit(targetIndex, depth, returnStack);
           }
           case "indirect-call": {
             const target = knownIndirectFlowTarget(op2);
-            const targetIndex = target === void 0 ? void 0 : addresses.get(target);
+            const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
             if (targetIndex === void 0 || returnStack.length >= 5) return true;
             return visit(targetIndex, depth, [i + 1, ...returnStack]);
           }
           case "indirect-cjump": {
             const target = knownIndirectFlowTarget(op2);
-            const targetIndex = target === void 0 ? void 0 : addresses.get(target);
+            const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
             return (targetIndex === void 0 ? true : visit(targetIndex, depth, returnStack)) || visit(i + 1, depth, returnStack);
           }
           case "return":
@@ -17783,13 +20220,21 @@ var MKProEmulatorBundle = (() => {
   function removingPreShiftLiftCanExposeStack(ops, producerIndex) {
     return stackDifferenceCanReachConsumer(ops, producerIndex + 1, 2);
   }
-  function replacingNumberEntryCanExposeStackLift(ops, numberEntryEndIndex) {
-    return stackDifferenceCanReachConsumer(ops, numberEntryEndIndex + 1, 1);
+  function replacingNumberEntryCanExposeStackLift(ops, numberEntryEndIndex, options = {}) {
+    return stackDifferenceCanReachConsumer(ops, numberEntryEndIndex + 1, 1, options);
+  }
+  function addressStableFlowTargetIndex(addresses, target, numericTargetMustBeBeforeIndex) {
+    if (target === void 0) return void 0;
+    const targetIndex = addresses.get(target);
+    if (targetIndex === void 0 || numericTargetMustBeBeforeIndex !== void 0 && targetIndex >= numericTargetMustBeBeforeIndex) return void 0;
+    return targetIndex;
   }
   function x2SyncCanExposeContextSensitiveRestore(ops, syncIndex, options = {}) {
     const labels = labelIndexes(ops);
     const addresses = addressIndexes(ops);
     const visited = /* @__PURE__ */ new Set();
+    const directNumericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex ?? syncIndex;
+    const indirectNumericTargetMustBeBeforeIndex = options.numericTargetMustBeBeforeIndex;
     const visit = (start, returnStack = [], sawExecutableAfterSync = false) => {
       for (let i = start; i < ops.length; i += 1) {
         const key = `${i}:${sawExecutableAfterSync ? 1 : 0}:${returnStack.join(",")}`;
@@ -17817,39 +20262,42 @@ var MKProEmulatorBundle = (() => {
           case "return":
             return false;
           case "jump": {
-            if (typeof op2.target !== "string") return true;
+            if (typeof op2.target !== "string") {
+              const targetIndex = addresses.get(op2.target);
+              return targetIndex === void 0 || targetIndex >= directNumericTargetMustBeBeforeIndex ? true : visit(targetIndex, returnStack, true);
+            }
             const target = labels.get(op2.target);
             return target === void 0 ? true : visit(target + 1, returnStack, true);
           }
           case "cjump":
           case "loop": {
-            if (typeof op2.target !== "string") return true;
-            const target = labels.get(op2.target);
             const fallthrough = conditionalX2Effect(op2, "fallthrough");
             const jump2 = conditionalX2Effect(op2, "jump");
             if (fallthrough === "unknown" || jump2 === "unknown") return true;
-            return jump2 === "preserves" && (target === void 0 ? true : visit(target + 1, returnStack, true)) || fallthrough === "preserves" && visit(i + 1, returnStack, true);
+            const target = typeof op2.target === "string" ? labels.get(op2.target) : addresses.get(op2.target);
+            if (jump2 === "preserves" && typeof op2.target !== "string" && (target === void 0 || target >= directNumericTargetMustBeBeforeIndex)) return true;
+            return jump2 === "preserves" && (target === void 0 ? true : visit(typeof op2.target === "string" ? target + 1 : target, returnStack, true)) || fallthrough === "preserves" && visit(i + 1, returnStack, true);
           }
           case "call": {
-            if (typeof op2.target !== "string") return true;
-            const target = labels.get(op2.target);
+            const target = typeof op2.target === "string" ? labels.get(op2.target) : addresses.get(op2.target);
+            if (typeof op2.target !== "string" && (target === void 0 || target >= directNumericTargetMustBeBeforeIndex)) return true;
             if (target === void 0 || returnStack.length >= 5) return true;
-            return visit(target + 1, [i + 1, ...returnStack], true);
+            return visit(typeof op2.target === "string" ? target + 1 : target, [i + 1, ...returnStack], true);
           }
           case "indirect-jump": {
             const target = knownIndirectFlowTarget(op2);
-            const targetIndex = target === void 0 ? void 0 : addresses.get(target);
+            const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
             return targetIndex === void 0 ? true : visit(targetIndex, returnStack, true);
           }
           case "indirect-call": {
             const target = knownIndirectFlowTarget(op2);
-            const targetIndex = target === void 0 ? void 0 : addresses.get(target);
+            const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
             if (targetIndex === void 0 || returnStack.length >= 5) return true;
             return visit(targetIndex, [i + 1, ...returnStack], true);
           }
           case "indirect-cjump": {
             const target = knownIndirectFlowTarget(op2);
-            const targetIndex = target === void 0 ? void 0 : addresses.get(target);
+            const targetIndex = addressStableFlowTargetIndex(addresses, target, indirectNumericTargetMustBeBeforeIndex);
             const fallthrough = conditionalX2Effect(op2, "fallthrough");
             const jump2 = conditionalX2Effect(op2, "jump");
             if (fallthrough === "unknown" || jump2 === "unknown") return true;
@@ -17974,75 +20422,268 @@ var MKProEmulatorBundle = (() => {
     layoutSafe: false
   };
 
-  // src/core/passes/branch-target-x-reuse.ts
-  var run2 = (ops) => {
-    const labels = labelIndexes2(ops);
-    const addresses = addressIndexes(ops);
-    const references = targetReferenceCountsByEntryIndex(ops, labels, addresses);
-    const x2States = computeX2RegisterStates(ops);
-    const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
-    const directReturnContext = directReturnAnalysisContext(ops);
-    const remove = /* @__PURE__ */ new Set();
+  // src/core/passes/cfg.ts
+  function buildTargetIndexes(ops) {
+    const labelIndex = /* @__PURE__ */ new Map();
+    const addressIndex = /* @__PURE__ */ new Map();
+    let address = 0;
     for (let index = 0; index < ops.length; index += 1) {
       const op2 = ops[index];
-      if (!isConditionalTargetOp(op2) || hasRewriteBarrier(op2)) continue;
-      const targetIndex = branchTargetEntryIndex(ops, op2, labels, addresses);
-      if (targetIndex === void 0) continue;
-      if ((references.get(targetIndex) ?? 0) !== 1) continue;
-      if (hasFallthroughIntoIndex(ops, targetIndex)) continue;
-      const heldRegister = immediatelyHeldRegister(ops, index);
-      const targetRegisterState = transferX2RegisterStateForEdge(
-        {
-          x: heldRegister === void 0 ? void 0 : /* @__PURE__ */ new Set([heldRegister]),
-          x2: x2States[index]
-        },
-        op2,
-        "jump"
-      );
-      const targetRecall = branchTargetRecallAfterTransparentPrefix(
-        ops,
-        targetIndex,
-        references,
-        targetRegisterState,
-        transferX2ValueStateForEdge(
-          x2ValueStates[index],
-          op2,
-          "jump",
-          { trackRegisterMemory: true },
-          index
-        )
-      );
-      if (targetRecall === void 0 || remove.has(targetRecall.index)) continue;
-      const target = ops[targetRecall.index];
-      const targetRegister = removableRecallValueRegister(target);
-      if (targetRegister === void 0) continue;
-      if (op2.kind === "loop" && loopCounterRegister2(op2.counter) === targetRegister) continue;
-      const preservedRegister = branchPreservedRegister(heldRegister, op2, targetRegister);
-      const targetX2RegisterState = targetRecall.x2RegisterState ?? x2States[targetRecall.index];
-      const targetValueState = targetRecall.valueState ?? x2ValueStates[targetRecall.index];
-      const removal = analyzeRecallRemoval(
-        ops,
-        targetRecall.index,
-        targetX2RegisterState,
-        targetValueState,
-        directReturnContext
-      );
-      if (preservedRegister !== targetRegister && removal?.valueProof?.inX !== true) continue;
-      if (removal?.removable !== true) {
+      if (op2.kind === "label") {
+        labelIndex.set(op2.name, index);
         continue;
       }
-      remove.add(targetRecall.index);
+      addressIndex.set(address, index);
+      address += cellsPerOp(op2);
     }
-    if (remove.size === 0) return emptyResult(ops);
+    return { labelIndex, addressIndex };
+  }
+  function numericFlowTargetLayoutGuard(ops) {
+    const { addressIndex } = buildTargetIndexes(ops);
+    let latestTargetIndex = -1;
+    for (const op2 of ops) {
+      const target = numericFlowTarget(op2);
+      if (target === void 0) continue;
+      const targetIndex = addressIndex.get(target);
+      if (targetIndex === void 0) return void 0;
+      latestTargetIndex = Math.max(latestTargetIndex, targetIndex);
+    }
     return {
-      ops: ops.filter((_, index) => !remove.has(index)),
-      applied: remove.size,
-      optimizations: [{
-        name: "branch-target-x-reuse",
-        detail: `Dropped ${remove.size} branch-target recall${remove.size === 1 ? "" : "s"} already preserved in X by the branch path.`
-      }]
+      canDeleteAt: (index) => index >= latestTargetIndex
     };
-  };
+  }
+  function numericFlowTarget(op2) {
+    switch (op2.kind) {
+      case "jump":
+      case "cjump":
+      case "call":
+      case "loop":
+        return typeof op2.target === "number" ? op2.target : void 0;
+      case "orphan-address":
+        return typeof op2.target === "number" ? op2.target : void 0;
+      default:
+        return void 0;
+    }
+  }
+  function returnActsAsAddressOneJump(op2) {
+    return op2.kind === "return" && op2.meta.comment === "optimized \u0411\u041F 01";
+  }
+  function buildCfgEdges(ops, options = {}) {
+    const { labelIndex, addressIndex } = buildTargetIndexes(ops);
+    const successors = Array.from({ length: ops.length }, () => []);
+    const callReturns = [];
+    for (let index = 0; index < ops.length; index += 1) {
+      const op2 = ops[index];
+      const next = index + 1;
+      if ((op2.kind === "call" || op2.kind === "indirect-call") && next < ops.length) {
+        callReturns.push(next);
+      }
+    }
+    for (let index = 0; index < ops.length; index += 1) {
+      const op2 = ops[index];
+      const next = index + 1;
+      const fallthrough = () => {
+        if (next < ops.length) successors[index].push({ target: next, kind: "fallthrough" });
+      };
+      const jumpTo = (target) => {
+        const targetIndex = typeof target === "string" ? labelIndex.get(target) : addressIndex.get(target);
+        if (targetIndex !== void 0) successors[index].push({ target: targetIndex, kind: "jump" });
+      };
+      switch (op2.kind) {
+        case "label":
+        case "store":
+        case "recall":
+        case "indirect-store":
+        case "indirect-recall":
+        case "plain":
+        case "orphan-address":
+        case "stop":
+          fallthrough();
+          break;
+        case "jump":
+          jumpTo(op2.target);
+          break;
+        case "cjump":
+        case "loop":
+          jumpTo(op2.target);
+          fallthrough();
+          break;
+        case "call":
+          jumpTo(op2.target);
+          break;
+        case "indirect-jump": {
+          const target = knownIndirectFlowTarget(op2);
+          if (target !== void 0) jumpTo(target);
+          break;
+        }
+        case "indirect-call": {
+          const target = knownIndirectFlowTarget(op2);
+          if (target !== void 0) jumpTo(target);
+          if (options.indirectCallFallthrough === true) fallthrough();
+          break;
+        }
+        case "indirect-cjump": {
+          const target = knownIndirectFlowTarget(op2);
+          if (target !== void 0) jumpTo(target);
+          fallthrough();
+          break;
+        }
+        case "return":
+          if (returnActsAsAddressOneJump(op2)) {
+            jumpTo(1);
+          } else {
+            for (const target of callReturns) successors[index].push({ target, kind: "normal" });
+          }
+          break;
+      }
+    }
+    return successors;
+  }
+  function buildCfgSuccessors(ops, options = {}) {
+    return buildCfgEdges(ops, options).map((edges) => edges.map((edge) => edge.target));
+  }
+  function loopCounterRegister2(counter) {
+    switch (counter) {
+      case "L0":
+        return "0";
+      case "L1":
+        return "1";
+      case "L2":
+        return "2";
+      case "L3":
+        return "3";
+    }
+  }
+
+  // src/core/passes/recall-removal.ts
+  function runRecallRemovalPass(ops, report, collect) {
+    const engine = createEngine(ops);
+    collect(engine);
+    if (engine.removed.size === 0) return emptyResult(ops);
+    return {
+      ops: ops.filter((_, index) => !engine.removed.has(index)),
+      applied: engine.removed.size,
+      optimizations: [{ name: report.name, detail: report.detail(engine.removed.size) }]
+    };
+  }
+  function createEngine(ops) {
+    let x2States;
+    let x2ValueStates;
+    let returnContext;
+    const removed = /* @__PURE__ */ new Set();
+    const x2RegisterState = (index) => {
+      x2States ??= computeX2RegisterStates(ops);
+      return x2States[index];
+    };
+    const x2ValueState = (index) => {
+      x2ValueStates ??= computeX2ValueStates(ops, { trackRegisterMemory: true });
+      return x2ValueStates[index];
+    };
+    const directReturnContext = () => {
+      returnContext ??= directReturnAnalysisContext(ops);
+      return returnContext;
+    };
+    return {
+      ops,
+      removed,
+      x2RegisterState,
+      x2ValueState,
+      directReturnContext,
+      plan: (recallIndex, overrides = {}) => {
+        const context = directReturnContext();
+        const planOptions = {
+          removedIndexes: removed,
+          ...overrides.stackSchedulerStart !== void 0 ? { stackSchedulerStart: overrides.stackSchedulerStart } : {},
+          ...overrides.stackExposureEnd !== void 0 ? { stackExposureEnd: overrides.stackExposureEnd } : {},
+          ...overrides.stackSchedulerState !== void 0 ? { stackSchedulerState: overrides.stackSchedulerState } : {}
+        };
+        const hasStateOverride = "x2RegisterState" in overrides || "x2ValueState" in overrides || "stackSchedulerState" in overrides;
+        if (!hasStateOverride && overrides.requireValueProof !== true) {
+          const cheap = planRecallRemovalWithStackScheduler(
+            ops,
+            recallIndex,
+            void 0,
+            void 0,
+            context,
+            planOptions
+          );
+          if (cheap?.removable === true) return cheap;
+        }
+        return planRecallRemovalWithStackScheduler(
+          ops,
+          recallIndex,
+          "x2RegisterState" in overrides ? overrides.x2RegisterState : x2RegisterState(recallIndex),
+          "x2ValueState" in overrides ? overrides.x2ValueState : x2ValueState(recallIndex),
+          context,
+          planOptions
+        );
+      }
+    };
+  }
+
+  // src/core/passes/branch-target-x-reuse.ts
+  var run2 = (ops) => runRecallRemovalPass(
+    ops,
+    {
+      name: "branch-target-x-reuse",
+      detail: (count) => `Dropped ${count} branch-target recall${count === 1 ? "" : "s"} already preserved in X by the branch path.`
+    },
+    (engine) => {
+      const labels = labelIndexes(ops);
+      const addresses = addressIndexes(ops);
+      const references = targetReferenceCountsByEntryIndex(ops, labels, addresses);
+      const numericTargets = numericFlowTargetLayoutGuard(ops);
+      if (numericTargets === void 0) return;
+      for (let index = 0; index < ops.length; index += 1) {
+        const op2 = ops[index];
+        if (!isConditionalTargetOp(op2) || hasRewriteBarrier(op2)) continue;
+        const targetIndex = branchTargetEntryIndex(ops, op2, labels, addresses);
+        if (targetIndex === void 0) continue;
+        if ((references.get(targetIndex) ?? 0) !== 1) continue;
+        if (hasFallthroughIntoIndex(ops, targetIndex)) continue;
+        const heldRegister = immediatelyHeldRegister(ops, index);
+        const targetRegisterState = transferX2RegisterStateForEdge(
+          {
+            x: heldRegister === void 0 ? void 0 : /* @__PURE__ */ new Set([heldRegister]),
+            x2: engine.x2RegisterState(index)
+          },
+          op2,
+          "jump"
+        );
+        const targetRecall = branchTargetRecallAfterTransparentPrefix(
+          ops,
+          targetIndex,
+          references,
+          targetRegisterState,
+          transferX2ValueStateForEdge(
+            engine.x2ValueState(index),
+            op2,
+            "jump",
+            { trackRegisterMemory: true },
+            index
+          ),
+          engine.directReturnContext()
+        );
+        if (targetRecall === void 0 || engine.removed.has(targetRecall.index)) continue;
+        if (!numericTargets.canDeleteAt(targetRecall.index)) continue;
+        const target = ops[targetRecall.index];
+        const targetRegister = removableRecallValueRegister(target);
+        if (targetRegister === void 0) continue;
+        if (op2.kind === "loop" && loopCounterRegister2(op2.counter) === targetRegister) continue;
+        const preservedRegister = branchPreservedRegister(heldRegister, op2, targetRegister);
+        const removalPlan = engine.plan(targetRecall.index, {
+          x2RegisterState: targetRecall.x2RegisterState ?? engine.x2RegisterState(targetRecall.index),
+          x2ValueState: targetRecall.valueState ?? engine.x2ValueState(targetRecall.index),
+          stackSchedulerStart: index,
+          stackExposureEnd: targetRecall.index,
+          stackSchedulerState: engine.x2ValueState(index)
+        });
+        if (preservedRegister !== targetRegister && removalPlan?.analysis.valueProof?.inX !== true) continue;
+        if (removalPlan?.removable !== true) continue;
+        engine.removed.add(targetRecall.index);
+      }
+    }
+  );
   var branchTargetXReuse = {
     name: "branch-target-x-reuse",
     run: run2,
@@ -18066,26 +20707,6 @@ var MKProEmulatorBundle = (() => {
       return removableRecallValueRegister(op2);
     }
     return void 0;
-  }
-  function loopCounterRegister2(counter) {
-    switch (counter) {
-      case "L0":
-        return "0";
-      case "L1":
-        return "1";
-      case "L2":
-        return "2";
-      case "L3":
-        return "3";
-    }
-  }
-  function labelIndexes2(ops) {
-    const result = /* @__PURE__ */ new Map();
-    for (let index = 0; index < ops.length; index += 1) {
-      const op2 = ops[index];
-      if (op2.kind === "label") result.set(op2.name, index);
-    }
-    return result;
   }
   function targetReferenceCountsByEntryIndex(ops, labels, addresses) {
     const result = /* @__PURE__ */ new Map();
@@ -18132,24 +20753,32 @@ var MKProEmulatorBundle = (() => {
     }
     return void 0;
   }
-  function branchTargetRecallAfterTransparentPrefix(ops, targetIndex, references, x2RegisterState, targetValueState) {
+  function branchTargetRecallAfterTransparentPrefix(ops, targetIndex, references, x2RegisterState, targetValueState, directReturnContext) {
     let valueState = targetValueState;
     let registerState = x2RegisterState;
     for (let index = targetIndex; index < ops.length; index += 1) {
       if (index !== targetIndex && (references.get(index) ?? 0) > 0) return void 0;
       const op2 = ops[index];
       if (removableRecallValueRegister(op2) !== void 0) return { index, x2RegisterState: registerState, valueState };
-      if (!isTransparentBranchTargetPrefixOp(op2)) return void 0;
+      if (!isTransparentBranchTargetPrefixOp(ops, op2, directReturnContext)) return void 0;
       const storedRegister = transparentPrefixStoredRegister(op2);
       if (storedRegister !== void 0) {
         registerState = transferTransparentStoreX2RegisterState(registerState, valueState?.x, storedRegister);
       }
-      valueState = transferX2ValueStateForEdge(valueState, op2, "normal", { trackRegisterMemory: true }, index);
+      valueState = isKnownReturnCallOp(op2) ? transferX2ValueStateThroughKnownTransparentReturnCall(
+        ops,
+        op2,
+        valueState,
+        directReturnContext,
+        { trackRegisterMemory: true },
+        index
+      ) : transferX2ValueStateForEdge(valueState, op2, "normal", { trackRegisterMemory: true }, index);
     }
     return void 0;
   }
-  function isTransparentBranchTargetPrefixOp(op2) {
+  function isTransparentBranchTargetPrefixOp(ops, op2, directReturnContext) {
     if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) return false;
+    if (isKnownReturnCallOp(op2)) return x2KnownReturnCallPreservesStackXAndX2(ops, op2, directReturnContext);
     switch (op2.kind) {
       case "label":
       case "store":
@@ -18217,6 +20846,167 @@ var MKProEmulatorBundle = (() => {
     return op2.kind === "jump" || op2.kind === "indirect-jump" || op2.kind === "return" || op2.kind === "stop";
   }
 
+  // src/core/passes/outline.ts
+  function targetKey(target) {
+    return typeof target === "number" ? `#${target}` : target;
+  }
+  function hasNumericOutlineFlowTarget(ops) {
+    return ops.some((op2) => {
+      switch (op2.kind) {
+        case "jump":
+        case "cjump":
+        case "call":
+        case "loop":
+          return typeof op2.target === "number";
+        default:
+          return false;
+      }
+    });
+  }
+  function rangeIntersects(indexes, start, end) {
+    for (let index = start; index <= end; index += 1) {
+      if (indexes.has(index)) return true;
+    }
+    return false;
+  }
+  function markRange(indexes, start, end) {
+    for (let index = start; index <= end; index += 1) indexes.add(index);
+  }
+  function createLabelAllocator(ops, prefix) {
+    const existing = new Set(ops.flatMap((op2) => op2.kind === "label" ? [op2.name] : []));
+    let counter = 0;
+    return {
+      next: () => {
+        let suffix = counter;
+        while (existing.has(`${prefix}${suffix}`)) suffix += 1;
+        counter += 1;
+        const label = `${prefix}${suffix}`;
+        existing.add(label);
+        return label;
+      }
+    };
+  }
+  function collectSuffixCandidates(ops, config) {
+    const byKey = /* @__PURE__ */ new Map();
+    for (let end = 0; end < ops.length; end += 1) {
+      const final = ops[end];
+      if (!config.isTerminal(final)) continue;
+      const parts = [config.opKey(final)];
+      let cells = cellsPerOp(final);
+      for (let start = end - 1; start >= 0; start -= 1) {
+        const op2 = ops[start];
+        if (!config.isBodyOp(op2)) break;
+        parts.unshift(config.opKey(op2));
+        cells += cellsPerOp(op2);
+        if (cells <= 2) continue;
+        const key = parts.join("\n");
+        const occurrences = byKey.get(key) ?? [];
+        occurrences.push({ key, start, end, cells });
+        byKey.set(key, occurrences);
+      }
+    }
+    return [...byKey.entries()].map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0].cells }));
+  }
+  function selectSharedSuffixes(candidates, labels, protectedIndexes) {
+    const selected = [];
+    const ordered = [...candidates].sort((left, right) => {
+      const leftSavings = (left.occurrences.length - 1) * (left.cells - 2);
+      const rightSavings = (right.occurrences.length - 1) * (right.cells - 2);
+      return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
+    });
+    for (const candidate of ordered) {
+      const available = candidate.occurrences.filter(
+        (occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
+      );
+      if (available.length < 2) continue;
+      const [target, ...replacements] = available;
+      if (target === void 0 || replacements.length === 0) continue;
+      const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
+      if (savedCells <= 0) continue;
+      selected.push({ label: labels.next(), target, replacements });
+      for (const occurrence of [target, ...replacements]) {
+        markRange(protectedIndexes, occurrence.start, occurrence.end);
+      }
+    }
+    return selected;
+  }
+
+  // src/core/passes/conditional-branch-trampoline.ts
+  var LABEL_PREFIX = "__conditional_branch_trampoline_";
+  var run3 = (ops, context) => {
+    if (context.options.conditionalBranchTrampoline !== true) {
+      return { ops: [...ops], applied: 0, optimizations: [] };
+    }
+    const plans = collectPlans(ops);
+    if (plans.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+    const labels = createLabelAllocator(ops, LABEL_PREFIX);
+    const labelByTargetIndex = /* @__PURE__ */ new Map();
+    for (const plan of plans) {
+      if (!labelByTargetIndex.has(plan.targetIndex)) labelByTargetIndex.set(plan.targetIndex, labels.next());
+    }
+    const retargetByIndex = new Map(plans.map((plan) => [plan.branchIndex, labelByTargetIndex.get(plan.targetIndex)]));
+    const result = [];
+    for (let index = 0; index < ops.length; index += 1) {
+      const entryLabel = labelByTargetIndex.get(index);
+      if (entryLabel !== void 0) result.push({ kind: "label", name: entryLabel, hidden: true });
+      const op2 = ops[index];
+      const retarget = retargetByIndex.get(index);
+      if (retarget !== void 0 && op2.kind === "cjump") {
+        result.push({
+          ...op2,
+          target: retarget,
+          targetMeta: {
+            ...op2.targetMeta,
+            comment: "conditional branch trampoline"
+          },
+          meta: {
+            ...op2.meta,
+            comment: op2.meta.comment?.replace(/^false branch/u, "conditional branch trampoline") ?? "conditional branch trampoline"
+          }
+        });
+        continue;
+      }
+      result.push(op2);
+    }
+    return {
+      ops: result,
+      applied: plans.length,
+      optimizations: [{
+        name: "conditional-branch-trampoline",
+        detail: `Retargeted ${plans.length} conditional branch${plans.length === 1 ? "" : "es"} through a later identical conditional with the same destination.`
+      }]
+    };
+  };
+  function collectPlans(ops) {
+    const plans = [];
+    for (let index = 0; index < ops.length; index += 1) {
+      const branch = ops[index];
+      if (branch.kind !== "cjump" || typeof branch.target !== "string" || hasRewriteBarrier(branch)) continue;
+      const target = findLaterEquivalentConditional(ops, index, branch);
+      if (target === void 0) continue;
+      plans.push({ branchIndex: index, targetIndex: target });
+    }
+    return plans;
+  }
+  function findLaterEquivalentConditional(ops, branchIndex, branch) {
+    for (let index = branchIndex + 1; index < ops.length; index += 1) {
+      const candidate = ops[index];
+      if (candidate.kind === "label") continue;
+      if (candidate.kind === "cjump" && candidate.condition === branch.condition && candidate.opcode === branch.opcode && sameTarget(candidate.target, branch.target) && !hasRewriteBarrier(candidate)) {
+        return index;
+      }
+    }
+    return void 0;
+  }
+  function sameTarget(left, right) {
+    return left === right;
+  }
+  var conditionalBranchTrampoline = {
+    name: "conditional-branch-trampoline",
+    run: run3,
+    layoutSafe: false
+  };
+
   // src/core/passes/constant-folding.ts
   function digitOf(op2) {
     if (op2.kind === "plain" && op2.opcode <= 9) return op2.opcode;
@@ -18242,7 +21032,7 @@ var MKProEmulatorBundle = (() => {
     if (digit !== 1) return false;
     return aluOpcode(op2) === "*";
   }
-  var run3 = (ops) => {
+  var run4 = (ops) => {
     const result = [];
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
@@ -18272,7 +21062,7 @@ var MKProEmulatorBundle = (() => {
   };
   var constantFolding = {
     name: "constant-folding",
-    run: run3,
+    run: run4,
     layoutSafe: false
   };
 
@@ -18331,7 +21121,7 @@ var MKProEmulatorBundle = (() => {
     cseLabelCounter += 1;
     return `__cse_block_${cseLabelCounter}`;
   }
-  var run4 = (ops) => {
+  var run5 = (ops) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     const blocks = collectCseCandidates(ops);
     if (blocks.length < 2) return { ops: [...ops], applied: 0, optimizations: [] };
@@ -18402,100 +21192,11 @@ var MKProEmulatorBundle = (() => {
   };
   var cseDisplayBlock = {
     name: "cse-display-block",
-    run: run4,
+    run: run5,
     layoutSafe: false
   };
 
   // src/core/passes/liveness-analysis.ts
-  function buildTargetIndexes(ops) {
-    const labelIndex = /* @__PURE__ */ new Map();
-    const addressIndex = /* @__PURE__ */ new Map();
-    let address = 0;
-    for (let i = 0; i < ops.length; i += 1) {
-      const op2 = ops[i];
-      if (op2.kind === "label") {
-        labelIndex.set(op2.name, i);
-        continue;
-      }
-      addressIndex.set(address, i);
-      address += cellsPerOp(op2);
-    }
-    return { labelIndex, addressIndex };
-  }
-  function buildSuccessors(ops) {
-    const { labelIndex, addressIndex } = buildTargetIndexes(ops);
-    const successors = Array.from({ length: ops.length }, () => []);
-    const callReturns = [];
-    for (let i = 0; i < ops.length; i += 1) {
-      const op2 = ops[i];
-      const next = i + 1;
-      if ((op2.kind === "call" || op2.kind === "indirect-call") && next < ops.length) {
-        callReturns.push(next);
-      }
-    }
-    for (let i = 0; i < ops.length; i += 1) {
-      const op2 = ops[i];
-      const next = i + 1;
-      const fallthrough = () => {
-        if (next < ops.length) successors[i].push(next);
-      };
-      const jumpTo = (target) => {
-        if (typeof target === "string") {
-          const idx = labelIndex.get(target);
-          if (idx !== void 0) successors[i].push(idx);
-        } else {
-          const idx = addressIndex.get(target);
-          if (idx !== void 0) successors[i].push(idx);
-        }
-      };
-      switch (op2.kind) {
-        case "label":
-        case "store":
-        case "recall":
-        case "indirect-store":
-        case "indirect-recall":
-        case "plain":
-        case "orphan-address":
-          fallthrough();
-          break;
-        case "stop":
-          fallthrough();
-          break;
-        case "return":
-          successors[i].push(...callReturns);
-          break;
-        case "jump":
-          jumpTo(op2.target);
-          break;
-        case "cjump":
-        case "loop":
-          jumpTo(op2.target);
-          fallthrough();
-          break;
-        case "call":
-          jumpTo(op2.target);
-          break;
-        case "indirect-jump": {
-          const target = knownIndirectFlowTarget(op2);
-          if (target !== void 0) jumpTo(target);
-          break;
-        }
-        case "indirect-call": {
-          const target = knownIndirectFlowTarget(op2);
-          if (target !== void 0) jumpTo(target);
-          fallthrough();
-          break;
-        }
-        case "indirect-cjump": {
-          const target = knownIndirectFlowTarget(op2);
-          if (target !== void 0) jumpTo(target);
-          fallthrough();
-          break;
-        }
-      }
-    }
-    return { successors };
-  }
   function defsAndUses(op2) {
     switch (op2.kind) {
       case "store":
@@ -18521,27 +21222,15 @@ var MKProEmulatorBundle = (() => {
       case "indirect-cjump":
         return { defs: [], uses: [op2.register] };
       case "loop": {
-        const register = loopCounterRegister3(op2.counter);
+        const register = loopCounterRegister2(op2.counter);
         return { defs: [register], uses: [register] };
       }
       default:
         return { defs: [], uses: [] };
     }
   }
-  function loopCounterRegister3(counter) {
-    switch (counter) {
-      case "L0":
-        return "0";
-      case "L1":
-        return "1";
-      case "L2":
-        return "2";
-      case "L3":
-        return "3";
-    }
-  }
   function computeLiveness(ops) {
-    const { successors } = buildSuccessors(ops);
+    const successors = buildCfgSuccessors(ops, { indirectCallFallthrough: true });
     const n = ops.length;
     const liveIn = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
     const liveOut = Array.from({ length: n }, () => /* @__PURE__ */ new Set());
@@ -18668,7 +21357,7 @@ var MKProEmulatorBundle = (() => {
     }
     return visited;
   }
-  var run5 = (ops) => {
+  var run6 = (ops) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     const reachable = reachableFromEntry(ops);
     if (reachable.size === ops.length) {
@@ -18705,7 +21394,7 @@ var MKProEmulatorBundle = (() => {
   };
   var deadCodeAfterHalt = {
     name: "dead-code-after-halt",
-    run: run5,
+    run: run6,
     layoutSafe: false
   };
 
@@ -18739,7 +21428,7 @@ var MKProEmulatorBundle = (() => {
     }
     return true;
   }
-  var run6 = (ops, context) => {
+  var run7 = (ops, context) => {
     if (context.options.disableInterproceduralOpts === true) {
       return { ops: [...ops], applied: 0, optimizations: [] };
     }
@@ -18833,7 +21522,7 @@ var MKProEmulatorBundle = (() => {
   };
   var deadProcElimination = {
     name: "dead-proc-elimination",
-    run: run6,
+    run: run7,
     layoutSafe: false
   };
 
@@ -18851,7 +21540,7 @@ var MKProEmulatorBundle = (() => {
     if (op2.kind !== "plain") return false;
     return op2.opcode === 16 || op2.opcode === 18;
   }
-  var run7 = (ops) => {
+  var run8 = (ops) => {
     const result = [];
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
@@ -18878,7 +21567,7 @@ var MKProEmulatorBundle = (() => {
   };
   var deadStoreBeforeCommutative = {
     name: "dead-temp-store",
-    run: run7,
+    run: run8,
     layoutSafe: false
   };
 
@@ -18914,7 +21603,7 @@ var MKProEmulatorBundle = (() => {
     const next = nextEffectiveOp(ops, index);
     return next !== void 0 && isVpOp(next);
   }
-  var run8 = (ops) => {
+  var run9 = (ops) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     const liveness = computeLiveness(ops);
     const removed = /* @__PURE__ */ new Set();
@@ -18955,7 +21644,7 @@ var MKProEmulatorBundle = (() => {
   }
   var deadStoreElimination = {
     name: "dead-store-elimination",
-    run: run8,
+    run: run9,
     layoutSafe: false
   };
 
@@ -18972,6 +21661,28 @@ var MKProEmulatorBundle = (() => {
   function isTerminalFlow(op2) {
     return op2.kind === "jump" || op2.kind === "indirect-jump" || op2.kind === "return";
   }
+  function cannotFallThrough(op2) {
+    return op2 === void 0 || isTerminalFlow(op2);
+  }
+  function previousExecutableCannotFallThrough(ops, index) {
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      const op2 = ops[cursor];
+      if (op2?.kind === "label") return false;
+      return cannotFallThrough(op2);
+    }
+    return true;
+  }
+  function removableLabelRun(ops, index) {
+    const labels = [];
+    let cursor = index;
+    while (cursor < ops.length) {
+      const op2 = ops[cursor];
+      if (op2 === void 0 || !canRemoveLabel(op2)) break;
+      labels.push(op2.name);
+      cursor += 1;
+    }
+    return labels.length === 0 ? void 0 : { labels, next: cursor };
+  }
   function terminalFlowKey(op2) {
     if (op2.kind === "jump") return `jump:${String(op2.target)}:${op2.opcode}`;
     if (op2.kind === "indirect-jump") return `indirect-jump:${op2.register}:${op2.opcode}`;
@@ -18981,12 +21692,36 @@ var MKProEmulatorBundle = (() => {
   function canRemoveLabel(op2) {
     return op2.kind === "label" && op2.procedureBoundary === void 0;
   }
-  var run9 = (ops) => {
+  var run10 = (ops) => {
     const rewrite = /* @__PURE__ */ new Map();
     const remove = /* @__PURE__ */ new Set();
     let applied = 0;
     let pauseOnlyApplied = 0;
+    const separatedPauseTails = /* @__PURE__ */ new Map();
+    for (let i = 0; i + 2 < ops.length; i += 1) {
+      if (remove.has(i)) continue;
+      const run35 = removableLabelRun(ops, i);
+      if (run35 === void 0) continue;
+      const pause = ops[run35.next];
+      const flow = ops[run35.next + 1];
+      if (pause !== void 0 && isPauseLike(pause) && flow !== void 0 && isTerminalFlow(flow) && previousExecutableCannotFallThrough(ops, i) && !hasRewriteBarrier(pause) && !hasRewriteBarrier(flow)) {
+        const key = terminalFlowKey(flow);
+        if (key === void 0) continue;
+        const keptLabel = separatedPauseTails.get(key);
+        if (keptLabel === void 0) {
+          separatedPauseTails.set(key, run35.labels[0]);
+          i = run35.next + 1;
+          continue;
+        }
+        for (const label of run35.labels) rewrite.set(label, keptLabel);
+        for (let index = i; index <= run35.next + 1; index += 1) remove.add(index);
+        applied += 1;
+        pauseOnlyApplied += 1;
+        i = run35.next + 1;
+      }
+    }
     for (let i = 0; i + 7 < ops.length; i += 1) {
+      if (remove.has(i)) continue;
       const firstLabel = ops[i];
       const firstPause = ops[i + 1];
       const firstFlowLabel = ops[i + 2];
@@ -19074,42 +21809,40 @@ var MKProEmulatorBundle = (() => {
   };
   var duplicateFailureTail = {
     name: "duplicate-failure-tail-merge",
-    run: run9,
+    run: run10,
     layoutSafe: false
   };
 
   // src/core/passes/flow-x-reuse.ts
-  var run10 = (ops) => {
-    if (ops.length === 0) return emptyResult(ops);
-    if (hasNumericFlowTarget(ops) || hasUnknownIndirectFlow(ops)) return emptyResult(ops);
-    const graph = buildGraph(ops);
-    const inStates = computeXRegisterStates(ops, graph);
-    const x2States = computeX2RegisterStates(ops);
-    const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
-    const directReturnContext = directReturnAnalysisContext(ops);
-    const remove = /* @__PURE__ */ new Set();
-    for (let index = 0; index < ops.length; index += 1) {
-      const op2 = ops[index];
-      const recallRegister = removableRecallValueRegister(op2);
-      if (recallRegister === void 0) continue;
-      const removal = analyzeRecallRemoval(ops, index, x2States[index], x2ValueStates[index], directReturnContext);
-      if (removal?.removable !== true) continue;
-      const alreadyInX = inStates[index]?.has(recallRegister) === true || removal.valueProof?.inX === true;
-      if (alreadyInX) remove.add(index);
+  var run11 = (ops) => runRecallRemovalPass(
+    ops,
+    {
+      name: "flow-x-reuse",
+      detail: (count) => `Dropped ${count} recall${count === 1 ? "" : "s"} whose register value already reaches the point in X on every CFG predecessor.`
+    },
+    (engine) => {
+      if (ops.length === 0) return;
+      if (hasUnknownIndirectFlow(ops)) return;
+      const numericTargets = numericFlowTargetLayoutGuard(ops);
+      if (numericTargets === void 0) return;
+      const graph = buildCfgEdges(ops);
+      const inStates = computeXRegisterStates(ops, graph);
+      for (let index = 0; index < ops.length; index += 1) {
+        const op2 = ops[index];
+        const recallRegister = removableRecallValueRegister(op2);
+        if (recallRegister === void 0) continue;
+        if (!numericTargets.canDeleteAt(index)) continue;
+        const cfgAlreadyInX = inStates[index]?.has(recallRegister) === true;
+        const removalPlan = engine.plan(index, { requireValueProof: !cfgAlreadyInX });
+        if (removalPlan?.removable !== true) continue;
+        const alreadyInX = cfgAlreadyInX || removalPlan.analysis.valueProof?.inX === true;
+        if (alreadyInX) engine.removed.add(index);
+      }
     }
-    if (remove.size === 0) return emptyResult(ops);
-    return {
-      ops: ops.filter((_, index) => !remove.has(index)),
-      applied: remove.size,
-      optimizations: [{
-        name: "flow-x-reuse",
-        detail: `Dropped ${remove.size} recall${remove.size === 1 ? "" : "s"} whose register value already reaches the point in X on every CFG predecessor.`
-      }]
-    };
-  };
+  );
   var flowXReuse = {
     name: "flow-x-reuse",
-    run: run10,
+    run: run11,
     layoutSafe: false
   };
   function computeXRegisterStates(ops, graph) {
@@ -19129,7 +21862,7 @@ var MKProEmulatorBundle = (() => {
           outStates[index] = output;
           changed = true;
         }
-        for (const edge of graph.successors[index] ?? []) {
+        for (const edge of graph[index] ?? []) {
           const edgeOutput = edge.kind === "normal" ? output : transferXSet(input, ops[index], edge.kind);
           const joined = joinXSets(inStates[edge.target], edgeOutput);
           if (!sameSet(joined, inStates[edge.target])) {
@@ -19165,7 +21898,7 @@ var MKProEmulatorBundle = (() => {
       case "stop":
         return /* @__PURE__ */ new Set();
       case "loop":
-        return removeRegister(input, loopCounterRegister4(op2.counter));
+        return removeRegister(input, loopCounterRegister2(op2.counter));
       case "call":
       case "return":
         return new Set(input);
@@ -19191,18 +21924,6 @@ var MKProEmulatorBundle = (() => {
     output.delete(register);
     return output;
   }
-  function loopCounterRegister4(counter) {
-    switch (counter) {
-      case "L0":
-        return "0";
-      case "L1":
-        return "1";
-      case "L2":
-        return "2";
-      case "L3":
-        return "3";
-    }
-  }
   function joinXSets(current, incoming) {
     if (current === void 0) return new Set(incoming);
     const joined = /* @__PURE__ */ new Set();
@@ -19218,106 +21939,6 @@ var MKProEmulatorBundle = (() => {
       if (!right.has(value)) return false;
     }
     return true;
-  }
-  function buildGraph(ops) {
-    const { labelIndex, addressIndex } = buildTargetIndexes2(ops);
-    const successors = Array.from({ length: ops.length }, () => []);
-    const callReturns = [];
-    for (let index = 0; index < ops.length; index += 1) {
-      const op2 = ops[index];
-      const next = index + 1;
-      if ((op2.kind === "call" || op2.kind === "indirect-call") && next < ops.length) callReturns.push(next);
-    }
-    for (let index = 0; index < ops.length; index += 1) {
-      const op2 = ops[index];
-      const next = index + 1;
-      const fallthrough = () => {
-        if (next < ops.length) successors[index].push({ target: next, kind: "fallthrough" });
-      };
-      const jumpTo = (target) => {
-        const targetIndex = typeof target === "string" ? labelIndex.get(target) : addressIndex.get(target);
-        if (targetIndex !== void 0) successors[index].push({ target: targetIndex, kind: "jump" });
-      };
-      const normal = (target) => {
-        successors[index].push({ target, kind: "normal" });
-      };
-      switch (op2.kind) {
-        case "label":
-        case "store":
-        case "recall":
-        case "indirect-store":
-        case "indirect-recall":
-        case "plain":
-        case "orphan-address":
-        case "stop":
-          fallthrough();
-          break;
-        case "jump":
-          jumpTo(op2.target);
-          break;
-        case "cjump":
-          jumpTo(op2.target);
-          fallthrough();
-          break;
-        case "loop":
-          jumpTo(op2.target);
-          fallthrough();
-          break;
-        case "call":
-          jumpTo(op2.target);
-          break;
-        case "indirect-jump": {
-          const target = knownIndirectFlowTarget(op2);
-          if (target !== void 0) jumpTo(target);
-          break;
-        }
-        case "indirect-call": {
-          const target = knownIndirectFlowTarget(op2);
-          if (target !== void 0) jumpTo(target);
-          break;
-        }
-        case "indirect-cjump": {
-          const target = knownIndirectFlowTarget(op2);
-          if (target !== void 0) jumpTo(target);
-          fallthrough();
-          break;
-        }
-        case "return":
-          for (const target of callReturns) normal(target);
-          break;
-      }
-    }
-    return { successors };
-  }
-  function buildTargetIndexes2(ops) {
-    const labelIndex = /* @__PURE__ */ new Map();
-    const addressIndex = /* @__PURE__ */ new Map();
-    let address = 0;
-    for (let index = 0; index < ops.length; index += 1) {
-      const op2 = ops[index];
-      if (op2.kind === "label") {
-        labelIndex.set(op2.name, index);
-        continue;
-      }
-      addressIndex.set(address, index);
-      address += cellsPerOp(op2);
-    }
-    return { labelIndex, addressIndex };
-  }
-  function hasNumericFlowTarget(ops) {
-    return ops.some((op2) => {
-      switch (op2.kind) {
-        case "jump":
-        case "cjump":
-        case "call":
-        case "loop":
-          return typeof op2.target === "number";
-        case "orphan-address":
-          return typeof op2.target === "number";
-        default:
-          return false;
-      }
-    });
   }
   function hasUnknownIndirectFlow(ops) {
     return ops.some(
@@ -19343,7 +21964,7 @@ var MKProEmulatorBundle = (() => {
     if (op2.kind === "indirect-cjump" && op2.register === register) return true;
     return false;
   }
-  var run11 = (ops) => {
+  var run12 = (ops) => {
     const integerPartRegisters = /* @__PURE__ */ new Map();
     const remove = /* @__PURE__ */ new Set();
     for (let index = 0; index < ops.length; index += 1) {
@@ -19383,7 +22004,7 @@ var MKProEmulatorBundle = (() => {
   };
   var indirectSelectorIntegerPart = {
     name: "indirect-selector-integer-part",
-    run: run11,
+    run: run12,
     layoutSafe: false
   };
 
@@ -19585,14 +22206,6 @@ var MKProEmulatorBundle = (() => {
   };
 
   // src/core/passes/jump-thread.ts
-  function labelTargets(ops) {
-    const map = /* @__PURE__ */ new Map();
-    for (let i = 0; i < ops.length; i += 1) {
-      const op2 = ops[i];
-      if (op2.kind === "label") map.set(op2.name, i);
-    }
-    return map;
-  }
   function followLabel(ops, labels, start, seen) {
     let current = start;
     while (!seen.has(current)) {
@@ -19609,8 +22222,8 @@ var MKProEmulatorBundle = (() => {
     }
     return current;
   }
-  var run12 = (ops) => {
-    const labels = labelTargets(ops);
+  var run13 = (ops) => {
+    const labels = labelIndexes(ops);
     const result = [];
     let applied = 0;
     for (const op2 of ops) {
@@ -19641,12 +22254,12 @@ var MKProEmulatorBundle = (() => {
   };
   var jumpThread = {
     name: "jump-thread",
-    run: run12,
+    run: run13,
     layoutSafe: false
   };
 
   // src/core/passes/jump-to-next.ts
-  var run13 = (ops) => {
+  var run14 = (ops) => {
     const result = [];
     let applied = 0;
     for (let i = 0; i < ops.length; i += 1) {
@@ -19683,7 +22296,7 @@ var MKProEmulatorBundle = (() => {
   };
   var jumpToNextThreading = {
     name: "jump-to-next-threading",
-    run: run13,
+    run: run14,
     layoutSafe: false
   };
 
@@ -19715,92 +22328,75 @@ var MKProEmulatorBundle = (() => {
         return false;
     }
   }
-  var run14 = (ops) => {
-    const removed = /* @__PURE__ */ new Set();
-    const x2States = computeX2RegisterStates(ops);
-    const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
-    const directReturnContext = directReturnAnalysisContext(ops);
-    const labelEntries = computeLabelEntryIndexes(ops, { procedureBoundary: "start" });
-    let xHolds;
-    let canTrustValueX = true;
-    for (let i = 0; i < ops.length; i += 1) {
-      const op2 = ops[i];
-      if (op2.kind === "label") {
-        if (labelEntries.has(i)) {
+  var run15 = (ops) => runRecallRemovalPass(
+    ops,
+    {
+      name: "last-x-reuse",
+      detail: (count) => `Dropped ${count} recall(s) whose register value was already in X.`
+    },
+    (engine) => {
+      const labelEntries = computeLabelEntryIndexes(ops, { procedureBoundary: "start" });
+      let xHolds;
+      let canTrustValueX = true;
+      for (let i = 0; i < ops.length; i += 1) {
+        const op2 = ops[i];
+        if (op2.kind === "label") {
+          if (labelEntries.has(i)) {
+            xHolds = void 0;
+            canTrustValueX = false;
+          }
+          continue;
+        }
+        const storedRegister = storedCurrentXValueRegister(op2);
+        if (storedRegister !== void 0) {
+          xHolds = storedRegister;
+          canTrustValueX = true;
+          continue;
+        }
+        const recallRegister = removableRecallValueRegister(op2);
+        if (recallRegister !== void 0 && (xHolds === recallRegister || canTrustValueX)) {
+          const directInX = xHolds === recallRegister;
+          const removalPlan = engine.plan(i, { requireValueProof: !directInX });
+          if ((directInX || removalPlan?.analysis.valueProof?.inX === true) && removalPlan?.removable === true) {
+            engine.removed.add(i);
+            continue;
+          }
+        }
+        if (recallRegister !== void 0) {
+          xHolds = recallRegister;
+          canTrustValueX = true;
+          continue;
+        }
+        if (isKnownReturnCallOp(op2) && x2KnownReturnCallPreservesStackXAndX2(ops, op2, engine.directReturnContext())) {
+          if (op2.kind === "indirect-call" && !isStableIndirectSelector(op2.register) && xHolds === op2.register) {
+            xHolds = void 0;
+            canTrustValueX = false;
+          }
+          continue;
+        }
+        if (op2.kind === "jump" || op2.kind === "call" || op2.kind === "indirect-jump" || op2.kind === "indirect-call" || op2.kind === "indirect-cjump" || op2.kind === "return" || op2.kind === "stop") {
           xHolds = void 0;
           canTrustValueX = false;
+          continue;
         }
-        continue;
-      }
-      const storedRegister = storedCurrentXValueRegister(op2);
-      if (storedRegister !== void 0) {
-        xHolds = storedRegister;
-        canTrustValueX = true;
-        continue;
-      }
-      const recallRegister = removableRecallValueRegister(op2);
-      const removal = analyzeRecallRemoval(ops, i, x2States[i], x2ValueStates[i], directReturnContext);
-      if (recallRegister !== void 0 && (xHolds === recallRegister || canTrustValueX && removal?.valueProof?.inX === true) && removal?.removable === true) {
-        removed.add(i);
-        continue;
-      }
-      if (recallRegister !== void 0) {
-        xHolds = recallRegister;
-        canTrustValueX = true;
-        continue;
-      }
-      if (op2.kind === "jump" || op2.kind === "call" || op2.kind === "indirect-jump" || op2.kind === "indirect-call" || op2.kind === "indirect-cjump" || op2.kind === "return" || op2.kind === "stop") {
-        xHolds = void 0;
-        canTrustValueX = false;
-        continue;
-      }
-      if (op2.kind === "cjump") {
-        continue;
-      }
-      if (op2.kind === "loop") {
-        if (xHolds === loopCounterRegister5(op2.counter)) xHolds = void 0;
-        canTrustValueX = false;
-        continue;
-      }
-      if (clobbersX(op2)) {
-        xHolds = void 0;
-        canTrustValueX = true;
-      }
-    }
-    if (removed.size === 0) {
-      return { ops: [...ops], applied: 0, optimizations: [] };
-    }
-    const result = [];
-    for (let i = 0; i < ops.length; i += 1) {
-      if (!removed.has(i)) result.push(ops[i]);
-    }
-    const passResult = {
-      ops: result,
-      applied: removed.size,
-      optimizations: [
-        {
-          name: "last-x-reuse",
-          detail: `Dropped ${removed.size} recall(s) whose register value was already in X.`
+        if (op2.kind === "cjump") {
+          continue;
         }
-      ]
-    };
-    return passResult;
-  };
-  function loopCounterRegister5(counter) {
-    switch (counter) {
-      case "L0":
-        return "0";
-      case "L1":
-        return "1";
-      case "L2":
-        return "2";
-      case "L3":
-        return "3";
+        if (op2.kind === "loop") {
+          if (xHolds === loopCounterRegister2(op2.counter)) xHolds = void 0;
+          canTrustValueX = false;
+          continue;
+        }
+        if (clobbersX(op2)) {
+          xHolds = void 0;
+          canTrustValueX = true;
+        }
+      }
     }
-  }
+  );
   var lastXReuse = {
     name: "last-x-reuse",
-    run: run14,
+    run: run15,
     layoutSafe: false
   };
 
@@ -19808,12 +22404,18 @@ var MKProEmulatorBundle = (() => {
   function isStackLift(op2) {
     return op2.kind === "plain" && op2.opcode === 14 && !hasRewriteBarrier(op2);
   }
-  var run15 = (ops) => {
+  var run16 = (ops) => {
     const remove = /* @__PURE__ */ new Set();
     const context = directReturnAnalysisContext(ops);
     for (let index = 0; index < ops.length - 1; index += 1) {
       const op2 = ops[index];
       if (!isStackLift(op2)) continue;
+      if (isTerminalHaltX2Sync(ops[index + 1])) {
+        if (removingStackLiftCanExposeStack(ops, index)) continue;
+        if (removingRecallCanExposeX2Restore(ops, index)) continue;
+        remove.add(index);
+        continue;
+      }
       if (previousProducerAlreadySuppliesLiftX2Sync(ops, index, context)) {
         if (removingStackLiftCanExposeStack(ops, index)) continue;
         remove.add(index);
@@ -19866,16 +22468,19 @@ var MKProEmulatorBundle = (() => {
       applied: remove.size,
       optimizations: [{
         name: "pre-shift-stack-lift",
-        detail: `Removed ${remove.size} \u0412\u2191 lift${remove.size === 1 ? "" : "s"} already supplied by a following stack-shifting command or made dead before a hard X2 overwrite.`
+        detail: `Removed ${remove.size} \u0412\u2191 lift${remove.size === 1 ? "" : "s"} already supplied by a following stack-shifting command, made dead before a hard X2 overwrite, or made dead by a terminal halt sync.`
       }]
     };
   };
+  function isTerminalHaltX2Sync(op2) {
+    return op2?.kind === "stop" && op2.semantic === "halt" && !hasRewriteBarrier(op2) && !isDisplayFocusSensitive(op2);
+  }
   function previousProducerAlreadySuppliesLiftX2Sync(ops, liftIndex, context) {
     return x2PreviousStackLiftAndX2SyncProducerIndex(ops, liftIndex, context) !== void 0;
   }
   var preShiftStackLift = {
     name: "pre-shift-stack-lift",
-    run: run15,
+    run: run16,
     layoutSafe: false
   };
 
@@ -19902,11 +22507,43 @@ var MKProEmulatorBundle = (() => {
     }
     return used;
   }
-  function spareStableRegisters(ops) {
-    const used = usedRegisters(ops);
-    return STABLE_REGISTERS.filter((register) => !used.has(register));
+  function reservedPreloadedRegisters(preloaded) {
+    return new Set(Object.keys(preloaded ?? {}));
   }
-  function numericFlowTarget(op2) {
+  function spareStableRegisters(ops, reserved = /* @__PURE__ */ new Set()) {
+    const used = usedRegisters(ops);
+    return STABLE_REGISTERS.filter((register) => !used.has(register) && !reserved.has(register));
+  }
+  function registerIsOverwritten(ops, register) {
+    for (const op2 of ops) {
+      if (op2.kind === "store" && op2.register === register) return true;
+      if (op2.kind !== "indirect-store") continue;
+      const targets = knownIndirectMemoryTargets(op2);
+      if (targets === void 0 || targets.has(register)) return true;
+    }
+    return false;
+  }
+  function existingConstantSelectorPlans(ops, preloaded) {
+    const plans = /* @__PURE__ */ new Map();
+    if (preloaded === void 0) return plans;
+    for (const register of STABLE_REGISTERS) {
+      const value = preloaded[register];
+      if (value === void 0 || registerIsOverwritten(ops, register)) continue;
+      const evaluated = evaluateIndirectAddress(register, value, "flow");
+      if (evaluated === void 0) continue;
+      const target = evaluated?.actualFlowTarget;
+      if (target === void 0 || target < 0 || target > 104) continue;
+      if (plans.has(target)) continue;
+      plans.set(target, {
+        register,
+        selectorValue: value,
+        superDark: evaluated.superDark?.entryAddress === target,
+        existingConstant: true
+      });
+    }
+    return plans;
+  }
+  function numericFlowTarget2(op2) {
     if (op2.kind !== "jump" && op2.kind !== "call" && op2.kind !== "cjump" && op2.kind !== "loop") return void 0;
     if (typeof op2.target !== "number") return void 0;
     if (!Number.isInteger(op2.target) || op2.target < 0 || op2.target > 104) return void 0;
@@ -19915,12 +22552,12 @@ var MKProEmulatorBundle = (() => {
   function branchTarget(op2) {
     if (op2.kind !== "jump" && op2.kind !== "call" && op2.kind !== "cjump") return void 0;
     if (op2.targetMeta.formalOpcode !== void 0 || op2.targetMeta.roles?.includes("formal-address")) return void 0;
-    return numericFlowTarget(op2);
+    return numericFlowTarget2(op2);
   }
   function maxNumericFlowTarget(ops) {
     let max = -1;
     for (const op2 of ops) {
-      const target = numericFlowTarget(op2);
+      const target = numericFlowTarget2(op2);
       if (target !== void 0 && target > max) max = target;
     }
     return max;
@@ -20067,7 +22704,7 @@ var MKProEmulatorBundle = (() => {
     }
     return true;
   }
-  function runtimeIndirectCallPlans(ops, breakEven = false) {
+  function runtimeIndirectCallPlans(ops, breakEven = false, reserved = /* @__PURE__ */ new Set()) {
     const addresses = addressByIndex(ops);
     const labels = calculateLabelAddresses(ops);
     const targets = /* @__PURE__ */ new Map();
@@ -20105,7 +22742,7 @@ var MKProEmulatorBundle = (() => {
       const targetIndex = firstOpIndexAtAddress(ops, addresses, candidate.target);
       if (targetIndex === void 0) continue;
       const register = STABLE_REGISTERS.find(
-        (item) => !usedRegisters3.has(item) && canBorrowRegisterForRuntimeSelector(ops, item, targetIndex, candidate.insertIndex, selected)
+        (item) => !usedRegisters3.has(item) && !reserved.has(item) && canBorrowRegisterForRuntimeSelector(ops, item, targetIndex, candidate.insertIndex, selected)
       );
       if (register === void 0) continue;
       usedRegisters3.add(register);
@@ -20119,7 +22756,11 @@ var MKProEmulatorBundle = (() => {
     return plans;
   }
   var runtimeIndirectCallRun = (ops, context) => {
-    const plans = runtimeIndirectCallPlans(ops, context.options.aggressiveIndirectCallThreshold === true);
+    const plans = runtimeIndirectCallPlans(
+      ops,
+      context.options.aggressiveIndirectCallThreshold === true,
+      reservedPreloadedRegisters(context.options.preloadedConstantRegisters)
+    );
     if (plans.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
     const byInsert = /* @__PURE__ */ new Map();
     const byIndex = /* @__PURE__ */ new Map();
@@ -20155,9 +22796,11 @@ var MKProEmulatorBundle = (() => {
       ]
     };
   };
-  function runPreloadedIndirectFlow(ops, _context, flowOptions = {}) {
-    const registers = spareStableRegisters(ops);
-    if (registers.length === 0) return { ops: [...ops], applied: 0, optimizations: [] };
+  function runPreloadedIndirectFlow(ops, context, flowOptions = {}) {
+    const reserved = reservedPreloadedRegisters(context.options.preloadedConstantRegisters);
+    const registers = spareStableRegisters(ops, reserved);
+    const existingSelectors = context.options.dualUseConstantIndirectFlow === true ? existingConstantSelectorPlans(ops, context.options.preloadedConstantRegisters) : /* @__PURE__ */ new Map();
+    if (registers.length === 0 && existingSelectors.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
     const addresses = addressByIndex(ops);
     const labels = calculateLabelAddresses(ops);
     const maxTarget = maxNumericFlowTarget(ops);
@@ -20171,9 +22814,10 @@ var MKProEmulatorBundle = (() => {
         continue;
       }
       const { selectorValue, superDark } = selectorForTarget(ops, addresses, labels, target);
-      const evaluated = evaluateIndirectAddress(registers[0], selectorValue, "flow");
+      const existingSelector = existingSelectors.get(target);
+      const evaluated = registers[0] === void 0 ? void 0 : evaluateIndirectAddress(registers[0], selectorValue, "flow");
       const selectedSuperDark = evaluated?.superDark?.entryAddress === target;
-      if (evaluated?.actualFlowTarget !== target || selectedSuperDark !== superDark) {
+      if (existingSelector === void 0 && (evaluated?.actualFlowTarget !== target || selectedSuperDark !== superDark)) {
         continue;
       }
       const existing = eligibleTargets.get(target);
@@ -20185,10 +22829,19 @@ var MKProEmulatorBundle = (() => {
     }
     const targets = /* @__PURE__ */ new Map();
     const preloads = [];
+    let reusedExistingConstants = 0;
+    const usedExistingRegisters = /* @__PURE__ */ new Set();
     const sortedTargets = [...eligibleTargets.values()].sort(
       (left, right) => right.indices.length - left.indices.length || left.indices[0] - right.indices[0]
     );
     for (const target of sortedTargets) {
+      const existingSelector = existingSelectors.get(target.target);
+      if (existingSelector !== void 0 && !usedExistingRegisters.has(existingSelector.register)) {
+        targets.set(target.target, existingSelector);
+        usedExistingRegisters.add(existingSelector.register);
+        reusedExistingConstants += 1;
+        continue;
+      }
       const register = registers.shift();
       if (register === void 0) break;
       if (!isStableIndirectSelector(register)) continue;
@@ -20225,16 +22878,23 @@ var MKProEmulatorBundle = (() => {
     }
     if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
     const formal2 = preloads.filter((preload) => /[B-F]/iu.test(preload.value)).length;
+    const reused = reusedExistingConstants === 0 ? "" : ` and reused ${reusedExistingConstants} existing constant selector${reusedExistingConstants === 1 ? "" : "s"}`;
     const optimizations = [
       {
         name: "preloaded-indirect-flow",
-        detail: `Replaced ${applied} numeric direct branch/call(s) with compiler-owned preloaded indirect flow (${formal2} formal alias selector${formal2 === 1 ? "" : "s"}).`
+        detail: `Replaced ${applied} numeric direct branch/call(s) with compiler-owned preloaded indirect flow (${formal2} formal alias selector${formal2 === 1 ? "" : "s"})${reused}.`
       }
     ];
     if (superDarkApplied > 0) {
       optimizations.push({
         name: "preloaded-super-dark-flow",
         detail: `Selected ${superDarkApplied} FA..FF one-command indirect dispatch(es) after proving the entry cell falls through to the matching 01..06 continuation jump.`
+      });
+    }
+    if (reusedExistingConstants > 0) {
+      optimizations.push({
+        name: "constants-dual-use",
+        detail: `Reused ${reusedExistingConstants} setup constant preload${reusedExistingConstants === 1 ? "" : "s"} as stable indirect-flow selector${reusedExistingConstants === 1 ? "" : "s"}.`
       });
     }
     return {
@@ -20244,10 +22904,10 @@ var MKProEmulatorBundle = (() => {
       optimizations
     };
   }
-  var run16 = (ops, context) => runPreloadedIndirectFlow(ops, context, {});
+  var run17 = (ops, context) => runPreloadedIndirectFlow(ops, context, {});
   var preloadedIndirectFlow = {
     name: "preloaded-indirect-flow",
-    run: run16,
+    run: run17,
     layoutSafe: false
   };
   var runtimeIndirectCallFlow = {
@@ -20351,7 +23011,7 @@ var MKProEmulatorBundle = (() => {
     }
     return true;
   }
-  var run17 = (ops) => {
+  var run18 = (ops) => {
     const labelIndex = /* @__PURE__ */ new Map();
     for (let i = 0; i < ops.length; i += 1) {
       const op2 = ops[i];
@@ -20427,7 +23087,7 @@ var MKProEmulatorBundle = (() => {
   };
   var redundantPrologueElimination = {
     name: "redundant-prologue-elimination",
-    run: run17,
+    run: run18,
     layoutSafe: false
   };
 
@@ -20620,7 +23280,7 @@ var MKProEmulatorBundle = (() => {
     }
     return { ops: result, applied: mapping.size };
   }
-  var run18 = (ops, context) => {
+  var run19 = (ops, context) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     if (ops.some((op2) => hasRewriteBarrier(op2))) {
       return { ops: [...ops], applied: 0, optimizations: [] };
@@ -20653,12 +23313,12 @@ var MKProEmulatorBundle = (() => {
   };
   var registerCoalesce = {
     name: "register-coalesce",
-    run: run18,
+    run: run19,
     layoutSafe: true
   };
 
   // src/core/passes/return-zero-jump.ts
-  var run19 = (ops) => {
+  var run20 = (ops) => {
     const usesCall = ops.some((op2) => op2.kind === "call" || op2.kind === "indirect-call");
     if (usesCall) return { ops: [...ops], applied: 0, optimizations: [] };
     const labels = calculateLabelAddresses(ops);
@@ -20704,17 +23364,21 @@ var MKProEmulatorBundle = (() => {
   };
   var returnZeroJump = {
     name: "return-zero-jump",
-    run: run19,
+    run: run20,
     layoutSafe: false
   };
 
   // src/core/passes/return-suffix-gadget.ts
-  var run20 = (ops) => {
-    if (hasNumericFlowTarget2(ops)) return emptyResult(ops);
+  var run21 = (ops) => {
+    if (hasNumericOutlineFlowTarget(ops)) return emptyResult(ops);
     if (ops.some((op2) => op2.kind === "label" && op2.name.startsWith("__shared_straight_line_helper_"))) {
       return emptyResult(ops);
     }
-    const candidates = collectReturnSuffixCandidates(ops);
+    const candidates = collectSuffixCandidates(ops, {
+      isTerminal: isShareableReturn,
+      isBodyOp: isShareableBodyOp,
+      opKey
+    });
     const selected = selectGadgets(candidates, ops);
     if (selected.length === 0) return emptyResult(ops);
     const targetLabels = /* @__PURE__ */ new Map();
@@ -20784,65 +23448,20 @@ var MKProEmulatorBundle = (() => {
   }
   var returnSuffixGadget = {
     name: "return-suffix-gadget",
-    run: run20,
+    run: run21,
     layoutSafe: false
   };
-  function collectReturnSuffixCandidates(ops) {
-    const byKey = /* @__PURE__ */ new Map();
-    for (let end = 0; end < ops.length; end += 1) {
-      const final = ops[end];
-      if (!isShareableReturn(final)) continue;
-      const parts = [opKey(final)];
-      let cells = cellsPerOp(final);
-      for (let start = end - 1; start >= 0; start -= 1) {
-        const op2 = ops[start];
-        if (!isShareableBodyOp(op2)) break;
-        parts.unshift(opKey(op2));
-        cells += cellsPerOp(op2);
-        if (cells <= 2) continue;
-        const key = parts.join("\n");
-        const bodyKey = parts.slice(0, -1).join("\n");
-        const occurrences = byKey.get(key) ?? [];
-        occurrences.push({ key, bodyKey, start, end, cells, bodyCells: cells - cellsPerOp(final) });
-        byKey.set(key, occurrences);
-      }
-    }
-    return [...byKey.entries()].map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0].cells }));
-  }
   function selectGadgets(candidates, ops) {
-    const existingLabels = new Set(ops.flatMap((op2) => op2.kind === "label" ? [op2.name] : []));
+    const labels = createLabelAllocator(ops, "__return_suffix_gadget_");
     const protectedIndexes = /* @__PURE__ */ new Set();
-    const selected = [];
-    let labelIndex = 0;
-    const ordered = [...candidates].sort((left, right) => {
-      const leftSavings = (left.occurrences.length - 1) * (left.cells - 2);
-      const rightSavings = (right.occurrences.length - 1) * (right.cells - 2);
-      return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
-    });
-    for (const candidate of ordered) {
-      const available = candidate.occurrences.filter(
-        (occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
-      );
-      if (available.length < 2) continue;
-      const [target, ...replacements] = available;
-      if (target === void 0 || replacements.length === 0) continue;
-      const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
-      if (savedCells <= 0) continue;
-      const label = freshLabel2(existingLabels, labelIndex);
-      labelIndex += 1;
-      existingLabels.add(label);
-      selected.push({ kind: "jump", label, target, replacements });
-      for (const occurrence of [target, ...replacements]) {
-        markRange(protectedIndexes, occurrence.start, occurrence.end);
-      }
-    }
-    const bodyTargets = collectBodyTargets(candidates);
+    const selected = selectSharedSuffixes(candidates, labels, protectedIndexes).map((suffix) => ({ kind: "jump", ...suffix }));
+    const bodyTargets = collectBodyTargets(ops, candidates);
     const bodyOccurrences = collectBodyOccurrences(ops, new Set(bodyTargets.keys()));
-    const bodyCalls = selectBodyCalls(bodyTargets, bodyOccurrences, existingLabels, protectedIndexes, labelIndex);
+    const bodyCalls = selectBodyCalls(bodyTargets, bodyOccurrences, labels, protectedIndexes);
     selected.push(...bodyCalls);
     const tailCallTargets = collectTailCallTargets(ops);
     const tailCallOccurrences = collectTailCallOccurrences(ops, new Set(tailCallTargets.keys()));
-    const tailCalls = selectBodyCalls(tailCallTargets, tailCallOccurrences, existingLabels, protectedIndexes, labelIndex);
+    const tailCalls = selectBodyCalls(tailCallTargets, tailCallOccurrences, labels, protectedIndexes);
     selected.push(...tailCalls);
     return selected;
   }
@@ -20930,19 +23549,6 @@ var MKProEmulatorBundle = (() => {
         return false;
     }
   }
-  function hasNumericFlowTarget2(ops) {
-    return ops.some((op2) => {
-      switch (op2.kind) {
-        case "jump":
-        case "cjump":
-        case "call":
-        case "loop":
-          return typeof op2.target === "number";
-        default:
-          return false;
-      }
-    });
-  }
   function opKey(op2) {
     switch (op2.kind) {
       case "store":
@@ -20973,23 +23579,29 @@ var MKProEmulatorBundle = (() => {
         return op2.kind;
     }
   }
-  function collectBodyTargets(candidates) {
+  function collectBodyTargets(ops, candidates) {
     const result = /* @__PURE__ */ new Map();
     for (const candidate of candidates) {
       for (const occurrence of candidate.occurrences) {
-        if (occurrence.bodyKey.length === 0 || occurrence.bodyCells <= 2) continue;
-        const targets = result.get(occurrence.bodyKey) ?? [];
+        const bodyKey = suffixBodyKey(occurrence.key);
+        const bodyCells = occurrence.cells - cellsPerOp(ops[occurrence.end]);
+        if (bodyKey.length === 0 || bodyCells <= 2) continue;
+        const targets = result.get(bodyKey) ?? [];
         targets.push({
-          key: occurrence.bodyKey,
+          key: bodyKey,
           start: occurrence.start,
           bodyEnd: occurrence.end - 1,
           end: occurrence.end,
-          cells: occurrence.bodyCells
+          cells: bodyCells
         });
-        result.set(occurrence.bodyKey, targets);
+        result.set(bodyKey, targets);
       }
     }
     return result;
+  }
+  function suffixBodyKey(key) {
+    const cut = key.lastIndexOf("\n");
+    return cut === -1 ? "" : key.slice(0, cut);
   }
   function collectBodyOccurrences(ops, wantedKeys) {
     const result = /* @__PURE__ */ new Map();
@@ -21064,9 +23676,8 @@ var MKProEmulatorBundle = (() => {
     }
     return result;
   }
-  function selectBodyCalls(targets, occurrences, existingLabels, protectedIndexes, initialLabelIndex) {
+  function selectBodyCalls(targets, occurrences, labels, protectedIndexes) {
     const selected = [];
-    let labelIndex = initialLabelIndex;
     const keys = [...targets.keys()].sort((left, right) => {
       const leftCells = targets.get(left)?.[0]?.cells ?? 0;
       const rightCells = targets.get(right)?.[0]?.cells ?? 0;
@@ -21080,10 +23691,7 @@ var MKProEmulatorBundle = (() => {
       if (replacements.length === 0) continue;
       const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
       if (savedCells <= 0) continue;
-      const label = freshLabel2(existingLabels, labelIndex);
-      labelIndex += 1;
-      existingLabels.add(label);
-      selected.push({ kind: "call", label, target, replacements: [...replacements] });
+      selected.push({ kind: "call", label: labels.next(), target, replacements: [...replacements] });
       markRange(protectedIndexes, target.start, target.end);
       for (const occurrence of replacements) {
         markRange(protectedIndexes, occurrence.start, occurrence.end);
@@ -21091,30 +23699,8 @@ var MKProEmulatorBundle = (() => {
     }
     return selected;
   }
-  function targetKey(target) {
-    return typeof target === "number" ? `#${target}` : target;
-  }
   function sameTargetBody(occurrence, target) {
     return occurrence.start === target.start && occurrence.end === target.bodyEnd;
-  }
-  function rangeIntersects(indexes, start, end) {
-    for (let index = start; index <= end; index += 1) {
-      if (indexes.has(index)) return true;
-    }
-    return false;
-  }
-  function markRange(indexes, start, end) {
-    for (let index = start; index <= end; index += 1) {
-      indexes.add(index);
-    }
-  }
-  function freshLabel2(existingLabels, index) {
-    let suffix = index;
-    while (true) {
-      const label = `__return_suffix_gadget_${suffix}`;
-      if (!existingLabels.has(label)) return label;
-      suffix += 1;
-    }
   }
 
   // src/core/passes/r0-fractional-sentinel.ts
@@ -21206,7 +23792,7 @@ var MKProEmulatorBundle = (() => {
     if (fractionalJumps > 0) parts.push(`${fractionalJumps} direct flow op(s) to 99 via fractional R0`);
     return `Reused fractional-R0 side effects for ${parts.join(" and ")}.`;
   }
-  var run21 = (ops) => {
+  var run22 = (ops) => {
     if (ops.length === 0) return { ops: [], applied: 0, optimizations: [] };
     const liveness = computeLiveness(ops);
     const remove = /* @__PURE__ */ new Set();
@@ -21316,12 +23902,12 @@ var MKProEmulatorBundle = (() => {
   };
   var r0FractionalSentinel = {
     name: "r0-fractional-sentinel",
-    run: run21,
+    run: run22,
     layoutSafe: false
   };
 
   // src/core/passes/shared-call-tail.ts
-  var run22 = (ops) => {
+  var run23 = (ops) => {
     const candidates = collectSharedCallTails(ops);
     const normalizeContinuation = buildContinuationNormalizer(ops);
     if (candidates.size === 0) return { ops: [...ops], applied: 0, optimizations: [] };
@@ -21380,15 +23966,15 @@ var MKProEmulatorBundle = (() => {
   };
   var sharedCallTail = {
     name: "shared-call-tail",
-    run: run22,
+    run: run23,
     layoutSafe: false
   };
   function collectSharedCallTails(ops) {
     const normalizeContinuation = buildContinuationNormalizer(ops);
     const counts = /* @__PURE__ */ new Map();
-    for (let index2 = 0; index2 < ops.length - 1; index2 += 1) {
-      const op2 = ops[index2];
-      const next = ops[index2 + 1];
+    for (let index = 0; index < ops.length - 1; index += 1) {
+      const op2 = ops[index];
+      const next = ops[index + 1];
       if (op2.kind !== "call" || next.kind !== "jump") continue;
       if (hasRewriteBarrier(op2) || hasRewriteBarrier(next)) continue;
       const normalizedTarget = normalizeContinuation(next.target);
@@ -21405,37 +23991,33 @@ var MKProEmulatorBundle = (() => {
       }
     }
     const result = /* @__PURE__ */ new Map();
-    let index = 0;
+    const labels = createLabelAllocator(ops, "__shared_call_tail_");
     for (const [key, candidate] of counts) {
       if (candidate.count < 3) continue;
       result.set(key, {
         key,
-        label: `__shared_call_tail_${index}`,
+        label: labels.next(),
         call: candidate.call,
         continuation: candidate.continuation,
         count: candidate.count
       });
-      index += 1;
     }
     return result;
   }
   function callTailKey(call, continuation, normalizeContinuation) {
-    return `${targetKey2(call.target)}|${targetKey2(normalizeContinuation(continuation.target))}`;
-  }
-  function targetKey2(target) {
-    return typeof target === "number" ? `#${target}` : target;
+    return `${targetKey(call.target)}|${targetKey(normalizeContinuation(continuation.target))}`;
   }
   function buildContinuationNormalizer(ops) {
-    const labelIndexes3 = /* @__PURE__ */ new Map();
+    const labelIndexes2 = /* @__PURE__ */ new Map();
     for (let index = 0; index < ops.length; index += 1) {
       const op2 = ops[index];
-      if (op2.kind === "label") labelIndexes3.set(op2.name, index);
+      if (op2.kind === "label") labelIndexes2.set(op2.name, index);
     }
     const normalize = (target, seen = /* @__PURE__ */ new Set()) => {
       if (typeof target !== "string") return target;
       if (seen.has(target)) return target;
       seen.add(target);
-      const labelIndex = labelIndexes3.get(target);
+      const labelIndex = labelIndexes2.get(target);
       if (labelIndex === void 0) return target;
       const executableIndex = nextExecutableIndex2(ops, labelIndex + 1);
       const executable = executableIndex === void 0 ? void 0 : ops[executableIndex];
@@ -21459,8 +24041,8 @@ var MKProEmulatorBundle = (() => {
     "__shared_terminal_tail_",
     "__shared_straight_line_helper_"
   ];
-  var run23 = (ops, context) => {
-    if (hasNumericFlowTarget3(ops)) return emptyResult(ops);
+  var run24 = (ops, context) => {
+    if (hasNumericOutlineFlowTarget(ops)) return emptyResult(ops);
     const selected = selectHelpers(collectCandidates(ops, context.options.sharedStraightLineCallBodies === true), ops);
     if (selected.length === 0) return emptyResult(ops);
     const replacementByStart = /* @__PURE__ */ new Map();
@@ -21530,7 +24112,7 @@ var MKProEmulatorBundle = (() => {
   };
   var sharedStraightLineHelper = {
     name: "shared-straight-line-helper",
-    run: run23,
+    run: run24,
     layoutSafe: false
   };
   function collectCandidates(ops, allowDirectCalls) {
@@ -21560,7 +24142,7 @@ var MKProEmulatorBundle = (() => {
         byKey.set(key, occurrences);
       }
     }
-    return [...byKey.entries()].map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0].cells })).filter((candidate) => candidate.occurrences.length >= 2);
+    return [...byKey.entries()].map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0].cells })).filter((candidate) => candidate.occurrences.length >= 1);
   }
   function generatedBodyIndexes(ops, allowDirectCalls) {
     const indexes = /* @__PURE__ */ new Set();
@@ -21623,42 +24205,41 @@ var MKProEmulatorBundle = (() => {
     }
   }
   function selectHelpers(candidates, ops) {
-    const existingLabels = new Set(ops.flatMap((op2) => op2.kind === "label" ? [op2.name] : []));
+    const labels = createLabelAllocator(ops, "__shared_straight_line_helper_");
     const protectedIndexes = /* @__PURE__ */ new Set();
     const selected = [];
-    let labelIndex = 0;
-    const ordered = candidates.filter((candidate) => candidate.cells >= MIN_BODY_CELLS).sort((left, right) => {
+    const ordered = candidates.filter(
+      (candidate) => candidate.cells >= MIN_BODY_CELLS && candidate.occurrences.length >= 2
+    ).sort((left, right) => {
       const leftSavings = netSavings(left.occurrences.length, left.cells);
       const rightSavings = netSavings(right.occurrences.length, right.cells);
       return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
     });
     for (const candidate of ordered) {
       const occurrences = candidate.occurrences.filter(
-        (occurrence) => !rangeIntersects2(protectedIndexes, occurrence.start, occurrence.end)
+        (occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
       );
       if (occurrences.length < 2) continue;
       if (netSavings(occurrences.length, candidate.cells) <= 0) continue;
-      const label = freshLabel3(existingLabels, labelIndex);
-      labelIndex += 1;
-      existingLabels.add(label);
       selected.push({
-        label,
+        label: labels.next(),
         body: ops.slice(occurrences[0].start, occurrences[0].end + 1),
         occurrences,
         cells: candidate.cells,
         entries: []
       });
       for (const occurrence of occurrences) {
-        markRange2(protectedIndexes, occurrence.start, occurrence.end);
+        markRange(protectedIndexes, occurrence.start, occurrence.end);
       }
     }
-    selectInternalEntries(selected, candidates, existingLabels, protectedIndexes, labelIndex);
+    selectInternalEntries(selected, candidates, labels, protectedIndexes);
+    selectAnchoredInternalEntryHelpers(selected, candidates, ops, labels, protectedIndexes);
     return selected;
   }
   function netSavings(occurrences, cells) {
     return occurrences * cells - (occurrences * 2 + cells + 1);
   }
-  function selectInternalEntries(helpers, candidates, existingLabels, protectedIndexes, startLabelIndex) {
+  function selectInternalEntries(helpers, candidates, labels, protectedIndexes) {
     const candidateByKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
     const entryCandidates = [];
     for (const helper of helpers) {
@@ -21673,7 +24254,6 @@ var MKProEmulatorBundle = (() => {
         entryCandidates.push({ helper, offset, key, cells, occurrences: candidate.occurrences });
       }
     }
-    let labelIndex = startLabelIndex;
     const ordered = entryCandidates.sort((left, right) => {
       const leftSavings = left.occurrences.length * (left.cells - 2);
       const rightSavings = right.occurrences.length * (right.cells - 2);
@@ -21682,22 +24262,86 @@ var MKProEmulatorBundle = (() => {
     for (const candidate of ordered) {
       if (candidate.cells <= 2) continue;
       const replacements = candidate.occurrences.filter(
-        (occurrence) => !rangeIntersects2(protectedIndexes, occurrence.start, occurrence.end)
+        (occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
       );
       if (replacements.length === 0) continue;
-      const label = freshLabel3(existingLabels, labelIndex);
-      labelIndex += 1;
-      existingLabels.add(label);
       candidate.helper.entries.push({
-        label,
+        label: labels.next(),
         offset: candidate.offset,
         replacements,
         cells: candidate.cells
       });
       for (const replacement of replacements) {
-        markRange2(protectedIndexes, replacement.start, replacement.end);
+        markRange(protectedIndexes, replacement.start, replacement.end);
       }
     }
+  }
+  function selectAnchoredInternalEntryHelpers(selected, candidates, ops, labels, protectedIndexes) {
+    const candidateByKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
+    const entryCandidates = [];
+    for (const bodyCandidate of candidates) {
+      if (bodyCandidate.cells < MIN_BODY_CELLS) continue;
+      for (const anchor of bodyCandidate.occurrences) {
+        if (rangeIntersects(protectedIndexes, anchor.start, anchor.end)) continue;
+        const body = ops.slice(anchor.start, anchor.end + 1);
+        const parts = body.map(opKey2);
+        const suffixCells = body.map(cellsPerOp);
+        for (let offset = 1; offset < body.length; offset += 1) {
+          const cells = suffixCells.slice(offset).reduce((sum, count) => sum + count, 0);
+          if (cells < MIN_ENTRY_CELLS) continue;
+          const key = parts.slice(offset).join("\n");
+          const suffixCandidate = candidateByKey.get(key);
+          if (suffixCandidate === void 0) continue;
+          const replacements = suffixCandidate.occurrences.filter(
+            (occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end) && !rangesOverlap(anchor.start, anchor.end, occurrence.start, occurrence.end)
+          );
+          if (replacements.length === 0) continue;
+          const savings = replacements.length * (cells - 2) - 3;
+          if (savings <= 0) continue;
+          entryCandidates.push({
+            bodyCandidate,
+            anchor,
+            offset,
+            key,
+            cells,
+            replacements,
+            savings
+          });
+        }
+      }
+    }
+    const ordered = entryCandidates.sort(
+      (left, right) => right.savings - left.savings || right.cells - left.cells || right.bodyCandidate.cells - left.bodyCandidate.cells || left.key.localeCompare(right.key)
+    );
+    for (const candidate of ordered) {
+      if (rangeIntersects(protectedIndexes, candidate.anchor.start, candidate.anchor.end)) continue;
+      const replacements = candidate.replacements.filter(
+        (occurrence) => !rangeIntersects(protectedIndexes, occurrence.start, occurrence.end)
+      );
+      if (replacements.length === 0) continue;
+      const savings = replacements.length * (candidate.cells - 2) - 3;
+      if (savings <= 0) continue;
+      const helper = {
+        label: labels.next(),
+        body: ops.slice(candidate.anchor.start, candidate.anchor.end + 1),
+        occurrences: [candidate.anchor],
+        cells: candidate.bodyCandidate.cells,
+        entries: [{
+          label: labels.next(),
+          offset: candidate.offset,
+          replacements,
+          cells: candidate.cells
+        }]
+      };
+      selected.push(helper);
+      markRange(protectedIndexes, candidate.anchor.start, candidate.anchor.end);
+      for (const replacement of replacements) {
+        markRange(protectedIndexes, replacement.start, replacement.end);
+      }
+    }
+  }
+  function rangesOverlap(leftStart, leftEnd, rightStart, rightEnd) {
+    return leftStart <= rightEnd && rightStart <= leftEnd;
   }
   function helperCall(label, source, entry = false) {
     const meta = {
@@ -21815,42 +24459,20 @@ var MKProEmulatorBundle = (() => {
         return op2.kind;
     }
   }
-  function hasNumericFlowTarget3(ops) {
-    return ops.some((op2) => {
-      switch (op2.kind) {
-        case "jump":
-        case "cjump":
-        case "call":
-        case "loop":
-          return typeof op2.target === "number";
-        default:
-          return false;
-      }
-    });
-  }
-  function rangeIntersects2(indexes, start, end) {
-    for (let index = start; index <= end; index += 1) {
-      if (indexes.has(index)) return true;
-    }
-    return false;
-  }
-  function markRange2(indexes, start, end) {
-    for (let index = start; index <= end; index += 1) indexes.add(index);
-  }
-  function freshLabel3(existingLabels, index) {
-    let suffix = index;
-    while (true) {
-      const label = `__shared_straight_line_helper_${suffix}`;
-      if (!existingLabels.has(label)) return label;
-      suffix += 1;
-    }
-  }
 
   // src/core/passes/shared-terminal-tail.ts
-  var run24 = (ops) => {
-    if (hasNumericFlowTarget4(ops)) return emptyResult(ops);
-    const candidates = collectTailCandidates(ops);
-    const selected = selectTails(candidates, ops);
+  var run25 = (ops) => {
+    if (hasNumericOutlineFlowTarget(ops)) return emptyResult(ops);
+    const candidates = collectSuffixCandidates(ops, {
+      isTerminal: isShareableTerminal,
+      isBodyOp: isShareableBodyOp3,
+      opKey: opKey3
+    });
+    const selected = selectSharedSuffixes(
+      candidates,
+      createLabelAllocator(ops, "__shared_terminal_tail_"),
+      /* @__PURE__ */ new Set()
+    );
     if (selected.length === 0) return emptyResult(ops);
     const targetLabels = /* @__PURE__ */ new Map();
     const replacementByStart = /* @__PURE__ */ new Map();
@@ -21890,59 +24512,9 @@ var MKProEmulatorBundle = (() => {
   };
   var sharedTerminalTail = {
     name: "shared-terminal-tail",
-    run: run24,
+    run: run25,
     layoutSafe: false
   };
-  function collectTailCandidates(ops) {
-    const byKey = /* @__PURE__ */ new Map();
-    for (let end = 0; end < ops.length; end += 1) {
-      const final = ops[end];
-      if (!isShareableTerminal(final)) continue;
-      const parts = [opKey3(final)];
-      let cells = cellsPerOp(final);
-      for (let start = end - 1; start >= 0; start -= 1) {
-        const op2 = ops[start];
-        if (!isShareableBodyOp3(op2)) break;
-        parts.unshift(opKey3(op2));
-        cells += cellsPerOp(op2);
-        if (cells <= 2) continue;
-        const key = parts.join("\n");
-        const occurrences = byKey.get(key) ?? [];
-        occurrences.push({ key, start, end, cells });
-        byKey.set(key, occurrences);
-      }
-    }
-    return [...byKey.entries()].map(([key, occurrences]) => ({ key, occurrences, cells: occurrences[0].cells }));
-  }
-  function selectTails(candidates, ops) {
-    const existingLabels = new Set(ops.flatMap((op2) => op2.kind === "label" ? [op2.name] : []));
-    const protectedIndexes = /* @__PURE__ */ new Set();
-    const selected = [];
-    let labelIndex = 0;
-    const ordered = [...candidates].sort((left, right) => {
-      const leftSavings = (left.occurrences.length - 1) * (left.cells - 2);
-      const rightSavings = (right.occurrences.length - 1) * (right.cells - 2);
-      return rightSavings - leftSavings || right.cells - left.cells || left.key.localeCompare(right.key);
-    });
-    for (const candidate of ordered) {
-      const available = candidate.occurrences.filter(
-        (occurrence) => !rangeIntersects3(protectedIndexes, occurrence.start, occurrence.end)
-      );
-      if (available.length < 2) continue;
-      const [target, ...replacements] = available;
-      if (target === void 0 || replacements.length === 0) continue;
-      const savedCells = replacements.reduce((sum, occurrence) => sum + occurrence.cells - 2, 0);
-      if (savedCells <= 0) continue;
-      const label = freshLabel4(existingLabels, labelIndex);
-      labelIndex += 1;
-      existingLabels.add(label);
-      selected.push({ label, target, replacements });
-      for (const occurrence of [target, ...replacements]) {
-        markRange3(protectedIndexes, occurrence.start, occurrence.end);
-      }
-    }
-    return selected;
-  }
   function sharedTailJump(label, source) {
     const meta = {
       mnemonic: "\u0411\u041F",
@@ -21999,7 +24571,7 @@ var MKProEmulatorBundle = (() => {
         return `stop:${op2.semantic}`;
       case "jump":
       case "call":
-        return `${op2.kind}:${targetKey3(op2.target)}`;
+        return `${op2.kind}:${targetKey(op2.target)}`;
       case "return":
         return "return";
       case "plain":
@@ -22007,85 +24579,40 @@ var MKProEmulatorBundle = (() => {
       case "label":
         return `label:${op2.name}`;
       case "cjump":
-        return `cjump:${op2.condition}:${targetKey3(op2.target)}`;
+        return `cjump:${op2.condition}:${targetKey(op2.target)}`;
       case "loop":
-        return `loop:${op2.counter}:${targetKey3(op2.target)}`;
+        return `loop:${op2.counter}:${targetKey(op2.target)}`;
       case "indirect-cjump":
         return `indirect-cjump:${op2.condition}:${op2.register}`;
       case "orphan-address":
-        return `address:${targetKey3(op2.target)}`;
-    }
-  }
-  function targetKey3(target) {
-    return typeof target === "number" ? `#${target}` : target;
-  }
-  function hasNumericFlowTarget4(ops) {
-    return ops.some((op2) => {
-      switch (op2.kind) {
-        case "jump":
-        case "cjump":
-        case "call":
-          return typeof op2.target === "number";
-        case "loop":
-          return typeof op2.target === "number";
-        default:
-          return false;
-      }
-    });
-  }
-  function rangeIntersects3(indexes, start, end) {
-    for (let index = start; index <= end; index += 1) {
-      if (indexes.has(index)) return true;
-    }
-    return false;
-  }
-  function markRange3(indexes, start, end) {
-    for (let index = start; index <= end; index += 1) indexes.add(index);
-  }
-  function freshLabel4(existing, startIndex) {
-    let index = startIndex;
-    while (true) {
-      const label = `__shared_terminal_tail_${index}`;
-      if (!existing.has(label)) return label;
-      index += 1;
+        return `address:${targetKey(op2.target)}`;
     }
   }
 
   // src/core/passes/store-recall-peephole.ts
-  var run25 = (ops) => {
-    let x2States;
-    let x2ValueStates;
-    let directReturnContext;
-    const remove = /* @__PURE__ */ new Set();
-    for (let i = 0; i < ops.length; i += 1) {
-      const current = ops[i];
-      const next = ops[i + 1];
-      const storedRegister = storedCurrentXValueRegister(current);
-      const recalledRegister = next === void 0 ? void 0 : removableRecallValueRegister(next);
-      if (storedRegister === void 0 || recalledRegister === void 0) continue;
-      x2States ??= computeX2RegisterStates(ops);
-      x2ValueStates ??= computeX2ValueStates(ops, { trackRegisterMemory: true });
-      directReturnContext ??= directReturnAnalysisContext(ops);
-      const removal = analyzeRecallRemoval(ops, i + 1, x2States[i + 1], x2ValueStates[i + 1], directReturnContext);
-      if ((storedRegister === recalledRegister || removal?.valueProof?.inX === true) && removal?.removable === true) {
-        remove.add(i + 1);
+  var run26 = (ops) => runRecallRemovalPass(
+    ops,
+    {
+      name: "store-recall-peephole",
+      detail: (count) => `Dropped ${count} redundant \u041F->X immediately after X->\u041F to the same register.`
+    },
+    (engine) => {
+      for (let i = 0; i < ops.length; i += 1) {
+        const current = ops[i];
+        const next = ops[i + 1];
+        const storedRegister = storedCurrentXValueRegister(current);
+        const recalledRegister = next === void 0 ? void 0 : removableRecallValueRegister(next);
+        if (storedRegister === void 0 || recalledRegister === void 0) continue;
+        const removalPlan = engine.plan(i + 1, { requireValueProof: storedRegister !== recalledRegister });
+        if ((storedRegister === recalledRegister || removalPlan?.analysis.valueProof?.inX === true) && removalPlan?.removable === true) {
+          engine.removed.add(i + 1);
+        }
       }
     }
-    if (remove.size === 0) return emptyResult(ops);
-    return {
-      ops: ops.filter((_, index) => !remove.has(index)),
-      applied: remove.size,
-      optimizations: [
-        {
-          name: "store-recall-peephole",
-          detail: `Dropped ${remove.size} redundant \u041F->X immediately after X->\u041F to the same register.`
-        }
-      ]
-    };
-  };
+  );
   var storeRecallPeephole = {
     name: "store-recall-peephole",
-    run: run25,
+    run: run26,
     layoutSafe: false
   };
 
@@ -22096,7 +24623,7 @@ var MKProEmulatorBundle = (() => {
     "<0": { condition: ">=0", opcode: 89 },
     ">=0": { condition: "<0", opcode: 92 }
   };
-  var run26 = (ops, context) => {
+  var run27 = (ops, context) => {
     if (context.options.tailBranchInversion !== true) {
       return { ops: [...ops], applied: 0, optimizations: [] };
     }
@@ -22168,21 +24695,26 @@ var MKProEmulatorBundle = (() => {
   }
   var tailBranchInversion = {
     name: "tail-branch-inversion",
-    run: run26,
+    run: run27,
     layoutSafe: false
   };
 
   // src/core/passes/tail-call.ts
-  var run27 = (ops) => {
+  var run28 = (ops) => {
     const tailJumpTargets = findTailJumpTargets(ops);
     const returnContinuations = collectReturnContinuations(ops, tailJumpTargets);
     const returnLabels = collectReturnLabels(ops);
     const normalizeContinuation = buildContinuationNormalizer2(ops);
+    const labelAddresses2 = calculateLabelAddresses(ops);
+    const returnTargets = collectReturnTargets(ops);
     const result = [];
     let applied = 0;
+    let emptyStackApplied = 0;
+    let seenProcedureStart = false;
     for (let index = 0; index < ops.length; index += 1) {
       const op2 = ops[index];
       if (op2.kind === "label") {
+        if (op2.procedureBoundary === "start") seenProcedureStart = true;
         result.push(op2);
         continue;
       }
@@ -22243,7 +24775,7 @@ var MKProEmulatorBundle = (() => {
           continue;
         }
         const target = typeof op2.target === "string" ? tailJumpTargets.get(op2.target) : void 0;
-        if (target !== void 0 && next?.kind === "jump" && sameTarget(normalizeContinuation(next.target), target.continuation)) {
+        if (target !== void 0 && next?.kind === "jump" && sameTarget2(normalizeContinuation(next.target), target.continuation)) {
           result.push({
             kind: "jump",
             target: op2.target,
@@ -22259,7 +24791,24 @@ var MKProEmulatorBundle = (() => {
           applied += 1;
           continue;
         }
-        if (target !== void 0 && next?.kind === "label" && sameTarget(normalizeContinuation(next.name), target.continuation)) {
+        if (!seenProcedureStart && typeof op2.target === "string" && returnTargets.has(op2.target) && next !== void 0 && loopBackTargetsHead(next, normalizeContinuation, labelAddresses2) && !hasRewriteBarrier(op2) && !hasRewriteBarrier(next)) {
+          result.push({
+            kind: "jump",
+            target: op2.target,
+            opcode: 81,
+            meta: {
+              ...op2.meta,
+              mnemonic: "\u0411\u041F",
+              comment: op2.meta.comment?.replace(/^proc call/u, "empty-stack tail call") ?? "empty-stack tail call"
+            },
+            targetMeta: { ...op2.targetMeta }
+          });
+          index += 1;
+          applied += 1;
+          emptyStackApplied += 1;
+          continue;
+        }
+        if (target !== void 0 && next?.kind === "label" && sameTarget2(normalizeContinuation(next.name), target.continuation)) {
           result.push({
             kind: "jump",
             target: op2.target,
@@ -22284,13 +24833,13 @@ var MKProEmulatorBundle = (() => {
       applied,
       optimizations: [{
         name: "tail-call-lowering",
-        detail: tailJumpCount === 0 ? `Replaced ${applied} subroutine tail call${applied === 1 ? "" : "s"} with direct jump(s).` : `Replaced ${applied} subroutine tail operation${applied === 1 ? "" : "s"} with direct jump continuation${tailJumpCount === 1 ? "" : "s"}.`
+        detail: tailCallDetail(applied, tailJumpCount, emptyStackApplied)
       }]
     };
   };
   var tailCallLowering = {
     name: "tail-call-lowering",
-    run: run27,
+    run: run28,
     layoutSafe: false
   };
   function findTailJumpTargets(ops) {
@@ -22318,7 +24867,7 @@ var MKProEmulatorBundle = (() => {
       if (region === void 0 || !blockHasReturn(ops, region.start, region.end)) continue;
       const first = continuations[0];
       if (first === void 0) continue;
-      if (continuations.every((continuation) => continuation !== void 0 && sameTarget(continuation, first))) {
+      if (continuations.every((continuation) => continuation !== void 0 && sameTarget2(continuation, first))) {
         result.set(target, { continuation: first, start: region.start, end: region.end });
       }
     }
@@ -22356,6 +24905,31 @@ var MKProEmulatorBundle = (() => {
     }
     return result;
   }
+  function collectReturnTargets(ops) {
+    const callTargets = /* @__PURE__ */ new Set();
+    for (const op2 of ops) {
+      if (op2.kind === "call" && typeof op2.target === "string") callTargets.add(op2.target);
+      if (op2.kind === "label" && op2.procedureBoundary === "start") callTargets.add(op2.name);
+    }
+    const regions = collectCallableRegions(ops, callTargets);
+    const result = /* @__PURE__ */ new Set();
+    for (const [target, region] of regions) {
+      if (blockHasReturn(ops, region.start, region.end)) result.add(target);
+    }
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const [target, region] of regions) {
+        if (result.has(target)) continue;
+        const tail = terminalTailTarget(ops, region.start, region.end);
+        if (tail !== void 0 && result.has(tail)) {
+          result.add(target);
+          changed = true;
+        }
+      }
+    }
+    return result;
+  }
   function nextExecutableIndex4(ops, start) {
     for (let index = start; index < ops.length; index += 1) {
       if (ops[index]?.kind !== "label") return index;
@@ -22371,26 +24945,43 @@ var MKProEmulatorBundle = (() => {
     }
     return false;
   }
+  function terminalTailTarget(ops, start, end) {
+    for (let index = end - 1; index >= start; index -= 1) {
+      const op2 = ops[index];
+      if (op2.kind === "label") continue;
+      return op2.kind === "jump" && typeof op2.target === "string" ? op2.target : void 0;
+    }
+    return void 0;
+  }
   function callContinuation(ops, index) {
     const next = ops[index + 1];
     if (next?.kind === "jump") return next.target;
     if (next?.kind === "label") return next.name;
     return void 0;
   }
-  function sameTarget(left, right) {
+  function sameTarget2(left, right) {
     return left === right;
   }
+  function tailCallDetail(applied, tailJumpCount, emptyStackApplied) {
+    const base = tailJumpCount === 0 ? `Replaced ${applied} subroutine tail call${applied === 1 ? "" : "s"} with direct jump(s).` : `Replaced ${applied} subroutine tail operation${applied === 1 ? "" : "s"} with direct jump continuation${tailJumpCount === 1 ? "" : "s"}.`;
+    if (emptyStackApplied === 0) return base;
+    return `${base} ${emptyStackApplied} site${emptyStackApplied === 1 ? "" : "s"} use empty-return-stack \u0412/\u041E as the loop-head continuation.`;
+  }
+  function loopBackTargetsHead(op2, normalizeContinuation, labelAddresses2) {
+    if (op2.kind === "jump") return targetAddress(normalizeContinuation(op2.target), labelAddresses2) === 0;
+    return knownIndirectFlowTarget(op2) === 0 && op2.kind === "indirect-jump";
+  }
   function buildContinuationNormalizer2(ops) {
-    const labelIndexes3 = /* @__PURE__ */ new Map();
+    const labelIndexes2 = /* @__PURE__ */ new Map();
     for (let index = 0; index < ops.length; index += 1) {
       const op2 = ops[index];
-      if (op2.kind === "label") labelIndexes3.set(op2.name, index);
+      if (op2.kind === "label") labelIndexes2.set(op2.name, index);
     }
     const normalize = (target, seen = /* @__PURE__ */ new Set()) => {
       if (typeof target !== "string") return target;
       if (seen.has(target)) return target;
       seen.add(target);
-      const labelIndex = labelIndexes3.get(target);
+      const labelIndex = labelIndexes2.get(target);
       if (labelIndex === void 0) return target;
       const executableIndex = nextExecutableIndex4(ops, labelIndex + 1);
       const executable = executableIndex === void 0 ? void 0 : ops[executableIndex];
@@ -22404,202 +24995,122 @@ var MKProEmulatorBundle = (() => {
   function isDecimalDigit(op2) {
     return op2.kind === "plain" && op2.opcode >= 0 && op2.opcode <= 9 && !hasRewriteBarrier(op2) && !isDisplayFocusSensitive(op2);
   }
-  function isTransparentVpGapOp(op2) {
-    return op2.kind === "label" || op2.kind === "orphan-address";
-  }
-  function canRemoveClosedContextSignPair(ops, secondSignIndex, state, stateAfterPair, context) {
-    if (!x2StateIsClosedPlainContext(state)) return false;
-    if (state === void 0) return false;
-    if (!x2StateHasSameClosedSignChangeSourceInXAndX2(state)) return false;
-    if (!removingRecallCanExposeX2Restore(ops, secondSignIndex)) return true;
-    return canRemoveClosedContextSignPairBeforeProvedVp(ops, secondSignIndex, state, stateAfterPair, context);
-  }
-  function canRemoveOpenMantissaSignPairBeforeProvedVp(ops, secondSignIndex, state, stateAfterPair, context) {
-    if (analyzeX2VpShapeContext(state).kind !== "active-mantissa") return false;
-    if (x2RestoreGapBeforeVp(ops, secondSignIndex + 1, context).vpIndex === void 0) return false;
-    return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterPair, { hasSignRestore: true });
-  }
-  function canRemoveMantissaRestoreRunBeforeProvedVp(state, stateAfterRun) {
-    return x2StateCanDiscardRestoreRunBeforeProvedVp(
-      state,
-      stateAfterRun,
-      { hasSignRestore: !x2StateIsClosedPlainContext(state) }
-    );
-  }
-  function mantissaRestoreRunBeforeProvedVp(ops, vpIndex, states, context) {
-    const run34 = [];
-    let sawSign = false;
-    for (let cursor = vpIndex - 1; cursor >= 0; cursor -= 1) {
-      const op2 = ops[cursor];
-      if (isTransparentVpGapOp(op2)) continue;
-      if (isFreeStandingX2EmptyOp(op2)) {
-        run34.push(cursor);
-        continue;
-      }
-      if (isFreeStandingX2SignChangeOp(op2)) {
-        run34.push(cursor);
-        sawSign = true;
-        continue;
-      }
-      if (isKnownReturnCallOp(op2) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op2, context)) continue;
-      break;
-    }
-    if (!sawSign) return [];
-    run34.reverse();
-    const first = run34[0];
-    if (first === void 0) return [];
-    return canRemoveMantissaRestoreRunBeforeProvedVp(states[first], states[vpIndex]) ? run34 : [];
-  }
-  function x2ContextRestoreRunBeforeFreshDigit(ops, startIndex, state, context) {
-    const vpContext = analyzeX2VpShapeContext(state);
-    if (!vpContext.canDiscardRestoreBeforeFreshDigit) {
-      if (!x2StateIsClosedPlainContext(state) || previousExecutableIsFreeStandingRestoreOp(ops, startIndex)) return [];
-    }
-    return x2ContextRestoreRunBeforeFreshDigitEntry(ops, startIndex, context);
-  }
-  function previousExecutableIsFreeStandingRestoreOp(ops, index) {
-    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-      const op2 = ops[cursor];
-      if (isTransparentVpGapOp(op2)) continue;
-      return isFreeStandingX2EmptyOp(op2) || isFreeStandingX2SignChangeOp(op2);
-    }
-    return false;
-  }
-  function x2ContextRestoreRunBeforeDeadOverwrite(ops, startIndex, state, context) {
-    if (!x2StateHasX2RestoreContext(state)) return [];
-    return x2ContextRestoreRunBeforeHardOverwrite(ops, startIndex, context);
-  }
-  function x2ContextRestoreRunBeforeFreshDigitEntry(ops, startIndex, context) {
-    return x2ContextRestoreRunBeforeTerminal(ops, startIndex, context, isDecimalDigit);
-  }
   function isHardX2OverwriteWithoutStackUse(op2) {
     return analyzeX2StackEffect(op2).hardX2OverwriteWithoutStackUse;
   }
-  function x2ContextRestoreRunBeforeHardOverwrite(ops, startIndex, context) {
-    return x2ContextRestoreRunBeforeTerminal(ops, startIndex, context, isHardX2OverwriteWithoutStackUse);
+  var stageOrder = [
+    "duplicate-vp",
+    "proved-vp",
+    "exponent-boundary",
+    "hard-overwrite-terminal",
+    "sign-pair-before-fresh-digit",
+    "fresh-digit-terminal",
+    "closed-sign-pair"
+  ];
+  var sourceMatchReasonOrder = [
+    "same-exponent-context",
+    "active-mantissa-source",
+    "entry-source",
+    "explicit-sign-source",
+    "nonzero-sign-source",
+    "source-mismatch"
+  ];
+  var signRestoreSourceProofReasonOrder = [
+    "shape-transition",
+    "source-match-explicit-sign",
+    "source-match-nonzero-sign",
+    "shared-sign-source",
+    "no-sign-restore-source"
+  ];
+  function stageRank(stage) {
+    const rank = stageOrder.indexOf(stage);
+    return rank < 0 ? stageOrder.length : rank;
   }
-  function x2ContextRestoreRunBeforeTerminal(ops, startIndex, context, isTerminal) {
-    const removableIndexes = [];
-    for (let index = startIndex; index < ops.length; index += 1) {
-      const op2 = ops[index];
-      if (isFreeStandingX2RestoreGapOp(op2)) {
-        removableIndexes.push(index);
-        continue;
-      }
-      if (isTransparentVpGapOp(op2)) continue;
-      if (isKnownReturnCallOp(op2) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op2, context)) continue;
-      return removableIndexes.length > 0 && isTerminal(op2) ? removableIndexes : [];
-    }
-    return [];
+  function rankedIndex(order, value) {
+    if (value === void 0) return void 0;
+    const rank = order.indexOf(value);
+    return rank < 0 ? order.length : rank;
   }
-  function canRemoveClosedContextSignPairBeforeProvedVp(ops, secondSignIndex, state, stateAfterPair, context) {
-    if (x2RestoreGapBeforeVp(ops, secondSignIndex + 1, context).vpIndex === void 0) return false;
-    return x2StatesHaveSameVpEntrySource(state, stateAfterPair);
+  function sourceMatchReasonRank(reason) {
+    return rankedIndex(sourceMatchReasonOrder, reason);
   }
-  function freeStandingEmptyRunBeforeProvedVp(ops, index, context) {
-    const indexes = [];
-    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-      const op2 = ops[cursor];
-      if (isTransparentVpGapOp(op2)) continue;
-      if (isFreeStandingX2EmptyOp(op2)) {
-        indexes.push(cursor);
-        continue;
-      }
-      if (isKnownReturnCallOp(op2) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op2, context)) continue;
-      break;
-    }
-    indexes.reverse();
-    return indexes;
+  function signRestoreSourceProofReasonRank(reason) {
+    return rankedIndex(signRestoreSourceProofReasonOrder, reason);
   }
-  function removableExponentSeparatorRun(ops, startIndex, state) {
-    const context = analyzeX2VpShapeContext(state);
-    if (!context.canDiscardSeparatorBeforeNonDigit && !context.canDiscardSeparatorBeforeSignChange) return [];
-    const run34 = [];
-    for (let index = startIndex; index < ops.length; index += 1) {
-      const op2 = ops[index];
-      if (isTransparentVpGapOp(op2)) continue;
-      if (isFreeStandingX2EmptyOp(op2)) {
-        run34.push(index);
-        continue;
-      }
-      if (run34.length === 0) return [];
-      if (isDecimalDigit(op2)) return [];
-      if (isFreeStandingX2SignChangeOp(op2)) {
-        return context.canDiscardSeparatorBeforeSignChange || context.canDiscardSeparatorBeforeNonDigit ? run34 : [];
-      }
-      return context.canDiscardSeparatorBeforeNonDigit ? run34 : [];
-    }
-    return [];
+  function compareOptionalRanks(leftRank, rightRank) {
+    if (leftRank === void 0 || rightRank === void 0) return 0;
+    return leftRank - rightRank;
   }
-  function canRemoveSecondVpAfterPreviousVp(stateBeforePreviousVp) {
-    const context = analyzeX2VpShapeContext(stateBeforePreviousVp);
-    return context.kind === "active-mantissa" || context.kind === "active-exponent" || context.kind === "active-structural-exponent";
+  function compareSourceProofReason(left, right) {
+    const sourceDiff = compareOptionalRanks(
+      sourceMatchReasonRank(left.sourceMatchReason),
+      sourceMatchReasonRank(right.sourceMatchReason)
+    );
+    if (sourceDiff !== 0) return sourceDiff;
+    return compareOptionalRanks(
+      signRestoreSourceProofReasonRank(left.signRestoreSourceProofReason),
+      signRestoreSourceProofReasonRank(right.signRestoreSourceProofReason)
+    );
   }
-  var run28 = (ops) => {
+  function firstRemovableIndex(removableIndexes) {
+    return Math.min(...removableIndexes);
+  }
+  function lastRemovableIndex(removableIndexes) {
+    return Math.max(...removableIndexes);
+  }
+  function compareCandidates(left, right) {
+    const firstDiff = firstRemovableIndex(left.removableIndexes) - firstRemovableIndex(right.removableIndexes);
+    if (firstDiff !== 0) return firstDiff;
+    const lastDiff = lastRemovableIndex(right.removableIndexes) - lastRemovableIndex(left.removableIndexes);
+    if (lastDiff !== 0) return lastDiff;
+    const lengthDiff = right.removableIndexes.length - left.removableIndexes.length;
+    if (lengthDiff !== 0) return lengthDiff;
+    const sourceDiff = compareSourceProofReason(left, right);
+    if (sourceDiff !== 0) return sourceDiff;
+    const stageDiff = stageRank(left.stage) - stageRank(right.stage);
+    if (stageDiff !== 0) return stageDiff;
+    return left.startIndex - right.startIndex;
+  }
+  function canApplyCandidate(removableIndexes, remove) {
+    return removableIndexes.length > 0 && removableIndexes.every((index) => !remove.has(index));
+  }
+  function stageCountsDetail(stageCounts) {
+    const parts = stageOrder.map((stage) => {
+      const count = stageCounts.get(stage);
+      return count === void 0 ? void 0 : `${stage}=${count}`;
+    }).filter((part) => part !== void 0);
+    return parts.length === 0 ? "" : ` Stages: ${parts.join(", ")}.`;
+  }
+  var run29 = (ops) => {
     const remove = /* @__PURE__ */ new Set();
+    const stageCounts = /* @__PURE__ */ new Map();
     const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
     const context = directReturnAnalysisContext(ops);
+    const candidates = [];
     for (let i = 1; i < ops.length; i += 1) {
-      const prev = ops[i - 1];
-      const cur = ops[i];
-      if (remove.has(i - 1)) continue;
-      if (isFreeStandingX2VpOp(prev) && isFreeStandingX2VpOp(cur) && canRemoveSecondVpAfterPreviousVp(x2ValueStates[i - 1])) {
-        remove.add(i);
-        continue;
+      const planned = x2PlanVpSpliceCandidatesAt(ops, i, x2ValueStates, context, {
+        isDecimalDigit,
+        isHardX2OverwriteWithoutStackUse
+      });
+      for (const candidate of planned) {
+        if (candidate.splice.removableIndexes.length === 0) continue;
+        candidates.push({
+          startIndex: i,
+          stage: candidate.stage,
+          sourceMatchReason: candidate.sourceMatchReason,
+          signRestoreSourceProofReason: candidate.signRestoreSourceProofReason,
+          removableIndexes: candidate.splice.removableIndexes
+        });
       }
-      if (isFreeStandingX2VpOp(cur)) {
-        const restoreRun = mantissaRestoreRunBeforeProvedVp(ops, i, x2ValueStates, context);
-        if (restoreRun.length > 0) {
-          for (const runIndex of restoreRun) remove.add(runIndex);
-          continue;
-        }
-        const emptyRun = freeStandingEmptyRunBeforeProvedVp(ops, i, context);
-        if (emptyRun.length > 0) {
-          for (const emptyIndex of emptyRun) remove.add(emptyIndex);
-          const firstEmpty = emptyRun[0];
-          if (firstEmpty === i - emptyRun.length && firstEmpty > 0 && isFreeStandingX2VpOp(ops[firstEmpty - 1]) && canRemoveSecondVpAfterPreviousVp(x2ValueStates[firstEmpty - 1])) {
-            remove.add(i);
-          }
-          continue;
-        }
-      }
-      const previousContext = analyzeX2VpShapeContext(x2ValueStates[i - 1]);
-      if (isFreeStandingX2EmptyOp(cur)) {
-        const separatorRun = removableExponentSeparatorRun(ops, i, x2ValueStates[i]);
-        if (separatorRun.length > 0) {
-          for (const separatorIndex of separatorRun) remove.add(separatorIndex);
-          continue;
-        }
-      }
-      if (isFreeStandingX2EmptyOp(prev) && isFreeStandingX2SignChangeOp(cur) && previousContext.canDiscardSeparatorBeforeSignChange) {
-        remove.add(i - 1);
-        continue;
-      }
-      if (isFreeStandingX2EmptyOp(cur) || isFreeStandingX2SignChangeOp(cur)) {
-        const restoreRun = x2ContextRestoreRunBeforeDeadOverwrite(ops, i, x2ValueStates[i], context);
-        if (restoreRun.length > 0) {
-          for (const runIndex of restoreRun) remove.add(runIndex);
-          continue;
-        }
-      }
-      if (isFreeStandingX2SignChangeOp(prev) && isFreeStandingX2SignChangeOp(cur) && previousContext.canCancelExponentSignPair) {
-        remove.add(i - 1);
-        remove.add(i);
-      }
-      if (isFreeStandingX2SignChangeOp(prev) && isFreeStandingX2SignChangeOp(cur) && canRemoveOpenMantissaSignPairBeforeProvedVp(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1], context)) {
-        remove.add(i - 1);
-        remove.add(i);
-      }
-      if (isFreeStandingX2EmptyOp(cur) || isFreeStandingX2SignChangeOp(cur)) {
-        const restoreRun = x2ContextRestoreRunBeforeFreshDigit(ops, i, x2ValueStates[i], context);
-        if (restoreRun.length > 0) {
-          for (const runIndex of restoreRun) remove.add(runIndex);
-          continue;
-        }
-      }
-      if (isFreeStandingX2SignChangeOp(prev) && isFreeStandingX2SignChangeOp(cur) && canRemoveClosedContextSignPair(ops, i, x2ValueStates[i - 1], x2ValueStates[i + 1], context)) {
-        remove.add(i - 1);
-        remove.add(i);
+    }
+    candidates.sort(compareCandidates);
+    for (const candidate of candidates) {
+      if (canApplyCandidate(candidate.removableIndexes, remove)) {
+        for (const index of candidate.removableIndexes) remove.add(index);
+        stageCounts.set(
+          candidate.stage,
+          (stageCounts.get(candidate.stage) ?? 0) + candidate.removableIndexes.length
+        );
       }
     }
     if (remove.size === 0) return emptyResult(ops);
@@ -22609,19 +25120,20 @@ var MKProEmulatorBundle = (() => {
       optimizations: [
         {
           name: "vp-exponent-splice",
-          detail: `Collapsed ${remove.size} redundant \u0412\u041F/empty/sign cell(s) around an X2 boundary (active-entry \u0412\u041F \u0412\u041F -> \u0412\u041F, \u041A\u041D\u041E\u041F/\u041A1/\u041A2 \u0412\u041F -> \u0412\u041F, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ and empty restore runs before proved \u0412\u041F/fresh digit -> empty, closed value /-/ /-/ -> empty).`
+          detail: `Collapsed ${remove.size} redundant \u0412\u041F/empty/sign cell(s) around an X2 boundary (active-entry \u0412\u041F \u0412\u041F -> \u0412\u041F, \u041A\u041D\u041E\u041F/\u041A1/\u041A2 \u0412\u041F -> \u0412\u041F, exponent-digit empty separators, VP-context /-/ separators/signs before fresh digits/dead overwrites, exponent /-/ /-/ -> empty, mantissa /-/ and empty restore runs before proved \u0412\u041F/fresh digit -> empty, closed value /-/ /-/ -> empty).${stageCountsDetail(stageCounts)}`
         }
       ]
     };
   };
   var vpSplice = {
     name: "vp-splice",
-    run: run28,
+    run: run29,
     layoutSafe: false
   };
 
   // src/core/passes/vp-x2-peephole.ts
   var ABS = 49;
+  var SIGN = 50;
   var INTEGER = 52;
   var FRACTION = 53;
   function x2BoundaryText(op2) {
@@ -22651,46 +25163,45 @@ var MKProEmulatorBundle = (() => {
     if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) return false;
     return op2.kind === "plain" && op2.opcode === ABS && !hasRoles(op2);
   }
+  function isFreeStandingSignOp(op2) {
+    if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) return false;
+    return op2.kind === "plain" && op2.opcode === SIGN && !hasRoles(op2);
+  }
   function isFreeStandingNoopUnaryOp(op2) {
-    return isFreeStandingFractionOp(op2) || isFreeStandingIntegerOp(op2) || isFreeStandingAbsOp(op2);
+    return isFreeStandingFractionOp(op2) || isFreeStandingIntegerOp(op2) || isFreeStandingAbsOp(op2) || isFreeStandingSignOp(op2);
   }
-  function isFractionalNoopValue(value) {
-    return value === "0" || /^-?0\.[0-9]+$/u.test(value);
-  }
-  function stateHasFractionalNoopX(state) {
-    if (state === void 0 || !x2StateIsClosedPlainContext(state)) return false;
-    for (const fact of state.x) {
-      const visible = x2ValueFactRestoredVisibleDecimal(fact);
-      if (visible !== void 0 && isFractionalNoopValue(visible)) return true;
-    }
-    for (const visible of x2ShapeSetRestoredVisibleDecimals(effectiveVisibleXStateShape(state))) {
-      if (isFractionalNoopValue(visible)) return true;
-    }
-    return false;
-  }
-  function stateHasIntegerNoopX(state) {
-    return state !== void 0 && x2StateIsClosedPlainContext(state) && x2ShapeSetHasExactIntegerDisplay(effectiveVisibleXStateShape(state));
-  }
-  function stateHasAbsNoopX(state) {
-    return state !== void 0 && x2StateIsClosedPlainContext(state) && x2ShapeSetHasExactNonNegativeDisplay(effectiveVisibleXStateShape(state));
-  }
-  function isKnownNoopUnaryOp(ops, index, states) {
+  function isKnownNoopUnaryOp(ops, index, states, labelEntries) {
     const op2 = ops[index];
     const state = states[index];
     if (!isFreeStandingNoopUnaryOp(op2)) return false;
-    const knownNoop = op2.kind === "plain" && op2.opcode === FRACTION ? stateHasFractionalNoopX(state) : op2.kind === "plain" && op2.opcode === INTEGER ? stateHasIntegerNoopX(state) : stateHasAbsNoopX(state);
-    return knownNoop && // К {x} preserves hidden X2. Once dataflow proves it is also a visible-X
-    // no-op, and К [x] is treated the same only when the display shape is
-    // already the exact integer display. К |x| follows the same rule for exact
-    // non-negative displays, including scientific decimal display shapes.
-    // Removing any of them cannot change a later restore value. The exposure
-    // guard still keeps immediate restore boundaries where the opcode itself
-    // could be the observable previous-command context.
-    !x2SyncCanExposeContextSensitiveRestore(
+    const knownNoop = op2.kind === "plain" && x2StateHasVisibleUnaryNoop(state, op2.opcode);
+    if (!knownNoop) return false;
+    if (!x2SyncCanExposeContextSensitiveRestore(
       ops,
       index,
       { redundantSyncValue: true, redundantSyncShape: true }
-    );
+    )) return true;
+    return noopUnaryPreservesImmediateVpSource(ops, index, states, labelEntries);
+  }
+  function noopUnaryPreservesImmediateVpSource(ops, index, states, labelEntries) {
+    const vpIndex = immediateVpRestoreAfterNoopIndex(ops, index, labelEntries);
+    if (vpIndex === void 0) return false;
+    return x2StatesHaveSameVpEntrySource(states[index], states[vpIndex]);
+  }
+  function immediateVpRestoreAfterNoopIndex(ops, index, labelEntries) {
+    for (let cursor = index + 1; cursor < ops.length; cursor += 1) {
+      const op2 = ops[cursor];
+      if (op2.kind === "label") {
+        if (labelEntries.has(cursor)) return void 0;
+        continue;
+      }
+      return isFreeStandingVpRestore(op2) ? cursor : void 0;
+    }
+    return void 0;
+  }
+  function isFreeStandingVpRestore(op2) {
+    if (hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) return false;
+    return op2.kind === "plain" && op2.opcode === 12 && !hasRoles(op2);
   }
   function isFreeStandingEmptyOp(op2) {
     if (hasRewriteBarrier(op2)) return false;
@@ -22728,7 +25239,7 @@ var MKProEmulatorBundle = (() => {
   function simpleDirectReturnPreservesX(ops, call, context) {
     return knownReturnCallReturnsThroughNestedTransparentRange(ops, call, context, isXPreservingBoundaryGap);
   }
-  var run29 = (ops) => {
+  var run30 = (ops) => {
     if (!ops.some(isFractionAfterX2Boundary) && !ops.some(isFreeStandingNoopUnaryOp)) return emptyResult(ops);
     const remove = /* @__PURE__ */ new Set();
     const labelEntries = computeLabelEntryIndexes(ops);
@@ -22740,7 +25251,7 @@ var MKProEmulatorBundle = (() => {
       if (fractionIndex !== void 0) remove.add(fractionIndex);
     }
     for (let i = 0; i < ops.length; i += 1) {
-      if (!remove.has(i) && isKnownNoopUnaryOp(ops, i, states)) remove.add(i);
+      if (!remove.has(i) && isKnownNoopUnaryOp(ops, i, states, labelEntries)) remove.add(i);
     }
     if (remove.size === 0) return emptyResult(ops);
     return {
@@ -22749,14 +25260,14 @@ var MKProEmulatorBundle = (() => {
       optimizations: [
         {
           name: "vp-fraction-restore",
-          detail: `Removed ${remove.size} redundant \u041A {x}/\u041A [x]/\u041A |x| op(s) already supplied by a \u0412\u041F/X2 boundary or proved no-op X value.`
+          detail: `Removed ${remove.size} redundant \u041A {x}/\u041A [x]/\u041A |x|/\u041A \u0417\u041D op(s) already supplied by a \u0412\u041F/X2 boundary or proved no-op X value.`
         }
       ]
     };
   };
   var vpX2Peephole = {
     name: "vp-x2-peephole",
-    run: run29,
+    run: run30,
     layoutSafe: false
   };
 
@@ -22764,7 +25275,7 @@ var MKProEmulatorBundle = (() => {
   var DOT = 10;
   var SIGN_CHANGE = 11;
   var VP = 12;
-  var run30 = (ops) => {
+  var run31 = (ops) => {
     if (!ops.some(isPotentialDeadRestoreOrProducerOpcode)) return emptyResult(ops);
     const states = computeX2ValueStates(ops, { trackRegisterMemory: true });
     const dotSafeStates = computeX2DotRestoreGapStates(ops);
@@ -22796,8 +25307,22 @@ var MKProEmulatorBundle = (() => {
         stackProducerExposure
       );
       if (deadRun === void 0) continue;
-      if (isDeadRecallCandidate(op2) && removingRecallCanExposeStackLift(ops, index)) continue;
-      if (isDeadStackShiftingProducerCandidate(op2) && stackShiftCanExposeStack(ops, index, stackProducerExposure)) {
+      if (isDeadRecallCandidate(op2) && deadProducerStackLiftCanExpose(
+        ops,
+        index,
+        states[index],
+        context,
+        removingRecallCanExposeStackLift(ops, index),
+        remove
+      )) continue;
+      if (isDeadStackShiftingProducerCandidate(op2) && deadProducerStackLiftCanExpose(
+        ops,
+        index,
+        states[index],
+        context,
+        stackShiftCanExposeStack(ops, index, stackProducerExposure),
+        remove
+      )) {
         continue;
       }
       for (const removeIndex of deadRun) remove.add(removeIndex);
@@ -22829,7 +25354,7 @@ var MKProEmulatorBundle = (() => {
       if (!hasDotSafeStructuralX2 && !hasVpDotSafeStructuralX2 && x2StateHasUnsafeDotRestoreShapeX2(state)) {
         return false;
       }
-      return (x2StateIsClosedPlainContext(state) || hasVpDotSafeStructuralX2) && (x2StateHasDotSafeDecimalX2(state) || hasDotSafeStructuralX2 || hasVpDotSafeStructuralX2 || x2CanUseDotRestoreAt(ops, index, state, dotSafe, immediateSync, context));
+      return (x2StateIsClosedDotRestoreValueContext(state) || hasVpDotSafeStructuralX2) && (x2StateHasDotSafeDecimalX2(state) || hasDotSafeStructuralX2 || hasVpDotSafeStructuralX2 || x2CanUseDotRestoreAt(ops, index, state, dotSafe, immediateSync, context));
     }
     if (op2.opcode === SIGN_CHANGE) {
       return isDeadSignRestoreCandidate(state);
@@ -22856,41 +25381,40 @@ var MKProEmulatorBundle = (() => {
     return x2StateIsClosedPlainContext(state) && (x2StateHasDotSafeDecimalX2(state) || x2StateHasStructuralShapeX2(state)) || state.entry.kind === "open" || x2StateHasX2RestoreContext(state);
   }
   function deadRestoreRunBeforeHardOverwrite(ops, states, dotSafeStates, immediateSyncStates, start, context, recallStackExposure, stackProducerExposure) {
-    const remove = [start];
     let sameSegment = true;
-    for (let index = start + 1; index < ops.length; index += 1) {
-      const op2 = ops[index];
-      if (op2.kind === "label") {
-        sameSegment = false;
-        continue;
+    const scan = x2ScanRestoreRunBeforeTerminal(
+      ops,
+      start,
+      context,
+      (op2, index) => {
+        if (index === start) return "remove";
+        if (isFreeStandingX2EmptyOp(op2)) return sameSegment ? "remove" : "transparent";
+        if (sameSegment && isDeadRestoreCandidate(
+          ops,
+          op2,
+          states[index],
+          index,
+          dotSafeStates[index] === true,
+          immediateSyncStates[index] === true,
+          context
+        )) {
+          return "remove";
+        }
+        return isOverwriteEndpointThatCannotObserveRestoredX(
+          ops,
+          index,
+          op2,
+          recallStackExposure,
+          stackProducerExposure
+        ) ? "terminal" : "block";
+      },
+      {
+        onTransparentGap: (op2) => {
+          if (op2.kind === "label") sameSegment = false;
+        }
       }
-      if (op2.kind === "orphan-address") continue;
-      if (isFreeStandingX2EmptyOp(op2)) {
-        if (sameSegment) remove.push(index);
-        continue;
-      }
-      if (sameSegment && isDeadRestoreCandidate(
-        ops,
-        op2,
-        states[index],
-        index,
-        dotSafeStates[index] === true,
-        immediateSyncStates[index] === true,
-        context
-      )) {
-        remove.push(index);
-        continue;
-      }
-      if (isKnownReturnCallOp(op2) && x2RestoreGapDirectReturnDoesNotObserveRestore(ops, op2, context)) continue;
-      return isOverwriteEndpointThatCannotObserveRestoredX(
-        ops,
-        index,
-        op2,
-        recallStackExposure,
-        stackProducerExposure
-      ) ? remove : void 0;
-    }
-    return void 0;
+    );
+    return scan.terminalIndex === void 0 ? void 0 : scan.removableIndexes;
   }
   function isFreeStandingPlain(op2) {
     return op2.kind === "plain" && !hasRewriteBarrier(op2) && !isDisplayFocusSensitive(op2) && !hasRoles2(op2);
@@ -22927,21 +25451,33 @@ var MKProEmulatorBundle = (() => {
     }
     return exposes;
   }
+  function deadProducerStackLiftCanExpose(ops, index, state, context, initiallyExposesStackLift, removedIndexes) {
+    return planX2ReplacementStackLift(
+      ops,
+      index,
+      index,
+      state,
+      context,
+      initiallyExposesStackLift,
+      { invalidatedProducerIndexes: removedIndexes }
+    ).exposesStackLift;
+  }
   var x2DeadRestoreBeforeOverwrite = {
     name: "x2-dead-restore-before-overwrite",
-    run: run30,
+    run: run31,
     layoutSafe: false
   };
 
   // src/core/passes/x2-hidden-temp-restore.ts
   var DOT2 = 10;
-  var run31 = (ops) => {
+  var run32 = (ops) => {
     const x2States = computeX2RegisterStates(ops);
     const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
     const dotSafeStates = computeX2DotRestoreGapStates(ops);
     const immediateSyncStates = computeX2ImmediateSyncStates(ops);
     const liveness = computeLiveness(ops);
     const directReturnContext = directReturnAnalysisContext(ops);
+    const replacedStackLiftProducerIndexes = /* @__PURE__ */ new Set();
     let applied = 0;
     const result = ops.map((op2, index) => {
       const register = removableRecallValueRegister(op2);
@@ -22996,15 +25532,15 @@ var MKProEmulatorBundle = (() => {
         sourceProvesFreeStandingRestore,
         directReturnContext
       );
-      const hasOnlyRestoreGapBeforeVp = x2HasOnlyRestoreGapBeforeVp(ops, index + 1, directReturnContext);
-      const insertedDotHasOnlyRestoreGapBeforeVp = x2ReplacementDotHasOnlyRestoreGapBeforeVp(
+      const vpSourcePlan = x2PlanDotReplacementVpSource(
         ops,
-        index + 1,
+        index,
+        x2ValueStates[index],
+        x2ValueStates[index + 1],
         directReturnContext
       );
-      const hasSignRestoreGapBeforeVp = x2HasSignRestoreGapBeforeVp(ops, index + 1, directReturnContext);
       const recallSyncProvesVpSource = removal.valueProof?.x2SyncVpShape === true || removal.valueProof?.x2SyncShape === true;
-      const canUseVpSourceEscape = sourceAlreadyDotSafe && hasOnlyRestoreGapBeforeVp && (x2StateCanDiscardRestoreRunBeforeProvedVp(x2ValueStates[index], x2ValueStates[index + 1]) || hasSignRestoreGapBeforeVp && x2StatesHaveSameVpEntrySignSource(x2ValueStates[index], x2ValueStates[index + 1])) || recallSyncProvesVpSource && insertedDotHasOnlyRestoreGapBeforeVp && !hasSignRestoreGapBeforeVp;
+      const canUseVpSourceEscape = sourceAlreadyDotSafe && vpSourcePlan.source.hasOnlyRestoreGapBeforeVp && vpSourcePlan.preservesVpEntrySource || recallSyncProvesVpSource && vpSourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp && hiddenTempRecallSyncPreservesSignedVpSource(vpSourcePlan.source);
       if (!canUseVpSourceEscape && !sourceRestoresSameVisibleShape && !sourceRestoresSameDotSafeDecimalShape && !sourceRestoresSameDotSafeStructuralShape && x2StateHasUnsafeDotRestoreShapeX2(x2ValueStates[index])) return op2;
       if (!canUseSourceDotRestore && !canUseVpSourceEscape) {
         return op2;
@@ -23013,9 +25549,18 @@ var MKProEmulatorBundle = (() => {
         redundantSyncValue: sourceAlreadySynced,
         redundantSyncShape: sourceRestoresSameVisibleShape || sourceRestoresSameDotSafeDecimalShape || sourceRestoresSameDotSafeStructuralShape
       }) : removal.exposesX2Restore;
-      const exposesStackLift = removal.exposesStackLift && !hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(ops, index, x2ValueStates[index], directReturnContext);
-      if (exposesStackLift || exposesX2Restore) return op2;
+      const stackLiftPlan = planX2ReplacementStackLift(
+        ops,
+        index,
+        index,
+        x2ValueStates[index],
+        directReturnContext,
+        removal.exposesStackLift,
+        { invalidatedProducerIndexes: replacedStackLiftProducerIndexes }
+      );
+      if (stackLiftPlan.exposesStackLift || exposesX2Restore) return op2;
       applied += 1;
+      if (analyzeX2StackEffect(op2).stackLiftAndX2Sync) replacedStackLiftProducerIndexes.add(index);
       return dotRestoreOp(register, op2);
     });
     if (applied === 0) return { ops: [...ops], applied: 0, optimizations: [] };
@@ -23040,6 +25585,10 @@ var MKProEmulatorBundle = (() => {
         comment: [sourceComment, `restore ${register} from hidden X2 temp`].filter(Boolean).join("; ")
       }
     };
+  }
+  function hiddenTempRecallSyncPreservesSignedVpSource(source) {
+    if (!source.hasSignRestoreGapBeforeVp) return true;
+    return source.signRestoreSourceProof.reason === "source-match-explicit-sign" || source.signRestoreSourceProof.reason === "source-match-nonzero-sign";
   }
   function hiddenTempStoreSourceAlreadySyncedInX2(ops, storeIndex, recallIndex, storeState, recallState, directReturnContext) {
     if (storeState === void 0 || recallState === void 0) return false;
@@ -23096,9 +25645,6 @@ var MKProEmulatorBundle = (() => {
       recallState?.x2Shape
     );
   }
-  function hiddenTempRecallStackLiftAlreadySuppliedByDuplicateY(ops, recallIndex, recallState, directReturnContext) {
-    return x2StateHasSameVisibleXAndY(recallState) && x2PreviousStackLiftAndX2SyncProducerIndex(ops, recallIndex, directReturnContext) !== void 0 && !removingPreShiftLiftCanExposeStack(ops, recallIndex);
-  }
   function hiddenTempStoreComputedSourceAlreadySyncedInX2(ops, storeIndex, recallIndex, storeState, recallState, directReturnContext) {
     if (storeState === void 0 || recallState === void 0) return false;
     for (const fact of storeState.x) {
@@ -23154,7 +25700,7 @@ var MKProEmulatorBundle = (() => {
             maybeOverwritten = maybeOverwritten || memoryAccessMayOverwriteRegister(op2, register);
             continue;
           case "loop": {
-            const nextOverwritten = maybeOverwritten || loopCounterRegister6(op2.counter) === register;
+            const nextOverwritten = maybeOverwritten || loopCounterRegister3(op2.counter) === register;
             const target = flowTargetStartIndex(ops, op2.target, directReturnContext);
             return target === void 0 || visit(cursor + 1, nextOverwritten) || visit(target, nextOverwritten);
           }
@@ -23287,7 +25833,7 @@ var MKProEmulatorBundle = (() => {
       case "indirect-cjump":
         return !isStableIndirectSelector(op2.register) && op2.register === register;
       case "loop":
-        return loopCounterRegister6(op2.counter) === register;
+        return loopCounterRegister3(op2.counter) === register;
       default:
         return false;
     }
@@ -23303,7 +25849,7 @@ var MKProEmulatorBundle = (() => {
       case "indirect-cjump":
         return op2.register === register || knownIndirectMemoryTarget(op2) === register;
       case "loop":
-        return loopCounterRegister6(op2.counter) === register;
+        return loopCounterRegister3(op2.counter) === register;
       default:
         return false;
     }
@@ -23324,7 +25870,7 @@ var MKProEmulatorBundle = (() => {
         return false;
     }
   }
-  function loopCounterRegister6(counter) {
+  function loopCounterRegister3(counter) {
     switch (counter) {
       case "L0":
         return "0";
@@ -23338,7 +25884,7 @@ var MKProEmulatorBundle = (() => {
   }
   var x2HiddenTempRestore = {
     name: "x2-hidden-temp-restore",
-    run: run31,
+    run: run32,
     layoutSafe: false
   };
 
@@ -23346,6 +25892,7 @@ var MKProEmulatorBundle = (() => {
   var DOT3 = 10;
   var SIGN_CHANGE2 = 11;
   var VP2 = 12;
+  var STACK_LIFT = 14;
   function isPlainDigit(op2) {
     return op2.kind === "plain" && op2.opcode >= 0 && op2.opcode <= 9 && !hasRewriteBarrier(op2) && !isDisplayFocusSensitive(op2);
   }
@@ -23358,7 +25905,7 @@ var MKProEmulatorBundle = (() => {
   function isPlainVp(op2) {
     return op2 !== void 0 && op2.kind === "plain" && op2.opcode === VP2 && !hasRewriteBarrier(op2) && !isDisplayFocusSensitive(op2);
   }
-  function decimalLiteralRunAt(ops, start) {
+  function decimalLiteralRunAt(ops, start, options = {}) {
     const digits = [];
     let end = start;
     while (end < ops.length) {
@@ -23390,7 +25937,7 @@ var MKProEmulatorBundle = (() => {
     if (x2Fact === void 0) return void 0;
     const dotPreservesVpEntrySource = !hasPoint && raw === normalized && normalized !== "0";
     if (sign === "") {
-      if (digits.length < 2 && !hasPoint) return void 0;
+      if (!options.allowSinglePositiveInteger && digits.length < 2 && !hasPoint) return void 0;
       return { end: end - 1, displayValue: raw, x2Fact, dotPreservesVpEntrySource };
     }
     return { end, displayValue: raw, x2Fact, dotPreservesVpEntrySource };
@@ -23447,6 +25994,419 @@ var MKProEmulatorBundle = (() => {
     if (exponent === void 0) return decimal2 === void 0 ? [] : [decimal2];
     if (decimal2 === void 0 || decimal2.end === exponent.end) return [exponent];
     return [exponent, decimal2];
+  }
+  function literalRunWithRemovableSuffix(ops, run35, start, context) {
+    let cursor = run35.end + 1;
+    let end = run35.end;
+    let crossedGap = false;
+    while (isRpnExpressionGapOp(ops, cursor, context, start)) {
+      end = cursor;
+      cursor += 1;
+      crossedGap = true;
+    }
+    if (isPlainXPreservingX2Sync(ops[cursor])) return { ...run35, end: cursor };
+    if (crossedGap && isTerminalExpressionBoundary(ops, cursor, context, start)) return { ...run35, end };
+    return run35;
+  }
+  function unaryExpressionRunAt(ops, start, terminalBoundaryContext) {
+    return rpnExpressionRunAt(ops, start, terminalBoundaryContext) ?? unaryExpressionRunFromSingleSourceAt(ops, start) ?? binaryExpressionRunAt(ops, start);
+  }
+  function rpnExpressionRunAt(ops, start, terminalBoundaryContext) {
+    const stack = [];
+    let cursor = start;
+    let sawOperator = false;
+    while (cursor < ops.length) {
+      if (stack.length === 1 && sawOperator && isPlainXPreservingX2Sync(ops[cursor])) {
+        const [result] = stack;
+        return {
+          end: cursor,
+          displayValue: result.displayValue,
+          x2Facts: result.x2Facts,
+          sourceStackEnd: result.sourceStackEnd ?? result.end,
+          allowDuplicateYStackProof: result.allowDuplicateYStackProof ?? true
+        };
+      }
+      if (stack.length === 1 && sawOperator && isTerminalExpressionBoundary(ops, cursor, terminalBoundaryContext, start)) {
+        const [result] = stack;
+        return {
+          end: result.end,
+          displayValue: result.displayValue,
+          x2Facts: result.x2Facts,
+          sourceStackEnd: result.sourceStackEnd ?? result.end,
+          allowDuplicateYStackProof: result.allowDuplicateYStackProof ?? true
+        };
+      }
+      if (stack.length > 0 && isRpnExpressionGapOp(ops, cursor, terminalBoundaryContext, start)) {
+        const top = stack[stack.length - 1];
+        stack[stack.length - 1] = { ...top, end: cursor };
+        cursor += 1;
+        continue;
+      }
+      if (isPlainStackLiftSeparator(ops[cursor]) && stack.length > 0) {
+        cursor += 1;
+        continue;
+      }
+      const source = expressionSourceRunAt(ops, cursor);
+      if (source !== void 0) {
+        stack.push({
+          ...source,
+          sourceStackEnd: source.end,
+          allowDuplicateYStackProof: true
+        });
+        cursor = source.end + 1;
+        continue;
+      }
+      const op2 = ops[cursor];
+      if (op2 === void 0 || op2.kind !== "plain") return void 0;
+      if (stack.length >= 1) {
+        const source2 = stack[stack.length - 1];
+        const nextFacts = stableUnaryExpressionValueFactsForSource(op2, source2.x2Facts);
+        if (nextFacts.length > 0) {
+          const mnemonic = "mnemonic" in op2.meta ? op2.meta.mnemonic : void 0;
+          stack[stack.length - 1] = {
+            end: cursor,
+            displayValue: `${mnemonic ?? "expr"}(${source2.displayValue})`,
+            x2Facts: nextFacts,
+            sourceStackEnd: source2.sourceStackEnd ?? source2.end,
+            allowDuplicateYStackProof: source2.allowDuplicateYStackProof ?? true
+          };
+          sawOperator = true;
+          cursor += 1;
+          while (isRpnExpressionGapOp(ops, cursor, terminalBoundaryContext, start)) {
+            const top = stack[stack.length - 1];
+            stack[stack.length - 1] = { ...top, end: cursor };
+            cursor += 1;
+          }
+          continue;
+        }
+      }
+      if (stack.length >= 2) {
+        const xSource = stack.pop();
+        const ySource = stack.pop();
+        const nextFacts = binaryExpressionValueFactsForSources(op2, ySource, xSource);
+        if (nextFacts.length > 0) {
+          const mnemonic = "mnemonic" in op2.meta ? op2.meta.mnemonic : void 0;
+          stack.push({
+            end: cursor,
+            displayValue: `${mnemonic ?? "expr"}(${ySource.displayValue},${xSource.displayValue})`,
+            x2Facts: nextFacts,
+            sourceStackEnd: cursor,
+            allowDuplicateYStackProof: false
+          });
+          sawOperator = true;
+          cursor += 1;
+          while (isRpnExpressionGapOp(ops, cursor, terminalBoundaryContext, start)) {
+            const top = stack[stack.length - 1];
+            stack[stack.length - 1] = { ...top, end: cursor };
+            cursor += 1;
+          }
+          continue;
+        }
+        stack.push(ySource, xSource);
+      }
+      return void 0;
+    }
+    return void 0;
+  }
+  function isTerminalExpressionBoundary(ops, cursor, context, immutableBeforeIndex, visited = /* @__PURE__ */ new Set()) {
+    const op2 = ops[cursor];
+    if (op2?.kind === "label" || op2?.kind === "orphan-address") {
+      return isTerminalExpressionBoundary(ops, cursor + 1, context, immutableBeforeIndex, visited);
+    }
+    if (op2 !== void 0 && isKnownReturnCallOp(op2) && returnCallTargetAddressIsStableForTerminalBoundary(op2, context, immutableBeforeIndex) && x2KnownReturnCallPreservesStackXAndX2(ops, op2, context)) {
+      if (visited.has(cursor)) return false;
+      return isTerminalExpressionBoundary(
+        ops,
+        cursor + 1,
+        context,
+        immutableBeforeIndex,
+        /* @__PURE__ */ new Set([...visited, cursor])
+      );
+    }
+    if (op2?.kind === "jump" && typeof op2.target === "string") {
+      const target = context.labels.get(op2.target);
+      if (target === void 0 || visited.has(target)) return false;
+      return isTerminalExpressionBoundary(
+        ops,
+        target + 1,
+        context,
+        immutableBeforeIndex,
+        /* @__PURE__ */ new Set([...visited, target])
+      );
+    }
+    if (op2?.kind === "jump" && typeof op2.target === "number") {
+      const targetIndex = context.addresses.get(op2.target);
+      if (targetIndex === void 0 || targetIndex >= immutableBeforeIndex || visited.has(targetIndex)) return false;
+      return isTerminalExpressionBoundary(
+        ops,
+        targetIndex,
+        context,
+        immutableBeforeIndex,
+        /* @__PURE__ */ new Set([...visited, targetIndex])
+      );
+    }
+    if (op2?.kind === "cjump" || op2?.kind === "loop") {
+      const target = directBranchTargetEntryForTerminalBoundary(op2, context, immutableBeforeIndex);
+      if (target === void 0 || visited.has(target.visitKey)) return false;
+      const nextVisited = /* @__PURE__ */ new Set([...visited, cursor, target.visitKey]);
+      return isTerminalExpressionBoundary(
+        ops,
+        target.entry,
+        context,
+        immutableBeforeIndex,
+        nextVisited
+      ) && isTerminalExpressionBoundary(
+        ops,
+        cursor + 1,
+        context,
+        immutableBeforeIndex,
+        nextVisited
+      );
+    }
+    if (op2?.kind === "indirect-jump") {
+      const target = knownIndirectFlowTarget(op2);
+      const targetIndex = target === void 0 ? void 0 : context.addresses.get(target);
+      if (targetIndex === void 0 || targetIndex >= immutableBeforeIndex || visited.has(targetIndex)) return false;
+      return isTerminalExpressionBoundary(
+        ops,
+        targetIndex,
+        context,
+        immutableBeforeIndex,
+        /* @__PURE__ */ new Set([...visited, targetIndex])
+      );
+    }
+    if (op2?.kind === "indirect-cjump") {
+      const target = knownIndirectFlowTarget(op2);
+      const targetIndex = target === void 0 ? void 0 : context.addresses.get(target);
+      if (targetIndex === void 0 || targetIndex >= immutableBeforeIndex || visited.has(targetIndex)) return false;
+      const nextVisited = /* @__PURE__ */ new Set([...visited, cursor, targetIndex]);
+      return isTerminalExpressionBoundary(
+        ops,
+        targetIndex,
+        context,
+        immutableBeforeIndex,
+        nextVisited
+      ) && isTerminalExpressionBoundary(
+        ops,
+        cursor + 1,
+        context,
+        immutableBeforeIndex,
+        nextVisited
+      );
+    }
+    return op2 === void 0 || op2.kind === "stop" || op2.kind === "return";
+  }
+  function directBranchTargetEntryForTerminalBoundary(op2, context, immutableBeforeIndex) {
+    if (typeof op2.target === "string") {
+      const target = context.labels.get(op2.target);
+      return target === void 0 ? void 0 : { entry: target + 1, visitKey: target };
+    }
+    const targetIndex = context.addresses.get(op2.target);
+    if (targetIndex === void 0 || targetIndex >= immutableBeforeIndex) return void 0;
+    return { entry: targetIndex, visitKey: targetIndex };
+  }
+  function returnCallTargetAddressIsStableForTerminalBoundary(op2, context, immutableBeforeIndex) {
+    if (op2.kind === "call") {
+      if (typeof op2.target === "string") return true;
+      const targetIndex2 = context.addresses.get(op2.target);
+      return targetIndex2 !== void 0 && targetIndex2 < immutableBeforeIndex;
+    }
+    const target = knownIndirectFlowTarget(op2);
+    const targetIndex = target === void 0 ? void 0 : context.addresses.get(target);
+    return targetIndex !== void 0 && targetIndex < immutableBeforeIndex;
+  }
+  function isRpnExpressionNonExecutableGap(op2) {
+    return op2 !== void 0 && op2.kind === "orphan-address" && !hasRewriteBarrier(op2);
+  }
+  function isRpnExpressionGapOp(ops, cursor, context, immutableBeforeIndex) {
+    const op2 = ops[cursor];
+    return isPlainExpressionSyncGapOp(op2) || isRpnExpressionNonExecutableGap(op2) || isRemovableExpressionReturnCallGap(ops, op2, context, immutableBeforeIndex);
+  }
+  function isRemovableExpressionReturnCallGap(ops, op2, context, immutableBeforeIndex) {
+    return op2 !== void 0 && isKnownReturnCallOp(op2) && returnCallTargetAddressIsStableForTerminalBoundary(op2, context, immutableBeforeIndex) && knownReturnCallReturnsThroughNestedTransparentRange(
+      ops,
+      op2,
+      context,
+      isRemovableExpressionReturnCallBodyGapOp
+    );
+  }
+  function isRemovableExpressionReturnCallBodyGapOp(op2) {
+    return isPlainExpressionSyncGapOp(op2) || isRpnExpressionNonExecutableGap(op2);
+  }
+  function unaryExpressionRunFromSingleSourceAt(ops, start) {
+    const source = expressionSourceRunAt(ops, start);
+    if (source === void 0) return void 0;
+    let cursor = source.end + 1;
+    let displayValue = source.displayValue;
+    let x2Facts = source.x2Facts;
+    while (cursor < ops.length) {
+      const unary = ops[cursor];
+      if (unary === void 0 || unary.kind !== "plain") return void 0;
+      const nextFacts = stableUnaryExpressionValueFactsForSource(unary, x2Facts);
+      if (nextFacts.length === 0) return void 0;
+      const mnemonic = "mnemonic" in unary.meta ? unary.meta.mnemonic : void 0;
+      displayValue = `${mnemonic ?? "expr"}(${displayValue})`;
+      x2Facts = nextFacts;
+      cursor += 1;
+      while (isPlainExpressionSyncGapOp(ops[cursor])) cursor += 1;
+      if (isPlainXPreservingX2Sync(ops[cursor])) {
+        return {
+          end: cursor,
+          displayValue,
+          x2Facts,
+          sourceStackEnd: source.end,
+          allowDuplicateYStackProof: true
+        };
+      }
+    }
+    return void 0;
+  }
+  function binaryExpressionRunAt(ops, start) {
+    const ySource = expressionOperandRunAt(ops, start);
+    if (ySource === void 0) return void 0;
+    const xStart = binaryExpressionXSourceStart(ops, ySource.end + 1);
+    const xSource = expressionOperandRunAt(ops, xStart);
+    if (xSource === void 0) return void 0;
+    const binaryIndex = xSource.end + 1;
+    const binary = ops[binaryIndex];
+    if (binary === void 0 || binary.kind !== "plain") return void 0;
+    const binaryFacts = binaryExpressionValueFactsForSources(binary, ySource, xSource);
+    if (binaryFacts.length === 0) return void 0;
+    const mnemonic = "mnemonic" in binary.meta ? binary.meta.mnemonic : void 0;
+    let cursor = binaryIndex + 1;
+    let displayValue = `${mnemonic ?? "expr"}(${ySource.displayValue},${xSource.displayValue})`;
+    let x2Facts = binaryFacts;
+    while (cursor < ops.length) {
+      while (isPlainExpressionSyncGapOp(ops[cursor])) cursor += 1;
+      if (isPlainXPreservingX2Sync(ops[cursor])) {
+        return {
+          end: cursor,
+          displayValue,
+          x2Facts,
+          sourceStackEnd: binaryIndex,
+          allowDuplicateYStackProof: false
+        };
+      }
+      const unary = ops[cursor];
+      if (unary === void 0 || unary.kind !== "plain") return void 0;
+      const nextFacts = stableUnaryExpressionValueFactsForSource(unary, x2Facts);
+      if (nextFacts.length === 0) return void 0;
+      const unaryMnemonic = "mnemonic" in unary.meta ? unary.meta.mnemonic : void 0;
+      displayValue = `${unaryMnemonic ?? "expr"}(${displayValue})`;
+      x2Facts = nextFacts;
+      cursor += 1;
+    }
+    return void 0;
+  }
+  function expressionOperandRunAt(ops, start) {
+    const source = expressionSourceRunAt(ops, start);
+    if (source === void 0) return void 0;
+    let cursor = source.end + 1;
+    let end = source.end;
+    let displayValue = source.displayValue;
+    let x2Facts = source.x2Facts;
+    while (cursor < ops.length) {
+      const unary = ops[cursor];
+      if (unary === void 0 || unary.kind !== "plain") break;
+      const nextFacts = stableUnaryExpressionValueFactsForSource(unary, x2Facts);
+      if (nextFacts.length === 0) break;
+      const mnemonic = "mnemonic" in unary.meta ? unary.meta.mnemonic : void 0;
+      displayValue = `${mnemonic ?? "expr"}(${displayValue})`;
+      x2Facts = nextFacts;
+      end = cursor;
+      cursor += 1;
+      while (isPlainExpressionSyncGapOp(ops[cursor])) {
+        end = cursor;
+        cursor += 1;
+      }
+    }
+    return { end, displayValue, x2Facts };
+  }
+  function binaryExpressionXSourceStart(ops, start) {
+    return isPlainStackLiftSeparator(ops[start]) ? start + 1 : start;
+  }
+  function isPlainStackLiftSeparator(op2) {
+    return op2 !== void 0 && op2.kind === "plain" && op2.opcode === STACK_LIFT && !hasRewriteBarrier(op2) && !isDisplayFocusSensitive(op2) && !hasRoles3(op2);
+  }
+  function expressionSourceRunAt(ops, start) {
+    const exponent = exponentLiteralRunAt(ops, start);
+    if (exponent !== void 0) {
+      return {
+        end: exponent.end,
+        displayValue: exponent.displayValue,
+        x2Facts: [exponent.x2Fact]
+      };
+    }
+    const decimal2 = decimalLiteralRunAt(ops, start, { allowSinglePositiveInteger: true });
+    if (decimal2 !== void 0) {
+      return {
+        end: decimal2.end,
+        displayValue: decimal2.displayValue,
+        x2Facts: [decimal2.x2Fact]
+      };
+    }
+    return registerExpressionSourceRunAt(ops, start) ?? stableConstantExpressionSourceRunAt(ops, start);
+  }
+  function registerExpressionSourceRunAt(ops, start) {
+    const op2 = ops[start];
+    if (op2 === void 0 || hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) return void 0;
+    const register = registerExpressionSourceRegister(op2);
+    if (register === void 0) return void 0;
+    return {
+      end: start,
+      displayValue: `R${register}`,
+      x2Facts: [registerValueFact2(register)]
+    };
+  }
+  function registerExpressionSourceRegister(op2) {
+    if (op2.kind === "recall") return op2.register;
+    if (op2.kind !== "indirect-recall" || !isStableIndirectSelector(op2.register)) return void 0;
+    return knownIndirectMemoryTarget(op2);
+  }
+  function stableConstantExpressionSourceRunAt(ops, start) {
+    const op2 = ops[start];
+    if (op2 === void 0 || op2.kind !== "plain") return void 0;
+    const x2Facts = [...x2StableConstantExpressionValueFacts(op2)];
+    if (x2Facts.length === 0) return void 0;
+    const mnemonic = "mnemonic" in op2.meta ? op2.meta.mnemonic : void 0;
+    return {
+      end: start,
+      displayValue: mnemonic ?? "const",
+      x2Facts
+    };
+  }
+  function registerValueFact2(register) {
+    return `reg:${register}`;
+  }
+  function stableUnaryExpressionValueFactsForSource(unary, sourceFacts) {
+    const output = /* @__PURE__ */ new Set();
+    for (const sourceFact of sourceFacts) {
+      for (const x2Fact of x2UnaryExpressionValueFacts(unary, sourceFact)) output.add(x2Fact);
+    }
+    return [...output];
+  }
+  function binaryExpressionValueFactsForSources(binary, ySource, xSource) {
+    const output = /* @__PURE__ */ new Set();
+    for (const yFact of ySource.x2Facts) {
+      for (const xFact of xSource.x2Facts) {
+        for (const x2Fact of x2BinaryExpressionValueFacts(binary, yFact, xFact)) output.add(x2Fact);
+      }
+    }
+    return [...output];
+  }
+  function isPlainExpressionSyncGapOp(op2) {
+    if (op2 === void 0 || op2.kind !== "plain" || hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2) || hasRoles3(op2)) {
+      return false;
+    }
+    const effect = analyzeX2StackEffect(op2);
+    return plainPreservesXValue(op2) && effect.stackPreserves && effect.x2Preserves;
+  }
+  function isPlainXPreservingX2Sync(op2) {
+    if (op2 === void 0 || op2.kind !== "plain" || hasRewriteBarrier(op2) || isDisplayFocusSensitive(op2)) {
+      return false;
+    }
+    const effect = analyzeX2StackEffect(op2);
+    return effect.stackPreserves && effect.x2Affects && plainPreservesXValue(op2);
   }
   function decimalValueFact2(value, flavor) {
     return `decimal:${value}:${flavor}`;
@@ -23539,28 +26499,52 @@ var MKProEmulatorBundle = (() => {
   function hasRoles3(op2) {
     return "meta" in op2 && op2.meta.roles !== void 0 && op2.meta.roles.length > 0;
   }
-  function replacingLiteralCanExposeContextSensitiveRestore(ops, run34, context, vpReachabilityCache, redundantSync) {
+  function replacingLiteralCanExposeContextSensitiveRestore(ops, run35, state, producerIndex, context, vpReachabilityCache, redundantSync) {
     let replacementCanReachVpRestore;
     const canReachVpRestore = () => {
-      const start = run34.end + 1;
-      replacementCanReachVpRestore ??= vpReachabilityCache.get(start);
+      const start = run35.end + 1;
+      const cacheKey = `${start}:${producerIndex}`;
+      replacementCanReachVpRestore ??= vpReachabilityCache.get(cacheKey);
       if (replacementCanReachVpRestore === void 0) {
-        replacementCanReachVpRestore = literalReplacementCanReachVpRestore(ops, start);
-        vpReachabilityCache.set(start, replacementCanReachVpRestore);
+        replacementCanReachVpRestore = literalReplacementCanReachVpRestore(ops, start, producerIndex);
+        vpReachabilityCache.set(cacheKey, replacementCanReachVpRestore);
       }
       return replacementCanReachVpRestore;
     };
-    if (!run34.dotPreservesVpEntrySource && x2ReplacementDotHasOnlyRestoreGapBeforeVp(ops, run34.end + 1, context)) return true;
-    if (!x2SyncCanExposeContextSensitiveRestore(ops, run34.end)) return false;
-    if (run34.dotPreservesVpEntrySource && (x2HasOnlyRestoreGapBeforeVp(ops, run34.end + 1, context) || x2ReplacementDotHasOnlyRestoreGapBeforeVp(ops, run34.end + 1, context))) return false;
-    if (!canReachVpRestore() && !x2SyncCanExposeContextSensitiveRestore(ops, run34.end, {
+    const replacementDotState = transferX2ValueStateForEdge(
+      state,
+      { kind: "plain", opcode: DOT3, meta: { mnemonic: "." } },
+      "normal",
+      { trackRegisterMemory: true },
+      producerIndex
+    );
+    const vpSourcePlan = x2PlanDotReplacementVpSource(
+      ops,
+      run35.end,
+      state,
+      replacementDotState,
+      context
+    );
+    if (!run35.dotPreservesVpEntrySource && vpSourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp) return true;
+    if (!x2SyncCanExposeContextSensitiveRestore(ops, run35.end, {
+      numericTargetMustBeBeforeIndex: producerIndex
+    })) return false;
+    if (run35.dotPreservesVpEntrySource && (vpSourcePlan.source.hasOnlyRestoreGapBeforeVp || vpSourcePlan.source.replacementDotHasOnlyRestoreGapBeforeVp)) return false;
+    if (!canReachVpRestore() && !x2SyncCanExposeContextSensitiveRestore(ops, run35.end, {
       redundantSyncValue: redundantSync.value,
       redundantSyncDisplayValue: redundantSync.displayValue,
-      redundantSyncShape: redundantSync.shape
+      redundantSyncShape: redundantSync.shape,
+      numericTargetMustBeBeforeIndex: producerIndex
     })) return false;
     return true;
   }
-  function literalReplacementCanReachVpRestore(ops, start) {
+  function addressStableFlowTargetIndex2(addresses, target, numericTargetMustBeBeforeIndex) {
+    if (target === void 0) return void 0;
+    const targetIndex = addresses.get(target);
+    if (targetIndex === void 0 || targetIndex >= numericTargetMustBeBeforeIndex) return void 0;
+    return targetIndex;
+  }
+  function literalReplacementCanReachVpRestore(ops, start, numericTargetMustBeBeforeIndex) {
     const labels = labelIndexes(ops);
     const addresses = addressIndexes(ops);
     const visited = /* @__PURE__ */ new Set();
@@ -23585,36 +26569,39 @@ var MKProEmulatorBundle = (() => {
             return true;
           }
           case "jump": {
-            if (typeof op2.target !== "string") return true;
+            if (typeof op2.target !== "string") {
+              const targetIndex = addresses.get(op2.target);
+              return targetIndex === void 0 || targetIndex >= numericTargetMustBeBeforeIndex ? true : visit(targetIndex, returnStack);
+            }
             const target = labels.get(op2.target);
             return target === void 0 ? true : visit(target + 1, returnStack);
           }
           case "cjump":
           case "loop": {
-            if (typeof op2.target !== "string") return true;
-            const target = labels.get(op2.target);
-            return (target === void 0 ? true : visit(target + 1, returnStack)) || visit(index + 1, returnStack);
+            const target = typeof op2.target === "string" ? labels.get(op2.target) : addresses.get(op2.target);
+            if (typeof op2.target !== "string" && (target === void 0 || target >= numericTargetMustBeBeforeIndex)) return true;
+            return (target === void 0 ? true : visit(typeof op2.target === "string" ? target + 1 : target, returnStack)) || visit(index + 1, returnStack);
           }
           case "call": {
-            if (typeof op2.target !== "string") return true;
-            const target = labels.get(op2.target);
+            const target = typeof op2.target === "string" ? labels.get(op2.target) : addresses.get(op2.target);
+            if (typeof op2.target !== "string" && (target === void 0 || target >= numericTargetMustBeBeforeIndex)) return true;
             if (target === void 0 || returnStack.length >= 5) return true;
-            return visit(target + 1, [index + 1, ...returnStack]);
+            return visit(typeof op2.target === "string" ? target + 1 : target, [index + 1, ...returnStack]);
           }
           case "indirect-jump": {
             const target = knownIndirectFlowTarget(op2);
-            const targetIndex = target === void 0 ? void 0 : addresses.get(target);
+            const targetIndex = addressStableFlowTargetIndex2(addresses, target, numericTargetMustBeBeforeIndex);
             return targetIndex === void 0 ? true : visit(targetIndex, returnStack);
           }
           case "indirect-call": {
             const target = knownIndirectFlowTarget(op2);
-            const targetIndex = target === void 0 ? void 0 : addresses.get(target);
+            const targetIndex = addressStableFlowTargetIndex2(addresses, target, numericTargetMustBeBeforeIndex);
             if (targetIndex === void 0 || returnStack.length >= 5) return true;
             return visit(targetIndex, [index + 1, ...returnStack]);
           }
           case "indirect-cjump": {
             const target = knownIndirectFlowTarget(op2);
-            const targetIndex = target === void 0 ? void 0 : addresses.get(target);
+            const targetIndex = addressStableFlowTargetIndex2(addresses, target, numericTargetMustBeBeforeIndex);
             return (targetIndex === void 0 ? true : visit(targetIndex, returnStack)) || visit(index + 1, returnStack);
           }
           case "return": {
@@ -23642,24 +26629,65 @@ var MKProEmulatorBundle = (() => {
       }
     };
   }
-  function replacingLiteralStackLiftCanExpose(ops, runStart, run34, state, context) {
-    return replacingNumberEntryCanExposeStackLift(ops, run34.end) && !literalStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run34, state, context);
+  function replacingLiteralStackLiftCanExpose(ops, runStart, run35, state, context, invalidatedProducerIndexes) {
+    return planX2ReplacementStackLift(
+      ops,
+      runStart,
+      run35.end,
+      state,
+      context,
+      replacingNumberEntryCanExposeStackLift(ops, run35.end, {
+        numericTargetMustBeBeforeIndex: runStart
+      }),
+      { invalidatedProducerIndexes }
+    ).exposesStackLift;
   }
-  function literalStackLiftAlreadySuppliedByDuplicateY(ops, runStart, run34, state, context) {
-    return x2StateHasSameVisibleXAndY(state) && x2PreviousStackLiftAndX2SyncProducerIndex(ops, runStart, context) !== void 0 && !removingPreShiftLiftCanExposeStack(ops, run34.end);
+  function replacingExpressionStackLiftCanExpose(ops, runStart, run35, state, context, invalidatedProducerIndexes) {
+    return planX2ReplacementStackLift(
+      ops,
+      runStart,
+      run35.sourceStackEnd,
+      state,
+      context,
+      replacingNumberEntryCanExposeStackLift(ops, run35.end, {
+        numericTargetMustBeBeforeIndex: runStart
+      }),
+      {
+        allowDuplicateYStackProof: run35.allowDuplicateYStackProof,
+        invalidatedProducerIndexes
+      }
+    ).exposesStackLift;
   }
-  var run32 = (ops) => {
+  function markReplacedStackLiftProducers(ops, start, end, output) {
+    for (let index = start; index < end; index += 1) {
+      const op2 = ops[index];
+      if (op2 !== void 0 && analyzeX2StackEffect(op2).stackLiftAndX2Sync) output.add(index);
+    }
+  }
+  function canReplaceRunInCurrentX2Context(ops, start, end, state) {
+    if (x2StateIsClosedPlainContext(state)) return true;
+    return x2StateIsClosedDotRestoreValueContext(state) && !runContainsVp(ops, start, end);
+  }
+  function runContainsVp(ops, start, end) {
+    for (let index = start; index <= end; index += 1) {
+      if (isPlainVp(ops[index])) return true;
+    }
+    return false;
+  }
+  var run33 = (ops) => {
     const x2ValueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
     const dotSafeStates = computeX2DotRestoreGapStates(ops);
     const immediateSyncStates = computeX2ImmediateSyncStates(ops);
     const directReturnContext = directReturnAnalysisContext(ops);
     const vpReachabilityCache = /* @__PURE__ */ new Map();
+    const replacedStackLiftProducerIndexes = /* @__PURE__ */ new Set();
     const result = [];
     let removed = 0;
     opLoop:
       for (let index = 0; index < ops.length; index += 1) {
         const state = x2ValueStates[index];
-        for (const runAtIndex of literalRunsAt(ops, index)) {
+        for (const baseRunAtIndex of literalRunsAt(ops, index)) {
+          const runAtIndex = literalRunWithRemovableSuffix(ops, baseRunAtIndex, index, directReturnContext);
           const exactX2Fact = x2ValueSetHasFact(state?.x2, runAtIndex.x2Fact);
           const visibleDecimalX2ValueFact = x2ValueSetHasRestoredVisibleDecimal(state?.x2, runAtIndex.x2Fact);
           const visibleDecimalX2ShapeFact = visibleDecimalX2ValueFact ? false : x2ValueShapeSetHasRestoredVisibleDecimal(state?.x2, state?.x2Shape, runAtIndex.x2Fact);
@@ -23667,7 +26695,7 @@ var MKProEmulatorBundle = (() => {
           const visibleDecimalX2DotSafeShapeFact = visibleDecimalX2ShapeFact && !x2StateHasUnsafeDotRestoreShapeX2(state);
           const visibleDecimalX2Fact = visibleDecimalX2ValueFact || visibleDecimalX2DotSafeShapeFact;
           const sourceProvesFreeStandingRestore = x2ValueSetHasNormalizedDecimalFact(state?.x2, runAtIndex.x2Fact) || visibleDecimalX2Fact;
-          if (x2StateIsClosedPlainContext(state) && x2CanUseSourceDotRestoreAt(
+          if (canReplaceRunInCurrentX2Context(ops, index, runAtIndex.end, state) && x2CanUseSourceDotRestoreAt(
             ops,
             index,
             state,
@@ -23675,16 +26703,73 @@ var MKProEmulatorBundle = (() => {
             immediateSyncStates[index] === true,
             sourceProvesFreeStandingRestore,
             directReturnContext
-          ) && (exactX2Fact || visibleDecimalX2Fact) && !replacingLiteralStackLiftCanExpose(ops, index, runAtIndex, state, directReturnContext) && !replacingLiteralCanExposeContextSensitiveRestore(ops, runAtIndex, directReturnContext, vpReachabilityCache, {
-            value: exactX2Fact,
-            displayValue: visibleDecimalX2DisplayValueFact,
-            shape: visibleDecimalX2DotSafeShapeFact
-          })) {
+          ) && (exactX2Fact || visibleDecimalX2Fact) && !replacingLiteralStackLiftCanExpose(
+            ops,
+            index,
+            runAtIndex,
+            state,
+            directReturnContext,
+            replacedStackLiftProducerIndexes
+          ) && !replacingLiteralCanExposeContextSensitiveRestore(
+            ops,
+            runAtIndex,
+            state,
+            index,
+            directReturnContext,
+            vpReachabilityCache,
+            {
+              value: exactX2Fact,
+              displayValue: visibleDecimalX2DisplayValueFact,
+              shape: visibleDecimalX2DotSafeShapeFact
+            }
+          )) {
+            markReplacedStackLiftProducers(ops, index, runAtIndex.end, replacedStackLiftProducerIndexes);
             result.push(dotRestoreOp2(runAtIndex.displayValue, ops[index]));
             removed += runAtIndex.end - index;
             index = runAtIndex.end;
             continue opLoop;
           }
+        }
+        const expressionRun = unaryExpressionRunAt(ops, index, directReturnContext);
+        const expressionSourceProvesFreeStandingRestore = x2StateHasSameDotRestoreValueInXAndX2(state) && !x2StateHasUnsafeDotRestoreShapeX2(state);
+        if (expressionRun !== void 0 && canReplaceRunInCurrentX2Context(ops, index, expressionRun.end, state) && x2ValueSetHasAnyFact(state?.x2, expressionRun.x2Facts) && x2CanUseSourceDotRestoreAt(
+          ops,
+          index,
+          state,
+          dotSafeStates[index] === true,
+          immediateSyncStates[index] === true,
+          expressionSourceProvesFreeStandingRestore,
+          directReturnContext
+        ) && !replacingExpressionStackLiftCanExpose(
+          ops,
+          index,
+          expressionRun,
+          state,
+          directReturnContext,
+          replacedStackLiftProducerIndexes
+        ) && !replacingLiteralCanExposeContextSensitiveRestore(
+          ops,
+          {
+            end: expressionRun.end,
+            displayValue: expressionRun.displayValue,
+            x2Fact: expressionRun.x2Facts[0],
+            dotPreservesVpEntrySource: false
+          },
+          state,
+          index,
+          directReturnContext,
+          vpReachabilityCache,
+          {
+            value: true,
+            displayValue: false,
+            shape: false
+          }
+        )) {
+          markReplacedStackLiftProducers(ops, index, expressionRun.end, replacedStackLiftProducerIndexes);
+          result.push(dotRestoreOp2(expressionRun.displayValue, ops[index]));
+          removed += expressionRun.end - index;
+          index = expressionRun.end;
+          continue opLoop;
         }
         result.push(ops[index]);
       }
@@ -23700,17 +26785,23 @@ var MKProEmulatorBundle = (() => {
       ]
     };
   };
+  function x2ValueSetHasAnyFact(input, facts) {
+    for (const fact of facts) {
+      if (x2ValueSetHasFact(input, fact)) return true;
+    }
+    return false;
+  }
   var x2LiteralRestore = {
     name: "x2-literal-restore",
-    run: run32,
+    run: run33,
     layoutSafe: false
   };
 
   // src/core/passes/x2-noop-restore.ts
   var DOT4 = 10;
-  var run33 = (ops) => {
+  var run34 = (ops) => {
     if (!ops.some(isPlainDot2)) return emptyResult(ops);
-    const valueStates = computeX2ValueStates(ops);
+    const valueStates = computeX2ValueStates(ops, { trackRegisterMemory: true });
     const dotSafeStates = computeX2DotRestoreGapStates(ops);
     const immediateSyncStates = computeX2ImmediateSyncStates(ops);
     const directReturnContext = directReturnAnalysisContext(ops);
@@ -23720,7 +26811,7 @@ var MKProEmulatorBundle = (() => {
       if (!isPlainDot2(op2)) continue;
       if (isDisplayFocusSensitive(op2)) continue;
       const state = valueStates[index];
-      const sourceProvesFreeStandingRestore = x2StateHasSameNormalizedDecimalInXAndX2(state) || x2StateHasSameRestoredVisibleDecimalInXAndX2(state) || x2StateHasSameDotSafeStructuralMantissaInXAndX2(state);
+      const sourceProvesFreeStandingRestore = x2StateHasSameNormalizedDecimalInXAndX2(state) || x2StateHasSameRestoredVisibleDecimalInXAndX2(state) || x2StateHasSameDotSafeStructuralMantissaInXAndX2(state) || x2StateHasSameDotRestoreValueInXAndX2(state) && !x2StateHasUnsafeDotRestoreShapeX2(state);
       if (!x2CanUseSourceDotRestoreAt(
         ops,
         index,
@@ -23730,7 +26821,7 @@ var MKProEmulatorBundle = (() => {
         sourceProvesFreeStandingRestore,
         directReturnContext
       )) continue;
-      if (!isDotSafeValueContext(state)) continue;
+      if (!isClosedDotRestoreValueContext(state)) continue;
       if (x2StateHasUnsafeDotRestoreShapeX2(state) && !x2StateHasOnlyDotSafeStructuralMantissaX2(state)) continue;
       if (!x2StateHasSameDotRestoreValueInXAndX2(state) && !x2StateHasSameRestoredVisibleDecimalInXAndX2(state)) continue;
       if (dotCanExposeContextSensitiveRestore(ops, index, state, valueStates[index + 1], directReturnContext)) continue;
@@ -23753,30 +26844,20 @@ var MKProEmulatorBundle = (() => {
   }
   function dotCanExposeContextSensitiveRestore(ops, index, state, stateAfterDot, context) {
     if (!x2SyncCanExposeContextSensitiveRestore(ops, index)) return false;
-    return !dotPreservesVpEntrySourceThroughRestoreGap(ops, index, state, stateAfterDot, context);
+    return !x2PlanDotReplacementVpSource(
+      ops,
+      index,
+      state,
+      stateAfterDot,
+      context
+    ).preservesVpEntrySource;
   }
-  function dotPreservesVpEntrySourceThroughRestoreGap(ops, index, state, stateAfterDot, context) {
-    if (x2HasOnlyRestoreGapBeforeVp(ops, index + 1, context)) {
-      return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterDot) || x2HasSignRestoreGapBeforeVp(ops, index + 1, context) && x2StatesHaveSameVpEntrySignSource(state, stateAfterDot);
-    }
-    if (!x2ReplacementDotHasOnlyRestoreGapBeforeVp(ops, index + 1, context) || dotFollowsClosedSignChangeSource(ops, index)) return false;
-    return x2StateCanDiscardRestoreRunBeforeProvedVp(state, stateAfterDot) && x2StatesHaveSameExplicitVpEntrySignSource(state, stateAfterDot);
-  }
-  function dotFollowsClosedSignChangeSource(ops, index) {
-    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-      const op2 = ops[cursor];
-      if (op2.kind === "label" || op2.kind === "orphan-address") continue;
-      if (isFreeStandingX2EmptyOp(op2)) continue;
-      return isFreeStandingX2SignChangeOp(op2);
-    }
-    return false;
-  }
-  function isDotSafeValueContext(state) {
-    return x2StateIsClosedPlainContext(state);
+  function isClosedDotRestoreValueContext(state) {
+    return x2StateIsClosedDotRestoreValueContext(state);
   }
   var x2NoopRestore = {
     name: "x2-noop-restore",
-    run: run33,
+    run: run34,
     layoutSafe: false
   };
 
@@ -23785,6 +26866,7 @@ var MKProEmulatorBundle = (() => {
     redundantPrologueElimination,
     tailCallLowering,
     tailBranchInversion,
+    conditionalBranchTrampoline,
     sharedCallTail,
     returnSuffixGadget,
     sharedTerminalTail,
@@ -23924,6 +27006,54 @@ var MKProEmulatorBundle = (() => {
     }
     return labels;
   }
+  function machineCells(items) {
+    const cells = [];
+    let address = 0;
+    for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+      const item = items[itemIndex];
+      if (item.kind === "label") continue;
+      cells.push({ itemIndex, address, item });
+      address += 1;
+    }
+    return cells;
+  }
+  function machineLabelsByAddress(items) {
+    const labels = /* @__PURE__ */ new Map();
+    let address = 0;
+    for (const item of items) {
+      if (item.kind === "label") {
+        const list = labels.get(address) ?? [];
+        list.push(item.name);
+        labels.set(address, list);
+      } else {
+        address += 1;
+      }
+    }
+    return labels;
+  }
+  function machineCellAt(cells, address) {
+    return cells.find((cell) => cell.address === address);
+  }
+  function referencedMachineLabels(items) {
+    const referenced = /* @__PURE__ */ new Set();
+    for (const item of items) {
+      if (item.kind === "address" && typeof item.target === "string") referenced.add(item.target);
+    }
+    return referenced;
+  }
+  function addressHasReferencedLabel(labels, referenced, address) {
+    return labels.get(address)?.some((label) => referenced.has(label)) === true;
+  }
+  function machineAddressByItemIndex(items) {
+    const addresses = /* @__PURE__ */ new Map();
+    let address = 0;
+    for (let itemIndex = 0; itemIndex < items.length; itemIndex += 1) {
+      if (items[itemIndex]?.kind === "label") continue;
+      addresses.set(itemIndex, address);
+      address += 1;
+    }
+    return addresses;
+  }
   function opAddresses(ops) {
     const addresses = [];
     let address = 0;
@@ -23942,9 +27072,24 @@ var MKProEmulatorBundle = (() => {
     }
     return used;
   }
-  function spareStableRegister(ops) {
+  function spareStableRegister(ops, reserved = /* @__PURE__ */ new Set()) {
     const used = usedRegisters2(ops);
-    return STABLE_REGISTERS2.find((register) => !used.has(register));
+    return STABLE_REGISTERS2.find((register) => !used.has(register) && !reserved.has(register));
+  }
+  function preloadRegisterMap(preloads) {
+    const result = {};
+    for (const preload of preloads) result[preload.register] = preload.value;
+    return result;
+  }
+  function optionsWithReservedPreloads(options, preloads) {
+    if (preloads.length === 0) return options;
+    return {
+      ...options,
+      preloadedConstantRegisters: {
+        ...options.preloadedConstantRegisters,
+        ...preloadRegisterMap(preloads)
+      }
+    };
   }
   function formalLabelFromOrdinal2(ordinal) {
     const high = Math.floor(ordinal / 10);
@@ -23991,6 +27136,21 @@ var MKProEmulatorBundle = (() => {
     if (!Number.isInteger(target) || target < 0 || target > 104) return void 0;
     if (target <= 47) return formalLabelFromOrdinal2(target + 112);
     return officialLabel2(target);
+  }
+  function retargetedSelectorValue(register, previousValue, shiftedTarget) {
+    const fractional = fractionalSelectorSuffix(previousValue);
+    if (fractional !== void 0) {
+      const candidate = `${shiftedTarget}${fractional}`;
+      if (evaluateIndirectAddress(register, candidate, "flow")?.actualFlowTarget === shiftedTarget) {
+        return candidate;
+      }
+    }
+    return selectorForActualTarget(shiftedTarget);
+  }
+  function fractionalSelectorSuffix(value) {
+    const match = /^(\d+)(\.\d+)$/u.exec(value.trim());
+    if (match === null || match[1] === "0") return void 0;
+    return match?.[2];
   }
   function indirectFlowOp3(op2, register, selectorValue, target) {
     const offset = registerIndex2(register);
@@ -24165,6 +27325,23 @@ var MKProEmulatorBundle = (() => {
     if (!ADDRESS_TAKING_OPCODES.has(executable.opcode)) return true;
     return items[index + 1]?.kind === "address";
   }
+  function isNumberEntryOpcode(opcode) {
+    return opcode >= 0 && opcode <= 9 || opcode === 10 || opcode === 11 || opcode === 12;
+  }
+  function nextExecutableOpcode(items, start) {
+    for (let index = start; index < items.length; index += 1) {
+      const item = items[index];
+      if (item?.kind === "label") continue;
+      return overlayExecutableAt(items, index)?.opcode;
+    }
+    return void 0;
+  }
+  function canMoveOverlayOpcodeTo(sourceItems, sourceIndex, targetItems, targetIndex, opcode) {
+    if (!isNumberEntryOpcode(opcode)) return true;
+    const sourceNextOpcode = nextExecutableOpcode(sourceItems, sourceIndex + 1);
+    const targetNextOpcode = nextExecutableOpcode(targetItems, targetIndex + 1);
+    return targetNextOpcode === void 0 || !isNumberEntryOpcode(targetNextOpcode) || sourceNextOpcode !== void 0 && isNumberEntryOpcode(sourceNextOpcode);
+  }
   function overlaidMnemonic(items, index) {
     return overlayExecutableAt(items, index)?.mnemonic ?? "unknown";
   }
@@ -24175,6 +27352,16 @@ var MKProEmulatorBundle = (() => {
     return {
       ...address,
       comment: [address.comment, `address/code overlay for ${overlaid}`].filter(Boolean).join("; ")
+    };
+  }
+  function overlayAddressItemWithFormalOpcode(address, formalOpcode, overlaid) {
+    return {
+      ...address,
+      formalOpcode,
+      comment: [
+        address.comment,
+        `formal address/code overlay for ${overlaid}`
+      ].filter(Boolean).join("; ")
     };
   }
   function directAddressTarget(items, itemIndex) {
@@ -24230,9 +27417,51 @@ var MKProEmulatorBundle = (() => {
     if (branch.opcode === 83) return !targetMayReturn(address.target);
     return false;
   }
+  function previousNonLabelIndex(items, before) {
+    for (let index = before - 1; index >= 0; index -= 1) {
+      if (items[index]?.kind !== "label") return index;
+    }
+    return void 0;
+  }
+  function labelsHaveNoLinearFallthrough(items, labelsStart, targetMayReturn) {
+    const previousIndex = previousNonLabelIndex(items, labelsStart);
+    if (previousIndex === void 0) return false;
+    const previous = items[previousIndex];
+    if (previous?.kind === "op") return previous.opcode === 80 || previous.opcode === 82;
+    if (previous?.kind !== "address") return false;
+    const branchIndex = previousNonLabelIndex(items, previousIndex);
+    const branch = branchIndex === void 0 ? void 0 : items[branchIndex];
+    if (branch?.kind !== "op") return false;
+    if (branch.opcode === 81) return true;
+    if (branch.opcode === 83) return !targetMayReturn(previous.target);
+    return false;
+  }
+  function fixedAddressTargetsSurviveRemoval(items, removedAddress) {
+    for (const item of items) {
+      if (item.kind !== "address") continue;
+      const fixedTarget = fixedAddressActualTarget(item);
+      if (fixedTarget !== void 0 && fixedTarget >= removedAddress) return false;
+    }
+    return true;
+  }
   function fixedAddressActualTarget(address) {
     if (address.formalOpcode !== void 0) return formalAddressInfo(address.formalOpcode).actual;
     return typeof address.target === "number" ? address.target : void 0;
+  }
+  function resolvedAddressTarget(items, address) {
+    if (typeof address.target === "number") return address.target;
+    return machineLayout(items).labels.get(address.target);
+  }
+  function chooseOverlayAddressItem(candidate, address, executableOpcode, overlaid) {
+    const ordinary = overlayAddressItem(address, overlaid);
+    if (addressOpcodeForItem(candidate, ordinary) === executableOpcode) return ordinary;
+    const target = resolvedAddressTarget(candidate, ordinary);
+    if (target === void 0) return void 0;
+    const formal2 = formalAddressInfo(executableOpcode);
+    if (formal2.actual !== target) return void 0;
+    const formalAddress = overlayAddressItemWithFormalOpcode(address, executableOpcode, overlaid);
+    if (addressOpcodeForItem(candidate, formalAddress) !== executableOpcode) return void 0;
+    return formalAddress;
   }
   function applyAddressCodeOverlay(items) {
     const layout = machineLayout(items);
@@ -24256,7 +27485,17 @@ var MKProEmulatorBundle = (() => {
       if (addressCellAddress === void 0) continue;
       const fixedTarget = fixedAddressActualTarget(address);
       if (fixedTarget !== void 0 && fixedTarget > addressCellAddress) continue;
-      const candidateAddress = overlayAddressItem(address, overlaidMnemonic(items, labelsEnd));
+      const overlaid = overlaidMnemonic(items, labelsEnd);
+      const provisional = [
+        ...items.slice(0, index + 1),
+        ...labels,
+        address,
+        ...items.slice(labelsEnd + 1)
+      ];
+      const provisionalAddressIndex = index + 1 + labels.length;
+      if (!canMoveOverlayOpcodeTo(items, labelsEnd, provisional, provisionalAddressIndex, executableOpcode)) continue;
+      const candidateAddress = chooseOverlayAddressItem(provisional, address, executableOpcode, overlaid);
+      if (candidateAddress === void 0) continue;
       const candidate = [
         ...items.slice(0, index + 1),
         ...labels,
@@ -24266,6 +27505,53 @@ var MKProEmulatorBundle = (() => {
       if (addressOpcodeForItem(candidate, candidateAddress) !== executableOpcode) continue;
       if (cellCount(candidate) >= cellCount(items)) continue;
       return { items: candidate, applied: 1 };
+    }
+    const referenced = referencedMachineLabels(items);
+    for (let index = 0; index < items.length - 2; index += 1) {
+      const branch = items[index];
+      const address = items[index + 1];
+      if (branch?.kind !== "op" || address?.kind !== "address") continue;
+      if (branch.opcode !== 81) continue;
+      for (let labelsStart = index + 3; labelsStart < items.length - 1; labelsStart += 1) {
+        if (items[labelsStart]?.kind !== "label") continue;
+        let labelsEnd = labelsStart;
+        const labels = [];
+        while (items[labelsEnd]?.kind === "label") {
+          labels.push(items[labelsEnd]);
+          labelsEnd += 1;
+        }
+        if (labels.length === 0 || !labels.some((label) => referenced.has(label.name))) continue;
+        if (!labelsHaveNoLinearFallthrough(items, labelsStart, targetMayReturn)) continue;
+        if (!canOverlayExecutableCellAt(items, labelsEnd)) continue;
+        const executableOpcode = overlaidOpcode(items, labelsEnd);
+        if (executableOpcode === void 0 || ADDRESS_TAKING_OPCODES.has(executableOpcode)) continue;
+        const removedAddress = layout.addressByItemIndex.get(labelsEnd);
+        if (removedAddress === void 0 || !fixedAddressTargetsSurviveRemoval(items, removedAddress)) continue;
+        const branchTargetAddress = resolvedMachineTarget(address.target, layout.labels);
+        if (branchTargetAddress === removedAddress && !canOverlayAddressContinuation(targetMayReturn, branch, address)) continue;
+        const overlaid = overlaidMnemonic(items, labelsEnd);
+        const provisional = [
+          ...items.slice(0, index + 1),
+          ...labels,
+          address,
+          ...items.slice(index + 2, labelsStart),
+          ...items.slice(labelsEnd + 1)
+        ];
+        const provisionalAddressIndex = index + 1 + labels.length;
+        if (!canMoveOverlayOpcodeTo(items, labelsEnd, provisional, provisionalAddressIndex, executableOpcode)) continue;
+        const candidateAddress = chooseOverlayAddressItem(provisional, address, executableOpcode, overlaid);
+        if (candidateAddress === void 0) continue;
+        const candidate = [
+          ...items.slice(0, index + 1),
+          ...labels,
+          candidateAddress,
+          ...items.slice(index + 2, labelsStart),
+          ...items.slice(labelsEnd + 1)
+        ];
+        if (addressOpcodeForItem(candidate, candidateAddress) !== executableOpcode) continue;
+        if (cellCount(candidate) >= cellCount(items)) continue;
+        return { items: candidate, applied: 1 };
+      }
     }
     return { items: [...items], applied: 0 };
   }
@@ -24312,11 +27598,12 @@ var MKProEmulatorBundle = (() => {
     });
     return { items: lowerIrToMachine(ir), preloads: kept, merged: remap.size };
   }
-  function selectorValueForRegister(preloads, register) {
+  function selectorValueForRegister(preloads, register, options) {
     for (const preload of preloads) {
-      if (preload.register === register) return preload.value;
+      if (preload.register === register) return { value: preload.value, existing: false };
     }
-    return void 0;
+    const existing = options?.preloadedConstantRegisters?.[register];
+    return existing === void 0 ? void 0 : { value: existing, existing: true };
   }
   function firstExecutableOpIndexAtAddress(ops, addresses, target) {
     for (let index = 0; index < ops.length; index += 1) {
@@ -24348,7 +27635,7 @@ var MKProEmulatorBundle = (() => {
       if (targetIndex === void 0) return void 0;
       const shiftedTarget = afterAddresses[targetIndex];
       if (shiftedTarget === void 0) return void 0;
-      const selectorValue = selectorForActualTarget(shiftedTarget);
+      const selectorValue = retargetedSelectorValue(register, preload.value, shiftedTarget);
       if (selectorValue === void 0) return void 0;
       const shiftedDecoded = evaluateIndirectAddress(register, selectorValue, "flow");
       if (shiftedDecoded?.actualFlowTarget !== shiftedTarget) return void 0;
@@ -24374,6 +27661,10 @@ var MKProEmulatorBundle = (() => {
   function numericTargetView(ir, labels) {
     const numeric = [];
     const targetLabel = [];
+    const labelByAddress = /* @__PURE__ */ new Map();
+    for (const [label, address] of labels) {
+      if (!labelByAddress.has(address)) labelByAddress.set(address, label);
+    }
     for (const op2 of ir) {
       if (isDirectBranch(op2) && typeof op2.target === "string") {
         const address = labels.get(op2.target);
@@ -24383,6 +27674,11 @@ var MKProEmulatorBundle = (() => {
           continue;
         }
       }
+      if (isDirectBranch(op2) && typeof op2.target === "number") {
+        targetLabel.push(labelByAddress.get(op2.target));
+        numeric.push(op2);
+        continue;
+      }
       numeric.push(op2);
       targetLabel.push(void 0);
     }
@@ -24391,14 +27687,15 @@ var MKProEmulatorBundle = (() => {
   function isSuperDarkRewrite(op2) {
     return /\bsuper-dark\b/iu.test(op2.meta.comment ?? "");
   }
-  function validateRewriteAt(index, ir, numeric, targetLabel, result, items) {
+  function validateRewriteAt(index, ir, numeric, targetLabel, result, items, options) {
     const rewritten = result.ops[index];
     const original = numeric[index];
     if (!isIndirectBranch(rewritten) || !isDirectBranch(original)) return void 0;
     const label = targetLabel[index];
     if (label === void 0) return void 0;
-    const selectorValue = selectorValueForRegister(result.preloads ?? [], rewritten.register);
-    if (selectorValue === void 0) return void 0;
+    const selector = selectorValueForRegister(result.preloads ?? [], rewritten.register, options);
+    if (selector === void 0) return void 0;
+    const selectorValue = selector.value;
     const candidate = ir.map((op2, i) => i === index ? rewritten : op2);
     const finalLabels = labelAddresses(candidate);
     const targetFinalAddress = finalLabels.get(label);
@@ -24420,16 +27717,18 @@ var MKProEmulatorBundle = (() => {
       darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
       convertedAddresses: [addresses[index]],
       protectedTargets: [targetFinalAddress],
+      existingPreload: selector.existing,
       converted: 1
     };
   }
-  function validateRewriteGroup(indices, ir, numeric, targetLabel, result, items) {
+  function validateRewriteGroup(indices, ir, numeric, targetLabel, result, items, options) {
     if (indices.length === 0) return void 0;
     const first = result.ops[indices[0]];
     if (!isIndirectBranch(first)) return void 0;
     const register = first.register;
-    const selectorValue = selectorValueForRegister(result.preloads ?? [], register);
-    if (selectorValue === void 0) return void 0;
+    const selector = selectorValueForRegister(result.preloads ?? [], register, options);
+    if (selector === void 0) return void 0;
+    const selectorValue = selector.value;
     const indexSet = new Set(indices);
     const candidate = ir.map((op2, i) => indexSet.has(i) ? result.ops[i] : op2);
     const finalLabels = labelAddresses(candidate);
@@ -24458,6 +27757,7 @@ var MKProEmulatorBundle = (() => {
       darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
       convertedAddresses: indices.map((index) => addresses[index]),
       protectedTargets: indices.map((index) => targetLabel[index]).map((label) => label === void 0 ? void 0 : finalLabels.get(label)).filter((target) => target !== void 0),
+      existingPreload: selector.existing,
       converted: indices.length
     };
   }
@@ -24510,11 +27810,12 @@ var MKProEmulatorBundle = (() => {
       darkEntry: decoded.formalAddress !== void 0 && decoded.formalAddress.kind !== "official" && decoded.formalAddress.kind !== "super-dark",
       convertedAddresses: indices.map((index) => addresses[index]),
       protectedTargets: [finalTarget],
+      existingPreload: false,
       converted: indices.length
     };
   }
-  function applyForwardRewrite(ir, targetLabel, items) {
-    const register = spareStableRegister(ir);
+  function applyForwardRewrite(ir, targetLabel, items, reserved) {
+    const register = spareStableRegister(ir, reserved);
     if (register === void 0) return void 0;
     const labels = labelAddresses(ir);
     const addresses = opAddresses(ir);
@@ -24534,18 +27835,18 @@ var MKProEmulatorBundle = (() => {
     for (const indices of groups.values()) {
       const candidate = validateForwardRewriteGroup(indices, ir, targetLabel, register, items);
       if (candidate === void 0) continue;
-      if (best === void 0 || candidate.converted > best.converted || candidate.converted === best.converted && candidate.darkEntry && !best.darkEntry) {
-        best = candidate;
-      }
+      best = betterRewrite(best, candidate);
     }
     return best;
   }
-  function applyOneRewrite(items, options) {
+  function applyOneRewrite(items, options, existingPreloads = []) {
+    const roundOptions = optionsWithReservedPreloads(options, existingPreloads);
+    const reserved = new Set(Object.keys(roundOptions.preloadedConstantRegisters ?? {}));
     const ir = raiseMachineToIr(items);
     const labels = labelAddresses(ir);
     const { numeric, targetLabel } = numericTargetView(ir, labels);
     let best;
-    const result = runPreloadedIndirectFlow(numeric, { options }, { relaxMaxTargetGuard: true });
+    const result = runPreloadedIndirectFlow(numeric, { options: roundOptions }, { relaxMaxTargetGuard: true });
     if (result.applied > 0) {
       const groups = /* @__PURE__ */ new Map();
       for (let index = 0; index < result.ops.length; index += 1) {
@@ -24557,13 +27858,13 @@ var MKProEmulatorBundle = (() => {
         groups.set(op2.register, list);
       }
       for (const indices of groups.values()) {
-        const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items);
-        const candidate = group ?? validateRewriteAt(indices[0], ir, numeric, targetLabel, result, items);
+        const group = validateRewriteGroup(indices, ir, numeric, targetLabel, result, items, roundOptions);
+        const candidate = group ?? validateRewriteAt(indices[0], ir, numeric, targetLabel, result, items, roundOptions);
         if (candidate === void 0) continue;
         best = betterRewrite(best, candidate);
       }
     }
-    return betterRewrite(best, applyForwardRewrite(ir, targetLabel, items));
+    return betterRewrite(best, applyForwardRewrite(ir, targetLabel, items, reserved));
   }
   function betterRewrite(current, candidate) {
     if (candidate === void 0) return current;
@@ -24581,17 +27882,27 @@ var MKProEmulatorBundle = (() => {
     let applied = 0;
     let superDarkApplied = 0;
     let darkEntryApplied = 0;
+    let existingSelectorApplied = 0;
+    const immutableTargets = [];
     if (cellCount(current) <= rescueAbove) {
       return { items: [...items], preloads: [], optimizations: [], applied: 0 };
     }
     for (let round = 0; round < MAX_REWRITES; round += 1) {
-      const step = applyOneRewrite(current, options);
+      const step = applyOneRewrite(current, options, preloads);
       if (step === void 0) break;
+      if (step.convertedAddresses.some((address) => immutableTargets.some((target) => address < target))) {
+        break;
+      }
       const retargeted = retargetExistingSelectorsAfterShift(current, step.items, preloads);
       if (retargeted === void 0) break;
       current = retargeted.items;
       preloads.splice(0, preloads.length, ...retargeted.preloads);
-      preloads.push(step.preload);
+      if (step.existingPreload) {
+        existingSelectorApplied += step.converted;
+        immutableTargets.push(...step.protectedTargets);
+      } else {
+        preloads.push(step.preload);
+      }
       applied += step.converted;
       if (step.superDark) superDarkApplied += 1;
       if (step.darkEntry) darkEntryApplied += 1;
@@ -24626,7 +27937,449 @@ var MKProEmulatorBundle = (() => {
         detail: `Shared ${merge.merged} duplicate selector register(s): one stored constant now drives several dispatch sites, freeing the rest.`
       });
     }
+    if (existingSelectorApplied > 0) {
+      optimizations.push({
+        name: "constants-dual-use",
+        detail: `Reused existing setup constant preload(s) as immutable indirect-flow selector(s) for ${existingSelectorApplied} branch/call site(s).`
+      });
+    }
     return { items: current, preloads: finalPreloads, optimizations, applied };
+  }
+  function indirectJumpMachineOp(register, comment, sourceLine) {
+    return {
+      kind: "op",
+      opcode: 128 + registerIndex2(register),
+      mnemonic: `\u041A \u0411\u041F ${register}`,
+      comment,
+      ...sourceLine === void 0 ? {} : { sourceLine }
+    };
+  }
+  function indirectBranchOpcodeForRegister(opcode, register) {
+    const offset = registerIndex2(register);
+    switch (opcode) {
+      case 81:
+        return 128 + offset;
+      case 83:
+        return 160 + offset;
+      case 87:
+        return 112 + offset;
+      case 89:
+        return 144 + offset;
+      case 92:
+        return 192 + offset;
+      case 94:
+        return 224 + offset;
+      default:
+        return void 0;
+    }
+  }
+  function indirectBranchMnemonic(opcode, register) {
+    const base = opcode - registerIndex2(register);
+    switch (base) {
+      case 112:
+        return `\u041A x\u22600 ${register}`;
+      case 128:
+        return `\u041A \u0411\u041F ${register}`;
+      case 144:
+        return `\u041A x\u22650 ${register}`;
+      case 160:
+        return `\u041A \u041F\u041F ${register}`;
+      case 192:
+        return `\u041A x<0 ${register}`;
+      case 224:
+        return `\u041A x=0 ${register}`;
+      default:
+        return `\u041A \u0411\u041F ${register}`;
+    }
+  }
+  function existingSelectorFlowTargets(preloads) {
+    const targets = [];
+    for (const preload of preloads) {
+      const register = preload.register;
+      const target = evaluateIndirectAddress(register, preload.value, "flow")?.actualFlowTarget;
+      if (target === void 0) continue;
+      targets.push({ register, value: preload.value, target });
+    }
+    return targets;
+  }
+  function findExistingSelectorFlowRewrite(items, preloads) {
+    const selectors = existingSelectorFlowTargets(preloads);
+    if (selectors.length === 0) return void 0;
+    const cells = machineCells(items);
+    const labels = machineLabelAddresses(items);
+    const labelsByAddress = machineLabelsByAddress(items);
+    const referencedLabels = referencedMachineLabels(items);
+    for (let index = 0; index < cells.length - 1; index += 1) {
+      const branch = cells[index];
+      const address = cells[index + 1];
+      if (branch.item.kind !== "op" || address.item.kind !== "address") continue;
+      const target = resolvedMachineTarget(address.item.target, labels);
+      if (target === void 0) continue;
+      for (const selector of selectors) {
+        if (selector.target !== target) continue;
+        const opcode = indirectBranchOpcodeForRegister(branch.item.opcode, selector.register);
+        if (opcode === void 0) continue;
+        if (addressHasReferencedLabel(labelsByAddress, referencedLabels, address.address)) continue;
+        return {
+          branchIndex: branch.itemIndex,
+          addressIndex: address.itemIndex,
+          opcode,
+          mnemonic: indirectBranchMnemonic(opcode, selector.register),
+          comment: [
+            branch.item.comment,
+            `reused preloaded R${selector.register}=${selector.value} indirect-target=${target} direct flow`
+          ].filter(Boolean).join("; "),
+          ...branch.item.sourceLine === void 0 ? {} : { sourceLine: branch.item.sourceLine }
+        };
+      }
+    }
+    return void 0;
+  }
+  function applyExistingSelectorFlowRewrite(items, rewrite) {
+    const result = [];
+    for (let index = 0; index < items.length; index += 1) {
+      if (index === rewrite.addressIndex) continue;
+      if (index === rewrite.branchIndex) {
+        result.push({
+          kind: "op",
+          opcode: rewrite.opcode,
+          mnemonic: rewrite.mnemonic,
+          comment: rewrite.comment,
+          ...rewrite.sourceLine === void 0 ? {} : { sourceLine: rewrite.sourceLine }
+        });
+        continue;
+      }
+      result.push(items[index]);
+    }
+    return result;
+  }
+  function firstProcedureStartAddress(items) {
+    let address = 0;
+    for (const item of items) {
+      if (item.kind === "label") {
+        if (item.procedureBoundary === "start") return address;
+        continue;
+      }
+      address += 1;
+    }
+    return void 0;
+  }
+  function knownMachineIndirectJumpTarget(op2, preloads) {
+    if (op2.kind !== "op") return void 0;
+    const register = registerFromIndirectOpcode(op2.opcode);
+    if (register === void 0 || op2.opcode - registerIndex2(register) !== 128) return void 0;
+    const commentTarget = /\bindirect-target=(\d+)\b/u.exec(op2.comment ?? "")?.[1];
+    if (commentTarget !== void 0) {
+      const target = Number(commentTarget);
+      if (Number.isInteger(target)) return target;
+    }
+    const selectorValue = preloadValueForRegister(preloads, register);
+    return selectorValue === void 0 ? void 0 : evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget;
+  }
+  function findEmptyStackTailCallRewrite(items, preloads) {
+    const cells = machineCells(items);
+    const firstProc = firstProcedureStartAddress(items);
+    if (firstProc === void 0) return void 0;
+    for (let index = 0; index < cells.length - 2; index += 1) {
+      const call = cells[index];
+      const address = cells[index + 1];
+      const loopBack = cells[index + 2];
+      if (call.address >= firstProc) break;
+      if (call.item.kind !== "op" || call.item.opcode !== 83) continue;
+      if (address.item.kind !== "address") continue;
+      if (knownMachineIndirectJumpTarget(loopBack.item, preloads) !== 0) continue;
+      return {
+        callIndex: call.itemIndex,
+        loopBackIndex: loopBack.itemIndex,
+        mnemonic: "\u0411\u041F",
+        comment: [
+          call.item.comment?.replace(/^proc call/u, "empty-stack tail call") ?? "empty-stack tail call",
+          "empty-return-stack loop head"
+        ].filter(Boolean).join("; "),
+        ...call.item.sourceLine === void 0 ? {} : { sourceLine: call.item.sourceLine }
+      };
+    }
+    return void 0;
+  }
+  function applyEmptyStackTailCallRewrite(items, rewrite) {
+    const result = [];
+    for (let index = 0; index < items.length; index += 1) {
+      if (index === rewrite.loopBackIndex) continue;
+      if (index === rewrite.callIndex) {
+        result.push({
+          kind: "op",
+          opcode: 81,
+          mnemonic: rewrite.mnemonic,
+          comment: rewrite.comment,
+          ...rewrite.sourceLine === void 0 ? {} : { sourceLine: rewrite.sourceLine }
+        });
+        continue;
+      }
+      result.push(items[index]);
+    }
+    return result;
+  }
+  function stopTailReuseBases(items, preloads) {
+    const cells = machineCells(items);
+    const bases = [];
+    for (const preload of preloads) {
+      const register = preload.register;
+      const decoded = evaluateIndirectAddress(register, preload.value, "flow");
+      const target = decoded?.actualFlowTarget;
+      if (target === void 0) continue;
+      const stop = machineCellAt(cells, target)?.item;
+      const continuation = machineCellAt(cells, target + 1)?.item;
+      if (stop?.kind !== "op" || stop.opcode !== 80 || continuation?.kind !== "op" || continuation.opcode < 128 || continuation.opcode > 142) {
+        continue;
+      }
+      bases.push({ register, target, continuationOpcode: continuation.opcode });
+    }
+    return bases;
+  }
+  function findStopTailReuseRewrite(items, preloads) {
+    const bases = stopTailReuseBases(items, preloads);
+    if (bases.length === 0) return void 0;
+    const cells = machineCells(items);
+    const labels = machineLabelsByAddress(items);
+    const referencedLabels = referencedMachineLabels(items);
+    for (const base of bases) {
+      for (const cell of cells) {
+        if (cell.address <= base.target) continue;
+        const item = cell.item;
+        const next = machineCellAt(cells, cell.address + 1);
+        const afterNext = machineCellAt(cells, cell.address + 2);
+        if (item.kind === "op" && item.opcode === 80 && next?.item.kind === "op" && next.item.opcode === base.continuationOpcode && !addressHasReferencedLabel(labels, referencedLabels, next.address)) {
+          return {
+            base,
+            replaceIndex: cell.itemIndex,
+            removeIndex: next.itemIndex,
+            zeroPrefixed: false
+          };
+        }
+        if (item.kind === "op" && (item.opcode === 0 || item.opcode === 13) && next?.item.kind === "op" && next.item.opcode === 80 && afterNext?.item.kind === "op" && afterNext.item.opcode === base.continuationOpcode && !addressHasReferencedLabel(labels, referencedLabels, next.address) && !addressHasReferencedLabel(labels, referencedLabels, afterNext.address)) {
+          return {
+            base,
+            replaceIndex: next.itemIndex,
+            removeIndex: afterNext.itemIndex,
+            zeroPrefixed: true
+          };
+        }
+      }
+    }
+    return void 0;
+  }
+  function applyStopTailReuseRewrite(items, rewrite) {
+    const result = [];
+    const source = items[rewrite.replaceIndex];
+    for (let index = 0; index < items.length; index += 1) {
+      if (index === rewrite.removeIndex) continue;
+      if (index === rewrite.replaceIndex) {
+        result.push(indirectJumpMachineOp(
+          rewrite.base.register,
+          `${rewrite.zeroPrefixed ? "zero then " : ""}reuse stop tail at ${rewrite.base.target}`,
+          source?.kind === "op" || source?.kind === "address" ? source.sourceLine : void 0
+        ));
+        continue;
+      }
+      result.push(items[index]);
+    }
+    return result;
+  }
+  function preloadValueForRegister(preloads, register) {
+    return preloads.find((preload) => preload.register === register)?.value;
+  }
+  function findBranchToStopTailSelectorRewrite(items, preloads) {
+    const cells = machineCells(items);
+    const labels = machineLabelAddresses(items);
+    const labelsByAddress = machineLabelsByAddress(items);
+    const referencedLabels = referencedMachineLabels(items);
+    for (let index = 0; index < cells.length - 1; index += 1) {
+      const branch = cells[index];
+      const address = cells[index + 1];
+      if (branch.item.kind !== "op" || address.item.kind !== "address") continue;
+      const target = resolvedMachineTarget(address.item.target, labels);
+      if (target === void 0) continue;
+      const targetCell = machineCellAt(cells, target);
+      if (targetCell?.item.kind !== "op") continue;
+      const register = registerFromIndirectOpcode(targetCell.item.opcode);
+      if (register === void 0 || targetCell.item.opcode - registerIndex2(register) !== 128) continue;
+      const selectorValue = preloadValueForRegister(preloads, register);
+      if (selectorValue === void 0) continue;
+      const stopTarget = evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget;
+      if (stopTarget === void 0) continue;
+      const stop = machineCellAt(cells, stopTarget)?.item;
+      if (stop?.kind !== "op" || stop.opcode !== 80) continue;
+      const opcode = indirectBranchOpcodeForRegister(branch.item.opcode, register);
+      if (opcode === void 0) continue;
+      if (addressHasReferencedLabel(labelsByAddress, referencedLabels, address.address)) continue;
+      return {
+        branchIndex: branch.itemIndex,
+        addressIndex: address.itemIndex,
+        opcode,
+        mnemonic: indirectBranchMnemonic(opcode, register),
+        comment: [branch.item.comment, `branch to reused stop tail at ${stopTarget}`].filter(Boolean).join("; "),
+        ...branch.item.sourceLine === void 0 ? {} : { sourceLine: branch.item.sourceLine }
+      };
+    }
+    return void 0;
+  }
+  function applyBranchToStopTailSelectorRewrite(items, rewrite) {
+    const result = [];
+    for (let index = 0; index < items.length; index += 1) {
+      if (index === rewrite.addressIndex) continue;
+      if (index === rewrite.branchIndex) {
+        result.push({
+          kind: "op",
+          opcode: rewrite.opcode,
+          mnemonic: rewrite.mnemonic,
+          comment: rewrite.comment,
+          ...rewrite.sourceLine === void 0 ? {} : { sourceLine: rewrite.sourceLine }
+        });
+        continue;
+      }
+      result.push(items[index]);
+    }
+    return result;
+  }
+  function registerFromIndirectOpcode(opcode) {
+    const offset = opcode & 15;
+    if (offset > 14) return void 0;
+    const base = opcode - offset;
+    if (base !== 112 && base !== 128 && base !== 144 && base !== 160 && base !== 192 && base !== 224) {
+      return void 0;
+    }
+    return offset <= 9 ? String(offset) : String.fromCharCode(87 + offset);
+  }
+  function retargetMachineSelectorComments(items, selectorByRegister) {
+    return items.map((item) => {
+      if (item.kind !== "op") return item;
+      const register = registerFromIndirectOpcode(item.opcode);
+      if (register === void 0) return item;
+      const selectorValue = selectorByRegister.get(register);
+      if (selectorValue === void 0) return item;
+      const target = evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget;
+      if (target === void 0) return item;
+      const comment = replaceIndirectTargetComment(item.comment, register, selectorValue, target);
+      if (comment === item.comment) return item;
+      if (comment === void 0) {
+        const { comment: _comment, ...rest } = item;
+        return rest;
+      }
+      return { ...item, comment };
+    });
+  }
+  function retargetSelectorPreloadsAfterMachineDeletion(beforeItems, afterItems, preloads) {
+    if (preloads.length === 0) return { items: [...afterItems], preloads: [] };
+    const beforeCells = machineCells(beforeItems);
+    const afterAddressByItemIndex = machineAddressByItemIndex(afterItems);
+    const nextPreloads = [];
+    const nextByRegister = /* @__PURE__ */ new Map();
+    for (const preload of preloads) {
+      const register = preload.register;
+      const decoded = evaluateIndirectAddress(register, preload.value, "flow");
+      const target = decoded?.actualFlowTarget;
+      if (target === void 0) return void 0;
+      const beforeCell = machineCellAt(beforeCells, target);
+      if (beforeCell === void 0) return void 0;
+      const targetItem = beforeItems[beforeCell.itemIndex];
+      const afterItemIndex = afterItems.findIndex((item) => item === targetItem);
+      if (afterItemIndex < 0) return void 0;
+      const shiftedTarget = afterAddressByItemIndex.get(afterItemIndex);
+      if (shiftedTarget === void 0) return void 0;
+      const selectorValue = shiftedTarget === target ? preload.value : retargetedSelectorValue(register, preload.value, shiftedTarget);
+      if (selectorValue === void 0) return void 0;
+      const shiftedDecoded = evaluateIndirectAddress(register, selectorValue, "flow");
+      if (shiftedDecoded?.actualFlowTarget !== shiftedTarget) return void 0;
+      nextPreloads.push({ ...preload, value: selectorValue });
+      nextByRegister.set(register, selectorValue);
+    }
+    return {
+      items: retargetMachineSelectorComments(afterItems, nextByRegister),
+      preloads: nextPreloads
+    };
+  }
+  function optimizePostLayoutStopTailReuse(items, preloads) {
+    let current = [...items];
+    let currentPreloads = [...preloads];
+    let stopTailApplied = 0;
+    let existingSelectorApplied = 0;
+    let emptyStackTailCallApplied = 0;
+    for (let round = 0; round < MAX_REWRITES; round += 1) {
+      const emptyStackTailCall = findEmptyStackTailCallRewrite(current, currentPreloads);
+      if (emptyStackTailCall !== void 0) {
+        const candidate = applyEmptyStackTailCallRewrite(current, emptyStackTailCall);
+        if (cellCount(candidate) >= cellCount(current)) break;
+        const retargeted = retargetSelectorPreloadsAfterMachineDeletion(current, candidate, currentPreloads);
+        if (retargeted === void 0) break;
+        current = retargeted.items;
+        currentPreloads = retargeted.preloads;
+        emptyStackTailCallApplied += 1;
+        continue;
+      }
+      const existingSelectorRewrite = findExistingSelectorFlowRewrite(current, currentPreloads);
+      if (existingSelectorRewrite !== void 0) {
+        const candidate = applyExistingSelectorFlowRewrite(current, existingSelectorRewrite);
+        if (cellCount(candidate) >= cellCount(current)) break;
+        const retargeted = retargetSelectorPreloadsAfterMachineDeletion(current, candidate, currentPreloads);
+        if (retargeted === void 0) break;
+        current = retargeted.items;
+        currentPreloads = retargeted.preloads;
+        existingSelectorApplied += 1;
+        continue;
+      }
+      const branchRewrite = findBranchToStopTailSelectorRewrite(current, currentPreloads);
+      if (branchRewrite !== void 0) {
+        const candidate = applyBranchToStopTailSelectorRewrite(current, branchRewrite);
+        if (cellCount(candidate) >= cellCount(current)) break;
+        const retargeted = retargetSelectorPreloadsAfterMachineDeletion(current, candidate, currentPreloads);
+        if (retargeted === void 0) break;
+        current = retargeted.items;
+        currentPreloads = retargeted.preloads;
+        stopTailApplied += 1;
+        continue;
+      }
+      const rewrite = findStopTailReuseRewrite(current, currentPreloads);
+      if (rewrite !== void 0) {
+        const candidate = applyStopTailReuseRewrite(current, rewrite);
+        if (cellCount(candidate) >= cellCount(current)) break;
+        const retargeted = retargetSelectorPreloadsAfterMachineDeletion(current, candidate, currentPreloads);
+        if (retargeted === void 0) break;
+        current = retargeted.items;
+        currentPreloads = retargeted.preloads;
+        stopTailApplied += 1;
+        continue;
+      }
+      break;
+    }
+    const applied = stopTailApplied + existingSelectorApplied + emptyStackTailCallApplied;
+    if (applied === 0) {
+      return { items: [...items], preloads: [...preloads], optimizations: [], applied: 0 };
+    }
+    const optimizations = [];
+    if (emptyStackTailCallApplied > 0) {
+      optimizations.push({
+        name: "post-layout-empty-stack-tail-call",
+        detail: `Replaced ${emptyStackTailCallApplied} terminal main-loop call${emptyStackTailCallApplied === 1 ? "" : "s"} with direct jump(s) whose final \u0412/\u041E returns through the empty stack to the loop head.`
+      });
+    }
+    if (stopTailApplied > 0) {
+      optimizations.push({
+        name: "post-layout-stop-tail-reuse",
+        detail: `Replaced ${stopTailApplied} repeated stop tail${stopTailApplied === 1 ? "" : "s"} with proven preloaded indirect jumps to an existing stop tail.`
+      });
+    }
+    if (existingSelectorApplied > 0) {
+      optimizations.push({
+        name: "post-layout-existing-selector-flow",
+        detail: `Replaced ${existingSelectorApplied} direct branch/call${existingSelectorApplied === 1 ? "" : "s"} with already-proven preloaded selector flow after retargeting shifted selectors.`
+      });
+    }
+    return {
+      items: current,
+      preloads: currentPreloads,
+      optimizations,
+      applied
+    };
   }
 
   // src/core/program-patch.ts
@@ -24972,11 +28725,13 @@ var MKProEmulatorBundle = (() => {
     showSequenceHelpers = /* @__PURE__ */ new Map();
     expressionHelpers = /* @__PURE__ */ new Map();
     randomCellHelpers = /* @__PURE__ */ new Map();
+    packedScoreStackHelper;
     nearAnyHelpers = /* @__PURE__ */ new Map();
     lineCountHelpers = /* @__PURE__ */ new Map();
     spatialBitMaskHelpers = /* @__PURE__ */ new Map();
     spatialLineProgressionHelpers = /* @__PURE__ */ new Map();
     spatialSumLoopHelpers = /* @__PURE__ */ new Map();
+    segmentedBitplaneHitHelpers = /* @__PURE__ */ new Map();
     terminalTailHelpers = [];
     // True while the body of an expression / random-coordinate helper is being emitted,
     // so the lowering does not recursively route that same expression back
@@ -26320,6 +30075,9 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
+    if (ctx.loweringOptions.indirectUnderflowDecrement === true && compileIndirectPredecrementUnderflowBranch(ctx, decrement, branch)) {
+      return true;
+    }
     const okLabel = ctx.freshLabel("decrement_ok");
     ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
     ctx.emitNumberOrPreload("1");
@@ -26336,6 +30094,27 @@ var MKProEmulatorBundle = (() => {
       detail: `Fused ${decrement.target} decrement and negative branch at lines ${decrement.line}/${branch.line}.`
     });
     return true;
+  }
+  function compileIndirectPredecrementUnderflowBranch(ctx, decrement, branch) {
+    const register = indirectPredecrementUnderflowRegister(ctx, decrement.target);
+    if (register === void 0) return false;
+    const okLabel = ctx.freshLabel("decrement_ok");
+    ctx.emitOp(208 + registerIndex(register), `\u041A \u041F->X ${register}`, `predecrement ${decrement.target}`, decrement.line);
+    ctx.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+    ctx.emitJump(92, "F x<0", okLabel, `decrement underflow ${decrement.target}`, branch.line);
+    ctx.compileStatements(branch.thenBody);
+    ctx.emitLabel(okLabel);
+    ctx.markCurrentX(decrement.target);
+    ctx.optimizations.push({
+      name: "indirect-underflow-decrement",
+      detail: `Used ${getOpcode(208 + registerIndex(register)).name}'s pre-decrement side effect for ${decrement.target} before the underflow branch at lines ${decrement.line}/${branch.line}.`
+    });
+    return true;
+  }
+  function indirectPredecrementUnderflowRegister(ctx, target) {
+    const register = ctx.allocation.registers[target];
+    if (register === void 0 || !isPredecrementIndirectRegister(register)) return void 0;
+    return register;
   }
   function statementsAreDomainErrorTrap(ctx, statements, seen = /* @__PURE__ */ new Set()) {
     if (statements.length !== 1) return false;
@@ -26359,7 +30138,9 @@ var MKProEmulatorBundle = (() => {
     ctx.currentXKnownZero = false;
     ctx.scaledCoordVariables.clear();
   }
-  function planDomainErrorGuard(condition) {
+  function planDomainErrorGuard(condition, ast) {
+    const arcPlan = ast === void 0 ? void 0 : planArcDomainErrorGuard(condition, ast);
+    if (arcPlan !== void 0) return arcPlan;
     const SQRT_OPCODE = 33;
     const SQRT_MNEMONIC = "F sqrt";
     const LG_OPCODE = 23;
@@ -26410,10 +30191,75 @@ var MKProEmulatorBundle = (() => {
     if (isZeroExpression(a)) return symmetric ? { first: b, trapOpcode, trapMnemonic } : void 0;
     return { first: a, second: b, trapOpcode, trapMnemonic };
   }
+  function planArcDomainErrorGuard(condition, ast) {
+    const ASIN_OPCODE = 25;
+    const ASIN_MNEMONIC = "F sin^-1";
+    const upper = arcUpperDomainExpression(condition, ast);
+    if (upper !== void 0) return { first: upper, trapOpcode: ASIN_OPCODE, trapMnemonic: ASIN_MNEMONIC };
+    const lower = arcLowerDomainExpression(condition, ast);
+    if (lower !== void 0) return { first: lower, trapOpcode: ASIN_OPCODE, trapMnemonic: ASIN_MNEMONIC };
+    return void 0;
+  }
+  function arcUpperDomainExpression(condition, ast) {
+    const left = numericLiteralValue2(condition.left);
+    const right = numericLiteralValue2(condition.right);
+    switch (condition.op) {
+      case ">":
+        if (right === 1 && rangeCannotTrapBelowMinusOne(condition.left, ast)) return condition.left;
+        return void 0;
+      case "<":
+        if (left === 1 && rangeCannotTrapBelowMinusOne(condition.right, ast)) return condition.right;
+        return void 0;
+      case ">=":
+        if (right === 2 && isKnownIntegerValuedExpression(condition.left, ast) && rangeCannotTrapBelowMinusOne(condition.left, ast)) {
+          return condition.left;
+        }
+        return void 0;
+      case "<=":
+        if (left === 2 && isKnownIntegerValuedExpression(condition.right, ast) && rangeCannotTrapBelowMinusOne(condition.right, ast)) {
+          return condition.right;
+        }
+        return void 0;
+      default:
+        return void 0;
+    }
+  }
+  function arcLowerDomainExpression(condition, ast) {
+    const left = numericLiteralValue2(condition.left);
+    const right = numericLiteralValue2(condition.right);
+    switch (condition.op) {
+      case "<":
+        if (right === -1 && rangeCannotTrapAboveOne(condition.left, ast)) return condition.left;
+        return void 0;
+      case ">":
+        if (left === -1 && rangeCannotTrapAboveOne(condition.right, ast)) return condition.right;
+        return void 0;
+      case "<=":
+        if (right === -2 && isKnownIntegerValuedExpression(condition.left, ast) && rangeCannotTrapAboveOne(condition.left, ast)) {
+          return condition.left;
+        }
+        return void 0;
+      case ">=":
+        if (left === -2 && isKnownIntegerValuedExpression(condition.right, ast) && rangeCannotTrapAboveOne(condition.right, ast)) {
+          return condition.right;
+        }
+        return void 0;
+      default:
+        return void 0;
+    }
+  }
+  function rangeCannotTrapBelowMinusOne(expr, ast) {
+    const range3 = numericRangeForExpression(expr, ast);
+    return range3?.min !== void 0 && range3.min >= -1;
+  }
+  function rangeCannotTrapAboveOne(expr, ast) {
+    const range3 = numericRangeForExpression(expr, ast);
+    return range3?.max !== void 0 && range3.max <= 1;
+  }
   function compileDomainErrorGuard(ctx, statement, line) {
     if (ctx.loweringOptions.domainErrorGuards !== true) return false;
     if (!statementsAreDomainErrorTrap(ctx, statement.thenBody)) return false;
-    const plan = planDomainErrorGuard(statement.condition);
+    const plan = planDomainErrorGuard(statement.condition, ctx.ast);
     if (plan === void 0) return false;
     const emitOperand = (expr) => {
       if (expr.kind === "identifier" && ctx.xHolds(expr.name)) return;
@@ -26436,7 +30282,7 @@ var MKProEmulatorBundle = (() => {
   }
   function compileAssignThenDomainTrap(ctx, assign, branch) {
     if (!statementsAreDomainErrorTrap(ctx, branch.thenBody)) return false;
-    const plan = planDomainErrorGuard(branch.condition);
+    const plan = planDomainErrorGuard(branch.condition, ctx.ast);
     if (plan === void 0 || plan.second !== void 0) return false;
     if (plan.first.kind !== "identifier" || plan.first.name !== assign.target) return false;
     if (ctx.allocation.registers[assign.target] === void 0) return false;
@@ -26448,7 +30294,7 @@ var MKProEmulatorBundle = (() => {
     if (branch.elseBody !== void 0) ctx.compileStatements(branch.elseBody);
     ctx.optimizations.push({
       name: "assign-zero-domain-guard",
-      detail: `Fused ${assign.target} store and "${branch.condition.op} 0" terminal-error branch through ${plan.trapMnemonic}.`
+      detail: `Fused ${assign.target} store and terminal-error branch through ${plan.trapMnemonic}.`
     });
     return true;
   }
@@ -26459,6 +30305,7 @@ var MKProEmulatorBundle = (() => {
     if (compileNestedGuardSharedFailure(ctx, statement, line)) return;
     if (compileResidualGuardedUpdate(ctx, statement, line)) return;
     if (compileDirectTerminalIfBranch(ctx, statement, line)) return;
+    if (compileSegmentedBitplaneHitUpdate(ctx, statement, line)) return;
     if (compileMembershipClearReuse(ctx, statement, line)) return;
     if (compileMembershipSetReuse(ctx, statement, line)) return;
     if (compileLocalTerminalElseTail(ctx, statement, line)) return;
@@ -26472,18 +30319,19 @@ var MKProEmulatorBundle = (() => {
     const fallthroughIdentifier = directFallthroughIdentifier ?? ctx.nearAnyFallthroughCandidate(selected.condition, selected.thenBody);
     const falseBranchIdentifier = selected.elseBody === void 0 ? void 0 : ctx.falseBranchCurrentXCandidate(selected.condition, selected.elseBody);
     const falseBranchKnownZero = selected.elseBody === void 0 ? false : inequalityFalseBranchLeavesZero(ctx, selected.condition);
+    const trueFallthroughKnownZero = equalityTrueFallthroughLeavesZero(selected.condition) || equalityTrueFallthroughCanFeedZeroAccumulator(ctx, selected.condition) && statementCanEnterPackedLineFamilyScoreZeroEntry(ctx, selected.thenBody[0]);
     compileCondition(ctx, selected.condition, falseLabel, line);
     if (fallthroughIdentifier !== void 0) {
       ctx.currentXVariable = fallthroughIdentifier;
       ctx.currentXAliases = /* @__PURE__ */ new Set([fallthroughIdentifier]);
-      ctx.currentXKnownZero = equalityTrueFallthroughLeavesZero(selected.condition);
+      ctx.currentXKnownZero = trueFallthroughKnownZero;
       if (directFallthroughIdentifier !== void 0) {
         ctx.optimizations.push({
           name: "x-preserving-fallthrough-branch",
           detail: `Preserved ${directFallthroughIdentifier} in X across the true branch of the zero-test at line ${line}.`
         });
       }
-    } else if (equalityTrueFallthroughLeavesZero(selected.condition)) {
+    } else if (trueFallthroughKnownZero) {
       ctx.currentXKnownZero = true;
       ctx.optimizations.push({
         name: "equality-zero-fallthrough",
@@ -26524,6 +30372,57 @@ var MKProEmulatorBundle = (() => {
     } else {
       ctx.emitLabel(falseLabel);
     }
+  }
+  function compileSegmentedBitplaneHitUpdate(ctx, statement, line) {
+    const matched = matchSegmentedBitplaneHitUpdate(ctx, statement);
+    if (matched === void 0) return false;
+    const falseLabel = ctx.freshLabel("if_false");
+    const thenLabel = ctx.freshLabel("segmented_bitplane_then");
+    const thenTerminates = ctx.statementsTerminate(matched.tail);
+    const endLabel = statement.elseBody !== void 0 && !thenTerminates ? ctx.freshLabel("if_end") : void 0;
+    if (!emitSegmentedBitplaneHitUpdateDispatch(
+      ctx,
+      matched.collection,
+      matched.item,
+      matched.update,
+      falseLabel,
+      thenLabel,
+      line
+    )) {
+      return false;
+    }
+    ctx.emitLabel(thenLabel);
+    ctx.compileStatements(matched.tail);
+    if (statement.elseBody !== void 0) {
+      if (endLabel !== void 0) ctx.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
+      ctx.emitLabel(falseLabel);
+      ctx.currentXKnownZero = true;
+      ctx.compileStatements(statement.elseBody);
+      if (endLabel !== void 0) ctx.emitLabel(endLabel);
+    } else {
+      ctx.emitLabel(falseLabel);
+    }
+    return true;
+  }
+  function matchSegmentedBitplaneHitUpdate(ctx, statement) {
+    if (statement.condition.op !== "!=" || !isZeroExpression(statement.condition.right)) return void 0;
+    const test = statement.condition.left;
+    if (test.kind !== "call" || test.callee.toLowerCase() !== "__seg_bit_has" || test.args.length !== 2) return void 0;
+    const [collection, item] = test.args;
+    if (collection?.kind !== "identifier" || item === void 0) return void 0;
+    const first = statement.thenBody[0];
+    const update = first?.kind === "segmented_bitplane_update" ? first : first?.kind === "call" ? ctx.ast.procs.find((candidate) => candidate.name === first.block)?.body[0] : void 0;
+    if (update === void 0) return void 0;
+    if (update.kind !== "segmented_bitplane_update") return void 0;
+    if (update.collection !== collection.name || !expressionEquals(update.item, item)) return void 0;
+    const proc = first?.kind === "call" ? ctx.ast.procs.find((candidate) => candidate.name === first.block) : void 0;
+    const procTail = first?.kind === "call" ? proc?.body.slice(1) ?? [] : void 0;
+    return {
+      collection: collection.name,
+      item,
+      update,
+      tail: procTail === void 0 ? statement.thenBody.slice(1) : [...procTail, ...statement.thenBody.slice(1)]
+    };
   }
   function branchResidualExpression(ctx, condition) {
     const compiled = selectCheaperEquivalentCondition(
@@ -26592,7 +30491,11 @@ var MKProEmulatorBundle = (() => {
     if (condition.op !== "==") return void 0;
     const direct = identifierEqualsNumericCondition(condition.left, condition.right);
     if (direct !== void 0) return direct;
-    return identifierEqualsNumericCondition(condition.right, condition.left);
+    const reverse = identifierEqualsNumericCondition(condition.right, condition.left);
+    if (reverse !== void 0) return reverse;
+    const modulo = fracDivisionEqualsZeroCondition(condition.left, condition.right);
+    if (modulo !== void 0) return modulo;
+    return fracDivisionEqualsZeroCondition(condition.right, condition.left);
   }
   function identifierEqualsNumericCondition(identifierSide, numericSide) {
     const value = numericLiteralValue2(numericSide);
@@ -26604,6 +30507,19 @@ var MKProEmulatorBundle = (() => {
       return value === 0 ? { name: arg.name, values: [0] } : { name: arg.name, values: [value, -value] };
     }
     return void 0;
+  }
+  function fracDivisionEqualsZeroCondition(exprSide, zeroSide) {
+    if (!isZeroExpression(zeroSide)) return void 0;
+    if (exprSide.kind !== "call" || exprSide.callee.toLowerCase() !== "frac" || exprSide.args.length !== 1) {
+      return void 0;
+    }
+    const divided = exprSide.args[0];
+    if (divided.kind !== "binary" || divided.op !== "/") return void 0;
+    if (divided.left.kind !== "identifier") return void 0;
+    const divisor = numericLiteralValue2(divided.right);
+    if (divisor === void 0 || !Number.isInteger(divisor) || divisor === 0) return void 0;
+    const abs = Math.abs(divisor);
+    return { name: divided.left.name, values: [0, abs, -abs] };
   }
   function displayIsSingleResidualExpression(ctx, displayName, residual) {
     const display = ctx.ast.displays.find((candidate) => candidate.name === displayName);
@@ -26639,6 +30555,22 @@ var MKProEmulatorBundle = (() => {
   }
   function simpleEqualityOperand(expr) {
     return expr.kind === "identifier" || expr.kind === "number";
+  }
+  function equalityTrueFallthroughCanFeedZeroAccumulator(ctx, condition) {
+    const compiled = selectCheaperEquivalentCondition(
+      condition,
+      ctx.ast,
+      new Set(Object.keys(ctx.allocation.constants))
+    ).condition;
+    if (matchSmallSetCondition(compiled) !== void 0) return false;
+    if (matchNearAnyHelperCondition(compiled) !== void 0) return false;
+    const normalized = normalizeZeroComparison(compiled);
+    if (normalized?.op !== "==" || !canTestAgainstZeroDirectly(normalized.op)) return false;
+    if (normalized.expr.kind === "call") {
+      const callee = normalized.expr.callee.toLowerCase();
+      if (callee === "coord_list_has" || callee === "__mkpro_negative_zero_ge") return false;
+    }
+    return expressionIsDeterministic(normalized.expr);
   }
   function compileResidualEqualityElseIf(ctx, statement, line) {
     if (statement.elseBody?.length !== 1) return false;
@@ -26822,6 +30754,7 @@ var MKProEmulatorBundle = (() => {
     if (membership === void 0) return false;
     if (!isBitClearAssignment(clear, membership)) return false;
     if (clear.kind === "indexed_assign" && membership.mode !== "mask") return false;
+    if (compileMembershipClearStoreDeltaBranch(ctx, statement, clear, tail, membership, line)) return true;
     const preparedSelector = prepareMembershipClearSelector(ctx, clear, membership, line);
     if (clear.kind === "indexed_assign" && numericIndexValue(clear.target.index) === void 0 && preparedSelector === void 0) {
       return false;
@@ -26852,6 +30785,48 @@ var MKProEmulatorBundle = (() => {
       detail: `Reused the successful membership mask when clearing ${membershipSetTargetText(clear)} at line ${clear.line}.`
     });
     return true;
+  }
+  function compileMembershipClearStoreDeltaBranch(ctx, statement, clear, tail, membership, line) {
+    if (membership.mode !== "mask" || clear.kind !== "assign") return false;
+    if (membership.collection.kind !== "identifier" || clear.target !== membership.collection.name) return false;
+    if (!membershipMaskPreservesY(membership.mask)) return false;
+    const falseLabel = ctx.freshLabel("if_false");
+    const endLabel = ctx.freshLabel("if_end");
+    ctx.emitRecall(membership.collection.name, `membership clear source ${membership.collection.name}`, line);
+    emitYPreservingMembershipMask(ctx, membership.mask, line);
+    ctx.emitOp(58, "\u041A \u0418\u041D\u0412", "membership clear mask complement", line);
+    ctx.emitOp(55, "\u041A \u2227", "clear membership bit before test", line);
+    ctx.emitStore(clear.target, `set ${clear.target}`, clear.line);
+    ctx.emitOp(17, "-", "membership clear delta test", line);
+    ctx.emitJump(87, "F x\u22600", falseLabel, "false branch for !=", line);
+    ctx.compileStatements(tail);
+    if (statement.elseBody) {
+      ctx.emitJump(81, "\u0411\u041F", endLabel, "if end", line);
+      ctx.emitLabel(falseLabel);
+      ctx.currentXKnownZero = true;
+      ctx.compileStatements(statement.elseBody);
+      ctx.emitLabel(endLabel);
+    } else {
+      ctx.emitLabel(falseLabel);
+    }
+    ctx.optimizations.push({
+      name: "membership-clear-delta-branch",
+      detail: `Cleared ${clear.target} before branching and used the old value in Y to test membership at line ${line}.`
+    });
+    return true;
+  }
+  function membershipMaskPreservesY(mask) {
+    return mask.kind === "identifier" || mask.kind === "call" && mask.callee.toLowerCase() === "frac" && mask.args.length === 1 && mask.args[0]?.kind === "identifier";
+  }
+  function emitYPreservingMembershipMask(ctx, mask, line) {
+    if (mask.kind === "identifier") {
+      ctx.emitRecall(mask.name, `membership clear mask ${mask.name}`, line);
+      return;
+    }
+    if (mask.kind === "call" && mask.callee.toLowerCase() === "frac" && mask.args.length === 1 && mask.args[0]?.kind === "identifier") {
+      ctx.emitRecall(mask.args[0].name, `membership clear mask ${mask.args[0].name}`, line);
+      ctx.emitOp(53, "\u041A {x}", "membership clear mask frac", line);
+    }
   }
   function prepareMembershipClearSelector(ctx, clear, membership, line) {
     if (clear.kind !== "indexed_assign") return void 0;
@@ -27075,6 +31050,7 @@ var MKProEmulatorBundle = (() => {
   }
   function emitMembershipSetStore(ctx, set, preparedSelector) {
     if (set.kind === "assign") {
+      if (ctx.emitLoopCarriedPromptValue(set.target, set.line)) return;
       ctx.emitStore(set.target, `set ${set.target}`, set.line);
       return;
     }
@@ -27248,7 +31224,9 @@ var MKProEmulatorBundle = (() => {
     return true;
   }
   function compileDispatch(ctx, statement) {
-    const optimized = optimizeDispatchDefaultCases(statement);
+    const optimized = optimizeDispatchDefaultCases(statement, {
+      preserveCaseOrder: ctx.loweringOptions.preserveDispatchCaseOrder === true
+    });
     if (optimized.removed > 0) {
       ctx.optimizations.push({
         name: "dispatch-default-merge",
@@ -27542,7 +31520,7 @@ var MKProEmulatorBundle = (() => {
     if (compileSmallSetCondition(ctx, compiledCondition, falseLabel, line, preloadedConstants)) return;
     if (compileRemainderZeroCondition(ctx, compiledCondition, falseLabel, line)) return;
     if (isZeroExpression(compiledCondition.right) && canTestAgainstZeroDirectly(compiledCondition.op)) {
-      const bitHasLowering = compileBitHasConditionWithBitMaskHelper(ctx, compiledCondition.left, line) ?? compileBitHasConditionWithSpatialHelper(ctx, compiledCondition.left, line);
+      const bitHasLowering = compileBitHasConditionWithBitMaskHelper(ctx, compiledCondition.left, line) ?? compileBitHasConditionWithSpatialHelper(ctx, compiledCondition.left, line) ?? compileSegmentedBitplaneConditionWithHelper(ctx, compiledCondition.left, line);
       if (bitHasLowering === void 0) {
         if (!(compiledCondition.left.kind === "identifier" && ctx.xHolds(compiledCondition.left.name))) {
           compileExpression(ctx, compiledCondition.left);
@@ -27558,6 +31536,7 @@ var MKProEmulatorBundle = (() => {
     }
     if (compileEqualityWithCurrentX(ctx, compiledCondition, falseLabel, line)) return;
     if (compileCurrentXNegatedZeroCondition(ctx, compiledCondition, falseLabel, line, condition)) return;
+    if (compileNegatedZeroCondition(ctx, compiledCondition, falseLabel, line, condition)) return;
     if (compiledCondition.op === ">" || compiledCondition.op === "<=") {
       compileExpression(ctx, compiledCondition.right);
       compileExpression(ctx, compiledCondition.left);
@@ -27592,6 +31571,32 @@ var MKProEmulatorBundle = (() => {
     ctx.optimizations.push({
       name: "current-x-negated-zero-test",
       detail: `Reused ${name} already in X and negated it for ${conditionToText(condition)} at line ${line}.`
+    });
+    return true;
+  }
+  function compileNegatedZeroCondition(ctx, condition, falseLabel, line, originalCondition) {
+    let directOp;
+    let name;
+    if (condition.left.kind === "identifier" && isZeroExpression(condition.right)) {
+      if (condition.op === "<=") directOp = ">=";
+      else if (condition.op === ">") directOp = "<";
+      name = condition.left.name;
+    } else if (isZeroExpression(condition.left) && condition.right.kind === "identifier") {
+      if (condition.op === ">=") directOp = ">=";
+      else if (condition.op === "<") directOp = "<";
+      name = condition.right.name;
+    }
+    if (directOp === void 0 || name === void 0) return false;
+    compileExpression(ctx, { kind: "identifier", name });
+    ctx.emitOp(11, "/-/", `negate ${name} for zero test`, line);
+    ctx.currentXVariable = void 0;
+    ctx.currentXAliases.clear();
+    ctx.currentXKnownZero = false;
+    const opcode = directTestOpcode(directOp);
+    ctx.emitJump(opcode, getOpcode(opcode).name, falseLabel, `false branch for ${originalCondition.op}`, line);
+    ctx.optimizations.push({
+      name: "negated-zero-test",
+      detail: `Negated ${name} for ${conditionToText(condition)} instead of materializing zero at line ${line}.`
     });
     return true;
   }
@@ -27642,6 +31647,19 @@ var MKProEmulatorBundle = (() => {
     return {
       name: "spatial-hit-condition-helper",
       detail: `Tested bit_has() through the shared spatial hit helper at line ${line}.`
+    };
+  }
+  function compileSegmentedBitplaneConditionWithHelper(ctx, expr, line) {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "__seg_bit_has" || expr.args.length !== 2) return void 0;
+    const [collection, index] = expr.args;
+    if (collection?.kind !== "identifier" || index === void 0) return void 0;
+    if (!(index.kind === "identifier" && ctx.xHolds(index.name)) && !ctx.xHoldsExpression(index)) {
+      compileExpression(ctx, index);
+    }
+    if (!emitSegmentedBitplaneHitFromCurrentX(ctx, collection.name, line)) return void 0;
+    return {
+      name: "segmented-bitplane-condition-helper",
+      detail: `Tested ${collection.name} through the shared segmented bitplane helper at line ${line}.`
     };
   }
   function compileNearAnyHelperCondition(ctx, condition, falseLabel, line, _preloadedConstants) {
@@ -27726,15 +31744,27 @@ var MKProEmulatorBundle = (() => {
       for (const action of setupNumericPreloadActions(numericSegment)) {
         emitSetupNumericPreloadAction(ctx, numericSegment, action);
         const targets = setupNumericActionTargetIndexes(action);
+        const storedRegisters = [];
+        const seenRegisters = /* @__PURE__ */ new Set();
         for (const targetIndex of targets) {
           const preload = numericSegment[targetIndex];
+          if (seenRegisters.has(preload.register)) continue;
+          seenRegisters.add(preload.register);
+          storedRegisters.push(preload.register);
           ctx.emitOp(64 + registerIndex(preload.register), `X->\u041F ${preload.register}`, `setup R${preload.register}`, void 0, true);
         }
-        if (targets.length > 1) {
-          const registers = targets.map((targetIndex) => `R${numericSegment[targetIndex].register}`).join(", ");
+        if (storedRegisters.length > 1) {
+          const registers = storedRegisters.map((register) => `R${register}`).join(", ");
           ctx.optimizations.push({
             name: "duplicate-preload-store-reuse",
             detail: `Loaded setup constant ${normalizeConstantLiteral(numericSegment[action.targetIndex].value)} once and stored it into ${registers}.`
+          });
+        }
+        if (storedRegisters.length < targets.length) {
+          const register = numericSegment[action.targetIndex].register;
+          ctx.optimizations.push({
+            name: "duplicate-preload-register-elision",
+            detail: `Skipped ${targets.length - storedRegisters.length} duplicate setup store(s) to R${register} after the same constant was already stored there.`
           });
         }
       }
@@ -27773,6 +31803,7 @@ var MKProEmulatorBundle = (() => {
     for (const group of repeatedIndexedGroups) compileRepeatedIndexedSetupGroup(ctx, group);
     if (usesR0SetupPointer) restoreSetupPointerR0(ctx, preloads);
     const initializedCoordLists = /* @__PURE__ */ new Set();
+    const initializedSegmentedBitplanes = /* @__PURE__ */ new Set();
     for (const field of fields) {
       if (groupedFieldNames.has(field.name)) continue;
       if (field.initial === void 0) continue;
@@ -27782,6 +31813,16 @@ var MKProEmulatorBundle = (() => {
           const group = randomCoordListSetupFields(fields, coordList);
           compileRandomCoordListSetup(ctx, group, coordList);
           initializedCoordLists.add(coordList.listName);
+        }
+        continue;
+      }
+      const segmented = segmentedBitplaneRandomUniquePlacement(field.name, field.initial);
+      if (segmented !== void 0) {
+        const key = `${segmented.collection}:${segmented.countSource}`;
+        if (!initializedSegmentedBitplanes.has(key)) {
+          const group = segmentedBitplaneRandomUniqueSetupFields(fields, segmented);
+          compileSegmentedBitplaneRandomUniqueSetup(ctx, group, segmented);
+          initializedSegmentedBitplanes.add(key);
         }
         continue;
       }
@@ -27797,7 +31838,7 @@ var MKProEmulatorBundle = (() => {
         ctx.emitOp(64 + registerIndex(register), `X->\u041F ${register}`, "setup formatted report mask", void 0, true);
       }
     }
-    if (fields.some((field) => field.initial !== void 0 && randomCoordListItemPlacement(field.name, field.initial) !== void 0)) {
+    if (initializedSegmentedBitplanes.size === 0 && fields.some((field) => field.initial !== void 0 && randomCoordListItemPlacement(field.name, field.initial) !== void 0)) {
       ctx.emitNumber("7");
     }
     ctx.emitOp(80, "\u0421/\u041F", "setup complete");
@@ -27812,7 +31853,7 @@ var MKProEmulatorBundle = (() => {
         index += 1;
         continue;
       }
-      if (coordListItemInfo(first.name) !== void 0 || randomCoordListItemPlacement(first.name, first.initial) !== void 0) {
+      if (coordListItemInfo(first.name) !== void 0 || randomCoordListItemPlacement(first.name, first.initial) !== void 0 || segmentedBitplaneRandomUniquePlacement(first.name, first.initial) !== void 0) {
         index += 1;
         continue;
       }
@@ -27821,27 +31862,28 @@ var MKProEmulatorBundle = (() => {
         index += 1;
         continue;
       }
-      const run34 = [first];
+      const run35 = [first];
       let previousRegisterIndex = registerIndex(firstRegister);
       let cursor = index + 1;
       while (cursor < fields.length) {
         const candidate = fields[cursor];
         if (candidate.initial === void 0 || candidate.initialStack !== void 0) break;
         if (coordListItemInfo(candidate.name) !== void 0) break;
+        if (segmentedBitplaneRandomUniquePlacement(candidate.name, candidate.initial) !== void 0) break;
         if (!expressionEquals(candidate.initial, first.initial)) break;
         const candidateRegister = ctx.allocation.registers[candidate.name];
         if (candidateRegister === void 0) break;
         const candidateRegisterIndex = registerIndex(candidateRegister);
         if (candidateRegisterIndex !== previousRegisterIndex + 1) break;
-        run34.push(candidate);
+        run35.push(candidate);
         previousRegisterIndex = candidateRegisterIndex;
         cursor += 1;
       }
       const minRegisterIndex = registerIndex(firstRegister);
       const maxRegisterIndex = previousRegisterIndex;
-      if (run34.length >= 3 && minRegisterIndex >= 1 && maxRegisterIndex <= 14) {
+      if (run35.length >= 3 && minRegisterIndex >= 1 && maxRegisterIndex <= 14) {
         groups.push({
-          fields: run34,
+          fields: run35,
           initial: first.initial,
           minRegisterIndex,
           maxRegisterIndex
@@ -28123,10 +32165,25 @@ var MKProEmulatorBundle = (() => {
   }
   function compileProcedures(ctx) {
     const order = procEmissionOrder(ctx);
+    const packedLineFamilyConsumedUpdateProcs = ctx.loweringOptions.packedLineFamilyUpdateCheckTail === true || ctx.loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true || ctx.loweringOptions.packedLineFamilyBorrowedMutatingSelectorUpdateCheckTail === true ? new Set(
+      order.map((proc) => {
+        if (ctx.loweringOptions.packedLineFamilyBorrowedMutatingSelectorUpdateCheckTail === true) {
+          return packedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc(ctx, proc)?.match.updateProc;
+        }
+        if (ctx.loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true) {
+          return packedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx, proc)?.updateProc;
+        }
+        return packedLineFamilyUpdateCheckMarkerProc(ctx, proc)?.updateProc;
+      }).filter((name) => name !== void 0)
+    ) : /* @__PURE__ */ new Set();
     for (const proc of order) {
       if (ctx.inlineProcNames.has(proc.name)) continue;
+      if (packedLineFamilyConsumedUpdateProcs.has(proc.name)) continue;
+      const skipSingleUseXParamStackStopRisk = matchXParamStackStopRiskRead(ctx.ast, proc) !== void 0 && countExpressionCalls(ctx.ast, proc.name) === 1;
+      if (skipSingleUseXParamStackStopRisk) continue;
       ctx.emitProcedureLabel(proc.name);
       ctx.compileWithinProcedure(proc, () => {
+        let emittedExplicitReturn = false;
         const xParam = ctx.xParamProcs.get(proc.name);
         const xParamValue = ctx.loweringOptions.xParamValueFunctions === true ? matchXParamValueFunction(proc) : void 0;
         const xParamDecay = matchXParamReturnDecay(proc);
@@ -28151,17 +32208,903 @@ var MKProEmulatorBundle = (() => {
             name: "show-read-stack-stop-risk-lowering",
             detail: `Reused displayed ${xParamStackStopRisk.param} as the parked Y value for ${proc.name}.`
           });
+        } else if (ctx.loweringOptions.packedLineFamilyBorrowedMutatingSelectorUpdateCheckTail === true && compilePackedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc(ctx, proc)) {
+          emittedExplicitReturn = true;
+        } else if (ctx.loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true && compilePackedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx, proc)) {
+          emittedExplicitReturn = true;
+        } else if (ctx.loweringOptions.packedLineFamilyUpdateCheckTail === true && compilePackedLineFamilyUpdateCheckMarkerProc(ctx, proc)) {
+          emittedExplicitReturn = true;
+        } else if (compileXParamIndexedFractionalReportTailProc(ctx, proc)) {
+          emittedExplicitReturn = true;
+        } else if (compilePackedLineFamilyScoreProc(ctx, proc)) {
+          emittedExplicitReturn = true;
         } else if (xParam !== void 0) {
           compileXParamProcBody(ctx, proc, xParam);
         } else {
           ctx.compileStatements(proc.body);
         }
-        if (!ctx.statementsTerminate(proc.body)) {
+        if (!ctx.statementsTerminate(proc.body) && !emittedExplicitReturn) {
           ctx.emitOp(82, "\u0412/\u041E", "implicit return from proc");
         }
       });
       ctx.emitProcedureEndLabel(proc.name);
     }
+  }
+  function compilePackedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc(ctx, proc) {
+    const borrowed = packedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc(ctx, proc);
+    if (borrowed === void 0) return false;
+    const { match } = borrowed;
+    const firstSlot = match.steps[0]?.slot;
+    if (firstSlot === void 0) return false;
+    ctx.emitStore(match.deltaName, `set ${match.deltaName} from X parameter`, match.first.line);
+    ctx.emitNumberOrPreload(String(firstSlot + 1));
+    emitBorrowedSelectorStore(ctx, borrowed, `packed-line borrowed mutating selector start ${firstSlot + 1}`, match.first.line);
+    const tailLabel = ctx.freshLabel("packed_line_family_borrowed_mutating_update_check_tail");
+    for (let index = 0; index < match.steps.length; index += 1) {
+      const step = match.steps[index];
+      compilePackedLineFamilyMutatingSelectorUpdateCheckStep(ctx, match, step);
+      if (index === match.steps.length - 1) {
+        ctx.emitLabel(tailLabel);
+      } else {
+        ctx.emitJump(83, "\u041F\u041F", tailLabel, "packed-line borrowed mutating shared update/check tail", step.sourceLine);
+        ctx.currentYVariable = void 0;
+      }
+    }
+    emitPackedLineFamilyMutatingSelectorUpdateCheckTail(ctx, {
+      ...match,
+      selectorRegister: borrowed.selectorRegister
+    });
+    ctx.optimizations.push({
+      name: "packed-line-family-borrowed-mutating-selector-update-check-tail",
+      detail: `Borrowed R${borrowed.selectorRegister}${borrowed.borrowedOwner === void 0 ? "" : ` (${borrowed.borrowedOwner})`} as a descending mutating selector for ${proc.name} slots ${match.steps.map((step) => step.slot).join(",")}.`
+    });
+    return true;
+  }
+  function packedLineFamilyBorrowedMutatingSelectorUpdateCheckMarkerProc(ctx, proc) {
+    const match = packedLineFamilyUpdateCheckMarkerProc(ctx, proc);
+    if (match === void 0) return void 0;
+    if (!packedLineFamilyUpdateCheckStepsDescendByOne(match.steps)) return void 0;
+    if (!match.steps.every((step) => expressionPreservesPreviousXAsYForPackedLine(step.lineExpr))) return void 0;
+    if (!match.steps.every((step) => step.normalizer === void 0 || xParamProcPreservesCallerY(ctx, step.normalizer))) {
+      return void 0;
+    }
+    const borrowed = borrowedPredecrementSelectorRegister(ctx, proc, match);
+    if (borrowed === void 0) return void 0;
+    return { match, ...borrowed };
+  }
+  function emitBorrowedSelectorStore(ctx, borrowed, comment, line) {
+    if (borrowed.borrowedOwner !== void 0) {
+      ctx.emitStore(borrowed.borrowedOwner, comment, line);
+      return;
+    }
+    ctx.emitOp(64 + registerIndex(borrowed.selectorRegister), `X->\u041F ${borrowed.selectorRegister}`, comment, line);
+    ctx.currentXVariable = void 0;
+    ctx.currentXAliases.clear();
+  }
+  function compilePackedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx, proc) {
+    const match = packedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx, proc);
+    if (match === void 0) return false;
+    const firstSlot = match.steps[0]?.slot;
+    if (firstSlot === void 0) return false;
+    ctx.emitStore(match.deltaName, `set ${match.deltaName} from X parameter`, match.first.line);
+    ctx.emitNumberOrPreload(String(firstSlot + 1));
+    ctx.emitStore(match.selector, `packed-line mutating selector start ${firstSlot + 1}`, match.first.line);
+    const tailLabel = ctx.freshLabel("packed_line_family_mutating_update_check_tail");
+    for (let index = 0; index < match.steps.length; index += 1) {
+      const step = match.steps[index];
+      compilePackedLineFamilyMutatingSelectorUpdateCheckStep(ctx, match, step);
+      if (index === match.steps.length - 1) {
+        ctx.emitLabel(tailLabel);
+      } else {
+        ctx.emitJump(83, "\u041F\u041F", tailLabel, "packed-line mutating shared update/check tail", step.sourceLine);
+        ctx.currentYVariable = void 0;
+      }
+    }
+    emitPackedLineFamilyMutatingSelectorUpdateCheckTail(ctx, match);
+    ctx.optimizations.push({
+      name: "packed-line-family-mutating-selector-update-check-tail",
+      detail: `Lowered ${proc.name} and ${match.updateProc} as a descending R${match.selectorRegister} mutating-selector packed-line update/check tail for slots ${match.steps.map((step) => step.slot).join(",")}.`
+    });
+    return true;
+  }
+  function packedLineFamilyMutatingSelectorUpdateCheckMarkerProc(ctx, proc) {
+    const match = packedLineFamilyUpdateCheckMarkerProc(ctx, proc, { allowMutatingSelector: true });
+    if (match === void 0) return void 0;
+    if (!isPredecrementIndirectRegister(match.selectorRegister)) return void 0;
+    if (!packedLineFamilyUpdateCheckStepsDescendByOne(match.steps)) return void 0;
+    if (!match.steps.every((step) => expressionPreservesPreviousXAsYForPackedLine(step.lineExpr))) return void 0;
+    if (!match.steps.every((step) => step.normalizer === void 0 || xParamProcPreservesCallerY(ctx, step.normalizer))) {
+      return void 0;
+    }
+    return match;
+  }
+  function compilePackedLineFamilyUpdateCheckMarkerProc(ctx, proc) {
+    const match = packedLineFamilyUpdateCheckMarkerProc(ctx, proc);
+    if (match === void 0) return false;
+    ctx.emitStore(match.deltaName, `set ${match.deltaName} from X parameter`, match.first.line);
+    const tailLabel = ctx.freshLabel("packed_line_family_update_check_tail");
+    for (let index = 0; index < match.steps.length; index += 1) {
+      const step = match.steps[index];
+      compilePackedLineFamilyUpdateCheckStep(ctx, match, step);
+      if (index === match.steps.length - 1) {
+        ctx.emitLabel(tailLabel);
+      } else {
+        ctx.emitJump(83, "\u041F\u041F", tailLabel, "packed-line shared update/check tail", step.sourceLine);
+        ctx.currentYVariable = void 0;
+      }
+    }
+    emitPackedLineFamilyUpdateCheckTail(ctx, match);
+    ctx.optimizations.push({
+      name: "packed-line-family-update-check-tail",
+      detail: `Lowered ${proc.name} and ${match.updateProc} as a local shared packed-line update/check tail for slots ${match.steps.map((step) => step.slot).join(",")}.`
+    });
+    return true;
+  }
+  function compilePackedLineFamilyMutatingSelectorUpdateCheckStep(ctx, match, step) {
+    compileExpression(ctx, packedLineFamilyUpdateStepLineValue(match, step));
+    compileExpressionPreservingPreviousXAsY(ctx, step.lineExpr, step.sourceLine);
+    if (step.normalizer !== void 0) {
+      compileBlockCall(ctx, step.normalizer, step.sourceLine ?? match.update.line);
+    }
+  }
+  function compilePackedLineFamilyUpdateCheckStep(ctx, match, step) {
+    compileExpression(ctx, step.lineExpr);
+    if (step.normalizer !== void 0) {
+      compileBlockCall(ctx, step.normalizer, step.sourceLine ?? match.update.line);
+    }
+    ctx.markCurrentX(match.yName);
+    ctx.emitNumberOrPreload(String(step.slot));
+    ctx.currentYVariable = match.yName;
+  }
+  function emitPackedLineFamilyUpdateCheckTail(ctx, match) {
+    ctx.emitStore(match.selector, `set ${match.selector} from X parameter`, match.update.line);
+    ctx.emitOp(20, "X\u2194Y", "stack-carried packed digit index", match.update.line);
+    ctx.emitOp(21, "F 10\u02E3", "stack-carried packed digit pow10", match.update.line);
+    compileExpression(ctx, match.factor);
+    ctx.emitOp(18, "\xD7", "stack-carried packed digit delta", match.update.line);
+    ctx.emitOp(
+      208 + registerIndex(match.selectorRegister),
+      `\u041A \u041F->X ${match.selectorRegister}`,
+      "indexed packed digit update base",
+      match.update.line
+    );
+    ctx.emitOp(binaryOpcode(match.op), match.op, "indexed packed digit update", match.update.line);
+    ctx.emitPreparedIndexedStore(match.update.target, match.selectorRegister, match.update.line);
+    compileExpression(ctx, match.mask);
+    ctx.emitOp(55, "\u041A \u2227", "updated packed fractional report mask", match.branch.line);
+    ctx.emitOp(53, "\u041A {x}", "updated packed fractional report predicate", match.branch.line);
+    const haltLabel = ctx.freshLabel("packed_frac_report_x2_halt");
+    ctx.emitJump(94, "F x=0", haltLabel, "true branch for packed fractional report !=", match.branch.line);
+    ctx.emitOp(82, "\u0412/\u041E", "packed fractional report return", match.branch.line);
+    ctx.emitLabel(haltLabel);
+    ctx.emitOp(10, ".", "updated packed fractional report X2 restore", match.branch.line);
+    ctx.emitOp(80, "\u0421/\u041F", "halt", match.haltLine);
+    ctx.currentYVariable = void 0;
+  }
+  function emitPackedLineFamilyMutatingSelectorUpdateCheckTail(ctx, match) {
+    ctx.emitOp(21, "F 10\u02E3", "stack-carried packed digit pow10", match.update.line);
+    compileExpression(ctx, match.factor);
+    ctx.emitOp(18, "\xD7", "stack-carried packed digit delta", match.update.line);
+    ctx.emitOp(binaryOpcode(match.op), match.op, "mutating-selector packed digit update", match.update.line);
+    ctx.emitOp(
+      176 + registerIndex(match.selectorRegister),
+      `\u041A X->\u041F ${match.selectorRegister}`,
+      `predecrement indexed set ${bankMemberKey(match.update.target.base, match.update.target.field)}`,
+      match.update.line
+    );
+    compileExpression(ctx, match.mask);
+    ctx.emitOp(55, "\u041A \u2227", "updated packed fractional report mask", match.branch.line);
+    ctx.emitOp(53, "\u041A {x}", "updated packed fractional report predicate", match.branch.line);
+    const haltLabel = ctx.freshLabel("packed_frac_report_x2_halt");
+    ctx.emitJump(94, "F x=0", haltLabel, "true branch for packed fractional report !=", match.branch.line);
+    ctx.emitOp(82, "\u0412/\u041E", "packed fractional report return", match.branch.line);
+    ctx.emitLabel(haltLabel);
+    ctx.emitOp(10, ".", "updated packed fractional report X2 restore", match.branch.line);
+    ctx.emitOp(80, "\u0421/\u041F", "halt", match.haltLine);
+    ctx.currentYVariable = void 0;
+  }
+  function packedLineFamilyUpdateCheckMarkerProc(ctx, proc, options = {}) {
+    const first = proc.body[0];
+    if (first?.kind !== "assign" || first.expr.kind !== "identifier") return void 0;
+    const candidates = ctx.ast.procs.flatMap((candidate) => {
+      const update = xParamIndexedFractionalReportTailProc(ctx, candidate, {
+        allowMutatingSelector: options.allowMutatingSelector === true
+      });
+      if (update === void 0 || update.factor.kind !== "identifier") return [];
+      if (first.target !== update.factor.name) return [];
+      return [{ proc: candidate, update }];
+    });
+    for (const candidate of candidates) {
+      const steps = packedLineFamilyUpdateCheckMarkerSteps(ctx, proc.body.slice(1), candidate.proc.name, candidate.update);
+      if (steps === void 0) continue;
+      return {
+        updateProc: candidate.proc.name,
+        selector: candidate.update.selector,
+        selectorRegister: candidate.update.selectorRegister,
+        yName: candidate.update.yName,
+        deltaName: first.target,
+        update: candidate.update.update,
+        factor: candidate.update.factor,
+        op: candidate.update.op,
+        mask: candidate.update.mask,
+        branch: candidate.update.branch,
+        haltLine: candidate.update.haltLine,
+        first,
+        steps
+      };
+    }
+    return void 0;
+  }
+  function packedLineFamilyUpdateCheckStepsDescendByOne(steps) {
+    if (steps.length < 2) return false;
+    for (let index = 1; index < steps.length; index += 1) {
+      if (steps[index - 1].slot - steps[index].slot !== 1) return false;
+    }
+    return true;
+  }
+  function packedLineFamilyUpdateStepLineValue(match, step) {
+    return {
+      ...match.update.target,
+      index: numberExpression2(step.slot)
+    };
+  }
+  function xParamProcPreservesCallerY(ctx, procName) {
+    const lowering = ctx.xParamProcs.get(procName);
+    if (lowering === void 0) return false;
+    if (lowering.kind === "copy" || lowering.kind === "add") return true;
+    if (lowering.kind !== "expr") return false;
+    return expressionPreservesPreviousXAsYForPackedLine(lowering.first.expr);
+  }
+  function expressionPreservesPreviousXAsYForPackedLine(expr) {
+    if (isSimpleStackLoad(expr)) return true;
+    switch (expr.kind) {
+      case "unary":
+        return expr.op === "-" && expressionPreservesPreviousXAsYForPackedLine(expr.expr);
+      case "binary":
+        return (expr.op === "+" || expr.op === "-" || expr.op === "*" || expr.op === "/") && expressionPreservesPreviousXAsYForPackedLine(expr.left) && expressionPreservesPreviousXAsYForPackedLine(expr.right);
+      case "call":
+        return expr.args.length === 1 && X_TRANSFORM_UNARY_OPCODES[expr.callee.toLowerCase()] !== void 0 && expressionPreservesPreviousXAsYForPackedLine(expr.args[0]);
+      case "number":
+      case "identifier":
+      case "indexed":
+      case "string":
+        return false;
+    }
+  }
+  function compileExpressionPreservingPreviousXAsY(ctx, expr, line) {
+    if (isSimpleStackLoad(expr)) {
+      compileExpression(ctx, expr);
+      return;
+    }
+    switch (expr.kind) {
+      case "unary":
+        compileExpressionPreservingPreviousXAsY(ctx, expr.expr, line);
+        ctx.emitOp(11, "/-/", "stack-preserving unary minus", line);
+        return;
+      case "binary":
+        compileExpressionPreservingPreviousXAsY(ctx, expr.left, line);
+        compileExpressionPreservingPreviousXAsY(ctx, expr.right, line);
+        ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+        return;
+      case "call": {
+        compileExpressionPreservingPreviousXAsY(ctx, expr.args[0], line);
+        const opcode = X_TRANSFORM_UNARY_OPCODES[expr.callee.toLowerCase()];
+        if (opcode === void 0) {
+          compileExpression(ctx, expr);
+          return;
+        }
+        ctx.emitOp(opcode[0], opcode[1], `${expr.callee}()`, line);
+        return;
+      }
+      case "number":
+      case "identifier":
+      case "indexed":
+      case "string":
+        compileExpression(ctx, expr);
+        return;
+    }
+  }
+  function borrowedPredecrementSelectorRegister(ctx, proc, match) {
+    const ownerByRegister = /* @__PURE__ */ new Map();
+    for (const [name, register] of Object.entries(ctx.allocation.registers)) {
+      ownerByRegister.set(register, name);
+    }
+    const constantRegisters = new Set(Object.values(ctx.allocation.constants));
+    const preferred = ["3", "0", "1", "2"];
+    for (const selectorRegister of preferred) {
+      if (!isPredecrementIndirectRegister(selectorRegister)) continue;
+      if (constantRegisters.has(selectorRegister)) continue;
+      if (ctx.allocation.negativeZeroDegree === selectorRegister) continue;
+      const borrowedOwner = ownerByRegister.get(selectorRegister);
+      if (borrowedOwner !== void 0) {
+        if (packedLineFamilyClusterReadsIdentifier(ctx, proc, match, borrowedOwner)) continue;
+        if (!allCallsToProcCanClobberIdentifier(ctx.ast, proc.name, borrowedOwner)) continue;
+      }
+      return borrowedOwner === void 0 ? { selectorRegister } : { selectorRegister, borrowedOwner };
+    }
+    return void 0;
+  }
+  function packedLineFamilyClusterReadsIdentifier(ctx, proc, match, name) {
+    if (statementsReadIdentifierForBorrow(ctx.ast, proc.body, name, /* @__PURE__ */ new Set())) return true;
+    const updateProc = ctx.ast.procs.find((candidate) => candidate.name === match.updateProc);
+    if (updateProc !== void 0 && statementsReadIdentifierForBorrow(ctx.ast, updateProc.body, name, /* @__PURE__ */ new Set())) {
+      return true;
+    }
+    for (const normalizer of new Set(match.steps.map((step) => step.normalizer).filter((item) => item !== void 0))) {
+      const normalizerProc = ctx.ast.procs.find((candidate) => candidate.name === normalizer);
+      if (normalizerProc !== void 0 && statementsReadIdentifierForBorrow(ctx.ast, normalizerProc.body, name, /* @__PURE__ */ new Set())) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function allCallsToProcCanClobberIdentifier(ast, procName, name) {
+    let found = false;
+    let safe = true;
+    const visitStatements = (statements, continuation) => {
+      if (!safe) return;
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        const rest = [...statements.slice(index + 1), ...continuation];
+        if (statement.kind === "call" && statement.block === procName) {
+          found = true;
+          if (firstIdentifierAccessForBorrow(ast, rest, name, /* @__PURE__ */ new Set()) === "read") {
+            safe = false;
+            return;
+          }
+        }
+        switch (statement.kind) {
+          case "loop":
+          case "while":
+            visitStatements(statement.body, [...statement.body, ...rest]);
+            break;
+          case "if":
+            visitStatements(statement.thenBody, rest);
+            if (statement.elseBody !== void 0) visitStatements(statement.elseBody, rest);
+            break;
+          case "dispatch":
+            for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body, rest);
+            if (statement.defaultBody !== void 0) visitStatements(statement.defaultBody, rest);
+            break;
+          case "pause":
+          case "preview":
+          case "halt":
+          case "return_value":
+          case "assign":
+          case "indexed_assign":
+          case "coord_list_remove":
+          case "core":
+          case "show":
+          case "input":
+          case "call":
+          case "decimal_series":
+            break;
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body, []);
+    for (const candidate of ast.procs) {
+      if (candidate.name !== procName) visitStatements(candidate.body, []);
+    }
+    return found && safe;
+  }
+  function firstIdentifierAccessForBorrow(ast, statements, name, seenProcs) {
+    for (const statement of statements) {
+      const access = statementFirstIdentifierAccessForBorrow(ast, statement, name, seenProcs);
+      if (access !== "none") return access;
+    }
+    return "none";
+  }
+  function statementFirstIdentifierAccessForBorrow(ast, statement, name, seenProcs) {
+    if (statement.kind === "call") {
+      const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === void 0) return "none";
+      const key = `${name}\0${proc.name}`;
+      if (seenProcs.has(key)) return "none";
+      seenProcs.add(key);
+      const access = firstIdentifierAccessForBorrow(ast, proc.body, name, seenProcs);
+      seenProcs.delete(key);
+      return access;
+    }
+    if (statement.kind === "if") {
+      if (expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name)) return "read";
+      const thenAccess = firstIdentifierAccessForBorrow(ast, statement.thenBody, name, seenProcs);
+      const elseAccess = statement.elseBody === void 0 ? "none" : firstIdentifierAccessForBorrow(ast, statement.elseBody, name, seenProcs);
+      if (thenAccess === "read" || elseAccess === "read") return "read";
+      if (thenAccess === "write" || elseAccess === "write") return "write";
+      return "none";
+    }
+    if (statement.kind === "loop" || statement.kind === "while") {
+      if (statement.kind === "while" && (expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name))) return "read";
+      const bodyAccess = firstIdentifierAccessForBorrow(ast, statement.body, name, seenProcs);
+      return bodyAccess === "read" ? "read" : bodyAccess === "write" ? "write" : "none";
+    }
+    if (statement.kind === "dispatch") {
+      if (expressionReferencesIdentifier(statement.expr, name)) return "read";
+      let sawWrite = false;
+      for (const dispatchCase of statement.cases) {
+        if (expressionReferencesIdentifier(dispatchCase.value, name)) return "read";
+        const access = firstIdentifierAccessForBorrow(ast, dispatchCase.body, name, seenProcs);
+        if (access === "read") return "read";
+        if (access === "write") sawWrite = true;
+      }
+      if (statement.defaultBody !== void 0) {
+        const access = firstIdentifierAccessForBorrow(ast, statement.defaultBody, name, seenProcs);
+        if (access === "read") return "read";
+        if (access === "write") sawWrite = true;
+      }
+      return sawWrite ? "write" : "none";
+    }
+    if (statementReadsIdentifierForBorrow(ast, statement, name, seenProcs)) return "read";
+    if (statementWritesIdentifierForBorrow(statement, name)) return "write";
+    return "none";
+  }
+  function statementsReadIdentifierForBorrow(ast, statements, name, seenProcs) {
+    return statements.some((statement) => statementReadsIdentifierForBorrow(ast, statement, name, seenProcs));
+  }
+  function statementReadsIdentifierForBorrow(ast, statement, name, seenProcs) {
+    switch (statement.kind) {
+      case "pause":
+      case "preview":
+      case "return_value":
+        return expressionReferencesIdentifier(statement.expr, name);
+      case "halt":
+        return expressionReferencesIdentifier(statement.expr, name) || statement.displaySources?.includes(name) === true;
+      case "assign":
+        return expressionReferencesIdentifier(statement.expr, name);
+      case "indexed_assign":
+        return expressionReferencesIdentifier(statement.target.index, name) || expressionReferencesIdentifier(statement.expr, name);
+      case "coord_list_remove":
+        return expressionReferencesIdentifier(statement.item, name);
+      case "segmented_bitplane_update":
+        return expressionReferencesIdentifier(statement.item, name);
+      case "if":
+        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifierForBorrow(ast, statement.thenBody, name, seenProcs) || statement.elseBody !== void 0 && statementsReadIdentifierForBorrow(ast, statement.elseBody, name, seenProcs);
+      case "loop":
+        return statementsReadIdentifierForBorrow(ast, statement.body, name, seenProcs);
+      case "while":
+        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifierForBorrow(ast, statement.body, name, seenProcs);
+      case "dispatch":
+        return expressionReferencesIdentifier(statement.expr, name) || statement.cases.some(
+          (dispatchCase) => expressionReferencesIdentifier(dispatchCase.value, name) || statementsReadIdentifierForBorrow(ast, dispatchCase.body, name, seenProcs)
+        ) || statement.defaultBody !== void 0 && statementsReadIdentifierForBorrow(ast, statement.defaultBody, name, seenProcs);
+      case "core":
+        return statement.inputs?.some((input) => expressionReferencesIdentifier(input.expr, name)) ?? false;
+      case "call": {
+        const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+        if (proc === void 0) return false;
+        const key = `${name}\0${proc.name}`;
+        if (seenProcs.has(key)) return false;
+        seenProcs.add(key);
+        const result = statementsReadIdentifierForBorrow(ast, proc.body, name, seenProcs);
+        seenProcs.delete(key);
+        return result;
+      }
+      case "show":
+      case "input":
+      case "decimal_series":
+        return false;
+    }
+  }
+  function statementWritesIdentifierForBorrow(statement, name) {
+    switch (statement.kind) {
+      case "assign":
+      case "input":
+        return statement.target === name;
+      case "indexed_assign":
+        return statement.target.base === name;
+      case "segmented_bitplane_update":
+        return false;
+      case "if":
+        return statement.thenBody.some((child) => statementWritesIdentifierForBorrow(child, name)) && (statement.elseBody?.some((child) => statementWritesIdentifierForBorrow(child, name)) ?? false);
+      case "loop":
+      case "while":
+        return statement.body.some((child) => statementWritesIdentifierForBorrow(child, name));
+      case "dispatch":
+        return statement.cases.some(
+          (dispatchCase) => dispatchCase.body.some((child) => statementWritesIdentifierForBorrow(child, name))
+        ) && (statement.defaultBody?.some((child) => statementWritesIdentifierForBorrow(child, name)) ?? false);
+      default:
+        return false;
+    }
+  }
+  function packedLineFamilyUpdateCheckMarkerSteps(ctx, statements, updateProc, update) {
+    const steps = [];
+    let cursor = 0;
+    let normalizer;
+    while (cursor < statements.length) {
+      const direct = packedLineFamilyUpdateCheckDirectStep(statements, cursor, updateProc, update);
+      if (direct !== void 0) {
+        steps.push(direct.step);
+        cursor += direct.consumed;
+        continue;
+      }
+      const normalized = packedLineFamilyUpdateCheckNormalizedStep(ctx, statements, cursor, updateProc, update);
+      if (normalized !== void 0) {
+        if (normalizer !== void 0 && normalizer !== normalized.normalizer) return void 0;
+        normalizer = normalized.normalizer;
+        steps.push(normalized.step);
+        cursor += normalized.consumed;
+        continue;
+      }
+      return void 0;
+    }
+    if (steps.length < 4 || new Set(steps.map((step) => step.slot)).size < 4) return void 0;
+    if (!steps.every((step) => packedLineFamilyUpdateSlotMatchesBank(ctx, update.update.target, step.slot))) {
+      return void 0;
+    }
+    return steps;
+  }
+  function packedLineFamilyUpdateCheckDirectStep(statements, cursor, updateProc, update) {
+    const lineAssign = statements[cursor];
+    const paramAssign = statements[cursor + 1];
+    const call = statements[cursor + 2];
+    if (lineAssign?.kind !== "assign" || lineAssign.target !== update.yName || paramAssign?.kind !== "assign" || paramAssign.target !== update.param || call?.kind !== "call" || call.block !== updateProc) {
+      return void 0;
+    }
+    const slot = numericLiteralValue2(paramAssign.expr);
+    if (slot === void 0) return void 0;
+    return {
+      step: { lineExpr: lineAssign.expr, slot, sourceLine: lineAssign.line },
+      consumed: 3
+    };
+  }
+  function packedLineFamilyUpdateCheckNormalizedStep(ctx, statements, cursor, updateProc, update) {
+    const rawAssign = statements[cursor];
+    const normalizerCall = statements[cursor + 1];
+    const paramAssign = statements[cursor + 2];
+    const call = statements[cursor + 3];
+    if (rawAssign?.kind !== "assign" || normalizerCall?.kind !== "call" || paramAssign?.kind !== "assign" || paramAssign.target !== update.param || call?.kind !== "call" || call.block !== updateProc) {
+      return void 0;
+    }
+    const normalizer = ctx.ast.procs.find((candidate) => candidate.name === normalizerCall.block);
+    if (!procAssignsTargetFromParam(normalizer, update.yName, rawAssign.target)) return void 0;
+    const slot = numericLiteralValue2(paramAssign.expr);
+    if (slot === void 0) return void 0;
+    return {
+      step: {
+        lineExpr: rawAssign.expr,
+        slot,
+        sourceLine: rawAssign.line,
+        normalizer: normalizerCall.block
+      },
+      normalizer: normalizerCall.block,
+      consumed: 4
+    };
+  }
+  function procAssignsTargetFromParam(proc, target, param) {
+    if (proc === void 0) return false;
+    return proc.body.some(
+      (statement) => statement.kind === "assign" && statement.target === target && expressionReferencesIdentifier(statement.expr, param)
+    );
+  }
+  function packedLineFamilyUpdateSlotMatchesBank(ctx, target, slot) {
+    const resolved = findStateBankMember(ctx.ast, target);
+    if (resolved === void 0) return false;
+    return resolved.member.elements.some((element) => element.index === slot);
+  }
+  function compileXParamIndexedFractionalReportTailProc(ctx, proc) {
+    const match = xParamIndexedFractionalReportTailProc(ctx, proc);
+    if (match === void 0) return false;
+    if (ctx.loweringOptions.xParamYStackStoredEntry === true) {
+      ctx.emitStore(match.selector, `set ${match.selector} from X parameter`, proc.body[0]?.line);
+      ctx.emitOp(20, "X\u2194Y", "stack-carried packed digit index", match.update.line);
+      ctx.markCurrentX(match.yName);
+      ctx.emitLabel(xParamYStackStoredEntryLabel(proc.name));
+      ctx.emitOp(21, "F 10\u02E3", "stack-carried packed digit pow10", match.update.line);
+      compileExpression(ctx, match.factor);
+      ctx.emitOp(18, "\xD7", "stack-carried packed digit delta", match.update.line);
+      ctx.emitOp(
+        208 + registerIndex(match.selectorRegister),
+        `\u041A \u041F->X ${match.selectorRegister}`,
+        "indexed packed digit update base",
+        match.update.line
+      );
+      ctx.emitOp(binaryOpcode(match.op), match.op, "indexed packed digit update", match.update.line);
+      ctx.emitPreparedIndexedStore(match.update.target, match.selectorRegister, match.update.line);
+      compileExpression(ctx, match.mask);
+      ctx.emitOp(55, "\u041A \u2227", "updated packed fractional report mask", match.branch.line);
+      ctx.emitOp(53, "\u041A {x}", "updated packed fractional report predicate", match.branch.line);
+      const haltLabel = ctx.freshLabel("packed_frac_report_x2_halt");
+      ctx.emitJump(94, "F x=0", haltLabel, "true branch for packed fractional report !=", match.branch.line);
+      ctx.emitOp(82, "\u0412/\u041E", "packed fractional report return", match.branch.line);
+      ctx.emitLabel(haltLabel);
+      ctx.emitOp(10, ".", "updated packed fractional report X2 restore", match.branch.line);
+      ctx.emitOp(80, "\u0421/\u041F", "halt", match.haltLine);
+    } else {
+      emitPackedLineFamilyUpdateCheckTail(ctx, match);
+    }
+    ctx.currentYVariable = void 0;
+    ctx.optimizations.push({
+      name: ctx.loweringOptions.xParamYStackStoredEntry === true ? "x-param-y-stack-multi-entry" : "x-param-proc-entry",
+      detail: ctx.loweringOptions.xParamYStackStoredEntry === true ? `Compiled rule ${proc.name} with a secondary entry after its X-parameter store and Y-stack swap.` : `Compiled rule ${proc.name} to copy ${ctx.xParamProcs.get(proc.name)?.param ?? "parameter"} directly from X.`
+    });
+    ctx.optimizations.push({
+      name: "indexed-packed-y-stack-pow10-delta",
+      detail: `Used ${match.yName} carried in Y as the pow10 index for ${expressionToIntentText(match.update.target)} at line ${match.update.line}.`
+    });
+    ctx.optimizations.push({
+      name: "indexed-packed-fractional-report-branch",
+      detail: `Reused ${expressionToIntentText(match.update.target)} left in X after a packed update for fractional ${conditionToText(match.branch.condition)} at line ${match.branch.line}.`
+    });
+    ctx.optimizations.push({
+      name: "indexed-packed-fractional-report-x2-tail",
+      detail: `Restored the terminal fractional packed report through X2 after branching directly to the halt path at line ${match.branch.line}.`
+    });
+    return true;
+  }
+  function xParamIndexedFractionalReportTailProc(ctx, proc, options = {}) {
+    const lowering = ctx.xParamProcs.get(proc.name);
+    if (lowering?.kind !== "copy") return void 0;
+    const yStack = ctx.xParamYStackProcs.get(proc.name);
+    if (yStack === void 0) return void 0;
+    const first = proc.body[0];
+    const update = proc.body[1];
+    if (first !== lowering.first || update?.kind !== "indexed_assign") return void 0;
+    const selector = lowering.first.target;
+    const selectorRegister = options.allowMutatingSelector === true ? physicalIndexedSelectorRegister(ctx, update.target, selector) : directPhysicalIndexedSelectorRegister(ctx, update.target, selector);
+    if (selectorRegister === void 0) return void 0;
+    const delta = indexedPackedPow10DeltaUpdate(update);
+    if (delta === void 0) return void 0;
+    const yTerm = yStackPow10DeltaTerm(delta.term, yStack.yName);
+    if (yTerm === void 0) return void 0;
+    const report = fractionalReportTail(update.target, proc.body.slice(2));
+    if (report === void 0) return void 0;
+    return {
+      param: lowering.param,
+      selector,
+      selectorRegister,
+      yName: yStack.yName,
+      update,
+      factor: yTerm.factor,
+      op: delta.op,
+      mask: report.mask,
+      branch: report.branch,
+      haltLine: report.haltLine
+    };
+  }
+  function directPhysicalIndexedSelectorRegister(ctx, target, selector) {
+    const selectorRegister = physicalIndexedSelectorRegister(ctx, target, selector);
+    if (selectorRegister === void 0 || registerIndex(selectorRegister) < 7) return void 0;
+    return selectorRegister;
+  }
+  function physicalIndexedSelectorRegister(ctx, target, selector) {
+    if (target.index.kind !== "identifier" || target.index.name !== selector) return void 0;
+    const selectorRegister = ctx.allocation.registers[selector];
+    if (selectorRegister === void 0) return void 0;
+    const resolved = findStateBankMember(ctx.ast, target);
+    if (resolved === void 0) return void 0;
+    for (const element of resolved.member.elements) {
+      const register = ctx.allocation.registers[element.name];
+      if (register === void 0 || registerIndex(register) !== element.index) return void 0;
+    }
+    return selectorRegister;
+  }
+  function indexedPackedPow10DeltaUpdate(statement) {
+    const expr = statement.expr;
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "packed_add" && expr.args.length === 3) {
+      if (!expressionEquals(expr.args[0], statement.target)) return void 0;
+      return {
+        op: "+",
+        term: multiplyExpressions2(expr.args[2], {
+          kind: "call",
+          callee: "pow10",
+          args: [expr.args[1]]
+        })
+      };
+    }
+    if (expr.kind !== "binary" || expr.op !== "+" && expr.op !== "-") return void 0;
+    if (!expressionEquals(expr.left, statement.target)) return void 0;
+    if (!isPow10Term(expr.right)) return void 0;
+    return { op: expr.op, term: expr.right };
+  }
+  function yStackPow10DeltaTerm(expr, yName) {
+    if (isPow10OfIdentifier(expr, yName)) return { factor: numberExpression2(1) };
+    if (expr.kind !== "binary" || expr.op !== "*") return void 0;
+    if (isPow10OfIdentifier(expr.left, yName) && isSimpleStackLoad(expr.right)) {
+      return { factor: expr.right };
+    }
+    if (isPow10OfIdentifier(expr.right, yName) && isSimpleStackLoad(expr.left)) {
+      return { factor: expr.left };
+    }
+    return void 0;
+  }
+  function isPow10Term(expr) {
+    if (expr.kind !== "call") return false;
+    const name = expr.callee.toLowerCase();
+    if (name === "pow10" && expr.args.length === 1) return true;
+    return name === "pow" && expr.args.length === 2 && numericLiteralValue2(expr.args[0]) === 10;
+  }
+  function isPow10OfIdentifier(expr, name) {
+    if (expr.kind !== "call") return false;
+    const callee = expr.callee.toLowerCase();
+    if (callee === "pow10" && expr.args.length === 1) {
+      return expr.args[0]?.kind === "identifier" && expr.args[0].name === name;
+    }
+    return callee === "pow" && expr.args.length === 2 && numericLiteralValue2(expr.args[0]) === 10 && expr.args[1]?.kind === "identifier" && expr.args[1].name === name;
+  }
+  function fractionalReportTail(target, tail) {
+    if (tail.length === 1 && tail[0]?.kind === "if") {
+      return fractionalBitReportBranch(target, tail[0]);
+    }
+    if (tail.length !== 2) return void 0;
+    const reportAssign = tail[0];
+    const branch = tail[1];
+    if (reportAssign?.kind !== "assign" || branch?.kind !== "if") return void 0;
+    const report = bitAndReportForTarget(reportAssign.expr, target);
+    if (report === void 0 || !isSimpleStackLoad(report.mask)) return void 0;
+    if (!branchIsIdentifierFractionalReportTrap(branch, reportAssign.target)) return void 0;
+    return {
+      mask: report.mask,
+      branch,
+      haltLine: branch.thenBody[0]?.line ?? branch.line
+    };
+  }
+  function fractionalBitReportBranch(target, branch) {
+    if (branch.elseBody !== void 0 || branch.thenBody.length !== 1) return void 0;
+    const halt = branch.thenBody[0];
+    if (halt?.kind !== "halt" || halt.literal !== void 0) return void 0;
+    if (branch.condition.op !== "!=") return void 0;
+    const left = fractionalBitAndReportForTarget(branch.condition.left, target);
+    const right = fractionalBitAndReportForTarget(branch.condition.right, target);
+    const report = left === void 0 ? right === void 0 ? void 0 : isZeroExpression(branch.condition.left) ? right : void 0 : isZeroExpression(branch.condition.right) ? left : void 0;
+    if (report === void 0) return void 0;
+    if (!expressionEquals(halt.expr, report.expr) || !isSimpleStackLoad(report.mask)) return void 0;
+    return { mask: report.mask, branch, haltLine: halt.line };
+  }
+  function branchIsIdentifierFractionalReportTrap(branch, reportName) {
+    if (branch.elseBody !== void 0 || branch.thenBody.length !== 1) return false;
+    const halt = branch.thenBody[0];
+    if (halt?.kind !== "halt" || halt.literal !== void 0) return false;
+    if (halt.expr.kind !== "identifier" || halt.expr.name !== reportName) return false;
+    if (branch.condition.op !== "!=") return false;
+    const left = fractionalIdentifierReport(branch.condition.left, reportName);
+    const right = fractionalIdentifierReport(branch.condition.right, reportName);
+    return left ? isZeroExpression(branch.condition.right) : right && isZeroExpression(branch.condition.left);
+  }
+  function fractionalIdentifierReport(expr, reportName) {
+    return expr.kind === "call" && expr.callee.toLowerCase() === "frac" && expr.args.length === 1 && expr.args[0]?.kind === "identifier" && expr.args[0].name === reportName;
+  }
+  function fractionalBitAndReportForTarget(expr, target) {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "frac" || expr.args.length !== 1) return void 0;
+    return bitAndReportForTarget(expr.args[0], target);
+  }
+  function bitAndReportForTarget(expr, target) {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_and" || expr.args.length !== 2) return void 0;
+    const [left, right] = expr.args;
+    if (left !== void 0 && right !== void 0 && expressionEquals(left, target)) {
+      return { expr, mask: right };
+    }
+    if (left !== void 0 && right !== void 0 && expressionEquals(right, target)) {
+      return { expr, mask: left };
+    }
+    return void 0;
+  }
+  function compilePackedLineFamilyScoreProc(ctx, proc) {
+    const match = packedLineFamilyScoreProc(ctx, proc);
+    if (match === void 0) return false;
+    const helper = ctx.freshLabel("packed_line_family_score_accumulator");
+    const emitScore = (term) => {
+      compileExpression(ctx, term.lineValue);
+      compileExpression(ctx, term.index);
+      ctx.emitJump(83, "\u041F\u041F", helper, "packed-line score accumulator helper", term.line);
+    };
+    const markScoreInX = () => {
+      ctx.currentXVariable = match.score;
+      ctx.currentXAliases = /* @__PURE__ */ new Set([match.score]);
+      ctx.currentXKnownZero = false;
+    };
+    ctx.currentXKnownZero = false;
+    ctx.emitZero("packed-line score accumulator", match.line);
+    ctx.emitLabel(packedLineFamilyScoreZeroEntryLabel(proc.name));
+    emitScore(match.first);
+    markScoreInX();
+    emitScore(match.second);
+    markScoreInX();
+    const tail = ctx.freshLabel("packed_line_family_score_tail");
+    compileExpression(ctx, match.diagonalAdd.lineValue);
+    compileExpression(ctx, match.partial);
+    ctx.emitJump(83, "\u041F\u041F", tail, "packed-line shared diagonal score", match.diagonalAdd.scoreAssign.line);
+    markScoreInX();
+    compileExpression(ctx, match.diagonalSub.lineValue);
+    compileExpression(ctx, match.partial);
+    ctx.emitOp(11, "/-/", "packed-line negative diagonal index", match.diagonalSub.rawAssign.line);
+    ctx.emitLabel(tail);
+    compileExpression(ctx, match.shared);
+    ctx.emitOp(16, "+", "packed-line diagonal index", match.diagonalAdd.rawAssign.line);
+    compileBlockCall(ctx, match.normalizer, match.diagonalAdd.rawAssign.line);
+    ctx.emitJump(83, "\u041F\u041F", helper, "packed-line score accumulator helper", match.diagonalAdd.scoreAssign.line);
+    markScoreInX();
+    ctx.emitOp(82, "\u0412/\u041E", "packed-line family score return", match.diagonalSub.scoreAssign.line);
+    ctx.emitLabel(helper);
+    ctx.emitOp(21, "F 10\u02E3", "packed-line score helper pow10", match.line);
+    ctx.emitOp(19, "/", "packed-line score helper divide", match.line);
+    ctx.emitOp(53, "\u041A {x}", "packed-line score helper frac", match.line);
+    ctx.emitNumberOrPreload("0.41200076");
+    ctx.emitOp(17, "-", "packed-line score helper center", match.line);
+    ctx.emitOp(34, "F x\xB2", "packed-line score helper square", match.line);
+    ctx.emitOp(16, "+", "packed-line score helper accumulate", match.line);
+    ctx.emitOp(82, "\u0412/\u041E", "packed-line score helper return", match.line);
+    ctx.optimizations.push({
+      name: "packed-line-family-score-accumulator",
+      detail: `Accumulated four packed_score() terms through one helper while sharing diagonal scoring for ${expressionToIntentText(match.diagonalAdd.rawAssign.expr)} and ${expressionToIntentText(match.diagonalSub.rawAssign.expr)} in ${proc.name}.`
+    });
+    return true;
+  }
+  function packedLineFamilyScoreZeroEntryLabel(procName) {
+    return `\0packed_line_family_score_zero_entry_${procName}`;
+  }
+  function statementCanEnterPackedLineFamilyScoreZeroEntry(ctx, statement) {
+    if (statement?.kind !== "call") return false;
+    const proc = ctx.ast.procs.find((candidate) => candidate.name === statement.block);
+    return proc !== void 0 && packedLineFamilyScoreProc(ctx, proc) !== void 0;
+  }
+  function packedLineFamilyScoreProc(ctx, proc) {
+    if (proc.body.length !== 7) return void 0;
+    const [firstAssign, addRaw, addCall, addScore, subRaw, subCall, subScore] = proc.body;
+    if (firstAssign?.kind !== "assign" || addRaw?.kind !== "assign" || addCall?.kind !== "call" || addScore?.kind !== "assign" || subRaw?.kind !== "assign" || subCall?.kind !== "call" || subScore?.kind !== "assign") return void 0;
+    if (addCall.block !== subCall.block) return void 0;
+    if (addRaw.target !== subRaw.target) return void 0;
+    const normalizer = ctx.xParamProcs.get(addCall.block);
+    if (normalizer === void 0 || normalizer.param !== addRaw.target) return void 0;
+    const normalizerProc = ctx.ast.procs.find((candidate) => candidate.name === addCall.block);
+    if (normalizerProc === void 0) return void 0;
+    const normalizerReturn = ctx.procReturnXVariable(normalizerProc);
+    if (normalizerReturn === void 0) return void 0;
+    if (!ctx.stackOnlyStateFields.has(firstAssign.target)) return void 0;
+    const firstPair = packedScorePair(firstAssign.expr);
+    if (firstPair === void 0) return void 0;
+    const addTerm = packedScoreAccumulatorTerm(addScore, firstAssign.target, normalizerReturn);
+    const subTerm = packedScoreAccumulatorTerm(subScore, firstAssign.target, normalizerReturn);
+    if (addTerm === void 0 || subTerm === void 0) return void 0;
+    const diagonal = sharedAddSubOperands(addRaw.expr, subRaw.expr);
+    if (diagonal === void 0) return void 0;
+    return {
+      score: firstAssign.target,
+      normalizer: addCall.block,
+      normalizerParam: normalizer.param,
+      normalizerReturn,
+      first: { ...firstPair.first, line: firstAssign.line },
+      second: { ...firstPair.second, line: firstAssign.line },
+      diagonalAdd: { lineValue: addTerm.lineValue, rawAssign: addRaw, scoreAssign: addScore },
+      diagonalSub: { lineValue: subTerm.lineValue, rawAssign: subRaw, scoreAssign: subScore },
+      shared: diagonal.shared,
+      partial: diagonal.partial,
+      line: firstAssign.line
+    };
+  }
+  function packedScorePair(expr) {
+    if (expr.kind !== "binary" || expr.op !== "+") return void 0;
+    const first = packedScoreTerm(expr.left);
+    const second = packedScoreTerm(expr.right);
+    return first !== void 0 && second !== void 0 ? { first, second } : void 0;
+  }
+  function packedScoreAccumulatorTerm(statement, score, indexName) {
+    if (statement.target !== score) return void 0;
+    const expr = statement.expr;
+    if (expr.kind !== "binary" || expr.op !== "+") return void 0;
+    const target = { kind: "identifier", name: score };
+    if (expressionEquals(expr.left, target)) return packedScoreTermWithIndex(expr.right, indexName);
+    if (expressionEquals(expr.right, target)) return packedScoreTermWithIndex(expr.left, indexName);
+    return void 0;
+  }
+  function packedScoreTermWithIndex(expr, indexName) {
+    const term = packedScoreTerm(expr);
+    if (term === void 0) return void 0;
+    return term.index.kind === "identifier" && term.index.name === indexName ? { lineValue: term.lineValue } : void 0;
+  }
+  function packedScoreTerm(expr) {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "packed_score" || expr.args.length !== 2) {
+      return void 0;
+    }
+    const [lineValue, index] = expr.args;
+    return lineValue !== void 0 && index !== void 0 ? { lineValue, index } : void 0;
+  }
+  function sharedAddSubOperands(add, sub) {
+    if (add.kind !== "binary" || add.op !== "+" || sub.kind !== "binary" || sub.op !== "-") return void 0;
+    if (!expressionEquals(add.left, sub.left) || !expressionEquals(add.right, sub.right)) return void 0;
+    if (!isSimpleStackLoad(add.left) || !isSimpleStackLoad(add.right)) return void 0;
+    return { shared: add.left, partial: add.right };
   }
   function compileXParamValueFunctionBody(ctx, proc, match, scratch) {
     emitPositiveModuloOfCurrentX(ctx, match.width, match.line);
@@ -28326,6 +33269,21 @@ var MKProEmulatorBundle = (() => {
         detail: `Emitted shared helper for ${expressionToIntentText(helper.expr)}.`
       });
     }
+    if (ctx.packedScoreStackHelper !== void 0) {
+      const helper = ctx.packedScoreStackHelper;
+      ctx.emitLabel(helper.label);
+      ctx.emitOp(21, "F 10\u02E3", "packed_score helper pow10", helper.line);
+      ctx.emitOp(19, "/", "packed_score helper divide", helper.line);
+      ctx.emitOp(53, "\u041A {x}", "packed_score helper frac", helper.line);
+      ctx.emitNumberOrPreload("0.41200076");
+      ctx.emitOp(17, "-", "packed_score helper center", helper.line);
+      ctx.emitOp(34, "F x\xB2", "packed_score helper square", helper.line);
+      ctx.emitOp(82, "\u0412/\u041E", "packed_score helper return", helper.line);
+      ctx.optimizations.push({
+        name: "packed-score-stack-helper",
+        detail: "Emitted shared stack helper for packed_score(value, index)."
+      });
+    }
     for (const helper of ctx.nearAnyHelpers.values()) {
       ctx.emitLabel(helper.label);
       compileExpression(ctx, helper.value);
@@ -28370,8 +33328,12 @@ var MKProEmulatorBundle = (() => {
     }
     for (const helper of ctx.spatialBitMaskHelpers.values()) {
       ctx.emitLabel(helper.label);
-      ctx.emitOp(14, "\u0412\u2191", "bit_mask helper argument lift", helper.line);
-      emitBitMaskFromCurrentXWithQuotientScratch(ctx, helper.scratch, helper.line);
+      if (ctx.loweringOptions.compactBitMaskHelperBody === true) {
+        emitCompactBitMaskFromCurrentXWithQuotientScratch(ctx, helper.scratch, helper.line);
+      } else {
+        ctx.emitOp(14, "\u0412\u2191", "bit_mask helper argument lift", helper.line);
+        emitBitMaskFromCurrentXWithQuotientScratch(ctx, helper.scratch, helper.line);
+      }
       ctx.emitOp(82, "\u0412/\u041E", "bit_mask return", helper.line);
       ctx.optimizations.push({
         name: "bit-mask-helper",
@@ -28402,6 +33364,11 @@ var MKProEmulatorBundle = (() => {
       ctx.emitOp(53, "\u041A {x}", "spatial hit membership fraction", helper.line);
       ctx.emitOp(50, "\u041A \u0417\u041D", "spatial hit to count", helper.line);
       ctx.emitOp(82, "\u0412/\u041E", "spatial hit return", helper.line);
+    }
+    for (const helper of ctx.segmentedBitplaneHitHelpers.values()) {
+      ctx.emitLabel(helper.label);
+      emitSegmentedBitplaneHitHelperBody(ctx, helper.collection, helper.line);
+      ctx.emitOp(82, "\u0412/\u041E", "segmented bitplane hit return", helper.line);
     }
   }
   function compileInitialState(ctx) {
@@ -28450,6 +33417,10 @@ var MKProEmulatorBundle = (() => {
     }
     const count = end - start;
     if (count <= 1) return 0;
+    for (let index = start; index < end; index += 1) {
+      const assignment = statements[index];
+      if (ctx.allocation.registers[assignment.target] === void 0) return 0;
+    }
     compileExpression(ctx, first.expr);
     for (let index = start; index < end; index += 1) {
       const assignment = statements[index];
@@ -28508,21 +33479,43 @@ var MKProEmulatorBundle = (() => {
     const lowering = ctx.xParamProcs.get(call.block);
     if (lowering === void 0 || assign.target !== lowering.param) return false;
     if (!expressionPureForSubstitution(assign.expr)) return false;
-    compileExpression(ctx, assign.expr);
+    const reusedCurrentX = assign.expr.kind === "identifier" && ctx.xHolds(assign.expr.name);
+    if (!reusedCurrentX) compileExpression(ctx, assign.expr);
     compileBlockCall(ctx, call.block, call.line);
     ctx.optimizations.push({
       name: "x-param-proc-call",
-      detail: `Passed ${assign.target} to rule ${call.block} through X at line ${assign.line}.`
+      detail: reusedCurrentX ? `Passed ${assign.target} to rule ${call.block} through the value already in X at line ${assign.line}.` : `Passed ${assign.target} to rule ${call.block} through X at line ${assign.line}.`
     });
     return true;
   }
   function compileXParamProcBody(ctx, proc, lowering) {
-    if (lowering.kind === "copy") {
-      ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter`, lowering.first.line);
+    if (lowering.kind === "indexed") {
+      ctx.currentXVariable = lowering.param;
+      ctx.currentXAliases = /* @__PURE__ */ new Set([lowering.param]);
+      ctx.currentXKnownZero = false;
+      ctx.compileStatement(lowering.first);
       ctx.compileStatements(proc.body.slice(1));
       ctx.optimizations.push({
-        name: "x-param-proc-entry",
-        detail: `Compiled rule ${proc.name} to copy ${lowering.param} directly from X.`
+        name: "x-param-indexed-entry",
+        detail: `Compiled rule ${proc.name} to consume ${lowering.param} as an indexed selector directly from X.`
+      });
+      return;
+    }
+    if (lowering.kind === "copy") {
+      ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter`, lowering.first.line);
+      const yStack = ctx.xParamYStackProcs.get(proc.name);
+      if (yStack !== void 0 && ctx.loweringOptions.xParamYStackStoredEntry === true) {
+        ctx.emitOp(20, "X\u2194Y", "x-param y-stack entry", lowering.first.line);
+        ctx.markCurrentX(yStack.yName);
+        ctx.emitLabel(xParamYStackStoredEntryLabel(proc.name));
+      } else if (yStack !== void 0) {
+        ctx.currentYVariable = yStack.yName;
+      }
+      ctx.compileStatements(proc.body.slice(1));
+      if (yStack !== void 0) ctx.currentYVariable = void 0;
+      ctx.optimizations.push({
+        name: yStack !== void 0 && ctx.loweringOptions.xParamYStackStoredEntry === true ? "x-param-y-stack-multi-entry" : "x-param-proc-entry",
+        detail: yStack !== void 0 && ctx.loweringOptions.xParamYStackStoredEntry === true ? `Compiled rule ${proc.name} with a secondary entry after its X-parameter store and Y-stack swap.` : `Compiled rule ${proc.name} to copy ${lowering.param} directly from X.`
       });
       return;
     }
@@ -28538,11 +33531,17 @@ var MKProEmulatorBundle = (() => {
         ));
         return;
       }
-      ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter expression`, lowering.first.line);
+      if (ctx.stackOnlyStateFields.has(lowering.first.target)) {
+        ctx.currentXVariable = lowering.first.target;
+        ctx.currentXAliases = /* @__PURE__ */ new Set([lowering.first.target]);
+        ctx.currentXKnownZero = false;
+      } else {
+        ctx.emitStore(lowering.first.target, `set ${lowering.first.target} from X parameter expression`, lowering.first.line);
+      }
       ctx.compileStatements(proc.body.slice(1));
       ctx.optimizations.push({
         name: "x-param-proc-entry",
-        detail: `Compiled rule ${proc.name} to compute ${lowering.first.target} from ${lowering.param} already in X.`
+        detail: ctx.stackOnlyStateFields.has(lowering.first.target) ? `Compiled rule ${proc.name} to return stack-only ${lowering.first.target} from ${lowering.param} already in X.` : `Compiled rule ${proc.name} to compute ${lowering.first.target} from ${lowering.param} already in X.`
       });
       return;
     }
@@ -28554,6 +33553,9 @@ var MKProEmulatorBundle = (() => {
       name: "x-param-proc-entry",
       detail: `Compiled rule ${proc.name} to consume ${lowering.param} directly from X.`
     });
+  }
+  function xParamYStackStoredEntryLabel(procName) {
+    return `\0xparam_ystack_entry_${procName}`;
   }
   function compileXParamFirstExpression(ctx, expr, param, line) {
     if (!expressionCanConsumeIdentifierFromX(expr, param)) return false;
@@ -28928,7 +33930,7 @@ var MKProEmulatorBundle = (() => {
     if (statement.target.startsWith(PACKED_COUNTER_PREFIX)) return false;
     const register = ctx.allocation.registers[statement.target];
     if (register === void 0) return false;
-    if (isPredecrementIndirectRegister(register) && targetRangeFitsIndirectDecrement(ctx, statement.target)) {
+    if (isPredecrementIndirectRegister(register) && (targetRangeFitsIndirectDecrement(ctx, statement.target) || ctx.loweringOptions.indirectUnderflowDecrement === true && targetRangeFitsTerminalUnderflowDecrement(ctx, statement.target) && ctx.terminalUnderflowUnitDecrementProtected(statement))) {
       return emitIndirectUnitDecrement(ctx, statement.target, register, `decrement ${statement.target}`, statement.line);
     }
     return false;
@@ -28936,7 +33938,12 @@ var MKProEmulatorBundle = (() => {
   function targetRangeFitsIndirectDecrement(ctx, target) {
     const field = ctx.findStateField(target);
     if (field?.min === void 0 || field.max === void 0) return false;
-    return field.type === "range" && field.min >= 0 && field.max <= 14;
+    return field.type === "range" && field.min >= 1 && field.max <= 14;
+  }
+  function targetRangeFitsTerminalUnderflowDecrement(ctx, target) {
+    const field = ctx.findStateField(target);
+    if (field?.min === void 0 || field.max === void 0) return false;
+    return field.type === "range" && field.min >= 0;
   }
   function emitIndirectUnitDecrement(ctx, target, register, comment, line) {
     if (!isPredecrementIndirectRegister(register)) return false;
@@ -28971,7 +33978,7 @@ var MKProEmulatorBundle = (() => {
   function targetRangeFitsIndirectIncrement(ctx, target) {
     const field = ctx.findStateField(target);
     if (field?.min === void 0 || field.max === void 0) return false;
-    return field.type === "range" && field.min >= 0 && field.max + 1 <= 14;
+    return field.type === "range" && field.min >= 0;
   }
   function emitErrorStopOpcode(ctx, comment, line, raw = false) {
     ctx.emitOp(41, "\u041A \xF7", comment, line, raw);
@@ -28993,6 +34000,28 @@ var MKProEmulatorBundle = (() => {
         ctx.optimizations.push({
           name: "terminal-rule-tail-call",
           detail: `Compiled terminal rule ${proc.name} as a direct jump instead of a subroutine call.`
+        });
+        return;
+      }
+      if (ctx.currentXKnownZero && packedLineFamilyScoreProc(ctx, proc) !== void 0) {
+        const bankSelectors2 = ctx.snapshotBankSelectorCache();
+        ctx.emitJump(
+          83,
+          "\u041F\u041F",
+          packedLineFamilyScoreZeroEntryLabel(proc.name),
+          `proc call ${proc.name} zero-accumulator entry`,
+          line
+        );
+        ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors2);
+        const returnX2 = ctx.procReturnXVariable(proc);
+        if (returnX2 !== void 0) {
+          ctx.currentXVariable = returnX2;
+          ctx.currentXAliases = /* @__PURE__ */ new Set([returnX2]);
+          ctx.currentXKnownZero = false;
+        }
+        ctx.optimizations.push({
+          name: "zero-accumulator-proc-entry",
+          detail: `Entered ${proc.name} after its zero literal because X already held a proved zero at line ${line}.`
         });
         return;
       }
@@ -29067,6 +34096,7 @@ var MKProEmulatorBundle = (() => {
   }
 
   // src/core/emit/lowering/spatial.ts
+  var SEGMENTED_BITPLANE_SELECTOR_VALUES = ["0", "1", "11", "14"];
   function compileGridCellMaskReuse(ctx, first, second) {
     const used = matchCellHelperCall(first.expr, ["cell_used", "cell_has"]);
     const mark = matchCellHelperCall(second.expr, ["cell_mark", "cell_set"]);
@@ -29102,6 +34132,36 @@ var MKProEmulatorBundle = (() => {
     return true;
   }
   function compileBitSetMaskReuse(ctx, first, second) {
+    const firstMaskSet = matchBitOrMaskAssignment(first);
+    const secondMaskSet = matchBitOrMaskAssignment(second);
+    if (firstMaskSet !== void 0 && secondMaskSet !== void 0) {
+      if (!expressionEquals(firstMaskSet.mask, secondMaskSet.mask)) return false;
+      if (expressionReferencesIdentifier(firstMaskSet.mask, first.target)) return false;
+      if (expressionReferencesIdentifier(secondMaskSet.mask, second.target)) return false;
+      const scratch2 = bitMaskScratchName(first);
+      if (!ctx.allocation.registers[scratch2]) return false;
+      compileExpression(ctx, firstMaskSet.mask);
+      ctx.emitStore(scratch2, "cell bit mask scratch", first.line);
+      emitCommutativeMaskOpWithScratch(ctx, firstMaskSet.collection, scratch2, {
+        opcode: 56,
+        mnemonic: "\u041A \u2228",
+        opComment: "bit_set with reused mask",
+        recallComment: "reuse cell bit mask",
+        optimization: "mask-stack-op-reuse",
+        detail: `Kept ${scratch2} on the stack for the first bit_set at line ${first.line}.`,
+        line: first.line
+      });
+      ctx.emitStore(first.target, `set ${first.target}`, first.line);
+      compileExpression(ctx, secondMaskSet.collection);
+      ctx.emitRecall(scratch2, "reuse cell bit mask", second.line);
+      ctx.emitOp(56, "\u041A \u2228", "bit_set with reused mask", second.line);
+      ctx.emitStore(second.target, `set ${second.target}`, second.line);
+      ctx.optimizations.push({
+        name: "bit-set-mask-cse",
+        detail: `Computed a cell mask once for adjacent set updates at lines ${first.line}/${second.line}.`
+      });
+      return true;
+    }
     const firstSet = matchBitSetAssignment(first);
     const secondSet = matchBitSetAssignment(second);
     if (firstSet === void 0 || secondSet === void 0) return false;
@@ -29129,6 +34189,113 @@ var MKProEmulatorBundle = (() => {
       detail: `Computed bit_mask() once for adjacent set updates at lines ${first.line}/${second.line}.`
     });
     return true;
+  }
+  function compileBitOrMaskSetReuse(ctx, first, second) {
+    const firstSet = matchBitOrMaskAssignment(first);
+    const secondSet = matchBitOrMaskAssignment(second);
+    if (firstSet === void 0 || secondSet === void 0) return false;
+    if (!expressionEquals(firstSet.mask, secondSet.mask)) return false;
+    if (expressionReferencesIdentifier(firstSet.mask, first.target)) return false;
+    if (expressionReferencesIdentifier(secondSet.mask, second.target)) return false;
+    const scratch = bitMaskScratchName(first);
+    if (!ctx.allocation.registers[scratch]) return false;
+    compileExpression(ctx, firstSet.mask);
+    ctx.emitStore(scratch, "cell bit mask scratch", first.line);
+    emitCommutativeMaskOpWithScratch(ctx, firstSet.collection, scratch, {
+      opcode: 56,
+      mnemonic: "\u041A \u2228",
+      opComment: "bit_set with reused mask",
+      recallComment: "reuse cell bit mask",
+      optimization: "mask-stack-op-reuse",
+      detail: `Kept ${scratch} on the stack for the first bit_set at line ${first.line}.`,
+      line: first.line
+    });
+    ctx.emitStore(first.target, `set ${first.target}`, first.line);
+    compileExpression(ctx, secondSet.collection);
+    ctx.emitRecall(scratch, "reuse cell bit mask", second.line);
+    ctx.emitOp(56, "\u041A \u2228", "bit_set with reused mask", second.line);
+    ctx.emitStore(second.target, `set ${second.target}`, second.line);
+    ctx.optimizations.push({
+      name: "bit-set-mask-cse",
+      detail: `Computed a set-mask expression once for adjacent set updates at lines ${first.line}/${second.line}.`
+    });
+    return true;
+  }
+  function matchBitOrMaskAssignment(statement) {
+    const expr = statement.expr;
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_or" || expr.args.length !== 2) return void 0;
+    const left = expr.args[0];
+    const right = expr.args[1];
+    if (left.kind === "identifier" && left.name === statement.target) {
+      return { collection: left, mask: right };
+    }
+    if (right.kind === "identifier" && right.name === statement.target) {
+      return { collection: right, mask: left };
+    }
+    return void 0;
+  }
+  function compileSingleBitMaskOpCopyReuse(ctx, first, second) {
+    const lowering = matchFractionalMaskOpThenCopy(first, second);
+    if (lowering === void 0) return false;
+    compileExpression(ctx, lowering.base);
+    ctx.emitStore(second.target, `set ${second.target}`, second.line);
+    if (lowering.fractional) ctx.emitOp(53, "\u041A {x}", "single bit op copy mask fraction", first.line);
+    if (lowering.negate) ctx.emitOp(58, "\u041A \u0418\u041D\u0412", "single bit op copy mask complement", first.line);
+    compileExpression(ctx, lowering.collection);
+    ctx.emitOp(lowering.opcode, lowering.mnemonic, `${first.target} bit op with copied mask`, first.line);
+    ctx.emitStore(first.target, `set ${first.target}`, first.line);
+    ctx.optimizations.push({
+      name: "single-bit-mask-op-copy-reuse",
+      detail: `Copied ${expressionToIntentText(lowering.base)} to ${second.target} and reused it for ${first.target} ${lowering.mnemonic} at lines ${first.line}/${second.line}.`
+    });
+    return true;
+  }
+  function matchFractionalMaskOpThenCopy(first, second) {
+    if (first.target === second.target) return void 0;
+    const expr = first.expr;
+    if (expr.kind !== "call" || expr.args.length !== 2) return void 0;
+    const op2 = bitwiseOpcode(expr.callee);
+    if (op2 === void 0) return void 0;
+    const collection = expr.args[0];
+    if (!expressionEquals(collection, { kind: "identifier", name: first.target })) return void 0;
+    const mask = matchFractionalMaskOperand(expr.args[1]);
+    if (mask === void 0) return void 0;
+    if (!expressionEquals(mask.base, second.expr)) return void 0;
+    if (!expressionIsDeterministic(mask.base) || !expressionIsDeterministic(collection)) return void 0;
+    if (expressionReferencesIdentifier(mask.base, first.target)) return void 0;
+    if (expressionReferencesIdentifier(collection, second.target)) return void 0;
+    return {
+      opcode: op2[0],
+      mnemonic: op2[1],
+      collection,
+      base: mask.base,
+      fractional: mask.fractional,
+      negate: mask.negate
+    };
+  }
+  function bitwiseOpcode(name) {
+    switch (name.toLowerCase()) {
+      case "bit_and":
+        return [55, "\u041A \u2227"];
+      case "bit_or":
+        return [56, "\u041A \u2228"];
+      case "bit_xor":
+        return [57, "\u041A \u2295"];
+      default:
+        return void 0;
+    }
+  }
+  function matchFractionalMaskOperand(expr) {
+    let mask = expr;
+    let negate = false;
+    if (mask.kind === "call" && mask.callee.toLowerCase() === "bit_not" && mask.args.length === 1) {
+      negate = true;
+      mask = mask.args[0];
+    }
+    if (mask.kind === "call" && mask.callee.toLowerCase() === "frac" && mask.args.length === 1) {
+      return { base: mask.args[0], fractional: true, negate };
+    }
+    return { base: mask, fractional: false, negate };
   }
   function compileSingleBitMaskOpAssignment(ctx, statement) {
     const match = matchSingleBitMaskOpAssignment(statement);
@@ -29219,10 +34386,36 @@ var MKProEmulatorBundle = (() => {
     ctx.emitStackNumberOrPreload("8");
     ctx.emitOp(16, "+", "bit mask anchor", line);
   }
+  function emitCompactBitMaskFromCurrentXWithQuotientScratch(ctx, scratch, line) {
+    ctx.emitNumber("4");
+    ctx.emitOp(19, "/", "bit mask quotient", line);
+    ctx.emitStore(scratch, "bit mask quotient", line);
+    ctx.emitOp(53, "\u041A {x}", "bit mask remainder fraction", line);
+    ctx.emitNumber("4");
+    ctx.emitOp(18, "*", "bit mask remainder scale", line);
+    ctx.emitNumber("2");
+    ctx.emitOp(36, "F x^y", "bit mask power", line);
+    ctx.emitNumber("0.5");
+    ctx.emitOp(16, "+", "bit mask round bias", line);
+    ctx.emitOp(52, "\u041A [x]", "bit mask round", line);
+    ctx.emitRecall(scratch, "bit mask quotient", line);
+    ctx.emitOp(52, "\u041A [x]", "bit mask digit index", line);
+    ctx.emitNumber("1");
+    ctx.emitOp(16, "+", "bit mask decade index", line);
+    ctx.emitOp(21, "F 10^x", "bit mask decade", line);
+    ctx.emitOp(19, "/", "bit mask fractional place", line);
+    ctx.emitNumber("8");
+    ctx.emitOp(16, "+", "bit mask anchor", line);
+    ctx.optimizations.push({
+      name: "compact-bit-mask-helper-body",
+      detail: "Used number-entry stack lift in the shared bit_mask helper instead of explicit \u0412\u2191 separators."
+    });
+  }
   function emitBitSetCollectionWithScratch(ctx, collection, set, scratch) {
     compileExpression(ctx, collection);
     ctx.emitRecall(scratch, "reuse cell bit mask", set.line);
     ctx.emitOp(56, "\u041A \u2228", "bit_set with reused mask", set.line);
+    if (ctx.emitLoopCarriedPromptValue(set.target, set.line)) return;
     ctx.emitStore(set.target, `set ${set.target}`, set.line);
   }
   function emitCommutativeMaskOpWithScratch(ctx, collection, scratch, options) {
@@ -29295,6 +34488,30 @@ var MKProEmulatorBundle = (() => {
     if (mask?.kind !== "identifier" || cell === void 0) return false;
     const board = boardForCellMask(mask, ctx.ast);
     if (board === void 0) return false;
+    const segmented = segmentedBitplaneCollectionInfo(ctx.ast, mask.name);
+    if (segmented !== void 0) {
+      if (ctx.loweringOptions.segmentedLineCountScan === true && compileSegmentedBitplaneLineCountScan(ctx, mask.name, cell, void 0)) {
+        return true;
+      }
+      const scratch2 = spatialCountScratchNames();
+      if (scratch2.some((name) => ctx.allocation.registers[name] === void 0)) return false;
+      if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === void 0) return false;
+      if (segmented.planes.some((plane) => ctx.allocation.registers[plane] === void 0)) return false;
+      emitSpatialProgressionCountLoopBody(
+        ctx,
+        mask.name,
+        cell,
+        spatialLineProgressions(board, cell),
+        false,
+        void 0,
+        "line_count"
+      );
+      ctx.optimizations.push({
+        name: "segmented-bitplane-line-count-helper",
+        detail: `Lowered line_count(${mask.name}, ...) through a shared segmented bitplane progression helper.`
+      });
+      return true;
+    }
     const scratch = spatialCountScratchNames();
     if (scratch.some((name) => ctx.allocation.registers[name] === void 0)) return false;
     const maskScratch = spatialCountMaskScratchName();
@@ -29316,6 +34533,77 @@ var MKProEmulatorBundle = (() => {
     }
     emitSpatialLineCountLoopBody(ctx, hitMask, cell, board, void 0);
     return true;
+  }
+  function compileSegmentedBitplaneLineCountScan(ctx, collection, cell, sourceLine) {
+    const info2 = segmentedBitplaneCollectionInfo(ctx.ast, collection);
+    if (info2 === void 0) return false;
+    if (cell.kind !== "identifier") return false;
+    const scratch = spatialCountScratchNames();
+    const total = scratch[0];
+    const counter = scratch[3];
+    const counterRegister = ctx.allocation.registers[counter];
+    const flCounterOpcode = counterRegister === void 0 ? void 0 : flOpcode(counterRegister);
+    if (flCounterOpcode === void 0) return false;
+    if (scratch.some((name) => ctx.allocation.registers[name] === void 0)) return false;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === void 0) return false;
+    if (info2.planes.some((plane) => ctx.allocation.registers[plane] === void 0)) return false;
+    const candidate = { kind: "identifier", name: SEGMENTED_BITPLANE_INDEX };
+    const start = ctx.freshLabel("segmented_line_count_scan");
+    const visible = ctx.freshLabel("segmented_line_count_visible");
+    const next = ctx.freshLabel("segmented_line_count_next");
+    ctx.emitZero("line_count scan total", sourceLine);
+    ctx.emitStore(total, "line_count scan total", sourceLine);
+    ctx.emitNumberOrPreload("100");
+    ctx.emitStore(counter, "line_count scan counter", sourceLine);
+    ctx.emitLabel(start);
+    ctx.emitRecall(counter, "line_count scan counter", sourceLine);
+    ctx.emitNumberOrPreload("1");
+    ctx.emitOp(17, "-", "line_count scan candidate index", sourceLine);
+    ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "line_count scan candidate", sourceLine);
+    emitSegmentedLineCountOnesDigit(ctx, candidate, sourceLine, "line_count scan candidate x");
+    emitSegmentedLineCountOnesDigit(ctx, cell, sourceLine, "line_count scan cell x");
+    ctx.emitOp(17, "-", "line_count scan dx", sourceLine);
+    ctx.emitJump(87, "F x!=0", visible, "line_count scan same column", sourceLine);
+    ctx.emitNumberOrPreload("10");
+    ctx.emitOp(18, "*", "line_count scan dx digit", sourceLine);
+    emitSegmentedLineCountTensDigit(ctx, candidate, sourceLine, "line_count scan candidate y");
+    emitSegmentedLineCountTensDigit(ctx, cell, sourceLine, "line_count scan cell y");
+    ctx.emitOp(17, "-", "line_count scan dy", sourceLine);
+    ctx.emitJump(87, "F x!=0", visible, "line_count scan same row", sourceLine);
+    ctx.emitOp(49, "\u041A |x|", "line_count scan |dy|", sourceLine);
+    ctx.emitOp(20, "<->", "line_count scan dx", sourceLine);
+    ctx.emitOp(49, "\u041A |x|", "line_count scan |dx|", sourceLine);
+    ctx.emitOp(17, "-", "line_count scan diagonal compare", sourceLine);
+    ctx.emitJump(87, "F x!=0", visible, "line_count scan same diagonal", sourceLine);
+    ctx.emitJump(81, "\u0411\u041F", next, "line_count scan not visible", sourceLine);
+    ctx.emitLabel(visible);
+    ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "line_count scan probe candidate", sourceLine);
+    emitSegmentedBitplaneHitHelperBody(ctx, collection, sourceLine);
+    ctx.emitRecall(total, "line_count scan total", sourceLine);
+    ctx.emitOp(16, "+", "line_count scan add hit", sourceLine);
+    ctx.emitStore(total, "line_count scan total", sourceLine);
+    ctx.emitLabel(next);
+    ctx.emitJump(flCounterOpcode, getOpcode(flCounterOpcode).name, start, "line_count scan loop", sourceLine);
+    ctx.emitRecall(total, "line_count scan result", sourceLine);
+    ctx.optimizations.push({
+      name: "segmented-bitplane-line-count-scan",
+      detail: `Lowered line_count(${collection}, ...) as one 10x10 segmented bitplane scan.`
+    });
+    return true;
+  }
+  function emitSegmentedLineCountTensDigit(ctx, expr, sourceLine, comment) {
+    compileExpression(ctx, expr);
+    ctx.emitNumberOrPreload("10");
+    ctx.emitOp(19, "/", `${comment} /10`, sourceLine);
+    ctx.emitOp(52, "\u041A [x]", comment, sourceLine);
+  }
+  function emitSegmentedLineCountOnesDigit(ctx, expr, sourceLine, comment) {
+    compileExpression(ctx, expr);
+    ctx.emitNumberOrPreload("10");
+    ctx.emitOp(19, "/", `${comment} /10`, sourceLine);
+    ctx.emitOp(53, "\u041A {x}", `${comment} fraction`, sourceLine);
+    ctx.emitNumberOrPreload("10");
+    ctx.emitOp(18, "*", comment, sourceLine);
   }
   function emitSpatialLineCountLoopBody(ctx, hitMask, cell, board, sourceLine) {
     emitSpatialProgressionCountLoopBody(
@@ -29480,7 +34768,15 @@ var MKProEmulatorBundle = (() => {
     const start = ctx.freshLabel(`${operation}_loop`);
     ctx.emitLabel(start);
     compileExpression(ctx, addExpressions2(cell, { kind: "identifier", name: offset }));
-    emitInlineSpatialHitFromCurrentX(ctx, hitMask, sourceLine);
+    if (segmentedBitplaneCollectionInfo(ctx.ast, hitMask) !== void 0) {
+      emitSegmentedBitplaneHitHelperBody(ctx, hitMask, sourceLine);
+      ctx.optimizations.push({
+        name: "segmented-bitplane-sum-helper-inline-hit",
+        detail: `Inlined segmented bitplane hit inside the ${operation} sum-loop helper for ${hitMask}.`
+      });
+    } else {
+      emitInlineSpatialHitFromCurrentX(ctx, hitMask, sourceLine);
+    }
     ctx.emitRecall(offset, `${operation} offset`);
     ctx.emitRecall(step, `${operation} step`);
     ctx.emitOp(16, "+", `${operation} next offset`);
@@ -29536,6 +34832,330 @@ var MKProEmulatorBundle = (() => {
     const helper = ctx.ensureSpatialHitHelper(mask.name, scratch);
     compileExpression(ctx, index);
     ctx.emitJump(83, "\u041F\u041F", helper.label, `spatial hit ${mask.name}`, helper.line);
+    return true;
+  }
+  function compileSegmentedBitplaneUpdateStatement(ctx, statement) {
+    const info2 = segmentedBitplaneCollectionInfo(ctx.ast, statement.collection);
+    if (info2 === void 0) return false;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === void 0) return false;
+    if (info2.planes.some((plane) => ctx.allocation.registers[plane] === void 0)) return false;
+    const selector = emitSegmentedBitplaneIndirectSelect(ctx, statement.item, statement.line);
+    if (selector !== void 0) {
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane local index", statement.line);
+      emitBitMaskFromCurrentXWithQuotientScratch(ctx, SEGMENTED_BITPLANE_INDEX, statement.line);
+      if (statement.op === "-=") ctx.emitOp(58, "\u041A \u0418\u041D\u0412", "segmented bitplane clear mask", statement.line);
+      ctx.emitOp(208 + registerIndex(selector), `\u041A \u041F->X ${selector}`, "segmented bitplane selected plane", statement.line);
+      ctx.emitOp(
+        statement.op === "+=" ? 56 : 55,
+        statement.op === "+=" ? "\u041A \u2228" : "\u041A \u2227",
+        statement.op === "+=" ? "segmented bitplane set" : "segmented bitplane clear",
+        statement.line
+      );
+      ctx.emitOp(176 + registerIndex(selector), `\u041A X->\u041F ${selector}`, "segmented bitplane store selected plane", statement.line);
+      ctx.optimizations.push({
+        name: "segmented-bitplane-update-indirect",
+        detail: `${statement.op === "+=" ? "Set" : "Cleared"} ${statement.collection} with one indirect selected plane at line ${statement.line}.`
+      });
+      return true;
+    }
+    emitSegmentedBitplaneGroupDispatch(ctx, statement.item, statement.line, (group) => {
+      emitSegmentedBitplaneLocalMask(ctx, group, statement.line);
+      if (statement.op === "-=") ctx.emitOp(58, "\u041A \u0418\u041D\u0412", "segmented bitplane clear mask", statement.line);
+      ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane update mask", statement.line);
+      ctx.emitRecall(info2.planes[group], "segmented bitplane update plane", statement.line);
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane update mask", statement.line);
+      ctx.emitOp(
+        statement.op === "+=" ? 56 : 55,
+        statement.op === "+=" ? "\u041A \u2228" : "\u041A \u2227",
+        statement.op === "+=" ? "segmented bitplane set" : "segmented bitplane clear",
+        statement.line
+      );
+      ctx.emitStore(info2.planes[group], "segmented bitplane update plane", statement.line);
+    });
+    ctx.optimizations.push({
+      name: "segmented-bitplane-update",
+      detail: `${statement.op === "+=" ? "Set" : "Cleared"} ${statement.collection} through four 25-cell bitplanes at line ${statement.line}.`
+    });
+    return true;
+  }
+  function compileSegmentedBitplaneRandomUniqueSetup(ctx, fields, placement) {
+    const line = fields[0]?.line;
+    const info2 = segmentedBitplaneCollectionInfo(ctx.ast, placement.collection);
+    const selector = segmentedBitplaneSelectorRegister(ctx);
+    if (info2 === void 0 || selector === void 0 || ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === void 0 || ctx.allocation.registers[SEGMENTED_BITPLANE_COUNTER] === void 0 || ctx.allocation.registers[SEGMENTED_BITPLANE_SEED] === void 0 || ctx.allocation.registers[placement.countSource] === void 0 || info2.planes.some((plane) => ctx.allocation.registers[plane] === void 0) || fields.length !== info2.planes.length) {
+      ctx.diagnostics.push({
+        level: "error",
+        message: `segmented cells random() setup for ${placement.collection} needs four planes, a count source, selector, index, counter, and seed registers.`,
+        ...line === void 0 ? {} : { line }
+      });
+      return;
+    }
+    ctx.emitZero("segmented bitplane setup zero", line);
+    for (const plane of info2.planes) {
+      ctx.emitStore(plane, `setup ${plane}`, line, true);
+    }
+    ctx.emitOp(59, "\u041A \u0421\u0427", "segmented bitplane random seed", line);
+    ctx.emitStore(SEGMENTED_BITPLANE_SEED, "segmented bitplane random seed", line, true);
+    ctx.emitRecall(placement.countSource, "segmented bitplane random count", line);
+    ctx.emitStore(SEGMENTED_BITPLANE_COUNTER, "segmented bitplane remaining placements", line, true);
+    const draw = ctx.freshLabel("seg_bitplane_random_draw");
+    ctx.emitLabel(draw);
+    emitSegmentedBitplaneRandomCandidate(ctx, line);
+    const selected = emitSegmentedBitplaneIndirectSelect(ctx, { kind: "identifier", name: SEGMENTED_BITPLANE_INDEX }, line);
+    if (selected === void 0) {
+      ctx.diagnostics.push({
+        level: "error",
+        message: `segmented cells random() setup for ${placement.collection} could not select a plane indirectly.`,
+        ...line === void 0 ? {} : { line }
+      });
+      return;
+    }
+    ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane random local index", line);
+    emitBitMaskFromCurrentXWithQuotientScratch(ctx, SEGMENTED_BITPLANE_INDEX, line);
+    ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane random mask", line, true);
+    ctx.emitOp(208 + registerIndex(selected), `\u041A \u041F->X ${selected}`, "segmented bitplane random selected plane", line);
+    ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane random mask", line);
+    ctx.emitOp(55, "\u041A \u2227", "segmented bitplane random collision probe", line);
+    ctx.emitOp(53, "\u041A {x}", "segmented bitplane random collision fraction", line);
+    ctx.emitJump(94, "F x=0", draw, "segmented bitplane random collision", line);
+    ctx.emitOp(208 + registerIndex(selected), `\u041A \u041F->X ${selected}`, "segmented bitplane random selected plane", line);
+    ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane random mask", line);
+    ctx.emitOp(56, "\u041A \u2228", "segmented bitplane random set", line);
+    ctx.emitOp(176 + registerIndex(selected), `\u041A X->\u041F ${selected}`, "segmented bitplane random store selected plane", line);
+    ctx.emitRecall(SEGMENTED_BITPLANE_COUNTER, "segmented bitplane remaining placements", line);
+    ctx.emitNumberOrPreload("1");
+    ctx.emitOp(17, "-", "segmented bitplane decrement remaining placements", line);
+    ctx.emitStore(SEGMENTED_BITPLANE_COUNTER, "segmented bitplane remaining placements", line, true);
+    ctx.emitJump(94, "F x=0", draw, "segmented bitplane random next placement", line);
+    ctx.emitRecall(placement.countSource, "segmented bitplane setup complete count", line);
+    ctx.emitOp(11, "/-/", "segmented bitplane setup complete display", line);
+    ctx.optimizations.push({
+      name: "segmented-bitplane-random-unique",
+      detail: `Generated unique random setup for ${placement.collection} through four 25-cell bitplanes.`
+    });
+  }
+  function emitSegmentedBitplaneRandomCandidate(ctx, line) {
+    ctx.emitRecall(SEGMENTED_BITPLANE_SEED, "segmented bitplane random seed", line);
+    ctx.emitNumberOrPreload("37");
+    ctx.emitOp(18, "*", "segmented bitplane next random seed", line);
+    ctx.emitOp(53, "\u041A {x}", "segmented bitplane random seed fraction", line);
+    ctx.emitStore(SEGMENTED_BITPLANE_SEED, "segmented bitplane random seed", line, true);
+    ctx.emitNumberOrPreload("100");
+    ctx.emitOp(18, "*", "segmented bitplane random scaled seed", line);
+    ctx.emitOp(52, "\u041A [x]", "segmented bitplane random flat index", line);
+    ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane random candidate", line, true);
+  }
+  function emitSegmentedBitplaneHitUpdateDispatch(ctx, collection, item, update, falseLabel, thenLabel, line) {
+    const info2 = segmentedBitplaneCollectionInfo(ctx.ast, collection);
+    if (info2 === void 0) return false;
+    if (update.collection !== collection || !expressionEquals(update.item, item)) return false;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === void 0) return false;
+    if (info2.planes.some((plane) => ctx.allocation.registers[plane] === void 0)) return false;
+    const selector = emitSegmentedBitplaneIndirectSelect(ctx, item, line);
+    if (selector !== void 0) {
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane local index", line);
+      emitBitMaskFromCurrentXWithQuotientScratch(ctx, SEGMENTED_BITPLANE_INDEX, line);
+      ctx.emitOp(208 + registerIndex(selector), `\u041A \u041F->X ${selector}`, "segmented bitplane selected plane", line);
+      ctx.emitOp(55, "\u041A \u2227", "segmented bitplane probe", line);
+      ctx.emitOp(53, "\u041A {x}", "segmented bitplane hit fraction", line);
+      ctx.emitJump(87, "F x\u22600", falseLabel, "false branch for segmented hit", line);
+      if (update.op === "-=") {
+        ctx.emitOp(58, "\u041A \u0418\u041D\u0412", "segmented bitplane clear matched mask", update.line);
+        ctx.emitOp(208 + registerIndex(selector), `\u041A \u041F->X ${selector}`, "segmented bitplane clear selected plane", update.line);
+        ctx.emitOp(55, "\u041A \u2227", "segmented bitplane clear matched bit", update.line);
+        ctx.emitOp(176 + registerIndex(selector), `\u041A X->\u041F ${selector}`, "segmented bitplane store selected plane", update.line);
+      }
+      ctx.emitJump(81, "\u0411\u041F", thenLabel, "segmented bitplane hit tail", line);
+      ctx.optimizations.push({
+        name: "segmented-bitplane-hit-update-indirect",
+        detail: `Fused ${collection} probe/update through one indirect selected plane at line ${line}.`
+      });
+      return true;
+    }
+    emitSegmentedBitplaneGroupDispatch(ctx, item, line, (group) => {
+      const plane = info2.planes[group];
+      emitSegmentedBitplaneLocalMask(ctx, group, line);
+      ctx.emitRecall(plane, "segmented bitplane probe plane", line);
+      ctx.emitOp(55, "\u041A \u2227", "segmented bitplane probe", line);
+      ctx.emitOp(53, "\u041A {x}", "segmented bitplane hit fraction", line);
+      ctx.emitJump(87, "F x\u22600", falseLabel, "false branch for segmented hit", line);
+      if (update.op === "-=") {
+        ctx.emitOp(58, "\u041A \u0418\u041D\u0412", "segmented bitplane clear matched mask", update.line);
+        ctx.emitRecall(plane, "segmented bitplane clear plane", update.line);
+        ctx.emitOp(55, "\u041A \u2227", "segmented bitplane clear matched bit", update.line);
+        ctx.emitStore(plane, "segmented bitplane clear plane", update.line);
+      }
+      ctx.emitJump(81, "\u0411\u041F", thenLabel, "segmented bitplane hit tail", line);
+      return true;
+    });
+    ctx.optimizations.push({
+      name: "segmented-bitplane-hit-update",
+      detail: `Fused ${collection} membership probe with ${update.op} update at line ${line}.`
+    });
+    return true;
+  }
+  function emitSegmentedBitplaneGroupDispatch(ctx, item, line, emitGroup) {
+    const labels = [0, 1, 2, 3].map((group) => ctx.freshLabel(`seg_bitplane_group_${group}`));
+    const end = ctx.freshLabel("seg_bitplane_group_end");
+    if (!(item.kind === "identifier" && ctx.xHolds(item.name)) && !ctx.xHoldsExpression(item)) {
+      compileExpression(ctx, item);
+    }
+    ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+    for (let group = 0; group < 3; group += 1) {
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+      ctx.emitNumberOrPreload(String((group + 1) * 25));
+      ctx.emitOp(17, "-", "segmented bitplane threshold", line);
+      ctx.emitJump(92, "F x<0", labels[group], "segmented bitplane select", line);
+    }
+    ctx.emitJump(81, "\u0411\u041F", labels[3], "segmented bitplane select", line);
+    for (let group = 0; group < 4; group += 1) {
+      ctx.emitLabel(labels[group]);
+      const exitsGroup = emitGroup(group) === true;
+      if (group < 3 && !exitsGroup) ctx.emitJump(81, "\u0411\u041F", end, "segmented bitplane group end", line);
+    }
+    ctx.emitLabel(end);
+  }
+  function emitSegmentedBitplaneLocalMask(ctx, group, line) {
+    ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+    if (group > 0) {
+      ctx.emitNumberOrPreload(String(group * 25));
+      ctx.emitOp(17, "-", "segmented bitplane local index", line);
+    }
+    emitBitMaskFromCurrentXWithQuotientScratch(ctx, SEGMENTED_BITPLANE_INDEX, line);
+  }
+  function segmentedBitplaneSelectorRegister(ctx) {
+    const register = ctx.allocation.registers[SEGMENTED_BITPLANE_SELECTOR];
+    return register !== void 0 && registerIndex(register) >= 7 ? register : void 0;
+  }
+  function emitSegmentedBitplaneIndirectSelect(ctx, item, line) {
+    const selector = segmentedBitplaneSelectorRegister(ctx);
+    if (selector === void 0) return void 0;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === void 0) return void 0;
+    const labels = [0, 1, 2, 3].map((group) => ctx.freshLabel(`seg_bitplane_select_${group}`));
+    const selected = ctx.freshLabel("seg_bitplane_selected");
+    const itemIsStoredIndex = item.kind === "identifier" && item.name === SEGMENTED_BITPLANE_INDEX;
+    if (!(item.kind === "identifier" && ctx.xHolds(item.name)) && !ctx.xHoldsExpression(item)) {
+      compileExpression(ctx, item);
+    }
+    if (!itemIsStoredIndex) {
+      ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+    }
+    for (let group = 0; group < 3; group += 1) {
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+      ctx.emitNumberOrPreload(String((group + 1) * 25));
+      ctx.emitOp(17, "-", "segmented bitplane threshold", line);
+      ctx.emitJump(92, "F x<0", labels[group], "segmented bitplane indirect select", line);
+    }
+    ctx.emitJump(81, "\u0411\u041F", labels[3], "segmented bitplane indirect select", line);
+    for (let group = 0; group < 4; group += 1) {
+      ctx.emitLabel(labels[group]);
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", line);
+      if (group > 0) {
+        ctx.emitNumberOrPreload(String(group * 25));
+        ctx.emitOp(17, "-", "segmented bitplane local index", line);
+      }
+      ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane local index", line);
+      ctx.emitNumberOrPreload(SEGMENTED_BITPLANE_SELECTOR_VALUES[group]);
+      ctx.emitStore(SEGMENTED_BITPLANE_SELECTOR, "segmented bitplane selector", line);
+      if (group < 3) ctx.emitJump(81, "\u0411\u041F", selected, "segmented bitplane selected", line);
+    }
+    ctx.emitLabel(selected);
+    return selector;
+  }
+  function compileSegmentedBitplaneHitCall(ctx, expr) {
+    if (expr.args.length !== 2) {
+      ctx.diagnostics.push({
+        level: "error",
+        message: "__seg_bit_has() expects two arguments."
+      });
+      return true;
+    }
+    const [collection, index] = expr.args;
+    if (collection?.kind !== "identifier" || index === void 0) return false;
+    if (segmentedBitplaneCollectionInfo(ctx.ast, collection.name) === void 0) {
+      ctx.diagnostics.push({
+        level: "error",
+        message: `Collection ${collection.name} is not lowered as segmented bitplanes.`
+      });
+      return true;
+    }
+    if (!(index.kind === "identifier" && ctx.xHolds(index.name)) && !ctx.xHoldsExpression(index)) {
+      compileExpression(ctx, index);
+    }
+    if (emitSegmentedBitplaneHitFromCurrentX(ctx, collection.name, void 0)) return true;
+    ctx.diagnostics.push({
+      level: "error",
+      message: `segmented bitplane hit for ${collection.name} needs four plane registers and ${SEGMENTED_BITPLANE_INDEX}.`
+    });
+    return true;
+  }
+  function emitSegmentedBitplaneHitFromCurrentX(ctx, collection, sourceLine) {
+    const info2 = segmentedBitplaneCollectionInfo(ctx.ast, collection);
+    if (info2 === void 0) return false;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === void 0) return false;
+    if (info2.planes.some((plane) => ctx.allocation.registers[plane] === void 0)) return false;
+    const shouldShare = countExpressionCalls(ctx.ast, "__seg_bit_has") > 1 || countExpressionCalls(ctx.ast, "line_count") > 0;
+    if (!shouldShare) {
+      return emitSegmentedBitplaneHitHelperBody(ctx, collection, sourceLine);
+    }
+    const helper = ctx.ensureSegmentedBitplaneHitHelper(collection, sourceLine);
+    ctx.emitJump(83, "\u041F\u041F", helper.label, `segmented bitplane hit ${collection}`, sourceLine);
+    ctx.optimizations.push({
+      name: "segmented-bitplane-hit-helper-call",
+      detail: `Tested ${collection} through a shared 25-cell bitplane selector.`
+    });
+    return true;
+  }
+  function emitSegmentedBitplaneHitHelperBody(ctx, collection, sourceLine) {
+    const info2 = segmentedBitplaneCollectionInfo(ctx.ast, collection);
+    if (info2 === void 0) return false;
+    if (ctx.allocation.registers[SEGMENTED_BITPLANE_INDEX] === void 0) return false;
+    if (info2.planes.some((plane) => ctx.allocation.registers[plane] === void 0)) return false;
+    ctx.emitStore(SEGMENTED_BITPLANE_INDEX, "segmented bitplane index", sourceLine);
+    const selector = emitSegmentedBitplaneIndirectSelect(ctx, { kind: "identifier", name: SEGMENTED_BITPLANE_INDEX }, sourceLine);
+    if (selector !== void 0) {
+      ctx.emitRecall(SEGMENTED_BITPLANE_INDEX, "segmented bitplane local index", sourceLine);
+      emitBitMaskFromCurrentXWithQuotientScratch(ctx, SEGMENTED_BITPLANE_INDEX, sourceLine);
+      ctx.emitOp(208 + registerIndex(selector), `\u041A \u041F->X ${selector}`, "segmented bitplane selected plane", sourceLine);
+      ctx.emitOp(55, "\u041A \u2227", "segmented bitplane hit test", sourceLine);
+      ctx.emitOp(53, "\u041A {x}", "segmented bitplane hit fraction", sourceLine);
+      ctx.emitOp(50, "\u041A \u0417\u041D", "segmented bitplane hit to count", sourceLine);
+      ctx.optimizations.push({
+        name: "segmented-bitplane-hit-indirect-helper",
+        detail: `Emitted shared hit helper for ${collection} with one indirect selected plane.`
+      });
+      return true;
+    }
+    const scratch = SEGMENTED_BITPLANE_INDEX;
+    const labels = info2.planes.map((_plane, index) => ctx.freshLabel(`seg_bitplane_${index}`));
+    const end = ctx.freshLabel("seg_bitplane_end");
+    ctx.emitStore(scratch, "segmented bitplane index", sourceLine);
+    for (let group = 0; group < 3; group += 1) {
+      ctx.emitRecall(scratch, "segmented bitplane index", sourceLine);
+      ctx.emitNumberOrPreload(String((group + 1) * 25));
+      ctx.emitOp(17, "-", "segmented bitplane threshold", sourceLine);
+      ctx.emitJump(92, "F x<0", labels[group], "segmented bitplane select", sourceLine);
+    }
+    ctx.emitJump(81, "\u0411\u041F", labels[3], "segmented bitplane select", sourceLine);
+    for (let group = 0; group < 4; group += 1) {
+      ctx.emitLabel(labels[group]);
+      ctx.emitRecall(scratch, "segmented bitplane index", sourceLine);
+      if (group > 0) {
+        ctx.emitNumberOrPreload(String(group * 25));
+        ctx.emitOp(17, "-", "segmented bitplane local index", sourceLine);
+      }
+      emitBitMaskFromCurrentXWithQuotientScratch(ctx, scratch, sourceLine);
+      ctx.emitRecall(info2.planes[group], "segmented bitplane plane", sourceLine);
+      ctx.emitOp(55, "\u041A \u2227", "segmented bitplane hit test", sourceLine);
+      ctx.emitOp(53, "\u041A {x}", "segmented bitplane hit fraction", sourceLine);
+      ctx.emitOp(50, "\u041A \u0417\u041D", "segmented bitplane hit to count", sourceLine);
+      if (group < 3) ctx.emitJump(81, "\u0411\u041F", end, "segmented bitplane hit end", sourceLine);
+    }
+    ctx.emitLabel(end);
+    ctx.optimizations.push({
+      name: "segmented-bitplane-hit-helper",
+      detail: `Emitted shared hit helper for ${collection} through four 25-cell bitplanes.`
+    });
     return true;
   }
   function compileNegativeZeroDegreeSelectorCall(ctx, expr) {
@@ -29617,6 +35237,13 @@ var MKProEmulatorBundle = (() => {
         return;
       }
       case "indexed":
+        if (ctx.xHoldsExpression(expr)) {
+          ctx.optimizations.push({
+            name: "current-x-indexed-reuse",
+            detail: `Reused ${expressionToIntentText(expr)} already in X.`
+          });
+          return;
+        }
         ctx.emitIndexedRecall(expr);
         return;
       case "unary":
@@ -29762,6 +35389,18 @@ var MKProEmulatorBundle = (() => {
     const xParamStackStopRisk = matchXParamStackStopRiskRead(ctx.ast, proc);
     if (xParamStackStopRisk !== void 0 && expr.args.length === 1) {
       compileExpression(ctx, expr.args[0]);
+      if (countExpressionCalls(ctx.ast, proc.name) === 1) {
+        compileInlineXParamStackStopRiskRead(ctx, xParamStackStopRisk);
+        ctx.optimizations.push({
+          name: "x-param-stack-stop-risk-inline",
+          detail: `Inlined single-use ${proc.name} while passing ${xParamStackStopRisk.param} through X.`
+        });
+        ctx.optimizations.push({
+          name: "show-read-stack-stop-risk-lowering",
+          detail: `Reused displayed ${xParamStackStopRisk.param} as the parked Y value for ${proc.name}.`
+        });
+        return true;
+      }
       const bankSelectors2 = ctx.snapshotBankSelectorCache();
       ctx.emitJump(83, "\u041F\u041F", proc.name, `call function ${proc.name}`, proc.line);
       ctx.restoreBankSelectorCacheAfterCall(proc.name, bankSelectors2);
@@ -29783,6 +35422,20 @@ var MKProEmulatorBundle = (() => {
       detail: `Called function ${proc.name} and consumed its result from X.`
     });
     return true;
+  }
+  function compileInlineXParamStackStopRiskRead(ctx, risk) {
+    ctx.emitOp(14, "\u0412\u2191", "x-param inline keep displayed value", risk.showLine);
+    ctx.emitOp(80, "\u0421/\u041F", `show ${risk.display}`, risk.showLine);
+    ctx.armValueInY(risk.param);
+    try {
+      compileStackStopRiskTail(ctx, risk.risk, {
+        inputComment: "risk input read()",
+        inputLine: risk.line,
+        consumerLine: risk.line
+      });
+    } finally {
+      ctx.clearArmedValueInY();
+    }
   }
   function expressionLeadsWithRead(expr) {
     if (expr.kind !== "call") return false;
@@ -29821,6 +35474,9 @@ var MKProEmulatorBundle = (() => {
     if (name === "__spatial_hit") {
       if (compileSpatialHitCall(ctx, expr)) return;
     }
+    if (name === "__seg_bit_has") {
+      if (compileSegmentedBitplaneHitCall(ctx, expr)) return;
+    }
     if (name === NEGATIVE_ZERO_DEGREE_SELECTOR_GE) {
       if (compileNegativeZeroDegreeSelectorCall(ctx, expr)) return;
     }
@@ -29845,6 +35501,9 @@ var MKProEmulatorBundle = (() => {
         name: "small-set-primitive-lowering",
         detail: `Lowered ${expr.callee}() to coordinate-set arithmetic.`
       });
+      return;
+    }
+    if (name === "packed_score" && compilePackedScoreStackHelperCall(ctx, expr)) {
       return;
     }
     const macro = packedGridExpressionMacro(name, expr.args);
@@ -30093,6 +35752,18 @@ var MKProEmulatorBundle = (() => {
         return expr.callee.toLowerCase() === "random" && expr.args.length <= 2 || expr.args.some(expressionContainsValidRandom);
     }
   }
+  function compilePackedScoreStackHelperCall(ctx, expr) {
+    const helper = ctx.sharedPackedScoreStackHelper(void 0);
+    if (helper === void 0) return false;
+    compileExpression(ctx, expr.args[0]);
+    compileExpression(ctx, expr.args[1]);
+    ctx.emitJump(83, "\u041F\u041F", helper.label, "packed_score helper");
+    ctx.optimizations.push({
+      name: "packed-score-stack-helper-call",
+      detail: "Reused shared packed_score stack helper for packed-line scoring."
+    });
+    return true;
+  }
   function compileCommutativeCallWithCurrentX(ctx, expr, opcode) {
     const left = expr.args[0];
     const right = expr.args[1];
@@ -30175,6 +35846,8 @@ var MKProEmulatorBundle = (() => {
         return expressionReferencesIdentifier(statement.target.index, name) || expressionReferencesIdentifier(statement.expr, name);
       case "coord_list_remove":
         return expressionReferencesIdentifier(statement.item, name);
+      case "segmented_bitplane_update":
+        return expressionReferencesIdentifier(statement.item, name);
       case "if":
         return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifier(statement.thenBody, name) || statement.elseBody !== void 0 && statementsReadIdentifier(statement.elseBody, name);
       case "loop":
@@ -30224,6 +35897,7 @@ var MKProEmulatorBundle = (() => {
       case "core":
       case "decimal_series":
       case "coord_list_remove":
+      case "segmented_bitplane_update":
         return false;
       case "if":
         if (conditionReferencesProtected(statement.condition, protectedTemps)) return false;
@@ -30416,6 +36090,33 @@ var MKProEmulatorBundle = (() => {
   function referencesAnyTemp(expr, temps) {
     return temps.some((temp) => countIdentifierReads(expr, temp) > 0);
   }
+  function canCompileStackResidentExpression(expr, temps) {
+    switch (expr.kind) {
+      case "identifier":
+        return true;
+      case "number":
+      case "string":
+        return true;
+      case "indexed":
+        return !referencesAnyTemp(expr.index, temps);
+      case "unary":
+        return canCompileStackResidentExpression(expr.expr, temps);
+      case "binary":
+        return canCompileStackResidentExpression(expr.left, temps) && canCompileStackResidentExpression(expr.right, temps);
+      case "call": {
+        const name = expr.callee.toLowerCase();
+        const unary = STACK_TEMP_UNARY_CALL_OPCODES[name];
+        if (unary !== void 0 && expr.args.length === 1) {
+          return canCompileStackResidentExpression(expr.args[0], temps);
+        }
+        const binary = STACK_TEMP_BINARY_CALL_OPCODES[name];
+        if (binary !== void 0 && expr.args.length === 2) {
+          return canCompileStackResidentExpression(expr.args[0], temps) && canCompileStackResidentExpression(expr.args[1], temps);
+        }
+        return !referencesAnyTemp(expr, temps);
+      }
+    }
+  }
   function compileStackResidentExpression(ctx, expr, temps, line) {
     switch (expr.kind) {
       case "identifier": {
@@ -30536,6 +36237,7 @@ var MKProEmulatorBundle = (() => {
       case "core":
       case "decimal_series":
       case "coord_list_remove":
+      case "segmented_bitplane_update":
         return true;
     }
   }
@@ -30583,6 +36285,8 @@ var MKProEmulatorBundle = (() => {
     if (consumer.kind === "indexed_assign" && site.temps.some((segment) => expressionReferencesIdentifier(consumer.target.index, segment.assign.target))) {
       return 0;
     }
+    const tempNames = site.temps.map((segment) => segment.assign.target);
+    if (!canCompileStackResidentExpression(consumer.expr, tempNames)) return 0;
     emitStackResidentFusion(ctx, site);
     return site.consumerIndex - start + 1;
   }
@@ -30593,6 +36297,7 @@ var MKProEmulatorBundle = (() => {
     budget: 105,
     analysis: false
   };
+  var MK61_RETURN_STACK_LIMIT = 5;
   var REGISTER_ORDER = [
     "0",
     "1",
@@ -30677,6 +36382,48 @@ var MKProEmulatorBundle = (() => {
   function sourceHasMultipleProcs(source) {
     return (source.match(/\bfn\b/gu) ?? []).length >= 2;
   }
+  function sourceHasReferenceDeclaration(source) {
+    return /^\s*reference\s+\S+/mu.test(source);
+  }
+  function sourceMayUseBitMaskHelper(source) {
+    return /\bbit_(?:and|or|xor|not)\s*\(/u.test(source) || /\b(?:not\s+)?in\b/u.test(source);
+  }
+  function sourceHasDeadSourceResidualTempCandidate(source) {
+    let ast;
+    try {
+      ast = parseProgram(source);
+    } catch {
+      return false;
+    }
+    let found = false;
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (found) return;
+        switch (statement.kind) {
+          case "assign":
+            found = residualTempReusePlan(statement) !== void 0;
+            break;
+          case "if":
+            visitStatements(statement.thenBody);
+            if (statement.elseBody !== void 0) visitStatements(statement.elseBody);
+            break;
+          case "while":
+          case "loop":
+            visitStatements(statement.body);
+            break;
+          case "dispatch":
+            for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body);
+            if (statement.defaultBody !== void 0) visitStatements(statement.defaultBody);
+            break;
+          default:
+            break;
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    return found;
+  }
   function sourceHasRepeatedRoutableUnaryShape(source) {
     let ast;
     try {
@@ -30738,10 +36485,38 @@ var MKProEmulatorBundle = (() => {
     });
   }
   function compileMKPro(source, options = {}) {
+    const attemptCache = /* @__PURE__ */ new Map();
+    const onceCache = /* @__PURE__ */ new Map();
+    const cachedCompileLoweringAttempt = (loweringOptions) => {
+      const key = loweringOptionsCacheKey(loweringOptions);
+      const cached = attemptCache.get(key);
+      if (cached !== void 0) return compileAttemptCacheResult(cached);
+      try {
+        const result = compileLoweringAttempt(source, options, loweringOptions);
+        attemptCache.set(key, { ok: true, result });
+        return result;
+      } catch (error) {
+        attemptCache.set(key, { ok: false, error });
+        throw error;
+      }
+    };
+    const cachedCompileMKProOnce = (probeOptions, loweringOptions) => {
+      const key = `${stableCompileCacheKey(probeOptions)}|${loweringOptionsCacheKey(loweringOptions)}`;
+      const cached = onceCache.get(key);
+      if (cached !== void 0) return compileAttemptCacheResult(cached);
+      try {
+        const result = compileMKProOnce(source, probeOptions, loweringOptions);
+        onceCache.set(key, { ok: true, result });
+        return result;
+      } catch (error) {
+        onceCache.set(key, { ok: false, error });
+        throw error;
+      }
+    };
     let primary;
     let primaryError;
     try {
-      primary = compileLoweringAttempt(source, options, {});
+      primary = cachedCompileLoweringAttempt({});
     } catch (error) {
       if (!canRetryLoweringAfterPrimaryFailure(error)) throw error;
       primaryError = error;
@@ -30749,12 +36524,13 @@ var MKProEmulatorBundle = (() => {
     const candidates = [];
     const tryCandidate = (loweringOptions, name, detail) => {
       try {
-        candidates.push({ result: compileLoweringAttempt(source, options, loweringOptions), name, detail });
+        candidates.push({ result: cachedCompileLoweringAttempt(loweringOptions), name, detail });
       } catch {
       }
     };
-    const requestedBudget = { ...DEFAULT_OPTIONS, ...options }.budget;
-    const rescueThreshold = Math.min(requestedBudget, DEFAULT_OPTIONS.budget);
+    const opts = { ...DEFAULT_OPTIONS, ...options };
+    const requestedBudget = opts.budget;
+    const rescueThreshold = Math.min(requestedBudget, opts.indirectFlowRescueAbove ?? DEFAULT_OPTIONS.budget);
     const needsSizeRescue = primary === void 0 || primary.report.steps > rescueThreshold || primary.report.budgetReport.exceeded;
     const canRouteRepeatedUnaryArgs = sourceHasRepeatedRoutableUnaryShape(source);
     const primaryOverflows = primary === void 0 || primary.steps.length > 105;
@@ -30767,7 +36543,8 @@ var MKProEmulatorBundle = (() => {
       tryCandidate(spec.options, spec.name, spec.detail);
     };
     for (const spec of enumerateStaticCandidateSpecs({ source, primaryOverflows })) runSpec(spec);
-    reclaimCoalescedPreloadCandidates(source, options, needsSizeRescue, tryCandidate);
+    reclaimCoalescedPreloadCandidates(source, options, needsSizeRescue, tryCandidate, cachedCompileMKProOnce);
+    fractionalConstantSelectorCandidates(source, options, needsSizeRescue, tryCandidate, cachedCompileMKProOnce);
     const OFFICIAL_PROGRAM_LIMIT2 = 105;
     const selectBest = () => {
       let best2 = primary;
@@ -30781,9 +36558,9 @@ var MKProEmulatorBundle = (() => {
       }
       return { best: best2, selected: selected2 };
     };
-    if ((selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT2) {
+    if (needsSizeRescue && (selectBest().best?.steps.length ?? 0) > OFFICIAL_PROGRAM_LIMIT2) {
       for (const spec of enumerateExpansionCandidateSpecs({ source, primaryOverflows })) runSpec(spec);
-      demoteConstantIndirectFlowCandidates(source, options, needsSizeRescue, tryCandidate);
+      demoteConstantIndirectFlowCandidates(source, options, needsSizeRescue, tryCandidate, cachedCompileMKProOnce);
     }
     const { best, selected } = selectBest();
     if (best === void 0) {
@@ -30801,15 +36578,83 @@ var MKProEmulatorBundle = (() => {
     }
     return finishCompileAttempt(best, options.analysis === true);
   }
+  function compileAttemptCacheResult(entry) {
+    if (entry.ok) return entry.result;
+    throw entry.error;
+  }
+  function loweringOptionsCacheKey(options) {
+    return stableCompileCacheKey(options);
+  }
+  function fractionalConstantSelectorForValue(options, value) {
+    return options.fractionalConstantSelectors?.find((plan) => plan.value === value);
+  }
+  function fractionalSelectorPreloadValue(value, target) {
+    if (target <= 0) return void 0;
+    if (!fractionalSelectorCandidateValue(value)) return void 0;
+    const natural = naturalFractionalSelectorPreloadValue(value);
+    if (natural?.target === target) return natural.value;
+    const fraction = value.slice(1);
+    return `${target}${fraction}`;
+  }
+  function naturalFractionalSelectorPreloadValue(value) {
+    if (!fractionalSelectorCandidateValue(value)) return void 0;
+    const fraction = value.slice(2);
+    const firstSignificant = fraction.search(/[1-9]/u);
+    if (firstSignificant < 0) return void 0;
+    const significant = fraction.slice(firstSignificant);
+    if (/[1-9]/u.test(significant.slice(8))) return void 0;
+    const mantissa = significant.padEnd(8, "0").slice(0, 8);
+    const target = Number.parseInt(mantissa.slice(-2), 10);
+    if (target <= 0) return void 0;
+    return {
+      value: `${mantissa[0]}.${mantissa.slice(1)}E-${firstSignificant + 1}`,
+      target
+    };
+  }
+  function fractionalSelectorNeedsRecovery(value, selectorValue) {
+    return naturalFractionalSelectorPreloadValue(value)?.value !== selectorValue;
+  }
+  function fractionalSelectorCandidateValue(value) {
+    if (!/^0\.\d+$/u.test(value)) return false;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric > 0 && numeric < 1;
+  }
+  function stableCompileCacheKey(value) {
+    return JSON.stringify(stableCompileCacheValue(value));
+  }
+  function stableCompileCacheValue(value) {
+    if (value instanceof Set) {
+      return {
+        $set: [...value].map(stableCompileCacheValue).sort(stableCompileCacheValueCompare)
+      };
+    }
+    if (Array.isArray(value)) return value.map(stableCompileCacheValue);
+    if (value !== null && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).filter(([, item]) => item !== void 0).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, stableCompileCacheValue(item)])
+      );
+    }
+    return value;
+  }
+  function stableCompileCacheValueCompare(left, right) {
+    return JSON.stringify(left).localeCompare(JSON.stringify(right));
+  }
   var PROC_LAYOUT_MODIFIERS = [
     { options: { orderProcsByCallCount: true }, name: "call-count-proc-layout", detail: "Emitted procedures in descending call-count order so hot helpers occupy the cheapest addresses" },
     { options: { procLayoutStrategy: "size-asc" }, name: "size-asc-proc-layout", detail: "Emitted the smallest procedures first to pack hot helpers into the cheapest addresses" },
     { options: { procLayoutStrategy: "size-desc" }, name: "size-desc-proc-layout", detail: "Emitted the largest procedures first" },
     { options: { procLayoutStrategy: "reverse" }, name: "reverse-proc-layout", detail: "Emitted procedures in reverse source order" }
   ];
+  var DEMOTE_PROC_LAYOUT_MODIFIERS = PROC_LAYOUT_MODIFIERS.filter(
+    (layout) => layout.options.orderProcsByCallCount === true || layout.options.procLayoutStrategy === "size-asc"
+  );
+  var MAX_DEMOTED_INDIRECT_FLOW_VALUES = 4;
   function enumerateStaticCandidateSpecs(ctx) {
     const { source, primaryOverflows } = ctx;
     const specs = [];
+    const allowAggressivePostLayout = primaryOverflows || sourceHasReferenceDeclaration(source);
+    const mayUseBitMaskHelper = sourceMayUseBitMaskHelper(source);
+    const mayUseDeadSourceResidual = sourceHasDeadSourceResidualTempCandidate(source);
     const add = (options, name, detail, gate = "always") => {
       specs.push({ options, name, detail, gate });
     };
@@ -30854,6 +36699,122 @@ var MKProEmulatorBundle = (() => {
       "Freed the unused residual-dispatch scratch register to unlock more preloaded constants"
     );
     add(
+      { preserveDispatchCaseOrder: true },
+      "source-order-dispatch-layout",
+      "Kept numeric dispatch cases in source order so full layout can choose when local residual ordering blocks a cheaper layout",
+      "sizeRescue"
+    );
+    add(
+      { preserveDispatchCaseOrder: true, freeResidualDispatchScratch: true },
+      "source-order-dispatch-free-scratch",
+      "Combined source-order numeric dispatch layout with residual scratch freeing",
+      "sizeRescue"
+    );
+    add(
+      { recallStoredInputAfterDecrement: true },
+      "stored-input-decrement-recall-sync",
+      "Restored stored prompt input with \u041F->X after decrement guards to expose an X2 sync for later optimizer passes",
+      "sizeRescue"
+    );
+    add(
+      { singleBitMaskOpCopyReuse: true },
+      "single-bit-mask-op-copy-reuse",
+      "Copied a mask source once and reused the live X value for a following single-bit mask update when the full layout wins",
+      "sizeRescue"
+    );
+    add(
+      { dualUseConstantIndirectFlow: true },
+      "dual-use-constant-indirect-flow",
+      "Reused existing setup constant preloads as indirect-flow selectors when store-target proofs keep those registers stable",
+      "sizeRescue"
+    );
+    add(
+      { dualUseConstantIndirectFlow: true, tailBranchInversion: true },
+      "dual-use-constant-tail-branch-layout",
+      "Combined dual-use constant indirect-flow selectors with tail-branch inversion after full layout",
+      "sizeRescue"
+    );
+    add(
+      { conditionalBranchTrampoline: true },
+      "conditional-branch-trampoline-layout",
+      "Retargeted repeated condition branches through later identical conditionals to expose cheaper middle-entry layout targets",
+      "sizeRescue"
+    );
+    add(
+      { dualUseConstantIndirectFlow: true, conditionalBranchTrampoline: true },
+      "dual-use-constant-conditional-trampoline-layout",
+      "Combined dual-use constant indirect-flow selectors with conditional branch trampolines after full layout",
+      "sizeRescue"
+    );
+    add(
+      { dualUseConstantIndirectFlow: true, tailBranchInversion: true, conditionalBranchTrampoline: true },
+      "dual-use-constant-tail-conditional-trampoline-layout",
+      "Combined dual-use constant indirect-flow selectors, tail-branch inversion, and conditional branch trampolines after full layout",
+      "sizeRescue"
+    );
+    if (allowAggressivePostLayout && mayUseDeadSourceResidual) {
+      add(
+        { deadSourceResidualTempReuse: true },
+        "dead-source-residual-temp-reuse",
+        "Reused dead source registers for residual temporary values when whole-program layout wins"
+      );
+      add(
+        { deadSourceResidualTempReuse: true, tailBranchInversion: true },
+        "dead-source-residual-tail-branch",
+        "Combined dead-source residual temp reuse with tail-branch inversion"
+      );
+    }
+    if (allowAggressivePostLayout) {
+      add(
+        { aggressivePostLayoutIndirectFlow: true },
+        "aggressive-post-layout-indirect-flow",
+        "Tried proven post-layout indirect-flow and dark-entry rewrites even though the primary layout already fit"
+      );
+      add(
+        { aggressivePostLayoutIndirectFlow: true, invertBranchOrder: true },
+        "aggressive-post-layout-branch-order",
+        "Combined proven post-layout indirect-flow with inverted branch-order layout"
+      );
+      add(
+        { aggressivePostLayoutIndirectFlow: true, tailBranchInversion: true },
+        "aggressive-post-layout-tail-branch",
+        "Combined proven post-layout indirect-flow with tail-branch inversion"
+      );
+      if (mayUseDeadSourceResidual) {
+        add(
+          { deadSourceResidualTempReuse: true, aggressivePostLayoutIndirectFlow: true },
+          "dead-source-residual-aggressive-post-layout",
+          "Combined dead-source residual temp reuse with proven post-layout indirect-flow"
+        );
+        add(
+          { deadSourceResidualTempReuse: true, aggressivePostLayoutIndirectFlow: true, tailBranchInversion: true },
+          "dead-source-residual-aggressive-tail-branch",
+          "Combined dead-source residual temp reuse, proven post-layout indirect-flow, and tail-branch inversion"
+        );
+      }
+      add(
+        { aggressivePostLayoutIndirectFlow: true, sharedStraightLineCallBodies: true },
+        "aggressive-post-layout-shared-call-body",
+        "Combined proven post-layout indirect-flow with shared call-body helpers"
+      );
+      add(
+        { aggressivePostLayoutIndirectFlow: true, dualUseConstantIndirectFlow: true },
+        "aggressive-post-layout-dual-use-constant",
+        "Combined proven post-layout indirect-flow with dual-use constant selectors"
+      );
+      add(
+        { aggressivePostLayoutIndirectFlow: true, dualUseConstantIndirectFlow: true, tailBranchInversion: true },
+        "aggressive-post-layout-dual-use-tail-branch",
+        "Combined proven post-layout indirect-flow, dual-use constant selectors, and tail-branch inversion"
+      );
+    }
+    add(
+      { indirectUnderflowDecrement: true },
+      "indirect-underflow-decrement",
+      "Used R0..R3 indirect pre-decrement for terminal underflow guards when full-program layout wins",
+      "sizeRescue"
+    );
+    add(
       { aliasXReuse: true },
       "alias-x-reuse",
       "Reused X for copy-equivalent variables at scalar sites (conditions, near_any)"
@@ -30896,9 +36857,33 @@ var MKProEmulatorBundle = (() => {
       "Shared repeated straight-line bodies that contain direct subroutine calls"
     );
     add(
+      { packedLineFamilyUpdateCheckTail: true },
+      "packed-line-family-update-check-tail",
+      "Tried a local shared packed-line update/check tail for source-shaped packed line families",
+      "sizeRescue"
+    );
+    add(
+      { packedLineFamilyMutatingSelectorUpdateCheckTail: true },
+      "packed-line-family-mutating-selector-update-check-tail",
+      "Tried a descending R0..R3 mutating-selector packed-line update/check tail for source-shaped packed line families",
+      "sizeRescue"
+    );
+    add(
+      { packedLineFamilyBorrowedMutatingSelectorUpdateCheckTail: true },
+      "packed-line-family-borrowed-mutating-selector-update-check-tail",
+      "Tried borrowing a dead R0..R3 register for descending packed-line update/check tails",
+      "sizeRescue"
+    );
+    add(
       { tailBranchInversion: true },
       "late-layout-tail-branch-inversion",
       "Selected tail-branch inversion after full layout"
+    );
+    add(
+      { tailBranchInversion: true, conditionalBranchTrampoline: true },
+      "late-layout-tail-branch-conditional-trampoline",
+      "Selected tail-branch inversion plus conditional branch trampolines after full layout",
+      "sizeRescue"
     );
     add(
       { hoistSharedHelpers: true, canonicalizeIfChains: true, tailBranchInversion: true },
@@ -30925,6 +36910,32 @@ var MKProEmulatorBundle = (() => {
       "shared-bit-mask-helper-hoisted-layout",
       "Selected shared bit_mask helper calls with hoisted helper layout"
     );
+    if (mayUseBitMaskHelper) {
+      add(
+        { compactBitMaskHelperBody: true },
+        "compact-bit-mask-helper-body",
+        "Selected compact shared bit_mask helper body after full layout",
+        "sizeRescue"
+      );
+      add(
+        { compactBitMaskHelperBody: true, tailBranchInversion: true },
+        "compact-bit-mask-helper-tail-branch",
+        "Combined compact shared bit_mask helper body with tail-branch inversion",
+        "sizeRescue"
+      );
+    }
+    if (sourceMayUseSegmentedLineCount(source)) {
+      add(
+        { segmentedBitplanes: true, segmentedLineCountScan: true },
+        "segmented-bitplane-line-count-scan-layout",
+        "Scanned 10x10 segmented bitplanes through one alignment-tested board loop instead of four generic progressions"
+      );
+      add(
+        { segmentedBitplanes: true, segmentedLineCountScan: true, hoistSharedHelpers: true },
+        "segmented-bitplane-line-count-scan-hoisted",
+        "Combined the segmented 10x10 line_count scan with hoisted helpers for cheaper helper calls"
+      );
+    }
     add(
       { signedAbsMatchPairs: true },
       "signed-abs-match-pair",
@@ -31038,7 +37049,7 @@ var MKProEmulatorBundle = (() => {
       add(
         { domainErrorGuards: true },
         "domain-error-guards",
-        "Replaced terminal-error guards with self-trapping domain opcodes (F \u221A / F lg)"
+        "Replaced terminal-error guards with self-trapping domain opcodes (F \u221A / F lg / F sin^-1)"
       );
       add(
         { domainErrorGuards: true, unrollCountedLoops: true },
@@ -31124,15 +37135,39 @@ var MKProEmulatorBundle = (() => {
       "inline-floor-hoisted-proc-tail-layout",
       "Combined inline floor-row display expressions with front-hoisted procs and tail-branch inversion"
     );
+    add(
+      { xParamYStackStoredEntry: true },
+      "x-param-y-stack-stored-entry",
+      "Tried secondary entries for X-parameter procedures whose first body update consumes a stack-carried value",
+      "sizeRescue"
+    );
     return specs;
+  }
+  function sourceMayUseSegmentedLineCount(source) {
+    return /\bline_count\s*\(/u.test(source) && /\bcells\s*\(/u.test(source) && /\bboard\s*\(\s*0\s*\.\.\s*9\s*,\s*0\s*\.\.\s*9\s*\)/u.test(source);
   }
   function enumerateExpansionCandidateSpecs(ctx) {
     const { source } = ctx;
     const specs = [];
     if (!sourceHasMultipleProcs(source)) return specs;
+    const mayUseBitMaskHelper = sourceMayUseBitMaskHelper(source);
+    const mayUseDeadSourceResidual = sourceHasDeadSourceResidualTempCandidate(source);
     const semanticBundles = [
       { options: { stackResidentTemps: true }, name: "stack-resident-temps", detail: "stack-resident temporaries" },
-      { options: { sharedBitMaskHelperCalls: true }, name: "shared-bit-mask-helper", detail: "shared bit_mask helper calls" }
+      { options: { sharedBitMaskHelperCalls: true }, name: "shared-bit-mask-helper", detail: "shared bit_mask helper calls" },
+      { options: { dualUseConstantIndirectFlow: true }, name: "dual-use-constant-indirect-flow", detail: "dual-use constant indirect-flow selectors" },
+      { options: { dualUseConstantIndirectFlow: true, tailBranchInversion: true }, name: "dual-use-constant-tail-branch", detail: "dual-use constant indirect-flow selectors with tail-branch inversion" },
+      { options: { conditionalBranchTrampoline: true }, name: "conditional-branch-trampoline", detail: "conditional branch trampolines" },
+      { options: { dualUseConstantIndirectFlow: true, conditionalBranchTrampoline: true }, name: "dual-use-constant-conditional-trampoline", detail: "dual-use constant indirect-flow selectors with conditional branch trampolines" },
+      { options: { xParamYStackStoredEntry: true }, name: "x-param-y-stack-stored-entry", detail: "secondary X-parameter/Y-stack procedure entries" },
+      ...mayUseBitMaskHelper ? [
+        { options: { compactBitMaskHelperBody: true }, name: "compact-bit-mask-helper-body", detail: "compact shared bit_mask helper body" },
+        { options: { compactBitMaskHelperBody: true, tailBranchInversion: true }, name: "compact-bit-mask-helper-tail-branch", detail: "compact shared bit_mask helper body with tail-branch inversion" }
+      ] : [],
+      ...mayUseDeadSourceResidual ? [
+        { options: { deadSourceResidualTempReuse: true }, name: "dead-source-residual-temp-reuse", detail: "dead-source residual temp reuse" },
+        { options: { deadSourceResidualTempReuse: true, tailBranchInversion: true }, name: "dead-source-residual-tail-branch", detail: "dead-source residual temp reuse with tail-branch inversion" }
+      ] : []
     ];
     for (const bundle of semanticBundles) {
       for (const layout of PROC_LAYOUT_MODIFIERS) {
@@ -31146,10 +37181,26 @@ var MKProEmulatorBundle = (() => {
     }
     return specs;
   }
-  function reclaimCoalescedPreloadCandidates(source, options, needsSizeRescue, tryCandidate) {
+  function reclaimCoalescedPreloadCandidates(source, options, needsSizeRescue, tryCandidate, compileOnce = (compileOptions, loweringOptions) => compileMKProOnce(source, compileOptions, loweringOptions)) {
+    const allowAggressivePostLayout = needsSizeRescue || sourceHasReferenceDeclaration(source);
+    const mayUseBitMaskHelper = sourceMayUseBitMaskHelper(source);
+    const mayUseDeadSourceResidual = sourceHasDeadSourceResidualTempCandidate(source);
     const reclaimBases = [
       {},
+      ...allowAggressivePostLayout ? [
+        { aggressivePostLayoutIndirectFlow: true },
+        { aggressivePostLayoutIndirectFlow: true, invertBranchOrder: true },
+        { aggressivePostLayoutIndirectFlow: true, tailBranchInversion: true }
+      ] : [],
       { unrollCountedLoops: true },
+      ...mayUseBitMaskHelper ? [
+        { compactBitMaskHelperBody: true },
+        { compactBitMaskHelperBody: true, tailBranchInversion: true }
+      ] : [],
+      ...mayUseDeadSourceResidual ? [
+        { deadSourceResidualTempReuse: true },
+        { deadSourceResidualTempReuse: true, tailBranchInversion: true }
+      ] : [],
       ...needsSizeRescue ? [
         { setupOnlyCountedLoopInit: true },
         { unrollCountedLoops: true, setupOnlyCountedLoopInit: true },
@@ -31162,7 +37213,7 @@ var MKProEmulatorBundle = (() => {
     for (const base of reclaimBases) {
       let probe;
       try {
-        probe = compileMKProOnce(source, { ...options, analysis: true }, { ...base, collectCoalesceShares: true });
+        probe = compileOnce({ ...options, analysis: true }, { ...base, collectCoalesceShares: true });
       } catch {
         continue;
       }
@@ -31178,13 +37229,218 @@ var MKProEmulatorBundle = (() => {
       );
     }
   }
-  function demoteConstantIndirectFlowCandidates(source, options, needsSizeRescue, tryCandidate) {
+  function fractionalConstantSelectorCandidates(source, options, needsSizeRescue, tryCandidate, compileOnce = (compileOptions, loweringOptions) => compileMKProOnce(source, compileOptions, loweringOptions)) {
+    if (!needsSizeRescue) return;
+    const bases = [
+      {},
+      { dualUseConstantIndirectFlow: true },
+      { dualUseConstantIndirectFlow: true, tailBranchInversion: true },
+      { conditionalBranchTrampoline: true },
+      { dualUseConstantIndirectFlow: true, conditionalBranchTrampoline: true },
+      { dualUseConstantIndirectFlow: true, tailBranchInversion: true, conditionalBranchTrampoline: true },
+      { procLayoutStrategy: "reverse" },
+      { dualUseConstantIndirectFlow: true, tailBranchInversion: true, procLayoutStrategy: "reverse" },
+      { dualUseConstantIndirectFlow: true, tailBranchInversion: true, conditionalBranchTrampoline: true, procLayoutStrategy: "reverse" }
+    ];
+    const tried = /* @__PURE__ */ new Set();
+    for (const base of bases) {
+      fractionalConstantSelectorCandidatesForBase(
+        options,
+        base,
+        tried,
+        tryCandidate,
+        compileOnce,
+        "fractional-constant-selector",
+        (plan) => `Packed direct-flow target ${plan.target} into fractional constant ${plan.value}`
+      );
+    }
+  }
+  function fractionalConstantSelectorCandidatesForBase(options, base, tried, tryCandidate, compileOnce, name, detail, limit = 12) {
+    let probe;
+    try {
+      probe = compileOnce({ ...options, analysis: true }, base);
+    } catch {
+      return;
+    }
+    for (const plan of discoverFractionalConstantSelectorPlans(probe).slice(0, limit)) {
+      const key = `${JSON.stringify(stableCompileCacheValue(base))}|${plan.value}|${plan.target}`;
+      if (tried.has(key)) continue;
+      tried.add(key);
+      tryCandidate(
+        {
+          ...base,
+          dualUseConstantIndirectFlow: true,
+          fractionalConstantSelectors: [plan],
+          forceFractionalConstantSelectorPreloads: uniqueNormalizedFractionalSelectorValues([
+            ...base.forceFractionalConstantSelectorPreloads ?? [],
+            plan.value
+          ])
+        },
+        name,
+        detail(plan)
+      );
+    }
+  }
+  function discoverFractionalConstantSelectorPlans(result) {
+    const targetStats = directFlowTargetStats(result.steps);
+    if (targetStats.size === 0) return [];
+    const plans = [];
+    for (const source of fractionalConstantSelectorSources(result)) {
+      for (const [target, targetStat] of targetStats.entries()) {
+        const selectorValue = fractionalSelectorPreloadValue(source.value, target);
+        if (selectorValue === void 0) continue;
+        const needsRecovery = fractionalSelectorNeedsRecovery(source.value, selectorValue);
+        const directCount = needsRecovery ? targetStat.count : targetStat.stableWithoutRetargetCount;
+        const recoveryCost = needsRecovery ? source.useCount : 0;
+        const benefit = directCount - recoveryCost;
+        if (benefit <= 0) continue;
+        if (!source.registers.some(
+          (register) => evaluateIndirectAddress(register, selectorValue, "flow")?.actualFlowTarget === target
+        )) {
+          continue;
+        }
+        plans.push({ value: source.value, target, benefit });
+      }
+    }
+    return plans.sort(
+      (left, right) => right.benefit - left.benefit || directFlowTargetRank(result.steps, right.target) - directFlowTargetRank(result.steps, left.target) || left.value.localeCompare(right.value)
+    ).map(({ value, target }) => ({ value, target }));
+  }
+  function fractionalConstantSelectorSources(result) {
+    const sources = /* @__PURE__ */ new Map();
+    for (const preload of result.report.preloads) {
+      const value = normalizeConstantLiteral(preload.value);
+      if (!fractionalSelectorCandidateValue(value)) continue;
+      const register = registerFromText(preload.register);
+      const recallCount = fractionalConstantRecallCount(result.steps, register, value);
+      if (recallCount === 0) continue;
+      sources.set(value, { value, registers: [register], useCount: recallCount });
+    }
+    for (const value of collectPreloadConstantValues(result.ast, false)) {
+      if (!fractionalSelectorCandidateValue(value) || sources.has(value)) continue;
+      const useCount = countRuntimeLiteralUses(result.ast, value);
+      if (useCount === 0) continue;
+      sources.set(value, {
+        value,
+        registers: stableConstantSelectorProbeRegisters(),
+        useCount
+      });
+    }
+    return [...sources.values()];
+  }
+  function stableConstantSelectorProbeRegisters() {
+    return [...REGISTER_ORDER].reverse().filter((register) => registerIndex(register) >= 7);
+  }
+  function countRuntimeLiteralUses(ast, value) {
+    let count = 0;
+    const visitExpr = (expr) => {
+      if (expr.kind === "number") {
+        if (normalizeConstantLiteral(expr.raw) === value) count += 1;
+        return;
+      }
+      if (expr.kind === "unary") {
+        if (expr.op === "-" && expr.expr.kind === "number") {
+          if (normalizeConstantLiteral(negatedNumberLiteral(expr.expr.raw)) === value) count += 1;
+          return;
+        }
+        visitExpr(expr.expr);
+        return;
+      }
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+        return;
+      }
+      if (expr.kind === "call") {
+        const macro = packedGridExpressionMacro(expr.callee.toLowerCase(), expr.args);
+        if (macro !== void 0) {
+          visitExpr(macro);
+          return;
+        }
+        for (const arg of expr.args) visitExpr(arg);
+      }
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "assign") visitExpr(statement.expr);
+        if (statement.kind === "indexed_assign") {
+          visitExpr(statement.target.index);
+          visitExpr(statement.expr);
+        }
+        if (statement.kind === "if") {
+          visitExpr(statement.condition.left);
+          visitExpr(statement.condition.right);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody !== void 0) visitStatements(statement.elseBody);
+        }
+        if (statement.kind === "loop" || statement.kind === "while") visitStatements(statement.body);
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody !== void 0) visitStatements(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    return count;
+  }
+  function directFlowTargetStats(steps) {
+    const stats = /* @__PURE__ */ new Map();
+    for (let index = 0; index < steps.length - 1; index += 1) {
+      if (!getOpcode(steps[index].opcode).takesAddress) continue;
+      const target = formalAddressInfo(steps[index + 1].opcode).actual;
+      if (target < 0 || target > 104) continue;
+      const current = stats.get(target) ?? { count: 0, stableWithoutRetargetCount: 0 };
+      const addressCell = steps[index + 1].address;
+      stats.set(target, {
+        count: current.count + 1,
+        stableWithoutRetargetCount: current.stableWithoutRetargetCount + (addressCell > target ? 1 : 0)
+      });
+      index += 1;
+    }
+    return stats;
+  }
+  function directFlowTargetRank(steps, target) {
+    let rank = 0;
+    for (let index = 0; index < steps.length - 1; index += 1) {
+      if (!getOpcode(steps[index].opcode).takesAddress) continue;
+      if (formalAddressInfo(steps[index + 1].opcode).actual === target) rank += steps.length - index;
+      index += 1;
+    }
+    return rank;
+  }
+  function fractionalConstantRecallCount(steps, register, value) {
+    const opcode = 96 + registerIndex(register);
+    const comment = `preload const ${value}`;
+    return steps.filter((step) => step.opcode === opcode && step.comment === comment).length;
+  }
+  function demoteConstantIndirectFlowCandidates(source, options, needsSizeRescue, tryCandidate, compileOnce = (compileOptions, loweringOptions) => compileMKProOnce(source, compileOptions, loweringOptions)) {
     const demoteBases = [
       {},
+      { indirectUnderflowDecrement: true },
+      { dualUseConstantIndirectFlow: true },
+      { dualUseConstantIndirectFlow: true, tailBranchInversion: true },
+      ...DEMOTE_PROC_LAYOUT_MODIFIERS.flatMap((layout) => [
+        { dualUseConstantIndirectFlow: true, ...layout.options },
+        { dualUseConstantIndirectFlow: true, tailBranchInversion: true, ...layout.options }
+      ]),
+      { indirectUnderflowDecrement: true, dualUseConstantIndirectFlow: true },
       { shareRandomCell: true, hoistSharedHelpers: true },
       { freeResidualDispatchScratch: true },
       { sharedBitMaskHelperCalls: true },
       { sharedBitMaskHelperCalls: true, hoistSharedHelpers: true },
+      ...needsSizeRescue ? [
+        { setupOnlyCountedLoopInit: true, hoistProcs: true, aggressiveIndirectCall: true }
+      ] : [],
+      ...sourceHasComparisonGuardedUpdate(source) ? [
+        { comparisonGuardedUpdateSelectors: true },
+        { comparisonGuardedUpdateSelectors: true, invertBranchOrder: true }
+      ] : [],
       ...sourceMayContainErrorTrap(source) ? [
         { domainErrorGuards: true, unrollCountedLoops: true },
         ...needsSizeRescue ? [
@@ -31203,51 +37459,80 @@ var MKProEmulatorBundle = (() => {
       ] : []
     ];
     const triedDemotions = /* @__PURE__ */ new Set();
+    const triedDemotedFractionalSelectors = /* @__PURE__ */ new Set();
     for (const base of demoteBases) {
       let probe;
       try {
-        probe = compileMKProOnce(source, { ...options, analysis: true }, base);
+        probe = compileOnce({ ...options, analysis: true }, base);
       } catch {
         continue;
       }
-      for (const preload of probe.report.preloads ?? []) {
-        if (preload.countsAgainstProgram || !/^-?\d+$/u.test(preload.value)) continue;
-        const key = `${JSON.stringify(base)}|${preload.value}`;
+      const demotableValues = demotableIndirectFlowPreloadValues(probe);
+      for (const value of demotableValues) {
+        const key = `${JSON.stringify(base)}|${value}`;
         if (triedDemotions.has(key)) continue;
         triedDemotions.add(key);
+        const demotedBase = { ...base, suppressConstantPreloads: /* @__PURE__ */ new Set([value]) };
         tryCandidate(
-          { ...base, suppressConstantPreloads: /* @__PURE__ */ new Set([preload.value]) },
+          demotedBase,
           "demote-constant-indirect-flow",
-          `Inlined single-use constant ${preload.value} to free a register for post-layout indirect flow`
+          `Inlined single-use constant ${value} to free a register for post-layout indirect flow`
         );
+        if (base.dualUseConstantIndirectFlow === true) {
+          fractionalConstantSelectorCandidatesForBase(
+            options,
+            demotedBase,
+            triedDemotedFractionalSelectors,
+            tryCandidate,
+            compileOnce,
+            "demote-fractional-constant-selector",
+            (plan) => `Inlined single-use constant ${value} and packed direct-flow target ${plan.target} into fractional constant ${plan.value}`,
+            4
+          );
+        }
       }
       const suppressed = /* @__PURE__ */ new Set();
       for (let depth = 0; depth < 6; depth += 1) {
         let chainProbe;
         try {
-          chainProbe = compileMKProOnce(source, { ...options, analysis: true }, {
+          chainProbe = compileOnce({ ...options, analysis: true }, {
             ...base,
             suppressConstantPreloads: new Set(suppressed)
           });
         } catch {
           break;
         }
-        const next = (chainProbe.report.preloads ?? []).filter((preload) => !preload.countsAgainstProgram && /^-?\d+$/u.test(preload.value) && !suppressed.has(preload.value)).sort(
-          (left, right) => estimateNumberCost2(left.value) - estimateNumberCost2(right.value) || left.value.length - right.value.length || left.value.localeCompare(right.value)
-        )[0];
+        const next = demotableIndirectFlowPreloadValues(chainProbe, suppressed)[0];
         if (next === void 0) break;
-        suppressed.add(next.value);
+        suppressed.add(next);
         const values = [...suppressed];
         const key = `${JSON.stringify(base)}|chain:${values.join(",")}`;
         if (triedDemotions.has(key)) continue;
         triedDemotions.add(key);
+        const demotedBase = { ...base, suppressConstantPreloads: new Set(values) };
         tryCandidate(
-          { ...base, suppressConstantPreloads: new Set(values) },
+          demotedBase,
           "demote-constant-chain-indirect-flow",
           `Inlined constants ${values.join(", ")} to keep a register free for post-layout indirect flow`
         );
       }
     }
+  }
+  function demotableIndirectFlowPreloadValues(result, suppressed = /* @__PURE__ */ new Set()) {
+    const values = /* @__PURE__ */ new Set();
+    for (const preload of result.report.preloads ?? []) {
+      const value = demotableIndirectFlowPreloadValue(preload);
+      if (value !== void 0 && !suppressed.has(value)) values.add(value);
+    }
+    return [...values].sort(
+      (left, right) => estimateNumberCost2(left) - estimateNumberCost2(right) || left.length - right.length || left.localeCompare(right)
+    ).slice(0, MAX_DEMOTED_INDIRECT_FLOW_VALUES);
+  }
+  function demotableIndirectFlowPreloadValue(preload) {
+    if (preload.countsAgainstProgram) return void 0;
+    const value = normalizeConstantLiteral(preload.value);
+    if (/^[A-F][0-9A-F]$/iu.test(value)) return void 0;
+    return executableSetupValue(value) === void 0 ? void 0 : value;
   }
   function estimatedStartupProgramCost(result) {
     return result.steps.length + estimatedStartupCost(result);
@@ -31265,12 +37550,18 @@ var MKProEmulatorBundle = (() => {
     try {
       return compileMKProOnce(source, options, loweringOptions);
     } catch (error) {
-      if (options.analysis === true || !isOnlyBudgetExceeded(error)) throw error;
+      if (options.analysis === true || !canRetryLoweringAttemptInAnalysis(error, options)) throw error;
       return compileMKProOnce(source, { ...options, analysis: true }, loweringOptions);
     }
   }
   function isOnlyBudgetExceeded(error) {
     return error instanceof CompileError && error.diagnostics.some((diagnostic) => diagnostic.level === "error" && diagnostic.code === "BUDGET_EXCEEDED") && error.diagnostics.every((diagnostic) => diagnostic.level !== "error" || diagnostic.code === "BUDGET_EXCEEDED");
+  }
+  function canRetryLoweringAttemptInAnalysis(error, options) {
+    if (isOnlyBudgetExceeded(error)) return true;
+    const requestedBudget = { ...DEFAULT_OPTIONS, ...options }.budget;
+    if (requestedBudget > DEFAULT_OPTIONS.budget) return false;
+    return canRetryLoweringAfterPrimaryFailure(error);
   }
   function canRetryLoweringAfterPrimaryFailure(error) {
     if (!(error instanceof CompileError)) return false;
@@ -31809,6 +38100,10 @@ var MKProEmulatorBundle = (() => {
           const item = rewriteExpr(statement.item);
           return item === statement.item ? statement : { ...statement, item };
         }
+        case "segmented_bitplane_update": {
+          const item = rewriteExpr(statement.item);
+          return item === statement.item ? statement : { ...statement, item };
+        }
         case "pause":
         case "preview":
         case "halt":
@@ -31978,7 +38273,8 @@ var MKProEmulatorBundle = (() => {
   function compileMKProOnce(source, options, loweringOptions) {
     const ast = parseProgram(source, {
       signedAbsMatchPairs: loweringOptions.signedAbsMatchPairs === true,
-      synthesizeParametricSiblings: loweringOptions.synthesizeParametricSiblings === true
+      synthesizeParametricSiblings: loweringOptions.synthesizeParametricSiblings === true,
+      segmentedBitplanes: loweringOptions.segmentedBitplanes === true
     });
     const opts = { ...DEFAULT_OPTIONS, ...options };
     if (loweringOptions.coalesceCopies === true) opts.coalesceCopies = true;
@@ -31997,10 +38293,16 @@ var MKProEmulatorBundle = (() => {
     materializeDisplayExpressions(ast, optimizations, loweringOptions.inlineFloorPackedRowExpressions === true);
     elideXParamReturnStateFields(ast, optimizations);
     const foldedConstants = foldProgramConstants(ast);
-    if (foldedConstants > 0) {
+    if (foldedConstants.applied > 0) {
       optimizations.push({
         name: "expression-constant-folder",
-        detail: `Folded ${foldedConstants} constant expression node(s) before code generation.`
+        detail: `Folded ${foldedConstants.applied} constant expression node(s) before code generation.`
+      });
+    }
+    if (foldedConstants.grdAngleAssumptions > 0) {
+      optimizations.push({
+        name: "grd-angle-mode-assumption",
+        detail: `Folded ${foldedConstants.grdAngleAssumptions} \u0413\u0420\u0414-only trigonometric identity node(s) under requires angle_mode(grd).`
       });
     }
     if (loweringOptions.setupOnlyCountedLoopInit !== true) {
@@ -32015,10 +38317,16 @@ var MKProEmulatorBundle = (() => {
     if (loweringOptions.comparisonGuardedUpdateSelectors === true) {
       canonicalizeComparisonGuardedUpdateCorrections(ast, optimizations);
       const refoldedConstants = foldProgramConstants(ast);
-      if (refoldedConstants > 0) {
+      if (refoldedConstants.applied > 0) {
         optimizations.push({
           name: "expression-constant-folder",
-          detail: `Folded ${refoldedConstants} comparison guarded correction expression node${refoldedConstants === 1 ? "" : "s"} before code generation.`
+          detail: `Folded ${refoldedConstants.applied} comparison guarded correction expression node${refoldedConstants.applied === 1 ? "" : "s"} before code generation.`
+        });
+      }
+      if (refoldedConstants.grdAngleAssumptions > 0) {
+        optimizations.push({
+          name: "grd-angle-mode-assumption",
+          detail: `Folded ${refoldedConstants.grdAngleAssumptions} \u0413\u0420\u0414-only trigonometric identity node(s) under requires angle_mode(grd).`
         });
       }
     }
@@ -32028,7 +38336,13 @@ var MKProEmulatorBundle = (() => {
     inlineDisplayStringValues(ast, optimizations);
     trimDisplayEdgeWhitespace(ast, optimizations);
     fuseTailCopyAssignments(ast, optimizations);
-    eliminateUnobservedState(ast, optimizations);
+    if (loweringOptions.deadSourceResidualTempReuse === true) {
+      reuseDeadSourceResidualTemps(ast, optimizations);
+    }
+    inlineIndexedBitReportBranchTemps(ast, optimizations);
+    eliminateUnobservedState(ast, optimizations, {
+      preserveDispatchCaseOrder: loweringOptions.preserveDispatchCaseOrder === true
+    });
     eliminateIdentityAssignments(ast, optimizations);
     if (!opts.disableInterproceduralOpts) {
       for (let pass = 0; pass < 4; pass += 1) {
@@ -32053,7 +38367,10 @@ var MKProEmulatorBundle = (() => {
     validateV2Intent(ast, diagnostics);
     validateReservedInternalNames(ast, diagnostics);
     validateFunctionTailRecursion(ast, diagnostics);
+    validateFunctionReturnStackDepth(ast, diagnostics);
     validateRawMachineHazards(ast, warnings);
+    warnHardwareMaxMinZeroOperands(ast, warnings);
+    warnShowHaltStyleRule(ast, warnings);
     if (diagnostics.some((diagnostic) => diagnostic.level === "error")) {
       throw new CompileError(diagnostics);
     }
@@ -32086,9 +38403,13 @@ var MKProEmulatorBundle = (() => {
       loweringOptions.suppressConstantPreloads,
       loweringOptions.sharedBitMaskHelperCalls === true,
       loweringOptions.startupAwareConstantPreloads === true,
+      loweringOptions.forceFractionalConstantSelectorPreloads ?? [],
       loweringOptions.forcedRegisterShares ?? [],
       loweringOptions.xParamValueFunctions === true,
-      loweringOptions.comparisonGuardedUpdateSelectors === true
+      loweringOptions.comparisonGuardedUpdateSelectors === true,
+      loweringOptions.preserveDispatchCaseOrder === true,
+      loweringOptions.packedLineFamilyMutatingSelectorUpdateCheckTail === true,
+      opts.strictAllocation === true
     );
     const context = new EmitContext(
       ast,
@@ -32105,28 +38426,52 @@ var MKProEmulatorBundle = (() => {
     const coalesceShares = loweringOptions.collectCoalesceShares === true ? [...computeNonOverlappingRegisterMapping(raiseMachineToIr(context.items), { defAware: true })].map(
       ([freeRegister, keepRegister]) => ({ freeRegister, keepRegister })
     ) : void 0;
-    const passOptions = loweringOptions.tailBranchInversion === true ? { ...opts, tailBranchInversion: true } : opts;
+    const preloadedConstantRegisters = constantPreloadRegisters(allocation, loweringOptions);
+    const passOptions = loweringOptions.tailBranchInversion === true || loweringOptions.conditionalBranchTrampoline === true ? {
+      ...opts,
+      ...loweringOptions.tailBranchInversion === true ? { tailBranchInversion: true } : {},
+      ...loweringOptions.conditionalBranchTrampoline === true ? { conditionalBranchTrampoline: true } : {}
+    } : opts;
+    const passOptionsWithPreloads = {
+      ...passOptions,
+      preloadedConstantRegisters,
+      dualUseConstantIndirectFlow: loweringOptions.dualUseConstantIndirectFlow === true
+    };
     const exactDecimalSeries = programContainsDecimalSeries(ast);
-    const optimizedResult = exactDecimalSeries ? { items: context.items, preloads: [] } : optimizeItems(context.items, passOptions, optimizations);
+    const optimizedResult = exactDecimalSeries ? { items: context.items, preloads: [] } : optimizeItems(context.items, passOptionsWithPreloads, optimizations);
     const referenceMetrics = ast.reference === void 0 ? void 0 : resolveReferenceMetrics(ast.reference);
-    const indirectFlowRescueAbove = opts.indirectFlowRescueAbove ?? (referenceMetrics === void 0 ? void 0 : Math.min(referenceMetrics.span, opts.budget));
+    const indirectFlowRescueAbove = loweringOptions.aggressivePostLayoutIndirectFlow === true ? 0 : opts.indirectFlowRescueAbove ?? (referenceMetrics === void 0 ? void 0 : Math.min(referenceMetrics.span, opts.budget));
     const postLayoutFlow = exactDecimalSeries ? { items: optimizedResult.items, optimizations: [], preloads: [] } : optimizePostLayoutIndirectFlow(
       optimizedResult.items,
-      passOptions,
+      passOptionsWithPreloads,
       indirectFlowRescueAbove
     );
     const postLayoutR0Flow = exactDecimalSeries ? { items: postLayoutFlow.items, optimizations: [], preloads: [] } : optimizePostLayoutFractionalR0Flow(
       postLayoutFlow.items,
       [...optimizedResult.preloads, ...postLayoutFlow.preloads]
     );
-    const postLayoutOverlay = exactDecimalSeries ? { items: postLayoutR0Flow.items, optimizations: [], preloads: [] } : optimizePostLayoutAddressCodeOverlay(postLayoutR0Flow.items);
+    const setupPreloads = buildPreloadReport(ast, allocation, loweringOptions);
+    const retargetableSetupPreloads = fractionalSelectorSetupPreloads(setupPreloads, allocation, loweringOptions);
+    const postLayoutStopTail = exactDecimalSeries ? { items: postLayoutR0Flow.items, optimizations: [], preloads: postLayoutFlow.preloads } : optimizePostLayoutStopTailReuse(postLayoutR0Flow.items, [
+      ...postLayoutFlow.preloads,
+      ...retargetableSetupPreloads
+    ]);
+    const postLayoutOverlay = exactDecimalSeries ? { items: postLayoutStopTail.items, optimizations: [], preloads: [] } : optimizePostLayoutAddressCodeOverlay(postLayoutStopTail.items);
     const optimized = postLayoutOverlay.items;
-    optimizations.push(...postLayoutFlow.optimizations, ...postLayoutR0Flow.optimizations, ...postLayoutOverlay.optimizations);
+    validateHardwareReturnStackDepth(optimized, diagnostics);
+    optimizations.push(
+      ...postLayoutFlow.optimizations,
+      ...postLayoutR0Flow.optimizations,
+      ...postLayoutStopTail.optimizations,
+      ...postLayoutOverlay.optimizations
+    );
     const preloads = [
-      ...buildPreloadReport(ast, allocation),
+      ...setupPreloads.filter(
+        (preload) => !postLayoutStopTail.preloads.some((candidate) => candidate.register === preload.register)
+      ),
       ...buildNegativeZeroDegreePreloadReport(allocation, optimizations),
       ...optimizedResult.preloads,
-      ...postLayoutFlow.preloads
+      ...postLayoutStopTail.preloads
     ];
     const setupProgram = buildGeneratedSetupProgram(
       ast,
@@ -32139,6 +38484,7 @@ var MKProEmulatorBundle = (() => {
       warnings,
       candidates
     );
+    appendPackedLineFamilyLayoutCandidates(ast, candidates);
     appendOptimizationCandidateReports(optimizations, candidates);
     const { steps, labels, cellRoles } = layoutProgram(optimized, diagnostics, opts, ast, machineProfile);
     const programPatch = buildProgramPatchReport(steps, opts.delivery);
@@ -32353,6 +38699,8 @@ var MKProEmulatorBundle = (() => {
             expr: rewriteExpr(statement.expr)
           };
         case "coord_list_remove":
+          return { ...statement, item: rewriteExpr(statement.item) };
+        case "segmented_bitplane_update":
           return { ...statement, item: rewriteExpr(statement.item) };
         case "if":
           return {
@@ -32996,12 +39344,18 @@ var MKProEmulatorBundle = (() => {
   }
   function materializeDisplayExpressions(ast, optimizations, inlineFloorPackedRowExpressions) {
     let materialized = 0;
+    let residualElisions = 0;
+    const residualDirectDisplays = residualGuardedDisplayExpressionElisions(ast);
     const plans = /* @__PURE__ */ new Map();
     for (const display of ast.displays) {
       const assignments = [];
       const items = display.items.map((item, index) => {
         if (item.kind !== "source" || item.expr === void 0) return item;
         if (inlineFloorPackedRowExpressions && canInlineFloorPackedRowDisplayExpression(ast, display, index)) return item;
+        if (residualDirectDisplays.has(display.name)) {
+          residualElisions += 1;
+          return item;
+        }
         const target = `${DISPLAY_EXPR_PREFIX}${display.name}_${index}`;
         assignments.push({
           kind: "assign",
@@ -33023,6 +39377,12 @@ var MKProEmulatorBundle = (() => {
       display.items = items;
       display.sources = sourceNamesForDisplayItems(items);
       plans.set(display.name, assignments);
+    }
+    if (residualElisions > 0) {
+      optimizations.push({
+        name: "residual-display-materialization-elision",
+        detail: `Kept ${residualElisions} residual display expression field${residualElisions === 1 ? "" : "s"} inline for direct branch-X reuse.`
+      });
     }
     if (plans.size === 0) return;
     const rewrite = (statements) => {
@@ -33069,6 +39429,71 @@ var MKProEmulatorBundle = (() => {
       name: "display-expression-materialization",
       detail: `Materialized ${materialized} display expression field${materialized === 1 ? "" : "s"} before show().`
     });
+  }
+  function residualGuardedDisplayExpressionElisions(ast) {
+    const expressions = /* @__PURE__ */ new Map();
+    for (const display of ast.displays) {
+      if (display.items.length !== 1) continue;
+      const item = display.items[0];
+      if (item?.kind !== "source" || item.expr === void 0 || item.width !== void 0 || item.pad !== void 0) {
+        continue;
+      }
+      expressions.set(display.name, item.expr);
+    }
+    if (expressions.size === 0) return /* @__PURE__ */ new Set();
+    const uses = /* @__PURE__ */ new Map();
+    const residualUses = /* @__PURE__ */ new Map();
+    const countUse = (displayName) => {
+      if (displayName === void 0 || !expressions.has(displayName)) return;
+      uses.set(displayName, (uses.get(displayName) ?? 0) + 1);
+    };
+    const countResidualUse = (statement) => {
+      const match = matchResidualGuardedUpdate(statement);
+      if (match === void 0) return;
+      const firstElse = statement.elseBody?.[0];
+      if (firstElse?.kind !== "show") return;
+      const expression = expressions.get(firstElse.display);
+      if (expression === void 0) return;
+      const residual = subtractExpressions2(match.condition.left, match.condition.right);
+      if (!expressionEquals(expression, residual)) return;
+      residualUses.set(firstElse.display, (residualUses.get(firstElse.display) ?? 0) + 1);
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        if (statement.kind === "show") {
+          countUse(statement.display);
+          continue;
+        }
+        if (statement.kind === "halt") {
+          countUse(statement.display);
+          continue;
+        }
+        if (statement.kind === "if") {
+          countResidualUse(statement);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody !== void 0) visitStatements(statement.elseBody);
+          continue;
+        }
+        if (statement.kind === "while" || statement.kind === "loop") {
+          visitStatements(statement.body);
+          continue;
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visitStatements(dispatchCase.body);
+          if (statement.defaultBody !== void 0) visitStatements(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    const result = /* @__PURE__ */ new Set();
+    for (const displayName of expressions.keys()) {
+      const total = uses.get(displayName) ?? 0;
+      if (total > 0 && total === (residualUses.get(displayName) ?? 0)) {
+        result.add(displayName);
+      }
+    }
+    return result;
   }
   function canInlineFloorPackedRowDisplayExpression(ast, display, index) {
     const [floor, separator, row] = display.items;
@@ -33151,8 +39576,42 @@ var MKProEmulatorBundle = (() => {
   function xParamProcParamNames(ast) {
     const procCallCounts = collectProcCallCounts(ast);
     const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
-    const readCounts = collectVariableReadCounts(ast);
-    return new Set([...collectXParamProcLowerings(ast, readCounts, inlineProcNames).values()].map((lowering) => lowering.param));
+    const lowerings = collectXParamProcLowerings(ast, inlineProcNames);
+    const ownersByParam = procParamOwnersByName(ast);
+    const loweringOwnersByParam = /* @__PURE__ */ new Map();
+    for (const [procName, lowering] of lowerings) {
+      const owners = loweringOwnersByParam.get(lowering.param) ?? /* @__PURE__ */ new Set();
+      owners.add(procName);
+      loweringOwnersByParam.set(lowering.param, owners);
+    }
+    const names = /* @__PURE__ */ new Set();
+    for (const [param, loweringOwners] of loweringOwnersByParam) {
+      const allOwners = ownersByParam.get(param) ?? /* @__PURE__ */ new Set();
+      if ([...allOwners].some((owner) => !loweringOwners.has(owner))) continue;
+      if (!identifierReadOutsideProcs(ast, loweringOwners, param)) names.add(param);
+    }
+    return names;
+  }
+  function procParamOwnersByName(ast) {
+    const owners = /* @__PURE__ */ new Map();
+    for (const proc of ast.procs) {
+      for (const param of proc.params ?? []) {
+        const names = owners.get(param) ?? /* @__PURE__ */ new Set();
+        names.add(proc.name);
+        owners.set(param, names);
+      }
+    }
+    return owners;
+  }
+  function xParamValueFunctionParamNamesForAllocation(ast) {
+    const names = /* @__PURE__ */ new Set();
+    for (const proc of ast.procs) {
+      const match = matchXParamValueFunction(proc);
+      if (match !== void 0 && !identifierReadOutsideProc(ast, proc.name, match.param)) {
+        names.add(match.param);
+      }
+    }
+    return names;
   }
   function loopCarriedPromptCandidates(ast) {
     const candidates = [];
@@ -33238,6 +39697,8 @@ var MKProEmulatorBundle = (() => {
         case "indexed_assign":
           return exprReads(statement.target.index) || exprReads(statement.expr);
         case "coord_list_remove":
+          return exprReads(statement.item);
+        case "segmented_bitplane_update":
           return exprReads(statement.item);
         case "while":
           return conditionReads(statement.condition) || statementsRead(statement.body);
@@ -33423,6 +39884,9 @@ var MKProEmulatorBundle = (() => {
     });
   }
   function identifierReadOutsideProc(ast, procName, name) {
+    return identifierReadOutsideProcs(ast, /* @__PURE__ */ new Set([procName]), name);
+  }
+  function identifierReadOutsideProcs(ast, procNames, name) {
     const visitExpr = (expr) => expressionReferencesIdentifier(expr, name);
     const visitCondition = (condition) => visitExpr(condition.left) || visitExpr(condition.right);
     const visitStatements = (statements) => {
@@ -33444,7 +39908,7 @@ var MKProEmulatorBundle = (() => {
       return false;
     };
     if (ast.entries.some((entry) => visitStatements(entry.body))) return true;
-    return ast.procs.some((proc) => proc.name !== procName && visitStatements(proc.body));
+    return ast.procs.some((proc) => !procNames.has(proc.name) && visitStatements(proc.body));
   }
   function fuseTailCopyAssignments(ast, optimizations) {
     const procMap = new Map(ast.procs.map((proc) => [proc.name, proc]));
@@ -33516,6 +39980,435 @@ var MKProEmulatorBundle = (() => {
       detail: `Fused ${fused} tail copy assignment${fused === 1 ? "" : "s"} before state liveness.`
     });
   }
+  function reuseDeadSourceResidualTemps(ast, optimizations) {
+    let reused = 0;
+    const rewriteBlock = (statements) => {
+      let rewritten = statements.map(rewriteChildren);
+      for (let index = 0; index < rewritten.length; index += 1) {
+        const assignment = rewritten[index];
+        if (assignment?.kind !== "assign") continue;
+        const plan = residualTempReusePlan(assignment);
+        if (plan === void 0) continue;
+        const state = {
+          ast,
+          target: assignment.target,
+          source: plan.source,
+          residual: assignment.expr,
+          targetAvailable: "all",
+          sourceAvailable: "all",
+          rewrites: 0,
+          failed: false
+        };
+        const suffix = rewriteResidualTempSuffix(rewritten.slice(index + 1), state);
+        if (state.failed || state.rewrites === 0) continue;
+        rewritten = [
+          ...rewritten.slice(0, index),
+          { ...assignment, target: plan.source, expr: structuredClone(assignment.expr) },
+          ...suffix
+        ];
+        reused += 1;
+      }
+      return rewritten;
+    };
+    const rewriteChildren = (statement) => {
+      switch (statement.kind) {
+        case "if":
+          return {
+            ...statement,
+            thenBody: rewriteBlock(statement.thenBody),
+            ...statement.elseBody === void 0 ? {} : { elseBody: rewriteBlock(statement.elseBody) }
+          };
+        case "while":
+        case "loop":
+          return { ...statement, body: rewriteBlock(statement.body) };
+        case "dispatch":
+          return {
+            ...statement,
+            cases: statement.cases.map((dispatchCase) => ({
+              ...dispatchCase,
+              body: rewriteBlock(dispatchCase.body)
+            })),
+            ...statement.defaultBody === void 0 ? {} : { defaultBody: rewriteBlock(statement.defaultBody) }
+          };
+        default:
+          return statement;
+      }
+    };
+    for (const entry of ast.entries) entry.body = rewriteBlock(entry.body);
+    for (const proc of ast.procs) proc.body = rewriteBlock(proc.body);
+    if (reused === 0) return;
+    optimizations.push({
+      name: "dead-source-residual-temp-reuse",
+      detail: `Reused ${reused} dead source register${reused === 1 ? "" : "s"} for residual temporary values before allocation.`
+    });
+  }
+  function residualTempReusePlan(assignment) {
+    if (!expressionPureForSubstitution(assignment.expr)) return void 0;
+    if (expressionReferencesIdentifier(assignment.expr, assignment.target)) return void 0;
+    const identifiers = expressionIdentifierNames(assignment.expr);
+    if (identifiers.size !== 1) return void 0;
+    const source = [...identifiers][0];
+    if (source === assignment.target) return void 0;
+    return { source };
+  }
+  function rewriteResidualTempSuffix(statements, state) {
+    return statements.map((statement) => rewriteResidualTempStatement(statement, state));
+  }
+  function rewriteResidualTempStatement(statement, state) {
+    if (state.failed) return statement;
+    switch (statement.kind) {
+      case "assign": {
+        const expr = rewriteResidualTempExpression(statement.expr, state);
+        const rewritten = expr === statement.expr ? statement : { ...statement, expr };
+        applyResidualTempWrite(state, statement.target);
+        return rewritten;
+      }
+      case "indexed_assign": {
+        const target = rewriteResidualTempIndexedTarget(statement.target, state);
+        const expr = rewriteResidualTempExpression(statement.expr, state);
+        applyResidualTempIndexedWrite(state, statement.target.base);
+        return target === statement.target && expr === statement.expr ? statement : { ...statement, target, expr };
+      }
+      case "coord_list_remove": {
+        const item = rewriteResidualTempExpression(statement.item, state);
+        return item === statement.item ? statement : { ...statement, item };
+      }
+      case "pause":
+      case "preview":
+      case "return_value": {
+        const expr = rewriteResidualTempExpression(statement.expr, state);
+        return expr === statement.expr ? statement : { ...statement, expr };
+      }
+      case "halt": {
+        rejectResidualTempDisplayReads(statement.displaySources ?? displaySourcesForStatement(state.ast, statement), state);
+        const expr = rewriteResidualTempExpression(statement.expr, state);
+        return expr === statement.expr ? statement : { ...statement, expr };
+      }
+      case "input":
+        applyResidualTempWrite(state, statement.target);
+        return statement;
+      case "show":
+        rejectResidualTempDisplayReads(displaySourcesForStatement(state.ast, statement), state);
+        return statement;
+      case "call":
+        rejectResidualTempCallReads(statement.block, state);
+        applyResidualTempCallWrites(statement.block, state);
+        return statement;
+      case "core":
+        const inputs = statement.inputs?.map((input) => ({
+          ...input,
+          expr: rewriteResidualTempExpression(input.expr, state)
+        }));
+        for (const output of statement.outputs ?? []) applyResidualTempWrite(state, output.target);
+        for (const clobber of statement.clobbers ?? []) applyResidualTempWrite(state, clobber);
+        return inputs === void 0 ? statement : { ...statement, inputs };
+      case "if": {
+        const condition = rewriteResidualTempCondition(statement.condition, state);
+        const thenState = cloneResidualTempState(state);
+        const thenBody = rewriteResidualTempSuffix(statement.thenBody, thenState);
+        const elseState = cloneResidualTempState(state);
+        const elseBody = statement.elseBody === void 0 ? void 0 : rewriteResidualTempSuffix(statement.elseBody, elseState);
+        mergeResidualTempState(state, thenState, elseState);
+        return {
+          ...statement,
+          condition,
+          thenBody,
+          ...elseBody === void 0 ? {} : { elseBody }
+        };
+      }
+      case "while": {
+        const condition = rewriteResidualTempCondition(statement.condition, state);
+        rejectResidualTempStatementReads(statement, state);
+        state.targetAvailable = "mixed";
+        state.sourceAvailable = "mixed";
+        return { ...statement, condition };
+      }
+      case "loop":
+        rejectResidualTempStatementReads(statement, state);
+        state.targetAvailable = "mixed";
+        state.sourceAvailable = "mixed";
+        return statement;
+      case "dispatch": {
+        const expr = rewriteResidualTempExpression(statement.expr, state);
+        const cases = statement.cases.map((dispatchCase) => {
+          const caseState = cloneResidualTempState(state);
+          const value = rewriteResidualTempExpression(dispatchCase.value, caseState);
+          const body = rewriteResidualTempSuffix(dispatchCase.body, caseState);
+          return { value: { ...dispatchCase, value, body }, state: caseState };
+        });
+        const defaultState = cloneResidualTempState(state);
+        const defaultBody = statement.defaultBody === void 0 ? void 0 : rewriteResidualTempSuffix(statement.defaultBody, defaultState);
+        mergeResidualTempStates(state, [...cases.map((entry) => entry.state), defaultState]);
+        return {
+          ...statement,
+          expr,
+          cases: cases.map((entry) => entry.value),
+          ...defaultBody === void 0 ? {} : { defaultBody }
+        };
+      }
+      case "decimal_series":
+        return statement;
+    }
+    return statement;
+  }
+  function rewriteResidualTempExpression(expr, state) {
+    if (state.failed) return expr;
+    if (state.sourceAvailable === "all" && expressionEquals(expr, state.residual)) {
+      state.rewrites += 1;
+      return { kind: "identifier", name: state.source };
+    }
+    switch (expr.kind) {
+      case "number":
+      case "string":
+        return expr;
+      case "identifier":
+        if (expr.name === state.source) {
+          if (state.sourceAvailable !== "none") state.failed = true;
+          return expr;
+        }
+        if (expr.name === state.target) {
+          if (state.targetAvailable === "all") {
+            state.rewrites += 1;
+            return { kind: "identifier", name: state.source };
+          }
+          if (state.targetAvailable === "mixed") state.failed = true;
+        }
+        return expr;
+      case "indexed": {
+        const index = rewriteResidualTempExpression(expr.index, state);
+        return index === expr.index ? expr : { ...expr, index };
+      }
+      case "unary": {
+        const inner = rewriteResidualTempExpression(expr.expr, state);
+        return inner === expr.expr ? expr : { ...expr, expr: inner };
+      }
+      case "binary": {
+        const left = rewriteResidualTempExpression(expr.left, state);
+        const right = rewriteResidualTempExpression(expr.right, state);
+        return left === expr.left && right === expr.right ? expr : { ...expr, left, right };
+      }
+      case "call": {
+        const args = expr.args.map((arg) => rewriteResidualTempExpression(arg, state));
+        return args.every((arg, index) => arg === expr.args[index]) ? expr : { ...expr, args };
+      }
+    }
+  }
+  function rewriteResidualTempIndexedTarget(target, state) {
+    const index = rewriteResidualTempExpression(target.index, state);
+    return index === target.index ? target : { ...target, index };
+  }
+  function rewriteResidualTempCondition(condition, state) {
+    const left = rewriteResidualTempExpression(condition.left, state);
+    const right = rewriteResidualTempExpression(condition.right, state);
+    return left === condition.left && right === condition.right ? condition : { ...condition, left, right };
+  }
+  function applyResidualTempWrite(state, name) {
+    if (name === state.target) state.targetAvailable = "none";
+    if (name === state.source) {
+      state.sourceAvailable = "none";
+      if (state.targetAvailable === "all") state.targetAvailable = "mixed";
+    }
+  }
+  function applyResidualTempIndexedWrite(state, base) {
+    applyResidualTempWrite(state, base);
+  }
+  function cloneResidualTempState(state) {
+    return { ...state };
+  }
+  function mergeResidualTempState(base, thenState, elseState) {
+    mergeResidualTempStates(base, [thenState, elseState]);
+  }
+  function mergeResidualTempStates(base, states) {
+    base.failed = base.failed || states.some((state) => state.failed);
+    base.rewrites += states.reduce((sum, state) => sum + state.rewrites, 0);
+    base.targetAvailable = mergeResidualAvailability(states.map((state) => state.targetAvailable));
+    base.sourceAvailable = mergeResidualAvailability(states.map((state) => state.sourceAvailable));
+  }
+  function mergeResidualAvailability(values) {
+    if (values.length === 0) return "none";
+    const first = values[0];
+    return values.every((value) => value === first) ? first : "mixed";
+  }
+  function rejectResidualTempStatementReads(statement, state) {
+    if (state.sourceAvailable !== "none" && statementMayReadIdentifierDeep(statement, state.source, state.ast)) {
+      state.failed = true;
+    }
+    if (state.targetAvailable !== "none" && statementMayReadIdentifierDeep(statement, state.target, state.ast)) {
+      state.failed = true;
+    }
+  }
+  function rejectResidualTempDisplayReads(sources, state) {
+    if (state.sourceAvailable !== "none" && sources.includes(state.source)) state.failed = true;
+    if (state.targetAvailable !== "none" && sources.includes(state.target)) state.failed = true;
+  }
+  function rejectResidualTempCallReads(block, state) {
+    if (state.sourceAvailable !== "none" && procMayReadIdentifier(state.ast, block, state.source, /* @__PURE__ */ new Set())) {
+      state.failed = true;
+    }
+    if (state.targetAvailable !== "none" && procMayReadIdentifier(state.ast, block, state.target, /* @__PURE__ */ new Set())) {
+      state.failed = true;
+    }
+  }
+  function applyResidualTempCallWrites(block, state) {
+    if (procMayWriteIdentifier(state.ast, block, state.target, /* @__PURE__ */ new Set())) applyResidualTempWrite(state, state.target);
+    if (procMayWriteIdentifier(state.ast, block, state.source, /* @__PURE__ */ new Set())) applyResidualTempWrite(state, state.source);
+  }
+  function displaySourcesForStatement(ast, statement) {
+    if (statement.kind === "halt" && statement.displaySources !== void 0) return statement.displaySources;
+    const displayName = statement.kind === "show" ? statement.display : statement.display;
+    if (displayName === void 0) return [];
+    return ast.displays.find((display) => display.name === displayName)?.sources ?? [];
+  }
+  function expressionIdentifierNames(expr) {
+    const names = /* @__PURE__ */ new Set();
+    const visit = (candidate) => {
+      switch (candidate.kind) {
+        case "identifier":
+          names.add(candidate.name);
+          break;
+        case "indexed":
+          names.add(candidate.base);
+          visit(candidate.index);
+          break;
+        case "unary":
+          visit(candidate.expr);
+          break;
+        case "binary":
+          visit(candidate.left);
+          visit(candidate.right);
+          break;
+        case "call":
+          for (const arg of candidate.args) visit(arg);
+          break;
+        case "number":
+        case "string":
+          break;
+      }
+    };
+    visit(expr);
+    return names;
+  }
+  function inlineIndexedBitReportBranchTemps(ast, optimizations) {
+    let inlined = 0;
+    const rewriteStatement = (statement) => {
+      if (statement.kind === "loop" || statement.kind === "while") {
+        return { ...statement, body: rewriteStatements(statement.body) };
+      }
+      if (statement.kind === "if") {
+        const rewritten = {
+          ...statement,
+          thenBody: rewriteStatements(statement.thenBody)
+        };
+        if (statement.elseBody !== void 0) rewritten.elseBody = rewriteStatements(statement.elseBody);
+        return rewritten;
+      }
+      if (statement.kind === "dispatch") {
+        return {
+          ...statement,
+          cases: statement.cases.map((dispatchCase) => ({ ...dispatchCase, body: rewriteStatements(dispatchCase.body) })),
+          ...statement.defaultBody === void 0 ? {} : { defaultBody: rewriteStatements(statement.defaultBody) }
+        };
+      }
+      return statement;
+    };
+    const rewriteStatements = (statements) => {
+      const result = [];
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        const report = statements[index + 1];
+        const branch = statements[index + 2];
+        if (statement.kind === "indexed_assign" && report?.kind === "assign" && branch?.kind === "if") {
+          const rewritten = inlineIndexedBitReportBranchTemp(ast, statement, report, branch);
+          if (rewritten !== void 0) {
+            result.push(rewriteStatement(statement), rewritten);
+            inlined += 1;
+            index += 2;
+            continue;
+          }
+        }
+        result.push(rewriteStatement(statement));
+      }
+      return result;
+    };
+    for (const entry of ast.entries) entry.body = rewriteStatements(entry.body);
+    for (const proc of ast.procs) proc.body = rewriteStatements(proc.body);
+    if (inlined === 0) return;
+    optimizations.push({
+      name: "indexed-packed-report-temp-inline",
+      detail: `Inlined ${inlined} packed report temp${inlined === 1 ? "" : "s"} before state liveness so indexed packed report branches can reuse the updated cell in X.`
+    });
+  }
+  function inlineIndexedBitReportBranchTemp(ast, assign, temp, branch) {
+    if (indexedPow10DeltaUpdate(assign) === void 0) return void 0;
+    if (numericIndexValue(assign.target.index) !== void 0) return void 0;
+    if (!expressionPureForSubstitution(assign.target.index)) return void 0;
+    if (branch.elseBody !== void 0) return void 0;
+    if (branch.thenBody.length !== 1) return void 0;
+    const halt = branch.thenBody[0];
+    if (halt?.kind !== "halt" || halt.literal !== void 0) return void 0;
+    const report = bitAndReportForTarget2(temp.expr, assign.target);
+    if (report === void 0 || !isSimpleStackLoad(report.mask)) return void 0;
+    if (!expressionEquals(halt.expr, { kind: "identifier", name: temp.target })) return void 0;
+    if (countIdentifierReadsInStatement(branch, temp.target) !== 2) return void 0;
+    if (countIdentifierReadsInProgram(ast, temp.target) !== 2) return void 0;
+    const fractional = fractionalTempReportCondition(branch.condition, temp.target);
+    if (fractional !== void 0) {
+      const condition2 = fractional.side === "left" ? {
+        ...branch.condition,
+        left: { kind: "call", callee: "frac", args: [structuredClone(report.expr)] },
+        right: structuredClone(fractional.other)
+      } : {
+        ...branch.condition,
+        left: structuredClone(fractional.other),
+        right: { kind: "call", callee: "frac", args: [structuredClone(report.expr)] }
+      };
+      return {
+        ...branch,
+        condition: condition2,
+        thenBody: [{ ...halt, expr: structuredClone(report.expr) }]
+      };
+    }
+    const plain = plainTempReportCondition(branch.condition, temp.target);
+    if (plain === void 0) return void 0;
+    if (!isSimpleStackLoad(plain.neutral) || numericLiteralValue2(plain.neutral) === void 0) return void 0;
+    const condition = plain.side === "left" ? {
+      ...branch.condition,
+      left: structuredClone(report.expr),
+      right: structuredClone(plain.neutral)
+    } : {
+      ...branch.condition,
+      left: structuredClone(plain.neutral),
+      right: structuredClone(report.expr)
+    };
+    return {
+      ...branch,
+      condition,
+      thenBody: [{ ...halt, expr: structuredClone(report.expr) }]
+    };
+  }
+  function fractionalTempReportCondition(condition, temp) {
+    if (condition.op !== "!=") return void 0;
+    if (isFracOfIdentifier(condition.left, temp) && isZeroExpression(condition.right)) {
+      return { side: "left", other: condition.right };
+    }
+    if (isFracOfIdentifier(condition.right, temp) && isZeroExpression(condition.left)) {
+      return { side: "right", other: condition.left };
+    }
+    return void 0;
+  }
+  function plainTempReportCondition(condition, temp) {
+    if (condition.op !== "!=") return void 0;
+    if (condition.left.kind === "identifier" && condition.left.name === temp) {
+      return { side: "left", neutral: condition.right };
+    }
+    if (condition.right.kind === "identifier" && condition.right.name === temp) {
+      return { side: "right", neutral: condition.left };
+    }
+    return void 0;
+  }
+  function isFracOfIdentifier(expr, name) {
+    return expr.kind === "call" && expr.callee.toLowerCase() === "frac" && expr.args.length === 1 && expr.args[0]?.kind === "identifier" && expr.args[0].name === name;
+  }
   function countIdentifierReadsInProgram(ast, name) {
     let reads = 0;
     const addExpr = (expr) => {
@@ -33566,10 +40459,10 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) addStatements(proc.body);
     return reads;
   }
-  function eliminateUnobservedState(ast, optimizations) {
+  function eliminateUnobservedState(ast, optimizations, options = {}) {
     const stateFields = new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
     if (stateFields.size === 0) return;
-    const ephemeralInputTargets = collectEphemeralInputTargets(ast);
+    const ephemeralInputTargets = collectEphemeralInputTargets(ast, options);
     const externallyRead = /* @__PURE__ */ new Set();
     const inputTargets = /* @__PURE__ */ new Set();
     const assigned = /* @__PURE__ */ new Map();
@@ -33604,6 +40497,11 @@ var MKProEmulatorBundle = (() => {
         visitExpr(expr.right, ignored);
       }
       if (expr.kind === "call") {
+        const name = expr.callee.toLowerCase();
+        if ((name === "__seg_bit_has" || name === "line_count") && expr.args[0]?.kind === "identifier") {
+          const segmented = segmentedBitplaneCollectionInfo(ast, expr.args[0].name);
+          for (const plane of segmented?.planes ?? []) addRead(plane);
+        }
         for (const arg of expr.args) visitExpr(arg, ignored);
       }
     };
@@ -33663,6 +40561,13 @@ var MKProEmulatorBundle = (() => {
         if (statement.kind === "return_value") visitExpr(statement.expr);
       }
     };
+    for (const state of ast.states) {
+      for (const field of state.fields) {
+        if (field.initial === void 0) continue;
+        const segmented = segmentedBitplaneRandomUniquePlacement(field.name, field.initial);
+        if (segmented !== void 0) addRead(segmented.countSource);
+      }
+    }
     for (const entry of ast.entries) visitStatements(entry.body);
     for (const proc of ast.procs) visitStatements(proc.body);
     const removable = /* @__PURE__ */ new Set();
@@ -34061,6 +40966,8 @@ var MKProEmulatorBundle = (() => {
         return [statement.expr];
       case "indexed_assign":
         return [statement.target.index, statement.expr];
+      case "segmented_bitplane_update":
+        return [statement.item];
       case "if":
       case "while":
         return [statement.condition.left, statement.condition.right];
@@ -34773,6 +41680,7 @@ var MKProEmulatorBundle = (() => {
       ["stable-indirect-flow", "stable-register indirect branch/call selected by IR data-flow proof", 1],
       ["preloaded-indirect-flow", "compiler-owned address preload selected for one-cell indirect branch/call", 1],
       ["preloaded-super-dark-flow", "compiler-owned FA..FF preloaded one-command dispatch selected after layout proof", 1],
+      ["conditional-branch-trampoline", "conditional branches retargeted through equivalent later conditionals for middle-entry layout", 0],
       ["indirect-memory-table", "stable selector reused for indirect memory access", 0],
       ["indexed-packed-row-table", "indexed packed row display selected direct indirect-memory access", 0],
       ["r0-fractional-sentinel", "fractional R0 selector side effect reused after liveness proof", 0]
@@ -34788,6 +41696,318 @@ var MKProEmulatorBundle = (() => {
         reason
       });
     }
+  }
+  function appendPackedLineFamilyLayoutCandidates(ast, candidates) {
+    for (const opportunity of collectPackedLineFamilyLayoutOpportunities(ast)) {
+      if (candidates.some(
+        (candidate) => candidate.site === `packed-line-family ${opportunity.key}` && candidate.variant === "packed-line-family-layout"
+      )) {
+        continue;
+      }
+      candidates.push({
+        site: `packed-line-family ${opportunity.key}`,
+        variant: "packed-line-family-layout",
+        steps: 999999,
+        selected: false,
+        reason: packedLineFamilyLayoutReason(opportunity)
+      });
+    }
+  }
+  function packedLineFamilyLayoutReason(opportunity) {
+    const base = `detected a packed line bank with ${opportunity.scoredElements} scored elements and ${opportunity.hasFractionalReportCheck ? "a fractional report-checked update" : "an update"}`;
+    if (opportunity.updateProc === void 0 || opportunity.markerProc === void 0 || opportunity.scoreProc === void 0) {
+      return `${base}; score-tail sharing is implemented, but no full shared update/check and score walker is implemented yet`;
+    }
+    const slots = opportunity.updateSlots?.join(",") ?? "?";
+    const normalizer = opportunity.normalizerProc === void 0 ? "" : ` through ${opportunity.normalizerProc}`;
+    return `${base}; recognized full update/check walker ${opportunity.markerProc} -> ${opportunity.updateProc} for slots ${slots} and score walker ${opportunity.scoreProc}${normalizer}; shared multi-entry update/check plus score emission is not implemented yet`;
+  }
+  function collectPackedLineFamilyLayoutOpportunities(ast) {
+    const updates = /* @__PURE__ */ new Map();
+    const scores = /* @__PURE__ */ new Map();
+    const updateProcs = ast.procs.flatMap((proc) => {
+      const match = packedLineFamilyUpdateProc(ast, proc);
+      return match === void 0 ? [] : [match];
+    });
+    const scoreProcs = ast.procs.flatMap((proc) => {
+      const match = packedLineFamilyScoreWalkerProc(ast, proc);
+      return match === void 0 ? [] : [match];
+    });
+    const markerProcs = ast.procs.flatMap(
+      (proc) => updateProcs.flatMap((update) => {
+        const match = packedLineFamilyMarkerProc(ast, proc, update);
+        return match === void 0 ? [] : [match];
+      })
+    );
+    const recordScore = (expr) => {
+      const element = packedBankElementForExpression(ast, expr);
+      if (element?.index === void 0) return;
+      const indexes = scores.get(element.key) ?? /* @__PURE__ */ new Set();
+      indexes.add(element.index);
+      scores.set(element.key, indexes);
+    };
+    const visitExpr = (expr) => {
+      if (expr.kind === "call") {
+        if (expr.callee.toLowerCase() === "packed_score" && expr.args.length === 2) {
+          recordScore(expr.args[0]);
+        }
+        for (const arg of expr.args) visitExpr(arg);
+        return;
+      }
+      if (expr.kind === "unary") {
+        visitExpr(expr.expr);
+        return;
+      }
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+        return;
+      }
+      if (expr.kind === "indexed") visitExpr(expr.index);
+    };
+    const visitCondition = (condition) => {
+      visitExpr(condition.left);
+      visitExpr(condition.right);
+    };
+    const visitStatements = (statements) => {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        const next = statements[index + 1];
+        if (statement.kind === "indexed_assign") {
+          const update = indexedPow10DeltaUpdate(statement);
+          const target = update === void 0 ? void 0 : packedBankElementForExpression(ast, statement.target);
+          if (target !== void 0) {
+            const previous = updates.get(target.key);
+            updates.set(target.key, {
+              hasFractionalReportCheck: previous?.hasFractionalReportCheck === true || next?.kind === "if" && indexedPow10DeltaFractionalBitReportBranch(statement, next) !== void 0
+            });
+          }
+          visitExpr(statement.target.index);
+          visitExpr(statement.expr);
+          continue;
+        }
+        if (statement.kind === "assign" || statement.kind === "return_value") visitExpr(statement.expr);
+        if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
+        if (statement.kind === "if") {
+          visitCondition(statement.condition);
+          visitStatements(statement.thenBody);
+          if (statement.elseBody !== void 0) visitStatements(statement.elseBody);
+          continue;
+        }
+        if (statement.kind === "while") {
+          visitCondition(statement.condition);
+          visitStatements(statement.body);
+          continue;
+        }
+        if (statement.kind === "loop") {
+          visitStatements(statement.body);
+          continue;
+        }
+        if (statement.kind === "dispatch") {
+          visitExpr(statement.expr);
+          for (const dispatchCase of statement.cases) {
+            visitExpr(dispatchCase.value);
+            visitStatements(dispatchCase.body);
+          }
+          if (statement.defaultBody !== void 0) visitStatements(statement.defaultBody);
+          continue;
+        }
+        if (statement.kind === "core") {
+          for (const input of statement.inputs ?? []) visitExpr(input.expr);
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    const opportunities = [];
+    for (const [key, update] of updates) {
+      const scoredElements = scores.get(key)?.size ?? 0;
+      if (scoredElements < 4) continue;
+      const marker = markerProcs.find((candidate) => candidate.key === key);
+      const scorer = scoreProcs.find((candidate) => candidate.key === key);
+      opportunities.push({
+        key,
+        scoredElements,
+        hasFractionalReportCheck: update.hasFractionalReportCheck,
+        ...marker === void 0 ? {} : {
+          updateProc: marker.updateProc,
+          markerProc: marker.procName,
+          normalizerProc: marker.normalizerProc,
+          updateSlots: marker.slots
+        },
+        ...scorer === void 0 ? {} : { scoreProc: scorer.procName }
+      });
+    }
+    return opportunities;
+  }
+  function packedLineFamilyUpdateProc(ast, proc) {
+    const first = proc.body[0];
+    const update = proc.body[1];
+    const branch = proc.body[2];
+    if (first?.kind !== "assign" || update?.kind !== "indexed_assign" || branch?.kind !== "if" || proc.body.length !== 3) {
+      return void 0;
+    }
+    if (first.expr.kind !== "identifier") return void 0;
+    const param = first.expr.name;
+    const selector = first.target;
+    if (update.target.index.kind !== "identifier" || update.target.index.name !== selector) return void 0;
+    const target = packedBankElementForExpression(ast, update.target);
+    if (target === void 0) return void 0;
+    const delta = indexedPow10DeltaUpdate(update);
+    if (delta === void 0) return void 0;
+    const parts = packedPow10DeltaParts(delta.term);
+    if (parts === void 0) return void 0;
+    if (parts.index.kind !== "identifier" || parts.factor.kind !== "identifier") return void 0;
+    return {
+      procName: proc.name,
+      key: target.key,
+      param,
+      selector,
+      line: parts.index.name,
+      delta: parts.factor.name,
+      hasFractionalReportCheck: indexedPow10DeltaFractionalBitReportBranch(update, branch) !== void 0
+    };
+  }
+  function packedLineFamilyMarkerProc(ast, proc, update) {
+    const first = proc.body[0];
+    if (first?.kind !== "assign" || first.expr.kind !== "identifier" || first.target !== update.delta) {
+      return void 0;
+    }
+    const slots = [];
+    let cursor = 1;
+    let normalizerProc;
+    while (cursor < proc.body.length) {
+      const direct = packedLineFamilyDirectMarkerStep(proc.body, cursor, update);
+      if (direct !== void 0) {
+        slots.push(direct.slot);
+        cursor += direct.consumed;
+        continue;
+      }
+      const normalized = packedLineFamilyNormalizedMarkerStep(ast, proc.body, cursor, update);
+      if (normalized !== void 0) {
+        slots.push(normalized.slot);
+        normalizerProc = normalized.normalizerProc;
+        cursor += normalized.consumed;
+        continue;
+      }
+      return void 0;
+    }
+    if (slots.length < 4 || new Set(slots).size < 4) return void 0;
+    return {
+      procName: proc.name,
+      key: update.key,
+      updateProc: update.procName,
+      ...normalizerProc === void 0 ? {} : { normalizerProc },
+      slots
+    };
+  }
+  function packedLineFamilyDirectMarkerStep(statements, cursor, update) {
+    const lineAssign = statements[cursor];
+    const paramAssign = statements[cursor + 1];
+    const call = statements[cursor + 2];
+    if (lineAssign?.kind !== "assign" || lineAssign.target !== update.line || paramAssign?.kind !== "assign" || paramAssign.target !== update.param || call?.kind !== "call" || call.block !== update.procName) {
+      return void 0;
+    }
+    const slot = numericLiteralValue2(paramAssign.expr);
+    return slot === void 0 ? void 0 : { slot, consumed: 3 };
+  }
+  function packedLineFamilyNormalizedMarkerStep(ast, statements, cursor, update) {
+    const rawAssign = statements[cursor];
+    const normalizerCall = statements[cursor + 1];
+    const paramAssign = statements[cursor + 2];
+    const updateCall = statements[cursor + 3];
+    if (rawAssign?.kind !== "assign" || normalizerCall?.kind !== "call" || paramAssign?.kind !== "assign" || paramAssign.target !== update.param || updateCall?.kind !== "call" || updateCall.block !== update.procName) {
+      return void 0;
+    }
+    const normalizer = ast.procs.find((candidate) => candidate.name === normalizerCall.block);
+    if (!procAssignsTargetFromParam2(normalizer, update.line, rawAssign.target)) return void 0;
+    const slot = numericLiteralValue2(paramAssign.expr);
+    return slot === void 0 ? void 0 : {
+      slot,
+      normalizerProc: normalizerCall.block,
+      consumed: 4
+    };
+  }
+  function procAssignsTargetFromParam2(proc, target, param) {
+    if (proc === void 0) return false;
+    return proc.body.some(
+      (statement) => statement.kind === "assign" && statement.target === target && expressionReferencesIdentifier(statement.expr, param)
+    );
+  }
+  function packedLineFamilyScoreWalkerProc(ast, proc) {
+    const elements = /* @__PURE__ */ new Map();
+    const visitExpr = (expr) => {
+      if (expr.kind === "call") {
+        if (expr.callee.toLowerCase() === "packed_score" && expr.args.length === 2) {
+          const element = packedBankElementForExpression(ast, expr.args[0]);
+          if (element?.index !== void 0) {
+            const indexes = elements.get(element.key) ?? /* @__PURE__ */ new Set();
+            indexes.add(element.index);
+            elements.set(element.key, indexes);
+          }
+        }
+        for (const arg of expr.args) visitExpr(arg);
+        return;
+      }
+      if (expr.kind === "unary") {
+        visitExpr(expr.expr);
+        return;
+      }
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+        return;
+      }
+      if (expr.kind === "indexed") visitExpr(expr.index);
+    };
+    for (const statement of proc.body) {
+      if (statement.kind === "assign" || statement.kind === "return_value") visitExpr(statement.expr);
+      if (statement.kind === "pause" || statement.kind === "preview" || statement.kind === "halt") visitExpr(statement.expr);
+    }
+    const best = [...elements.entries()].filter(([, indexes]) => indexes.size >= 4).sort((left, right) => right[1].size - left[1].size)[0];
+    return best === void 0 ? void 0 : {
+      procName: proc.name,
+      key: best[0],
+      scoredElements: [...best[1]].sort((left, right) => left - right)
+    };
+  }
+  function packedPow10DeltaParts(expr) {
+    const pow102 = pow10Argument(expr);
+    if (pow102 !== void 0) return {
+      index: pow102,
+      factor: { kind: "number", raw: "1" }
+    };
+    if (expr.kind !== "binary" || expr.op !== "*") return void 0;
+    const left = pow10Argument(expr.left);
+    if (left !== void 0) return { index: left, factor: expr.right };
+    const right = pow10Argument(expr.right);
+    if (right !== void 0) return { index: right, factor: expr.left };
+    return void 0;
+  }
+  function pow10Argument(expr) {
+    return expr.kind === "call" && expr.callee.toLowerCase() === "pow10" && expr.args.length === 1 ? expr.args[0] : void 0;
+  }
+  function packedBankElementForExpression(ast, expr) {
+    if (expr.kind === "indexed") {
+      const resolved = findStateBankMember(ast, expr);
+      if (resolved?.member.type !== "packed") return void 0;
+      const key = bankMemberKey(resolved.bank.name, resolved.member.name);
+      const index = numericIndexValue(expr.index);
+      return index === void 0 ? { key } : { key, index };
+    }
+    if (expr.kind !== "identifier") return void 0;
+    for (const bank of ast.banks ?? []) {
+      for (const member of bank.members) {
+        if (member.type !== "packed") continue;
+        const element = member.elements.find((candidate) => candidate.name === expr.name);
+        if (element === void 0) continue;
+        return {
+          key: bankMemberKey(bank.name, member.name),
+          index: element.index
+        };
+      }
+    }
+    return void 0;
   }
   var customReferenceMetricsResolver;
   function buildReferenceReport(referenceName, compiledSteps, fallbackBudget) {
@@ -35064,6 +42284,128 @@ var MKProEmulatorBundle = (() => {
     for (const entry of ast.entries) visit(entry.body);
     for (const proc of ast.procs) visit(proc.body);
   }
+  function warnHardwareMaxMinZeroOperands(ast, warnings) {
+    const seen = /* @__PURE__ */ new Set();
+    const checkExpression = (expr, line) => {
+      switch (expr.kind) {
+        case "number":
+        case "string":
+        case "identifier":
+          return;
+        case "indexed":
+          checkExpression(expr.index, line);
+          return;
+        case "unary":
+          checkExpression(expr.expr, line);
+          return;
+        case "binary":
+          checkExpression(expr.left, line);
+          checkExpression(expr.right, line);
+          return;
+        case "call": {
+          for (const arg of expr.args) checkExpression(arg, line);
+          if (expr.callee !== "max" && expr.callee !== "min" || expr.args.length !== 2) return;
+          for (const arg of expr.args) {
+            if (numericLiteralValue2(arg) !== void 0) continue;
+            const range3 = numericRangeForExpression(arg, ast);
+            if (range3?.min === void 0 || range3.max === void 0) continue;
+            if (range3.min > 0 || range3.max < 0) continue;
+            const operand = arg.kind === "identifier" ? `'${arg.name}'` : "an operand";
+            const key = `${expr.callee}:${line}:${operand}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            warnings.push(
+              `${expr.callee}() at line ${line}: ${operand} can be exactly 0, and \u041A max treats 0 as the largest value (max(5, 0) == 0). Use safe_${expr.callee}() if you need the mathematical ${expr.callee === "max" ? "maximum" : "minimum"}.`
+            );
+          }
+          return;
+        }
+      }
+    };
+    const checkCondition = (condition, line) => {
+      checkExpression(condition.left, line);
+      checkExpression(condition.right, line);
+    };
+    const visit = (statements) => {
+      for (const statement of statements) {
+        switch (statement.kind) {
+          case "pause":
+          case "preview":
+          case "halt":
+          case "assign":
+          case "return_value":
+            checkExpression(statement.expr, statement.line);
+            break;
+          case "indexed_assign":
+            checkExpression(statement.target.index, statement.line);
+            checkExpression(statement.expr, statement.line);
+            break;
+          case "coord_list_remove":
+            checkExpression(statement.item, statement.line);
+            break;
+          case "loop":
+            visit(statement.body);
+            break;
+          case "while":
+            checkCondition(statement.condition, statement.line);
+            visit(statement.body);
+            break;
+          case "if":
+            checkCondition(statement.condition, statement.line);
+            visit(statement.thenBody);
+            if (statement.elseBody) visit(statement.elseBody);
+            break;
+          case "dispatch":
+            checkExpression(statement.expr, statement.line);
+            for (const dispatchCase of statement.cases) {
+              checkExpression(dispatchCase.value, dispatchCase.line);
+              visit(dispatchCase.body);
+            }
+            if (statement.defaultBody) visit(statement.defaultBody);
+            break;
+          case "core":
+            for (const input of statement.inputs ?? []) checkExpression(input.expr, input.line);
+            break;
+          default:
+            break;
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) visit(proc.body);
+  }
+  function warnShowHaltStyleRule(ast, warnings) {
+    const v2 = ast.v2;
+    if (v2 === void 0) return;
+    const seen = /* @__PURE__ */ new Set();
+    const visit = (statements) => {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        const next = statements[index + 1];
+        if (statement.kind === "v2_show" && next?.kind === "v2_stop" && next.items === void 0 && next.inlineName === void 0 && next.target?.trim() === "0") {
+          if (!seen.has(next.line)) {
+            seen.add(next.line);
+            warnings.push(
+              `show(...) immediately followed by halt() at line ${next.line}: for one final screen put the visible value directly in halt(...) instead of describing two display effects`
+            );
+          }
+        }
+        if (statement.kind === "v2_if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "v2_while" || statement.kind === "v2_loop" || statement.kind === "v2_block") {
+          visit(statement.body);
+        }
+        if (statement.kind === "v2_match") {
+          for (const matchCase of statement.cases) visit([matchCase.action]);
+          if (statement.otherwise) visit([statement.otherwise]);
+        }
+      }
+    };
+    if (v2.body.length > 0) visit(v2.body);
+    for (const rule of v2.rules) visit(rule.body);
+  }
   function collectUnsupportedV2Statements(ast) {
     const unsupported = [];
     const visit = (statements) => {
@@ -35090,6 +42432,9 @@ var MKProEmulatorBundle = (() => {
         if (statement.kind === "v2_match") {
           for (const matchCase of statement.cases) visit([matchCase.action]);
           if (statement.otherwise) visit([statement.otherwise]);
+        }
+        if (statement.kind === "v2_block") {
+          visit(statement.body);
         }
       }
     };
@@ -35153,6 +42498,7 @@ var MKProEmulatorBundle = (() => {
     // currentYVariable so the scheduler can keep the parked value in Y instead of
     // recalling it from a register, and reject expressions that re-reference it.
     parkedYVariable;
+    currentXExpression;
     bankSelectorCache = /* @__PURE__ */ new Map();
     pendingIndexedSelectorIntegerPart;
     // Read-only program analysis is computed once and injected; the lowering code
@@ -35160,6 +42506,9 @@ var MKProEmulatorBundle = (() => {
     analysis;
     get inlineProcNames() {
       return this.analysis.inlineProcNames;
+    }
+    terminalUnderflowUnitDecrementProtected(statement) {
+      return this.analysis.terminalUnderflowUnitDecrements.has(statement);
     }
     get procCallCounts() {
       return this.analysis.procCallCounts;
@@ -35169,6 +42518,12 @@ var MKProEmulatorBundle = (() => {
     }
     get xParamProcs() {
       return this.analysis.xParamProcs;
+    }
+    get xParamYStackProcs() {
+      return this.analysis.xParamYStackProcs;
+    }
+    get stackOnlyStateFields() {
+      return this.analysis.stackOnlyStateFields;
     }
     get readCounts() {
       return this.analysis.readCounts;
@@ -35225,6 +42580,9 @@ var MKProEmulatorBundle = (() => {
     get randomCellHelpers() {
       return this.helpers.randomCellHelpers;
     }
+    get packedScoreStackHelper() {
+      return this.helpers.packedScoreStackHelper;
+    }
     get nearAnyHelpers() {
       return this.helpers.nearAnyHelpers;
     }
@@ -35240,6 +42598,9 @@ var MKProEmulatorBundle = (() => {
     get spatialSumLoopHelpers() {
       return this.helpers.spatialSumLoopHelpers;
     }
+    get segmentedBitplaneHitHelpers() {
+      return this.helpers.segmentedBitplaneHitHelpers;
+    }
     get terminalTailHelpers() {
       return this.helpers.terminalTailHelpers;
     }
@@ -35250,6 +42611,7 @@ var MKProEmulatorBundle = (() => {
     }
     set currentXVariable(value) {
       this.emitter.currentXVariable = value;
+      this.currentXExpression = void 0;
     }
     get currentYVariable() {
       return this.parkedYVariable;
@@ -35372,6 +42734,274 @@ var MKProEmulatorBundle = (() => {
         previousCounterOpcode
       };
     }
+    compileDelayedUnitDecrementUnderflowGuardRun(statements, index) {
+      if (this.loweringOptions.indirectUnderflowDecrement !== true) return 0;
+      const decrement = statements[index];
+      if (decrement?.kind !== "assign") return 0;
+      if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return 0;
+      if (decrement.target.startsWith(PACKED_COUNTER_PREFIX)) return 0;
+      const guardIndex = statements.length - 1;
+      if (index >= guardIndex) return 0;
+      const register = this.allocation.registers[decrement.target];
+      if (register === void 0 || !isPredecrementIndirectRegister(register)) return 0;
+      const field = this.findStateField(decrement.target);
+      if (field?.type !== "range" || field.min === void 0 || field.min < 0) return 0;
+      const guard = statements[guardIndex];
+      if (guard?.kind === "if" && guard.elseBody === void 0 && this.delayedUnitDecrementGuardMatches(decrement.target, guard) && this.statementsTerminate(guard.thenBody)) {
+        const middle = statements.slice(index + 1, guardIndex);
+        if (!this.statementsCommuteWithDelayedUnitDecrement(middle, decrement.target, /* @__PURE__ */ new Set())) return 0;
+        this.compileStatements(middle);
+        this.emitDelayedIndirectUnitDecrement(decrement, register, guard);
+        this.compileStatement(guard);
+        return guardIndex - index + 1;
+      }
+      const transformed = this.delayedUnitDecrementTailWithGuard(
+        statements.slice(index + 1),
+        decrement,
+        /* @__PURE__ */ new Set()
+      );
+      if (transformed === void 0) return 0;
+      this.compileStatements(transformed);
+      this.optimizations.push({
+        name: "delayed-indirect-underflow-decrement",
+        detail: `Sank ${decrement.target}-- at line ${decrement.line} into terminal nonpositive branch tails so pre-decrement side effects stay terminal on underflow.`
+      });
+      return statements.length - index;
+    }
+    compileBranchLocalDelayedUnitDecrementGuard(branch, guard, beforeCondition) {
+      if (this.loweringOptions.indirectUnderflowDecrement !== true) return false;
+      const target = this.delayedUnitDecrementGuardTarget(guard);
+      if (target === void 0) return false;
+      if (!this.statementsTerminate(guard.thenBody)) return false;
+      if (this.statementsReadIdentifierDeep(guard.thenBody, target, /* @__PURE__ */ new Set())) return false;
+      const originalThenPlan = this.delayedUnitDecrementBranchPlan(branch.thenBody, target, guard);
+      const originalElsePlan = branch.elseBody === void 0 ? void 0 : this.delayedUnitDecrementBranchPlan(branch.elseBody, target, guard);
+      if (originalThenPlan === void 0 && originalElsePlan === void 0) return false;
+      const selected = this.branchOrderStatement(branch, branch.line);
+      const thenPlan = this.delayedUnitDecrementBranchPlan(selected.thenBody, target, guard);
+      const elsePlan = selected.elseBody === void 0 ? void 0 : this.delayedUnitDecrementBranchPlan(selected.elseBody, target, guard);
+      if (thenPlan === void 0 && elsePlan === void 0) return false;
+      const falseLabel = this.freshLabel("if_false");
+      const thenTerminates = this.statementsTerminate(selected.thenBody);
+      const endLabel = selected.elseBody !== void 0 && !thenTerminates ? this.freshLabel("if_end") : void 0;
+      beforeCondition?.();
+      compileCondition(this, selected.condition, falseLabel, branch.line);
+      this.clearCurrentXFacts();
+      this.compileDelayedUnitDecrementBranchBody(thenPlan, selected.thenBody, guard);
+      if (selected.elseBody !== void 0) {
+        if (endLabel !== void 0) this.emitJump(81, "\u0411\u041F", endLabel, "if end", branch.line);
+        this.emitLabel(falseLabel);
+        this.clearCurrentXFacts();
+        this.compileDelayedUnitDecrementBranchBody(elsePlan, selected.elseBody, guard);
+        if (endLabel !== void 0) this.emitLabel(endLabel);
+        this.clearCurrentXFacts();
+      } else {
+        this.emitLabel(falseLabel);
+        this.clearCurrentXFacts();
+      }
+      this.compileStatement(guard);
+      this.optimizations.push({
+        name: "delayed-indirect-underflow-decrement",
+        detail: `Sank a branch-local ${target}-- into the shared terminal nonpositive guard at line ${guard.line}.`
+      });
+      return true;
+    }
+    delayedUnitDecrementBranchPlan(statements, target, guard) {
+      for (let index = 0; index < statements.length; index += 1) {
+        const decrement = statements[index];
+        if (decrement?.kind !== "assign" || decrement.target !== target) continue;
+        if (!isUnitDecrementExpression(decrement.target, decrement.expr)) continue;
+        if (decrement.target.startsWith(PACKED_COUNTER_PREFIX)) continue;
+        const register = this.allocation.registers[decrement.target];
+        if (register === void 0 || !isPredecrementIndirectRegister(register)) continue;
+        const field = this.findStateField(decrement.target);
+        if (field?.type !== "range" || field.min === void 0 || field.min < 0) continue;
+        if (!this.delayedUnitDecrementGuardMatches(decrement.target, guard)) continue;
+        const suffix = statements.slice(index + 1);
+        if (!this.statementsCommuteWithDelayedUnitDecrement(suffix, decrement.target, /* @__PURE__ */ new Set())) continue;
+        const body = [...statements.slice(0, index), ...suffix];
+        if (this.statementsMayTerminateBeforeDelayedUnitDecrement(body, /* @__PURE__ */ new Set())) continue;
+        return { body, decrement, register };
+      }
+      return void 0;
+    }
+    compileDelayedUnitDecrementBranchBody(plan, fallback, guard) {
+      if (plan === void 0) {
+        this.compileStatements(fallback);
+        return;
+      }
+      this.compileStatements(plan.body);
+      this.emitDelayedIndirectUnitDecrement(plan.decrement, plan.register, guard);
+    }
+    emitDelayedIndirectUnitDecrement(decrement, register, guard) {
+      this.emitOp(208 + registerIndex(register), `\u041A \u041F->X ${register}`, `delayed predecrement ${decrement.target}`, decrement.line);
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      this.optimizations.push({
+        name: "delayed-indirect-underflow-decrement",
+        detail: `Delayed ${decrement.target}-- to the terminal nonpositive guard at line ${guard.line}, then used ${getOpcode(208 + registerIndex(register)).name}'s pre-decrement side effect.`
+      });
+    }
+    delayedUnitDecrementGuardTarget(guard) {
+      if (guard.elseBody !== void 0) return void 0;
+      const normalized = normalizeZeroComparison(guard.condition);
+      return normalized?.expr.kind === "identifier" && (normalized.op === "<" || normalized.op === "<=") ? normalized.expr.name : void 0;
+    }
+    delayedUnitDecrementGuardMatches(target, guard) {
+      return this.delayedUnitDecrementGuardTarget(guard) === target;
+    }
+    delayedUnitDecrementTailWithGuard(statements, decrement, seenProcs) {
+      const last = statements.at(-1);
+      if (last === void 0) return void 0;
+      if (last.kind === "if" && last.elseBody === void 0 && this.delayedUnitDecrementGuardMatches(decrement.target, last) && this.statementsTerminate(last.thenBody)) {
+        const prefix2 = statements.slice(0, -1);
+        if (!this.statementsCommuteWithDelayedUnitDecrement(prefix2, decrement.target, new Set(seenProcs))) {
+          return void 0;
+        }
+        return [...prefix2, decrement, last];
+      }
+      if (last.kind !== "if" || last.elseBody === void 0) return void 0;
+      if (countIdentifierReadsInCondition(last.condition, decrement.target) !== 0) return void 0;
+      const prefix = statements.slice(0, -1);
+      if (!this.statementsCommuteWithDelayedUnitDecrement(prefix, decrement.target, new Set(seenProcs))) {
+        return void 0;
+      }
+      const thenBody = this.delayedUnitDecrementTailWithGuard(last.thenBody, decrement, new Set(seenProcs));
+      const elseBody = this.delayedUnitDecrementTailWithGuard(last.elseBody, decrement, new Set(seenProcs));
+      if (thenBody === void 0 || elseBody === void 0) return void 0;
+      return [
+        ...prefix,
+        {
+          ...last,
+          thenBody,
+          elseBody
+        }
+      ];
+    }
+    statementsCommuteWithDelayedUnitDecrement(statements, target, seenProcs) {
+      return statements.every(
+        (statement) => this.statementCommutesWithDelayedUnitDecrement(statement, target, new Set(seenProcs))
+      );
+    }
+    statementCommutesWithDelayedUnitDecrement(statement, target, seenProcs) {
+      if (statement.kind === "assign") {
+        if (statement.target !== target) {
+          return !statementReadsIdentifier2(statement, target) && !statementMayWriteIdentifier(this.ast, statement, target, /* @__PURE__ */ new Set());
+        }
+        return this.expressionIsAffineSelfUpdate(statement.expr, target);
+      }
+      if (statement.kind === "if") {
+        return countIdentifierReadsInCondition(statement.condition, target) === 0 && this.statementsCommuteWithDelayedUnitDecrement(statement.thenBody, target, new Set(seenProcs)) && (statement.elseBody === void 0 || this.statementsCommuteWithDelayedUnitDecrement(statement.elseBody, target, new Set(seenProcs)));
+      }
+      if (statement.kind === "dispatch") {
+        if (expressionReferencesIdentifier(statement.expr, target)) return false;
+        for (const dispatchCase of statement.cases) {
+          if (expressionReferencesIdentifier(dispatchCase.value, target)) return false;
+          if (!this.statementsCommuteWithDelayedUnitDecrement(dispatchCase.body, target, new Set(seenProcs))) {
+            return false;
+          }
+        }
+        return statement.defaultBody === void 0 || this.statementsCommuteWithDelayedUnitDecrement(statement.defaultBody, target, new Set(seenProcs));
+      }
+      if (statement.kind === "call") {
+        const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+        if (proc === void 0) {
+          return !statementReadsIdentifier2(statement, target) && !statementMayWriteIdentifier(this.ast, statement, target, /* @__PURE__ */ new Set());
+        }
+        if (seenProcs.has(proc.name)) return false;
+        const nextSeen = new Set(seenProcs);
+        nextSeen.add(proc.name);
+        return this.statementsCommuteWithDelayedUnitDecrement(proc.body, target, nextSeen);
+      }
+      if (statement.kind === "loop" || statement.kind === "while") {
+        return !statementReadsIdentifier2(statement, target) && !statementMayWriteIdentifier(this.ast, statement, target, /* @__PURE__ */ new Set());
+      }
+      return !statementReadsIdentifier2(statement, target) && !statementMayWriteIdentifier(this.ast, statement, target, /* @__PURE__ */ new Set());
+    }
+    expressionIsAffineSelfUpdate(expr, target) {
+      let coefficient = 0;
+      let ok = true;
+      const visit = (current, sign) => {
+        if (!ok) return;
+        if (current.kind === "identifier" && current.name === target) {
+          coefficient += sign;
+          return;
+        }
+        if (!expressionReferencesIdentifier(current, target)) return;
+        if (current.kind === "binary" && (current.op === "+" || current.op === "-")) {
+          visit(current.left, sign);
+          visit(current.right, current.op === "+" ? sign : sign === 1 ? -1 : 1);
+          return;
+        }
+        ok = false;
+      };
+      visit(expr, 1);
+      return ok && coefficient === 1;
+    }
+    statementsMayTerminateBeforeDelayedUnitDecrement(statements, seenProcs) {
+      return statements.some(
+        (statement) => this.statementMayTerminateBeforeDelayedUnitDecrement(statement, new Set(seenProcs))
+      );
+    }
+    statementMayTerminateBeforeDelayedUnitDecrement(statement, seenProcs) {
+      if (statement.kind === "halt" || statement.kind === "loop" || statement.kind === "decimal_series" || statement.kind === "return_value") {
+        return true;
+      }
+      if (statement.kind === "if") {
+        return this.statementsMayTerminateBeforeDelayedUnitDecrement(statement.thenBody, new Set(seenProcs)) || statement.elseBody !== void 0 && this.statementsMayTerminateBeforeDelayedUnitDecrement(statement.elseBody, new Set(seenProcs));
+      }
+      if (statement.kind === "dispatch") {
+        return statement.cases.some(
+          (dispatchCase) => this.statementsMayTerminateBeforeDelayedUnitDecrement(dispatchCase.body, new Set(seenProcs))
+        ) || statement.defaultBody !== void 0 && this.statementsMayTerminateBeforeDelayedUnitDecrement(statement.defaultBody, new Set(seenProcs));
+      }
+      if (statement.kind === "while") {
+        return this.statementsMayTerminateBeforeDelayedUnitDecrement(statement.body, new Set(seenProcs));
+      }
+      if (statement.kind === "call") {
+        const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+        if (proc === void 0 || seenProcs.has(proc.name)) return true;
+        const nextSeen = new Set(seenProcs);
+        nextSeen.add(proc.name);
+        return this.statementsMayTerminateBeforeDelayedUnitDecrement(proc.body, nextSeen);
+      }
+      return false;
+    }
+    statementsReadIdentifierDeep(statements, name, seenProcs) {
+      return statements.some((statement) => this.statementReadsIdentifierDeep(statement, name, new Set(seenProcs)));
+    }
+    statementReadsIdentifierDeep(statement, name, seenProcs) {
+      if (statement.kind === "if") {
+        return countIdentifierReadsInCondition(statement.condition, name) > 0 || this.statementsReadIdentifierDeep(statement.thenBody, name, new Set(seenProcs)) || statement.elseBody !== void 0 && this.statementsReadIdentifierDeep(statement.elseBody, name, new Set(seenProcs));
+      }
+      if (statement.kind === "dispatch") {
+        return expressionReferencesIdentifier(statement.expr, name) || statement.cases.some(
+          (dispatchCase) => expressionReferencesIdentifier(dispatchCase.value, name) || this.statementsReadIdentifierDeep(dispatchCase.body, name, new Set(seenProcs))
+        ) || statement.defaultBody !== void 0 && this.statementsReadIdentifierDeep(statement.defaultBody, name, new Set(seenProcs));
+      }
+      if (statement.kind === "loop") {
+        return this.statementsReadIdentifierDeep(statement.body, name, new Set(seenProcs));
+      }
+      if (statement.kind === "while") {
+        return countIdentifierReadsInCondition(statement.condition, name) > 0 || this.statementsReadIdentifierDeep(statement.body, name, new Set(seenProcs));
+      }
+      if (statement.kind === "call") {
+        const proc = this.ast.procs.find((candidate) => candidate.name === statement.block);
+        if (proc === void 0 || seenProcs.has(proc.name)) return true;
+        const nextSeen = new Set(seenProcs);
+        nextSeen.add(proc.name);
+        return this.statementsReadIdentifierDeep(proc.body, name, nextSeen);
+      }
+      return statementReadsIdentifier2(statement, name);
+    }
+    clearCurrentXFacts() {
+      this.currentXVariable = void 0;
+      this.currentXAliases.clear();
+      this.currentXKnownZero = false;
+      this.currentXExpression = void 0;
+      this.currentXFormattedCoordReportBody = void 0;
+    }
     compileStatements(statements) {
       for (let index = 0; index < statements.length; index += 1) {
         const statement = statements[index];
@@ -35400,6 +43030,25 @@ var MKProEmulatorBundle = (() => {
             continue;
           }
         }
+        if (statement.kind === "assign" || statement.kind === "call") {
+          const xParamYStack = this.compileXParamYStackProcCallRun(statements, index);
+          if (xParamYStack > 1) {
+            index += xParamYStack - 1;
+            continue;
+          }
+        }
+        if (statement.kind === "assign" && next?.kind === "call" && statements[index + 2]?.kind === "assign" && this.compileXParamProcPackedScoreAccumulation(
+          statement,
+          next,
+          statements[index + 2]
+        )) {
+          index += 2;
+          continue;
+        }
+        if (statement.kind === "assign" && next?.kind === "call" && this.compileXParamYStackProcCall(statement, next)) {
+          index += 1;
+          continue;
+        }
         if (statement.kind === "assign" && next?.kind === "call" && compileXParamProcCall(this, statement, next)) {
           index += 1;
           continue;
@@ -35412,6 +43061,11 @@ var MKProEmulatorBundle = (() => {
           }
         }
         if (statement.kind === "assign") {
+          const delayedDecrement = this.compileDelayedUnitDecrementUnderflowGuardRun(statements, index);
+          if (delayedDecrement > 1) {
+            index += delayedDecrement - 1;
+            continue;
+          }
           const repeatedCountedWhile = this.compileRepeatedValueInitializedUnitDecrementWhileRun(statements, index);
           if (repeatedCountedWhile > 1) {
             index += repeatedCountedWhile - 1;
@@ -35420,6 +43074,22 @@ var MKProEmulatorBundle = (() => {
           const countedWhile = this.compileInitializedUnitDecrementWhileRun(statements, index);
           if (countedWhile > 1) {
             index += countedWhile - 1;
+            continue;
+          }
+          if (next?.kind === "assign" && compileGridCellMaskReuse(this, statement, next)) {
+            index += 1;
+            continue;
+          }
+          if (next?.kind === "assign" && compileBitSetMaskReuse(this, statement, next)) {
+            index += 1;
+            continue;
+          }
+          if (next?.kind === "assign" && compileBitOrMaskSetReuse(this, statement, next)) {
+            index += 1;
+            continue;
+          }
+          if (this.loweringOptions.singleBitMaskOpCopyReuse === true && next?.kind === "assign" && compileSingleBitMaskOpCopyReuse(this, statement, next)) {
+            index += 1;
             continue;
           }
           const reused = compileRepeatedAssignmentValue(this, statements, index);
@@ -35455,6 +43125,14 @@ var MKProEmulatorBundle = (() => {
           index += 1;
           continue;
         }
+        if (statement.kind === "assign" && next?.kind === "if" && compileBitOrTestAndSetBranch(this, statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (statement.kind === "assign" && next?.kind === "if" && this.compileMaxAssignEqualityBranch(statement, next)) {
+          index += 1;
+          continue;
+        }
         if (statement.kind === "assign" && next?.kind === "if" && compileAssignThenDomainTrap(this, statement, next)) {
           index += 1;
           continue;
@@ -35467,6 +43145,10 @@ var MKProEmulatorBundle = (() => {
           index += 1;
           continue;
         }
+        if (statement.kind === "indexed_assign" && next?.kind === "if" && this.compileIndexedPow10DeltaBitReportBranch(statement, next)) {
+          index += 1;
+          continue;
+        }
         if (statement.kind === "indexed_assign" && next?.kind === "assign" && this.compilePreincrementIndexedStore(statement, next)) {
           index += 1;
           continue;
@@ -35476,14 +43158,6 @@ var MKProEmulatorBundle = (() => {
           continue;
         }
         if (statement.kind === "while" && this.compileSetupInitializedUnitDecrementWhile(statement)) {
-          continue;
-        }
-        if (statement.kind === "assign" && next?.kind === "assign" && compileGridCellMaskReuse(this, statement, next)) {
-          index += 1;
-          continue;
-        }
-        if (statement.kind === "assign" && next?.kind === "assign" && compileBitSetMaskReuse(this, statement, next)) {
-          index += 1;
           continue;
         }
         if (statement.kind === "assign" && next?.kind === "assign" && compileIntFracSharedTail(this, statement, next)) {
@@ -35506,6 +43180,10 @@ var MKProEmulatorBundle = (() => {
           continue;
         }
         if (statement.kind === "if" && next?.kind === "if" && compileDoubleBranchRemoval(this, statement, next)) {
+          index += 1;
+          continue;
+        }
+        if (statement.kind === "if" && next?.kind === "if" && this.compileBranchLocalDelayedUnitDecrementGuard(statement, next)) {
           index += 1;
           continue;
         }
@@ -35569,9 +43247,25 @@ var MKProEmulatorBundle = (() => {
           index += 1;
           continue;
         }
+        if (statement.kind === "show" && next?.kind === "input" && statements[index + 2]?.kind === "if" && statements[index + 3]?.kind === "if" && this.inputFeedsOnlyFollowingCondition(next, statements[index + 2])) {
+          const branch = statements[index + 2];
+          const guard = statements[index + 3];
+          if (this.compileBranchLocalDelayedUnitDecrementGuard(branch, guard, () => {
+            compileShow(this, statement.display, statement.line);
+            this.markCurrentX(next.target);
+          })) {
+            this.optimizations.push({
+              name: "ephemeral-input-branch",
+              detail: `Branched directly on input ${next.target} at line ${next.line} without storing it.`
+            });
+            index += 3;
+            continue;
+          }
+        }
         if (statement.kind === "show" && next?.kind === "input" && statements[index + 2]?.kind === "if" && this.inputFeedsOnlyFollowingCondition(next, statements[index + 2])) {
           const branch = statements[index + 2];
           compileShow(this, statement.display, statement.line);
+          this.markInputEntryOpen();
           this.markCurrentX(next.target);
           compileIf(this, branch, branch.line);
           this.optimizations.push({
@@ -35584,6 +43278,7 @@ var MKProEmulatorBundle = (() => {
         if (statement.kind === "show" && next?.kind === "input" && statements[index + 2]?.kind === "dispatch" && this.inputFeedsOnlyFollowingDispatch(next, statements[index + 2])) {
           const dispatch = statements[index + 2];
           compileShow(this, statement.display, statement.line);
+          this.markInputEntryOpen();
           this.markCurrentX(next.target);
           this.compileStatement(dispatch);
           this.optimizations.push({
@@ -35618,6 +43313,7 @@ var MKProEmulatorBundle = (() => {
         }
         if (statement.kind === "input" && next?.kind === "if" && this.inputFeedsOnlyFollowingCondition(statement, next)) {
           this.emitOp(80, "\u0421/\u041F", `read ${statement.target}`, statement.line);
+          this.markInputEntryOpen();
           this.markCurrentX(statement.target);
           compileIf(this, next, next.line);
           this.optimizations.push({
@@ -35629,6 +43325,7 @@ var MKProEmulatorBundle = (() => {
         }
         if (statement.kind === "input" && next?.kind === "dispatch" && this.inputFeedsOnlyFollowingDispatch(statement, next)) {
           this.emitOp(80, "\u0421/\u041F", `read ${statement.target}`, statement.line);
+          this.markInputEntryOpen();
           this.markCurrentX(statement.target);
           this.compileStatement(next);
           this.optimizations.push({
@@ -35722,6 +43419,15 @@ var MKProEmulatorBundle = (() => {
     compileLoopCarriedPromptReadTail(prompt, body) {
       const first = body[0];
       if (first === void 0) return false;
+      const second = body[1];
+      if (first.kind === "if" && second?.kind === "if" && this.inputFeedsOnlyFollowingCondition(promptInputStatement(prompt), first) && this.compileBranchLocalDelayedUnitDecrementGuard(first, second)) {
+        this.compileStatements(body.slice(2));
+        this.optimizations.push({
+          name: "loop-carried-prompt-input-branch",
+          detail: `Branched directly on loop prompt input ${prompt.input} at line ${prompt.inputLine} without storing it.`
+        });
+        return true;
+      }
       if (first.kind === "if" && this.inputFeedsOnlyFollowingCondition(promptInputStatement(prompt), first)) {
         compileIf(this, first, first.line);
         this.compileStatements(body.slice(1));
@@ -35743,7 +43449,7 @@ var MKProEmulatorBundle = (() => {
       const decrement = body[0];
       const branch = body[1];
       const consumer = body[2];
-      if (decrement?.kind === "assign" && branch?.kind === "if" && (consumer?.kind === "dispatch" || consumer?.kind === "if") && this.compileLoopPromptReadDecrementUnderflow(prompt, decrement, branch, consumer)) {
+      if ((decrement?.kind === "assign" || decrement?.kind === "indexed_assign") && branch?.kind === "if" && (consumer?.kind === "dispatch" || consumer?.kind === "if") && this.compileLoopPromptReadDecrementUnderflow(prompt, decrement, branch, consumer)) {
         this.compileStatement(consumer);
         this.compileStatements(body.slice(3));
         return true;
@@ -35754,21 +43460,22 @@ var MKProEmulatorBundle = (() => {
       const input = promptInputStatement(prompt);
       if (!this.inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer)) return false;
       const okLabel = this.freshLabel("decrement_ok");
-      this.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+      const targetText = this.assignableTargetText(decrement.target);
+      this.emitAssignableRecall(decrement.target, `decrement/test ${targetText}`, decrement.line);
       this.emitNumberOrPreload("1");
-      this.emitOp(17, "-", `decrement/test ${decrement.target}`, decrement.line);
-      this.emitJump(92, "F x<0", okLabel, `decrement underflow ${decrement.target}`, branch.line);
+      this.emitOp(17, "-", `decrement/test ${targetText}`, decrement.line);
+      this.emitJump(92, "F x<0", okLabel, `decrement underflow ${targetText}`, branch.line);
       this.compileStatements(branch.thenBody);
       this.emitLabel(okLabel);
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
       this.currentXKnownZero = false;
-      this.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
+      this.emitAssignableStore(decrement.target, decrement.line);
       this.emitOp(20, "X\u2194Y", `restore read ${prompt.input}`, prompt.inputLine);
       this.markCurrentX(prompt.input);
       this.optimizations.push({
         name: "loop-carried-prompt-decrement-underflow",
-        detail: `Kept loop prompt input ${prompt.input} in Y while checking ${decrement.target} at lines ${prompt.inputLine}/${branch.line}.`
+        detail: `Kept loop prompt input ${prompt.input} in Y while checking ${targetText} at lines ${prompt.inputLine}/${branch.line}.`
       });
       return true;
     }
@@ -35779,12 +43486,17 @@ var MKProEmulatorBundle = (() => {
       } else if (this.currentXVariable !== statement.target || !expressionEquals(statement.expr, { kind: "identifier", name: statement.target })) {
         compileExpression(this, statement.expr);
       }
-      this.currentXVariable = statement.target;
-      this.currentXAliases = /* @__PURE__ */ new Set([statement.target]);
-      this.scaledCoordVariables.delete(statement.target);
+      this.emitLoopCarriedPromptValue(statement.target, statement.line);
+      return true;
+    }
+    emitLoopCarriedPromptValue(target, line) {
+      if (!this.loopPromptInitials.has(target)) return false;
+      this.currentXVariable = target;
+      this.currentXAliases = /* @__PURE__ */ new Set([target]);
+      this.scaledCoordVariables.delete(target);
       this.optimizations.push({
         name: "loop-carried-prompt-x",
-        detail: `Left prompt ${statement.target} in X at line ${statement.line} instead of storing it.`
+        detail: `Left prompt ${target} in X at line ${line ?? "?"} instead of storing it.`
       });
       return true;
     }
@@ -36045,7 +43757,10 @@ var MKProEmulatorBundle = (() => {
       };
       if (consumer.kind === "assign") {
         if (!this.stackTempValueDeadAfterConsumer(temp.target, consumer.target, statements.slice(index + 2), 1)) return 0;
-        return compileConsumer(consumer.expr, () => this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line)) ? 2 : 0;
+        return compileConsumer(consumer.expr, () => {
+          if (this.emitLoopCarriedPromptValue(consumer.target, consumer.line)) return;
+          this.emitStore(consumer.target, `set ${consumer.target}`, consumer.line);
+        }) ? 2 : 0;
       }
       if (!this.stackTempValueDeadAfterConsumer(temp.target, void 0, statements.slice(index + 2), 1)) return 0;
       if (consumer.kind === "halt" && consumer.literal === void 0) {
@@ -36103,7 +43818,7 @@ var MKProEmulatorBundle = (() => {
     }
     stackTempValueDeadAfterConsumer(temp, overwrittenByConsumer, tail, consumerReads) {
       if (overwrittenByConsumer === temp) return true;
-      if (statementsReadIdentifierBeforeWrite(tail, temp)) return false;
+      if (statementsReadIdentifierBeforeWrite(tail, temp, this.ast)) return false;
       if (this.stackTempValueHasVisibleProgramRead(temp) && (this.readCounts.get(temp) ?? 0) !== consumerReads) {
         return false;
       }
@@ -36323,9 +44038,181 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
+    compileMaxAssignEqualityBranch(assign, branch) {
+      if (branch.elseBody !== void 0) return false;
+      const candidate = maxAssignCandidate(assign);
+      if (candidate === void 0) return false;
+      if (!expressionPureForSubstitution(candidate)) return false;
+      if (expressionReferencesIdentifier(candidate, assign.target)) return false;
+      if (!conditionComparesExpressionWithIdentifier(branch.condition, candidate, assign.target, "==")) return false;
+      if (!(candidate.kind === "identifier" && this.xHolds(candidate.name))) {
+        compileExpression(this, candidate);
+      }
+      compileExpression(this, { kind: "identifier", name: assign.target });
+      this.emitOp(54, "\u041A max", "max-assignment update", assign.line);
+      this.emitStore(assign.target, `set ${assign.target}`, assign.line);
+      this.emitOp(17, "\u2212", "max-assignment equality compare", branch.line);
+      const falseLabel = this.freshLabel("max_assign_false");
+      this.emitJump(94, "F x=0", falseLabel, "false branch for max assignment equality", branch.line);
+      this.compileStatements(branch.thenBody);
+      this.emitLabel(falseLabel);
+      this.optimizations.push({
+        name: "max-assign-equality-branch",
+        detail: `Reused the candidate left on Y by max(${expressionToIntentText(candidate)}, ${assign.target}) for the following equality branch at line ${branch.line}.`
+      });
+      return true;
+    }
+    compileXParamProcPackedScoreAccumulation(paramAssign, call, scoreAssign) {
+      return this.compileXParamProcPackedScoreAccumulationTail(
+        paramAssign,
+        call,
+        scoreAssign,
+        !this.stackOnlyStateFields.has(scoreAssign.target)
+      );
+    }
+    compileXParamYStackProcCallRun(statements, index) {
+      const producer = statements[index];
+      const paramAssign = statements[index + 1];
+      const call = statements[index + 2];
+      if (producer?.kind !== "assign" && producer?.kind !== "call" || paramAssign?.kind !== "assign" || call?.kind !== "call") return 0;
+      const yStack = this.xParamYStackProcs.get(call.block);
+      if (yStack === void 0 || paramAssign.target !== yStack.xParam) return 0;
+      if (producer.kind === "assign" && producer.target !== yStack.yName) return 0;
+      if (!isSimpleStackLoad(paramAssign.expr)) return 0;
+      const storedEntry = this.loweringOptions.xParamYStackStoredEntry === true ? this.xParamYStackStoredEntry(call.block, paramAssign) : void 0;
+      if (storedEntry !== void 0 && this.canCompileYStackProducerAfterParamStore(producer, yStack.yName, storedEntry.target)) {
+        compileExpression(this, paramAssign.expr);
+        this.emitStore(storedEntry.target, `set ${storedEntry.target} from X parameter before y-stack entry`, paramAssign.line);
+        this.compileYStackProducerAfterParamStore(producer, yStack.yName);
+        this.compileXParamYStackStoredEntryCall(call.block, call.line);
+        this.optimizations.push({
+          name: "x-param-y-stack-stored-entry-call",
+          detail: `Stored ${paramAssign.target} before producing ${yStack.yName} and entered ${call.block} after its X-parameter prologue at line ${call.line}.`
+        });
+        return 3;
+      }
+      if (producer.kind !== "assign") return 0;
+      if (!expressionPureForSubstitution(producer.expr) || expressionReferencesIdentifier(producer.expr, producer.target)) {
+        return 0;
+      }
+      compileExpression(this, producer.expr);
+      this.markCurrentX(yStack.yName);
+      compileExpression(this, paramAssign.expr);
+      this.currentYVariable = yStack.yName;
+      compileBlockCall(this, call.block, call.line);
+      this.currentYVariable = void 0;
+      this.optimizations.push({
+        name: "x-param-y-stack-proc-call",
+        detail: `Passed ${paramAssign.target} in X and kept ${yStack.yName} in Y for ${call.block} at line ${call.line}.`
+      });
+      return 3;
+    }
+    xParamYStackStoredEntry(blockName, paramAssign) {
+      const lowering = this.xParamProcs.get(blockName);
+      const yStack = this.xParamYStackProcs.get(blockName);
+      if (lowering?.kind !== "copy" || yStack === void 0 || paramAssign.target !== yStack.xParam) return void 0;
+      if (!expressionPureForSubstitution(paramAssign.expr) || !isSimpleStackLoad(paramAssign.expr)) return void 0;
+      return { target: lowering.first.target };
+    }
+    canCompileYStackProducerAfterParamStore(producer, yName, storedTarget) {
+      if (statementFirstIdentifierAccess(producer, storedTarget, this.ast, /* @__PURE__ */ new Set()) !== "none") return false;
+      if (producer.kind === "assign") {
+        return producer.target === yName && expressionPureForSubstitution(producer.expr) && !expressionReferencesIdentifier(producer.expr, yName);
+      }
+      const proc = this.ast.procs.find((candidate) => candidate.name === producer.block);
+      return proc !== void 0 && this.procReturnXVariable(proc) === yName;
+    }
+    compileYStackProducerAfterParamStore(producer, yName) {
+      if (producer.kind === "assign") {
+        compileExpression(this, producer.expr);
+        this.markCurrentX(yName);
+        return;
+      }
+      compileBlockCall(this, producer.block, producer.line);
+      if (!this.xHolds(yName)) this.markCurrentX(yName);
+    }
+    compileXParamYStackStoredEntryCall(blockName, line) {
+      const bankSelectors = this.snapshotBankSelectorCache();
+      this.emitJump(
+        83,
+        "\u041F\u041F",
+        xParamYStackStoredEntryLabel(blockName),
+        `proc call ${blockName} y-stack entry`,
+        line
+      );
+      this.restoreBankSelectorCacheAfterCall(blockName, bankSelectors);
+      const proc = this.ast.procs.find((candidate) => candidate.name === blockName);
+      const returnX = proc === void 0 ? void 0 : this.procReturnXVariable(proc);
+      if (returnX !== void 0) this.markCurrentX(returnX);
+    }
+    compileXParamYStackProcCall(paramAssign, call) {
+      const yStack = this.xParamYStackProcs.get(call.block);
+      if (yStack === void 0 || paramAssign.target !== yStack.xParam) return false;
+      if (!this.xHolds(yStack.yName) || !isSimpleStackLoad(paramAssign.expr)) return false;
+      compileExpression(this, paramAssign.expr);
+      this.currentYVariable = yStack.yName;
+      compileBlockCall(this, call.block, call.line);
+      this.currentYVariable = void 0;
+      this.optimizations.push({
+        name: "x-param-y-stack-proc-call",
+        detail: `Passed ${paramAssign.target} in X while forwarding current ${yStack.yName} in Y for ${call.block} at line ${call.line}.`
+      });
+      return true;
+    }
+    compileXParamProcPackedScoreAccumulationTail(paramAssign, call, scoreAssign, store) {
+      const plan = this.xParamPackedScoreAccumulationPlan(paramAssign, call, scoreAssign);
+      if (plan === void 0) return false;
+      const lineFirst = this.canCompilePackedScoreLineFirst(plan.line, scoreAssign);
+      if (lineFirst) {
+        compileExpression(this, plan.line);
+        compileExpressionPreservingPreviousXAsY2(this, paramAssign.expr, paramAssign.line);
+        compileBlockCall(this, call.block, call.line);
+      } else {
+        compileExpressionPreservingPreviousXAsY2(this, paramAssign.expr, paramAssign.line);
+        compileBlockCall(this, call.block, call.line);
+        compileExpression(this, plan.line);
+        this.emitOp(20, "X\u2194Y", "packed_score returned-index order", scoreAssign.line);
+      }
+      this.emitJump(83, "\u041F\u041F", plan.helper.label, "packed_score helper", scoreAssign.line);
+      this.emitOp(16, "+", "packed_score stack accumulator", scoreAssign.line);
+      if (store) {
+        this.emitStore(scoreAssign.target, `set ${scoreAssign.target}`, scoreAssign.line);
+      } else {
+        this.currentXVariable = scoreAssign.target;
+        this.currentXAliases = /* @__PURE__ */ new Set([scoreAssign.target]);
+        this.currentXKnownZero = false;
+      }
+      this.optimizations.push({
+        name: lineFirst ? "x-param-packed-score-line-stack-accumulate" : "x-param-packed-score-accumulate",
+        detail: lineFirst ? `Loaded the packed_score line argument before ${call.block} so ${scoreAssign.target} stayed below it on the stack at line ${scoreAssign.line}.` : `Kept ${scoreAssign.target} on the stack while ${call.block} produced ${plan.returnX} for packed_score() at line ${scoreAssign.line}.`
+      });
+      return true;
+    }
+    canCompilePackedScoreLineFirst(line, scoreAssign) {
+      return isSimpleStackLoad(line) && !expressionReferencesIdentifier(line, scoreAssign.target);
+    }
+    xParamPackedScoreAccumulationPlan(paramAssign, call, scoreAssign) {
+      const lowering = this.xParamProcs.get(call.block);
+      if (lowering === void 0 || paramAssign.target !== lowering.param) return void 0;
+      if (!expressionPureForSubstitution(paramAssign.expr)) return void 0;
+      if (!expressionPreservesPreviousXAsY(paramAssign.expr)) return void 0;
+      if (!xParamLoweringPreservesCallerY(lowering)) return void 0;
+      const proc = this.ast.procs.find((candidate) => candidate.name === call.block);
+      if (proc === void 0 || proc.body.length !== 1) return void 0;
+      const returnX = this.procReturnXVariable(proc);
+      if (returnX === void 0) return void 0;
+      const packed = packedScoreAccumulator(scoreAssign, returnX);
+      if (packed === void 0) return void 0;
+      if (!this.xHolds(scoreAssign.target)) return void 0;
+      if (!isSimpleStackLoad(packed.line) || expressionReferencesIdentifier(packed.line, scoreAssign.target)) {
+        return void 0;
+      }
+      const helper = this.sharedPackedScoreStackHelper(scoreAssign.line);
+      return helper === void 0 ? void 0 : { line: packed.line, returnX, helper };
+    }
     compileIndexedAssignThenDomainTrap(assign, branch) {
       if (!statementsAreDomainErrorTrap(this, branch.thenBody)) return false;
-      const plan = planDomainErrorGuard(branch.condition);
+      const plan = planDomainErrorGuard(branch.condition, this.ast);
       if (plan === void 0 || plan.second !== void 0) return false;
       if (!expressionEquals(plan.first, assign.target)) return false;
       this.compileStatement(assign);
@@ -36342,6 +44229,49 @@ var MKProEmulatorBundle = (() => {
       if (delta === void 0) return false;
       if (numericIndexValue(statement.target.index) !== void 0) return false;
       if (!expressionPureForSubstitution(statement.target.index)) return false;
+      const yTerm = this.currentYVariable === void 0 ? void 0 : yStackPow10DeltaTerm2(delta.term, this.currentYVariable);
+      const xTerm = this.currentXVariable === void 0 ? void 0 : yStackPow10DeltaTerm2(delta.term, this.currentXVariable);
+      const directSelector = directIndexedSelectorRegister(this.ast, this.allocation.registers, statement.target);
+      if (xTerm !== void 0 && directSelector !== void 0) {
+        const xName = this.currentXVariable;
+        this.emitOp(21, "F 10\u02E3", "stack-carried packed digit pow10", statement.line);
+        compileExpression(this, xTerm.factor);
+        this.emitOp(18, "\xD7", "stack-carried packed digit delta", statement.line);
+        this.emitOp(
+          208 + registerIndex(directSelector),
+          `\u041A \u041F->X ${directSelector}`,
+          "indexed packed digit update base",
+          statement.line
+        );
+        this.emitOp(binaryOpcode(delta.op), delta.op, "indexed packed digit update", statement.line);
+        this.emitPreparedIndexedStore(statement.target, directSelector, statement.line);
+        this.optimizations.push({
+          name: "indexed-packed-x-stack-pow10-delta",
+          detail: `Used ${xName} already in X as the pow10 index for ${bankMemberKey(statement.target.base, statement.target.field)}[${expressionToIntentText(statement.target.index)}] at line ${statement.line}.`
+        });
+        return true;
+      }
+      if (yTerm !== void 0 && directSelector !== void 0) {
+        const yName = this.currentYVariable;
+        this.emitOp(20, "X\u2194Y", "stack-carried packed digit index", statement.line);
+        this.emitOp(21, "F 10\u02E3", "stack-carried packed digit pow10", statement.line);
+        compileExpression(this, yTerm.factor);
+        this.emitOp(18, "\xD7", "stack-carried packed digit delta", statement.line);
+        this.emitOp(
+          208 + registerIndex(directSelector),
+          `\u041A \u041F->X ${directSelector}`,
+          "indexed packed digit update base",
+          statement.line
+        );
+        this.emitOp(binaryOpcode(delta.op), delta.op, "indexed packed digit update", statement.line);
+        this.emitPreparedIndexedStore(statement.target, directSelector, statement.line);
+        this.currentYVariable = void 0;
+        this.optimizations.push({
+          name: "indexed-packed-y-stack-pow10-delta",
+          detail: `Used ${yName} carried in Y as the pow10 index for ${bankMemberKey(statement.target.base, statement.target.field)}[${expressionToIntentText(statement.target.index)}] at line ${statement.line}.`
+        });
+        return true;
+      }
       const preparedSelector = this.prepareIndexedSelector(statement.target, statement.line);
       if (preparedSelector === void 0) return false;
       this.emitOp(
@@ -36359,10 +44289,48 @@ var MKProEmulatorBundle = (() => {
       });
       return true;
     }
+    compileIndexedPow10DeltaBitReportBranch(assign, branch) {
+      const fractional = indexedPow10DeltaFractionalBitReportBranch(assign, branch);
+      if (fractional !== void 0) {
+        if (!this.compileIndexedPow10Delta(assign)) return false;
+        compileExpression(this, fractional.mask);
+        this.emitOp(55, "\u041A \u2227", "updated packed fractional report mask", branch.line);
+        this.emitOp(14, "\u0412\u2191", "updated packed fractional report keep", branch.line);
+        this.emitOp(53, "\u041A {x}", "updated packed fractional report predicate", branch.line);
+        const falseLabel2 = this.freshLabel("packed_frac_report_false");
+        this.emitJump(87, "F x\u22600", falseLabel2, "false branch for packed fractional report !=", branch.line);
+        this.emitOp(37, "F reverse", "updated packed fractional report restore", branch.line);
+        this.emitOp(80, "\u0421/\u041F", "halt", branch.thenBody[0]?.line ?? branch.line);
+        this.emitLabel(falseLabel2);
+        this.optimizations.push({
+          name: "indexed-packed-fractional-report-branch",
+          detail: `Reused ${expressionToIntentText(assign.target)} left in X after a packed update for fractional ${conditionToText(branch.condition)} at line ${branch.line}.`
+        });
+        return true;
+      }
+      const report = indexedPow10DeltaBitReportBranch(assign, branch);
+      if (report === void 0) return false;
+      if (!this.compileIndexedPow10Delta(assign)) return false;
+      compileExpression(this, report.mask);
+      this.emitOp(55, "\u041A \u2227", "updated packed report mask", branch.line);
+      compileExpression(this, report.neutral);
+      this.emitOp(17, "-", "updated packed report compare", branch.line);
+      const falseLabel = this.freshLabel("packed_report_false");
+      this.emitJump(87, "F x\u22600", falseLabel, "false branch for packed report !=", branch.line);
+      compileExpression(this, report.neutral);
+      this.emitOp(16, "+", "updated packed report restore", branch.line);
+      this.emitOp(80, "\u0421/\u041F", "halt", branch.thenBody[0]?.line ?? branch.line);
+      this.emitLabel(falseLabel);
+      this.optimizations.push({
+        name: "indexed-packed-bit-report-branch",
+        detail: `Reused ${expressionToIntentText(assign.target)} left in X after a packed update for ${conditionToText(branch.condition)} at line ${branch.line}.`
+      });
+      return true;
+    }
     compileInitializedUnitDecrementWhileRun(statements, index) {
-      const run34 = this.initializedUnitDecrementWhileRunAt(statements, index);
-      if (run34 === void 0) return 0;
-      return this.compileInitializedUnitDecrementWhile(run34.initializer, run34.loop, run34.intervening) ? run34.loopIndex - index + 1 : 0;
+      const run35 = this.initializedUnitDecrementWhileRunAt(statements, index);
+      if (run35 === void 0) return 0;
+      return this.compileInitializedUnitDecrementWhile(run35.initializer, run35.loop, run35.intervening) ? run35.loopIndex - index + 1 : 0;
     }
     compileRepeatedValueInitializedUnitDecrementWhileRun(statements, index) {
       const first = statements[index];
@@ -36372,24 +44340,24 @@ var MKProEmulatorBundle = (() => {
       for (let cursor = index + 1; cursor < statements.length; cursor += 1) {
         const candidate = statements[cursor];
         if (candidate.kind !== "assign" || !expressionEquals(candidate.expr, first.expr)) return 0;
-        const run34 = this.initializedUnitDecrementWhileRunAt(statements, cursor);
-        if (run34 === void 0) continue;
+        const run35 = this.initializedUnitDecrementWhileRunAt(statements, cursor);
+        if (run35 === void 0) continue;
         compileExpression(this, first.expr);
         for (let storeIndex = index; storeIndex <= cursor; storeIndex += 1) {
           const assignment = statements[storeIndex];
           this.emitStore(assignment.target, `set ${assignment.target}`, assignment.line);
         }
-        for (const statement of run34.intervening) this.compileStatement(statement);
-        this.emitCountedWhileBody(run34.lowering, run34.loop, "counted_while", `counted while ${run34.initializer.target}`);
+        for (const statement of run35.intervening) this.compileStatement(statement);
+        this.emitCountedWhileBody(run35.lowering, run35.loop, "counted_while", `counted while ${run35.initializer.target}`);
         this.optimizations.push({
           name: "repeated-assignment-counted-loop-reuse",
-          detail: `Reused ${expressionToIntentText(first.expr)} across ${cursor - index} prefix store(s) and counted loop ${run34.initializer.target} at line ${run34.loop.line}.`
+          detail: `Reused ${expressionToIntentText(first.expr)} across ${cursor - index} prefix store(s) and counted loop ${run35.initializer.target} at line ${run35.loop.line}.`
         });
         this.optimizations.push({
           name: "initialized-counted-while-loop",
-          detail: `Lowered initialized while ${run34.initializer.target} >= 1 through ${getOpcode(run34.lowering.flOpcode).name} at line ${run34.loop.line}.`
+          detail: `Lowered initialized while ${run35.initializer.target} >= 1 through ${getOpcode(run35.lowering.flOpcode).name} at line ${run35.loop.line}.`
         });
-        return run34.loopIndex - index + 1;
+        return run35.loopIndex - index + 1;
       }
       return 0;
     }
@@ -36398,7 +44366,9 @@ var MKProEmulatorBundle = (() => {
       return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
     }
     inputFeedsOnlyFollowingDispatch(input, dispatch) {
-      const optimized = optimizeDispatchDefaultCases(dispatch).statement;
+      const optimized = optimizeDispatchDefaultCases(dispatch, {
+        preserveCaseOrder: this.loweringOptions.preserveDispatchCaseOrder === true
+      }).statement;
       if (!dispatchUsesNumericResidualChain(optimized)) return false;
       const reads = countIdentifierReads(optimized.expr, input.target);
       return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
@@ -36408,11 +44378,11 @@ var MKProEmulatorBundle = (() => {
       return reads > 0 && (this.readCounts.get(input.target) ?? 0) === reads;
     }
     inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer) {
-      if (!isUnitDecrementExpression(decrement.target, decrement.expr)) return false;
+      if (!this.isUnitAssignableDecrement(decrement)) return false;
       if (branch.elseBody !== void 0) return false;
-      if (!decrementUnderflowCondition(branch.condition, decrement.target)) return false;
+      if (!this.conditionIsNegativeTargetGuard(branch.condition, decrement.target)) return false;
       if (!this.statementsTerminate(branch.thenBody)) return false;
-      if (this.allocation.registers[decrement.target] === void 0) return false;
+      if (!this.assignableTargetHasStorage(decrement.target)) return false;
       return consumer.kind === "dispatch" ? this.inputFeedsOnlyFollowingDispatch(input, consumer) : this.inputFeedsOnlyFollowingCondition(input, consumer);
     }
     inputFeedsStoredGuardedDecrementConsumer(input, decrement, branch, consumer) {
@@ -36478,6 +44448,20 @@ var MKProEmulatorBundle = (() => {
       if (expr.kind !== "binary" || expr.op !== op2) return false;
       if (!expressionEquals(expr.left, this.assignableTargetExpression(statement.target))) return false;
       return expr.right.kind === "identifier" && expr.right.name === temp;
+    }
+    isUnitAssignableDecrement(statement) {
+      const expr = statement.expr;
+      return expr.kind === "binary" && expr.op === "-" && expressionEquals(expr.left, this.assignableTargetExpression(statement.target)) && expr.right.kind === "number" && Number(expr.right.raw) === 1;
+    }
+    assignableTargetHasStorage(target) {
+      if (typeof target === "string") return this.allocation.registers[target] !== void 0;
+      const constantIndex = numericIndexValue(target.index);
+      if (constantIndex !== void 0) {
+        const resolved = findStateBankMember(this.ast, target);
+        const element = resolved === void 0 ? void 0 : stateBankElementForIndex(resolved.member, constantIndex);
+        return element !== void 0 && this.allocation.registers[element.name] !== void 0;
+      }
+      return findStateBankMember(this.ast, target) !== void 0;
     }
     compileRepeatedXParamSelfAssignment(first, second) {
       const firstMatch = this.matchXParamSelfAssignment(first);
@@ -36553,6 +44537,9 @@ var MKProEmulatorBundle = (() => {
       const omitInputStore = this.inputFeedsGuardedDecrementConsumer(input, decrement, branch, consumer);
       const keepStoredInput = !omitInputStore && this.inputFeedsStoredGuardedDecrementConsumer(input, decrement, branch, consumer);
       if (!omitInputStore && !keepStoredInput) return false;
+      if (keepStoredInput && this.loweringOptions.indirectUnderflowDecrement === true && this.compileShowReadStoredIndirectDecrementUnderflow(show, input, decrement, branch)) {
+        return true;
+      }
       compileShow(this, show.display, show.line);
       if (keepStoredInput) this.emitStore(input.target, `read ${input.target}`, input.line);
       const okLabel = this.freshLabel("decrement_ok");
@@ -36566,11 +44553,43 @@ var MKProEmulatorBundle = (() => {
       this.currentXAliases.clear();
       this.currentXKnownZero = false;
       this.emitStore(decrement.target, `set ${decrement.target}`, decrement.line);
-      this.emitOp(20, "X\u2194Y", `restore read ${input.target}`, input.line);
+      if (keepStoredInput && this.loweringOptions.recallStoredInputAfterDecrement === true) {
+        this.emitRecall(input.target, `restore read ${input.target}`, input.line);
+        this.optimizations.push({
+          name: "show-read-stored-decrement-recall-sync",
+          detail: `Restored stored read ${input.target} through \u041F->X after checking ${decrement.target}, exposing an X2 sync.`
+        });
+      } else {
+        this.emitOp(20, "X\u2194Y", `restore read ${input.target}`, input.line);
+      }
       this.markCurrentX(input.target);
       this.optimizations.push({
         name: keepStoredInput ? "show-read-stored-decrement-underflow-fusion" : "show-read-decrement-underflow-fusion",
         detail: keepStoredInput ? `Stored read ${input.target} while also restoring it from Y after checking ${decrement.target} at lines ${input.line}/${branch.line}.` : `Kept read ${input.target} in Y while checking ${decrement.target} at lines ${input.line}/${branch.line}.`
+      });
+      return true;
+    }
+    compileShowReadStoredIndirectDecrementUnderflow(show, input, decrement, branch) {
+      const register = indirectPredecrementUnderflowRegister(this, decrement.target);
+      if (register === void 0) return false;
+      compileShow(this, show.display, show.line);
+      this.emitStore(input.target, `read ${input.target}`, input.line);
+      const okLabel = this.freshLabel("decrement_ok");
+      this.emitOp(208 + registerIndex(register), `\u041A \u041F->X ${register}`, `predecrement ${decrement.target}`, decrement.line);
+      this.emitRecall(decrement.target, `decrement/test ${decrement.target}`, decrement.line);
+      this.emitJump(92, "F x<0", okLabel, `decrement underflow ${decrement.target}`, branch.line);
+      this.compileStatements(branch.thenBody);
+      this.emitLabel(okLabel);
+      this.markCurrentX(decrement.target);
+      this.emitRecall(input.target, `restore read ${input.target}`, input.line);
+      this.markCurrentX(input.target);
+      this.optimizations.push({
+        name: "show-read-stored-indirect-decrement-underflow",
+        detail: `Stored read ${input.target}, decremented ${decrement.target} through ${getOpcode(208 + registerIndex(register)).name}, and restored the read by recall at lines ${input.line}/${branch.line}.`
+      });
+      this.optimizations.push({
+        name: "indirect-underflow-decrement",
+        detail: `Used ${getOpcode(208 + registerIndex(register)).name}'s pre-decrement side effect for ${decrement.target} before the underflow branch at lines ${decrement.line}/${branch.line}.`
       });
       return true;
     }
@@ -36769,6 +44788,14 @@ var MKProEmulatorBundle = (() => {
           if (this.compileXParamValueScratchAssignment(statement)) return;
           if (isZeroExpression(statement.expr)) this.emitZero(`set ${statement.target}`, statement.line);
           else compileExpression(this, statement.expr);
+          if (this.stackOnlyStateFields.has(statement.target)) {
+            this.markCurrentX(statement.target);
+            this.optimizations.push({
+              name: "stack-only-state-field",
+              detail: `Kept ${statement.target} in X at line ${statement.line} instead of storing a proved stack-only state field.`
+            });
+            return;
+          }
           this.emitStore(statement.target, `set ${statement.target}`, statement.line);
           return;
         case "coord_list_remove":
@@ -36792,6 +44819,11 @@ var MKProEmulatorBundle = (() => {
           if (isZeroExpression(statement.expr)) this.emitZero(`set ${bankMemberKey(statement.target.base, statement.target.field)}`, statement.line);
           else compileExpression(this, statement.expr);
           this.emitIndexedStore(statement.target, statement.line);
+          return;
+        case "segmented_bitplane_update":
+          if (!compileSegmentedBitplaneUpdateStatement(this, statement)) {
+            this.diagnostics.push(buildDiagnostic("error", `Collection ${statement.collection} is not lowered as segmented bitplanes.`, statement.line));
+          }
           return;
         case "loop": {
           if (this.compileLoopCarriedPrompt(statement)) return;
@@ -37650,6 +45682,16 @@ var MKProEmulatorBundle = (() => {
       this.expressionHelpers.set(key, helper);
       return helper;
     }
+    sharedPackedScoreStackHelper(line) {
+      if (countExpressionCalls(this.ast, "packed_score") < 3) return void 0;
+      if (this.helpers.packedScoreStackHelper !== void 0) return this.helpers.packedScoreStackHelper;
+      const helper = {
+        label: "__packed_score",
+        ...line === void 0 ? {} : { line }
+      };
+      this.helpers.packedScoreStackHelper = helper;
+      return helper;
+    }
     shouldShareExpression(expr) {
       if (!expressionPureForSubstitution(expr)) return false;
       if (expr.kind === "number" || expr.kind === "identifier") return false;
@@ -37688,6 +45730,8 @@ var MKProEmulatorBundle = (() => {
     ensureSpatialHitHelper(mask, scratch) {
       const existing = this.spatialHitHelpers.get(mask);
       if (existing !== void 0) return existing;
+      const bitMaskScratch = this.sharedBitMaskHelperScratch();
+      if (bitMaskScratch !== void 0) this.ensureSpatialBitMaskHelper(bitMaskScratch, void 0);
       const helper = {
         mask,
         scratch,
@@ -37705,6 +45749,17 @@ var MKProEmulatorBundle = (() => {
         ...line === void 0 ? {} : { line }
       };
       this.spatialBitMaskHelpers.set(scratch, helper);
+      return helper;
+    }
+    ensureSegmentedBitplaneHitHelper(collection, line) {
+      const existing = this.segmentedBitplaneHitHelpers.get(collection);
+      if (existing !== void 0) return existing;
+      const helper = {
+        collection,
+        label: `__seg_bitplane_hit_${collection}`,
+        ...line === void 0 ? {} : { line }
+      };
+      this.segmentedBitplaneHitHelpers.set(collection, helper);
       return helper;
     }
     ensureSpatialSumLoopHelper(hitMask, cell, operation, line) {
@@ -37736,7 +45791,11 @@ var MKProEmulatorBundle = (() => {
       return helper;
     }
     emitNumber(raw) {
+      this.currentXExpression = void 0;
       this.emitter.emitNumber(raw);
+    }
+    markInputEntryOpen() {
+      this.emitter.machineEntryOpen = true;
     }
     emitZero(comment, sourceLine) {
       if (this.currentXKnownZero) {
@@ -37769,7 +45828,22 @@ var MKProEmulatorBundle = (() => {
       const normalized = normalizeConstantLiteral(raw);
       const register = this.allocation.constants[normalized];
       if (register !== void 0 && !STACK_LITERAL_PRELOAD_ONLY_CONSTANTS.has(normalized)) {
-        this.emitOp(96 + registerIndex(register), `\u041F->X ${register}`, `preload const ${normalized}`);
+        const selector = fractionalConstantSelectorForValue(this.loweringOptions, normalized);
+        const selectorValue = selector === void 0 ? void 0 : fractionalSelectorPreloadValue(normalized, selector.target);
+        const comment = selectorValue === void 0 ? `preload const ${normalized}` : fractionalSelectorNeedsRecovery(normalized, selectorValue) ? `preload const ${selectorValue}; fractional selector source ${normalized}` : `preload const ${selectorValue}; natural fractional selector source ${normalized}`;
+        this.emitOp(96 + registerIndex(register), `\u041F->X ${register}`, comment);
+        if (selector !== void 0 && selectorValue !== void 0 && fractionalSelectorNeedsRecovery(normalized, selectorValue)) {
+          this.emitOp(53, "\u041A {x}", `fractional selector const ${normalized}`);
+          this.optimizations.push({
+            name: "fractional-constant-selector-use",
+            detail: `Recovered fractional constant ${normalized} from R${register} carrying target ${selector.target} as ${selectorValue}.`
+          });
+        } else if (selector !== void 0 && selectorValue !== void 0) {
+          this.optimizations.push({
+            name: "natural-fractional-constant-selector-use",
+            detail: `Used normalized fractional constant ${selectorValue} from R${register} as ${normalized} while preserving its indirect target ${selector.target}.`
+          });
+        }
         this.optimizations.push({
           name: "preloaded-constant",
           detail: `Used preloaded R${register} for constant ${normalized}.`
@@ -37989,12 +46063,13 @@ var MKProEmulatorBundle = (() => {
       this.emitOp(
         208 + registerIndex(selector),
         `\u041A \u041F->X ${selector}`,
-        `indexed recall ${bankMemberKey(expr.base, expr.field)}${integerPart === void 0 ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
+        indexedMemoryComment("indexed recall", expr, resolved.member, this.allocation, integerPart),
         sourceLine
       );
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
       this.currentXKnownZero = false;
+      this.currentXExpression = expr;
     }
     emitIndexedStore(expr, sourceLine) {
       const resolved = findStateBankMember(this.ast, expr);
@@ -38018,11 +46093,12 @@ var MKProEmulatorBundle = (() => {
       this.emitOp(
         176 + registerIndex(selector),
         `\u041A X->\u041F ${selector}`,
-        `indexed set ${bankMemberKey(expr.base, expr.field)}${integerPart === void 0 ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
+        indexedMemoryComment("indexed set", expr, resolved.member, this.allocation, integerPart),
         sourceLine
       );
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
+      this.currentXExpression = expr;
     }
     prepareIndexedSelector(expr, sourceLine) {
       const selector = this.ensureIndexedSelector(expr, sourceLine);
@@ -38036,12 +46112,13 @@ var MKProEmulatorBundle = (() => {
       this.emitOp(
         208 + registerIndex(selector),
         `\u041A \u041F->X ${selector}`,
-        `indexed recall ${bankMemberKey(expr.base, expr.field)}${integerPart === void 0 ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
+        indexedMemoryComment("indexed recall", expr, findStateBankMember(this.ast, expr)?.member, this.allocation, integerPart),
         sourceLine
       );
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
       this.currentXKnownZero = false;
+      this.currentXExpression = expr;
     }
     emitPreparedIndexedStore(expr, prepared, sourceLine) {
       const selector = typeof prepared === "string" ? prepared : prepared.selector;
@@ -38049,11 +46126,12 @@ var MKProEmulatorBundle = (() => {
       this.emitOp(
         176 + registerIndex(selector),
         `\u041A X->\u041F ${selector}`,
-        `indexed set ${bankMemberKey(expr.base, expr.field)}${integerPart === void 0 ? "" : `; indirect-selector-integer-part=${integerPart}`}`,
+        indexedMemoryComment("indexed set", expr, findStateBankMember(this.ast, expr)?.member, this.allocation, integerPart),
         sourceLine
       );
       this.currentXVariable = void 0;
       this.currentXAliases.clear();
+      this.currentXExpression = expr;
     }
     ensureIndexedSelector(expr, sourceLine) {
       this.pendingIndexedSelectorIntegerPart = void 0;
@@ -38137,7 +46215,14 @@ var MKProEmulatorBundle = (() => {
         return selector;
       }
       if (affineIndex !== void 0 && affineIndex.integerPart !== true) {
-        this.emitRecall(affineIndex.name, `indexed selector ${affineIndex.name}`, sourceLine);
+        if (this.xHolds(affineIndex.name)) {
+          this.optimizations.push({
+            name: "current-x-indexed-selector",
+            detail: `Reused ${affineIndex.name} already in X while preparing ${bankMemberKey(expr.base, expr.field)} selector at line ${sourceLine}.`
+          });
+        } else {
+          this.emitRecall(affineIndex.name, `indexed selector ${affineIndex.name}`, sourceLine);
+        }
       } else {
         compileExpression(this, expr.index);
       }
@@ -38316,7 +46401,11 @@ var MKProEmulatorBundle = (() => {
       if (name === this.currentXVariable) return true;
       return this.loweringOptions.aliasXReuse === true && this.currentXAliases.has(name);
     }
+    xHoldsExpression(expr) {
+      return this.currentXExpression !== void 0 && expressionEquals(this.currentXExpression, expr);
+    }
     emitJump(opcode, mnemonic, target, comment, sourceLine) {
+      this.currentXExpression = void 0;
       this.emitter.emitJump(opcode, mnemonic, target, comment, sourceLine);
       if (opcode === 83) this.bankSelectorCache.clear();
     }
@@ -38324,20 +46413,25 @@ var MKProEmulatorBundle = (() => {
       this.emitter.emitAddress(target, comment, sourceLine);
     }
     emitFormalAddress(opcode, comment, sourceLine) {
+      this.currentXExpression = void 0;
       this.emitter.emitFormalAddress(opcode, comment, sourceLine);
     }
     emitOp(opcode, mnemonic, comment, sourceLine, raw = false) {
+      this.currentXExpression = void 0;
       this.emitter.emitOp(opcode, mnemonic, comment, sourceLine, raw);
     }
     emitLabel(name) {
+      this.currentXExpression = void 0;
       this.emitter.emitLabel(name);
       this.bankSelectorCache.clear();
     }
     emitProcedureLabel(name) {
+      this.currentXExpression = void 0;
       this.emitter.emitLabel(name, { procedureBoundary: "start", procedureName: name });
       this.bankSelectorCache.clear();
     }
     emitProcedureEndLabel(name) {
+      this.currentXExpression = void 0;
       this.emitter.emitLabel(`\0proc_end_${name}`, {
         procedureBoundary: "end",
         procedureName: name,
@@ -38641,13 +46735,16 @@ var MKProEmulatorBundle = (() => {
     const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
     const readCounts = collectVariableReadCounts(ast);
     const scaledCoordLists = collectScaledCoordListNames(ast);
+    const xParamProcs = collectXParamProcLowerings(ast, inlineProcNames);
     return {
       procCallCounts,
       inlineProcNames,
       functionProcs: new Map(
         ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => [proc.name, proc])
       ),
-      xParamProcs: collectXParamProcLowerings(ast, readCounts, inlineProcNames),
+      xParamProcs,
+      xParamYStackProcs: collectXParamYStackProcLowerings(ast, xParamProcs),
+      stackOnlyStateFields: collectStackOnlyStateFields(ast),
       readCounts,
       displayUseCounts: collectDisplayUseCounts(ast),
       showSequenceUseCounts: collectShowSequenceUseCounts(ast),
@@ -38657,7 +46754,8 @@ var MKProEmulatorBundle = (() => {
       lineCountGroupCounts: collectLineCountGroupCounts(ast),
       scaledCoordLists,
       scaledCoordCellNames: collectScaledCoordCellNames(ast, scaledCoordLists),
-      removableCoordLists: collectRemovableCoordListNames(ast)
+      removableCoordLists: collectRemovableCoordListNames(ast),
+      terminalUnderflowUnitDecrements: collectTerminalUnderflowUnitDecrements(ast, inlineProcNames, procCallCounts)
     };
   }
   function collectProcCallCounts(ast) {
@@ -38720,6 +46818,140 @@ var MKProEmulatorBundle = (() => {
   function collectFunctionProcNames(ast) {
     return new Set(ast.procs.filter((proc) => procContainsReturnValue(proc.body)).map((proc) => proc.name));
   }
+  function validateHardwareReturnStackDepth(items, diagnostics) {
+    const issue = findHardwareReturnStackIssue(raiseMachineToIr(items));
+    if (issue === void 0) return;
+    diagnostics.push(buildDiagnostic(
+      "warning",
+      returnStackIssueMessage(issue),
+      issue.op.meta.sourceLine,
+      issue.kind === "overflow" ? "RETURN_STACK_DEPTH_EXCEEDED" : "RETURN_STACK_DEPTH_UNPROVED"
+    ));
+  }
+  function findHardwareReturnStackIssue(ops) {
+    if (ops.length === 0) return void 0;
+    const targets = returnStackTargetIndexes(ops);
+    const visited = /* @__PURE__ */ new Set();
+    const pending = [{ index: 0, returnStack: [] }];
+    let firstWarning;
+    const enqueue = (index, returnStack) => {
+      if (index === void 0 || index < 0 || index >= ops.length) return;
+      pending.push({ index, returnStack });
+    };
+    while (pending.length > 0) {
+      const state = pending.pop();
+      const key = `${state.index}:${state.returnStack.join(",")}`;
+      if (visited.has(key)) continue;
+      visited.add(key);
+      const op2 = ops[state.index];
+      const next = state.index + 1;
+      switch (op2.kind) {
+        case "label":
+        case "store":
+        case "recall":
+        case "indirect-store":
+        case "indirect-recall":
+        case "plain":
+        case "orphan-address":
+        case "stop":
+          enqueue(next, state.returnStack);
+          break;
+        case "jump":
+          enqueue(returnStackTargetIndex(targets, op2.target), state.returnStack);
+          break;
+        case "cjump":
+        case "loop":
+          enqueue(returnStackTargetIndex(targets, op2.target), state.returnStack);
+          enqueue(next, state.returnStack);
+          break;
+        case "call": {
+          const issue = returnStackCallIssue(op2, returnStackTargetIndex(targets, op2.target), state.returnStack);
+          if (issue?.kind === "overflow") return issue;
+          if (issue !== void 0) {
+            firstWarning ??= issue;
+            break;
+          }
+          enqueue(returnStackTargetIndex(targets, op2.target), [next, ...state.returnStack]);
+          break;
+        }
+        case "indirect-jump": {
+          const target = knownIndirectFlowTarget(op2);
+          enqueue(target === void 0 ? void 0 : targets.addresses.get(target), state.returnStack);
+          break;
+        }
+        case "indirect-call": {
+          const target = knownIndirectFlowTarget(op2);
+          const targetIndex = target === void 0 ? void 0 : targets.addresses.get(target);
+          const issue = returnStackCallIssue(op2, targetIndex, state.returnStack, target === void 0);
+          if (issue?.kind === "overflow") return issue;
+          if (issue !== void 0) {
+            firstWarning ??= issue;
+            break;
+          }
+          enqueue(targetIndex, [next, ...state.returnStack]);
+          break;
+        }
+        case "indirect-cjump": {
+          const target = knownIndirectFlowTarget(op2);
+          enqueue(target === void 0 ? void 0 : targets.addresses.get(target), state.returnStack);
+          enqueue(next, state.returnStack);
+          break;
+        }
+        case "return":
+          if (op2.meta.comment === "optimized \u0411\u041F 01") {
+            enqueue(targets.addresses.get(1), state.returnStack);
+          } else if (state.returnStack.length === 0) {
+            enqueue(targets.addresses.get(0), []);
+          } else {
+            enqueue(state.returnStack[0], state.returnStack.slice(1));
+          }
+          break;
+      }
+    }
+    return firstWarning;
+  }
+  function returnStackCallIssue(op2, targetIndex, returnStack, unknownIndirectTarget = false) {
+    const depth = returnStack.length + 1;
+    if (depth > MK61_RETURN_STACK_LIMIT) return { kind: "overflow", op: op2, depth };
+    if (unknownIndirectTarget && op2.kind === "indirect-call") {
+      return { kind: "unknown-indirect-call", op: op2, depth };
+    }
+    if (targetIndex === void 0) return { kind: "unresolved-call-target", op: op2, depth };
+    return void 0;
+  }
+  function returnStackTargetIndexes(ops) {
+    const labels = /* @__PURE__ */ new Map();
+    const addresses = /* @__PURE__ */ new Map();
+    let address = 0;
+    for (let index = 0; index < ops.length; index += 1) {
+      const op2 = ops[index];
+      if (op2.kind === "label") {
+        labels.set(op2.name, index);
+        continue;
+      }
+      addresses.set(address, index);
+      address += cellsPerOp(op2);
+    }
+    return { labels, addresses };
+  }
+  function returnStackTargetIndex(indexes, target) {
+    return typeof target === "string" ? indexes.labels.get(target) : indexes.addresses.get(target);
+  }
+  function returnStackIssueMessage(issue) {
+    const call = describeReturnStackCall(issue.op);
+    if (issue.kind === "overflow") {
+      return `MK-61 return stack holds at most ${MK61_RETURN_STACK_LIMIT} nested \u041F\u041F frame(s); ${call} can execute at depth ${issue.depth}. Make the nested call tail-position, inline one helper, or split the call chain.`;
+    }
+    if (issue.kind === "unknown-indirect-call") {
+      return `Cannot prove MK-61 return stack depth through ${call}: the indirect call target is not statically known. Keep raw indirect subroutine calls within the ${MK61_RETURN_STACK_LIMIT}-frame hardware limit or use a proved indirect target.`;
+    }
+    return `Cannot prove MK-61 return stack depth through ${call}: the call target is not resolved in the generated program.`;
+  }
+  function describeReturnStackCall(op2) {
+    const suffix = op2.meta.comment === void 0 ? "" : ` (${op2.meta.comment})`;
+    if (op2.kind === "call") return `${op2.meta.mnemonic} ${String(op2.target)}${suffix}`;
+    return `${op2.meta.mnemonic}${suffix}`;
+  }
   function validateFunctionTailRecursion(ast, diagnostics) {
     const functions = collectFunctionProcNames(ast);
     if (functions.size === 0) return;
@@ -38739,6 +46971,127 @@ var MKProEmulatorBundle = (() => {
         ));
       }
     }
+  }
+  function validateFunctionReturnStackDepth(ast, diagnostics) {
+    const functions = collectFunctionProcNames(ast);
+    if (functions.size === 0) return;
+    const { tail, nonTail } = collectFunctionCallEdges(ast, functions);
+    const memo = /* @__PURE__ */ new Map();
+    const visiting = /* @__PURE__ */ new Set();
+    const additionalDepth = (name) => {
+      const cached = memo.get(name);
+      if (cached !== void 0) return cached;
+      if (visiting.has(name)) return 0;
+      visiting.add(name);
+      let best = 0;
+      for (const target of nonTail.get(name)?.keys() ?? []) {
+        best = Math.max(best, 1 + additionalDepth(target));
+      }
+      for (const target of tail.get(name)?.keys() ?? []) {
+        best = Math.max(best, additionalDepth(target));
+      }
+      visiting.delete(name);
+      memo.set(name, best);
+      return best;
+    };
+    const reported = /* @__PURE__ */ new Set();
+    for (const root of collectFunctionRootCalls(ast, functions)) {
+      const depth = 1 + additionalDepth(root.target);
+      if (depth <= MK61_RETURN_STACK_LIMIT) continue;
+      const key = `${root.target}:${root.line ?? "?"}:${depth}`;
+      if (reported.has(key)) continue;
+      reported.add(key);
+      diagnostics.push(buildDiagnostic(
+        "error",
+        `MK-61 return stack holds at most ${MK61_RETURN_STACK_LIMIT} nested \u041F\u041F frame(s); function call '${root.target}' can execute at depth ${depth}. Make one nested call tail-position, inline one helper, or split the call chain.`,
+        root.line,
+        "RETURN_STACK_DEPTH_EXCEEDED"
+      ));
+    }
+  }
+  function collectFunctionRootCalls(ast, functions) {
+    const roots = [];
+    const add = (target, line) => {
+      if (functions.has(target)) roots.push({ target, ...line === void 0 ? {} : { line } });
+    };
+    const visitExpr = (expr, line) => {
+      switch (expr.kind) {
+        case "number":
+        case "string":
+        case "identifier":
+          return;
+        case "indexed":
+          visitExpr(expr.index, line);
+          return;
+        case "unary":
+          visitExpr(expr.expr, line);
+          return;
+        case "binary":
+          visitExpr(expr.left, line);
+          visitExpr(expr.right, line);
+          return;
+        case "call":
+          add(expr.callee, line);
+          for (const arg of expr.args) visitExpr(arg, line);
+          return;
+      }
+    };
+    const visitCondition = (condition, line) => {
+      visitExpr(condition.left, line);
+      visitExpr(condition.right, line);
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        switch (statement.kind) {
+          case "assign":
+          case "preview":
+          case "pause":
+          case "halt":
+          case "return_value":
+            visitExpr(statement.expr, statement.line);
+            break;
+          case "indexed_assign":
+            visitExpr(statement.target.index, statement.line);
+            visitExpr(statement.expr, statement.line);
+            break;
+          case "if":
+            visitCondition(statement.condition, statement.line);
+            visitStatements(statement.thenBody);
+            if (statement.elseBody !== void 0) visitStatements(statement.elseBody);
+            break;
+          case "while":
+            visitCondition(statement.condition, statement.line);
+            visitStatements(statement.body);
+            break;
+          case "loop":
+            visitStatements(statement.body);
+            break;
+          case "dispatch":
+            visitExpr(statement.expr, statement.line);
+            for (const dispatchCase of statement.cases) {
+              visitExpr(dispatchCase.value, dispatchCase.line);
+              visitStatements(dispatchCase.body);
+            }
+            if (statement.defaultBody !== void 0) visitStatements(statement.defaultBody);
+            break;
+          case "call":
+            add(statement.block, statement.line);
+            break;
+          case "core":
+            for (const input of statement.inputs ?? []) visitExpr(input.expr, input.line);
+            break;
+          case "input":
+          case "show":
+          case "decimal_series":
+            break;
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) {
+      if (!functions.has(proc.name)) visitStatements(proc.body);
+    }
+    return roots;
   }
   function collectFunctionCallEdges(ast, functions) {
     const tail = /* @__PURE__ */ new Map();
@@ -38908,6 +47261,131 @@ var MKProEmulatorBundle = (() => {
     if (proc === void 0 || seenProcs.has(proc.name)) return false;
     seenProcs.add(proc.name);
     return statementListTerminatesStaticallySeen(proc.body, ast, seenProcs);
+  }
+  function collectTerminalUnderflowUnitDecrements(ast, inlineProcNames, procCallCounts) {
+    const protectedDecrements = /* @__PURE__ */ new WeakSet();
+    const procByName = new Map(ast.procs.map((proc) => [proc.name, proc]));
+    const analyzeStatements = (statements, pendingAfter, seenInline = /* @__PURE__ */ new Set()) => {
+      let pending = new Set(pendingAfter);
+      for (let index = statements.length - 1; index >= 0; index -= 1) {
+        pending = analyzeStatement(statements[index], pending, seenInline);
+      }
+      return pending;
+    };
+    const analyzeStatement = (statement, pendingAfter, seenInline) => {
+      const terminalGuard = terminalNonpositiveGuardVariable(ast, statement);
+      if (terminalGuard !== void 0) {
+        const pending = new Set(pendingAfter);
+        pending.add(terminalGuard);
+        return pending;
+      }
+      if (statement.kind === "assign") {
+        const pending = killReads(statement.expr, pendingAfter);
+        if (pendingAfter.has(statement.target) && isUnitDecrementExpression(statement.target, statement.expr)) {
+          protectedDecrements.add(statement);
+          pending.delete(statement.target);
+          return pending;
+        }
+        pending.delete(statement.target);
+        return pending;
+      }
+      if (statement.kind === "if") {
+        const thenPending = analyzeStatements(statement.thenBody, pendingAfter, new Set(seenInline));
+        const elsePending = statement.elseBody === void 0 ? new Set(pendingAfter) : analyzeStatements(statement.elseBody, pendingAfter, new Set(seenInline));
+        return killConditionReads(statement.condition, intersectSets(thenPending, elsePending));
+      }
+      if (statement.kind === "dispatch") {
+        let pending = statement.defaultBody === void 0 ? new Set(pendingAfter) : analyzeStatements(statement.defaultBody, pendingAfter, new Set(seenInline));
+        for (const dispatchCase of statement.cases) {
+          pending = intersectSets(
+            pending,
+            analyzeStatements(dispatchCase.body, pendingAfter, new Set(seenInline))
+          );
+          pending = killReads(dispatchCase.value, pending);
+        }
+        return killReads(statement.expr, pending);
+      }
+      if (statement.kind === "call") {
+        const proc = procByName.get(statement.block);
+        if (proc !== void 0 && (inlineProcNames.has(proc.name) || procCallCounts.get(proc.name) === 1) && !seenInline.has(proc.name)) {
+          const nextSeen = new Set(seenInline);
+          nextSeen.add(proc.name);
+          return analyzeStatements(proc.body, pendingAfter, nextSeen);
+        }
+        return killStatementTouches(ast, statement, pendingAfter);
+      }
+      if (statement.kind === "loop" || statement.kind === "while") {
+        analyzeStatements(statement.body, /* @__PURE__ */ new Set(), new Set(seenInline));
+        return killStatementTouches(ast, statement, pendingAfter);
+      }
+      return killStatementTouches(ast, statement, pendingAfter);
+    };
+    for (const entry of ast.entries) analyzeStatements(entry.body, /* @__PURE__ */ new Set());
+    for (const proc of ast.procs) analyzeStatements(proc.body, /* @__PURE__ */ new Set());
+    return protectedDecrements;
+  }
+  function terminalNonpositiveGuardVariable(ast, statement) {
+    if (statement.kind !== "if" || statement.elseBody !== void 0) return void 0;
+    if (!statementListTerminatesStatically(statement.thenBody, ast)) return void 0;
+    const normalized = normalizeZeroComparison(statement.condition);
+    if (normalized === void 0 || normalized.expr.kind !== "identifier") return void 0;
+    return normalized.op === "<" || normalized.op === "<=" ? normalized.expr.name : void 0;
+  }
+  function killStatementTouches(ast, statement, pendingAfter) {
+    const pending = new Set(pendingAfter);
+    for (const name of pendingAfter) {
+      if (statementReadsIdentifier2(statement, name) || statementMayWriteIdentifier(ast, statement, name, /* @__PURE__ */ new Set())) {
+        pending.delete(name);
+      }
+    }
+    return pending;
+  }
+  function killConditionReads(condition, pendingAfter) {
+    let pending = killReads(condition.left, pendingAfter);
+    pending = killReads(condition.right, pending);
+    return pending;
+  }
+  function killReads(expr, pendingAfter) {
+    const pending = new Set(pendingAfter);
+    for (const name of pendingAfter) {
+      if (expressionReferencesIdentifier(expr, name)) pending.delete(name);
+    }
+    return pending;
+  }
+  function statementMayWriteIdentifier(ast, statement, name, seenProcs) {
+    switch (statement.kind) {
+      case "assign":
+      case "input":
+        return statement.target === name;
+      case "indexed_assign":
+        return statement.target.base === name;
+      case "if":
+        return statement.thenBody.some((child) => statementMayWriteIdentifier(ast, child, name, new Set(seenProcs))) || (statement.elseBody?.some((child) => statementMayWriteIdentifier(ast, child, name, new Set(seenProcs))) ?? false);
+      case "loop":
+      case "while":
+        return statement.body.some((child) => statementMayWriteIdentifier(ast, child, name, new Set(seenProcs)));
+      case "dispatch":
+        return statement.cases.some(
+          (dispatchCase) => dispatchCase.body.some((child) => statementMayWriteIdentifier(ast, child, name, new Set(seenProcs)))
+        ) || (statement.defaultBody?.some((child) => statementMayWriteIdentifier(ast, child, name, new Set(seenProcs))) ?? false);
+      case "call": {
+        const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+        if (proc === void 0 || seenProcs.has(proc.name)) return true;
+        seenProcs.add(proc.name);
+        return proc.body.some((child) => statementMayWriteIdentifier(ast, child, name, seenProcs));
+      }
+      case "core":
+        return statement.outputs?.some((output) => output.target === name) ?? false;
+      default:
+        return false;
+    }
+  }
+  function intersectSets(left, right) {
+    const result = /* @__PURE__ */ new Set();
+    for (const value of left) {
+      if (right.has(value)) result.add(value);
+    }
+    return result;
   }
   function eliminateUnreachableV2Procs(ast, optimizations) {
     if (!ast.v2 || ast.procs.length === 0) return;
@@ -39252,19 +47730,21 @@ var MKProEmulatorBundle = (() => {
     }
     return reachableProcs;
   }
-  function allocateRegisters(ast, diagnostics, freeResidualDispatchScratch = false, suppressConstantPreloads = /* @__PURE__ */ new Set(), sharedBitMaskHelperCalls = false, startupAwareConstantPreloads = false, forcedRegisterShares = [], xParamValueFunctions = false, comparisonGuardedUpdateSelectors = false) {
+  function allocateRegisters(ast, diagnostics, freeResidualDispatchScratch = false, suppressConstantPreloads = /* @__PURE__ */ new Set(), sharedBitMaskHelperCalls = false, startupAwareConstantPreloads = false, forceFractionalConstantSelectorPreloads = [], forcedRegisterShares = [], xParamValueFunctions = false, comparisonGuardedUpdateSelectors = false, preserveDispatchCaseOrder = false, packedLineFamilyMutatingSelectorUpdateCheckTail = false, strictAllocation = false) {
     const declared = /* @__PURE__ */ new Set();
     const hints = /* @__PURE__ */ new Map();
     const variables = /* @__PURE__ */ new Set();
     const xParamNames = xParamProcParamNames(ast);
-    const xParamValueNames = xParamValueFunctions ? xParamValueFunctionParamNames(ast) : /* @__PURE__ */ new Set();
+    const xParamValueNames = xParamValueFunctions ? xParamValueFunctionParamNamesForAllocation(ast) : /* @__PURE__ */ new Set();
+    const stackOnlyStateFields = collectStackOnlyStateFields(ast);
     for (const state of ast.states) {
       for (const field of state.fields) {
         declared.add(field.name);
-        variables.add(field.name);
+        if (!stackOnlyStateFields.has(field.name)) variables.add(field.name);
       }
     }
     for (const binding of collectDomainBindings(ast)) {
+      if (segmentedBitplaneCollectionInfo(ast, binding.name) !== void 0) continue;
       declared.add(binding.name);
       variables.add(binding.name);
       if (binding.storage) hints.set(binding.name, binding.storage);
@@ -39283,20 +47763,28 @@ var MKProEmulatorBundle = (() => {
       }
     }
     applyStateBankRegisterHints(ast, variables, hints);
+    if (packedLineFamilyMutatingSelectorUpdateCheckTail) {
+      applyPackedLineFamilyMutatingSelectorHints(ast, variables, hints);
+    }
     collectStateBankSelectorVariables(ast, variables, hints);
     applyPackedGridRegisterHints(ast, variables, hints);
     applyCoordListRegisterHints(variables, hints);
+    applySegmentedBitplaneRegisterHints(ast, variables, hints);
+    const hintedRegisters = () => new Set([...hints.values()].map((hint) => hint.register));
     const flPreferenceOrder = ["2", "3", "1", "0"];
     let flPreferenceIndex = 0;
     for (const variable of collectUnitDecrementTargets(ast)) {
       if (!variables.has(variable) || hints.has(variable)) continue;
-      const register = flPreferenceOrder[flPreferenceIndex];
+      let register = flPreferenceOrder[flPreferenceIndex];
+      while (register !== void 0 && hintedRegisters().has(register)) {
+        flPreferenceIndex += 1;
+        register = flPreferenceOrder[flPreferenceIndex];
+      }
       if (register === void 0) break;
       hints.set(variable, { mode: "prefer", register });
       flPreferenceIndex += 1;
     }
     const preincrementIndexedPointers = collectPreincrementIndexedStorePointers(ast);
-    const hintedRegisters = () => new Set([...hints.values()].map((hint) => hint.register));
     for (const variable of collectUnitIncrementTargets(ast)) {
       if (!variables.has(variable) || hints.has(variable)) continue;
       const incrementPreferenceOrder = preincrementIndexedPointers.has(variable) ? ["5", "6", "4"] : ["4", "5", "6"];
@@ -39305,17 +47793,24 @@ var MKProEmulatorBundle = (() => {
       if (register === void 0) break;
       hints.set(variable, { mode: "prefer", register });
     }
-    warnUndeclaredAssignments(ast, declared, diagnostics);
-    collectAssignedVariables(ast, variables, xParamValueNames);
+    warnUndeclaredAssignments(ast, declared, diagnostics, strictAllocation, preserveDispatchCaseOrder);
+    collectAssignedVariables(
+      ast,
+      variables,
+      /* @__PURE__ */ new Set([...xParamValueNames, ...stackOnlyStateFields]),
+      preserveDispatchCaseOrder
+    );
     collectFunctionTailCallScratchVariables(ast, variables);
-    collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch);
+    collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch, preserveDispatchCaseOrder);
     collectGridCellScratchVariables(ast, variables);
     collectBitMaskScratchVariables(ast, variables);
+    collectSegmentedBitplaneScratchVariables(ast, variables);
     collectCoordListScratchVariables(ast, variables);
     collectSpatialHitScratchVariables(ast, variables, sharedBitMaskHelperCalls);
     collectSpatialCountScratchVariables(ast, variables);
     collectGuardedUpdateScratchVariables(ast, variables, comparisonGuardedUpdateSelectors);
     collectDisplayTemplateScratchVariables(ast, variables);
+    applySegmentedBitplaneRegisterHints(ast, variables, hints);
     applyCoordListRegisterHints(variables, hints);
     applyCoordListPackedReportRegisterHints(ast, variables, hints);
     applyCoordListCellRegisterHints(ast, variables, hints);
@@ -39377,7 +47872,12 @@ var MKProEmulatorBundle = (() => {
       if (movedAny) used.delete(freeRegister);
     }
     const constants = {};
-    for (const value of collectPreloadConstantValues(ast, startupAwareConstantPreloads)) {
+    const preloadValues = [
+      ...uniqueNormalizedFractionalSelectorValues(forceFractionalConstantSelectorPreloads),
+      ...collectPreloadConstantValues(ast, startupAwareConstantPreloads)
+    ];
+    for (const value of preloadValues) {
+      if (constants[value] !== void 0) continue;
       if (suppressConstantPreloads.has(value)) continue;
       const register = pickConstantRegister(used);
       if (!register) break;
@@ -39429,6 +47929,7 @@ var MKProEmulatorBundle = (() => {
   }
   function applyStateBankRegisterHints(ast, variables, hints) {
     const used = new Set([...hints.values()].map((hint) => hint.register));
+    const packedGridLineBanks = collectPackedGridLineBankNames(ast);
     let cursor = 1;
     const nextFreeRegister = () => {
       while (cursor < REGISTER_ORDER.length) {
@@ -39441,7 +47942,8 @@ var MKProEmulatorBundle = (() => {
     for (const bank of ast.banks ?? []) {
       for (const member of bank.members) {
         for (const element of member.elements.sort((left, right) => left.index - right.index)) {
-          const direct = element.index > 0 ? REGISTER_ORDER[element.index] : void 0;
+          const packedGridLine = packedGridLineRegister(bank, member, element.index, packedGridLineBanks);
+          const direct = packedGridLine ?? (element.index > 0 ? REGISTER_ORDER[element.index] : void 0);
           const register = direct !== void 0 && !used.has(direct) ? direct : nextFreeRegister();
           if (register === void 0) return;
           if (variables.has(element.name)) hints.set(element.name, { mode: "fixed", register });
@@ -39450,18 +47952,418 @@ var MKProEmulatorBundle = (() => {
       }
     }
   }
+  function applyPackedLineFamilyMutatingSelectorHints(ast, variables, hints) {
+    const selectors = collectPackedLineFamilyMutatingSelectors(ast);
+    if (selectors.size === 0) return;
+    const preferred = ["3", "0", "1", "2"];
+    const used = new Set([...hints.values()].map((hint) => hint.register));
+    for (const selector of selectors) {
+      if (!variables.has(selector) || hints.has(selector)) continue;
+      const register = preferred.find((candidate) => !used.has(candidate));
+      if (register === void 0) return;
+      hints.set(selector, { mode: "prefer", register });
+      used.add(register);
+    }
+  }
+  function collectPackedLineFamilyMutatingSelectors(ast) {
+    const selectors = /* @__PURE__ */ new Set();
+    const updates = ast.procs.flatMap((proc) => {
+      const match = packedLineFamilyUpdateProc(ast, proc);
+      return match === void 0 ? [] : [match];
+    });
+    for (const update of updates) {
+      for (const proc of ast.procs) {
+        const marker = packedLineFamilyMarkerProc(ast, proc, update);
+        if (marker === void 0 || !slotsAreStrictlyDescendingByOne(marker.slots)) continue;
+        selectors.add(update.selector);
+      }
+    }
+    return selectors;
+  }
+  function slotsAreStrictlyDescendingByOne(slots) {
+    if (slots.length < 2) return false;
+    for (let index = 1; index < slots.length; index += 1) {
+      if (slots[index - 1] - slots[index] !== 1) return false;
+    }
+    return true;
+  }
+  function packedGridLineRegister(bank, member, index, packedGridLineBanks) {
+    const key = bankMemberKey(bank.name, member.name);
+    if (!packedGridLineBanks.has(key)) return void 0;
+    if (member.type !== "packed") return void 0;
+    if (bank.min !== 1 || bank.max !== 4) return void 0;
+    if (member.elements.length !== 4) return void 0;
+    if (!member.elements.every((element) => element.index >= 1 && element.index <= 4)) return void 0;
+    return REGISTER_ORDER[index + 3];
+  }
+  function collectPackedGridLineBankNames(ast) {
+    const names = /* @__PURE__ */ new Set();
+    const recordLineBank = (expr) => {
+      if (expr?.kind === "indexed") {
+        names.add(bankMemberKey(expr.base, expr.field));
+        return;
+      }
+      if (expr?.kind !== "identifier") return;
+      const key = stateBankKeyForElementName(ast, expr.name);
+      if (key !== void 0) names.add(key);
+    };
+    const visitExpr = (expr) => {
+      if (expr.kind === "unary") {
+        visitExpr(expr.expr);
+        return;
+      }
+      if (expr.kind === "binary") {
+        visitExpr(expr.left);
+        visitExpr(expr.right);
+        return;
+      }
+      if (expr.kind === "indexed") {
+        visitExpr(expr.index);
+        return;
+      }
+      if (expr.kind !== "call") return;
+      const name = expr.callee.toLowerCase();
+      if (name === "packed_add" || name === "packed_digit" || name === "packed_score") {
+        recordLineBank(expr.args[0]);
+      }
+      for (const arg of expr.args) visitExpr(arg);
+    };
+    const visitCondition = (condition) => {
+      visitExpr(condition.left);
+      visitExpr(condition.right);
+    };
+    const visitStatements = (statements) => {
+      for (const statement of statements) {
+        switch (statement.kind) {
+          case "pause":
+          case "preview":
+          case "halt":
+            visitExpr(statement.expr);
+            break;
+          case "assign":
+          case "return_value":
+            visitExpr(statement.expr);
+            break;
+          case "indexed_assign":
+            visitExpr(statement.target.index);
+            visitExpr(statement.expr);
+            break;
+          case "if":
+          case "while":
+            visitCondition(statement.condition);
+            visitStatements(statement.kind === "if" ? statement.thenBody : statement.body);
+            if (statement.kind === "if" && statement.elseBody !== void 0) visitStatements(statement.elseBody);
+            break;
+          case "loop":
+            visitStatements(statement.body);
+            break;
+          case "dispatch":
+            visitExpr(statement.expr);
+            for (const dispatchCase of statement.cases) {
+              visitExpr(dispatchCase.value);
+              visitStatements(dispatchCase.body);
+            }
+            if (statement.defaultBody !== void 0) visitStatements(statement.defaultBody);
+            break;
+          case "call":
+          case "core":
+          case "input":
+          case "coord_list_remove":
+          case "decimal_series":
+            break;
+        }
+      }
+    };
+    for (const entry of ast.entries) visitStatements(entry.body);
+    for (const proc of ast.procs) visitStatements(proc.body);
+    return names;
+  }
+  function stateBankKeyForElementName(ast, name) {
+    for (const bank of ast.banks ?? []) {
+      for (const member of bank.members) {
+        if (member.elements.some((element) => element.name === name)) {
+          return bankMemberKey(bank.name, member.name);
+        }
+      }
+    }
+    return void 0;
+  }
   function preincrementIndexedStoreShape(ast, store, increment) {
     const pointer = increment.target;
     return isUnitIncrementExpression(pointer, increment.expr) && isUnitIncrementExpression(pointer, store.target.index) && findStateBankMember(ast, store.target) !== void 0;
   }
   function indexedPow10DeltaUpdate(statement) {
     const expr = statement.expr;
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "packed_add" && expr.args.length === 3) {
+      if (!expressionEquals(expr.args[0], statement.target)) return void 0;
+      return {
+        op: "+",
+        term: multiplyExpressions2(expr.args[2], {
+          kind: "call",
+          callee: "pow10",
+          args: [expr.args[1]]
+        })
+      };
+    }
     if (expr.kind !== "binary" || expr.op !== "+" && expr.op !== "-") return void 0;
     if (!expressionEquals(expr.left, statement.target)) return void 0;
-    if (!isPow10Term(expr.right)) return void 0;
+    if (!isPow10Term2(expr.right)) return void 0;
     return { op: expr.op, term: expr.right };
   }
-  function isPow10Term(expr) {
+  function yStackPow10DeltaTerm2(expr, yName) {
+    if (isPow10OfIdentifier2(expr, yName)) return { factor: { kind: "number", raw: "1" } };
+    if (expr.kind !== "binary" || expr.op !== "*") return void 0;
+    if (isPow10OfIdentifier2(expr.left, yName) && isSimpleStackLoad(expr.right)) {
+      return { factor: expr.right };
+    }
+    if (isPow10OfIdentifier2(expr.right, yName) && isSimpleStackLoad(expr.left)) {
+      return { factor: expr.left };
+    }
+    return void 0;
+  }
+  function isPow10OfIdentifier2(expr, name) {
+    return expr.kind === "call" && expr.callee.toLowerCase() === "pow10" && expr.args.length === 1 && expr.args[0]?.kind === "identifier" && expr.args[0].name === name;
+  }
+  function directIndexedSelectorRegister(ast, registers, expr) {
+    const resolved = findStateBankMember(ast, expr);
+    if (resolved === void 0) return void 0;
+    const linearOffset = contiguousRegisterOffset(resolved.member, registers);
+    if (linearOffset === void 0) return void 0;
+    const affineIndex = affineIndexIdentifierOffset(expr.index);
+    if (affineIndex === void 0 || affineIndex.integerPart === true) return void 0;
+    const offsetChoice = indirectMemorySelectorOffset(
+      resolved.member,
+      registers,
+      linearOffset,
+      -affineIndex.offset
+    );
+    if (offsetChoice.offset + affineIndex.offset !== 0) return void 0;
+    const indexRegister = registers[affineIndex.name];
+    return indexRegister !== void 0 && registerIndex(indexRegister) >= 7 ? indexRegister : void 0;
+  }
+  function indexedPow10DeltaBitReportBranch(assign, branch) {
+    if (indexedPow10DeltaUpdate(assign) === void 0) return void 0;
+    if (branch.elseBody !== void 0) return void 0;
+    if (branch.thenBody.length !== 1) return void 0;
+    const halt = branch.thenBody[0];
+    if (halt?.kind !== "halt" || halt.literal !== void 0) return void 0;
+    if (branch.condition.op !== "!=") return void 0;
+    const left = bitAndReportForTarget2(branch.condition.left, assign.target);
+    const right = bitAndReportForTarget2(branch.condition.right, assign.target);
+    const report = left === void 0 ? right === void 0 ? void 0 : { report: right, neutral: branch.condition.left } : { report: left, neutral: branch.condition.right };
+    if (report === void 0) return void 0;
+    if (!expressionEquals(halt.expr, report.report.expr)) return void 0;
+    if (!isSimpleStackLoad(report.report.mask) || !isSimpleStackLoad(report.neutral)) return void 0;
+    if (numericLiteralValue2(report.neutral) === void 0) return void 0;
+    return { mask: report.report.mask, neutral: report.neutral };
+  }
+  function indexedPow10DeltaFractionalBitReportBranch(assign, branch) {
+    if (indexedPow10DeltaUpdate(assign) === void 0) return void 0;
+    if (branch.elseBody !== void 0) return void 0;
+    if (branch.thenBody.length !== 1) return void 0;
+    const halt = branch.thenBody[0];
+    if (halt?.kind !== "halt" || halt.literal !== void 0) return void 0;
+    if (branch.condition.op !== "!=") return void 0;
+    const left = fractionalBitAndReportForTarget2(branch.condition.left, assign.target);
+    const right = fractionalBitAndReportForTarget2(branch.condition.right, assign.target);
+    const report = left === void 0 ? right === void 0 ? void 0 : isZeroExpression(branch.condition.left) ? right : void 0 : isZeroExpression(branch.condition.right) ? left : void 0;
+    if (report === void 0) return void 0;
+    if (!expressionEquals(halt.expr, report.expr)) return void 0;
+    if (!isSimpleStackLoad(report.mask)) return void 0;
+    return { mask: report.mask };
+  }
+  function fractionalBitAndReportForTarget2(expr, target) {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "frac" || expr.args.length !== 1) return void 0;
+    return bitAndReportForTarget2(expr.args[0], target);
+  }
+  function bitAndReportForTarget2(expr, target) {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_and" || expr.args.length !== 2) return void 0;
+    const [left, right] = expr.args;
+    if (left !== void 0 && right !== void 0 && expressionEquals(left, target)) {
+      return { expr, mask: right };
+    }
+    if (left !== void 0 && right !== void 0 && expressionEquals(right, target)) {
+      return { expr, mask: left };
+    }
+    return void 0;
+  }
+  function compileBitOrTestAndSetBranch(ctx, assign, branch) {
+    const match = bitOrTestAndSetBranch(assign, branch, ctx.ast);
+    if (match === void 0) return false;
+    compileExpression(ctx, { kind: "identifier", name: match.collection });
+    compileExpression(ctx, assign.expr);
+    ctx.emitOp(56, "\u041A \u2228", "bit_or test-and-set value", assign.line);
+    ctx.emitStore(match.collection, `bit_or test-and-set ${match.collection}`, match.update.line);
+    ctx.emitOp(17, "-", "bit_or test-and-set changed", branch.line);
+    const changedLabel = ctx.freshLabel("bit_or_test_set_changed");
+    const endLabel = ctx.freshLabel("bit_or_test_set_end");
+    ctx.emitJump(94, "F x=0", changedLabel, "false branch for bit_or test-and-set occupied", branch.line);
+    ctx.compileStatements(branch.thenBody);
+    ctx.emitJump(81, "\u0411\u041F", endLabel, "if end", branch.line);
+    ctx.emitLabel(changedLabel);
+    const consumed = compileBitOrTestAndSetNegativeArgPrefix(ctx, match.elseTail);
+    ctx.compileStatements(match.elseTail.slice(consumed));
+    ctx.emitLabel(endLabel);
+    ctx.optimizations.push({
+      name: "bit-or-test-and-set-branch",
+      detail: `Combined ${match.collection} membership test, bit_or update, and occupied branch at line ${branch.line}.`
+    });
+    return true;
+  }
+  function compileBitOrTestAndSetNegativeArgPrefix(ctx, tail) {
+    const assign = tail[0];
+    const call = tail[1];
+    if (assign?.kind !== "assign" || call?.kind !== "call") return 0;
+    const lowering = ctx.xParamProcs.get(call.block);
+    if (lowering === void 0 || assign.target !== lowering.param) return 0;
+    if (!isNumericValue2(assign.expr, -1)) return 0;
+    ctx.emitOp(50, "\u041A \u0417\u041D", `bit_or test-and-set ${assign.target} = -1`, assign.line);
+    ctx.markCurrentX(assign.target);
+    compileBlockCall(ctx, call.block, call.line);
+    ctx.optimizations.push({
+      name: "bit-or-test-and-set-negative-arg",
+      detail: `Derived ${assign.target} = -1 from the negative changed value in a bit_or test-and-set success path at line ${assign.line}.`
+    });
+    return 2;
+  }
+  function bitOrTestAndSetBranch(assign, branch, ast) {
+    if (!expressionIsDeterministic(assign.expr)) return void 0;
+    if (branch.condition.op !== "!=") return void 0;
+    if (branch.elseBody === void 0 || branch.elseBody.length === 0) return void 0;
+    const condition = bitAndMembershipForTemp(branch.condition.left, branch.condition.right, assign.target) ?? bitAndMembershipForTemp(branch.condition.right, branch.condition.left, assign.target);
+    if (condition === void 0) return void 0;
+    if (condition.collection === assign.target) return void 0;
+    const update = branch.elseBody[0];
+    if (update?.kind !== "assign" || update.target !== condition.collection) return void 0;
+    if (!isBitOrUpdate(update.expr, condition.collection, assign.target)) return void 0;
+    if (statementsReadIdentifierBeforeWrite(branch.thenBody, assign.target, ast)) return void 0;
+    const elseTail = branch.elseBody.slice(1);
+    if (statementsReadIdentifierBeforeWrite(elseTail, assign.target, ast)) return void 0;
+    return { collection: condition.collection, update, elseTail };
+  }
+  function bitAndMembershipForTemp(expr, zero, temp) {
+    if (!isZeroExpression(zero)) return void 0;
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_and" || expr.args.length !== 2) return void 0;
+    const [left, right] = expr.args;
+    if (left?.kind === "identifier" && right?.kind === "identifier" && right.name === temp) {
+      return { collection: left.name };
+    }
+    if (left?.kind === "identifier" && left.name === temp && right?.kind === "identifier") {
+      return { collection: right.name };
+    }
+    return void 0;
+  }
+  function isBitOrUpdate(expr, collection, temp) {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_or" || expr.args.length !== 2) return false;
+    const [left, right] = expr.args;
+    return identifierExpressionName(left) === collection && identifierExpressionName(right) === temp || identifierExpressionName(left) === temp && identifierExpressionName(right) === collection;
+  }
+  function identifierExpressionName(expr) {
+    return expr?.kind === "identifier" ? expr.name : void 0;
+  }
+  function maxAssignCandidate(statement) {
+    const expr = statement.expr;
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "max" || expr.args.length !== 2) return void 0;
+    const target = { kind: "identifier", name: statement.target };
+    if (expressionEquals(expr.args[0], target)) return expr.args[1];
+    if (expressionEquals(expr.args[1], target)) return expr.args[0];
+    return void 0;
+  }
+  function packedScoreAccumulator(statement, indexName) {
+    const expr = statement.expr;
+    if (expr.kind !== "binary" || expr.op !== "+") return void 0;
+    const target = { kind: "identifier", name: statement.target };
+    const right = packedScoreCallWithIndex(expr.right, indexName);
+    if (expressionEquals(expr.left, target) && right !== void 0) return { line: right.line };
+    const left = packedScoreCallWithIndex(expr.left, indexName);
+    if (expressionEquals(expr.right, target) && left !== void 0) return { line: left.line };
+    return void 0;
+  }
+  function packedScoreCallWithIndex(expr, indexName) {
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "packed_score" || expr.args.length !== 2) {
+      return void 0;
+    }
+    const [line, index] = expr.args;
+    return line !== void 0 && index?.kind === "identifier" && index.name === indexName ? { line } : void 0;
+  }
+  function expressionPreservesPreviousXAsY(expr) {
+    if (isSimpleStackLoad(expr)) return true;
+    switch (expr.kind) {
+      case "unary":
+        return expr.op === "-" && expressionPreservesPreviousXAsY(expr.expr);
+      case "binary":
+        return (expr.op === "+" || expr.op === "-" || expr.op === "*" || expr.op === "/") && expressionPreservesPreviousXAsY(expr.left) && expressionPreservesPreviousXAsY(expr.right);
+      case "call":
+        return expr.args.length === 1 && STACK_TEMP_UNARY_CALL_OPCODES2[expr.callee.toLowerCase()] !== void 0 && expressionPreservesPreviousXAsY(expr.args[0]);
+      case "number":
+      case "identifier":
+      case "indexed":
+      case "string":
+        return false;
+    }
+  }
+  function compileExpressionPreservingPreviousXAsY2(ctx, expr, line) {
+    if (isSimpleStackLoad(expr)) {
+      compileExpression(ctx, expr);
+      return;
+    }
+    switch (expr.kind) {
+      case "unary":
+        compileExpressionPreservingPreviousXAsY2(ctx, expr.expr, line);
+        ctx.emitOp(11, "/-/", "stack-preserving unary minus", line);
+        return;
+      case "binary":
+        compileExpressionPreservingPreviousXAsY2(ctx, expr.left, line);
+        compileExpressionPreservingPreviousXAsY2(ctx, expr.right, line);
+        ctx.emitOp(binaryOpcode(expr.op), expr.op, `expr ${expr.op}`, line);
+        return;
+      case "call": {
+        compileExpressionPreservingPreviousXAsY2(ctx, expr.args[0], line);
+        const opcode = STACK_TEMP_UNARY_CALL_OPCODES2[expr.callee.toLowerCase()];
+        ctx.emitOp(opcode[0], opcode[1], `${expr.callee}()`, line);
+        return;
+      }
+      case "number":
+      case "identifier":
+      case "indexed":
+      case "string":
+        compileExpression(ctx, expr);
+        return;
+    }
+  }
+  function xParamLoweringPreservesCallerY(lowering) {
+    if (lowering.kind === "copy") return true;
+    if (lowering.kind === "add") return true;
+    if (lowering.kind !== "expr") return false;
+    return xParamExpressionPreservesCallerY(lowering.first.expr, lowering.param);
+  }
+  function xParamExpressionPreservesCallerY(expr, param) {
+    switch (expr.kind) {
+      case "identifier":
+        return expr.name === param;
+      case "unary":
+        return expr.op === "-" && xParamExpressionPreservesCallerY(expr.expr, param);
+      case "binary": {
+        const leftUses = expressionReferencesIdentifier(expr.left, param);
+        const rightUses = expressionReferencesIdentifier(expr.right, param);
+        if (leftUses === rightUses) return false;
+        if (leftUses) return xParamExpressionPreservesCallerY(expr.left, param) && isSimpleStackLoad(expr.right);
+        return (expr.op === "+" || expr.op === "*") && xParamExpressionPreservesCallerY(expr.right, param) && isSimpleStackLoad(expr.left);
+      }
+      case "call":
+        return expr.args.length === 1 && X_TRANSFORM_UNARY_FUNCTIONS.has(expr.callee.toLowerCase()) && xParamExpressionPreservesCallerY(expr.args[0], param);
+      case "number":
+      case "string":
+      case "indexed":
+        return false;
+    }
+  }
+  function conditionComparesExpressionWithIdentifier(condition, expr, name, op2) {
+    if (condition.op !== op2) return false;
+    const identifier = { kind: "identifier", name };
+    return expressionEquals(condition.left, expr) && expressionEquals(condition.right, identifier) || expressionEquals(condition.left, identifier) && expressionEquals(condition.right, expr);
+  }
+  function isPow10Term2(expr) {
     if (expr.kind !== "call") return false;
     const name = expr.callee.toLowerCase();
     if (name === "pow10" && expr.args.length === 1) return true;
@@ -39652,6 +48554,7 @@ var MKProEmulatorBundle = (() => {
     const preferences = [
       ["x", "1"],
       ["y", "2"],
+      ["occupied", "9"],
       ["mask", "9"],
       ["lines", "4"]
     ];
@@ -39687,6 +48590,45 @@ var MKProEmulatorBundle = (() => {
     ];
     for (const [name, register] of scratchHints) {
       if (variables.has(name) && !hints.has(name)) hints.set(name, { mode: "prefer", register });
+    }
+  }
+  function applySegmentedBitplaneRegisterHints(ast, variables, hints) {
+    if (ast.v2 === void 0) return;
+    const preferredPlanes = ["0", "1", "b", "e"];
+    const used = new Set([...hints.values()].map((hint) => hint.register));
+    for (const field of ast.v2.state) {
+      if (field.type !== "cells" || field.domain === void 0) continue;
+      const board = ast.v2.boards.find((candidate) => candidate.name === field.domain);
+      if (!isSegmentedBitplaneBoard(board)) continue;
+      for (const [index, plane] of segmentedBitplaneNames(field.name).entries()) {
+        if (!variables.has(plane) || hints.has(plane)) continue;
+        const register = preferredPlanes[index];
+        if (used.has(register)) continue;
+        hints.set(plane, { mode: "prefer", register });
+        used.add(register);
+      }
+    }
+    if (variables.has(SEGMENTED_BITPLANE_SELECTOR) && !hints.has(SEGMENTED_BITPLANE_SELECTOR) && !used.has("7")) {
+      hints.set(SEGMENTED_BITPLANE_SELECTOR, { mode: "fixed", register: "7" });
+      used.add("7");
+    }
+    const spatialCounter = spatialCountCounterScratchName();
+    if (variables.has(spatialCounter) && !hints.has(spatialCounter) && !used.has("3")) {
+      hints.set(spatialCounter, { mode: "prefer", register: "3" });
+      used.add("3");
+    }
+    const indexPreference = variables.has(spatialCounter) ? "5" : "2";
+    if (variables.has(SEGMENTED_BITPLANE_INDEX) && !hints.has(SEGMENTED_BITPLANE_INDEX) && !used.has(indexPreference)) {
+      hints.set(SEGMENTED_BITPLANE_INDEX, { mode: "prefer", register: indexPreference });
+      used.add(indexPreference);
+    }
+    if (variables.has(SEGMENTED_BITPLANE_COUNTER) && !hints.has(SEGMENTED_BITPLANE_COUNTER) && !used.has("4")) {
+      hints.set(SEGMENTED_BITPLANE_COUNTER, { mode: "prefer", register: "4" });
+      used.add("4");
+    }
+    if (variables.has(SEGMENTED_BITPLANE_SEED) && !hints.has(SEGMENTED_BITPLANE_SEED) && !used.has("8")) {
+      hints.set(SEGMENTED_BITPLANE_SEED, { mode: "prefer", register: "8" });
+      used.add("8");
     }
   }
   function applyCoordListCellRegisterHints(ast, variables, hints) {
@@ -39895,10 +48837,25 @@ var MKProEmulatorBundle = (() => {
     for (const entry of ast.entries) visitStatements(entry.body);
     for (const proc of ast.procs) visitStatements(proc.body);
     const startupUseCount = (value) => Math.max(weights.get(value) ?? 1, occurrences.get(value) ?? 1);
-    const savings = (value) => (weights.get(value) ?? 1) * (estimateNumberCost2(value) - 1) + (bonuses.get(value) ?? 0);
+    const savings = (value) => (weights.get(value) ?? 1) * (estimateNumberCost2(value) - 1) + (bonuses.get(value) ?? 0) + dualUseAddressConstantPreloadBonus(value);
     return [...values].filter((value) => value !== "0" && (value !== "1" || bonuses.has(value))).filter(
-      (value) => !startupAwareConstantPreloads || !constantIsCheaperInlineForStartup(value, startupUseCount(value))
+      (value) => !startupAwareConstantPreloads || dualUseAddressConstantPreloadBonus(value) > 0 || !constantIsCheaperInlineForStartup(value, startupUseCount(value))
     ).sort((a, b) => savings(b) - savings(a) || estimateNumberCost2(b) - estimateNumberCost2(a));
+  }
+  function uniqueNormalizedFractionalSelectorValues(values) {
+    const result = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const raw of values) {
+      const value = normalizeConstantLiteral(raw);
+      if (!fractionalSelectorCandidateValue(value) || seen.has(value)) continue;
+      result.push(value);
+      seen.add(value);
+    }
+    return result;
+  }
+  function dualUseAddressConstantPreloadBonus(value) {
+    const target = naturalFractionalSelectorPreloadValue(value)?.target;
+    return target !== void 0 && target > 0 && target <= 104 ? 4 : 0;
   }
   function constantIsCheaperInlineForStartup(value, useCount) {
     const inlineCost = standaloneSynthesizedConstantCost(value);
@@ -40200,7 +49157,7 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) visitStatements(proc.body);
     return counts;
   }
-  function collectXParamProcLowerings(ast, readCounts, inlineProcNames) {
+  function collectXParamProcLowerings(ast, inlineProcNames) {
     const result = /* @__PURE__ */ new Map();
     const v2Rules = new Map(ast.v2?.rules.map((rule) => [rule.name, rule]) ?? []);
     for (const proc of ast.procs) {
@@ -40208,16 +49165,312 @@ var MKProEmulatorBundle = (() => {
       const params = proc.params ?? v2Rules.get(proc.name)?.params ?? [];
       if (params.length !== 1) continue;
       const param = params[0];
-      if ((readCounts.get(param) ?? 0) !== 1) continue;
       const first = proc.body[0];
-      if (first?.kind !== "assign") continue;
-      const matched = matchXParamFirstAssignment(first, param);
-      if (matched === void 0) continue;
+      if (first === void 0) continue;
+      const indexed = first.kind === "indexed_assign" && matchXParamFirstIndexedAssignment(first, param);
+      if (indexed !== true && countIdentifierReadsInStatements(proc.body, param) !== 1) continue;
+      const matched = first.kind === "assign" ? matchXParamFirstAssignment(first, param) : void 0;
+      if (matched === void 0 && indexed !== true) continue;
       if (statementsReadIdentifier2(proc.body.slice(1), param)) continue;
       if (!allProcCallsHaveImmediateParamAssignment(ast, proc.name, param)) continue;
-      result.set(proc.name, matched.kind === "add" ? { param, first, kind: "add", other: matched.other } : matched.kind === "copy" ? { param, first, kind: "copy" } : { param, first, kind: "expr" });
+      if (first.kind === "indexed_assign" && indexed === true) {
+        result.set(proc.name, { param, first, kind: "indexed" });
+      } else if (first.kind === "assign" && matched !== void 0) {
+        result.set(proc.name, matched.kind === "add" ? { param, first, kind: "add", other: matched.other } : matched.kind === "copy" ? { param, first, kind: "copy" } : { param, first, kind: "expr" });
+      }
     }
     return result;
+  }
+  function collectXParamYStackProcLowerings(ast, xParamProcs) {
+    const result = /* @__PURE__ */ new Map();
+    for (const proc of ast.procs) {
+      const lowering = xParamProcs.get(proc.name);
+      if (lowering?.kind !== "copy") continue;
+      const update = proc.body[1];
+      if (update?.kind !== "indexed_assign") continue;
+      const yName = indexedPow10DeltaStackIndexName(update);
+      if (yName === void 0) continue;
+      if (countIdentifierReadsInStatements(proc.body, yName) !== 1) continue;
+      if (proc.body.some((statement) => statementMayWriteIdentifier(ast, statement, yName, /* @__PURE__ */ new Set()))) continue;
+      if (!allXParamCallsHaveYStackProducer(ast, proc.name, lowering.param, yName)) continue;
+      result.set(proc.name, { xParam: lowering.param, yName });
+    }
+    return result;
+  }
+  function collectStackOnlyStateFields(ast) {
+    const stateFields = new Set(ast.states.flatMap((state) => state.fields.map((field) => field.name)));
+    if (stateFields.size === 0) return /* @__PURE__ */ new Set();
+    const procCallCounts = collectProcCallCounts(ast);
+    const inlineProcNames = findInlineProcNamesBySize(ast, procCallCounts);
+    const xParamProcs = collectXParamProcLowerings(ast, inlineProcNames);
+    const yStackProcs = collectXParamYStackProcLowerings(ast, xParamProcs);
+    const result = /* @__PURE__ */ new Set();
+    for (const name of stateFields) {
+      if (isStackOnlyStateField(ast, name, xParamProcs, yStackProcs)) result.add(name);
+    }
+    return result;
+  }
+  function isStackOnlyStateField(ast, name, xParamProcs, yStackProcs) {
+    const returnOnlyProcs = stackOnlyReturnProcsForTarget(ast, name, xParamProcs);
+    let covered = false;
+    let coveredWrite = false;
+    const visitStatements = (statements, currentProc) => {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        const coveredRun = stackOnlyCoveredRun(ast, statements, index, name, xParamProcs, yStackProcs, returnOnlyProcs);
+        if (coveredRun > 0) {
+          covered = true;
+          if (stackOnlyCoveredRunWritesTarget(statements, index, coveredRun, name, returnOnlyProcs)) {
+            coveredWrite = true;
+          }
+          index += coveredRun - 1;
+          continue;
+        }
+        if (statement.kind === "call" && returnOnlyProcs.has(statement.block)) {
+          covered = true;
+          coveredWrite = true;
+          continue;
+        }
+        if (statement.kind === "if") {
+          if (expressionReferencesIdentifier(statement.condition.left, name)) return false;
+          if (expressionReferencesIdentifier(statement.condition.right, name)) return false;
+          if (!visitStatements(statement.thenBody, currentProc)) return false;
+          if (statement.elseBody !== void 0 && !visitStatements(statement.elseBody, currentProc)) return false;
+          continue;
+        }
+        if (statement.kind === "loop" || statement.kind === "while") {
+          if (statement.kind === "while") {
+            if (expressionReferencesIdentifier(statement.condition.left, name)) return false;
+            if (expressionReferencesIdentifier(statement.condition.right, name)) return false;
+          }
+          if (!visitStatements(statement.body, currentProc)) return false;
+          continue;
+        }
+        if (statement.kind === "dispatch") {
+          if (expressionReferencesIdentifier(statement.expr, name)) return false;
+          for (const dispatchCase of statement.cases) {
+            if (expressionReferencesIdentifier(dispatchCase.value, name)) return false;
+            if (!visitStatements(dispatchCase.body, currentProc)) return false;
+          }
+          if (statement.defaultBody !== void 0 && !visitStatements(statement.defaultBody, currentProc)) return false;
+          continue;
+        }
+        if (currentProc !== void 0 && returnOnlyProcs.has(currentProc) && stackOnlyReturnAssignment(statement, name, xParamProcs.get(currentProc))) {
+          covered = true;
+          coveredWrite = true;
+          continue;
+        }
+        if (currentProc !== void 0 && statement.kind === "assign" && statement.target === name && expressionPureForSubstitution(statement.expr) && !expressionReferencesIdentifier(statement.expr, name) && allProcReturnConsumersAreStackOnly(ast, currentProc, name) && followingXParamPackedScoreAccumulatorRun(ast, statements, index + 1, name, xParamProcs)) {
+          covered = true;
+          coveredWrite = true;
+          continue;
+        }
+        if (currentProc !== void 0 && statement.kind === "assign" && statement.target === name && index === statements.length - 1 && expressionPureForSubstitution(statement.expr) && !expressionReferencesIdentifier(statement.expr, name) && allProcReturnConsumersAreStackOnly(ast, currentProc, name)) {
+          covered = true;
+          coveredWrite = true;
+          continue;
+        }
+        if (statementReadsIdentifier2(statement, name) || statementWritesIdentifier(statement, name)) return false;
+      }
+      return true;
+    };
+    for (const entry of ast.entries) {
+      if (!visitStatements(entry.body)) return false;
+    }
+    for (const proc of ast.procs) {
+      if (!visitStatements(proc.body, proc.name)) return false;
+    }
+    return covered && coveredWrite;
+  }
+  function stackOnlyCoveredRunWritesTarget(statements, index, count, name, returnOnlyProcs) {
+    for (let offset = 0; offset < count; offset += 1) {
+      const statement = statements[index + offset];
+      if (statement?.kind === "assign" && statement.target === name) return true;
+      if (statement?.kind === "call" && returnOnlyProcs.has(statement.block)) return true;
+    }
+    return false;
+  }
+  function stackOnlyReturnProcsForTarget(ast, name, xParamProcs) {
+    const result = /* @__PURE__ */ new Set();
+    for (const proc of ast.procs) {
+      const lowering = xParamProcs.get(proc.name);
+      if (lowering?.kind !== "expr") continue;
+      if (proc.body.length !== 1) continue;
+      const only = proc.body[0];
+      if (!stackOnlyReturnAssignment(only, name, lowering)) continue;
+      result.add(proc.name);
+    }
+    return result;
+  }
+  function stackOnlyReturnAssignment(statement, name, lowering) {
+    return lowering?.kind === "expr" && statement.kind === "assign" && statement.target === name && !expressionReferencesIdentifier(statement.expr, name);
+  }
+  function stackOnlyCoveredRun(ast, statements, index, name, xParamProcs, yStackProcs, returnOnlyProcs) {
+    const statement = statements[index];
+    const next = statements[index + 1];
+    const third = statements[index + 2];
+    const fourth = statements[index + 3];
+    if (statement?.kind === "assign" && statement.target === name) {
+      if (next?.kind === "if" && bitOrTestAndSetBranch(statement, next, ast) !== void 0) return 2;
+      if (next?.kind === "assign" && isBitOrUpdate(next.expr, next.target, name)) return 2;
+      if (next?.kind === "assign" && third?.kind === "call") {
+        const yStack = yStackProcs.get(third.block);
+        if (yStack !== void 0 && yStack.yName === name && next.target === yStack.xParam && expressionPureForSubstitution(statement.expr) && !expressionReferencesIdentifier(statement.expr, name)) {
+          return 3;
+        }
+      }
+    }
+    if (statement?.kind === "indexed_assign" && indexedPow10DeltaStackIndexName(statement) === name) return 1;
+    if (statement?.kind === "call" && stackOnlyCallReturnConsumerRun(ast, statements, index, name, statement.block) > 0) {
+      return stackOnlyCallReturnConsumerRun(ast, statements, index, name, statement.block);
+    }
+    const packedAccumulatorRun = stackOnlyXParamPackedScoreAccumulatorRun(ast, statements, index, name, xParamProcs);
+    if (packedAccumulatorRun > 0) return packedAccumulatorRun;
+    if (statement?.kind === "assign" && next?.kind === "call" && returnOnlyProcs.has(next.block)) {
+      const returnLowering = xParamProcs.get(next.block);
+      if (returnLowering === void 0 || statement.target !== returnLowering.param) return 0;
+      if (third?.kind === "assign" && fourth?.kind === "call") {
+        const yStack = yStackProcs.get(fourth.block);
+        if (yStack !== void 0 && yStack.yName === name && third.target === yStack.xParam) return 4;
+      }
+      if (third?.kind === "assign") {
+        const accumulator = packedScoreAccumulator(third, name);
+        if (accumulator !== void 0 && !expressionReferencesIdentifier(accumulator.line, name)) return 3;
+      }
+      return 2;
+    }
+    return 0;
+  }
+  function followingXParamPackedScoreAccumulatorRun(ast, statements, start, name, xParamProcs) {
+    for (let index = start; index < statements.length; index += 1) {
+      if (stackOnlyXParamPackedScoreAccumulatorRun(ast, statements, index, name, xParamProcs) > 0) return true;
+    }
+    return false;
+  }
+  function stackOnlyXParamPackedScoreAccumulatorRun(ast, statements, index, name, xParamProcs) {
+    const statement = statements[index];
+    const next = statements[index + 1];
+    const third = statements[index + 2];
+    if (statement?.kind !== "assign" || next?.kind !== "call" || third?.kind !== "assign") return 0;
+    const lowering = xParamProcs.get(next.block);
+    const proc = ast.procs.find((candidate) => candidate.name === next.block);
+    const returnX = proc === void 0 ? void 0 : procReturnXVariableFromAst(ast, proc);
+    const accumulator = returnX === void 0 ? void 0 : packedScoreAccumulator(third, returnX);
+    if (lowering !== void 0 && statement.target === lowering.param && expressionPureForSubstitution(statement.expr) && expressionPreservesPreviousXAsY(statement.expr) && xParamLoweringPreservesCallerY(lowering) && accumulator !== void 0 && third.target === name && !expressionReferencesIdentifier(accumulator.line, name)) {
+      return 3;
+    }
+    return 0;
+  }
+  function allProcReturnConsumersAreStackOnly(ast, procName, name) {
+    let calls = 0;
+    let ok = true;
+    const visit = (statements) => {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        if (statement.kind === "call" && statement.block === procName) {
+          calls += 1;
+          if (stackOnlyCallReturnConsumerRun(ast, statements, index, name, procName) === 0) ok = false;
+        }
+        if (statement.kind === "loop" || statement.kind === "while") visit(statement.body);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody !== void 0) visit(statement.elseBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody !== void 0) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) {
+      if (proc.name !== procName) visit(proc.body);
+    }
+    return ok && calls > 0;
+  }
+  function stackOnlyCallReturnConsumerRun(ast, statements, index, name, procName) {
+    const statement = statements[index];
+    if (statement?.kind !== "call" || statement.block !== procName) return 0;
+    const proc = ast.procs.find((candidate) => candidate.name === procName);
+    if (proc === void 0 || procReturnXVariableFromAst(ast, proc) !== name) return 0;
+    const next = statements[index + 1];
+    if (next?.kind === "assign" && isBitOrUpdate(next.expr, next.target, name)) return 2;
+    const third = statements[index + 2];
+    if (next?.kind === "assign" && third?.kind === "if") {
+      const candidate = maxAssignCandidate(next);
+      const returned = { kind: "identifier", name };
+      if (candidate !== void 0 && expressionEquals(candidate, returned) && third.elseBody === void 0 && conditionComparesExpressionWithIdentifier(third.condition, returned, next.target, "==") && !statementsReadIdentifier2(third.thenBody, name)) {
+        return 3;
+      }
+    }
+    return 0;
+  }
+  function indexedPow10DeltaStackIndexName(statement) {
+    const delta = indexedPow10DeltaUpdate(statement);
+    if (delta === void 0) return void 0;
+    return pow10IndexNameFromStackTerm(delta.term);
+  }
+  function pow10IndexNameFromStackTerm(expr) {
+    if (expr.kind === "call" && expr.callee.toLowerCase() === "pow10" && expr.args.length === 1) {
+      const arg = expr.args[0];
+      return arg?.kind === "identifier" ? arg.name : void 0;
+    }
+    if (expr.kind !== "binary" || expr.op !== "*") return void 0;
+    const left = pow10IndexNameFromStackTerm(expr.left);
+    if (left !== void 0 && isSimpleStackLoad(expr.right)) return left;
+    const right = pow10IndexNameFromStackTerm(expr.right);
+    if (right !== void 0 && isSimpleStackLoad(expr.left)) return right;
+    return void 0;
+  }
+  function allXParamCallsHaveYStackProducer(ast, procName, xParam, yName) {
+    const procByName = new Map(ast.procs.map((proc) => [proc.name, proc]));
+    let calls = 0;
+    let ok = true;
+    const visit = (statements) => {
+      for (let index = 0; index < statements.length; index += 1) {
+        const statement = statements[index];
+        if (statement.kind === "call" && statement.block === procName) {
+          calls += 1;
+          const param = statements[index - 1];
+          const producer = statements[index - 2];
+          if (param?.kind !== "assign" || param.target !== xParam) {
+            ok = false;
+          } else if (!xParamYStackProducer(ast, procByName, producer, yName)) {
+            ok = false;
+          } else if (producer?.kind === "assign" && statementsReadIdentifierBeforeWrite(statements.slice(index + 1), yName, ast)) {
+            ok = false;
+          }
+        }
+        if (statement.kind === "loop") visit(statement.body);
+        if (statement.kind === "while") visit(statement.body);
+        if (statement.kind === "if") {
+          visit(statement.thenBody);
+          if (statement.elseBody) visit(statement.elseBody);
+        }
+        if (statement.kind === "dispatch") {
+          for (const dispatchCase of statement.cases) visit(dispatchCase.body);
+          if (statement.defaultBody) visit(statement.defaultBody);
+        }
+      }
+    };
+    for (const entry of ast.entries) visit(entry.body);
+    for (const proc of ast.procs) {
+      if (proc.name !== procName) visit(proc.body);
+    }
+    return ok && calls > 0;
+  }
+  function xParamYStackProducer(ast, procByName, statement, yName) {
+    if (statement?.kind === "assign") {
+      return statement.target === yName && expressionPureForSubstitution(statement.expr) && !expressionReferencesIdentifier(statement.expr, yName);
+    }
+    if (statement?.kind !== "call") return false;
+    const proc = procByName.get(statement.block);
+    return proc !== void 0 && procReturnXVariableFromAst(ast, proc) === yName;
+  }
+  function procReturnXVariableFromAst(ast, proc) {
+    if (statementListTerminatesStatically(proc.body, ast)) return void 0;
+    const last = proc.body.at(-1);
+    return last?.kind === "assign" ? last.target : void 0;
   }
   function matchXParamFirstAssignment(statement, param) {
     const expr = statement.expr;
@@ -40231,6 +49484,9 @@ var MKProEmulatorBundle = (() => {
       }
     }
     return expressionCanConsumeIdentifierFromX(expr, param) ? { kind: "expr" } : void 0;
+  }
+  function matchXParamFirstIndexedAssignment(statement, param) {
+    return expressionCanConsumeIdentifierFromX(statement.target.index, param);
   }
   function allProcCallsHaveImmediateParamAssignment(ast, procName, param) {
     let calls = 0;
@@ -40281,6 +49537,8 @@ var MKProEmulatorBundle = (() => {
         return countIdentifierReads(statement.target.index, name) + countIdentifierReads(statement.expr, name);
       case "coord_list_remove":
         return countIdentifierReads(statement.item, name);
+      case "segmented_bitplane_update":
+        return countIdentifierReads(statement.item, name);
       case "if":
         return countIdentifierReadsInCondition(statement.condition, name) + countIdentifierReadsInStatements(statement.thenBody, name) + (statement.elseBody === void 0 ? 0 : countIdentifierReadsInStatements(statement.elseBody, name));
       case "loop":
@@ -40300,18 +49558,98 @@ var MKProEmulatorBundle = (() => {
         return 0;
     }
   }
+  function statementMayReadIdentifierDeep(statement, name, ast, seenProcs = /* @__PURE__ */ new Set()) {
+    switch (statement.kind) {
+      case "show":
+        return displaySourcesForStatement(ast, statement).includes(name);
+      case "halt":
+        return statementReadsIdentifier2(statement, name) || displaySourcesForStatement(ast, statement).includes(name);
+      case "call":
+        return procMayReadIdentifier(ast, statement.block, name, seenProcs);
+      case "if":
+        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statement.thenBody.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs)) || (statement.elseBody?.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs)) ?? false);
+      case "while":
+        return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statement.body.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs));
+      case "loop":
+        return statement.body.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs));
+      case "dispatch":
+        return expressionReferencesIdentifier(statement.expr, name) || statement.cases.some(
+          (dispatchCase) => expressionReferencesIdentifier(dispatchCase.value, name) || dispatchCase.body.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs))
+        ) || (statement.defaultBody?.some((child) => statementMayReadIdentifierDeep(child, name, ast, seenProcs)) ?? false);
+      default:
+        return statementReadsIdentifier2(statement, name);
+    }
+  }
+  function procMayReadIdentifier(ast, procName, name, seen) {
+    if (seen.has(procName)) return false;
+    seen.add(procName);
+    const proc = ast.procs.find((candidate) => candidate.name === procName);
+    const result = proc?.body.some((statement) => statementMayReadIdentifierDeep(statement, name, ast, seen)) ?? false;
+    seen.delete(procName);
+    return result;
+  }
+  function procMayWriteIdentifier(ast, procName, name, seen) {
+    if (seen.has(procName)) return false;
+    seen.add(procName);
+    const proc = ast.procs.find((candidate) => candidate.name === procName);
+    const result = proc?.body.some((statement) => statementMayWriteIdentifierDeep(statement, name, ast, seen)) ?? false;
+    seen.delete(procName);
+    return result;
+  }
+  function statementMayWriteIdentifierDeep(statement, name, ast, seenProcs) {
+    switch (statement.kind) {
+      case "assign":
+      case "input":
+        return statement.target === name;
+      case "indexed_assign":
+        return statement.target.base === name;
+      case "core":
+        return statement.outputs?.some((output) => output.target === name) === true || statement.clobbers?.includes(name) === true;
+      case "call":
+        return procMayWriteIdentifier(ast, statement.block, name, seenProcs);
+      case "if":
+        return statement.thenBody.some((child) => statementMayWriteIdentifierDeep(child, name, ast, seenProcs)) || (statement.elseBody?.some((child) => statementMayWriteIdentifierDeep(child, name, ast, seenProcs)) ?? false);
+      case "while":
+      case "loop":
+        return statement.body.some((child) => statementMayWriteIdentifierDeep(child, name, ast, seenProcs));
+      case "dispatch":
+        return statement.cases.some(
+          (dispatchCase) => dispatchCase.body.some((child) => statementMayWriteIdentifierDeep(child, name, ast, seenProcs))
+        ) || (statement.defaultBody?.some((child) => statementMayWriteIdentifierDeep(child, name, ast, seenProcs)) ?? false);
+      default:
+        return false;
+    }
+  }
   function flattenAdditionTerms(expr) {
     if (expr.kind === "binary" && expr.op === "+") {
       return [...flattenAdditionTerms(expr.left), ...flattenAdditionTerms(expr.right)];
     }
     return [expr];
   }
-  function statementsReadIdentifierBeforeWrite(statements, name) {
+  function statementsReadIdentifierBeforeWrite(statements, name, ast) {
+    return firstIdentifierAccess(statements, name, ast, /* @__PURE__ */ new Set()) === "read";
+  }
+  function firstIdentifierAccess(statements, name, ast, seenProcs) {
     for (const statement of statements) {
-      if (statementReadsIdentifier2(statement, name)) return true;
-      if (statementWritesIdentifier(statement, name)) return false;
+      const access = statementFirstIdentifierAccess(statement, name, ast, seenProcs);
+      if (access !== "none") return access;
     }
-    return false;
+    return "none";
+  }
+  function statementFirstIdentifierAccess(statement, name, ast, seenProcs) {
+    if (statement.kind === "call" && ast !== void 0) {
+      const proc = ast.procs.find((candidate) => candidate.name === statement.block);
+      if (proc === void 0) return "none";
+      const key = `${name}\0${proc.name}`;
+      if (seenProcs.has(key)) return "none";
+      seenProcs.add(key);
+      const access = firstIdentifierAccess(proc.body, name, ast, seenProcs);
+      seenProcs.delete(key);
+      return access;
+    }
+    if (statementReadsIdentifier2(statement, name)) return "read";
+    if (statementWritesIdentifier(statement, name)) return "write";
+    return "none";
   }
   function statementsReadIdentifierAsVisibleValue(ast, name) {
     const visit = (statements) => {
@@ -40358,6 +49696,8 @@ var MKProEmulatorBundle = (() => {
       case "indexed_assign":
         return expressionReferencesIdentifier(statement.target.index, name) || expressionReferencesIdentifier(statement.expr, name);
       case "coord_list_remove":
+        return expressionReferencesIdentifier(statement.item, name);
+      case "segmented_bitplane_update":
         return expressionReferencesIdentifier(statement.item, name);
       case "if":
         return expressionReferencesIdentifier(statement.condition.left, name) || expressionReferencesIdentifier(statement.condition.right, name) || statementsReadIdentifier2(statement.thenBody, name) || statement.elseBody !== void 0 && statementsReadIdentifier2(statement.elseBody, name);
@@ -40864,27 +50204,36 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) visitStatements(proc.body);
     return found;
   }
-  function warnUndeclaredAssignments(ast, declared, diagnostics) {
+  function warnUndeclaredAssignments(ast, declared, diagnostics, strictAllocation = false, preserveDispatchCaseOrder = false) {
     const seen = /* @__PURE__ */ new Set();
-    const ephemeralInputs = collectEphemeralInputTargets(ast);
+    const ephemeralInputs = collectEphemeralInputTargets(ast, { preserveDispatchCaseOrder });
     const loopPrompts = loopCarriedPromptNames(ast);
     const xParamNames = xParamProcParamNames(ast);
+    const report = (target, line) => {
+      if (seen.has(target)) return;
+      seen.add(target);
+      diagnostics.push({
+        level: strictAllocation ? "error" : "warning",
+        message: strictAllocation ? `Undeclared variable '${target}' (strict allocation). Declare it in state { ... } or pass it as a function parameter.` : `Implicit allocation for undeclared variable '${target}'. Declare it in state { ... } to silence.`,
+        ...line === void 0 ? {} : { line }
+      });
+    };
+    if (strictAllocation) {
+      for (const state of ast.states) {
+        for (const field of state.fields) {
+          if (field.implicit === true) report(field.name, field.line);
+        }
+      }
+    }
     const visit = (statements) => {
       for (const statement of statements) {
         if (statement.kind === "assign" || statement.kind === "input") {
           if (loopPrompts.has(statement.target)) continue;
           if (xParamNames.has(statement.target)) continue;
-          if (statement.kind === "input" && ephemeralInputs.has(statement.target)) continue;
+          if (statement.kind === "input" && !strictAllocation && ephemeralInputs.has(statement.target)) continue;
           if (statement.target.startsWith(DISPLAY_EXPR_PREFIX)) continue;
           if (statement.target.startsWith(INTERNAL_NAME_PREFIX)) continue;
-          if (!declared.has(statement.target) && !seen.has(statement.target)) {
-            diagnostics.push({
-              level: "warning",
-              message: `Implicit allocation for undeclared variable '${statement.target}'. Add 'store ${statement.target}' to silence.`,
-              line: statement.line
-            });
-            seen.add(statement.target);
-          }
+          if (!declared.has(statement.target)) report(statement.target, statement.line);
         }
         if (statement.kind === "loop") visit(statement.body);
         if (statement.kind === "while") visit(statement.body);
@@ -40901,8 +50250,8 @@ var MKProEmulatorBundle = (() => {
     for (const entry of ast.entries) visit(entry.body);
     for (const proc of ast.procs) visit(proc.body);
   }
-  function collectAssignedVariables(ast, variables, ignoredTargets = /* @__PURE__ */ new Set()) {
-    const ephemeralInputs = collectEphemeralInputTargets(ast);
+  function collectAssignedVariables(ast, variables, ignoredTargets = /* @__PURE__ */ new Set(), preserveDispatchCaseOrder = false) {
+    const ephemeralInputs = collectEphemeralInputTargets(ast, { preserveDispatchCaseOrder });
     const loopPrompts = loopCarriedPromptNames(ast);
     const xParamNames = xParamProcParamNames(ast);
     const visit = (statements) => {
@@ -40960,9 +50309,12 @@ var MKProEmulatorBundle = (() => {
       if (functionProcs.has(proc.name)) visit(proc.body);
     }
   }
-  function collectEphemeralInputTargets(ast) {
+  function collectEphemeralInputTargets(ast, options = {}) {
     const readCounts = collectVariableReadCounts(ast);
     const targets = /* @__PURE__ */ new Set();
+    const optimizeDispatch = (dispatch) => optimizeDispatchDefaultCases(dispatch, {
+      preserveCaseOrder: options.preserveDispatchCaseOrder === true
+    }).statement;
     const visit = (statements) => {
       for (let index = 0; index < statements.length; index += 1) {
         const statement = statements[index];
@@ -40973,7 +50325,7 @@ var MKProEmulatorBundle = (() => {
           if (reads > 0 && (readCounts.get(statement.target) ?? 0) === reads) targets.add(statement.target);
         }
         if (statement.kind === "input" && next?.kind === "dispatch") {
-          const dispatch = optimizeDispatchDefaultCases(next).statement;
+          const dispatch = optimizeDispatch(next);
           const reads = dispatchUsesNumericResidualChain(dispatch) ? countIdentifierReads(dispatch.expr, statement.target) : 0;
           if (reads > 0 && (readCounts.get(statement.target) ?? 0) === reads) targets.add(statement.target);
         }
@@ -40982,7 +50334,7 @@ var MKProEmulatorBundle = (() => {
           if (reads > 0 && (readCounts.get(next.target) ?? 0) === reads) targets.add(next.target);
         }
         if (statement.kind === "show" && next?.kind === "input" && afterNext?.kind === "dispatch") {
-          const dispatch = optimizeDispatchDefaultCases(afterNext).statement;
+          const dispatch = optimizeDispatch(afterNext);
           const reads = dispatchUsesNumericResidualChain(dispatch) ? countIdentifierReads(dispatch.expr, next.target) : 0;
           if (reads > 0 && (readCounts.get(next.target) ?? 0) === reads) targets.add(next.target);
         }
@@ -41037,7 +50389,7 @@ var MKProEmulatorBundle = (() => {
     }
     const rangeFits = (name) => {
       const range3 = rangeByName.get(name);
-      return range3?.type === "range" && range3.min !== void 0 && range3.max !== void 0 && range3.min >= 0 && range3.max + 1 <= 14;
+      return range3?.type === "range" && range3.min !== void 0 && range3.max !== void 0 && range3.min >= 0;
     };
     const visit = (statements) => {
       for (const statement of statements) {
@@ -41060,12 +50412,15 @@ var MKProEmulatorBundle = (() => {
     for (const proc of ast.procs) visit(proc.body);
     return targets;
   }
-  function collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch = false) {
+  function collectDispatchScratchVariables(ast, variables, freeResidualDispatchScratch = false, preserveDispatchCaseOrder = false) {
     const visit = (statements) => {
       for (const statement of statements) {
         if (statement.kind === "dispatch") {
-          const residualNeedsNoScratch = freeResidualDispatchScratch && dispatchUsesNumericResidualChain(statement);
-          if (statement.expr.kind !== "identifier" && !residualNeedsNoScratch) {
+          const optimized = optimizeDispatchDefaultCases(statement, {
+            preserveCaseOrder: preserveDispatchCaseOrder
+          }).statement;
+          const residualNeedsNoScratch = freeResidualDispatchScratch && dispatchUsesNumericResidualChain(optimized);
+          if (optimized.expr.kind !== "identifier" && !residualNeedsNoScratch) {
             variables.add(`${DISPATCH_SCRATCH_PREFIX}${statement.scratchId}`);
           }
           for (const dispatchCase of statement.cases) visit(dispatchCase.body);
@@ -41132,6 +50487,27 @@ var MKProEmulatorBundle = (() => {
     };
     for (const entry of ast.entries) visit(entry.body);
     for (const proc of ast.procs) visit(proc.body);
+  }
+  function collectSegmentedBitplaneScratchVariables(ast, variables) {
+    if (ast.v2 === void 0) return;
+    const segmentedNames = new Set(
+      ast.v2.state.filter((field) => segmentedBitplaneCollectionInfo(ast, field.name) !== void 0).map((field) => field.name)
+    );
+    if (segmentedNames.size === 0) return;
+    variables.add(SEGMENTED_BITPLANE_INDEX);
+    variables.add(SEGMENTED_BITPLANE_SELECTOR);
+    let randomUniqueSetup = false;
+    for (const state of ast.states) {
+      for (const field of state.fields) {
+        if (field.initial !== void 0 && segmentedBitplaneRandomUniquePlacement(field.name, field.initial) !== void 0) {
+          randomUniqueSetup = true;
+        }
+      }
+    }
+    if (randomUniqueSetup) {
+      variables.add(SEGMENTED_BITPLANE_COUNTER);
+      variables.add(SEGMENTED_BITPLANE_SEED);
+    }
   }
   function collectCoordListScratchVariables(ast, variables) {
     const addHasScratch = () => {
@@ -41741,9 +51117,21 @@ var MKProEmulatorBundle = (() => {
     };
   }
   function isReusableBitSetPair(first, second) {
-    const firstSet = matchBitSetAssignment(first);
-    const secondSet = matchBitSetAssignment(second);
+    const firstSet = matchPlainReusableBitSetAssignment(first);
+    const secondSet = matchPlainReusableBitSetAssignment(second);
     return firstSet !== void 0 && secondSet !== void 0 && expressionEquals(firstSet.item, secondSet.item);
+  }
+  function matchPlainReusableBitSetAssignment(statement) {
+    const bitSet = matchBitSetAssignment(statement);
+    if (bitSet !== void 0) return bitSet;
+    const expr = statement.expr;
+    if (expr.kind !== "call" || expr.callee.toLowerCase() !== "bit_or" || expr.args.length !== 2) return void 0;
+    const target = assignableTargetExpression(statement.target);
+    const left = expr.args[0];
+    const right = expr.args[1];
+    if (expressionEquals(left, target)) return { collection: left, item: right };
+    if (expressionEquals(right, target)) return { collection: right, item: left };
+    return void 0;
   }
   function isReusableMembershipSet(statement) {
     const present = matchBitMembershipCondition(statement.condition);
@@ -41863,6 +51251,8 @@ var MKProEmulatorBundle = (() => {
       case "indexed_assign":
         return estimateExpressionCost2(statement.target.index) + estimateExpressionCost2(statement.expr) + 1;
       case "coord_list_remove":
+        return Number.POSITIVE_INFINITY;
+      case "segmented_bitplane_update":
         return Number.POSITIVE_INFINITY;
       case "pause":
       case "preview":
@@ -42028,6 +51418,14 @@ var MKProEmulatorBundle = (() => {
       detail: "Candidate: reorder HEAD/MAIN/SUB so a subroutine return lands at the program head and a \u041F\u041F/\u0412/\u041E pair collapses. Single-use procedures are already inlined and tail-position calls already become direct jumps, so the remaining gain needs a global layout search with no proven safe trigger on the current programs."
     },
     {
+      id: "packed-line-family-layout",
+      category: "layout",
+      source: "documented",
+      requires: ["packed-grid-primitive-lowering", "shared-straight-line-helper"],
+      activeWhen: ["packed-line-family-layout"],
+      detail: "Candidate: detect packed line banks that are both updated/checked and scored, share source-shaped diagonal score tails through a local middle-entry layout, and continue toward a full shared update/check plus score walker instead of separate packed_add and packed_score traversals."
+    },
+    {
       id: "super-number-deferred-normalization",
       category: "data",
       source: "undocumented",
@@ -42063,6 +51461,14 @@ var MKProEmulatorBundle = (() => {
       requires: ["negative-zero-threshold-selector"],
       activeWhen: ["dual-constant-sign-digit"],
       detail: "Candidate: a language intent for a dual constant 1.|-00 plus compact sign-digits (2N..9N) and their comparison semantics. The negative-zero comparison behavior is already active through the negative-zero-threshold family; no current program needs the additional sign-digit literal surface."
+    },
+    {
+      id: "grd-angle-trig-identities",
+      category: "data",
+      source: "documented",
+      requires: ["grd-angle-mode"],
+      activeWhen: ["grd-angle-mode-assumption"],
+      detail: "Uses identities such as acos(0)=100 and cos(100)=0 only when the source program explicitly requires \u0413\u0420\u0414 angle mode."
     },
     {
       id: "branch-removal",
@@ -42192,8 +51598,8 @@ var MKProEmulatorBundle = (() => {
       category: "flow",
       source: "documented",
       requires: [],
-      activeWhen: ["fl-decrement-zero-branch", "indirect-incdec-counter", "r0-indirect-counter"],
-      detail: "Uses F L0..F L3 as compact decrement-and-continue/decrement-and-branch forms for small counters."
+      activeWhen: ["fl-decrement-zero-branch", "indirect-incdec-counter", "indirect-underflow-decrement", "r0-indirect-counter"],
+      detail: "Uses compact counter-side-effect decrement forms: F L0..F L3 for zero branches and R0..R3 indirect pre-decrement for proved unit updates or underflow guards."
     },
     {
       id: "address-constant-overlay",
@@ -42201,7 +51607,7 @@ var MKProEmulatorBundle = (() => {
       source: "undocumented",
       requires: ["address-constants", "code-data-overlay"],
       activeWhen: ["code-data-overlay", "address-code-overlay"],
-      detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; \u0411\u041F overlays and \u041F\u041F overlays with proved terminal targets are rewritten only after final address proof, including self-target operand execution, existing formal/numeric address bytes used as executable cells, address-taking executable bytes whose operand remains next, and fixed-address guards that reject overlays whose real target would shift."
+      detail: "Lets branch operands double as constants or executable bytes after the layout pass marks a conflict-free overlay role; \u0411\u041F overlays and \u041F\u041F overlays with proved terminal targets are rewritten only after final address proof, including self-target operand execution, existing formal/numeric address bytes used as executable cells, executable bytes reused as formal-address aliases to the same target, address-taking executable bytes whose operand remains next, and fixed-address guards that reject overlays whose real target would shift."
     },
     {
       id: "cyclic-address-layout",
@@ -42273,7 +51679,7 @@ var MKProEmulatorBundle = (() => {
       source: "mk61-delta",
       requires: ["x2-register"],
       activeWhen: ["vp-fraction-restore", "vp-exponent-splice"],
-      detail: "Uses compiler-marked \u0412\u041F cells where they simultaneously restore X2 and provide the needed fractional/mantissa side effect, including X-preserving store/empty/marker/direct-return gaps before redundant \u041A {x}; also collapses redundant \u0412\u041F \u0412\u041F, empty-op runs before \u0412\u041F, proved exponent /-/ /-/ toggles, and VP/X2 restore runs before fresh digits or dead overwrites across transparent return helpers."
+      detail: "Uses compiler-marked \u0412\u041F cells where they simultaneously restore X2 and provide the needed fractional/mantissa side effect, including X-preserving store/empty/marker/direct-return gaps before redundant \u041A {x}; also removes proved no-op \u041A {x}/\u041A [x]/\u041A |x|/\u041A \u0417\u041D cells under the shared X2 exposure guard, collapses redundant \u0412\u041F \u0412\u041F, empty-op runs before \u0412\u041F, proved exponent /-/ /-/ toggles, and VP/X2 restore runs before fresh digits or dead overwrites across transparent return helpers."
     },
     {
       id: "x2-hidden-temp",
@@ -42530,7 +51936,7 @@ var MKProEmulatorBundle = (() => {
       detail: "Removes a display/halt prologue that immediately precedes \u0411\u041F to a label whose forward prologue is byte-identical, since the user only ever observes the one display performed by the loop head."
     }
   ];
-  function buildPreloadReport(ast, allocation) {
+  function buildPreloadReport(ast, allocation, loweringOptions = {}) {
     const synthetic = [];
     const v2FieldNames = /* @__PURE__ */ new Set();
     const loweredInitializerListFields = /* @__PURE__ */ new Set();
@@ -42567,11 +51973,15 @@ var MKProEmulatorBundle = (() => {
         });
       }
     }
-    const constants = Object.entries(allocation.constants).map(([value, register]) => ({
-      register,
-      value,
-      countsAgainstProgram: false
-    }));
+    const constants = Object.entries(allocation.constants).map(([value, register]) => {
+      const selector = fractionalConstantSelectorForValue(loweringOptions, value);
+      const selectorValue = selector === void 0 ? void 0 : fractionalSelectorPreloadValue(value, selector.target);
+      return {
+        register,
+        value: selectorValue ?? value,
+        countsAgainstProgram: false
+      };
+    });
     const displayTemplateMasks = [];
     for (const display of ast.displays) {
       if (!displayHasMantissaExponentTemplateShape(display)) continue;
@@ -42584,6 +51994,35 @@ var MKProEmulatorBundle = (() => {
       });
     }
     return [...synthetic, ...constants, ...displayTemplateMasks];
+  }
+  function constantPreloadRegisters(allocation, loweringOptions = {}) {
+    const result = {};
+    for (const [value, register] of Object.entries(allocation.constants)) {
+      const selector = fractionalConstantSelectorForValue(loweringOptions, value);
+      result[register] = selector === void 0 ? value : fractionalSelectorPreloadValue(value, selector.target) ?? value;
+    }
+    return result;
+  }
+  function fractionalSelectorSetupPreloads(preloads, allocation, loweringOptions) {
+    if (loweringOptions.fractionalConstantSelectors === void 0) return [];
+    const registers = /* @__PURE__ */ new Set();
+    for (const [value, register] of Object.entries(allocation.constants)) {
+      if (fractionalConstantSelectorForValue(loweringOptions, value) !== void 0) registers.add(register);
+    }
+    return preloads.filter((preload) => registers.has(preload.register));
+  }
+  function indexedMemoryComment(action, expr, member, allocation, integerPart) {
+    const suffixes = [];
+    if (integerPart !== void 0) suffixes.push(`indirect-selector-integer-part=${integerPart}`);
+    const targets = member === void 0 ? [] : [...new Set(member.elements.flatMap((element) => {
+      const register = allocation.registers[element.name];
+      return register === void 0 ? [] : [register];
+    }))].sort((left, right) => registerIndex(left) - registerIndex(right));
+    if (targets.length > 0) suffixes.push(`indirect-memory-targets=${targets.join(",")}`);
+    return [
+      `${action} ${bankMemberKey(expr.base, expr.field)}`,
+      ...suffixes
+    ].join("; ");
   }
   function isIndexedInitializerListText(initial) {
     return initial.trimStart().startsWith("[");
@@ -42801,8 +52240,10 @@ var MKProEmulatorBundle = (() => {
     if (optimizations.some((optimization) => optimization.name === "branch-removal")) {
       add("branch-removal", "Optimizer removed a conditional branch through a proved branchless equivalent.", "optimizer");
     }
-    if (optimizations.some((optimization) => optimization.name === "fl-decrement-zero-branch")) {
-      add("fl-decrement-branch", "Optimizer fused a decrement and zero test through F L0..F L3.", "optimizer");
+    if (optimizations.some(
+      (optimization) => optimization.name === "fl-decrement-zero-branch" || optimization.name === "indirect-underflow-decrement"
+    )) {
+      add("fl-decrement-branch", "Optimizer fused decrement tests through compact counter side-effect opcodes.", "optimizer");
     }
     if (optimizations.some(
       (optimization) => optimization.name === "indirect-register-flow" || optimization.name === "stable-indirect-flow" || optimization.name === "preloaded-indirect-flow" || optimization.name === "preloaded-super-dark-flow"
@@ -42827,6 +52268,9 @@ var MKProEmulatorBundle = (() => {
     }
     if (optimizations.some((optimization) => optimization.name === "negative-zero-threshold-selector")) {
       add("negative-zero-degree", "Optimizer selected a preloaded negative-zero exponent threshold selector.", "optimizer");
+    }
+    if (optimizations.some((optimization) => optimization.name === "grd-angle-mode-assumption")) {
+      add("grd-angle-mode", "Optimizer used an identity that is valid only in \u0413\u0420\u0414 angle mode.", "optimizer");
     }
     if (optimizations.some((optimization) => optimization.name === "vp-fraction-restore")) {
       add("x2-restore-boundaries", "Optimizer used \u0412\u041F as both X2 restoration and fractional/mantissa transform.", "optimizer");
@@ -43041,6 +52485,9 @@ var MKProEmulatorBundle = (() => {
         count += statement.cases.length;
         for (const matchCase of statement.cases) count += countV2Statements([matchCase.action]);
         if (statement.otherwise) count += countV2Statements([statement.otherwise]);
+      }
+      if (statement.kind === "v2_block") {
+        count += countV2Statements(statement.body);
       }
       if (statement.kind === "v2_if") {
         count += countV2Statements(statement.thenBody);

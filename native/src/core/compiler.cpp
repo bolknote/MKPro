@@ -7359,12 +7359,13 @@ void emit_number_or_preload(LoweringContext& context, const std::string& value,
                            : std::nullopt;
   const std::string preload_key =
       selector_value.has_value() ? normalize_number_key(*selector_value) : key;
+  const bool stack_literal = comment.has_value() &&
+                             comment->starts_with("preload stack const ") &&
+                             is_stack_literal_preload_only_constant(key);
   const auto preload_it = context.preloaded_numbers.find(preload_key);
-  if (preload_it != context.preloaded_numbers.end()) {
+  if (preload_it != context.preloaded_numbers.end() &&
+      (!is_stack_literal_preload_only_constant(key) || stack_literal)) {
     emit_recall(context, preload_it->second);
-    const bool stack_literal = comment.has_value() &&
-                               comment->starts_with("preload stack const ") &&
-                               is_stack_literal_preload_only_constant(key);
     if (comment.has_value()) {
       context.emitter.items.back().comment = *comment;
     } else if (selector.has_value() && selector_value.has_value()) {
@@ -8750,7 +8751,7 @@ void collect_preload_number_literals(const Expression& expression, ValueSet& val
                                      std::map<std::string, int>& occurrences) {
   if (expression.kind == "number") {
     const std::string value = expression.raw.empty() ? expression.text : expression.raw;
-    if (number_entry_cost(value) > 1)
+    if (guarded_estimate_number_cost(value) > 1)
       collect_preload_literal_occurrence(value, values, occurrences);
     return;
   }
@@ -8896,7 +8897,7 @@ void collect_display_scale_preload_values_from_items(const V2Program& program,
     if (seen_source) {
       const std::string scale = std::to_string(
           static_cast<long long>(std::pow(10, natural_display_width(program, item))));
-      if (number_entry_cost(scale) > 1)
+      if (guarded_estimate_number_cost(scale) > 1)
         values.insert(normalize_number_key(scale));
     }
     seen_source = true;
@@ -9030,15 +9031,16 @@ std::optional<int> standalone_synthesized_constant_cost(const std::string& value
   const std::optional<int> exponent = positive_power_of_ten_exponent_for_key(value);
   if (!exponent.has_value())
     return std::nullopt;
-  const int cost = number_entry_cost(std::to_string(*exponent)) + 1;
-  return cost < number_entry_cost(value) ? std::optional<int>{cost} : std::nullopt;
+  const int cost = guarded_estimate_number_cost(std::to_string(*exponent)) + 1;
+  return cost < guarded_estimate_number_cost(value) ? std::optional<int>{cost}
+                                                    : std::nullopt;
 }
 
 bool constant_is_cheaper_inline_for_startup(const std::string& value, int use_count) {
   const std::optional<int> inline_cost = standalone_synthesized_constant_cost(value);
   if (!inline_cost.has_value())
     return false;
-  const int preload_cost = number_entry_cost(value) + 1 + use_count;
+  const int preload_cost = guarded_estimate_number_cost(value) + 1 + use_count;
   return *inline_cost * use_count <= preload_cost;
 }
 
@@ -9061,13 +9063,19 @@ std::vector<std::string> collect_preload_constant_values(const V2Program& progra
     weights[value] = std::max(weights[value], weight);
   };
 
+  const bool uses_line_count = program_contains_call(program, "line_count");
   if (program_uses_bit_mask_or_spatial_primitives(program)) {
+    if (!uses_line_count &&
+        (program_contains_call(program, "bit_mask") ||
+         program_contains_call(program, "neighbor_count"))) {
+      values.insert("0.5");
+    }
     for (const std::string& value : {"1", "2", "4", "8"}) {
       values.insert(value);
       add_bonus(value, 1);
     }
   }
-  if (program_contains_call(program, "line_count")) {
+  if (uses_line_count) {
     values.insert("10");
     values.insert("11");
     values.insert("19");
@@ -9103,7 +9111,7 @@ std::vector<std::string> collect_preload_constant_values(const V2Program& progra
   const auto savings = [&](const std::string& value) {
     const int weight = weights.contains(value) ? weights.at(value) : 1;
     const int bonus = bonuses.contains(value) ? bonuses.at(value) : 0;
-    return weight * (number_entry_cost(value) - 1) + bonus +
+    return weight * (guarded_estimate_number_cost(value) - 1) + bonus +
            dual_use_address_constant_preload_bonus(value);
   };
   std::stable_sort(ranked.begin(), ranked.end(),
@@ -9112,7 +9120,8 @@ std::vector<std::string> collect_preload_constant_values(const V2Program& progra
                      const int right_savings = savings(right);
                      if (left_savings != right_savings)
                        return left_savings > right_savings;
-                     return number_entry_cost(left) > number_entry_cost(right);
+                     return guarded_estimate_number_cost(left) >
+                            guarded_estimate_number_cost(right);
                    });
   return ranked;
 }
@@ -9913,7 +9922,7 @@ bool emit_inline_bit_mask_from_current_x_with_quotient_scratch(LoweringContext& 
   context.emitter.emit_op(0x13, "/", "bit mask quotient", source_line);
   emit_store(context, scratch, "bit mask quotient");
   context.emitter.emit_op(0x35, "К {x}", "bit mask remainder fraction", source_line);
-  emit_number_or_preload(context, "4", "preload stack const 4", source_line);
+  context.emitter.emit_number("4");
   context.emitter.emit_op(0x12, "*", "bit mask remainder scale", source_line);
   emit_number_or_preload(context, "2", "preload stack const 2", source_line);
   context.emitter.emit_op(0x24, "F x^y", "bit mask power", source_line);
@@ -19637,6 +19646,17 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
 
   Expression target = identifier_expression(*statement.target);
   Expression delta = parse_expression(*statement.expr, statement.line);
+  if (statement.op == "+=" && delta.kind == "number") {
+    if (!lower_expression_to_x(context, delta))
+      return false;
+    if (!lower_expression_to_x(context, target))
+      return false;
+    context.emitter.emit_op(0x10, "+", "expr +", statement.line);
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_aliases.clear();
+    emit_store(context, *statement.target, "set " + *statement.target);
+    return true;
+  }
   Expression update = statement.op == "+="
                           ? add_expression(std::move(target), std::move(delta))
                           : subtract_expression(std::move(target), std::move(delta));

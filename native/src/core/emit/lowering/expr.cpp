@@ -27,10 +27,6 @@ std::string lower_ascii(std::string value) {
   return value;
 }
 
-std::string normalize_number_key(const std::string& value) {
-  return lower_ascii(trim_ascii(value));
-}
-
 bool is_pure_expression(const Expression& expression) {
   if (expression.kind == "number" || expression.kind == "string" || expression.kind == "identifier")
     return true;
@@ -77,6 +73,50 @@ bool is_numeric_value(const LoweringContext& context, const Expression& expressi
 
 bool current_x_holds_name(ExpressionEmitApi& api, const std::string& name) {
   return api.emitter.current_x_variable == name || api.emitter.current_x_aliases.contains(name);
+}
+
+bool is_simple_stack_load(const Expression& expression) {
+  return expression.kind == "identifier" || expression.kind == "number";
+}
+
+bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& context,
+                                      const Expression& expression, int opcode) {
+  if (!api.emitter.current_x_variable.has_value() || expression.left == nullptr ||
+      expression.right == nullptr) {
+    return false;
+  }
+
+  if ((expression.left->kind == "identifier" &&
+       current_x_holds_name(api, expression.left->name) &&
+       is_simple_stack_load(*expression.right))) {
+    if (!api.lower_expression_to_x(*expression.right))
+      return false;
+    api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
+    api.emitter.current_x_variable.reset();
+    api.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "stack-current-x-scheduling",
+        .detail = "Reused current X for commutative " + expression.op + ".",
+    });
+    return true;
+  }
+
+  if ((expression.right->kind == "identifier" &&
+       current_x_holds_name(api, expression.right->name) &&
+       is_simple_stack_load(*expression.left))) {
+    if (!api.lower_expression_to_x(*expression.left))
+      return false;
+    api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
+    api.emitter.current_x_variable.reset();
+    api.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "stack-current-x-scheduling",
+        .detail = "Reused current X for commutative " + expression.op + ".",
+    });
+    return true;
+  }
+
+  return false;
 }
 
 bool compile_current_x_derivation(
@@ -250,12 +290,6 @@ std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, Lowering
 
   if (expression.kind == "number") {
     const std::string value = expression.raw.empty() ? expression.text : expression.raw;
-    const auto preload_it = context.preloaded_numbers.find(normalize_number_key(value));
-    if (preload_it != context.preloaded_numbers.end()) {
-      api.emit_recall(preload_it->second);
-      api.emitter.items.back().comment = "preload const " + normalize_number_key(value);
-      return true;
-    }
     if (context.lunar_shape && value == "10") {
       api.emit_recall("__const_10");
       api.emitter.items.back().comment = "preload const 10";
@@ -346,42 +380,10 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
     return true;
   }
 
-  if (expression.op == "+") {
-    if (expression.left->kind == "identifier" && expression.right->kind == "number") {
-      if (!api.lower_expression_to_x(*expression.right))
-        return false;
-      if (!api.lower_expression_to_x(*expression.left))
-        return false;
-      api.emitter.emit_op(0x10, "+", "expr +");
-      api.emitter.current_x_variable.reset();
-      api.emitter.current_x_aliases.clear();
-      return true;
-    }
-    const auto current = api.emitter.current_x_variable;
-    if (current.has_value() && api.expression_contains_identifier(*expression.right, *current) &&
-        expression.left->kind == "identifier") {
-      api.emit_recall(expression.left->name);
-      api.emitter.emit_op(0x10, "+", "expr +");
-      api.emitter.current_x_variable.reset();
-      api.emitter.current_x_aliases.clear();
-      return true;
-    }
-    if (current.has_value() && api.expression_contains_identifier(*expression.left, *current) &&
-        expression.right->kind == "identifier") {
-      api.emit_recall(expression.right->name);
-      api.emitter.emit_op(0x10, "+", "expr +");
-      api.emitter.current_x_variable.reset();
-      api.emitter.current_x_aliases.clear();
-      return true;
-    }
-    if (expression.left->kind == "identifier" && expression.right->kind == "identifier") {
-      api.emit_recall(expression.left->name);
-      api.emit_recall(expression.right->name);
-      api.emitter.emit_op(0x10, "+", "expr +");
-      api.emitter.current_x_variable.reset();
-      api.emitter.current_x_aliases.clear();
-      return true;
-    }
+  if ((expression.op == "+" || expression.op == "*") &&
+      lower_commutative_with_current_x(api, context, expression,
+                                       expression.op == "+" ? 0x10 : 0x12)) {
+    return true;
   }
 
   if (expression.op == "/" && is_numeric_value(context, *expression.left, 1.0)) {

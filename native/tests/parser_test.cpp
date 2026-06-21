@@ -187,6 +187,73 @@ program BadDisplay {
 }
 )mkpro",
                           "Display fragments must be separated by commas");
+
+  const ProgramAst former_words_program = parse_program(R"mkpro(
+program FormerWords {
+  loop {
+    world()
+    screen()
+  }
+  fn world() {
+    screen()
+  }
+  fn screen() {
+    halt(0)
+  }
+}
+)mkpro");
+  require(former_words_program.v2->rules.at(0).name == "world",
+          "former legacy word should be allowed as a function name");
+  require(former_words_program.v2->rules.at(1).name == "screen",
+          "former legacy word should be allowed as a function name");
+
+  require_throws_contains(R"mkpro(
+program OldRule {
+  loop {
+    step(1)
+  }
+  rule step(delta) {
+    halt(0)
+  }
+}
+)mkpro",
+                          "Unexpected program line 'rule step(delta) {'");
+  require_throws_contains(R"mkpro(
+program OldScreen {
+  state {
+    score: counter 0..9 = 0
+  }
+  screen main {
+    show(score)
+  }
+  loop {
+    show(score)
+  }
+}
+)mkpro",
+                          "Unexpected program line 'screen main {'");
+  require_throws_contains(R"mkpro(
+program OldFleet {
+  fleet enemy_fleet on ocean {
+  }
+  loop {
+    halt(0)
+  }
+}
+)mkpro",
+                          "Unexpected program line 'fleet enemy_fleet on ocean {'");
+  require_throws_contains(R"mkpro(
+program OldChallenge {
+  loop {
+    challenge tile as challenge using warning, memory, answer {
+      success {
+        halt(1)
+      }
+    }
+  }
+}
+)mkpro",
+                          "Function calls must look like 'name(...)'");
 }
 
 void expression_parser_matches_initial_contract() {

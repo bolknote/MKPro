@@ -17,9 +17,8 @@ struct SourceLine {
 };
 
 const std::unordered_set<std::string> kReservedRuleNames = {
-    "challenge", "else",    "fn",   "halt",     "if",     "loop", "match",
-    "otherwise", "program", "read", "requires", "return", "rule", "screen",
-    "show",      "state",   "stop", "turn",     "world",
+    "else", "fn",    "halt",   "if",     "loop", "match", "otherwise",
+    "program", "read", "requires", "return", "show", "state",
 };
 
 std::string trim(std::string value) {
@@ -970,27 +969,9 @@ private:
       if (starts_with(line.text, "board ")) {
         throw ParseError("Board must look like 'name: board(0..9, 0..9)'", line.line);
       }
-      if (starts_with(line.text, "fleet ")) {
-        throw ParseError("Fleet blocks were removed; declare cells and counters in state",
-                         line.line);
-      }
-      if (starts_with(line.text, "world ")) {
-        throw ParseError("Use 'name: board(encoding)' instead of world blocks", line.line);
-      }
-      if (starts_with(line.text, "encounters ")) {
-        throw ParseError("Use match blocks instead of encounters blocks", line.line);
-      }
-      if (starts_with(line.text, "screen ")) {
-        throw ParseError("Use 'fn name() { show(...) }' instead of screen blocks", line.line);
-      }
-      if (line.text == "turn {")
-        throw ParseError("Use 'loop {' instead of turn blocks", line.line);
       if (starts_with(line.text, "fn ")) {
         program.rules.push_back(parse_rule(line.text));
         continue;
-      }
-      if (starts_with(line.text, "rule ")) {
-        throw ParseError("Use 'fn name(arg, ...) {' instead of rule blocks", line.line);
       }
       const bool known_statement_block =
           std::regex_search(line.text, std::regex(R"(^(match|if|while|loop)\b)")) ||
@@ -1288,10 +1269,6 @@ private:
       statement.line = line.line;
       return statement;
     }
-    if (starts_with(line.text, "challenge ") && ends_with(line.text, "{")) {
-      throw ParseError("Use ordinary show/read/if statements instead of challenge blocks",
-                       line.line);
-    }
     if (line.text == "raw {") {
       ++index_;
       return parse_raw(line.line);
@@ -1495,8 +1472,6 @@ private:
     }
     if (starts_with(text, "read "))
       throw ParseError("Read input with 'name = read()'", line);
-    if (starts_with(text, "stop "))
-      throw ParseError("Use 'halt(...)' instead of stop", line);
     if (text == "return" || starts_with(text, "return ")) {
       const std::string expr = trim(text.substr(std::string("return").size()));
       if (expr.empty())

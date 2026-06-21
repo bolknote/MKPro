@@ -53,10 +53,6 @@ struct SelectedHelper {
   std::vector<SelectedHelperEntry> entries;
 };
 
-bool string_target_exists(const IrTarget& target) {
-  return std::holds_alternative<std::string>(target);
-}
-
 std::string call_target_key(const IrTarget& target) {
   if (const auto* text = std::get_if<std::string>(&target))
     return *text;
@@ -74,7 +70,7 @@ bool is_shareable_body_op(const IrOp& op, bool allow_direct_calls = false) {
   case IrKind::Plain:
     return true;
   case IrKind::Call:
-    return allow_direct_calls && string_target_exists(op.target);
+    return allow_direct_calls;
   case IrKind::Label:
   case IrKind::Jump:
   case IrKind::CondJump:
