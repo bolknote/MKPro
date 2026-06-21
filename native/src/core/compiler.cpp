@@ -4101,6 +4101,11 @@ int guarded_estimate_expression_cost(const Expression& expression) {
         is_numeric_literal_value(*expression.left, 1)) {
       return guarded_estimate_expression_cost(*expression.right) + 1;
     }
+    if (const std::optional<core::emit::RemainderByConstantMatch> remainder =
+            match_remainder_by_constant(expression)) {
+      return guarded_estimate_expression_cost(remainder->value) +
+             guarded_estimate_expression_cost(remainder->divisor) * 2 + 3;
+    }
     return (expression.left == nullptr ? 0 : guarded_estimate_expression_cost(*expression.left)) +
            (expression.right == nullptr ? 0 : guarded_estimate_expression_cost(*expression.right)) +
            1;
@@ -4162,6 +4167,17 @@ int guarded_condition_compile_cost(const V2Predicate& predicate, int line) {
   try {
     const Expression left = parse_expression(predicate.left, line);
     const Expression right = parse_expression(predicate.right, line);
+    if (guarded_expression_is_zero(right) && (predicate.op == "==" || predicate.op == "!=") &&
+        left.kind == "binary") {
+      const std::optional<core::emit::RemainderByConstantMatch> remainder =
+          match_remainder_by_constant(left);
+      const std::optional<double> divisor =
+          remainder.has_value() ? numeric_literal_value(remainder->divisor) : std::nullopt;
+      if (remainder.has_value() && divisor.has_value() && *divisor != 0.0) {
+        return guarded_estimate_expression_cost(remainder->value) +
+               guarded_estimate_expression_cost(remainder->divisor) + 4;
+      }
+    }
     if (guarded_expression_is_zero(right) && guarded_can_test_against_zero_directly(predicate.op))
       return guarded_estimate_expression_cost(left) + 2;
     return guarded_estimate_expression_cost(left) + guarded_estimate_expression_cost(right) + 3;
@@ -23954,6 +23970,113 @@ bool lower_x_param_y_stack_proc_call_run(LoweringContext& context,
   return true;
 }
 
+Expression substitute_expression_identifier(const Expression& expression, const std::string& name,
+                                            const Expression& replacement) {
+  if (expression.kind == "identifier" && expression.name == name)
+    return replacement;
+
+  Expression result = expression;
+  if (expression.index != nullptr) {
+    result.index =
+        std::make_shared<Expression>(substitute_expression_identifier(*expression.index, name,
+                                                                      replacement));
+  }
+  if (expression.expr != nullptr) {
+    result.expr =
+        std::make_shared<Expression>(substitute_expression_identifier(*expression.expr, name,
+                                                                     replacement));
+  }
+  if (expression.left != nullptr) {
+    result.left =
+        std::make_shared<Expression>(substitute_expression_identifier(*expression.left, name,
+                                                                     replacement));
+  }
+  if (expression.right != nullptr) {
+    result.right =
+        std::make_shared<Expression>(substitute_expression_identifier(*expression.right, name,
+                                                                     replacement));
+  }
+  result.args.clear();
+  result.args.reserve(expression.args.size());
+  for (const Expression& arg : expression.args)
+    result.args.push_back(substitute_expression_identifier(arg, name, replacement));
+  return result;
+}
+
+std::optional<V2Predicate> substitute_predicate_identifier(const V2Predicate& predicate,
+                                                           const std::string& name,
+                                                           const Expression& replacement,
+                                                           int source_line) {
+  try {
+    V2Predicate result = predicate;
+    if (predicate.kind == "v2_compare") {
+      result.left = expression_to_source(
+          substitute_expression_identifier(parse_expression(predicate.left, source_line), name,
+                                           replacement));
+      result.right = expression_to_source(
+          substitute_expression_identifier(parse_expression(predicate.right, source_line), name,
+                                           replacement));
+      return result;
+    }
+    if (predicate.kind == "v2_contains") {
+      result.collection = expression_to_source(substitute_expression_identifier(
+          parse_expression(predicate.collection, source_line), name, replacement));
+      result.item = expression_to_source(substitute_expression_identifier(
+          parse_expression(predicate.item, source_line), name, replacement));
+      return result;
+    }
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+bool lower_guard_assignment_substitution(LoweringContext& context, const V2Statement& assign,
+                                         const V2Statement& guarded,
+                                         const V2Statement* after_guard) {
+  if (context.program == nullptr || assign.kind != "v2_assign" || !assign.target.has_value() ||
+      !assign.expr.has_value() || guarded.kind != "v2_if" || !guarded.predicate.has_value()) {
+    return false;
+  }
+
+  const Expression target = parse_expression(*assign.target, assign.line);
+  if (target.kind != "identifier")
+    return false;
+  const std::string& target_name = target.name;
+  const int reads_in_condition =
+      count_identifier_reads_in_predicate(*guarded.predicate, target_name, guarded.line);
+  if (reads_in_condition == 0 ||
+      count_identifier_reads_in_program(*context.program, target_name) != reads_in_condition) {
+    return false;
+  }
+
+  const Expression assigned = parse_expression(*assign.expr, assign.line);
+  if (!expression_pure_for_substitution(assigned))
+    return false;
+  const std::optional<V2Predicate> substituted =
+      substitute_predicate_identifier(*guarded.predicate, target_name, assigned, guarded.line);
+  if (!substituted.has_value())
+    return false;
+
+  const int ordinary_cost = guarded_estimate_expression_cost(assigned) + 1 +
+                            guarded_condition_compile_cost(*guarded.predicate, guarded.line);
+  const int substituted_cost = guarded_condition_compile_cost(*substituted, guarded.line);
+  if (substituted_cost + 4 >= ordinary_cost)
+    return false;
+
+  V2Statement lowered = guarded;
+  lowered.predicate = *substituted;
+  if (!lower_statement(context, lowered, after_guard))
+    return false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "single-use-guard-substitution",
+      .detail = "Substituted " + target_name +
+                " directly into the following condition at lines " +
+                std::to_string(assign.line) + "/" + std::to_string(guarded.line) + ".",
+  });
+  return true;
+}
+
 bool lower_stack_resident_indexed_temp(LoweringContext& context,
                                        const std::vector<V2Statement>& statements,
                                        std::size_t start, std::size_t& consumed) {
@@ -24422,6 +24545,17 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
                                                   stack_unary_consumed)) {
       index += stack_unary_consumed - 1U;
       continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size()) {
+      const V2Statement* after_guard =
+          index + 2U < statements.size() ? &statements.at(index + 2U) : nullptr;
+      if (lower_guard_assignment_substitution(context, statements.at(index),
+                                              statements.at(index + 1U), after_guard)) {
+        ++index;
+        continue;
+      }
     }
     if (has_errors(context.diagnostics))
       return false;

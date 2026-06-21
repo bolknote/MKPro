@@ -2566,6 +2566,34 @@ program SingleUseStackTemp {
   require(single_use_stack_temp.listing.find("set tmp") == std::string::npos,
           "single-use stack temp should not spill tmp");
 
+  const CompileResult single_use_guard_substitution = compile_source(R"mkpro(
+program SingleUseGuardSubstitution {
+  state {
+    a: counter 0..999 = 123
+    tmp: packed = 0
+    hit: counter 0..9 = 0
+  }
+
+  loop {
+    tmp = a - int(a / 10) * 10
+    if tmp == 0 {
+      hit = 1
+    }
+    halt(hit)
+  }
+}
+)mkpro");
+  require(single_use_guard_substitution.implemented,
+          "native compiler should substitute single-use guard temporaries");
+  require(single_use_guard_substitution.diagnostics.empty(),
+          "single-use guard substitution compile should not report diagnostics");
+  require(has_optimization(single_use_guard_substitution, "single-use-guard-substitution"),
+          "single-use guard substitution should report the TS strategy name");
+  require(has_optimization(single_use_guard_substitution, "remainder-zero-test-lowering"),
+          "single-use guard substitution should expose remainder-zero lowering");
+  require(single_use_guard_substitution.listing.find("set tmp") == std::string::npos,
+          "single-use guard substitution should not spill tmp");
+
   const CompileResult read_expression_call = compile_source(R"mkpro(
 program ReadExpression {
   state {
