@@ -1849,13 +1849,12 @@ program RepeatedAssignmentValue {
           "repeated assignment value compile should not report diagnostics");
   require(has_optimization(repeated_assignment_value, "repeated-assignment-value-reuse"),
           "repeated assignment value should report the TS strategy name");
-  const std::size_t base_recalls = static_cast<std::size_t>(std::count_if(
-      repeated_assignment_value.steps.begin(), repeated_assignment_value.steps.end(),
-      [](const ResolvedStep& step) {
-        return step.comment.has_value() && *step.comment == "recall base";
-      }));
-  require(base_recalls == 1U,
-          "repeated assignment value reuse should compute base + 2 only once");
+  const std::size_t base_recalls = static_cast<std::size_t>(
+      std::count_if(repeated_assignment_value.steps.begin(), repeated_assignment_value.steps.end(),
+                    [](const ResolvedStep& step) {
+                      return step.comment.has_value() && *step.comment == "recall base";
+                    }));
+  require(base_recalls == 1U, "repeated assignment value reuse should compute base + 2 only once");
 
   for (const char* condition : {"ticks > 0", "1 <= ticks", "0 < ticks"}) {
     const CompileResult counted_while_alt = compile_source(std::string(R"mkpro(
@@ -2288,7 +2287,7 @@ program GridCellMaskCse {
   }
 }
 )mkpro",
-                                                        formula_helper_options);
+                                                          formula_helper_options);
   require(grid_cell_mask_cse.implemented,
           "native compiler should reuse grid cell masks across adjacent helpers");
   require(grid_cell_mask_cse.diagnostics.empty(),
@@ -2308,9 +2307,9 @@ program GridCellMaskCse {
           "grid cell mask CSE should use the scratch mask for cell_has");
   require(grid_has_it > grid_scratch_it,
           "grid cell mask CSE should build the scratch before cell_has");
-  require(std::count(grid_cell_comments.begin(), grid_cell_comments.end(),
-                     "reuse grid cell mask") == 1,
-          "grid cell mask CSE should recall the scratch mask once for cell_set");
+  require(
+      std::count(grid_cell_comments.begin(), grid_cell_comments.end(), "reuse grid cell mask") == 1,
+      "grid cell mask CSE should recall the scratch mask once for cell_set");
   require(std::count(grid_cell_comments.begin(), grid_cell_comments.end(),
                      "cell_set with reused mask") == 1,
           "grid cell mask CSE should use the scratch mask for cell_set");
@@ -2621,8 +2620,9 @@ program DseAcrossCall {
   require(dse_across_call.implemented, "native compiler should lower DSE-across-call program");
   require(dse_across_call.diagnostics.empty(),
           "DSE-across-call compile should not report diagnostics");
-  require(dse_across_call_unoptimized.implemented,
-          "native compiler should lower DSE-across-call program with interprocedural opts disabled");
+  require(
+      dse_across_call_unoptimized.implemented,
+      "native compiler should lower DSE-across-call program with interprocedural opts disabled");
   require(has_optimization(dse_across_call, "interprocedural-dead-store"),
           "interprocedural DSE should report the TS strategy name");
   require(!has_optimization(dse_across_call_unoptimized, "interprocedural-dead-store"),
@@ -2664,8 +2664,7 @@ program InterproceduralValuePropagation {
           "native compiler should lower value-prop program with interprocedural opts disabled");
   require(has_optimization(value_propagation, "interprocedural-value-propagation"),
           "interprocedural value propagation should report the TS strategy name");
-  require(!has_optimization(value_propagation_unoptimized,
-                            "interprocedural-value-propagation"),
+  require(!has_optimization(value_propagation_unoptimized, "interprocedural-value-propagation"),
           "disable_interprocedural_opts should suppress interprocedural value propagation");
   require(value_propagation.steps.size() < value_propagation_unoptimized.steps.size(),
           "interprocedural value propagation should shrink the generated program");
@@ -5398,7 +5397,7 @@ program SingleCaseResidualFallback {
   }
 }
 )mkpro",
-                                                        dispatch_default_merge_options);
+                                                              dispatch_default_merge_options);
   require(dispatch_default_merge.implemented,
           "native compiler should merge dispatch cases matching the default branch");
   require(dispatch_default_merge.diagnostics.empty(),
@@ -5431,7 +5430,7 @@ program DispatchResidualDefaultSign {
   }
 }
 )mkpro",
-                                                          dispatch_residual_sign_options);
+                                                              dispatch_residual_sign_options);
   require(dispatch_residual_sign.implemented,
           "native compiler should derive dispatch default sign expressions");
   require(dispatch_residual_sign.diagnostics.empty(),
@@ -5443,6 +5442,80 @@ program DispatchResidualDefaultSign {
   require(dispatch_residual_sign.listing.find("dispatch default residual sign") !=
               std::string::npos,
           "dispatch residual sign should be emitted from the residual already in X");
+
+  const CompileResult dispatch_residual_sign_domain =
+      compile_source(R"mkpro(
+program DispatchResidualDefaultSignDomain {
+  state {
+    key: counter -10..10 = stack.X
+  }
+
+  fn move(dir) {
+    halt(dir)
+  }
+
+  loop {
+    if abs(key) == 5 {
+      halt(5)
+    }
+    else {
+      match key {
+        0 => halt(0)
+        6 => halt(6)
+        otherwise => move(sign(5 - key))
+      }
+    }
+  }
+}
+)mkpro",
+                     dispatch_residual_sign_options);
+  require(dispatch_residual_sign_domain.implemented,
+          "native compiler should use branch exclusions for residual sign domains");
+  require(dispatch_residual_sign_domain.diagnostics.empty(),
+          "dispatch residual sign domain compile should not report diagnostics");
+  require(has_optimization(dispatch_residual_sign_domain, "dispatch-default-residual-sign-domain"),
+          "dispatch residual sign domain should report the TS optimization name");
+  require(dispatch_residual_sign_domain.listing.find("dispatch default residual adjust") ==
+              std::string::npos,
+          "dispatch residual sign domain should skip the unit residual adjust");
+
+  const CompileResult dispatch_residual_modulo_domain =
+      compile_source(R"mkpro(
+program ResidualModuloDispatch {
+  state {
+    key: counter -10..10 = 0
+  }
+
+  fn move(dir) {
+    halt(dir)
+  }
+
+  loop {
+    key = read()
+    if frac(key / 5) == 0 {
+      halt(sign(key))
+    }
+    else {
+      match key {
+        4 => halt(4)
+        6 => halt(6)
+        otherwise => move(sign(5 - key))
+      }
+    }
+  }
+}
+)mkpro",
+                     dispatch_residual_sign_options);
+  require(dispatch_residual_modulo_domain.implemented,
+          "native compiler should use modulo exclusions for residual sign domains");
+  require(dispatch_residual_modulo_domain.diagnostics.empty(),
+          "dispatch residual modulo domain compile should not report diagnostics");
+  require(
+      has_optimization(dispatch_residual_modulo_domain, "dispatch-default-residual-sign-domain"),
+      "dispatch residual modulo domain should report the TS optimization name");
+  require(dispatch_residual_modulo_domain.listing.find("dispatch default residual adjust") ==
+              std::string::npos,
+          "dispatch residual modulo domain should skip the unit residual adjust");
 
   CompileOptions dispatch_order_options;
   dispatch_order_options.analysis = true;
@@ -5462,7 +5535,8 @@ program DispatchCaseOrdering {
   }
 }
 )mkpro";
-  const CompileResult dispatch_order = compile_source(dispatch_order_source, dispatch_order_options);
+  const CompileResult dispatch_order =
+      compile_source(dispatch_order_source, dispatch_order_options);
   require(dispatch_order.implemented,
           "native compiler should reorder numeric residual dispatch cases");
   require(dispatch_order.diagnostics.empty(),
@@ -5845,8 +5919,7 @@ program LocalTerminalTail {
   }
 }
 )mkpro");
-  require(local_terminal_tail.implemented,
-          "native compiler should branch to local terminal tails");
+  require(local_terminal_tail.implemented, "native compiler should branch to local terminal tails");
   require(local_terminal_tail.diagnostics.empty(),
           "local terminal tail compile should not report diagnostics");
   require(has_optimization(local_terminal_tail, "local-terminal-tail-branch"),
@@ -6827,10 +6900,9 @@ program PackedRowExpressionDisplay {
           "native compiler should lower floor packed-row expression displays");
   require(packed_row_expression_display_statement.diagnostics.empty(),
           "floor packed-row expression display compile should not report diagnostics");
-  require(
-      has_optimization(packed_row_expression_display_statement,
-                       "floor-packed-row-expression-display"),
-      "floor packed-row expression display should report the TS strategy name");
+  require(has_optimization(packed_row_expression_display_statement,
+                           "floor-packed-row-expression-display"),
+          "floor packed-row expression display should report the TS strategy name");
   require(packed_row_expression_display_statement.listing.find(
               "display packed row expression merge") != std::string::npos,
           "floor packed-row expression display should merge the computed row");

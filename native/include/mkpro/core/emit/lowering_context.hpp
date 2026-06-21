@@ -148,6 +148,7 @@ struct LoweringContext {
   std::set<std::string> stack_only_state_fields;
   std::set<std::string> inline_call_stack;
   std::map<std::string, const V2StateField*> state_fields;
+  std::map<std::string, std::set<int>> path_excluded_numeric_values;
   std::map<std::string, const V2Board*> boards;
   std::map<std::string, const V2StateField*> state_banks;
   std::map<std::string, BankSelectorCacheEntry> bank_selector_cache;

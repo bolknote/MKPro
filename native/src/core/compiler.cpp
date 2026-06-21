@@ -17529,6 +17529,105 @@ bool lower_nested_guard_shared_failure(LoweringContext& context, const V2Stateme
   return true;
 }
 
+struct ExcludedNumericValues {
+  std::string name;
+  std::vector<int> values;
+};
+
+bool numeric_value_is_integer(double value);
+
+std::optional<int> integer_numeric_literal_value(const Expression& expression) {
+  const std::optional<double> value = numeric_literal_value(expression);
+  if (!value.has_value() || !numeric_value_is_integer(*value))
+    return std::nullopt;
+  return static_cast<int>(std::round(*value));
+}
+
+std::optional<ExcludedNumericValues>
+identifier_equals_numeric_condition(const Expression& identifier_side,
+                                    const Expression& numeric_side) {
+  const std::optional<int> value = integer_numeric_literal_value(numeric_side);
+  if (!value.has_value())
+    return std::nullopt;
+  if (identifier_side.kind == "identifier") {
+    return ExcludedNumericValues{.name = identifier_side.name, .values = {*value}};
+  }
+  if (identifier_side.kind == "call" && lower_ascii(identifier_side.callee) == "abs" &&
+      identifier_side.args.size() == 1U && identifier_side.args.front().kind == "identifier") {
+    if (*value == 0)
+      return ExcludedNumericValues{.name = identifier_side.args.front().name, .values = {0}};
+    return ExcludedNumericValues{.name = identifier_side.args.front().name,
+                                 .values = {*value, -*value}};
+  }
+  return std::nullopt;
+}
+
+std::optional<ExcludedNumericValues>
+frac_division_equals_zero_condition(LoweringContext& context, const Expression& expression_side,
+                                    const Expression& zero_side) {
+  if (!is_zero_expression(context, zero_side) || expression_side.kind != "call" ||
+      lower_ascii(expression_side.callee) != "frac" || expression_side.args.size() != 1U) {
+    return std::nullopt;
+  }
+  const Expression& divided = expression_side.args.front();
+  if (divided.kind != "binary" || divided.op != "/" || divided.left == nullptr ||
+      divided.right == nullptr || divided.left->kind != "identifier") {
+    return std::nullopt;
+  }
+  const std::optional<int> divisor = integer_numeric_literal_value(*divided.right);
+  if (!divisor.has_value() || *divisor == 0)
+    return std::nullopt;
+  const int abs_divisor = std::abs(*divisor);
+  return ExcludedNumericValues{.name = divided.left->name,
+                               .values = {0, abs_divisor, -abs_divisor}};
+}
+
+std::optional<ExcludedNumericValues>
+false_branch_excluded_numeric_values(LoweringContext& context, const V2Predicate& predicate,
+                                     int line) {
+  if (predicate.op != "==")
+    return std::nullopt;
+  const Expression left = parse_expression(predicate.left, line);
+  const Expression right = parse_expression(predicate.right, line);
+  if (std::optional<ExcludedNumericValues> direct =
+          identifier_equals_numeric_condition(left, right)) {
+    return direct;
+  }
+  if (std::optional<ExcludedNumericValues> reverse =
+          identifier_equals_numeric_condition(right, left)) {
+    return reverse;
+  }
+  if (std::optional<ExcludedNumericValues> modulo =
+          frac_division_equals_zero_condition(context, left, right)) {
+    return modulo;
+  }
+  return frac_division_equals_zero_condition(context, right, left);
+}
+
+bool lower_statement_block_with_excluded_values(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    const std::optional<ExcludedNumericValues>& excluded) {
+  if (!excluded.has_value() || excluded->values.empty())
+    return lower_statement_block(context, statements);
+
+  const auto previous_it = context.path_excluded_numeric_values.find(excluded->name);
+  const bool had_previous = previous_it != context.path_excluded_numeric_values.end();
+  const std::set<int> previous = had_previous ? previous_it->second : std::set<int>{};
+
+  std::set<int> next = previous;
+  for (const int value : excluded->values)
+    next.insert(value);
+  context.path_excluded_numeric_values[excluded->name] = std::move(next);
+
+  const bool lowered = lower_statement_block(context, statements);
+  if (had_previous) {
+    context.path_excluded_numeric_values[excluded->name] = previous;
+  } else {
+    context.path_excluded_numeric_values.erase(excluded->name);
+  }
+  return lowered;
+}
+
 bool lower_if_statement(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_if" || !statement.predicate.has_value())
     return false;
@@ -17619,7 +17718,9 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     }
     if (reuse_false_branch_residual)
       mark_branch_residual_reuse(context, *false_branch_residual, selected.line, "false branch");
-    if (!lower_statement_block(context, selected.else_body))
+    const std::optional<ExcludedNumericValues> excluded =
+        false_branch_excluded_numeric_values(context, *selected.predicate, selected.line);
+    if (!lower_statement_block_with_excluded_values(context, selected.else_body, excluded))
       return false;
     if (!then_stops)
       context.emitter.emit_label(end_label, {.hidden = true});
@@ -18154,6 +18255,35 @@ void emit_residual_compare_delta(LoweringContext& context, double delta, const s
   context.emitter.emit_op(delta < 0 ? 0x10 : 0x11, delta < 0 ? "+" : "-", comment, line);
 }
 
+bool numeric_value_is_integer(double value) {
+  return std::fabs(value - std::round(value)) <= 1e-12;
+}
+
+bool identifier_has_integer_domain(const LoweringContext& context, const std::string& name) {
+  const V2StateField* field = state_field_named(context, name);
+  return field != nullptr && field->type == "counter" && field->min.has_value() &&
+         field->max.has_value();
+}
+
+bool can_skip_dispatch_residual_sign_unit_adjust(const LoweringContext& context,
+                                                 const DispatchResidualSignMatch& matched,
+                                                 const Expression& dispatch_expression,
+                                                 double compared_value) {
+  const double delta = matched.bound - compared_value;
+  if (std::fabs(std::fabs(delta) - 1.0) > 1e-12)
+    return false;
+  if (!numeric_value_is_integer(matched.bound) || !numeric_value_is_integer(compared_value))
+    return false;
+  if (dispatch_expression.kind != "identifier")
+    return false;
+  if (!identifier_has_integer_domain(context, dispatch_expression.name))
+    return false;
+  const auto excluded_it = context.path_excluded_numeric_values.find(dispatch_expression.name);
+  if (excluded_it == context.path_excluded_numeric_values.end())
+    return false;
+  return excluded_it->second.contains(static_cast<int>(std::round(matched.bound)));
+}
+
 bool lower_dispatch_residual_default_x_param_call(LoweringContext& context,
                                                   const V2StatementPtr& action,
                                                   const Expression& dispatch_expression,
@@ -18173,8 +18303,18 @@ bool lower_dispatch_residual_default_x_param_call(LoweringContext& context,
   if (!matched.has_value())
     return false;
 
-  emit_residual_compare_delta(context, matched->bound - compared_value,
-                              "dispatch default residual adjust", action->line);
+  if (can_skip_dispatch_residual_sign_unit_adjust(context, *matched, dispatch_expression,
+                                                  compared_value)) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "dispatch-default-residual-sign-domain",
+        .detail = "Used integer-domain exclusions to derive " + action->args.front() +
+                  " without shifting the dispatch residual at line " +
+                  std::to_string(action->line) + ".",
+    });
+  } else {
+    emit_residual_compare_delta(context, matched->bound - compared_value,
+                                "dispatch default residual adjust", action->line);
+  }
   if (matched->negate)
     context.emitter.emit_op(0x0b, "/-/", "dispatch default residual sign direction", action->line);
   context.emitter.emit_op(0x32, "К ЗН", "dispatch default residual sign", action->line);
