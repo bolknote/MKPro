@@ -286,6 +286,13 @@ std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, Lowering
   }
 
   if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr) {
+    if (expression.expr->kind == "number") {
+      std::string value = trim_ascii(expression.expr->raw.empty() ? expression.expr->text
+                                                                  : expression.expr->raw);
+      value = value.starts_with("-") ? value.substr(1) : "-" + value;
+      api.emit_number_or_preload(value, std::nullopt, std::nullopt);
+      return true;
+    }
     if (const std::optional<double> folded =
             numeric_value_of_expression(expression, context.constants);
         folded.has_value()) {

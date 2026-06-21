@@ -14620,7 +14620,7 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
   if (expression.kind != "number" && expression.kind != "identifier") {
     const std::optional<double> folded = numeric_value_of_expression(context, expression);
     if (folded.has_value() && std::isfinite(*folded)) {
-      context.emitter.emit_number(format_number_literal(*folded));
+      emit_number_or_preload(context, format_number_literal(*folded));
       context.optimizations.push_back(OptimizationReport{
           .name = "expression-constant-folder",
           .detail = "Folded a compile-time expression to " + format_number_literal(*folded) + ".",
@@ -19615,24 +19615,16 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
   if (statement.op == "-=" && statement.expr == "1")
     return lower_decrement_update(context, *statement.target, "set ");
 
-  int opcode = 0;
-  std::string mnemonic;
-  if (statement.op == "+=") {
-    opcode = 0x10;
-    mnemonic = "+";
-  } else if (statement.op == "-=") {
-    opcode = 0x11;
-    mnemonic = "-";
-  } else {
+  if (statement.op != "+=" && statement.op != "-=")
     return false;
-  }
-  emit_recall(context, *statement.target);
-  const Expression expression = parse_expression(*statement.expr, statement.line);
-  if (!lower_expression_to_x(context, expression))
+
+  Expression target = identifier_expression(*statement.target);
+  Expression delta = parse_expression(*statement.expr, statement.line);
+  Expression update =
+      statement.op == "+=" ? add_expression(std::move(target), std::move(delta))
+                           : subtract_expression(std::move(target), std::move(delta));
+  if (!lower_expression_to_x(context, update))
     return false;
-  context.emitter.emit_op(opcode, mnemonic, "expr " + mnemonic, statement.line);
-  context.emitter.current_x_variable.reset();
-  context.emitter.current_x_aliases.clear();
   emit_store(context, *statement.target, "set " + *statement.target);
   return true;
 }
