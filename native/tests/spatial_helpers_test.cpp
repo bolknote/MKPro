@@ -79,6 +79,33 @@ program SpatialLineProgressionHelperReports {
   require(has_optimization(line_progression, "spatial-line-progression-helper"),
           "small-board line_count should emit the TS spatial line-progression helper body");
 
+  const CompileResult shared_line_count = compile_source(R"mkpro(
+program SpatialLineCountSharedHelperReports {
+  field: board(1..4, 1..4)
+
+  state {
+    cell: coord(field)
+    a: cells(field) = 0
+    b: cells(field) = 0
+    left: counter 0..9 = 0
+    right: counter 0..9 = 0
+  }
+
+  loop {
+    cell = read()
+    left = line_count(a, cell)
+    right = line_count(b, cell)
+    halt(left + right)
+  }
+}
+)mkpro",
+                                                         options);
+  require_clean_compile(shared_line_count, "shared spatial line_count helper");
+  require(has_optimization(shared_line_count, "spatial-line-count-helper-call"),
+          "repeated line_count groups should call the TS shared line_count helper");
+  require(has_optimization(shared_line_count, "spatial-line-count-helper"),
+          "repeated line_count groups should emit the TS shared line_count helper body");
+
   CompileOptions segmented_options = options;
   segmented_options.segmented_bitplanes = true;
   const CompileResult segmented_sum = compile_source(R"mkpro(

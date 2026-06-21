@@ -5218,9 +5218,18 @@ void collect_locals_from_expression_excluding(LoweringContext& context,
         add_coord_list_line_count_expression_scratch(collection);
       } else {
         collection.needs_line_count_scratch = true;
-        if (!expression.args.empty() && expression.args.front().kind == "identifier" &&
-            !is_segmented_cells_name(context, expression.args.front().name)) {
-          add_register_variable(collection, spatial_hit_scratch_name(expression.args.front().name));
+        if (!expression.args.empty() && expression.args.front().kind == "identifier") {
+          const std::string& mask_name = expression.args.front().name;
+          const auto count_it = context.expression_call_counts.find("line_count");
+          const bool share_line_count_mask =
+              count_it != context.expression_call_counts.end() && count_it->second > 1;
+          if (share_line_count_mask) {
+            const std::string mask_scratch = core::emit::spatial_count_mask_scratch_name();
+            add_register_variable(collection, mask_scratch);
+            add_register_variable(collection, spatial_hit_scratch_name(mask_scratch));
+          } else if (!is_segmented_cells_name(context, mask_name)) {
+            add_register_variable(collection, spatial_hit_scratch_name(mask_name));
+          }
           const V2StateField* field = state_field_named(context, expression.args.front().name);
           const auto board_it = field != nullptr && field->domain.has_value()
                                     ? context.boards.find(*field->domain)
@@ -5769,6 +5778,24 @@ void collect_show_sequence_use_counts(LoweringContext& context, const V2Program&
     collect_show_sequence_use_counts(rule.body, context.show_sequence_use_counts);
 }
 
+std::optional<std::string> line_count_group_key_for(const LoweringContext& context,
+                                                    const Expression& mask,
+                                                    const Expression& cell) {
+  if (mask.kind != "identifier")
+    return std::nullopt;
+  const V2StateField* field = state_field_named(context, mask.name);
+  if (field == nullptr || field->type != "cells" || !field->domain.has_value())
+    return std::nullopt;
+  const auto board_it = context.boards.find(*field->domain);
+  if (board_it == context.boards.end())
+    return std::nullopt;
+  const V2Board& board = *board_it->second;
+  std::ostringstream key;
+  key << board.name << ":" << board.x_min << ":" << board.x_max << ":" << board.y_min << ":"
+      << board.y_max << ":" << expression_to_json(cell);
+  return key.str();
+}
+
 void collect_expression_use_count(LoweringContext& context, const Expression& expression) {
   ++context.expression_use_counts[expression_to_json(expression)];
   if (expression.kind == "indexed" && expression.index != nullptr)
@@ -5782,7 +5809,14 @@ void collect_expression_use_count(LoweringContext& context, const Expression& ex
       collect_expression_use_count(context, *expression.right);
   }
   if (expression.kind == "call") {
-    ++context.expression_call_counts[lower_ascii(expression.callee)];
+    const std::string callee = lower_ascii(expression.callee);
+    ++context.expression_call_counts[callee];
+    if (callee == "line_count" && expression.args.size() == 2) {
+      if (const std::optional<std::string> key =
+              line_count_group_key_for(context, expression.args.at(0), expression.args.at(1))) {
+        ++context.line_count_group_counts[*key];
+      }
+    }
     for (const Expression& arg : expression.args)
       collect_expression_use_count(context, arg);
   }
@@ -5836,6 +5870,7 @@ void collect_expression_use_counts(LoweringContext& context,
 void collect_expression_use_counts(LoweringContext& context, const V2Program& program) {
   context.expression_use_counts.clear();
   context.expression_call_counts.clear();
+  context.line_count_group_counts.clear();
   collect_expression_use_counts(context, program.body);
   for (const V2Rule& rule : program.rules)
     collect_expression_use_counts(context, rule.body);
@@ -9713,6 +9748,38 @@ std::string spatial_line_progression_helper_label(LoweringContext& context, cons
   return label;
 }
 
+std::optional<std::string> shared_line_count_helper_label(LoweringContext& context,
+                                                          const Expression& mask,
+                                                          const Expression& cell,
+                                                          const V2Board& board) {
+  const auto call_count_it = context.expression_call_counts.find("line_count");
+  if (call_count_it == context.expression_call_counts.end() || call_count_it->second < 2)
+    return std::nullopt;
+  if (mask.kind != "identifier")
+    return std::nullopt;
+  if (!context.register_index_by_name.contains(core::emit::spatial_count_mask_scratch_name()))
+    return std::nullopt;
+  const std::optional<std::string> key = line_count_group_key_for(context, mask, cell);
+  if (!key.has_value())
+    return std::nullopt;
+  const auto group_count_it = context.line_count_group_counts.find(*key);
+  if (group_count_it == context.line_count_group_counts.end() || group_count_it->second < 2)
+    return std::nullopt;
+  const auto existing = context.line_count_helper_labels.find(*key);
+  if (existing != context.line_count_helper_labels.end())
+    return existing->second;
+  const std::string label = context.emitter.fresh_label("__line_count");
+  context.line_count_helper_labels[*key] = label;
+  context.line_count_helpers.push_back(LineCountHelperRequest{
+      .key = *key,
+      .label = label,
+      .cell = cell,
+      .board = board,
+      .counter = spatial_count_counter_name(context),
+  });
+  return label;
+}
+
 bool lower_expression_with_stack_carried_left_literal(LoweringContext& context,
                                                       const Expression& expression,
                                                       int carried_literal) {
@@ -9749,6 +9816,22 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
   if (context.segmented_line_count_scan && is_segmented_cells_name(context, mask.name) &&
       lower_segmented_bitplane_line_count_scan_to_x(context, mask.name, cell, 0)) {
     return true;
+  }
+  if (!is_segmented_cells_name(context, mask.name)) {
+    if (const std::optional<std::string> helper =
+            shared_line_count_helper_label(context, mask, cell, *board)) {
+      if (!lower_expression_to_x(context, mask))
+        return false;
+      context.emitter.emit_jump(0x53, "ПП", *helper, "line_count " + mask.name);
+      context.emitter.current_x_variable.reset();
+      context.emitter.current_x_expression.reset();
+      context.emitter.current_x_aliases.clear();
+      context.optimizations.push_back(OptimizationReport{
+          .name = "spatial-line-count-helper-call",
+          .detail = "Reused shared line_count helper for " + mask.name + ".",
+      });
+      return true;
+    }
   }
   if (!is_segmented_cells_name(context, mask.name) && board->width <= 4 && board->height <= 4) {
     const std::string step = core::emit::spatial_count_step_scratch_name();
@@ -25120,6 +25203,91 @@ bool lower_spatial_hit_helpers(LoweringContext& context) {
   return true;
 }
 
+bool lower_line_count_helper_body(LoweringContext& context, const std::string& hit_mask,
+                                  const Expression& cell, const V2Board& board, int source_line) {
+  context.emitter.emit_number("0");
+  emit_store(context, core::emit::spatial_count_total_scratch_name(), "line_count total");
+
+  if (board.width <= 4 && board.height <= 4 &&
+      context.register_index_by_name.contains(core::emit::spatial_count_step_scratch_name())) {
+    const std::string helper =
+        spatial_line_progression_helper_label(context, hit_mask, cell, "line_count");
+    for (const SpatialProgression& progression : spatial_line_progressions(board, cell)) {
+      context.emitter.emit_number("0");
+      emit_store(context, core::emit::spatial_count_line_scratch_name(), "line_count current line");
+      if (!lower_expression_to_x(context, progression.start_offset))
+        return false;
+      emit_store(context, core::emit::spatial_count_offset_scratch_name(), "line_count offset");
+      if (!lower_expression_to_x(context, progression.step))
+        return false;
+      emit_store(context, core::emit::spatial_count_step_scratch_name(), "line_count step");
+      emit_number_or_preload(context, std::to_string(progression.count), "line_count counter",
+                             source_line);
+      emit_store(context, spatial_count_counter_name(context), "line_count counter");
+      context.emitter.emit_jump(0x53, "ПП", helper, "line_count line progression", source_line);
+      emit_recall(context, core::emit::spatial_count_total_scratch_name());
+      emit_recall(context, core::emit::spatial_count_line_scratch_name());
+      context.emitter.emit_op(0x36, "К max", "line_count best line");
+      emit_store(context, core::emit::spatial_count_total_scratch_name(), "line_count total");
+    }
+    emit_recall(context, core::emit::spatial_count_total_scratch_name());
+    context.optimizations.push_back(OptimizationReport{
+        .name = "spatial-line-progression-helper-call",
+        .detail = "Reused shared line_count line progression helper for " + hit_mask + ".",
+    });
+    return true;
+  }
+
+  const std::string helper = spatial_sum_helper_label(context, hit_mask, cell, "line_count");
+  for (const SpatialProgression& progression : spatial_line_progressions(board, cell)) {
+    if (!lower_expression_to_x(context, progression.start_offset))
+      return false;
+    emit_store(context, core::emit::spatial_count_offset_scratch_name(), "line_count offset");
+    if (!lower_expression_to_x(context, progression.step))
+      return false;
+    emit_store(context, core::emit::spatial_count_line_scratch_name(), "line_count step");
+    const auto counter_it =
+        context.register_index_by_name.find(spatial_count_counter_name(context));
+    const bool helper_takes_counter_in_x =
+        counter_it != context.register_index_by_name.end() &&
+        fl_loop_opcode_for_register(counter_it->second).has_value();
+    if (!is_numeric_literal_value(progression.step, progression.count))
+      emit_number_or_preload(context, std::to_string(progression.count), "line_count counter",
+                             source_line);
+    if (!helper_takes_counter_in_x)
+      emit_store(context, spatial_count_counter_name(context), "line_count counter");
+    context.emitter.emit_jump(0x53, "ПП", helper, "line_count progression", source_line);
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_expression.reset();
+    context.emitter.current_x_aliases.clear();
+  }
+  emit_recall(context, core::emit::spatial_count_total_scratch_name());
+  context.optimizations.push_back(OptimizationReport{
+      .name = "spatial-sum-loop-helper-call",
+      .detail = "Reused shared line_count progression helper for " + hit_mask + ".",
+  });
+  return true;
+}
+
+bool lower_line_count_helpers(LoweringContext& context) {
+  for (const LineCountHelperRequest& helper : context.line_count_helpers) {
+    context.emitter.emit_label(
+        helper.label,
+        {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
+    emit_store(context, core::emit::spatial_count_mask_scratch_name(), "line count mask");
+    if (!lower_line_count_helper_body(context, core::emit::spatial_count_mask_scratch_name(),
+                                      helper.cell, helper.board, 0))
+      return false;
+    context.emitter.emit_op(0x52, "В/О", "line_count return");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "spatial-line-count-helper",
+        .detail = "Emitted shared line_count helper for " + helper.board.name + "/" +
+                  expression_to_source(helper.cell) + ".",
+    });
+  }
+  return true;
+}
+
 bool lower_spatial_line_progression_helpers(LoweringContext& context) {
   for (const SpatialLineProgressionHelperRequest& helper :
        context.spatial_line_progression_helpers) {
@@ -28509,7 +28677,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               lower_packed_display_helpers(context) && lower_display_byte_helpers(context) &&
               lower_show_sequence_helpers(context) && lower_literal_display_helpers(context) &&
               lower_random_cell_helpers(context) && lower_expression_helpers(context) &&
-              lower_near_any_helpers(context) && lower_spatial_line_progression_helpers(context) &&
+              lower_near_any_helpers(context) && lower_line_count_helpers(context) &&
+              lower_spatial_line_progression_helpers(context) &&
               lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
               lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);

@@ -71,6 +71,7 @@ std::string spatial_count_total_scratch_name();
 std::string spatial_count_line_scratch_name();
 std::string spatial_count_offset_scratch_name();
 std::string spatial_count_counter_scratch_name();
+std::string spatial_count_mask_scratch_name();
 std::string spatial_count_step_scratch_name();
 bool is_unsigned_decimal_digits(std::string_view text);
 std::optional<std::string> normalize_display_literal_text(std::string_view text);

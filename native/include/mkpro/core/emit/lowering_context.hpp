@@ -30,6 +30,14 @@ struct SpatialLineProgressionHelperRequest {
   std::string operation;
 };
 
+struct LineCountHelperRequest {
+  std::string key;
+  std::string label;
+  Expression cell;
+  V2Board board;
+  std::string counter;
+};
+
 struct SpatialHitHelperRequest {
   std::string mask;
   std::string scratch;
@@ -149,6 +157,9 @@ struct LoweringContext {
   std::set<std::string> scaled_coord_line_count_targets;
   std::set<std::string> scaled_coord_variables;
   std::set<std::string> removable_coord_lists;
+  std::map<std::string, int> line_count_group_counts;
+  std::map<std::string, std::string> line_count_helper_labels;
+  std::vector<LineCountHelperRequest> line_count_helpers;
   std::map<std::string, std::string> segmented_hit_helpers;
   std::vector<std::string> segmented_hit_helper_order;
   std::optional<std::string> bit_mask_helper;

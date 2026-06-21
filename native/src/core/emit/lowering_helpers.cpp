@@ -182,6 +182,10 @@ std::string spatial_count_counter_scratch_name() {
   return std::string(k_spatial_count_scratch_prefix) + "counter";
 }
 
+std::string spatial_count_mask_scratch_name() {
+  return std::string(k_spatial_count_scratch_prefix) + "mask";
+}
+
 std::string spatial_count_step_scratch_name() {
   return std::string(k_spatial_count_scratch_prefix) + "step";
 }
