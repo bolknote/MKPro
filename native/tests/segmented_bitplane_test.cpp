@@ -181,6 +181,38 @@ program SegmentedClear {
   require(scan.steps.size() < baseline.steps.size(),
           "segmented line_count scan should be smaller than the baseline segmented variant");
 
+  const CompileResult condition_helper = compile_segmented_scan(R"mkpro(
+program SegmentedConditionHelper {
+  field: board(0..9, 0..9)
+
+  state {
+    cell: coord(field)
+    foxes: cells(field) = random()
+    hit_value: packed = -20
+    bearing: counter 0..9 = 0
+  }
+
+  loop {
+    cell = read()
+    if cell in foxes {
+      show(hit_value)
+    }
+    bearing = line_count(foxes, cell)
+    halt(bearing)
+  }
+}
+)mkpro");
+  require(condition_helper.implemented,
+          "segmented bitplane condition-helper program should compile");
+  require(condition_helper.diagnostics.empty(),
+          "segmented bitplane condition-helper program should not report diagnostics");
+  require(has_optimization(condition_helper, "segmented-bitplane-condition-helper"),
+          "segmented membership before line_count should report the TS condition helper");
+  require(has_optimization(condition_helper, "segmented-bitplane-line-count-scan"),
+          "segmented membership helper program should still use the line_count scan");
+  require(!has_optimization(condition_helper, "spatial-hit-condition-helper"),
+          "segmented membership should not report ordinary spatial-hit condition helper");
+
   const CompileResult fox_hunt = compile_segmented(kSegmentedFoxHuntProgram);
   require(fox_hunt.implemented,
           "native compiler should lower counted segmented random setup program");

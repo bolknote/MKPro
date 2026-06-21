@@ -14135,6 +14135,50 @@ bool lower_cells_contains_false_branch_with_spatial_hit_helper(
   return true;
 }
 
+bool lower_segmented_bitplane_condition_false_branch(
+    LoweringContext& context, const V2Predicate& predicate, const std::string& false_label,
+    int source_line, std::optional<std::string> branch_comment) {
+  if (predicate.kind != "v2_compare" ||
+      !is_zero_expression(context, parse_expression(predicate.right, source_line)))
+    return false;
+  if (predicate.op != "==" && predicate.op != "!=" && predicate.op != ">=" && predicate.op != "<")
+    return false;
+  const Expression left = parse_expression(predicate.left, source_line);
+  if (left.kind != "call" || lower_ascii(left.callee) != "bit_has" || left.args.size() != 2U)
+    return false;
+  const Expression& collection = left.args.at(0);
+  if (collection.kind != "identifier" || !is_segmented_cells_name(context, collection.name))
+    return false;
+  if (!lower_segmented_bitplane_hit_to_x(context, collection.name, left.args.at(1), source_line))
+    return false;
+
+  int branch_opcode = 0;
+  std::string branch_mnemonic;
+  if (predicate.op == "==") {
+    branch_opcode = 0x5e;
+    branch_mnemonic = "F x=0";
+  } else if (predicate.op == "!=") {
+    branch_opcode = 0x57;
+    branch_mnemonic = "F x!=0";
+  } else if (predicate.op == ">=") {
+    branch_opcode = 0x59;
+    branch_mnemonic = "F x>=0";
+  } else {
+    branch_opcode = 0x5c;
+    branch_mnemonic = "F x<0";
+  }
+  context.emitter.emit_jump(branch_opcode, branch_mnemonic, false_label,
+                            branch_comment.value_or("false branch for " + predicate.op),
+                            source_line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "segmented-bitplane-condition-helper",
+      .detail = "Tested " + collection.name +
+                " through the shared segmented bitplane helper at line " +
+                std::to_string(source_line) + ".",
+  });
+  return true;
+}
+
 std::string swap_comparison_sides_op(const std::string& op) {
   if (op == "<")
     return ">";
@@ -14930,6 +14974,12 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
     return false;
 
   if (lower_small_set_condition_false_branch(context, selected_predicate, false_label, source_line))
+    return true;
+  if (has_errors(context.diagnostics))
+    return false;
+
+  if (lower_segmented_bitplane_condition_false_branch(context, selected_predicate, false_label,
+                                                      source_line, branch_comment))
     return true;
   if (has_errors(context.diagnostics))
     return false;
