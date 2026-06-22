@@ -534,12 +534,44 @@ plan_formatted_coord_report_template(const LoweringContext& context,
   };
 }
 
+std::optional<std::string> literal_only_display_text(const std::vector<DisplayItem>& items) {
+  std::string literal;
+  for (const DisplayItem& item : items) {
+    if (item.kind != "literal")
+      return std::nullopt;
+    literal += item.text;
+  }
+  return literal;
+}
+
+bool literal_needs_first_splice_scratch(const std::string& literal) {
+  if (should_use_preloaded_display_literal(literal))
+    return true;
+  if (decimal_display_literal_number(literal).has_value())
+    return false;
+  if (zero_digit_tail_display_program(literal).has_value())
+    return false;
+  if (sign_digit_literal_display_program(literal).has_value())
+    return false;
+  const std::optional<DisplayLiteralProgram> direct = display_literal_program(literal);
+  if (direct.has_value() && direct->kind != "error")
+    return false;
+  return signed_first_splice_display_literal_program(literal).has_value() ||
+         exponent_tail_display_literal_program(literal).has_value() ||
+         first_splice_display_literal_program(literal).has_value();
+}
+
 void collect_display_scratch_register_names(const V2Statement& statement,
                                             std::vector<std::string>& names) {
   if (statement.kind == "v2_show" && statement.items.has_value() &&
       looks_like_mantissa_exponent_display_template(*statement.items)) {
     names.push_back("__display_value_" + std::to_string(statement.line));
     names.push_back("__display_loop_" + std::to_string(statement.line));
+  }
+  if (statement.kind == "v2_show" && statement.items.has_value()) {
+    const std::optional<std::string> literal = literal_only_display_text(*statement.items);
+    if (literal.has_value() && literal_needs_first_splice_scratch(*literal))
+      names.push_back(first_splice_display_scratch_name(statement.line));
   }
   for (const V2Statement& child : statement.body)
     collect_display_scratch_register_names(child, names);
@@ -556,6 +588,10 @@ void collect_display_scratch_register_names(const V2Statement& statement,
 }
 
 } // namespace
+
+std::string first_splice_display_scratch_name(int source_line) {
+  return "__display_first_" + std::to_string(source_line);
+}
 
 bool items_match_formatted_coord_report_shape(const std::vector<DisplayItem>& items) {
   if (items.size() != 4U)
@@ -625,13 +661,7 @@ std::vector<std::string> display_scratch_register_names_for_program(const V2Prog
 }
 
 std::optional<std::string> collapse_literal_only_display(const std::vector<DisplayItem>& items) {
-  std::string literal;
-  for (const DisplayItem& item : items) {
-    if (item.kind != "literal")
-      return std::nullopt;
-    literal += item.text;
-  }
-  return literal;
+  return literal_only_display_text(items);
 }
 
 bool emit_display_literal_program_to_x(MachineEmitter& emitter,

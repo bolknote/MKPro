@@ -205,6 +205,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.general_constant_preloads = true;
     } else if (arg == "--dual-use-constant-indirect-flow") {
       options.dual_use_constant_indirect_flow = true;
+    } else if (arg == "--indirect-underflow-decrement") {
+      options.indirect_underflow_decrement = true;
     } else if (arg == "--tail-branch-inversion") {
       options.tail_branch_inversion = true;
     } else if (arg == "--conditional-branch-trampoline") {
@@ -212,8 +214,18 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
     } else if (arg == "--preloaded-indirect-flow") {
       options.preloaded_indirect_flow = true;
       options.aggressive_post_layout_indirect_flow = true;
+    } else if (arg == "--runtime-indirect-call-flow") {
+      options.runtime_indirect_call_flow = true;
     } else if (arg == "--aggressive-post-layout-indirect-flow") {
       options.aggressive_post_layout_indirect_flow = true;
+    } else if (arg == "--dead-source-residual-temp-reuse") {
+      options.dead_source_residual_temp_reuse = true;
+    } else if (arg == "--suppress-constant-preload") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --suppress-constant-preload\n";
+        return 64;
+      }
+      options.suppress_constant_preloads.insert(args[++index]);
     } else if (arg == "--force-register-share") {
       if (index + 1 >= args.size()) {
         std::cerr << "missing value for --force-register-share\n";

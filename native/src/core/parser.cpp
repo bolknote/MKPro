@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -862,6 +863,7 @@ StateFieldAst lower_v2_state_field(const V2StateField& field) {
   lowered.min = field.min;
   lowered.max = field.max;
   lowered.initial_stack = field.initial_stack;
+  lowered.implicit = field.implicit;
   lowered.line = field.line;
   if (field.initial.has_value()) {
     try {
@@ -938,6 +940,7 @@ private:
       const SourceLine line = peek();
       if (line.text == "}") {
         ++index_;
+        append_implicit_read_state_fields(program);
         return program;
       }
       if (starts_with(line.text, "requires ")) {
@@ -993,6 +996,46 @@ private:
       throw ParseError("Program requirement must look like 'requires angle_mode(grd)'", line.line);
     }
     program.angle_mode = V2ProgramRequirement{.mode = "grd", .line = line.line};
+  }
+
+  void append_implicit_read_state_fields(V2Program& program) {
+    std::set<std::string> declared;
+    for (const V2StateField& field : program.state)
+      declared.insert(field.name);
+
+    std::vector<V2StateField> implicit_fields;
+    auto add = [&](const std::string& name, int line) {
+      if (!declared.insert(name).second)
+        return;
+      implicit_fields.push_back(V2StateField{
+          .name = name,
+          .type = "packed",
+          .implicit = true,
+          .line = line,
+      });
+    };
+
+    const auto visit_action = [&](const V2StatementPtr& action, const auto& self) -> void {
+      if (action != nullptr)
+        self(std::vector<V2Statement>{*action}, self);
+    };
+    const auto visit = [&](const std::vector<V2Statement>& statements, const auto& self) -> void {
+      for (const V2Statement& statement : statements) {
+        if (statement.kind == "v2_read" && statement.target.has_value())
+          add(*statement.target, statement.line);
+        self(statement.body, self);
+        self(statement.then_body, self);
+        self(statement.else_body, self);
+        for (const V2MatchCase& match_case : statement.cases)
+          visit_action(match_case.action, self);
+        visit_action(statement.otherwise, self);
+      }
+    };
+
+    visit(program.body, visit);
+    for (const V2Rule& rule : program.rules)
+      visit(rule.body, visit);
+    program.state.insert(program.state.end(), implicit_fields.begin(), implicit_fields.end());
   }
 
   V2Const parse_const(const SourceLine& line) {

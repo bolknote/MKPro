@@ -74,8 +74,8 @@ program FormattedCoordReportRun {
           "coord_list formatted report compile should not report diagnostics");
   require(formatted_report.registers.find("__coord_list_dx") != formatted_report.registers.end(),
           "coord_list formatted report should reserve the dx scratch register");
-  require(formatted_report.registers.find("__coord_list_dy") != formatted_report.registers.end(),
-          "coord_list formatted report should reserve the dy scratch register");
+  require(formatted_report.registers.find("__coord_list_dy") == formatted_report.registers.end(),
+          "coord_list formatted report should keep dy on the stack like the TS lowering");
   require(has_optimization(formatted_report, "coord-list-line-count-formatted-report-body"),
           "coord_list formatted report should report the TS packed body strategy");
   require(has_optimization(formatted_report, "formatted-coord-report-packed-body"),

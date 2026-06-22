@@ -380,6 +380,62 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    auto require_kept_constant_indexed_access = [](std::vector<IrOp> ops, std::string target_register,
+                                                  const std::string& fixture) {
+      for (IrOp& op : ops) {
+        if (op.kind == IrKind::Store && op.register_name == target_register)
+          op.meta.comment = "set slots_2";
+        if (op.kind == IrKind::Recall && op.register_name == target_register)
+          op.meta.comment = "recall slots_2";
+      }
+      const std::vector<MachineItem> items = lower_ir_to_machine(ops);
+      CompileOptions options;
+      options.disable_interprocedural_opts = true;
+      const core::passes::RunPassesResult result = core::passes::run_ir_passes(items, options);
+      const bool kept_store =
+          std::any_of(result.items.begin(), result.items.end(), [](const MachineItem& item) {
+            return item.kind == MachineItemKind::Op && item.comment == "set slots_2";
+          });
+      const bool kept_recall =
+          std::any_of(result.items.begin(), result.items.end(), [](const MachineItem& item) {
+            return item.kind == MachineItemKind::Op && item.comment == "recall slots_2";
+          });
+      require(kept_store, "run_ir_passes removed live constant-indexed state store in " + fixture);
+      require(kept_recall,
+              "run_ir_passes removed live constant-indexed state recall in " + fixture);
+    };
+    require_kept_constant_indexed_access(
+        {stop("read x"), store("2"), plain(0x00), store("0"), recall("2"), stop("halt")},
+        "2", "stored-dead-x fixture");
+    require_kept_constant_indexed_access(
+        {stop("read x"), store("2"), plain(0x00), recall("2"), stop("halt")},
+        "2", "literal-invalidated-x fixture");
+    require_kept_constant_indexed_access({label("loop"), stop("read x"), store("2"), plain(0x00),
+                                          store("0"), recall("2"), stop("halt"),
+                                          jump_to("loop")},
+                                         "2", "looping stored-dead-x fixture");
+    require_kept_constant_indexed_access({label("loop"), stop("read x"), store("0"), plain(0x00),
+                                          store("1"), recall("0"), stop("halt"),
+                                          jump_to("loop")},
+                                         "0", "looping-r0-target fixture");
+    require_kept_constant_indexed_access({label("loop"), stop("read x"), store("1"), store("0"),
+                                          plain(0x00), store("1"), recall("0"), stop("halt"),
+                                          jump_to("loop")},
+                                         "0", "stale-register-memory-alias fixture");
+    const std::vector<MachineItem> stale_alias_items = lower_ir_to_machine(
+        {label("loop"), stop("read x"), store("1"), store("0"), plain(0x00), store("1"),
+         recall("0"), stop("halt"), jump_to("loop")});
+    CompileOptions stale_alias_options;
+    stale_alias_options.disable_interprocedural_opts = true;
+    const core::passes::RunPassesResult stale_alias_result =
+        core::passes::run_ir_passes(stale_alias_items, stale_alias_options);
+    require(stale_alias_result.pass_counts.at("dead-store-elimination") == 2,
+            "stale register memory alias fixture should match TS dead-store count");
+    require(stale_alias_result.pass_counts.at("store-recall-peephole") == 0,
+            "stale register memory alias fixture should not remove the live recall");
+  }
+
+  {
     const core::passes::PassResult result = run_redundant_prologue({
         label("head"),
         recall("1"),
@@ -898,6 +954,18 @@ void pass_pipeline_matches_initial_typescript_contract() {
 
   {
     const core::passes::PassResult result =
+        run_store_recall_peephole({recall("2"), store("2"), plain(0x00), store("0"),
+                                   recall("2"), stop("halt")});
+    require(result.applied == 0,
+            "store-recall-peephole removed recall after a decimal literal overwrote X");
+    require(result.ops.size() == 6,
+            "store-recall-peephole changed literal-invalidated recall proof fixture");
+    require(result.ops.at(4).kind == IrKind::Recall,
+            "store-recall-peephole dropped the recall needed after literal entry");
+  }
+
+  {
+    const core::passes::PassResult result =
         run_store_recall_peephole({known_target_indirect_store("8", "2"),
                                    known_target_indirect_recall("8", "2"), stop("halt")});
     require(result.applied == 1,
@@ -996,6 +1064,29 @@ void pass_pipeline_matches_initial_typescript_contract() {
             "recall-removal scheduler accepted an invalidated duplicate-Y producer");
     require(!plan->removable,
             "recall-removal scheduler removed recall with invalidated duplicate-Y producer");
+  }
+
+  {
+    IrOp preload_c = recall("c");
+    preload_c.meta.comment = "preload const 100";
+    IrOp preload_d = recall("d");
+    preload_d.meta.comment = "preload const 100";
+    const std::vector<IrOp> program = {preload_c, preload_d, stop("halt")};
+    core::passes::X2ValueStatesOptions value_options;
+    value_options.track_register_memory = true;
+    const auto x2_value_states =
+        core::passes::compute_x2_value_states(program, value_options);
+    const core::passes::DirectReturnAnalysisContext context =
+        core::passes::direct_return_analysis_context(program);
+
+    const std::optional<core::passes::RecallRemovalAnalysis> analysis =
+        core::passes::analyze_recall_removal(program, 1, std::nullopt,
+                                             x2_value_states.at(1), &context);
+    require(analysis.has_value(), "recall-removal analysis rejected preload value fixture");
+    require(analysis->value_proof.has_value() && analysis->value_proof->in_x,
+            "recall-removal did not prove preloaded constant already in X");
+    require(analysis->redundant_sync_value,
+            "recall-removal did not prove preloaded constant already synced in X2");
   }
 
   {

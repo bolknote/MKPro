@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <regex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -830,6 +831,8 @@ using StackDifferenceDepth = int;
 std::optional<StackDifferenceDepth> shift_difference(StackDifferenceDepth depth) {
   if (depth == 1)
     return 2;
+  if (depth == 2)
+    return 3;
   return std::nullopt;
 }
 
@@ -848,7 +851,8 @@ std::vector<int> stack_difference_call_return_indexes(const std::vector<IrOp>& o
     const int next = static_cast<int>(index + 1U);
     if (next >= static_cast<int>(ops.size()))
       continue;
-    if (op.kind == IrKind::Call || op.kind == IrKind::IndirectCall)
+    if (op.kind == IrKind::Call ||
+        (op.kind == IrKind::IndirectCall && known_indirect_flow_target(op).has_value()))
       returns.push_back(next);
   }
   return returns;
@@ -1255,12 +1259,264 @@ bool optional_shape_sets_intersect(const X2ShapeSet& left,
   return false;
 }
 
+namespace {
+
+std::string trim_ascii_copy(std::string value) {
+  const auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
+    return std::isspace(ch) != 0;
+  });
+  const auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) {
+    return std::isspace(ch) != 0;
+  }).base();
+  if (first >= last)
+    return {};
+  return std::string(first, last);
+}
+
+std::string replace_char_copy(std::string value, char from, char to) {
+  std::replace(value.begin(), value.end(), from, to);
+  return value;
+}
+
+std::optional<std::string> normalize_plain_decimal(std::string raw) {
+  raw = trim_ascii_copy(raw);
+  static const std::regex pattern(R"(^(-?)(?:([0-9]+)(?:\.([0-9]+))?|\.([0-9]+))$)");
+  std::smatch match;
+  if (!std::regex_match(raw, match, pattern))
+    return std::nullopt;
+
+  const std::string sign = match[1].str();
+  std::string integer = match[2].matched ? match[2].str() : "0";
+  std::string fraction = match[3].matched ? match[3].str()
+                         : match[4].matched ? match[4].str()
+                                            : std::string{};
+
+  const auto non_zero_integer = integer.find_first_not_of('0');
+  integer = non_zero_integer == std::string::npos ? "0" : integer.substr(non_zero_integer);
+  while (!fraction.empty() && fraction.back() == '0')
+    fraction.pop_back();
+
+  const std::string normalized = fraction.empty() ? integer : integer + "." + fraction;
+  if (normalized == "0")
+    return std::string{"0"};
+  return sign + normalized;
+}
+
+std::optional<std::string> scaled_decimal_digits(const std::string& digits, int scale) {
+  if (digits.empty() ||
+      !std::all_of(digits.begin(), digits.end(),
+                   [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
+    return std::nullopt;
+  }
+  if (scale <= 0)
+    return digits + std::string(static_cast<std::size_t>(-scale), '0');
+  const int point = static_cast<int>(digits.size()) - scale;
+  if (point > 0)
+    return digits.substr(0, static_cast<std::size_t>(point)) + "." +
+           digits.substr(static_cast<std::size_t>(point));
+  return "0." + std::string(static_cast<std::size_t>(-point), '0') + digits;
+}
+
+std::optional<std::string> normalize_preloaded_decimal_literal(std::string input) {
+  input = replace_char_copy(trim_ascii_copy(std::move(input)), ',', '.');
+  static const std::regex pattern(
+      R"(^(-?)(?:([0-9]+)(?:\.([0-9]*))?|\.([0-9]+))(?:[eE]([+-]?[0-9]{1,2}))?$)");
+  std::smatch match;
+  if (!std::regex_match(input, match, pattern))
+    return std::nullopt;
+
+  const std::string sign = match[1].str();
+  const std::string integer = match[2].matched ? match[2].str() : "0";
+  const std::string fraction = match[3].matched ? match[3].str()
+                               : match[4].matched ? match[4].str()
+                                                  : std::string{};
+  const int exponent = match[5].matched ? std::stoi(match[5].str()) : 0;
+  if (std::abs(exponent) > 64)
+    return std::nullopt;
+
+  std::string digits = integer + fraction;
+  const auto non_zero = digits.find_first_not_of('0');
+  digits = non_zero == std::string::npos ? "0" : digits.substr(non_zero);
+  const int scale = static_cast<int>(fraction.size()) - exponent;
+  if (static_cast<int>(digits.size()) + std::max(0, -scale) > 80)
+    return std::nullopt;
+  const std::optional<std::string> unsigned_value = scaled_decimal_digits(digits, scale);
+  if (!unsigned_value.has_value())
+    return std::nullopt;
+  return normalize_plain_decimal(sign + *unsigned_value);
+}
+
+int significant_decimal_digits(const std::string& input) {
+  const std::string unsigned_value = input.starts_with('-') ? input.substr(1) : input;
+  const std::size_t dot = unsigned_value.find('.');
+  std::string digits = dot == std::string::npos
+                           ? unsigned_value
+                           : unsigned_value.substr(0, dot) + unsigned_value.substr(dot + 1U);
+  const auto first = digits.find_first_not_of('0');
+  if (first == std::string::npos)
+    return 1;
+  digits = digits.substr(first);
+  if (dot == std::string::npos) {
+    while (!digits.empty() && digits.back() == '0')
+      digits.pop_back();
+  }
+  return static_cast<int>(std::max<std::size_t>(1U, digits.size()));
+}
+
+X2ValueFact decimal_value_fact(const std::string& value, std::string_view flavor) {
+  return "decimal:" + value + ":" + std::string(flavor);
+}
+
+X2ShapeFact decimal_mantissa_shape_fact(const std::string& value) {
+  return "mantissa:" + value + ":decimal";
+}
+
+std::optional<X2ShapeFact> exact_decimal_display_shape_fact(const std::string& value) {
+  const std::optional<std::string> normalized = normalize_plain_decimal(value);
+  if (!normalized.has_value() || significant_decimal_digits(*normalized) > 8)
+    return std::nullopt;
+  if (*normalized == "0")
+    return decimal_mantissa_shape_fact("0");
+  const std::string unsigned_value =
+      normalized->starts_with('-') ? normalized->substr(1) : *normalized;
+  const std::size_t dot = unsigned_value.find('.');
+  const std::string integer = dot == std::string::npos ? unsigned_value : unsigned_value.substr(0, dot);
+  const std::string fraction = dot == std::string::npos ? std::string{} : unsigned_value.substr(dot + 1U);
+  if (integer != "0" && integer.size() + fraction.size() <= 8U)
+    return decimal_mantissa_shape_fact(*normalized);
+  return std::nullopt;
+}
+
+std::optional<std::string> preloaded_constant_literal(const IrOp* op) {
+  if (op == nullptr || !op->meta.comment.has_value())
+    return std::nullopt;
+  const std::string& comment = *op->meta.comment;
+  const std::string lower = lower_ascii(comment);
+  std::size_t marker = lower.find("preload const");
+  while (marker != std::string::npos) {
+    if (marker == 0 || lower.at(marker - 1U) == ';')
+      break;
+    marker = lower.find("preload const", marker + 1U);
+  }
+  if (marker == std::string::npos)
+    return std::nullopt;
+  std::size_t start = marker + std::string_view{"preload const"}.size();
+  while (start < comment.size() && std::isspace(static_cast<unsigned char>(comment.at(start))) != 0)
+    ++start;
+  const std::size_t semicolon = comment.find(';', start);
+  std::string literal = trim_ascii_copy(comment.substr(start, semicolon == std::string::npos
+                                                                 ? std::string::npos
+                                                                 : semicolon - start));
+  std::string lower_literal = lower_ascii(literal);
+  std::size_t suffix = std::string::npos;
+  for (std::string_view word : {" base", " left", " right", " stack"}) {
+    const std::size_t found = lower_literal.find(word);
+    if (found != std::string::npos)
+      suffix = std::min(suffix, found);
+  }
+  if (suffix != std::string::npos)
+    literal = trim_ascii_copy(literal.substr(0, suffix));
+  return literal.empty() ? std::nullopt : std::optional<std::string>{literal};
+}
+
+X2ValueSet preloaded_constant_value_facts(const IrOp* op) {
+  const std::optional<std::string> literal = preloaded_constant_literal(op);
+  const std::optional<std::string> decimal =
+      literal.has_value() ? normalize_preloaded_decimal_literal(*literal) : std::nullopt;
+  return decimal.has_value() ? X2ValueSet{decimal_value_fact(*decimal, "normalized")} : X2ValueSet{};
+}
+
+X2ShapeSet preloaded_constant_shape_facts(const IrOp* op) {
+  const std::optional<std::string> literal = preloaded_constant_literal(op);
+  const std::optional<std::string> decimal =
+      literal.has_value() ? normalize_preloaded_decimal_literal(*literal) : std::nullopt;
+  if (!decimal.has_value())
+    return {};
+  const std::optional<X2ShapeFact> shape = exact_decimal_display_shape_fact(*decimal);
+  return shape.has_value() ? X2ShapeSet{*shape} : X2ShapeSet{};
+}
+
+} // namespace
+
+std::optional<std::string> x2_value_fact_restored_visible_decimal(const X2ValueFact& fact) {
+  constexpr std::string_view prefix = "decimal:";
+  constexpr std::string_view normalized_suffix = ":normalized";
+  constexpr std::string_view unnormalized_suffix = ":unnormalized";
+  if (!fact.starts_with(prefix))
+    return std::nullopt;
+  if (fact.ends_with(normalized_suffix)) {
+    return normalize_plain_decimal(
+        fact.substr(prefix.size(), fact.size() - prefix.size() - normalized_suffix.size()));
+  }
+  if (fact.ends_with(unnormalized_suffix)) {
+    return normalize_plain_decimal(
+        fact.substr(prefix.size(), fact.size() - prefix.size() - unnormalized_suffix.size()));
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> x2_shape_fact_restored_visible_decimal(const X2ShapeFact& fact) {
+  constexpr std::string_view mantissa_prefix = "mantissa:";
+  constexpr std::string_view decimal_suffix = ":decimal";
+  if (!fact.starts_with(mantissa_prefix) || !fact.ends_with(decimal_suffix))
+    return std::nullopt;
+  return fact.substr(mantissa_prefix.size(),
+                     fact.size() - mantissa_prefix.size() - decimal_suffix.size());
+}
+
+std::set<std::string>
+x2_value_shape_set_restored_visible_decimals(const X2ValueSet* values,
+                                             const X2ShapeSet* shapes) {
+  std::set<std::string> output;
+  if (values != nullptr) {
+    for (const X2ValueFact& fact : *values) {
+      if (const std::optional<std::string> visible =
+              x2_value_fact_restored_visible_decimal(fact)) {
+        output.insert(*visible);
+      }
+    }
+  }
+  if (shapes != nullptr) {
+    for (const X2ShapeFact& fact : *shapes) {
+      if (const std::optional<std::string> visible =
+              x2_shape_fact_restored_visible_decimal(fact)) {
+        output.insert(*visible);
+      }
+    }
+  }
+  return output;
+}
+
+bool string_sets_intersect(const std::set<std::string>& left,
+                           const std::set<std::string>& right) {
+  for (const std::string& value : left) {
+    if (right.contains(value))
+      return true;
+  }
+  return false;
+}
+
+bool x2_value_shape_sets_have_same_restored_visible_decimal(
+    const X2ValueSet* left_values, const X2ShapeSet* left_shapes,
+    const X2ValueSet* right_values, const X2ShapeSet* right_shapes) {
+  const std::set<std::string> left =
+      x2_value_shape_set_restored_visible_decimals(left_values, left_shapes);
+  if (left.empty())
+    return false;
+  const std::set<std::string> right =
+      x2_value_shape_set_restored_visible_decimals(right_values, right_shapes);
+  return string_sets_intersect(left, right);
+}
+
 bool x2_state_has_same_visible_x_and_y(
     const std::optional<X2ValueDataflowState>& state) {
   if (!state.has_value())
     return false;
+  const X2ValueSet* y_values = state->y.has_value() ? &*state->y : nullptr;
+  const X2ShapeSet* y_shapes = state->yShape.has_value() ? &*state->yShape : nullptr;
   return optional_x2_value_sets_intersect(state->x, state->y) ||
-         optional_shape_sets_intersect(state->xShape, state->yShape);
+         x2_value_shape_sets_have_same_restored_visible_decimal(&state->x, &state->xShape,
+                                                                y_values, y_shapes);
 }
 
 std::optional<RecallValueProof>
@@ -1271,13 +1527,40 @@ recall_value_proof(const IrOp& op, const std::optional<X2ValueDataflowState>& st
 
   bool in_x = x2_value_set_has_register(state->x, *register_name);
   bool x2_sync_value = false;
+  X2ValueSet recalled_values;
   if (state->memory.has_value()) {
     const auto memory = state->memory->find(*register_name);
     if (memory != state->memory->end()) {
+      recalled_values.insert(memory->second.begin(), memory->second.end());
       in_x = in_x || x2_value_sets_intersect(memory->second, state->x);
       x2_sync_value = x2_value_sets_intersect(memory->second, state->x2);
     }
   }
+  const X2ValueSet preloaded = preloaded_constant_value_facts(&op);
+  recalled_values.insert(preloaded.begin(), preloaded.end());
+  recalled_values.insert(recall_value_fact_for_register(*register_name));
+  in_x = in_x || x2_value_sets_intersect(preloaded, state->x);
+  x2_sync_value = x2_sync_value || x2_value_sets_intersect(preloaded, state->x2);
+  X2ShapeSet recalled_shapes;
+  for (const X2ValueFact& value : recalled_values) {
+    const std::optional<std::string> decimal = x2_value_fact_restored_visible_decimal(value);
+    if (!decimal.has_value())
+      continue;
+    const std::optional<X2ShapeFact> shape = exact_decimal_display_shape_fact(*decimal);
+    if (shape.has_value())
+      recalled_shapes.insert(*shape);
+  }
+  if (state->shapeMemory.has_value()) {
+    const auto shapes = state->shapeMemory->find(*register_name);
+    if (shapes != state->shapeMemory->end())
+      recalled_shapes.insert(shapes->second.begin(), shapes->second.end());
+  }
+  const X2ShapeSet preloaded_shapes = preloaded_constant_shape_facts(&op);
+  recalled_shapes.insert(preloaded_shapes.begin(), preloaded_shapes.end());
+  const bool x2_sync_display_value =
+      !x2_sync_value &&
+      x2_value_shape_sets_have_same_restored_visible_decimal(&state->x2, &state->x2Shape,
+                                                             &recalled_values, &recalled_shapes);
 
   const bool x2_sync_register = x2_value_set_has_register(state->x2, *register_name);
   return RecallValueProof{
@@ -1286,6 +1569,7 @@ recall_value_proof(const IrOp& op, const std::optional<X2ValueDataflowState>& st
       .x2_sync_register = x2_sync_register ? std::optional<std::string>{*register_name}
                                            : std::nullopt,
       .x2_sync_value = x2_sync_value,
+      .x2_sync_display_value = x2_sync_display_value,
   };
 }
 
@@ -1312,11 +1596,20 @@ analyze_recall_removal(const std::vector<IrOp>& ops, int recall_index,
   }
   const bool redundant_sync_value =
       value_proof.has_value() && value_proof->x2_sync_value;
+  const bool redundant_sync_display_value =
+      value_proof.has_value() && value_proof->x2_sync_display_value;
+  X2RestoreExposureOptions display_value_context_options;
+  display_value_context_options.redundant_sync_display_value = true;
+  const bool redundant_sync_display_value_for_context =
+      redundant_sync_display_value &&
+      !removing_recall_can_expose_x2_restore(ops, recall_index,
+                                             display_value_context_options);
 
   const bool exposes_stack_lift = removing_recall_can_expose_stack_lift(ops, recall_index);
   X2RestoreExposureOptions exposure_options;
   exposure_options.redundant_sync_register = redundant_sync_register;
   exposure_options.redundant_sync_value = redundant_sync_value;
+  exposure_options.redundant_sync_display_value = redundant_sync_display_value;
   const bool exposes_x2_restore =
       removing_recall_can_expose_x2_restore(ops, recall_index, exposure_options);
   (void)context;
@@ -1326,9 +1619,10 @@ analyze_recall_removal(const std::vector<IrOp>& ops, int recall_index,
       .value_proof = value_proof,
       .redundant_sync_register = redundant_sync_register,
       .redundant_sync_value = redundant_sync_value,
-      .redundant_sync_display_value = false,
+      .redundant_sync_display_value = redundant_sync_display_value,
       .redundant_sync_shape = false,
-      .x2_sync_redundant = redundant_sync_register.has_value() || redundant_sync_value,
+      .x2_sync_redundant = redundant_sync_register.has_value() || redundant_sync_value ||
+                           redundant_sync_display_value_for_context,
       .exposes_stack_lift = exposes_stack_lift,
       .exposes_x2_restore = exposes_x2_restore,
       .removable = !exposes_stack_lift && !exposes_x2_restore,
@@ -2218,20 +2512,162 @@ void internal_clear_x2_vp_entry_fields(X2ValueDataflowState& input) {
 
 X2ValueSet internal_recall_x2_values(const X2ValueDataflowState& input,
                                      const std::string& register_name,
-                                     bool track_register_memory) {
+                                     bool track_register_memory, const IrOp* op) {
+  X2ValueSet output;
   if (track_register_memory && input.memory.has_value()) {
     const auto found = input.memory->find(register_name);
     if (found != input.memory->end() && !found->second.empty()) {
-      return found->second;
+      output.insert(found->second.begin(), found->second.end());
     }
   }
-  return X2ValueSet{internal_x2_value_fact_for_register(register_name)};
+  const X2ValueSet preloaded = preloaded_constant_value_facts(op);
+  output.insert(preloaded.begin(), preloaded.end());
+  output.insert(internal_x2_value_fact_for_register(register_name));
+  return output;
+}
+
+X2ShapeSet internal_x2_shapes_from_value_facts(const X2ValueSet& values) {
+  X2ShapeSet output;
+  for (const X2ValueFact& value : values) {
+    const std::optional<std::string> decimal = x2_value_fact_restored_visible_decimal(value);
+    if (!decimal.has_value())
+      continue;
+    const std::optional<X2ShapeFact> shape = exact_decimal_display_shape_fact(*decimal);
+    if (shape.has_value())
+      output.insert(*shape);
+  }
+  return output;
+}
+
+X2ShapeSet internal_decimal_display_shape_facts(const X2ShapeSet& input) {
+  X2ShapeSet output;
+  for (const X2ShapeFact& fact : input) {
+    const std::optional<std::string> visible = x2_shape_fact_restored_visible_decimal(fact);
+    if (!visible.has_value())
+      continue;
+    const std::optional<X2ShapeFact> exact = exact_decimal_display_shape_fact(*visible);
+    if (exact.has_value() && *exact == fact)
+      output.insert(fact);
+  }
+  return output;
+}
+
+X2ShapeSet internal_recall_x2_shape_facts(const X2ValueSet& values, const IrOp* op,
+                                          const std::optional<X2ShapeSet>& memory_shapes) {
+  X2ShapeSet output = internal_x2_shapes_from_value_facts(values);
+  if (memory_shapes.has_value())
+    output.insert(memory_shapes->begin(), memory_shapes->end());
+  const X2ShapeSet preloaded = preloaded_constant_shape_facts(op);
+  output.insert(preloaded.begin(), preloaded.end());
+  return output;
+}
+
+X2ShapeSet internal_recall_direct_shape_facts(const IrOp* op,
+                                              const std::optional<X2ShapeSet>& memory_shapes) {
+  X2ShapeSet output = preloaded_constant_shape_facts(op);
+  if (memory_shapes.has_value())
+    output.insert(memory_shapes->begin(), memory_shapes->end());
+  return output;
+}
+
+std::optional<RegisterValueSet> internal_vp_entry_mantissas_from_value_facts(
+    const X2ValueSet& values) {
+  RegisterValueSet output;
+  constexpr std::string_view prefix = "decimal:";
+  constexpr std::string_view suffix = ":normalized";
+  for (const X2ValueFact& value : values) {
+    if (!value.starts_with(prefix) || !value.ends_with(suffix))
+      continue;
+    const std::optional<std::string> decimal =
+        normalize_plain_decimal(value.substr(prefix.size(), value.size() - prefix.size() -
+                                                                suffix.size()));
+    if (decimal.has_value())
+      output.insert(*decimal);
+  }
+  return output.empty() ? std::nullopt : std::optional<RegisterValueSet>{output};
+}
+
+std::optional<X2ShapeSet> optional_non_empty_shape_set(X2ShapeSet input) {
+  return input.empty() ? std::nullopt : std::optional<X2ShapeSet>{std::move(input)};
 }
 
 X2ValueSet internal_remove_x2_value(const X2ValueSet& input, const X2ValueFact& fact) {
   X2ValueSet output = input;
   output.erase(fact);
   return output;
+}
+
+bool internal_x2_value_fact_depends_on_register(const X2ValueFact& fact,
+                                                const std::string& register_name) {
+  const X2ValueFact register_fact = internal_x2_value_fact_for_register(register_name);
+  if (fact == register_fact)
+    return true;
+  if (!fact.starts_with("expr-key:"))
+    return false;
+  return fact.find(register_fact) != std::string::npos;
+}
+
+X2ValueSet internal_remove_register_dependent_value_facts(const X2ValueSet& input,
+                                                          const std::string& register_name) {
+  X2ValueSet output;
+  for (const X2ValueFact& fact : input) {
+    if (!internal_x2_value_fact_depends_on_register(fact, register_name))
+      output.insert(fact);
+  }
+  return output;
+}
+
+X2ValueMemory internal_remove_register_dependent_value_memory(
+    const X2ValueMemory& input, const std::string& register_name) {
+  X2ValueMemory output;
+  for (const auto& [memory_register, values] : input) {
+    X2ValueSet kept =
+        internal_remove_register_dependent_value_facts(values, register_name);
+    if (!kept.empty())
+      output[memory_register] = std::move(kept);
+  }
+  return output;
+}
+
+bool internal_register_write_preserves_stored_value(const X2ValueDataflowState& input,
+                                                    const std::string& register_name) {
+  return input.x.contains(internal_x2_value_fact_for_register(register_name));
+}
+
+X2ValueSet internal_add_stored_x2_value_alias(const X2ValueDataflowState& input,
+                                              const X2ValueFact& fact) {
+  X2ValueSet output = input.x2;
+  output.erase(fact);
+  if (x2_value_sets_intersect(input.x, input.x2))
+    output.insert(fact);
+  return output;
+}
+
+void internal_store_x2_value_memory(X2ValueDataflowState& output,
+                                    const std::string& register_name,
+                                    const X2ValueSet& values) {
+  if (!output.memory.has_value())
+    output.memory = X2ValueMemory{};
+  if (values.empty()) {
+    output.memory->erase(register_name);
+  } else {
+    (*output.memory)[register_name] = values;
+  }
+}
+
+void internal_store_x2_shape_memory(X2ValueDataflowState& output,
+                                    const std::string& register_name,
+                                    const X2ValueSet& values,
+                                    const X2ShapeSet& shapes) {
+  if (!output.shapeMemory.has_value())
+    output.shapeMemory = X2ShapeMemory{};
+  X2ShapeSet stored_shapes = internal_x2_shapes_from_value_facts(values);
+  stored_shapes.insert(shapes.begin(), shapes.end());
+  if (stored_shapes.empty()) {
+    output.shapeMemory->erase(register_name);
+  } else {
+    (*output.shapeMemory)[register_name] = stored_shapes;
+  }
 }
 
 X2ValueSet internal_sync_unknown_same_value(X2ValueSet x, X2Effect effect,
@@ -2274,16 +2710,14 @@ X2ValueDataflowState internal_invalidate_register_dependency(
     const X2ValueDataflowState& input, const std::string& register_name,
     bool track_register_memory) {
   X2ValueDataflowState output = internal_clone_x2_value_dataflow_state(input);
-  const X2ValueFact fact = internal_x2_value_fact_for_register(register_name);
-  output.x = internal_remove_x2_value(output.x, fact);
-  output.x2 = internal_remove_x2_value(output.x2, fact);
+  output.x = internal_remove_register_dependent_value_facts(output.x, register_name);
+  output.x2 = internal_remove_register_dependent_value_facts(output.x2, register_name);
   if (output.y.has_value()) {
-    std::set<X2ValueFact> y = *output.y;
-    y.erase(fact);
-    output.y = y;
+    output.y = internal_remove_register_dependent_value_facts(*output.y, register_name);
   }
   if (track_register_memory && output.memory.has_value()) {
-    output.memory->erase(register_name);
+    output.memory =
+        internal_remove_register_dependent_value_memory(*output.memory, register_name);
   }
   if (track_register_memory && output.shapeMemory.has_value()) {
     output.shapeMemory->erase(register_name);
@@ -2307,83 +2741,131 @@ X2ValueDataflowState internal_transfer_x2_value_dataflow_state(
     return internal_close_x2_value_entry(input);
   }
   case IrKind::Store: {
-    X2ValueDataflowState output = internal_close_x2_value_entry(input);
+    const X2ValueDataflowState closed = internal_close_x2_value_entry(input);
+    const X2ValueDataflowState stable =
+        internal_register_write_preserves_stored_value(closed, op.register_name)
+            ? closed
+            : internal_invalidate_register_dependency(closed, op.register_name,
+                                                      track_register_memory);
+    X2ValueDataflowState output = internal_clone_x2_value_dataflow_state(stable);
     const X2ValueFact fact = internal_x2_value_fact_for_register(op.register_name);
-    output.x = output.x;
     output.x.insert(fact);
-    output.x2 = output.x;
-    output.y = clone_optional_set(input.y);
+    output.x2 = internal_add_stored_x2_value_alias(stable, fact);
+    output.y = clone_optional_set(stable.y);
+    output.yShape = clone_optional_set(stable.yShape);
+    output.xShape = X2ShapeSet{stable.xShape.begin(), stable.xShape.end()};
+    output.x2Shape = X2ShapeSet{stable.x2Shape.begin(), stable.x2Shape.end()};
+    output.xDirectShape = clone_optional_set(stable.xDirectShape);
+    output.yDirectShape = clone_optional_set(stable.yDirectShape);
     output.vpContext = X2VpContextState{.kind = X2VpContextState::Kind::None};
+    output.structuralEntry = X2StructuralEntryState{.kind = X2StructuralEntryState::Kind::None};
     if (track_register_memory) {
-      if (!output.memory.has_value()) {
-        output.memory = X2ValueMemory{};
-      }
-      (*output.memory)[op.register_name] = output.x;
-      if (!output.shapeMemory.has_value()) {
-        output.shapeMemory = X2ShapeMemory{};
-      }
-      (*output.shapeMemory)[op.register_name] = X2ShapeSet{};
+      internal_store_x2_value_memory(output, op.register_name, stable.x);
+      internal_store_x2_shape_memory(output, op.register_name, stable.x, stable.xShape);
     }
     return output;
   }
   case IrKind::IndirectStore: {
     const std::optional<std::string> target = known_indirect_memory_target(op);
     if (!target.has_value()) {
-      return internal_close_x2_value_entry(input);
-    }
-    X2ValueDataflowState output = internal_close_x2_value_entry(input);
-    const X2ValueFact fact = internal_x2_value_fact_for_register(*target);
-    output.x = output.x;
-    output.x.insert(fact);
-    output.x2 = output.x;
-    output.vpContext = X2VpContextState{.kind = X2VpContextState::Kind::None};
-    if (track_register_memory) {
-      if (!output.memory.has_value()) {
+      X2ValueDataflowState output = internal_close_x2_value_entry(input);
+      if (track_register_memory) {
         output.memory = X2ValueMemory{};
-      }
-      (*output.memory)[*target] = output.x;
-      if (!output.shapeMemory.has_value()) {
         output.shapeMemory = X2ShapeMemory{};
       }
-      (*output.shapeMemory)[*target] = X2ShapeSet{};
+      return mkpro::core::is_stable_indirect_selector(op.register_name)
+                 ? output
+                 : internal_invalidate_register_dependency(output, op.register_name,
+                                                           track_register_memory);
     }
-    return output;
+    const X2ValueDataflowState closed = internal_close_x2_value_entry(input);
+    const X2ValueDataflowState stable =
+        internal_register_write_preserves_stored_value(closed, *target)
+            ? closed
+            : internal_invalidate_register_dependency(closed, *target, track_register_memory);
+    X2ValueDataflowState output = internal_clone_x2_value_dataflow_state(stable);
+    const X2ValueFact fact = internal_x2_value_fact_for_register(*target);
+    output.x.insert(fact);
+    output.x2 = internal_add_stored_x2_value_alias(stable, fact);
+    output.vpContext = X2VpContextState{.kind = X2VpContextState::Kind::None};
+    output.structuralEntry = X2StructuralEntryState{.kind = X2StructuralEntryState::Kind::None};
+    if (track_register_memory) {
+      internal_store_x2_value_memory(output, *target, stable.x);
+      internal_store_x2_shape_memory(output, *target, stable.x, stable.xShape);
+    }
+    return mkpro::core::is_stable_indirect_selector(op.register_name)
+               ? output
+               : internal_invalidate_register_dependency(output, op.register_name,
+                                                         track_register_memory);
   }
   case IrKind::Recall: {
-    const X2ValueSet values = internal_recall_x2_values(input, op.register_name,
-                                                        track_register_memory);
+    const X2ValueSet values =
+        internal_recall_x2_values(input, op.register_name, track_register_memory, &op);
+    const std::optional<X2ShapeSet> memory_shape =
+        track_register_memory && input.shapeMemory.has_value()
+            ? [&]() -> std::optional<X2ShapeSet> {
+                const auto found = input.shapeMemory->find(op.register_name);
+                return found == input.shapeMemory->end() ? std::nullopt
+                                                         : std::optional<X2ShapeSet>{found->second};
+              }()
+            : std::nullopt;
+    const X2ShapeSet shape = internal_recall_x2_shape_facts(values, &op, memory_shape);
+    const X2ShapeSet direct_shape = internal_recall_direct_shape_facts(&op, memory_shape);
     X2ValueDataflowState output = internal_close_x2_value_entry(input);
     output.x = values;
     output.x2 = values;
     output.y = X2ValueSet{input.x.begin(), input.x.end()};
-    output.yShape = X2ShapeSet{};
-    output.xShape = X2ShapeSet{};
-    output.x2Shape = X2ShapeSet{};
-    output.xDirectShape = input.xDirectShape;
-    output.yDirectShape = input.yDirectShape;
+    output.yShape = X2ShapeSet{input.xShape.begin(), input.xShape.end()};
+    output.xShape = shape;
+    output.x2Shape = shape;
+    output.xDirectShape = direct_shape;
+    output.yDirectShape = input.xDirectShape;
     output.vpContext = X2VpContextState{.kind = X2VpContextState::Kind::None};
     output.structuralEntry = X2StructuralEntryState{.kind = X2StructuralEntryState::Kind::None};
     output.structuralVpContext = X2StructuralEntryState{.kind = X2StructuralEntryState::Kind::None};
-    internal_clear_x2_vp_entry_fields(output);
+    output.vpEntryMantissa = internal_vp_entry_mantissas_from_value_facts(values);
+    output.vpEntrySignMantissa = std::nullopt;
+    output.vpEntryShape = std::nullopt;
+    output.vpEntrySignShape = optional_non_empty_shape_set(internal_decimal_display_shape_facts(shape));
+    output.vpEntryMantissaTransient = false;
+    output.vpEntryShapeTransient = false;
     return output;
   }
   case IrKind::IndirectRecall: {
     const std::optional<std::string> target = known_indirect_memory_target(op);
+    const std::optional<X2ShapeSet> memory_shape =
+        target.has_value() && track_register_memory && input.shapeMemory.has_value()
+            ? [&]() -> std::optional<X2ShapeSet> {
+                const auto found = input.shapeMemory->find(*target);
+                return found == input.shapeMemory->end() ? std::nullopt
+                                                         : std::optional<X2ShapeSet>{found->second};
+              }()
+            : std::nullopt;
     const X2ValueSet values =
         target.has_value()
-            ? internal_recall_x2_values(input, *target, track_register_memory)
+            ? internal_recall_x2_values(input, *target, track_register_memory, &op)
             : X2ValueSet{kSameUnknownValue};
+    const X2ShapeSet shape = internal_recall_x2_shape_facts(values, &op, memory_shape);
+    const X2ShapeSet direct_shape =
+        target.has_value() ? internal_recall_direct_shape_facts(&op, memory_shape) : X2ShapeSet{};
     X2ValueDataflowState output = internal_close_x2_value_entry(input);
     output.x = values;
     output.x2 = values;
     output.y = X2ValueSet{input.x.begin(), input.x.end()};
-    output.yShape = X2ShapeSet{};
-    output.xShape = X2ShapeSet{};
-    output.x2Shape = X2ShapeSet{};
+    output.yShape = X2ShapeSet{input.xShape.begin(), input.xShape.end()};
+    output.xShape = shape;
+    output.x2Shape = shape;
+    output.xDirectShape = direct_shape;
+    output.yDirectShape = input.xDirectShape;
     output.vpContext = X2VpContextState{.kind = X2VpContextState::Kind::None};
     output.structuralEntry = X2StructuralEntryState{.kind = X2StructuralEntryState::Kind::None};
     output.structuralVpContext = X2StructuralEntryState{.kind = X2StructuralEntryState::Kind::None};
-    internal_clear_x2_vp_entry_fields(output);
+    output.vpEntryMantissa = internal_vp_entry_mantissas_from_value_facts(values);
+    output.vpEntrySignMantissa = std::nullopt;
+    output.vpEntryShape = std::nullopt;
+    output.vpEntrySignShape = optional_non_empty_shape_set(internal_decimal_display_shape_facts(shape));
+    output.vpEntryMantissaTransient = false;
+    output.vpEntryShapeTransient = false;
     return output;
   }
   case IrKind::Plain: {

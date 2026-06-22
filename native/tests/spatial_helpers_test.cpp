@@ -28,6 +28,7 @@ void spatial_helpers_match_typescript_contract() {
   CompileOptions options;
   options.analysis = true;
   options.budget = 999;
+  options.disable_candidate_search = true;
 
   const CompileResult spatial_sum = compile_source(R"mkpro(
 program SpatialSumLoopHelperReports {

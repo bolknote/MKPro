@@ -70,7 +70,6 @@ LivenessInfo compute_liveness(const std::vector<IrOp>& ops) {
   const std::vector<std::vector<int>> successors =
       build_cfg_successors(ops, BuildCfgOptions{
                                     .indirect_call_fallthrough = true,
-                                    .unknown_indirect_flow_to_all = true,
                                 });
   const std::size_t size = ops.size();
   std::vector<RegisterValueSet> live_in(size);

@@ -122,6 +122,11 @@ std::optional<double> numeric_literal_value(const Expression& expression) {
   }
 }
 
+bool expression_is_numeric_value(const Expression& expression, double expected) {
+  const std::optional<double> value = numeric_literal_value(expression);
+  return value.has_value() && std::fabs(*value - expected) < 1e-12;
+}
+
 std::optional<RemainderByConstantMatch> match_int_divide_by_constant(const Expression& expression) {
   if (expression.kind != "call" || lower_ascii(expression.callee) != "int" ||
       expression.args.size() != 1U) {
@@ -649,10 +654,18 @@ Expression call_expression(std::string callee, std::vector<Expression> args) {
 }
 
 Expression add_expression(Expression left, Expression right) {
+  if (expression_is_numeric_value(left, 0.0))
+    return right;
+  if (expression_is_numeric_value(right, 0.0))
+    return left;
   return binary_expression(std::move(left), "+", std::move(right));
 }
 
 Expression subtract_expression(Expression left, Expression right) {
+  if (expression_is_numeric_value(right, 0.0))
+    return left;
+  if (expression_is_numeric_value(left, 0.0))
+    return unary_expression("-", std::move(right));
   return binary_expression(std::move(left), "-", std::move(right));
 }
 
@@ -661,6 +674,8 @@ Expression multiply_expression(Expression left, Expression right) {
 }
 
 Expression divide_expression(Expression left, Expression right) {
+  if (expression_is_numeric_value(right, 1.0))
+    return left;
   return binary_expression(std::move(left), "/", std::move(right));
 }
 

@@ -119,6 +119,25 @@ bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& c
   return false;
 }
 
+bool lower_commutative_numeric_right_before_identifier(ExpressionEmitApi& api,
+                                                       const Expression& expression,
+                                                       int opcode) {
+  if (expression.op != "*" || expression.left == nullptr || expression.right == nullptr) {
+    return false;
+  }
+  if (expression.left->kind != "identifier" || expression.right->kind != "number")
+    return false;
+
+  if (!api.lower_expression_to_x(*expression.right))
+    return false;
+  if (!api.lower_expression_to_x(*expression.left))
+    return false;
+  api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
+  api.emitter.current_x_variable.reset();
+  api.emitter.current_x_aliases.clear();
+  return true;
+}
+
 bool compile_current_x_derivation(
     ExpressionEmitApi& api, const Expression& expression,
     const std::map<std::string, std::pair<int, std::string>>& unary_opcodes) {
@@ -367,7 +386,9 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
   if (expression.left == nullptr || expression.right == nullptr)
     return false;
 
-  if (expression.op == "+" && expression.left->kind == "call" && expression.right->kind == "call") {
+  if (expression.op == "+" && expression.left->kind == "call" && expression.right->kind == "call" &&
+      (api.call_needs_binary_temp(*expression.left) ||
+       api.call_needs_binary_temp(*expression.right))) {
     if (!api.lower_call_to_x(*expression.left))
       return false;
     api.emit_store("__mkpro_call_1", "set __mkpro_call_1");
@@ -383,6 +404,11 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
   if ((expression.op == "+" || expression.op == "*") &&
       lower_commutative_with_current_x(api, context, expression,
                                        expression.op == "+" ? 0x10 : 0x12)) {
+    return true;
+  }
+
+  if (expression.op == "*" &&
+      lower_commutative_numeric_right_before_identifier(api, expression, 0x12)) {
     return true;
   }
 
@@ -485,6 +511,35 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
         .name = "entered-current-x",
         .detail = "Consumed the current keyboard-entered X value without emitting another stop.",
     });
+    return true;
+  }
+
+  if (callee == "pi") {
+    if (!expression.args.empty()) {
+      context.diagnostics.push_back(Diagnostic{
+          .severity = DiagnosticSeverity::Error,
+          .code = "native-unsupported",
+          .message = expression.callee + "() takes no arguments, got " +
+                     std::to_string(expression.args.size()) + ".",
+      });
+      return false;
+    }
+    api.emitter.emit_op(0x20, "F pi", expression.callee + "()");
+    return true;
+  }
+
+  if (callee == "e") {
+    if (!expression.args.empty()) {
+      context.diagnostics.push_back(Diagnostic{
+          .severity = DiagnosticSeverity::Error,
+          .code = "native-unsupported",
+          .message = expression.callee + "() takes no arguments, got " +
+                     std::to_string(expression.args.size()) + ".",
+      });
+      return false;
+    }
+    api.emitter.emit_number("1");
+    api.emitter.emit_op(0x16, "F e^x", expression.callee + "()");
     return true;
   }
 
@@ -746,11 +801,21 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       });
       return false;
     }
-    if (lower_commutative_call_with_destructive_selector_last(api, context, expression,
-                                                              binary_it->second))
-      return true;
-    if (!api.lower_expression_to_x(expression.args.at(0)))
-      return false;
+	    if (lower_commutative_call_with_destructive_selector_last(api, context, expression,
+	                                                              binary_it->second))
+	      return true;
+	    if (callee == "pow") {
+	      if (!api.lower_expression_to_x(expression.args.at(1)))
+	        return false;
+	      if (!api.lower_expression_to_x(expression.args.at(0)))
+	        return false;
+	      api.emitter.emit_op(binary_it->second.first, binary_it->second.second, callee + "()");
+	      api.emitter.current_x_variable.reset();
+	      api.emitter.current_x_aliases.clear();
+	      return true;
+	    }
+	    if (!api.lower_expression_to_x(expression.args.at(0)))
+	      return false;
     if (!api.lower_expression_to_x(expression.args.at(1)))
       return false;
     api.emitter.emit_op(binary_it->second.first, binary_it->second.second, callee + "()");

@@ -250,6 +250,8 @@ std::string state_field_to_json(const V2StateField& field) {
     add_field(out, first, "initial", json_escape(*field.initial));
   if (field.initial_stack.has_value())
     add_field(out, first, "initialStack", json_escape(*field.initial_stack));
+  if (field.implicit)
+    add_field(out, first, "implicit", "true");
   add_field(out, first, "line", std::to_string(field.line));
   out << '}';
   return out.str();

@@ -379,7 +379,7 @@ private:
   }
 
   Fragment build_invoke(V2Statement& statement) {
-    if (!statement.name.has_value() || !statement.args.empty()) {
+    if (!statement.name.has_value()) {
       const int node = add(RuleCfgNode{.barrier = true});
       return Fragment{.entry = node, .exits = {node}};
     }
@@ -389,8 +389,52 @@ private:
       const int node = add(RuleCfgNode{.barrier = true});
       return Fragment{.entry = node, .exits = {node}};
     }
+    std::vector<int> exits;
+    std::optional<int> entry;
+    if (!statement.args.empty()) {
+      const V2Rule* rule = nullptr;
+      for (const V2Rule& candidate : program_.rules) {
+        if (candidate.name == *statement.name) {
+          rule = &candidate;
+          break;
+        }
+      }
+      if (rule == nullptr || rule->params.size() != statement.args.size()) {
+        const int node = add(RuleCfgNode{.barrier = true});
+        return Fragment{.entry = node, .exits = {node}};
+      }
+
+      std::set<std::string> uses;
+      bool has_call_arg = false;
+      for (const std::string& arg : statement.args) {
+        const std::optional<Expression> expression = parse_expression_safe(arg, statement.line);
+        if (!expression.has_value()) {
+          const int node = add(RuleCfgNode{.barrier = true});
+          return Fragment{.entry = node, .exits = {node}};
+        }
+        add_all(uses, expression_uses(program_, *expression));
+        if (!expression_call_names(*expression).empty())
+          has_call_arg = true;
+      }
+      if (has_call_arg) {
+        const int barrier = add(RuleCfgNode{.barrier = true});
+        entry = barrier;
+        exits = {barrier};
+      }
+      const int args_node =
+          add(RuleCfgNode{.defs = rule->params, .uses = sorted_vector(uses)});
+      if (!entry.has_value())
+        entry = args_node;
+      else
+        link(exits, args_node);
+      exits = {args_node};
+    }
     const int node = add(RuleCfgNode{.succ = {callee_entry->second}});
-    return Fragment{.entry = node, .exits = {callee_exit->second}};
+    if (!entry.has_value())
+      entry = node;
+    else
+      link(exits, node);
+    return Fragment{.entry = *entry, .exits = {callee_exit->second}};
   }
 
   Fragment build_if(V2Statement& statement) {

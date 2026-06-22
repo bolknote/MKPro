@@ -12,6 +12,7 @@ void board_width_macros_matches_typescript_contract();
 void cfg_matches_typescript_contract();
 void compiler_coord_list_lowering_matches_typescript_contract();
 void compiler_display_lowering_matches_typescript_contract();
+void compiler_lowers_initial_v2_subset();
 void counted_loop_unroll_matches_typescript_contract();
 void constant_folding_matches_typescript_contract();
 void cse_display_block_matches_typescript_contract();
@@ -86,7 +87,8 @@ struct TestCase {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  const std::string filter = argc > 1 ? argv[1] : "";
   const std::vector<TestCase> tests = {
       {"arithmetic_if_matches_typescript_contract",
        mkpro::tests::arithmetic_if_matches_typescript_contract},
@@ -99,6 +101,7 @@ int main() {
        mkpro::tests::compiler_coord_list_lowering_matches_typescript_contract},
       {"compiler_display_lowering_matches_typescript_contract",
        mkpro::tests::compiler_display_lowering_matches_typescript_contract},
+      {"compiler_lowers_initial_v2_subset", mkpro::tests::compiler_lowers_initial_v2_subset},
       {"counted_loop_unroll_matches_typescript_contract",
        mkpro::tests::counted_loop_unroll_matches_typescript_contract},
       {"constant_folding_matches_typescript_contract",
@@ -218,20 +221,29 @@ int main() {
   };
 
   int failed = 0;
+  int selected = 0;
   for (const auto& test : tests) {
+    if (!filter.empty() && test.name.find(filter) == std::string::npos) {
+      continue;
+    }
+    ++selected;
     try {
       test.run();
-      std::cout << "[PASS] " << test.name << "\n";
+      std::cout << "[PASS] " << test.name << std::endl;
     } catch (const std::exception& error) {
       ++failed;
-      std::cerr << "[FAIL] " << test.name << ": " << error.what() << "\n";
+      std::cerr << "[FAIL] " << test.name << ": " << error.what() << std::endl;
     }
   }
 
+  if (selected == 0) {
+    std::cerr << "No native tests matched filter: " << filter << std::endl;
+    return 2;
+  }
   if (failed > 0) {
-    std::cerr << failed << " native test(s) failed\n";
+    std::cerr << failed << " native test(s) failed" << std::endl;
     return 1;
   }
-  std::cout << tests.size() << " native test(s) passed\n";
+  std::cout << selected << " native test(s) passed" << std::endl;
   return 0;
 }

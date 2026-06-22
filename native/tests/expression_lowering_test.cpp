@@ -115,14 +115,20 @@ struct ExpressionHarness {
                              expression_to_json(expression);
                 },
             .ensure_hidden_register = [&](const std::string&) { return true; },
-            .emit_number_or_preload =
-                [&](const std::string& value, std::optional<std::string> comment,
-                    std::optional<int> source_line) {
-                  context.emitter.emit_number(value);
-                  if (comment.has_value() && !context.emitter.items.empty())
-                    context.emitter.items.back().comment = std::move(*comment);
-                  (void)source_line;
-                }} {
+	            .emit_number_or_preload =
+	                [&](const std::string& value, std::optional<std::string> comment,
+	                    std::optional<int> source_line) {
+	                  if (const auto preload = context.preloaded_numbers.find(value);
+	                      preload != context.preloaded_numbers.end()) {
+	                    context.emitter.emit_op(0x60, "П->X " + preload->second,
+	                                            comment.value_or("preload const " + value));
+	                    return;
+	                  }
+	                  context.emitter.emit_number(value);
+	                  if (comment.has_value() && !context.emitter.items.empty())
+	                    context.emitter.items.back().comment = std::move(*comment);
+	                  (void)source_line;
+	                }} {
     lower = [&](const Expression& expression) {
       const std::optional<bool> result =
           core::emit::lower_basic_expression_to_x(api, context, expression);
@@ -245,11 +251,45 @@ void expression_lowering_helpers_match_typescript_contract() {
 
   {
     ExpressionHarness harness;
+    require(harness.lower(binary_expr(identifier_expr("reels"), "*", number_expr("10"))),
+            "identifier times numeric literal should lower");
+    require(harness.context.emitter.items.size() == 4,
+            "identifier times numeric literal should emit literal, recall, and multiply");
+    require(harness.context.emitter.items.at(0).opcode == 0x01 &&
+                harness.context.emitter.items.at(1).opcode == 0x00,
+            "identifier times numeric literal should emit the numeric operand first");
+    require(harness.context.emitter.items.at(2).comment == "recall reels",
+            "identifier times numeric literal should recall the identifier after the literal");
+    require(harness.context.emitter.items.at(3).opcode == 0x12,
+            "identifier times numeric literal should emit multiply");
+  }
+
+  {
+    ExpressionHarness harness;
     require(harness.lower(call_expr("read")), "read() should lower");
     require(harness.context.emitter.items.size() == 1, "read() should emit one stop");
     require(harness.context.emitter.items.back().opcode == 0x50, "read() should emit stop opcode");
     require(harness.context.emitter.items.back().comment == "read()",
             "read() should preserve comment");
+  }
+
+  {
+    ExpressionHarness harness;
+    require(harness.lower(call_expr("pi")), "pi() should lower");
+    require(harness.context.emitter.items.size() == 1, "pi() should emit one opcode");
+    require(harness.context.emitter.items.back().opcode == 0x20, "pi() should emit F pi");
+    require(harness.context.emitter.items.back().comment == "pi()",
+            "pi() should preserve comment");
+  }
+
+  {
+    ExpressionHarness harness;
+    require(harness.lower(call_expr("e")), "e() should lower");
+    require(harness.context.emitter.items.size() == 2, "e() should emit 1 then F e^x");
+    require(harness.context.emitter.items.at(0).opcode == 0x01, "e() should start with 1");
+    require(harness.context.emitter.items.at(1).opcode == 0x16, "e() should emit F e^x");
+    require(harness.context.emitter.items.at(1).comment == "e()",
+            "e() should preserve comment");
   }
 
   {

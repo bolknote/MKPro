@@ -536,6 +536,17 @@ std::optional<std::pair<int, std::string>> setup_binary_opcode(const std::string
   return std::nullopt;
 }
 
+std::optional<std::pair<int, std::string>>
+setup_binary_call_opcode(const std::string& callee) {
+  static const std::map<std::string, std::pair<int, std::string>> opcodes = {
+      {"pow", {0x24, "F x^y"}},  {"max", {0x36, "К max"}},   {"bit_and", {0x37, "К ∧"}},
+      {"bit_or", {0x38, "К ∨"}}, {"bit_xor", {0x39, "К ⊕"}},
+  };
+  const auto it = opcodes.find(lower_ascii(callee));
+  return it == opcodes.end() ? std::nullopt
+                             : std::optional<std::pair<int, std::string>>{it->second};
+}
+
 bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expression);
 
 bool lower_setup_random_call_to_x(MachineEmitter& setup, const Expression& expression) {
@@ -585,6 +596,16 @@ bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expres
     const std::string callee = lower_ascii(expression.callee);
     if (callee == "random")
       return lower_setup_random_call_to_x(setup, expression);
+    if (const std::optional<std::pair<int, std::string>> opcode =
+            setup_binary_call_opcode(callee)) {
+      if (expression.args.size() != 2U ||
+          !lower_setup_expression_to_x(setup, expression.args.at(0)) ||
+          !lower_setup_expression_to_x(setup, expression.args.at(1))) {
+        return false;
+      }
+      setup.emit_op(opcode->first, opcode->second, callee + "()", std::nullopt, true);
+      return true;
+    }
     if (expression.args.size() != 1U)
       return false;
     const std::optional<std::pair<int, std::string>> opcode = setup_unary_opcode(callee);
@@ -1075,19 +1096,42 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   std::vector<OptimizationReport> optimizations;
   std::set<std::size_t> consumed;
   bool setup_r0_dirty = false;
+  const bool r0_needs_non_numeric_restore =
+      std::any_of(preloads.begin(), preloads.end(), [](const PreloadReport& preload) {
+        return preload.register_name == "0" &&
+               (preload.setup_expression || !has_executable_setup_number_value(preload.value));
+      });
+  bool uses_r0_setup_pointer = false;
+  if (!r0_needs_non_numeric_restore) {
+    const std::set<std::size_t> empty_consumed;
+    for (std::size_t index = 0; index < preloads.size(); ++index) {
+      if (indexed_setup_preload_group_at(preloads, empty_consumed, index).has_value()) {
+        uses_r0_setup_pointer = true;
+        break;
+      }
+    }
+  }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (consumed.contains(index))
       continue;
     const PreloadReport& preload = preloads.at(index);
+    if (uses_r0_setup_pointer && preload.register_name == "0" && !preload.setup_expression &&
+        has_executable_setup_number_value(preload.value)) {
+      consumed.insert(index);
+      continue;
+    }
     const bool from_stack_x = preload.value == "stack.X";
     const bool from_stack_y = preload.value == "stack.Y";
-    if (const std::optional<IndexedSetupPreloadGroup> group =
-            indexed_setup_preload_group_at(preloads, consumed, index)) {
+    if (!r0_needs_non_numeric_restore) {
+      const std::optional<IndexedSetupPreloadGroup> group =
+          indexed_setup_preload_group_at(preloads, consumed, index);
+      if (group.has_value()) {
       if (emit_indexed_setup_preload_group(setup, optimizations, preload, *group)) {
         for (std::size_t consumed_index = index; consumed_index < group->end; ++consumed_index)
           consumed.insert(consumed_index);
         setup_r0_dirty = true;
         continue;
+      }
       }
     }
     if (preload.setup_expression) {

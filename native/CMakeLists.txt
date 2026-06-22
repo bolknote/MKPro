@@ -19,6 +19,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(mkpro_core STATIC
   src/core/ast_json.cpp
   src/core/compiler.cpp
+  src/core/constant_folder.cpp
   src/core/emit/lowering/coord_list.cpp
   src/core/emit/lowering/display.cpp
   src/core/emit/lowering/expr.cpp

@@ -72,6 +72,63 @@ std::optional<Expression> parse_expression_safe(const std::string& text, int lin
   }
 }
 
+std::optional<std::string> simple_show_target(const V2Statement& statement) {
+  if (statement.kind != "v2_show")
+    return std::nullopt;
+  if (statement.target.has_value()) {
+    const std::optional<Expression> target = parse_expression_safe(*statement.target, statement.line);
+    if (target.has_value() && target->kind == "identifier")
+      return target->name;
+  }
+  if (statement.items.has_value() && statement.items->size() == 1U) {
+    const DisplayItem& item = statement.items->front();
+    if (item.kind != "source")
+      return std::nullopt;
+    if (item.expr.has_value() && item.expr->kind == "identifier")
+      return item.expr->name;
+    if (!item.expr.has_value() && !item.name.empty())
+      return item.name;
+  }
+  return std::nullopt;
+}
+
+void collect_loop_header_show_targets(const std::vector<V2Statement>& statements,
+                                      std::set<std::string>& targets);
+
+void collect_loop_header_show_target(const V2Statement& statement, std::set<std::string>& targets) {
+  if (statement.kind == "v2_loop" && statement.body.size() >= 2U) {
+    const V2Statement& show = statement.body.at(0);
+    const V2Statement& read = statement.body.at(1);
+    if (show.kind == "v2_show" && read.kind == "v2_read") {
+      if (std::optional<std::string> target = simple_show_target(show))
+        targets.insert(*target);
+    }
+  }
+  collect_loop_header_show_targets(statement.body, targets);
+  collect_loop_header_show_targets(statement.then_body, targets);
+  collect_loop_header_show_targets(statement.else_body, targets);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_loop_header_show_target(*match_case.action, targets);
+  }
+  if (statement.otherwise != nullptr)
+    collect_loop_header_show_target(*statement.otherwise, targets);
+}
+
+void collect_loop_header_show_targets(const std::vector<V2Statement>& statements,
+                                      std::set<std::string>& targets) {
+  for (const V2Statement& statement : statements)
+    collect_loop_header_show_target(statement, targets);
+}
+
+std::set<std::string> loop_header_show_targets(const V2Program& program) {
+  std::set<std::string> targets;
+  collect_loop_header_show_targets(program.body, targets);
+  for (const V2Rule& rule : program.rules)
+    collect_loop_header_show_targets(rule.body, targets);
+  return targets;
+}
+
 V2Statement statement_from_pruned_vector(std::vector<V2Statement> statements, int line) {
   if (statements.size() == 1)
     return std::move(statements.front());
@@ -133,6 +190,7 @@ int eliminate_interprocedural_dead_stores(V2Program& program,
   const RuleCfg cfg = build_rule_cfg(program);
   const std::set<std::string> all_vars = collect_all_vars(cfg);
   const std::vector<std::set<std::string>> live_out = compute_live_out(cfg, all_vars);
+  const std::set<std::string> loop_show_targets = loop_header_show_targets(program);
 
   std::set<const V2Statement*> doomed;
   for (const RuleCfgNode& node : cfg.nodes) {
@@ -143,6 +201,8 @@ int eliminate_interprocedural_dead_stores(V2Program& program,
     if (!target.has_value() || target->kind != "identifier")
       continue;
     if (!fields.contains(target->name))
+      continue;
+    if (loop_show_targets.contains(target->name))
       continue;
     const std::optional<Expression> expr = parse_expression_safe(*assign->expr, assign->line);
     if (!expr.has_value() || !expression_is_call_free(*expr))

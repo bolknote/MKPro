@@ -225,6 +225,9 @@ struct LoweringContext {
   bool setup_only_counted_loop_init = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
+  bool packed_line_family_update_check_tail = false;
+  bool packed_line_family_mutating_selector_update_check_tail = false;
+  bool packed_line_family_borrowed_mutating_selector_update_check_tail = false;
   bool shared_bit_mask_helper_calls = false;
   bool compact_bit_mask_helper_body = false;
   bool domain_error_guards = false;
@@ -243,6 +246,7 @@ struct LoweringContext {
   bool emitting_near_any_helper = false;
   bool share_random_cell = false;
   bool aggressive_terminal_direct = false;
+  bool preloaded_indirect_flow = false;
   bool invert_branch_order = false;
   bool preserve_dispatch_case_order = false;
   bool order_procs_by_call_count = false;

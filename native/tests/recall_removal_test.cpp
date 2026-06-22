@@ -1,5 +1,6 @@
 #include "mkpro/core/passes/recall_removal.hpp"
 
+#include "mkpro/core/passes/helpers.hpp"
 #include "test_support.hpp"
 
 #include <string>
@@ -82,6 +83,15 @@ void recall_removal_engine_matches_initial_typescript_contract() {
 
     require(result.applied == 0, "recall-removal removed recall before context-sensitive ВП");
     require(result.ops.size() == 4, "recall-removal changed X2-restore-sensitive program");
+  }
+
+  {
+    const std::vector<IrOp> program = {store("1"),     recall("1"), recall("2"), recall("3"),
+                                       plain(0x10, "+"), plain(0x10, "+"), plain(0x10, "+"),
+                                       halt()};
+
+    require(core::passes::removing_recall_can_expose_stack_lift(program, 1),
+            "recall-removal lost TS depth-3 stack-difference safety");
   }
 }
 

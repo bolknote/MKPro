@@ -365,6 +365,7 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     proc.procedure_boundary = "start";
     std::vector<MachineItem> program = {
         MachineItem::label("main"),
+        digit(),
         MachineItem::op(0x53, "ПП"),
         MachineItem::address("finish_turn"),
         MachineItem::op(0x88, "К БП 8"),
@@ -372,7 +373,7 @@ void post_layout_indirect_flow_matches_typescript_contract() {
         digit(),
         MachineItem::op(0x52, "В/О"),
     };
-    program.at(1).comment = "proc call finish_turn";
+    program.at(2).comment = "proc call finish_turn";
 
     const core::PostLayoutIndirectFlowResult result = core::optimize_post_layout_stop_tail_reuse(
         program,
@@ -385,13 +386,13 @@ void post_layout_indirect_flow_matches_typescript_contract() {
     require(!result.optimizations.empty() &&
                 result.optimizations.at(0).name == "post-layout-empty-stack-tail-call",
             "empty-stack post-layout rewrite should report the TS optimization name");
-    require(result.items.at(1).kind == MachineItemKind::Op && result.items.at(1).opcode == 0x51,
+    require(result.items.at(2).kind == MachineItemKind::Op && result.items.at(2).opcode == 0x51,
             "empty-stack post-layout rewrite should replace the call with a direct jump");
-    require(result.items.at(1).comment.has_value() &&
-                result.items.at(1).comment->find("empty-return-stack") != std::string::npos,
+    require(result.items.at(2).comment.has_value() &&
+                result.items.at(2).comment->find("empty-return-stack") != std::string::npos,
             "empty-stack post-layout rewrite should preserve the proof in the comment");
-    require(result.items.at(2).kind == MachineItemKind::Address &&
-                std::get<std::string>(result.items.at(2).target) == "finish_turn",
+    require(result.items.at(3).kind == MachineItemKind::Address &&
+                std::get<std::string>(result.items.at(3).target) == "finish_turn",
             "empty-stack post-layout rewrite should keep the original procedure target");
     require(std::none_of(result.items.begin(), result.items.end(),
                          [](const MachineItem& item) {

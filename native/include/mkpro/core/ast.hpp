@@ -66,6 +66,7 @@ struct V2StateField {
   std::optional<int> max;
   std::optional<std::string> initial;
   std::optional<std::string> initial_stack;
+  bool implicit = false;
   int line = 0;
 };
 

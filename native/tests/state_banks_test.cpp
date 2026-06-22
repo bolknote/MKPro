@@ -1,8 +1,11 @@
+#include "mkpro/compiler.hpp"
 #include "mkpro/core/state_banks.hpp"
 
 #include "mkpro/core/emit/lowering_helpers.hpp"
 
 #include "test_support.hpp"
+
+#include <algorithm>
 
 namespace mkpro::tests {
 
@@ -48,6 +51,29 @@ void state_banks_match_typescript_contract() {
       core::emit::identifier_expression("blocked")));
   require(int_part.has_value() && int_part->name == "blocked" && int_part->integer_part,
           "affine selector should recognize int(identifier)");
+
+  const CompileResult scalar_bank_initial = compile_source(R"mkpro(
+program ScalarBankInitial {
+  state {
+    digits: counter[1..2] 0..9 = 0
+  }
+
+  loop {
+    digits[1] = 3
+    digits[2] = 4
+    halt(digits[1] + digits[2])
+  }
+}
+)mkpro");
+  require(scalar_bank_initial.implemented, "scalar bank initializer fixture should compile");
+  require(scalar_bank_initial.diagnostics.empty(),
+          "scalar bank initializer fixture should not report diagnostics");
+  require(std::none_of(scalar_bank_initial.preloads.begin(), scalar_bank_initial.preloads.end(),
+                       [](const PreloadReport& preload) {
+                         return preload.setup_target_name.has_value() &&
+                                preload.setup_target_name->starts_with("digits_");
+                       }),
+          "scalar bank initializer should not expand into per-element setup preloads");
 }
 
 }  // namespace mkpro::tests

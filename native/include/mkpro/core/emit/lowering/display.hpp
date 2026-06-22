@@ -27,6 +27,7 @@ struct DisplayEmitApi {
 };
 
 std::vector<std::string> display_scratch_register_names_for_program(const V2Program& program);
+std::string first_splice_display_scratch_name(int source_line);
 std::optional<std::string> collapse_literal_only_display(const std::vector<DisplayItem>& items);
 bool emit_display_literal_program_to_x(MachineEmitter& emitter,
                                        const DisplayLiteralProgram& program, int source_line,

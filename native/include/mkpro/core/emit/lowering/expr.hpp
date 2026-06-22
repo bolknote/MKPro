@@ -16,6 +16,7 @@ struct ExpressionEmitApi {
   std::function<bool(const Expression&)> lower_expression_to_x;
   std::function<void(const std::string&, std::string)> emit_store;
   std::function<bool(const Expression&)> lower_call_to_x;
+  std::function<bool(const Expression&)> call_needs_binary_temp;
   std::function<bool(const Expression&, const std::string&)> expression_contains_identifier;
   std::function<bool(const Expression&)> x_holds_expression;
   std::function<bool(const std::string&)> ensure_hidden_register;

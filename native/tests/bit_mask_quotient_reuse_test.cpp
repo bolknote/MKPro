@@ -27,10 +27,11 @@ int count_comment(const std::vector<std::string>& values, const std::string& com
   return static_cast<int>(std::count(values.begin(), values.end(), comment));
 }
 
-int count_bit_mask_helper_calls(const CompileResult& result) {
+int count_cell_mask_expression_helper_calls(const CompileResult& result) {
   return static_cast<int>(
       std::count_if(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
-        return step.opcode == 0x53 && step.comment == "bit_mask helper";
+        return step.opcode == 0x53 && step.comment.has_value() &&
+               step.comment->starts_with("expr cell_mask(");
       }));
 }
 
@@ -74,8 +75,8 @@ program AdjacentSetUpdates {
   require(first_set_index > scratch_index, "first reused bit_set should follow scratch store");
   require(std::find(scratch_index + 1, first_set_index, "reuse cell bit mask") == first_set_index,
           "first reused bit_set should consume the still-live stack mask without recalling it");
-  require(count_bit_mask_helper_calls(result) == 1,
-          "adjacent cells set updates should compute bit_mask once");
+  require(count_cell_mask_expression_helper_calls(result) == 1,
+          "adjacent cells set updates should compute cell_mask once");
   require(count_comment(step_comments, "bit_set with reused mask") == 2,
           "both cells set updates should use the reused mask");
   require(count_comment(step_comments, "reuse cell bit mask") == 1,
@@ -122,6 +123,7 @@ program SharedBitMaskHelper {
   CompileOptions variant_options;
   variant_options.analysis = true;
   variant_options.budget = 999999;
+  variant_options.disable_candidate_search = true;
   const CompileResult repeated_clear = compile_source(R"mkpro(
 program RepeatedBitClearScratch {
   grid: board(1..7, 1..4)
