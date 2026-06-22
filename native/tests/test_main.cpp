@@ -58,6 +58,7 @@ void random_cell_helpers_match_typescript_contract();
 void recall_removal_engine_matches_initial_typescript_contract();
 void residual_elseif_matches_typescript_contract();
 void residual_temp_matches_typescript_contract();
+void return_stack_script_matches_mk61_strategy_contract();
 void register_allocator_matches_typescript_contract();
 void register_coalesce_matches_typescript_contract();
 void rules_match_typescript_contract();
@@ -193,6 +194,8 @@ int main(int argc, char** argv) {
        mkpro::tests::residual_elseif_matches_typescript_contract},
       {"residual_temp_matches_typescript_contract",
        mkpro::tests::residual_temp_matches_typescript_contract},
+      {"return_stack_script_matches_mk61_strategy_contract",
+       mkpro::tests::return_stack_script_matches_mk61_strategy_contract},
       {"register_allocator_matches_typescript_contract",
        mkpro::tests::register_allocator_matches_typescript_contract},
       {"register_coalesce_matches_typescript_contract",

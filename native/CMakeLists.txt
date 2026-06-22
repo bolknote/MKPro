@@ -79,6 +79,7 @@ add_library(mkpro_core STATIC
   src/core/passes/x2_noop_restore.cpp
   src/core/post_layout_indirect_flow.cpp
   src/core/register_allocator.cpp
+  src/core/return_stack_script.cpp
   src/core/rule_cfg.cpp
   src/core/rules.cpp
   src/core/state_banks.cpp
@@ -147,6 +148,7 @@ add_executable(mkpro_tests
   tests/recall_removal_test.cpp
   tests/residual_elseif_test.cpp
   tests/residual_temp_test.cpp
+  tests/return_stack_script_test.cpp
   tests/register_allocator_test.cpp
   tests/register_coalesce_pass_test.cpp
   tests/rules_test.cpp

@@ -21,6 +21,7 @@
 #include "mkpro/core/passes/register_coalesce.hpp"
 #include "mkpro/core/post_layout_indirect_flow.hpp"
 #include "mkpro/core/register_allocator.hpp"
+#include "mkpro/core/return_stack_script.hpp"
 #include "mkpro/core/rules.hpp"
 #include "mkpro/core/state_banks.hpp"
 #include "mkpro/core/v2_const.hpp"
@@ -32031,6 +32032,15 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
   if (!exact_decimal_series) {
     constexpr int kPostLayoutOfficialProgramLimit = 105;
+    if (options.return_stack_script) {
+      const core::PostLayoutIndirectFlowResult return_stack_script =
+          core::optimize_post_layout_return_stack_script(post_layout_items);
+      post_layout_items = return_stack_script.items;
+      post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                       return_stack_script.optimizations.begin(),
+                                       return_stack_script.optimizations.end());
+    }
+
     const int indirect_flow_rescue_above =
         (options.aggressive_post_layout_indirect_flow || options.preloaded_indirect_flow)
             ? 0
