@@ -388,6 +388,18 @@ std::vector<MachineItem> apply_script_plan(const std::vector<MachineItem>& items
   return result;
 }
 
+int best_cell_count_with_address_overlay(const std::vector<MachineItem>& items) {
+  const PostLayoutIndirectFlowResult overlay = optimize_post_layout_address_code_overlay(items);
+  return machine_cell_count(overlay.items);
+}
+
+bool return_stack_candidate_beats_address_overlay(const std::vector<MachineItem>& current,
+                                                  const std::vector<MachineItem>& candidate) {
+  const int current_best = best_cell_count_with_address_overlay(current);
+  const int candidate_best = best_cell_count_with_address_overlay(candidate);
+  return candidate_best < current_best;
+}
+
 } // namespace
 
 std::vector<int> mk61_return_stack_after_call(std::vector<int> stack,
@@ -433,6 +445,81 @@ std::vector<ReturnStackReturnStep> simulate_mk61_return_stack(std::vector<int> s
   return result;
 }
 
+ReturnStackStartupLayoutPlan build_return_stack_startup_layout(
+    const std::vector<ReturnStackTailBlock>& tails,
+    const std::vector<MachineItem>& entry_body,
+    const std::string& entry_label,
+    const ReturnStackStartupLayoutOptions& options) {
+  ReturnStackStartupLayoutPlan plan;
+  plan.transitions = static_cast<int>(tails.size());
+  plan.existing_call_sites =
+      std::max(0, std::min(options.existing_call_sites, plan.transitions));
+  plan.strategy = plan.existing_call_sites > 0 ? "existing-callsite-layout"
+                                               : "one-shot-startup-prologue";
+  if (tails.size() < 2 || tails.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
+    plan.rejection_reason = "return-stack startup layout requires 2..5 transitions";
+    return plan;
+  }
+
+  plan.injected_call_sites = static_cast<int>(tails.size());
+  plan.paid_call_sites = std::max(0, plan.injected_call_sites - plan.existing_call_sites);
+  plan.transition_savings = static_cast<int>(tails.size());
+  plan.charge_cost = plan.paid_call_sites * 2;
+  plan.net_savings = plan.transition_savings - plan.charge_cost;
+  plan.profitable = plan.net_savings >= options.min_net_savings;
+  if (!plan.profitable) {
+    plan.rejection_reason = "return-stack startup layout does not meet strict net-savings "
+                            "threshold";
+  }
+
+  for (std::size_t index = 0; index < tails.size(); ++index) {
+    MachineItem charge_label = MachineItem::label("__return_stack_charge_" +
+                                                  std::to_string(index));
+    charge_label.hidden = true;
+    plan.items.push_back(std::move(charge_label));
+
+    plan.items.push_back(MachineItem::op(0x53, "ПП"));
+    const std::string target = index + 1U < tails.size()
+                                   ? "__return_stack_charge_" + std::to_string(index + 1U)
+                                   : entry_label;
+    plan.items.push_back(MachineItem::address(target));
+
+    plan.items.push_back(MachineItem::label(tails.at(index).label));
+    plan.items.insert(plan.items.end(), tails.at(index).body.begin(), tails.at(index).body.end());
+  }
+
+  plan.items.push_back(MachineItem::label(entry_label));
+  plan.items.insert(plan.items.end(), entry_body.begin(), entry_body.end());
+  return plan;
+}
+
+DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
+    std::vector<int> stack, int return_count, const DirtyReturnStackDispatchOptions& options) {
+  DirtyReturnStackDispatchPlan plan;
+  plan.risk_reason =
+      "dirty return-stack dispatch depends on exact post-exhaustion 99/77/55/33-style "
+      "stack contents and exact layout addresses";
+  const std::vector<ReturnStackReturnStep> steps =
+      simulate_mk61_return_stack(std::move(stack), return_count);
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    if (index < static_cast<std::size_t>(kReturnStackDepth)) {
+      plan.clean_targets.push_back(steps.at(index).target_address);
+    } else {
+      plan.dirty_return_addresses.push_back(steps.at(index).stored_return_address);
+      plan.dirty_targets.push_back(steps.at(index).target_address);
+    }
+  }
+  if (!options.size_rescue) {
+    plan.rejection_reason = "dirty return-stack dispatch is disabled outside explicit "
+                            "size-rescue mode";
+  } else if (static_cast<int>(plan.dirty_targets.size()) < options.min_dirty_targets) {
+    plan.rejection_reason = "dirty return-stack dispatch did not expose enough dirty targets";
+  } else {
+    plan.enabled = true;
+  }
+  return plan;
+}
+
 PostLayoutIndirectFlowResult
 optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) {
   std::vector<MachineItem> current = items;
@@ -445,6 +532,8 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       break;
     std::vector<MachineItem> candidate = apply_script_plan(current, *plan);
     if (machine_cell_count(candidate) >= machine_cell_count(current))
+      break;
+    if (!return_stack_candidate_beats_address_overlay(current, candidate))
       break;
     applied += static_cast<int>(plan->jumps.size());
     ++scripts;
