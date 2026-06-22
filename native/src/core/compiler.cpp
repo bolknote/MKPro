@@ -18327,9 +18327,17 @@ bool residual_guarded_update_saves(LoweringContext& context,
                                    const ResidualGuardedUpdateMatch& update) {
   const double correction = update.bound + update.delta;
   const std::string correction_raw = format_number_literal(correction);
-  const int ordinary_update_cost = guarded_estimate_expression_cost(parse_expression(
-                                       *update.assignment.expr, update.assignment.line)) +
-                                   1;
+  int ordinary_update_cost = guarded_estimate_expression_cost(parse_expression(
+                                 *update.assignment.expr, update.assignment.line)) +
+                             1;
+  if (update.assignment.kind == "v2_update") {
+    // TS runs this check after V2 lowering, where `room++` has become the full
+    // expression `room + 1` plus a store. Native keeps the sugar longer, so the
+    // RHS-only expression cost would underprice the ordinary update path.
+    ordinary_update_cost = 1 + guarded_estimate_expression_cost(parse_expression(
+                                   *update.assignment.expr, update.assignment.line)) +
+                           1 + 1;
+  }
   const int residual_update_cost =
       (std::fabs(correction) < 1e-12
            ? 0
@@ -20798,6 +20806,41 @@ bool can_skip_dispatch_residual_sign_unit_adjust(const LoweringContext& context,
   return excluded_it->second.contains(static_cast<int>(std::round(matched.bound)));
 }
 
+bool emit_dispatch_residual_sign_expression(LoweringContext& context, const Expression& expression,
+                                            const Expression& dispatch_expression,
+                                            double compared_value, int line) {
+  const std::optional<DispatchResidualSignMatch> matched =
+      match_dispatch_residual_sign_expression(context, expression, dispatch_expression);
+  if (!matched.has_value())
+    return false;
+
+  if (can_skip_dispatch_residual_sign_unit_adjust(context, *matched, dispatch_expression,
+                                                  compared_value)) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "dispatch-default-residual-sign-domain",
+        .detail = "Used integer-domain exclusions to derive " + expression_to_source(expression) +
+                  " without shifting the dispatch residual at line " + std::to_string(line) + ".",
+    });
+  } else {
+    emit_residual_compare_delta(context, matched->bound - compared_value,
+                                "dispatch default residual adjust", line);
+  }
+  if (matched->negate)
+    context.emitter.emit_op(0x0b, "/-/", "dispatch default residual sign direction", line);
+  context.emitter.emit_op(0x32, "К ЗН", "dispatch default residual sign", line);
+  if (matched->factor.has_value()) {
+    if (!lower_expression_to_x(context, *matched->factor))
+      return false;
+    context.emitter.emit_op(0x12, "*", "dispatch default residual sign scale", line);
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "dispatch-default-residual-sign",
+      .detail = "Derived " + expression_to_source(expression) +
+                " from the dispatch residual at line " + std::to_string(line) + ".",
+  });
+  return true;
+}
+
 bool lower_dispatch_residual_default_x_param_call(LoweringContext& context,
                                                   const V2StatementPtr& action,
                                                   const Expression& dispatch_expression,
@@ -20812,30 +20855,9 @@ bool lower_dispatch_residual_default_x_param_call(LoweringContext& context,
     return false;
 
   const Expression arg = parse_expression(action->args.front(), action->line);
-  const std::optional<DispatchResidualSignMatch> matched =
-      match_dispatch_residual_sign_expression(context, arg, dispatch_expression);
-  if (!matched.has_value())
+  if (!emit_dispatch_residual_sign_expression(context, arg, dispatch_expression, compared_value,
+                                              action->line)) {
     return false;
-
-  if (can_skip_dispatch_residual_sign_unit_adjust(context, *matched, dispatch_expression,
-                                                  compared_value)) {
-    context.optimizations.push_back(OptimizationReport{
-        .name = "dispatch-default-residual-sign-domain",
-        .detail = "Used integer-domain exclusions to derive " + action->args.front() +
-                  " without shifting the dispatch residual at line " +
-                  std::to_string(action->line) + ".",
-    });
-  } else {
-    emit_residual_compare_delta(context, matched->bound - compared_value,
-                                "dispatch default residual adjust", action->line);
-  }
-  if (matched->negate)
-    context.emitter.emit_op(0x0b, "/-/", "dispatch default residual sign direction", action->line);
-  context.emitter.emit_op(0x32, "К ЗН", "dispatch default residual sign", action->line);
-  if (matched->factor.has_value()) {
-    if (!lower_expression_to_x(context, *matched->factor))
-      return false;
-    context.emitter.emit_op(0x12, "*", "dispatch default residual sign scale", action->line);
   }
 
   const V2Rule& rule = *rule_it->second;
@@ -20858,6 +20880,49 @@ bool lower_dispatch_residual_default_x_param_call(LoweringContext& context,
     clear_current_x_facts(context);
   }
   return true;
+}
+
+bool lower_dispatch_residual_default_inline_param_call(LoweringContext& context,
+                                                       const V2StatementPtr& action,
+                                                       const Expression& dispatch_expression,
+                                                       double compared_value) {
+  if (action == nullptr || action->kind != "v2_invoke" || !action->name.has_value() ||
+      action->args.size() != 1U) {
+    return false;
+  }
+  const auto rule_it = context.rules.find(*action->name);
+  if (rule_it == context.rules.end())
+    return false;
+  const V2Rule& rule = *rule_it->second;
+  if (rule.params.size() != 1U || rule.body.empty() || statements_contain_return(rule.body) ||
+      count_identifier_reads_in_statements(rule.body, rule.params.front()) != 1 ||
+      context.inline_call_stack.contains(rule.name)) {
+    return false;
+  }
+
+  const Expression arg = parse_expression(action->args.front(), action->line);
+  if (!emit_dispatch_residual_sign_expression(context, arg, dispatch_expression, compared_value,
+                                              action->line)) {
+    return false;
+  }
+
+  context.inline_call_stack.insert(rule.name);
+  mark_current_x(context, rule.params.front());
+  context.emitter.current_x_known_zero = false;
+  const bool lowered = lower_statement_block(context, rule.body);
+  context.inline_call_stack.erase(rule.name);
+  if (lowered) {
+    const int uses =
+        context.proc_call_counts.contains(rule.name) ? context.proc_call_counts[rule.name] : 1;
+    context.optimizations.push_back(OptimizationReport{
+        .name = uses == 1 ? "single-use-rule-inline" : "size-model-rule-inline",
+        .detail = uses == 1 ? "Inlined single-use rule " + rule.name + " at line " +
+                                  std::to_string(action->line) + "."
+                            : "Inlined " + std::to_string(uses) + "-use rule " + rule.name +
+                                  " because it is smaller than a ПП/В/О subroutine.",
+    });
+  }
+  return lowered;
 }
 
 struct NumericMatchCase {
@@ -21044,13 +21109,15 @@ bool lower_numeric_residual_match_statement(LoweringContext& context,
     if (!lower_match_action(context, *match_case.action))
       return false;
     if (!match_action_terminates_statically(context, match_case.action))
-      context.emitter.emit_jump(0x51, "БП", end_label, "match end", match_case.line);
+      context.emitter.emit_jump(0x51, "БП", end_label, "dispatch end", match_case.line);
     context.emitter.emit_label(next_label, {.hidden = true});
   }
 
   if (statement.otherwise != nullptr) {
     if (!lower_dispatch_residual_default_x_param_call(context, statement.otherwise, match_expr,
                                                       compared_value) &&
+        !lower_dispatch_residual_default_inline_param_call(context, statement.otherwise, match_expr,
+                                                           compared_value) &&
         !lower_match_action(context, *statement.otherwise)) {
       return false;
     }
@@ -21129,7 +21196,7 @@ bool lower_match_statement(LoweringContext& context, const V2Statement& statemen
       if (match_case.action != nullptr && !lower_match_action(context, *match_case.action))
         return false;
       if (!match_action_terminates_statically(context, match_case.action.get()))
-        context.emitter.emit_jump(0x51, "БП", end_label, "match end", match_case.line);
+        context.emitter.emit_jump(0x51, "БП", end_label, "dispatch end", match_case.line);
       context.emitter.emit_label(next_label, {.hidden = true});
     }
   }
@@ -25045,7 +25112,7 @@ void warn_undeclared_allocations(const V2Program& program, bool strict,
 
 void warn_show_halt_style_statements(const std::vector<V2Statement>& statements,
                                      std::set<int>& seen_lines,
-                                     std::vector<Diagnostic>& diagnostics);
+                                     std::vector<std::string>& warnings);
 
 bool is_bare_halt_zero(const V2Statement& statement) {
   return statement.kind == "v2_stop" && !statement.items.has_value() &&
@@ -25054,23 +25121,23 @@ bool is_bare_halt_zero(const V2Statement& statement) {
 
 void warn_show_halt_style_statement_children(const V2Statement& statement,
                                              std::set<int>& seen_lines,
-                                             std::vector<Diagnostic>& diagnostics) {
-  warn_show_halt_style_statements(statement.body, seen_lines, diagnostics);
-  warn_show_halt_style_statements(statement.then_body, seen_lines, diagnostics);
-  warn_show_halt_style_statements(statement.else_body, seen_lines, diagnostics);
+                                             std::vector<std::string>& warnings) {
+  warn_show_halt_style_statements(statement.body, seen_lines, warnings);
+  warn_show_halt_style_statements(statement.then_body, seen_lines, warnings);
+  warn_show_halt_style_statements(statement.else_body, seen_lines, warnings);
   for (const V2MatchCase& match_case : statement.cases) {
     if (match_case.action != nullptr)
       warn_show_halt_style_statements(std::vector<V2Statement>{*match_case.action}, seen_lines,
-                                      diagnostics);
+                                      warnings);
   }
   if (statement.otherwise != nullptr)
     warn_show_halt_style_statements(std::vector<V2Statement>{*statement.otherwise}, seen_lines,
-                                    diagnostics);
+                                    warnings);
 }
 
 void warn_show_halt_style_statements(const std::vector<V2Statement>& statements,
                                      std::set<int>& seen_lines,
-                                     std::vector<Diagnostic>& diagnostics) {
+                                     std::vector<std::string>& warnings) {
   for (std::size_t index = 0; index < statements.size(); ++index) {
     const V2Statement& statement = statements.at(index);
     if (statement.kind == "v2_show" && index + 1U < statements.size() &&
@@ -25078,21 +25145,20 @@ void warn_show_halt_style_statements(const std::vector<V2Statement>& statements,
         !seen_lines.contains(statements.at(index + 1U).line)) {
       const int line = statements.at(index + 1U).line;
       seen_lines.insert(line);
-      diagnostics.push_back(diagnostic(
-          DiagnosticSeverity::Warning, "show-halt-style",
+      warnings.push_back(
           "show(...) immediately followed by halt() at line " + std::to_string(line) +
               ": for one final screen put the visible value directly in halt(...) instead of "
-              "describing two display effects"));
+              "describing two display effects");
     }
-    warn_show_halt_style_statement_children(statement, seen_lines, diagnostics);
+    warn_show_halt_style_statement_children(statement, seen_lines, warnings);
   }
 }
 
-void warn_show_halt_style_rule(const V2Program& program, std::vector<Diagnostic>& diagnostics) {
+void warn_show_halt_style_rule(const V2Program& program, std::vector<std::string>& warnings) {
   std::set<int> seen_lines;
-  warn_show_halt_style_statements(program.body, seen_lines, diagnostics);
+  warn_show_halt_style_statements(program.body, seen_lines, warnings);
   for (const V2Rule& rule : program.rules)
-    warn_show_halt_style_statements(rule.body, seen_lines, diagnostics);
+    warn_show_halt_style_statements(rule.body, seen_lines, warnings);
 }
 
 bool expression_is_deterministic_for_test_and_set(const Expression& expression) {
@@ -31865,7 +31931,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         loop_prompt_names.insert(name);
       }
       warn_undeclared_allocations(*ast.v2, options.strict, loop_prompt_names, context.diagnostics);
-      warn_show_halt_style_rule(*ast.v2, context.diagnostics);
+      warn_show_halt_style_rule(*ast.v2, result.warnings);
       context.transient_show_targets = transient_show_targets(*ast.v2);
       if (!has_errors(context.diagnostics)) {
         index_program_metadata(context, *ast.v2);

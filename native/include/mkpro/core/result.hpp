@@ -143,6 +143,7 @@ struct CompileOptions {
 struct CompileResult {
   bool implemented = false;
   std::vector<Diagnostic> diagnostics;
+  std::vector<std::string> warnings;
   std::vector<MachineItem> items;
   std::vector<ResolvedStep> steps;
   std::map<std::string, std::string> registers;

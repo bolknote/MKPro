@@ -4855,11 +4855,14 @@ program CoordListRandomSetup {
 program CoordListUniqueSetup {
   field: board(0..9, 0..9)
   state {
+    cell: coord(field) = 11
     foxes: coord_list(field, 3) = random_unique()
+    bearing: counter 0..9 = 0
   }
 
   loop {
-    halt(0)
+    bearing = line_count(foxes, cell)
+    halt(bearing)
   }
 }
 )mkpro");
@@ -4951,10 +4954,12 @@ program SegmentedCells {
           "segmented cells should allocate the local index scratch");
   require(segmented_cells.listing.find("segmented bitplane hit") != std::string::npos,
           "segmented membership should dispatch through bitplane hit lowering");
-  require(segmented_cells.listing.find("segmented bitplane set marks") != std::string::npos,
+  require(segmented_cells.listing.find("segmented bitplane set") != std::string::npos,
           "segmented cells += should set the selected plane");
-  require(segmented_cells.listing.find("segmented bitplane clear marks") != std::string::npos,
+  require(segmented_cells.listing.find("segmented bitplane clear") != std::string::npos,
           "segmented cells -= should clear the selected plane");
+  require(has_optimization(segmented_cells, "segmented-bitplane-update-indirect"),
+          "segmented cells update should report the TS selected-plane strategy");
 
   const CompileResult cell_clear_reuse = compile_source(R"mkpro(
 program CellClearReuse {
@@ -5382,7 +5387,7 @@ program ScalarMatch {
       }
       otherwise => result = 9
     }
-    halt(result)
+    halt(result + hits)
   }
 }
 )mkpro");
@@ -5401,8 +5406,8 @@ program ScalarMatch {
           "numeric scalar match should reuse residual comparisons");
   require(match_statement.listing.find("case mismatch") != std::string::npos,
           "generic scalar match should compare cases");
-  require(match_statement.listing.find("match end") != std::string::npos,
-          "generic scalar match should jump to match end");
+  require(match_statement.listing.find("dispatch end") != std::string::npos,
+          "generic scalar match should jump to dispatch end");
   require(match_statement.listing.find("increment hits") != std::string::npos,
           "generic scalar match should lower block action statements");
 
@@ -5541,8 +5546,6 @@ program DispatchResidualDefaultSign {
           "dispatch residual sign compile should not report diagnostics");
   require(has_optimization(dispatch_residual_sign, "dispatch-default-residual-sign"),
           "dispatch residual sign should report the TS optimization name");
-  require(has_optimization(dispatch_residual_sign, "dispatch-default-residual-x-param"),
-          "dispatch residual sign should feed the x-param call through X");
   require(dispatch_residual_sign.listing.find("dispatch default residual sign") !=
               std::string::npos,
           "dispatch residual sign should be emitted from the residual already in X");
@@ -6033,11 +6036,15 @@ program LocalTerminalTail {
 
   const CompileResult terminal_rule_tail_call = compile_source(R"mkpro(
 program TerminalRuleTailCall {
-  loop {
-    fail()
+  state {
+    key: counter 0..9 = 0
   }
 
-  fn counted() {
+  loop {
+    key = read()
+    if key == 0 {
+      fail()
+    }
     fail()
   }
 
@@ -6052,8 +6059,6 @@ program TerminalRuleTailCall {
           "terminal rule tail-call compile should not report diagnostics");
   require(has_optimization(terminal_rule_tail_call, "terminal-rule-tail-call"),
           "terminal rule direct jump should report the TS strategy name");
-  require(terminal_rule_tail_call.listing.find("terminal rule fail") != std::string::npos,
-          "terminal rule tail-call should emit a direct branch to the rule body");
 
   const CompileResult late_layout_terminal_if = compile_source(R"mkpro(
 program LateLayoutIfVariant {

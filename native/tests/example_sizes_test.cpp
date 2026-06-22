@@ -98,7 +98,7 @@ void example_sizes_match_typescript_baselines() {
   const std::filesystem::path examples_root = root / "examples";
   const std::filesystem::path pending_root = examples_root / "pending-optimizer";
 
-  const std::vector<std::string> expected_examples = [] {
+  const std::vector<std::string> expected_examples = [&] {
     std::vector<std::string> names;
     names.reserve(EXAMPLE_BASELINE.size());
     for (const auto& entry : EXAMPLE_BASELINE)
@@ -106,7 +106,7 @@ void example_sizes_match_typescript_baselines() {
     return names;
   }();
 
-  const std::vector<std::string> expected_pending = [] {
+  const std::vector<std::string> expected_pending = [&] {
     std::vector<std::string> names;
     names.reserve(PENDING_BASELINE.size());
     for (const auto& entry : PENDING_BASELINE)

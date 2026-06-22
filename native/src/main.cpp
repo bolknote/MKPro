@@ -135,6 +135,13 @@ void print_json(const mkpro::CompileResult& result) {
     std::cout << "}" << (index + 1U == result.optimizations.size() ? "" : ",") << "\n";
   }
   std::cout << "  ]";
+  std::cout << ",\n  \"warnings\": [\n";
+  for (std::size_t index = 0; index < result.warnings.size(); ++index) {
+    std::cout << "    ";
+    print_json_string(std::cout, result.warnings[index]);
+    std::cout << (index + 1U == result.warnings.size() ? "" : ",") << "\n";
+  }
+  std::cout << "  ]";
   if (!result.coalesce_shares.empty()) {
     std::cout << ",\n  \"coalesceShares\": [\n";
     for (std::size_t index = 0; index < result.coalesce_shares.size(); ++index) {

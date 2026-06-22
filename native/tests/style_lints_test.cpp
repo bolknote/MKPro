@@ -15,9 +15,10 @@ std::vector<std::string> show_halt_warnings(const std::string& source) {
   for (const Diagnostic& diagnostic : result.diagnostics) {
     require(diagnostic.severity != DiagnosticSeverity::Error,
             "style lint fixture should compile without errors: " + diagnostic.message);
-    if (diagnostic.severity == DiagnosticSeverity::Warning &&
-        diagnostic.message.find("show(...) immediately followed by halt()") != std::string::npos)
-      warnings.push_back(diagnostic.message);
+  }
+  for (const std::string& warning : result.warnings) {
+    if (warning.find("show(...) immediately followed by halt()") != std::string::npos)
+      warnings.push_back(warning);
   }
   return warnings;
 }

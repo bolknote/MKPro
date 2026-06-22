@@ -3,25 +3,12 @@
 #include "test_support.hpp"
 
 #include <algorithm>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
 #include <string>
 #include <string_view>
 
 namespace mkpro::tests {
 
 namespace {
-
-std::string read_text(const std::filesystem::path& path) {
-  std::ifstream input(path);
-  if (!input) {
-    throw std::runtime_error("cannot read fixture: " + path.string());
-  }
-  std::ostringstream buffer;
-  buffer << input.rdbuf();
-  return buffer.str();
-}
 
 bool has_optimization(const CompileResult& result, std::string_view name) {
   return std::any_of(result.optimizations.begin(), result.optimizations.end(),
