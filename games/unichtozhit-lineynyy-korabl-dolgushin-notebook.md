@@ -1,6 +1,6 @@
 # Уничтожить линейный корабль
 
-- Автор: автор неизвестен
+- Автор: Александр Долгушин
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", Рисунок (26).jpg
 - Программа: [unichtozhit-lineynyy-korabl-dolgushin-notebook.txt](unichtozhit-lineynyy-korabl-dolgushin-notebook.txt)
 

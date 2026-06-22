@@ -1,6 +1,6 @@
 # CRAZY FLY
 
-- Автор: неизвестен
+- Автор: Александр Долгушин
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", Рисунок (20).jpg; Рисунок (21).jpg
 - Программа: [crazy-fly-dolgushin-notebook.txt](crazy-fly-dolgushin-notebook.txt)
 

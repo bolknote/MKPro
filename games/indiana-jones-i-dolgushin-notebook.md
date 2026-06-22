@@ -1,5 +1,7 @@
 # INDIANA JONES I
 
+- Автор: Александр Долгушин
+
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 46, «INDIANA JONES I»
 - Программа: [indiana-jones-i-dolgushin-notebook.txt](indiana-jones-i-dolgushin-notebook.txt)
 

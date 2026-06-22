@@ -1,5 +1,7 @@
 # DARK EMPIRE
 
+- Автор: Александр Долгушин
+
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 45, «DARK EMPIRE»
 - Программа: [dark-empire-dolgushin-notebook.txt](dark-empire-dolgushin-notebook.txt)
 

@@ -1,6 +1,6 @@
 # ARCTIC RACE II
 
-- Автор: автор неизвестен
+- Автор: Александр Долгушин
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", Рисунок (33).jpg; Рисунок (34).jpg
 - Программа: [arctic-race-ii-dolgushin-notebook.txt](arctic-race-ii-dolgushin-notebook.txt)
 

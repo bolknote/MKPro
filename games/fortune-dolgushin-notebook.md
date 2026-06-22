@@ -1,5 +1,7 @@
 # FORTUNE
 
+- Автор: Александр Долгушин
+
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 44, «FORTUNE»
 - Программа: [fortune-dolgushin-notebook.txt](fortune-dolgushin-notebook.txt)
 

@@ -1,6 +1,6 @@
 # SPACE RANGER
 
-- Автор: автор неизвестен
+- Автор: Александр Долгушин
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", Рисунок (38).jpg; Рисунок (39).jpg; Рисунок (40).jpg
 - Программа: [space-ranger-dolgushin-notebook.txt](space-ranger-dolgushin-notebook.txt)
 

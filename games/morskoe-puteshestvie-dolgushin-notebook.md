@@ -1,6 +1,6 @@
 # Морское путешествие
 
-- Автор: неизвестен
+- Автор: Александр Долгушин
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", Рисунок (12).jpg; Рисунок (13).jpg
 - Программа: [morskoe-puteshestvie-dolgushin-notebook.txt](morskoe-puteshestvie-dolgushin-notebook.txt)
 

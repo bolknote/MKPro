@@ -1,5 +1,7 @@
 # BUSSINESMAN
 
+- Автор: Александр Долгушин
+
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 43, «BUSSINESMAN»
 - Программа: [bussinesman-dolgushin-notebook.txt](bussinesman-dolgushin-notebook.txt)
 

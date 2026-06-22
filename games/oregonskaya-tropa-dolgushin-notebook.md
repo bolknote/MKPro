@@ -1,6 +1,7 @@
 # Орегонская тропа
 
 - Автор: неизвестен
+- Редакция: Александр Долгушин
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", Рисунок (23).jpg; Рисунок (24).jpg
 - Программа: [oregonskaya-tropa-dolgushin-notebook.txt](oregonskaya-tropa-dolgushin-notebook.txt)
 

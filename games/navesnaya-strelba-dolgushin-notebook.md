@@ -1,6 +1,7 @@
 # Навесная стрельба
 
 - Автор: автор неизвестен
+- Редакция: Александр Долгушин
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", Рисунок (26).jpg; Рисунок (27).jpg
 - Программа: [navesnaya-strelba-dolgushin-notebook.txt](navesnaya-strelba-dolgushin-notebook.txt)
 

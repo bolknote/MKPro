@@ -1,5 +1,7 @@
 # HORSES RACE
 
+- Автор: Александр Долгушин
+
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 40, «HORSES RACE»
 - Программа: [horses-race-dolgushin-notebook.txt](horses-race-dolgushin-notebook.txt)
 

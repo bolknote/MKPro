@@ -1,5 +1,7 @@
 # SPELEOLOG
 
+- Автор: Александр Долгушин
+
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 38, «SPELEOLOG»
 - Программа: [speleolog-dolgushin-notebook.txt](speleolog-dolgushin-notebook.txt)
 

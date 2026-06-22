@@ -1,5 +1,7 @@
 # ARMAGEDDON MAN
 
+- Автор: Александр Долгушин
+
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", программа 47, страницы `Рисунок (71).jpg` - `Рисунок (74).jpg`
 - Программа: [armageddon-man-dolgushin-notebook.txt](armageddon-man-dolgushin-notebook.txt)
 

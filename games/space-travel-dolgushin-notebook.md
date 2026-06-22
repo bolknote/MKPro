@@ -1,6 +1,6 @@
 # SPACE TRAVEL
 
-- Автор: автор неизвестен
+- Автор: Александр Долгушин
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", Рисунок (42).jpg; Рисунок (43).jpg; Рисунок (44).jpg; Рисунок (45).jpg; Рисунок (46).jpg
 - Программа: [space-travel-dolgushin-notebook.txt](space-travel-dolgushin-notebook.txt)
 

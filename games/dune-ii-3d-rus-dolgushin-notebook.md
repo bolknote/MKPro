@@ -1,6 +1,6 @@
 # DUNE II 3D RUS
 
-- Автор: автор неизвестен
+- Автор: Александр Долгушин
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", Рисунок (28).jpg; Рисунок (29).jpg; Рисунок (30).jpg
 - Программа: [dune-ii-3d-rus-dolgushin-notebook.txt](dune-ii-3d-rus-dolgushin-notebook.txt)
 

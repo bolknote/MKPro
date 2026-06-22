@@ -1,6 +1,6 @@
 # Космический перелёт
 
-- Автор: неизвестен
+- Автор: Александр Долгушин
 - Источник: тетрадь Александра Долгушина "Мои игры МК-61", страницы 8-9, `Рисунок (8).jpg`, `Рисунок (9).jpg`
 - Программа: [kosmicheskiy-perelet-dolgushin-notebook.txt](kosmicheskiy-perelet-dolgushin-notebook.txt)
 
