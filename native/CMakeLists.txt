@@ -102,9 +102,11 @@ add_executable(mkpro_tests
   tests/board_width_macros_test.cpp
   tests/cfg_test.cpp
   tests/compiler_coord_list_test.cpp
+  tests/examples_contract_test.cpp
   tests/compiler_display_test.cpp
   tests/compiler_test.cpp
   tests/counted_loop_unroll_test.cpp
+  tests/example_sizes_test.cpp
   tests/constant_folding_test.cpp
   tests/cse_display_block_test.cpp
   tests/dead_code_after_halt_test.cpp
@@ -125,6 +127,7 @@ add_executable(mkpro_tests
   tests/indirect_selector_integer_part_test.cpp
   tests/inline_floor_packed_row_test.cpp
   tests/ir_round_trip_test.cpp
+  tests/golden_listing_contract_test.cpp
   tests/liveness_analysis_test.cpp
   tests/lowering_helpers_test.cpp
   tests/machine_profile_test.cpp
@@ -135,6 +138,7 @@ add_executable(mkpro_tests
   tests/packed_counter_stripes_test.cpp
   tests/packed_display_helper_test.cpp
   tests/packed_score_helper_test.cpp
+  tests/setup_format_contract_test.cpp
   tests/parser_test.cpp
   tests/passes_test.cpp
   tests/post_layout_indirect_flow_test.cpp
@@ -152,6 +156,7 @@ add_executable(mkpro_tests
   tests/setup_only_counted_loop_test.cpp
   tests/show_read_guarded_transfer_test.cpp
   tests/show_sequence_helper_test.cpp
+  tests/show_optimization_contract_test.cpp
   tests/small_set_condition_test.cpp
   tests/spatial_helpers_test.cpp
   tests/state_banks_test.cpp

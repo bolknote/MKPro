@@ -24,11 +24,15 @@ void display_byte_helpers_match_typescript_contract();
 void display_lowering_helpers_match_typescript_contract();
 void duplicate_failure_tail_matches_typescript_contract();
 void emitter_matches_initial_typescript_contract();
+void example_sizes_match_typescript_baselines();
+void compiler_examples_match_typescript_contract();
 void supported_examples_match_native_oracles();
 void expression_helpers_match_typescript_contract();
 void expression_lowering_helpers_match_typescript_contract();
 void formal_address_matches_typescript_contract();
 void format_primitives_match_typescript_contract();
+void golden_listing_contract_matches_typescript_contract();
+void setup_formatting_matches_typescript_contract();
 void functions_match_typescript_contract();
 void indirect_addressing_matches_typescript_contract();
 void indirect_selector_integer_part_matches_typescript_contract();
@@ -124,6 +128,10 @@ int main(int argc, char** argv) {
        mkpro::tests::duplicate_failure_tail_matches_typescript_contract},
       {"emitter_matches_initial_typescript_contract",
        mkpro::tests::emitter_matches_initial_typescript_contract},
+      {"example_sizes_match_typescript_baselines",
+       mkpro::tests::example_sizes_match_typescript_baselines},
+      {"compiler_examples_match_typescript_contract",
+       mkpro::tests::compiler_examples_match_typescript_contract},
       {"supported_examples_match_native_oracles",
        mkpro::tests::supported_examples_match_native_oracles},
       {"expression_helpers_match_typescript_contract",
@@ -134,6 +142,8 @@ int main(int argc, char** argv) {
        mkpro::tests::formal_address_matches_typescript_contract},
       {"format_primitives_match_typescript_contract",
        mkpro::tests::format_primitives_match_typescript_contract},
+      {"golden_listing_contract_matches_typescript_contract",
+       mkpro::tests::golden_listing_contract_matches_typescript_contract},
       {"functions_match_typescript_contract", mkpro::tests::functions_match_typescript_contract},
       {"indirect_addressing_matches_typescript_contract",
        mkpro::tests::indirect_addressing_matches_typescript_contract},
@@ -195,6 +205,10 @@ int main(int argc, char** argv) {
        mkpro::tests::setup_program_matches_typescript_contract},
       {"setup_only_counted_loop_matches_typescript_contract",
        mkpro::tests::setup_only_counted_loop_matches_typescript_contract},
+      {"show_optimization_strategies_match_typescript_contract",
+       mkpro::tests::show_optimization_strategies_match_typescript_contract},
+      {"setup_formatting_matches_typescript_contract",
+       mkpro::tests::setup_formatting_matches_typescript_contract},
       {"show_read_guarded_transfer_matches_typescript_contract",
        mkpro::tests::show_read_guarded_transfer_matches_typescript_contract},
       {"show_sequence_helpers_match_typescript_contract",
