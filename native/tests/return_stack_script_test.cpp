@@ -33,12 +33,45 @@ std::vector<MachineItem> jump(const std::string& target) {
   };
 }
 
-std::vector<MachineItem> direct_tail(int value, const std::string& target) {
+IrOp ir_plain(int opcode) {
+  IrOp op;
+  op.kind = IrKind::Plain;
+  op.opcode = opcode;
+  op.meta.mnemonic = std::to_string(opcode);
+  return op;
+}
+
+IrOp ir_stop() {
+  IrOp op;
+  op.kind = IrKind::Stop;
+  op.opcode = 0x50;
+  op.semantic = "halt";
+  op.meta.mnemonic = "С/П";
+  return op;
+}
+
+IrOp ir_jump(const std::string& target) {
+  IrOp op;
+  op.kind = IrKind::Jump;
+  op.opcode = 0x51;
+  op.target = target;
+  op.meta.mnemonic = "БП";
+  return op;
+}
+
+std::vector<IrOp> ir_jump_body(const std::string& target) {
+  return {ir_jump(target)};
+}
+
+std::vector<IrOp> direct_tail(int value, const std::string& target) {
   return {
-      digit(value),
-      MachineItem::op(0x51, "БП"),
-      MachineItem::address(target),
+      ir_plain(value),
+      ir_jump(target),
   };
+}
+
+std::vector<MachineItem> repeated_stop_layout(int cells) {
+  return std::vector<MachineItem>(static_cast<std::size_t>(cells), stop());
 }
 
 void append(std::vector<MachineItem>& items, const std::vector<MachineItem>& tail) {
@@ -178,7 +211,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
     std::vector<core::ReturnStackTailBlock> tails;
     tails.push_back(core::ReturnStackTailBlock{
         .label = "t1",
-        .body = {digit(1), stop()},
+        .body = {ir_plain(1), ir_stop()},
     });
     tails.push_back(core::ReturnStackTailBlock{
         .label = "t2",
@@ -189,7 +222,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
         .body = direct_tail(3, "t2"),
     });
     const core::ReturnStackStartupLayoutPlan plan =
-        core::build_return_stack_startup_layout(tails, jump("t3"));
+        core::build_return_stack_startup_layout(tails, ir_jump_body("t3"));
 
     require(plan.transitions == 3, "startup layout producer should count scripted transitions");
     require(plan.injected_call_sites == 3,
@@ -202,32 +235,121 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "pure one-shot startup prologue should be rejected by strict cost threshold");
     require(plan.strategy == "one-shot-startup-prologue" && !plan.rejection_reason.empty(),
             "unprofitable pure startup prologue should carry strategy/rejection metadata");
+    require(plan.one_shot_proved && plan.no_backward_charge_jumps &&
+                plan.no_external_charge_entries && plan.unique_entry_after_charge &&
+                plan.tail_order_proved,
+            "startup analyzer should prove the one-shot charging-chain invariants");
+    require(plan.ordered_tail_labels == std::vector<std::string>({"t1", "t2", "t3"}),
+            "startup analyzer should expose the physical tail order it proved from IR");
+    require(!plan.proofs.empty(), "startup analyzer should expose proof details");
     require(core::optimize_post_layout_return_stack_script(plan.items).applied == 3,
             "startup layout producer should place ПП callsites so the detector can prove them");
   }
 
   {
     std::vector<core::ReturnStackTailBlock> tails;
-    for (int index = 1; index <= 5; ++index) {
+    for (int index = 5; index >= 1; --index) {
       tails.push_back(core::ReturnStackTailBlock{
           .label = "t" + std::to_string(index),
-          .body = index == 1 ? std::vector<MachineItem>{digit(1), stop()}
+          .body = index == 1 ? std::vector<IrOp>{ir_plain(1), ir_stop()}
                              : direct_tail(index, "t" + std::to_string(index - 1)),
       });
     }
+    std::vector<core::ReturnStackExistingCallSite> existing_call_sites;
+    for (int index = 1; index <= 5; ++index) {
+      existing_call_sites.push_back(core::ReturnStackExistingCallSite{
+          .label = "existing_call_" + std::to_string(index),
+          .target_label = index == 5 ? "__return_stack_entry"
+                                     : "__return_stack_charge_" + std::to_string(index),
+          .continuation_label = "t" + std::to_string(index),
+          .source_address = index * 10,
+      });
+    }
+    const core::ReturnStackLayoutOpportunityAnalysis analysis =
+        core::analyze_return_stack_layout_opportunity(
+            core::ReturnStackLayoutOpportunity{
+                .tails = tails,
+                .entry_body = ir_jump_body("t5"),
+                .entry_label = "__return_stack_entry",
+                .existing_call_sites = existing_call_sites,
+            });
     const core::ReturnStackStartupLayoutPlan plan =
-        core::build_return_stack_startup_layout(tails, jump("t5"),
-                                                "__return_stack_entry",
-                                                {.existing_call_sites = 5});
+        core::materialize_return_stack_layout(analysis);
 
     require(plan.strategy == "existing-callsite-layout",
             "layout producer should distinguish existing-callsite charging");
+    require(plan.tail_order_proved &&
+                plan.ordered_tail_labels ==
+                    std::vector<std::string>({"t1", "t2", "t3", "t4", "t5"}),
+            "layout producer should reorder real IR tails into return-stack physical order");
     require(plan.existing_call_sites == 5 && plan.paid_call_sites == 0,
             "existing-callsite layout should treat all charge sites as free");
     require(plan.charge_cost == 0 && plan.net_savings == 5 && plan.profitable,
             "existing-callsite layout should be profitable when charging is free");
     require(core::optimize_post_layout_return_stack_script(plan.items).applied == 5,
             "profitable generated layout should still be provable by the detector");
+  }
+
+  {
+    std::vector<core::ReturnStackTailBlock> tails = {
+        core::ReturnStackTailBlock{.label = "t1", .body = {ir_plain(1), ir_stop()}},
+        core::ReturnStackTailBlock{.label = "t2", .body = direct_tail(2, "t1")},
+    };
+    const core::ReturnStackLayoutOpportunityAnalysis analysis =
+        core::analyze_return_stack_layout_opportunity(
+            core::ReturnStackLayoutOpportunity{
+                .tails = tails,
+                .entry_body = ir_jump_body("t2"),
+                .existing_call_sites =
+                    {
+                        core::ReturnStackExistingCallSite{
+                            .label = "bad_existing_call",
+                            .target_label = "wrong_target",
+                            .continuation_label = "t1",
+                            .source_address = 12,
+                        },
+                    },
+            });
+    require(analysis.plan.existing_call_sites == 0 && analysis.plan.paid_call_sites == 2,
+            "startup analyzer should count only concrete existing callsites that match the "
+            "generated charge edge and continuation");
+    require(!analysis.plan.risk_reasons.empty(),
+            "startup analyzer should explain ignored existing-callsite candidates");
+  }
+
+  {
+    std::vector<core::ReturnStackTailBlock> tails = {
+        core::ReturnStackTailBlock{.label = "t1", .body = {ir_plain(1), ir_stop()}},
+        core::ReturnStackTailBlock{.label = "t2", .body = direct_tail(2, "t1")},
+    };
+    const core::ReturnStackLayoutOpportunityAnalysis analysis =
+        core::analyze_return_stack_layout_opportunity(
+            core::ReturnStackLayoutOpportunity{
+                .tails = tails,
+                .entry_body = ir_jump_body("t2"),
+                .entry_at_address_zero = false,
+                .single_start_jump = false,
+            });
+    require(!analysis.plan.one_shot_proved && !analysis.plan.profitable,
+            "layout analyzer should reject opportunities without one-shot proof");
+    require(analysis.plan.rejection_reason.find("one-shot") != std::string::npos,
+            "one-shot rejection should be explicit");
+  }
+
+  {
+    std::vector<core::ReturnStackTailBlock> tails = {
+        core::ReturnStackTailBlock{.label = "t1", .body = {ir_plain(1), ir_stop()}},
+        core::ReturnStackTailBlock{.label = "t2", .body = direct_tail(2, "t1")},
+    };
+    const core::ReturnStackLayoutOpportunityAnalysis analysis =
+        core::analyze_return_stack_layout_opportunity(
+            core::ReturnStackLayoutOpportunity{
+                .tails = tails,
+                .entry_body = ir_jump_body("t2"),
+            },
+            {.min_net_savings = 0, .size_rescue = true});
+    require(!analysis.plan.allowed_by_size_rescue || analysis.plan.net_savings == 0,
+            "size-rescue admission should only apply to zero-net opportunities");
   }
 
   {
@@ -307,6 +429,99 @@ void return_stack_script_matches_mk61_strategy_contract() {
         core::optimize_post_layout_return_stack_script(one_return);
     require(result.applied == 0,
             "return-stack script should not spend the strategy on a one-transition script");
+  }
+
+  {
+    const std::vector<std::vector<int>> matrix = {
+        {19, 27, 35, 43, 51, 99, 100},
+        {27, 35, 43, 51, 59, 77, 78},
+        {35, 43, 51, 59, 67, 55, 56},
+        {43, 51, 59, 67, 75, 33, 34},
+    };
+    for (const std::vector<int>& row : matrix) {
+      std::vector<MachineItem> layout = repeated_stop_layout(row.at(6) + 2);
+      layout.at(static_cast<std::size_t>(row.at(6))) = digit(8);
+      const core::DirtyReturnStackDispatchPlan plan =
+          core::plan_dirty_return_stack_dispatch(
+              {row.at(0), row.at(1), row.at(2), row.at(3), row.at(4)}, 6, layout,
+              {.size_rescue = true});
+      require(plan.enabled && plan.layout_proved,
+              "dirty dispatch layout proof should accept safe matrix cells");
+      require(plan.dirty_return_addresses == std::vector<int>({row.at(5)}) &&
+                  plan.dirty_targets == std::vector<int>({row.at(6)}),
+              "dirty dispatch matrix should expose stored return and actual PC");
+      require(plan.cell_proofs.size() == 1 && plan.cell_proofs.front().safe &&
+                  plan.cell_proofs.front().required_opcode == 0x08,
+              "dirty dispatch proof should expose the required opcode");
+    }
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(78) = MachineItem::op(0x51, "БП");
+    const core::DirtyReturnStackDispatchPlan plan =
+        core::plan_dirty_return_stack_dispatch({27, 35, 43, 51, 59}, 6, layout,
+                                               {.size_rescue = true});
+    require(!plan.enabled && !plan.layout_proved &&
+                plan.cell_proofs.front().rejection_reason.find("address-taking") !=
+                    std::string::npos,
+            "dirty dispatch proof should reject address-taking opcode without operand");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(78) = digit(8);
+    const core::DirtyReturnStackDispatchPlan plan =
+        core::plan_dirty_return_stack_dispatch({27, 35, 43, 51, 59}, 8, layout,
+                                               {.size_rescue = true});
+    require(plan.enabled && plan.layout_proved,
+            "dirty dispatch proof should accept repeated dirty returns to the same safe cell");
+    require(plan.dirty_return_addresses == std::vector<int>({77, 77, 77}) &&
+                plan.dirty_targets == std::vector<int>({78, 78, 78}) &&
+                plan.cell_proofs.size() == 3,
+            "dirty dispatch proof should expose every repeated dirty stored return and actual PC");
+    require(std::all_of(plan.cell_proofs.begin(), plan.cell_proofs.end(),
+                        [](const core::DirtyReturnStackDispatchCellProof& proof) {
+                          return proof.safe && proof.required_opcode == 0x08;
+                        }),
+            "dirty dispatch proof should prove each repeated dirty target cell");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(78) = digit(7);
+    layout.at(79) = digit(8);
+    const core::DirtyReturnStackDispatchPlan plan =
+        core::plan_dirty_return_stack_dispatch({27, 35, 43, 51, 59}, 6, layout,
+                                               {.size_rescue = true});
+    require(!plan.enabled && !plan.layout_proved &&
+                plan.cell_proofs.front().rejection_reason.find("number-entry") !=
+                    std::string::npos,
+            "dirty dispatch proof should reject number-entry glue");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(78) = stop();
+    const core::DirtyReturnStackDispatchPlan plan =
+        core::plan_dirty_return_stack_dispatch({27, 35, 43, 51, 59}, 6, layout,
+                                               {.size_rescue = true});
+    require(!plan.enabled && !plan.layout_proved &&
+                plan.cell_proofs.front().rejection_reason.find("stops") != std::string::npos,
+            "dirty dispatch proof should reject stop cells when fallthrough is required");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
+    MachineItem formal = MachineItem::address(0);
+    formal.formal_opcode = 0xfa;
+    layout.at(78) = formal;
+    const core::DirtyReturnStackDispatchPlan plan =
+        core::plan_dirty_return_stack_dispatch({27, 35, 43, 51, 59}, 6, layout,
+                                               {.size_rescue = true});
+    require(!plan.enabled && !plan.layout_proved &&
+                plan.cell_proofs.front().rejection_reason.find("formal") != std::string::npos,
+            "dirty dispatch proof should reject formal/super-dark cells without separate proof");
   }
 }
 

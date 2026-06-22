@@ -1,6 +1,10 @@
 #include "mkpro/core/return_stack_script.hpp"
 
+#include "mkpro/core/formal_address.hpp"
+#include "mkpro/core/opcodes.hpp"
+
 #include <algorithm>
+#include <exception>
 #include <map>
 #include <optional>
 #include <set>
@@ -400,6 +404,299 @@ bool return_stack_candidate_beats_address_overlay(const std::vector<MachineItem>
   return candidate_best < current_best;
 }
 
+void append_ir_items(std::vector<MachineItem>& out, const std::vector<IrOp>& ops) {
+  std::vector<MachineItem> lowered = lower_ir_to_machine(ops);
+  out.insert(out.end(), lowered.begin(), lowered.end());
+}
+
+std::string charge_label_name(std::size_t index) {
+  return "__return_stack_charge_" + std::to_string(index);
+}
+
+std::optional<std::string> terminal_jump_target_from_ir_body(
+    const std::vector<IrOp>& body) {
+  if (body.empty())
+    return std::nullopt;
+  const IrOp& tail = body.back();
+  if (tail.kind != IrKind::Jump)
+    return std::nullopt;
+  const auto* label = std::get_if<std::string>(&tail.target);
+  if (label != nullptr && !label->empty())
+    return *label;
+  return std::nullopt;
+}
+
+bool terminal_stop_from_ir_body(const std::vector<IrOp>& body) {
+  if (body.empty())
+    return false;
+  const IrOp& tail = body.back();
+  return tail.kind == IrKind::Stop || tail.opcode == 0x50;
+}
+
+std::vector<std::size_t> default_tail_order(const ReturnStackLayoutOpportunity& opportunity) {
+  std::vector<std::size_t> order;
+  order.reserve(opportunity.tails.size());
+  for (std::size_t index = 0; index < opportunity.tails.size(); ++index)
+    order.push_back(index);
+  return order;
+}
+
+std::optional<std::vector<std::size_t>> proved_tail_order_from_ir(
+    const ReturnStackLayoutOpportunity& opportunity) {
+  std::map<std::string, std::size_t> tail_by_label;
+  for (std::size_t index = 0; index < opportunity.tails.size(); ++index) {
+    const std::string& label = opportunity.tails.at(index).label;
+    if (label.empty() || tail_by_label.contains(label))
+      return std::nullopt;
+    tail_by_label[label] = index;
+  }
+
+  std::optional<std::string> cursor =
+      terminal_jump_target_from_ir_body(opportunity.entry_body);
+  if (!cursor.has_value())
+    return std::nullopt;
+
+  std::vector<std::size_t> execution_order;
+  std::set<std::string> seen_labels;
+  while (cursor.has_value()) {
+    const auto tail_it = tail_by_label.find(*cursor);
+    if (tail_it == tail_by_label.end())
+      return std::nullopt;
+    if (seen_labels.contains(*cursor))
+      return std::nullopt;
+    seen_labels.insert(*cursor);
+    execution_order.push_back(tail_it->second);
+
+    const ReturnStackTailBlock& tail = opportunity.tails.at(tail_it->second);
+    const std::optional<std::string> next =
+        terminal_jump_target_from_ir_body(tail.body);
+    if (next.has_value()) {
+      cursor = next;
+      continue;
+    }
+    if (!terminal_stop_from_ir_body(tail.body))
+      return std::nullopt;
+    break;
+  }
+
+  if (execution_order.size() != opportunity.tails.size())
+    return std::nullopt;
+
+  std::reverse(execution_order.begin(), execution_order.end());
+  return execution_order;
+}
+
+std::vector<MachineItem> materialize_layout_items(
+    const ReturnStackLayoutOpportunity& opportunity,
+    const std::vector<std::size_t>& tail_order) {
+  std::vector<MachineItem> items;
+  for (std::size_t physical_index = 0; physical_index < tail_order.size();
+       ++physical_index) {
+    const ReturnStackTailBlock& tail =
+        opportunity.tails.at(tail_order.at(physical_index));
+    MachineItem charge_label = MachineItem::label(charge_label_name(physical_index));
+    charge_label.hidden = true;
+    items.push_back(std::move(charge_label));
+
+    items.push_back(MachineItem::op(0x53, "ПП"));
+    const std::string target = physical_index + 1U < tail_order.size()
+                                   ? charge_label_name(physical_index + 1U)
+                                   : opportunity.entry_label;
+    items.push_back(MachineItem::address(target));
+
+    items.push_back(MachineItem::label(tail.label));
+    append_ir_items(items, tail.body);
+  }
+
+  items.push_back(MachineItem::label(opportunity.entry_label));
+  append_ir_items(items, opportunity.entry_body);
+  return items;
+}
+
+std::optional<int> valid_concrete_existing_call_site_count(
+    const ReturnStackLayoutOpportunity& opportunity,
+    const std::vector<std::size_t>& tail_order, ReturnStackStartupLayoutPlan& plan) {
+  if (opportunity.existing_call_sites.empty())
+    return std::nullopt;
+
+  std::set<std::pair<std::string, std::string>> required;
+  for (std::size_t physical_index = 0; physical_index < tail_order.size();
+       ++physical_index) {
+    const std::string expected_target =
+        physical_index + 1U < tail_order.size() ? charge_label_name(physical_index + 1U)
+                                                : opportunity.entry_label;
+    const std::string expected_continuation =
+        opportunity.tails.at(tail_order.at(physical_index)).label;
+    required.insert({expected_target, expected_continuation});
+  }
+
+  std::set<std::pair<std::string, std::string>> used_edges;
+  std::set<int> used_sources;
+  int valid = 0;
+  int invalid = 0;
+  for (const ReturnStackExistingCallSite& site : opportunity.existing_call_sites) {
+    const std::pair<std::string, std::string> edge{site.target_label,
+                                                   site.continuation_label};
+    if (site.source_address < 0 || used_sources.contains(site.source_address) ||
+        !required.contains(edge) || used_edges.contains(edge)) {
+      ++invalid;
+      continue;
+    }
+    used_sources.insert(site.source_address);
+    used_edges.insert(edge);
+    ++valid;
+  }
+
+  if (valid > 0) {
+    plan.proofs.push_back("validated " + std::to_string(valid) +
+                          " concrete existing ПП callsite" +
+                          (valid == 1 ? "" : "s"));
+  }
+  if (invalid > 0) {
+    plan.risk_reasons.push_back("ignored " + std::to_string(invalid) +
+                                " existing ПП callsite candidate" +
+                                (invalid == 1 ? "" : "s") +
+                                " that did not match the generated charge/continuation layout");
+  }
+  return valid;
+}
+
+std::set<int> incoming_op_indexes_for_target(const std::map<int, std::vector<FlowReference>>& incoming,
+                                             int target) {
+  std::set<int> result;
+  const auto incoming_it = incoming.find(target);
+  if (incoming_it == incoming.end())
+    return result;
+  for (const FlowReference& ref : incoming_it->second)
+    result.insert(ref.op_index);
+  return result;
+}
+
+std::optional<int> item_index_for_address(const MachineLayout& layout, int address) {
+  const auto it = layout.item_index_by_address.find(address);
+  if (it == layout.item_index_by_address.end())
+    return std::nullopt;
+  return it->second;
+}
+
+std::optional<int> executable_opcode_at_item(const std::vector<MachineItem>& items,
+                                             const MachineLayout& layout, int item_index,
+                                             std::string& rejection_reason) {
+  if (item_index < 0 || item_index >= static_cast<int>(items.size())) {
+    rejection_reason = "target item is out of range";
+    return std::nullopt;
+  }
+  const MachineItem& item = items.at(static_cast<std::size_t>(item_index));
+  if (item.kind == MachineItemKind::Op)
+    return item.opcode;
+  if (item.kind != MachineItemKind::Address) {
+    rejection_reason = "target is not an executable cell";
+    return std::nullopt;
+  }
+  if (item.formal_opcode.has_value()) {
+    rejection_reason = "formal/super-dark address cell execution requires a separate proof";
+    return std::nullopt;
+  }
+  const std::optional<int> target = resolved_target(item, layout);
+  if (!target.has_value()) {
+    rejection_reason = "address cell target is unresolved";
+    return std::nullopt;
+  }
+  try {
+    return official_address_to_opcode(*target);
+  } catch (const std::exception&) {
+    rejection_reason = "address cell target is not an official executable address opcode";
+    return std::nullopt;
+  }
+}
+
+bool is_number_entry_opcode(int opcode) {
+  return (opcode >= 0x00 && opcode <= 0x09) || opcode == 0x0a || opcode == 0x0b ||
+         opcode == 0x0c || opcode == 0x0d;
+}
+
+bool is_trap_opcode(int opcode) {
+  switch (opcode) {
+  case 0x27:
+  case 0x28:
+  case 0x29:
+  case 0x2b:
+  case 0x2c:
+  case 0x2d:
+  case 0x2e:
+  case 0x3c:
+    return true;
+  default:
+    return false;
+  }
+}
+
+bool adjacent_number_entry(const std::vector<MachineItem>& items, const MachineLayout& layout,
+                           int item_index) {
+  const auto address_it = layout.address_by_item_index.find(item_index);
+  if (address_it == layout.address_by_item_index.end())
+    return false;
+  for (const int neighbor_address : {address_it->second - 1, address_it->second + 1}) {
+    const std::optional<int> neighbor_index = item_index_for_address(layout, neighbor_address);
+    if (!neighbor_index.has_value())
+      continue;
+    std::string reason;
+    const std::optional<int> opcode =
+        executable_opcode_at_item(items, layout, *neighbor_index, reason);
+    if (opcode.has_value() && is_number_entry_opcode(*opcode))
+      return true;
+  }
+  return false;
+}
+
+DirtyReturnStackDispatchCellProof prove_dirty_dispatch_cell(
+    const std::vector<MachineItem>& items, const MachineLayout& layout, int dirty_return_address,
+    int actual_pc, const DirtyReturnStackDispatchOptions& options) {
+  DirtyReturnStackDispatchCellProof proof{
+      .dirty_return_address = dirty_return_address,
+      .actual_pc = actual_pc,
+  };
+  const std::optional<int> item_index = item_index_for_address(layout, actual_pc);
+  if (!item_index.has_value()) {
+    proof.rejection_reason = "dirty target has no cell in the materialized layout";
+    return proof;
+  }
+
+  std::string rejection;
+  const std::optional<int> opcode =
+      executable_opcode_at_item(items, layout, *item_index, rejection);
+  if (!opcode.has_value()) {
+    proof.rejection_reason = rejection;
+    return proof;
+  }
+  proof.required_opcode = *opcode;
+
+  if (is_address_taking_opcode(*opcode)) {
+    const int operand_index = *item_index + 1;
+    if (operand_index >= static_cast<int>(items.size()) ||
+        items.at(static_cast<std::size_t>(operand_index)).kind != MachineItemKind::Address ||
+        items.at(static_cast<std::size_t>(operand_index)).formal_opcode.has_value() ||
+        !resolved_target(items.at(static_cast<std::size_t>(operand_index)), layout).has_value()) {
+      proof.rejection_reason = "dirty target is an address-taking opcode without a valid address "
+                               "operand cell";
+      return proof;
+    }
+  }
+  if (is_number_entry_opcode(*opcode) && adjacent_number_entry(items, layout, *item_index)) {
+    proof.rejection_reason = "dirty target number-entry opcode would glue to adjacent number "
+                             "entry";
+    return proof;
+  }
+  if (options.expect_fallthrough && (*opcode == 0x50 || is_trap_opcode(*opcode))) {
+    proof.rejection_reason = "dirty target stops or traps but the plan requires fallthrough";
+    return proof;
+  }
+
+  proof.safe = true;
+  proof.continuation_proof = "dirty target cell is executable and has a locally safe continuation";
+  return proof;
+}
+
 } // namespace
 
 std::vector<int> mk61_return_stack_after_call(std::vector<int> stack,
@@ -445,52 +742,171 @@ std::vector<ReturnStackReturnStep> simulate_mk61_return_stack(std::vector<int> s
   return result;
 }
 
-ReturnStackStartupLayoutPlan build_return_stack_startup_layout(
-    const std::vector<ReturnStackTailBlock>& tails,
-    const std::vector<MachineItem>& entry_body,
-    const std::string& entry_label,
-    const ReturnStackStartupLayoutOptions& options) {
-  ReturnStackStartupLayoutPlan plan;
-  plan.transitions = static_cast<int>(tails.size());
+ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
+    ReturnStackLayoutOpportunity opportunity, const ReturnStackStartupLayoutOptions& options) {
+  ReturnStackLayoutOpportunityAnalysis analysis{
+      .opportunity = std::move(opportunity),
+      .options = options,
+  };
+  ReturnStackStartupLayoutPlan& plan = analysis.plan;
+  const ReturnStackLayoutOpportunity& input = analysis.opportunity;
+  const std::optional<std::vector<std::size_t>> proved_tail_order =
+      proved_tail_order_from_ir(input);
+  const std::vector<std::size_t> tail_order =
+      proved_tail_order.has_value() ? *proved_tail_order : default_tail_order(input);
+  plan.tail_order_proved = proved_tail_order.has_value();
+  for (const std::size_t tail_index : tail_order)
+    plan.ordered_tail_labels.push_back(input.tails.at(tail_index).label);
+  plan.items = materialize_layout_items(input, tail_order);
+  plan.transitions = static_cast<int>(input.tails.size());
+  if (plan.tail_order_proved)
+    plan.proofs.push_back("tail blocks are ordered from the entry-chain IR");
+
+  const std::optional<int> concrete_existing_call_sites =
+      valid_concrete_existing_call_site_count(input, tail_order, plan);
   plan.existing_call_sites =
-      std::max(0, std::min(options.existing_call_sites, plan.transitions));
+      concrete_existing_call_sites.has_value()
+          ? std::min(*concrete_existing_call_sites, plan.transitions)
+          : std::max(0, std::min(options.existing_call_sites, plan.transitions));
   plan.strategy = plan.existing_call_sites > 0 ? "existing-callsite-layout"
                                                : "one-shot-startup-prologue";
-  if (tails.size() < 2 || tails.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
+
+  if (input.tails.size() < 2 || input.tails.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
     plan.rejection_reason = "return-stack startup layout requires 2..5 transitions";
-    return plan;
+    return analysis;
   }
 
-  plan.injected_call_sites = static_cast<int>(tails.size());
+  plan.injected_call_sites = plan.transitions;
   plan.paid_call_sites = std::max(0, plan.injected_call_sites - plan.existing_call_sites);
-  plan.transition_savings = static_cast<int>(tails.size());
+  plan.transition_savings = plan.transitions;
   plan.charge_cost = plan.paid_call_sites * 2;
-  plan.net_savings = plan.transition_savings - plan.charge_cost;
-  plan.profitable = plan.net_savings >= options.min_net_savings;
-  if (!plan.profitable) {
+  const int materialized_cells = machine_cell_count(plan.items);
+  plan.address_overlay_savings =
+      std::max(0, materialized_cells - best_cell_count_with_address_overlay(plan.items));
+  plan.address_shift_risk_count = plan.paid_call_sites;
+  plan.address_shift_cell_count = plan.paid_call_sites * 2;
+  if (plan.address_shift_risk_count > 0) {
+    plan.risk_reasons.push_back("injected ПП charge cells shift " +
+                                std::to_string(plan.address_shift_cell_count) +
+                                " downstream post-layout cells");
+  }
+  if (plan.address_overlay_savings > 0) {
+    plan.proofs.push_back("generated layout still exposes address-code-overlay savings");
+  }
+
+  const MachineLayout layout = machine_layout(plan.items);
+  const std::vector<FlowReference> refs = direct_flow_references(plan.items, layout);
+  const std::map<int, std::vector<FlowReference>> incoming = incoming_by_target(refs);
+
+  plan.one_shot_proved = input.entry_at_address_zero || input.single_start_jump;
+  if (plan.one_shot_proved) {
+    plan.proofs.push_back(input.entry_at_address_zero
+                              ? "charging chain starts at address 00"
+                              : "charging chain is reached by a single start jump");
+  }
+
+  plan.no_backward_charge_jumps = true;
+  for (int index = 0; index < plan.transitions; ++index) {
+    const auto label_it = layout.labels.find("__return_stack_charge_" + std::to_string(index));
+    if (label_it == layout.labels.end()) {
+      plan.no_backward_charge_jumps = false;
+      break;
+    }
+    const std::optional<CallSite> call = call_site_at_address(plan.items, layout, label_it->second);
+    if (!call.has_value() || call->target_address <= call->source_address) {
+      plan.no_backward_charge_jumps = false;
+      break;
+    }
+  }
+  if (plan.no_backward_charge_jumps)
+    plan.proofs.push_back("charging chain has no backward ПП edge");
+
+  plan.no_external_charge_entries = true;
+  for (int index = 1; index < plan.transitions; ++index) {
+    const auto label_it = layout.labels.find("__return_stack_charge_" + std::to_string(index));
+    if (label_it == layout.labels.end()) {
+      plan.no_external_charge_entries = false;
+      break;
+    }
+    const auto previous_label_it =
+        layout.labels.find("__return_stack_charge_" + std::to_string(index - 1));
+    if (previous_label_it == layout.labels.end()) {
+      plan.no_external_charge_entries = false;
+      break;
+    }
+    const std::optional<CallSite> previous =
+        call_site_at_address(plan.items, layout, previous_label_it->second);
+    if (!previous.has_value() ||
+        incoming_op_indexes_for_target(incoming, label_it->second) !=
+            std::set<int>{previous->op_index}) {
+      plan.no_external_charge_entries = false;
+      break;
+    }
+  }
+  if (plan.no_external_charge_entries)
+    plan.proofs.push_back("no external flow enters the middle of the charging chain");
+
+  const auto entry_it = layout.labels.find(input.entry_label);
+  plan.unique_entry_after_charge = false;
+  if (entry_it != layout.labels.end() && plan.transitions > 0) {
+    const auto final_charge_it =
+        layout.labels.find("__return_stack_charge_" + std::to_string(plan.transitions - 1));
+    if (final_charge_it != layout.labels.end()) {
+      const std::optional<CallSite> final_call =
+          call_site_at_address(plan.items, layout, final_charge_it->second);
+      plan.unique_entry_after_charge =
+          final_call.has_value() && final_call->target_address == entry_it->second &&
+          incoming_op_indexes_for_target(incoming, entry_it->second) ==
+              std::set<int>{final_call->op_index};
+    }
+  }
+  if (plan.unique_entry_after_charge)
+    plan.proofs.push_back("charging chain has a unique final entry target");
+
+  plan.net_savings = plan.transition_savings + plan.address_overlay_savings - plan.charge_cost;
+  plan.allowed_by_size_rescue =
+      options.size_rescue && plan.net_savings == 0 && plan.address_overlay_savings > 0;
+  plan.profitable =
+      (plan.net_savings >= options.min_net_savings && plan.net_savings > 0) ||
+      plan.allowed_by_size_rescue;
+  if (!plan.tail_order_proved) {
+    plan.rejection_reason = "return-stack startup layout cannot prove tail execution order "
+                            "from IR";
+  } else if (!plan.one_shot_proved) {
+    plan.rejection_reason = "return-stack startup layout lacks a one-shot entry proof";
+  } else if (!plan.no_backward_charge_jumps) {
+    plan.rejection_reason = "return-stack startup layout has a backward charging-chain edge";
+  } else if (!plan.no_external_charge_entries) {
+    plan.rejection_reason = "return-stack startup layout has external flow into the charging "
+                            "chain";
+  } else if (!plan.unique_entry_after_charge) {
+    plan.rejection_reason = "return-stack startup layout does not charge into a unique entry";
+  } else if (!plan.profitable) {
     plan.rejection_reason = "return-stack startup layout does not meet strict net-savings "
                             "threshold";
   }
 
-  for (std::size_t index = 0; index < tails.size(); ++index) {
-    MachineItem charge_label = MachineItem::label("__return_stack_charge_" +
-                                                  std::to_string(index));
-    charge_label.hidden = true;
-    plan.items.push_back(std::move(charge_label));
+  return analysis;
+}
 
-    plan.items.push_back(MachineItem::op(0x53, "ПП"));
-    const std::string target = index + 1U < tails.size()
-                                   ? "__return_stack_charge_" + std::to_string(index + 1U)
-                                   : entry_label;
-    plan.items.push_back(MachineItem::address(target));
+ReturnStackStartupLayoutPlan materialize_return_stack_layout(
+    const ReturnStackLayoutOpportunityAnalysis& analysis) {
+  return analysis.plan;
+}
 
-    plan.items.push_back(MachineItem::label(tails.at(index).label));
-    plan.items.insert(plan.items.end(), tails.at(index).body.begin(), tails.at(index).body.end());
-  }
-
-  plan.items.push_back(MachineItem::label(entry_label));
-  plan.items.insert(plan.items.end(), entry_body.begin(), entry_body.end());
-  return plan;
+ReturnStackStartupLayoutPlan build_return_stack_startup_layout(
+    const std::vector<ReturnStackTailBlock>& tails,
+    const std::vector<IrOp>& entry_body,
+    const std::string& entry_label,
+    const ReturnStackStartupLayoutOptions& options) {
+  ReturnStackLayoutOpportunity opportunity{
+      .tails = tails,
+      .entry_body = entry_body,
+      .entry_label = entry_label,
+  };
+  ReturnStackLayoutOpportunityAnalysis analysis =
+      analyze_return_stack_layout_opportunity(std::move(opportunity), options);
+  return materialize_return_stack_layout(analysis);
 }
 
 DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
@@ -516,6 +932,29 @@ DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
     plan.rejection_reason = "dirty return-stack dispatch did not expose enough dirty targets";
   } else {
     plan.enabled = true;
+  }
+  return plan;
+}
+
+DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
+    std::vector<int> stack, int return_count, const std::vector<MachineItem>& layout_items,
+    const DirtyReturnStackDispatchOptions& options) {
+  DirtyReturnStackDispatchPlan plan =
+      plan_dirty_return_stack_dispatch(std::move(stack), return_count, options);
+  const MachineLayout layout = machine_layout(layout_items);
+  bool all_safe = !plan.dirty_targets.empty();
+  for (std::size_t index = 0; index < plan.dirty_targets.size(); ++index) {
+    DirtyReturnStackDispatchCellProof proof = prove_dirty_dispatch_cell(
+        layout_items, layout, plan.dirty_return_addresses.at(index), plan.dirty_targets.at(index),
+        options);
+    if (!proof.safe)
+      all_safe = false;
+    plan.cell_proofs.push_back(std::move(proof));
+  }
+  plan.layout_proved = all_safe;
+  if (plan.enabled && !plan.layout_proved) {
+    plan.enabled = false;
+    plan.rejection_reason = "dirty return-stack dispatch lacks a safe layout proof";
   }
   return plan;
 }

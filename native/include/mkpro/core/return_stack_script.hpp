@@ -16,7 +16,23 @@ struct ReturnStackReturnStep {
 
 struct ReturnStackTailBlock {
   std::string label;
-  std::vector<MachineItem> body;
+  std::vector<IrOp> body;
+};
+
+struct ReturnStackExistingCallSite {
+  std::string label;
+  std::string target_label;
+  std::string continuation_label;
+  int source_address = -1;
+};
+
+struct ReturnStackLayoutOpportunity {
+  std::vector<ReturnStackTailBlock> tails;
+  std::vector<IrOp> entry_body;
+  std::string entry_label = "__return_stack_entry";
+  std::vector<ReturnStackExistingCallSite> existing_call_sites;
+  bool entry_at_address_zero = true;
+  bool single_start_jump = false;
 };
 
 struct ReturnStackStartupLayoutPlan {
@@ -27,23 +43,53 @@ struct ReturnStackStartupLayoutPlan {
   int paid_call_sites = 0;
   int transition_savings = 0;
   int charge_cost = 0;
+  int address_overlay_savings = 0;
+  int address_shift_risk_count = 0;
+  int address_shift_cell_count = 0;
   int net_savings = 0;
   bool profitable = false;
+  bool one_shot_proved = false;
+  bool no_backward_charge_jumps = false;
+  bool no_external_charge_entries = false;
+  bool unique_entry_after_charge = false;
+  bool tail_order_proved = false;
+  bool allowed_by_size_rescue = false;
   std::string strategy;
   std::string rejection_reason;
+  std::vector<std::string> ordered_tail_labels;
+  std::vector<std::string> proofs;
+  std::vector<std::string> risk_reasons;
 };
 
 struct ReturnStackStartupLayoutOptions {
   int existing_call_sites = 0;
   int min_net_savings = 1;
+  bool size_rescue = false;
+};
+
+struct ReturnStackLayoutOpportunityAnalysis {
+  ReturnStackLayoutOpportunity opportunity;
+  ReturnStackStartupLayoutOptions options;
+  ReturnStackStartupLayoutPlan plan;
+};
+
+struct DirtyReturnStackDispatchCellProof {
+  int dirty_return_address = 0;
+  int actual_pc = 0;
+  int required_opcode = 0;
+  bool safe = false;
+  std::string continuation_proof;
+  std::string rejection_reason;
 };
 
 struct DirtyReturnStackDispatchPlan {
   std::vector<int> clean_targets;
   std::vector<int> dirty_return_addresses;
   std::vector<int> dirty_targets;
+  std::vector<DirtyReturnStackDispatchCellProof> cell_proofs;
   bool high_risk = true;
   bool enabled = false;
+  bool layout_proved = false;
   std::string risk_reason;
   std::string rejection_reason;
 };
@@ -51,6 +97,7 @@ struct DirtyReturnStackDispatchPlan {
 struct DirtyReturnStackDispatchOptions {
   bool size_rescue = false;
   int min_dirty_targets = 1;
+  bool expect_fallthrough = true;
 };
 
 std::vector<int> mk61_return_stack_after_call(std::vector<int> stack,
@@ -59,15 +106,23 @@ std::optional<ReturnStackReturnStep> mk61_return_stack_after_return(
     const std::vector<int>& stack);
 std::vector<ReturnStackReturnStep> simulate_mk61_return_stack(
     std::vector<int> stack, int return_count);
+ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
+    ReturnStackLayoutOpportunity opportunity,
+    const ReturnStackStartupLayoutOptions& options = {});
+ReturnStackStartupLayoutPlan materialize_return_stack_layout(
+    const ReturnStackLayoutOpportunityAnalysis& analysis);
 ReturnStackStartupLayoutPlan build_return_stack_startup_layout(
     const std::vector<ReturnStackTailBlock>& tails,
-    const std::vector<MachineItem>& entry_body,
+    const std::vector<IrOp>& entry_body,
     const std::string& entry_label = "__return_stack_entry",
     const ReturnStackStartupLayoutOptions& options = {});
 DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(std::vector<int> stack,
                                                               int return_count,
                                                               const DirtyReturnStackDispatchOptions&
                                                                   options = {});
+DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
+    std::vector<int> stack, int return_count, const std::vector<MachineItem>& layout,
+    const DirtyReturnStackDispatchOptions& options = {});
 
 PostLayoutIndirectFlowResult
 optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items);
