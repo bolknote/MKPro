@@ -1,5 +1,6 @@
 #include "mkpro/core/format.hpp"
 
+#include "mkpro/core/formal_address.hpp"
 #include "mkpro/core/opcodes.hpp"
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <iomanip>
 #include <optional>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 
@@ -97,6 +99,21 @@ bool is_setup_literal(std::string_view value) {
   return regex_matches(value, pattern);
 }
 
+std::optional<std::string> executable_setup_value(const std::string& value) {
+  std::string trimmed = trim_copy(value);
+  std::replace(trimmed.begin(), trimmed.end(), ',', '.');
+  static const std::regex numeric_literal(R"(^-?\d+(?:[.]\d+)?(?:[eE]-?\d{1,2})?$)");
+  if (std::regex_match(trimmed, numeric_literal))
+    return trimmed;
+
+  static const std::regex formal_address_literal(R"(^[A-Fa-f][0-9A-Fa-f]$)");
+  if (std::regex_match(trimmed, formal_address_literal)) {
+    const int opcode = std::stoi(trimmed, nullptr, 16);
+    return std::to_string(formal_address_info(opcode).actual);
+  }
+  return std::nullopt;
+}
+
 std::string format_setup_value(const std::string& value) {
   const std::string normalized = upper_ascii(value);
   if (const std::optional<std::string> compact = compact_keyboard_decimal(value))
@@ -139,6 +156,54 @@ std::string format_setup_value(const std::string& value) {
     }
   }
   return formatted;
+}
+
+struct ExecutableSetupPreloadEntry {
+  PreloadReport preload;
+  std::string value;
+};
+
+struct ExecutableSetupPreloadGroup {
+  std::string value;
+  std::vector<PreloadReport> preloads;
+};
+
+std::vector<ExecutableSetupPreloadEntry>
+executable_setup_preload_entries(const std::vector<PreloadReport>& preloads) {
+  std::vector<ExecutableSetupPreloadEntry> entries;
+  for (const PreloadReport& preload : preloads) {
+    const std::optional<std::string> value = executable_setup_value(preload.value);
+    if (value.has_value())
+      entries.push_back(ExecutableSetupPreloadEntry{.preload = preload, .value = *value});
+  }
+  return entries;
+}
+
+std::vector<ExecutableSetupPreloadGroup>
+group_setup_preloads_by_executable_value(const std::vector<ExecutableSetupPreloadEntry>& entries) {
+  std::set<std::size_t> consumed;
+  std::vector<ExecutableSetupPreloadGroup> groups;
+  for (std::size_t index = 0; index < entries.size(); ++index) {
+    if (consumed.contains(index))
+      continue;
+    const ExecutableSetupPreloadEntry& entry = entries.at(index);
+    std::vector<PreloadReport> preloads = {entry.preload};
+    consumed.insert(index);
+    for (std::size_t other = index + 1U; other < entries.size(); ++other) {
+      if (consumed.contains(other))
+        continue;
+      const ExecutableSetupPreloadEntry& candidate = entries.at(other);
+      if (candidate.value != entry.value)
+        continue;
+      preloads.push_back(candidate.preload);
+      consumed.insert(other);
+    }
+    groups.push_back(ExecutableSetupPreloadGroup{
+        .value = entry.value,
+        .preloads = std::move(preloads),
+    });
+  }
+  return groups;
 }
 
 std::string format_step_address(int address) {
@@ -278,6 +343,8 @@ std::vector<ListingRow> coalesce_number_entry_rows(const std::vector<ResolvedSte
 }
 
 std::string format_listing_address(int address) {
+  if (address < 0)
+    return "--";
   return format_step_address(address);
 }
 
@@ -336,6 +403,71 @@ std::string format_listing_steps(const std::vector<ResolvedStep>& steps) {
   return format_listing_rows(coalesce_number_entry_rows(steps));
 }
 
+std::string format_manual_input_value(const ManualSetupInput& input) {
+  if (input.min.has_value() && input.max.has_value()) {
+    return "any value " + std::to_string(*input.min) + ".." + std::to_string(*input.max);
+  }
+  return "a value";
+}
+
+std::string format_setup_listing_steps(const std::vector<ManualSetupInput>& manual_inputs,
+                                       const std::vector<ResolvedStep>& steps) {
+  std::vector<ListingRow> rows;
+  rows.reserve(manual_inputs.size() + steps.size());
+  for (const ManualSetupInput& input : manual_inputs) {
+    rows.push_back(ListingRow{
+        .address = -1,
+        .hex = "-",
+        .mnemonic = "enter " + input.name,
+        .comment = "enter " + format_manual_input_value(input) + " in " + input.stack,
+    });
+  }
+  for (const ResolvedStep& step : steps)
+    rows.push_back(step_to_listing_row(step));
+  return format_listing_rows(rows);
+}
+
+std::optional<std::string>
+format_setup_preload_listing_steps(const std::vector<PreloadReport>& preloads) {
+  std::vector<PreloadReport> setup_preloads;
+  for (const PreloadReport& preload : preloads) {
+    if (is_setup_literal(preload.value))
+      setup_preloads.push_back(preload);
+  }
+  if (setup_preloads.empty())
+    return std::string{};
+
+  for (const PreloadReport& preload : setup_preloads) {
+    if (!executable_setup_value(preload.value).has_value())
+      return std::nullopt;
+  }
+
+  std::vector<ListingRow> rows;
+  int address = 0;
+  const std::vector<ExecutableSetupPreloadEntry> entries =
+      executable_setup_preload_entries(setup_preloads);
+  for (const ExecutableSetupPreloadGroup& group : group_setup_preloads_by_executable_value(entries)) {
+    rows.push_back(ListingRow{
+        .address = address,
+        .hex = "-",
+        .mnemonic = group.value,
+    });
+    ++address;
+    for (const PreloadReport& preload : group.preloads) {
+      const int opcode = 0x40 + register_index(preload.register_name);
+      const OpcodeInfo& info = opcode_by_code(opcode);
+      rows.push_back(ListingRow{
+          .address = address,
+          .hex = info.hex,
+          .mnemonic = info.name,
+          .comment = "setup R" + preload.register_name,
+      });
+      ++address;
+    }
+  }
+  return format_listing_rows(rows);
+}
+
 std::string format_program_tokens(const std::vector<ResolvedStep>& steps) {
   std::ostringstream out;
   for (std::size_t index = 0; index < steps.size(); ++index) {
@@ -374,7 +506,7 @@ std::string to_keycaps(std::string mnemonic) {
     return "÷";
   if (mnemonic == "-")
     return "−";
-  if (mnemonic == "<->")
+  if (mnemonic == "<->" || mnemonic == "X↔Y" || mnemonic == "X<->Y")
     return "↔";
   if (mnemonic == "F pi")
     return "F π";

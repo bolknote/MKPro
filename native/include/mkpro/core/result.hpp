@@ -37,6 +37,7 @@ struct PreloadReport {
   bool counts_against_program = false;
   std::optional<std::string> setup_target_name;
   bool setup_expression = false;
+  std::optional<std::string> setup_expression_text;
   std::optional<int> setup_source_line;
 };
 
@@ -49,6 +50,13 @@ struct SetupProgramReport {
   std::vector<ResolvedStep> steps;
   std::string reason;
   std::vector<OptimizationReport> optimizations;
+};
+
+struct ManualSetupInput {
+  std::string name;
+  std::string stack;
+  std::optional<int> min;
+  std::optional<int> max;
 };
 
 struct RegisterShare {
@@ -149,6 +157,7 @@ struct CompileResult {
   std::map<std::string, std::string> registers;
   std::map<std::string, std::string> labels;
   std::vector<PreloadReport> preloads;
+  std::vector<ManualSetupInput> manual_setup_inputs;
   std::vector<OptimizationReport> optimizations;
   std::optional<SetupProgramReport> setup_program;
   std::vector<RegisterShare> coalesce_shares;

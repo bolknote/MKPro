@@ -201,6 +201,7 @@ struct LoweringContext {
   std::optional<std::string> tail_show_target;
   std::set<std::string> transient_show_targets;
   std::map<std::string, std::string> preloaded_numbers;
+  std::vector<std::string> preloaded_number_order;
   std::set<std::string> suppress_constant_preloads;
   std::optional<std::string> negative_zero_degree_register;
   std::vector<FractionalConstantSelectorPlan> fractional_constant_selectors;
@@ -245,6 +246,7 @@ struct LoweringContext {
   bool emitting_expression_helper = false;
   bool emitting_near_any_helper = false;
   bool share_random_cell = false;
+  bool hoist_shared_helpers = false;
   bool aggressive_terminal_direct = false;
   bool preloaded_indirect_flow = false;
   bool invert_branch_order = false;

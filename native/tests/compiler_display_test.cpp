@@ -120,7 +120,9 @@ program ZeroDigitTailScreen {
           "zero-digit tail display should read the hidden tail from Rc");
   require(std::any_of(zero_tail.steps.begin(), zero_tail.steps.end(),
                       [](const ResolvedStep& step) {
-                        return step.opcode == 0x50 && step.comment == "show literal";
+                        return step.opcode == 0x50 &&
+                               step.comment.has_value() &&
+                               step.comment->starts_with("show __inline_show_");
                       }),
           "zero-digit tail display should emit the calculator stop");
 
@@ -151,7 +153,8 @@ program SignDigitLiteralScreen {
           "sign-digit literal display should normalize through indirect memory");
   require(std::any_of(sign_digit.steps.begin(), sign_digit.steps.end(),
                       [](const ResolvedStep& step) {
-                        return step.opcode == 0x50 && step.comment == "show literal";
+                        return step.opcode == 0x50 && step.comment.has_value() &&
+                               step.comment->starts_with("show __inline_show_");
                       }),
           "sign-digit literal display should emit the calculator stop");
 
@@ -181,7 +184,11 @@ program LiteralAlphabetScreen {
           "preloaded text literal display should expose a setup program");
   require(std::any_of(
               text_literal_preload.steps.begin(), text_literal_preload.steps.end(),
-              [](const ResolvedStep& step) { return step.comment == "display literal preload"; }),
+              [](const ResolvedStep& step) {
+                return step.comment.has_value() &&
+                       step.comment->starts_with("display __inline_show_") &&
+                       step.comment->ends_with(" literal");
+              }),
           "preloaded text literal display should recall the prepared literal");
   require(std::any_of(text_literal_preload.setup_program->steps.begin(),
                       text_literal_preload.setup_program->steps.end(),

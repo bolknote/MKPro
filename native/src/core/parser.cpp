@@ -941,6 +941,7 @@ private:
       if (line.text == "}") {
         ++index_;
         append_implicit_read_state_fields(program);
+        collect_inline_screens(program);
         return program;
       }
       if (starts_with(line.text, "requires ")) {
@@ -1036,6 +1037,86 @@ private:
     for (const V2Rule& rule : program.rules)
       visit(rule.body, visit);
     program.state.insert(program.state.end(), implicit_fields.begin(), implicit_fields.end());
+  }
+
+  static std::optional<std::string> display_literal_text(const std::vector<DisplayItem>& items) {
+    std::string text;
+    for (const DisplayItem& item : items) {
+      if (item.kind != "literal")
+        return std::nullopt;
+      text += item.text;
+    }
+    return text;
+  }
+
+  static std::string display_item_key(const std::vector<DisplayItem>& items) {
+    std::ostringstream out;
+    for (const DisplayItem& item : items) {
+      if (item.kind == "literal") {
+        out << "literal\0" << item.text << '\0';
+      } else {
+        out << "source\0" << item.name << '\0';
+        if (item.width.has_value())
+          out << *item.width;
+        out << '\0';
+        if (item.pad.has_value())
+          out << *item.pad;
+        out << '\0';
+      }
+    }
+    return out.str();
+  }
+
+  static void assign_inline_screen_name(
+      V2Statement& statement, const std::vector<DisplayItem>& items,
+      std::vector<std::pair<std::string, std::string>>& screens, int& next) {
+    const std::string key = display_item_key(items);
+    const auto existing =
+        std::find_if(screens.begin(), screens.end(),
+                     [&](const auto& entry) { return entry.first == key; });
+    if (existing != screens.end()) {
+      statement.inline_name = existing->second;
+      return;
+    }
+    const std::string name =
+        "__inline_show_" + std::to_string(statement.line) + "_" + std::to_string(next++);
+    statement.inline_name = name;
+    screens.emplace_back(key, name);
+  }
+
+  static void collect_inline_screens(V2Program& program) {
+    std::vector<std::pair<std::string, std::string>> screens;
+    int next = 0;
+
+    const auto visit_action = [&](V2StatementPtr& action, const auto& visit_statement) -> void {
+      if (action != nullptr)
+        visit_statement(*action, visit_statement);
+    };
+    const auto visit_statements = [&](std::vector<V2Statement>& statements,
+                                      const auto& visit_statement) -> void {
+      for (V2Statement& statement : statements)
+        visit_statement(statement, visit_statement);
+    };
+    const auto visit_statement = [&](V2Statement& statement, const auto& self) -> void {
+      if (statement.kind == "v2_show" && statement.items.has_value()) {
+        assign_inline_screen_name(statement, *statement.items, screens, next);
+      }
+      if (statement.kind == "v2_stop" && statement.items.has_value() &&
+          !display_literal_text(*statement.items).has_value()) {
+        assign_inline_screen_name(statement, *statement.items, screens, next);
+      }
+
+      visit_statements(statement.body, self);
+      visit_statements(statement.then_body, self);
+      visit_statements(statement.else_body, self);
+      for (V2MatchCase& match_case : statement.cases)
+        visit_action(match_case.action, self);
+      visit_action(statement.otherwise, self);
+    };
+
+    visit_statements(program.body, visit_statement);
+    for (V2Rule& rule : program.rules)
+      visit_statements(rule.body, visit_statement);
   }
 
   V2Const parse_const(const SourceLine& line) {

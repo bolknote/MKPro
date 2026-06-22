@@ -9,6 +9,10 @@ struct LivenessInfo {
   std::vector<RegisterValueSet> live_out;
 };
 
-LivenessInfo compute_liveness(const std::vector<IrOp>& ops);
+struct LivenessOptions {
+  bool unknown_indirect_flow_to_all = false;
+};
+
+LivenessInfo compute_liveness(const std::vector<IrOp>& ops, LivenessOptions options = {});
 
 } // namespace mkpro::core::passes

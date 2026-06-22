@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <exception>
 #include <map>
 #include <regex>
@@ -41,13 +42,38 @@ std::string lower_ascii(std::string value) {
   return value;
 }
 
-bool has_executable_setup_number_value(std::string_view value) {
-  const std::string normalized = normalized_v2_text(value);
+std::optional<std::string> executable_setup_value(std::string_view value) {
+  std::string normalized = normalized_v2_text(value);
+  std::replace(normalized.begin(), normalized.end(), ',', '.');
   static const std::regex decimal_pattern(R"(^-?\d+(?:[,.]\d+)?(?:E-?\d{1,2})?$)",
                                           std::regex_constants::icase);
   static const std::regex formal_address_pattern(R"(^[A-F][0-9A-F]$)", std::regex_constants::icase);
-  return std::regex_match(normalized, decimal_pattern) ||
-         std::regex_match(normalized, formal_address_pattern);
+  if (std::regex_match(normalized, decimal_pattern))
+    return normalized;
+  if (std::regex_match(normalized, formal_address_pattern)) {
+    const int opcode = std::stoi(normalized, nullptr, 16);
+    return std::to_string(formal_address_info(opcode).actual);
+  }
+  return std::nullopt;
+}
+
+bool has_executable_setup_number_value(std::string_view value) {
+  return executable_setup_value(value).has_value();
+}
+
+std::optional<double> executable_setup_number(std::string_view value) {
+  const std::optional<std::string> executable = executable_setup_value(value);
+  if (!executable.has_value())
+    return std::nullopt;
+  try {
+    return std::stod(*executable);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::string normalize_setup_constant_text(std::string_view value) {
+  return executable_setup_value(value).value_or(std::string(value));
 }
 
 std::optional<int> parse_integer_text(std::string_view text) {
@@ -470,6 +496,14 @@ void emit_setup_store(MachineEmitter& setup, const std::string& register_name,
   setup.emit_op(0x40 + reg_index, "X->П " + register_name, std::move(comment), std::nullopt, true);
 }
 
+std::string setup_target_name(const PreloadReport& preload) {
+  return preload.setup_target_name.value_or("R" + preload.register_name);
+}
+
+std::string setup_store_comment(const PreloadReport& preload) {
+  return "setup " + setup_target_name(preload);
+}
+
 void emit_setup_recall(MachineEmitter& setup, const std::string& register_name,
                        std::string comment) {
   const int reg_index = register_index(register_name);
@@ -500,11 +534,12 @@ void emit_negative_zero_degree_setup(MachineEmitter& setup, const std::string& r
 bool emit_stack_preload_setup(MachineEmitter& setup, const PreloadReport& preload) {
   if (preload.value != "stack.X" && preload.value != "stack.Y")
     return false;
+  const std::string target = setup_target_name(preload);
   if (preload.value == "stack.Y")
-    setup.emit_op(0x14, "X↔Y", "setup from stack.Y", std::nullopt, true);
-  emit_setup_store(setup, preload.register_name, "setup R" + preload.register_name);
+    setup.emit_op(0x14, "X↔Y", "setup " + target + " from stack.Y", std::nullopt, true);
+  emit_setup_store(setup, preload.register_name, "setup " + target);
   if (preload.value == "stack.Y")
-    setup.emit_op(0x14, "X↔Y", "restore stack.X after stack.Y setup", std::nullopt, true);
+    setup.emit_op(0x14, "X↔Y", "restore stack.X after " + target, std::nullopt, true);
   return true;
 }
 
@@ -594,6 +629,10 @@ bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expres
   }
   if (expression.kind == "call") {
     const std::string callee = lower_ascii(expression.callee);
+    if (callee == "pi" && expression.args.empty()) {
+      setup.emit_op(0x20, "F π", "pi()", std::nullopt, true);
+      return true;
+    }
     if (callee == "random")
       return lower_setup_random_call_to_x(setup, expression);
     if (const std::optional<std::pair<int, std::string>> opcode =
@@ -779,17 +818,18 @@ bool emit_segmented_bitplane_indirect_select_setup(MachineEmitter& setup,
 }
 
 void emit_random_board_coordinate_setup(MachineEmitter& setup, const V2Board& board,
-                                        const std::string& register_name) {
+                                        const std::string& register_name,
+                                        const std::string& target_name) {
   if (board.height == 1) {
     emit_random_int_setup(setup, std::to_string(board.width));
     emit_setup_integer_offset(setup, board.x_min);
-    emit_setup_store(setup, register_name, "setup R" + register_name);
+    emit_setup_store(setup, register_name, "setup " + target_name);
     return;
   }
   if (board.width == 1) {
     emit_random_int_setup(setup, std::to_string(board.height));
     emit_setup_integer_offset(setup, board.y_min);
-    emit_setup_store(setup, register_name, "setup R" + register_name);
+    emit_setup_store(setup, register_name, "setup " + target_name);
     return;
   }
 
@@ -802,7 +842,7 @@ void emit_random_board_coordinate_setup(MachineEmitter& setup, const V2Board& bo
   setup.emit_op(0x12, "*", "random coord y decade", std::nullopt, true);
   emit_setup_recall(setup, register_name, "random coord x");
   setup.emit_op(0x10, "+", "random coord", std::nullopt, true);
-  emit_setup_store(setup, register_name, "setup R" + register_name);
+  emit_setup_store(setup, register_name, "setup " + target_name);
 }
 
 int board_cell_count(const V2Board& board) {
@@ -1137,7 +1177,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     if (preload.setup_expression) {
       consumed.insert(index);
       const Expression expression =
-          parse_expression(preload.value, preload.setup_source_line.value_or(0));
+          parse_expression(preload.setup_expression_text.value_or(preload.value),
+                           preload.setup_source_line.value_or(0));
       if (lower_setup_expression_to_x(setup, expression)) {
         emit_setup_store(setup, preload.register_name,
                          "setup " +
@@ -1149,6 +1190,45 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       consumed.insert(index);
       emit_negative_zero_degree_setup(setup, preload.register_name);
       continue;
+    }
+    if (!from_stack_x && !from_stack_y && !preload.setup_expression) {
+      const std::optional<double> target_number = executable_setup_number(preload.value);
+      if (target_number.has_value() && *target_number < 0.0) {
+        std::optional<std::size_t> source_index;
+        for (std::size_t candidate = 0; candidate < preloads.size(); ++candidate) {
+          if (candidate == index || consumed.contains(candidate) ||
+              preloads.at(candidate).setup_expression) {
+            continue;
+          }
+          const std::optional<double> source_number =
+              executable_setup_number(preloads.at(candidate).value);
+          if (source_number.has_value() && *source_number > 0.0 &&
+              std::fabs(*source_number + *target_number) < 1e-15) {
+            source_index = candidate;
+            break;
+          }
+        }
+        if (source_index.has_value()) {
+          const PreloadReport& source = preloads.at(*source_index);
+          setup.emit_number(normalize_setup_constant_text(source.value));
+          emit_setup_store(setup, source.register_name, setup_store_comment(source));
+          emit_setup_recall(setup, source.register_name,
+                            "setup constant " + normalize_setup_constant_text(preload.value) +
+                                " base " + normalize_setup_constant_text(source.value));
+          setup.emit_op(0x0b, "/-/", "setup constant " +
+                                      normalize_setup_constant_text(preload.value),
+                        std::nullopt, true);
+          emit_setup_store(setup, preload.register_name, setup_store_comment(preload));
+          consumed.insert(index);
+          consumed.insert(*source_index);
+          optimizations.push_back(OptimizationReport{
+              .name = "constant-synthesis",
+              .detail = "Built setup constant " + normalize_setup_constant_text(preload.value) +
+                        " by negating R" + source.register_name + ".",
+          });
+          continue;
+        }
+      }
     }
     if (const std::optional<RandomUniqueCoordListValue> unique =
             parse_random_unique_coord_list_value(preload.value)) {
@@ -1184,7 +1264,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       consumed.insert(index);
       const auto board_it = boards.find(unique->domain);
       if (board_it != boards.end())
-        emit_random_board_coordinate_setup(setup, *board_it->second, preload.register_name);
+        emit_random_board_coordinate_setup(setup, *board_it->second, preload.register_name,
+                                           setup_target_name(preload));
       continue;
     }
     if (const std::optional<RandomUniqueSegmentedBitplaneValue> segmented =
@@ -1250,7 +1331,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       const auto board_it = boards.find(*random_domain);
       if (board_it != boards.end()) {
         consumed.insert(index);
-        emit_random_board_coordinate_setup(setup, *board_it->second, preload.register_name);
+        emit_random_board_coordinate_setup(setup, *board_it->second, preload.register_name,
+                                           setup_target_name(preload));
         continue;
       }
     }
@@ -1284,9 +1366,10 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       }
     }
     if (from_stack_y)
-      setup.emit_op(0x14, "X↔Y", "setup from stack.Y", std::nullopt, true);
+      setup.emit_op(0x14, "X↔Y", "setup " + setup_target_name(preload) + " from stack.Y",
+                    std::nullopt, true);
     if (!from_stack_x && !from_stack_y)
-      setup.emit_number(preload.value);
+      setup.emit_number(executable_setup_value(preload.value).value_or(preload.value));
     std::vector<std::string> stored_registers;
     std::set<std::string> seen_registers;
     std::size_t target_count = 0;
@@ -1301,15 +1384,16 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       seen_registers.insert(register_name);
       stored_registers.push_back(register_name);
       const int reg_index = register_index(register_name);
-      setup.emit_op(0x40 + reg_index, "X->П " + register_name, "setup R" + register_name,
-                    std::nullopt, true);
+      setup.emit_op(0x40 + reg_index, "X->П " + register_name,
+                    setup_store_comment(preloads.at(other)), std::nullopt, true);
     }
     if (!from_stack_x && !from_stack_y) {
       report_duplicate_preload_store_reuse(optimizations, preload.value, stored_registers,
                                            target_count, preload.register_name);
     }
     if (from_stack_y)
-      setup.emit_op(0x14, "X↔Y", "restore stack.X after stack.Y setup", std::nullopt, true);
+      setup.emit_op(0x14, "X↔Y", "restore stack.X after " + setup_target_name(preload),
+                    std::nullopt, true);
   }
   if (setup_r0_dirty)
     emit_restore_setup_pointer_r0(setup, preloads);

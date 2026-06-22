@@ -47,9 +47,10 @@ void display_lowering_helpers_match_typescript_contract() {
 
   const std::vector<std::string> names =
       core::emit::display_scratch_register_names_for_program(program);
-  require(names.size() == 2, "mantissa/exponent display should require two scratch names");
+  require(names.size() == 3, "mantissa/exponent display should require three scratch names");
   require(names.at(0) == "__display_value_17", "display value scratch name");
   require(names.at(1) == "__display_loop_17", "display loop scratch name");
+  require(names.at(2) == "__display_mask_17", "display mask scratch name");
 
   statement.items = std::vector<DisplayItem>{
       source_item("die"),

@@ -387,23 +387,23 @@ plan_variable_leading_display_mask_template(const LoweringContext& context,
 }
 
 bool emit_display_mask_field_value(DisplayEmitApi& api, const DisplayMaskBodyField& field,
-                                   std::string comment) {
+                                   const std::string& display_name) {
   if (field.literal) {
     api.emitter.emit_number(field.value);
     if (!api.emitter.items.empty())
-      api.emitter.items.back().comment = std::move(comment);
+      api.emitter.items.back().comment = "display " + display_name + " digit literal";
     return true;
   }
-  return api.lower_display_item_to_x(*field.item, std::move(comment));
+  return api.lower_display_item_to_x(*field.item, "display " + display_name + " source");
 }
 
 bool lower_display_mask_body_fields(DisplayEmitApi& api,
                                     const std::vector<DisplayMaskBodyField>& fields,
-                                    int source_line) {
+                                    const std::string& display_name, int source_line) {
   if (fields.empty())
     return false;
 
-  if (!emit_display_mask_field_value(api, fields.front(), "display mask numeric anchor"))
+  if (!emit_display_mask_field_value(api, fields.front(), display_name))
     return false;
   for (std::size_t index = 1; index < fields.size(); ++index) {
     const DisplayMaskBodyField& field = fields.at(index);
@@ -411,7 +411,7 @@ bool lower_display_mask_body_fields(DisplayEmitApi& api,
     api.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
     if (field.literal && field.value == "0")
       continue;
-    if (!emit_display_mask_field_value(api, field, "display source"))
+    if (!emit_display_mask_field_value(api, field, display_name))
       return false;
     api.emitter.emit_op(0x10, "+", "packed display field append", source_line);
   }
@@ -419,23 +419,24 @@ bool lower_display_mask_body_fields(DisplayEmitApi& api,
 }
 
 void emit_mantissa_mask_body_merge(DisplayEmitApi& api, const std::string& mask_register,
-                                   const std::string& scratch, int source_line,
-                                   const std::string& comment_prefix) {
+                                   const std::string& scratch, const std::string& display_name,
+                                   int source_line) {
   api.emit_recall(mask_register);
-  api.emitter.items.back().comment = comment_prefix + " literal mask";
+  api.emitter.items.back().comment = "display " + display_name + " literal mask";
   api.emitter.emit_op(0x38, "К ∨", "display mask body merge", source_line);
-  api.emit_store(scratch, comment_prefix + " body");
+  api.emit_store(scratch, "display " + display_name + " body");
 }
 
 void emit_mantissa_mask_leader_splice(DisplayEmitApi& api, const std::string& scratch, int width,
-                                      int source_line, const std::string& comment_prefix) {
+                                      const std::string& display_name, int source_line,
+                                      const std::string& comment_prefix) {
   api.emit_recall(scratch);
-  api.emitter.items.back().comment = comment_prefix + " body";
+  api.emitter.items.back().comment = "display " + display_name + " body";
   api.emitter.emit_op(0x14, "<->", comment_prefix + " leader merge", source_line);
   api.emitter.emit_op(0x54, "К НОП", comment_prefix + " leader preserve", source_line, true);
   api.emitter.emit_op(0x0c, "ВП", comment_prefix + " leader restore", source_line);
   emit_display_exponent(api.emitter, width - 1, source_line, comment_prefix + " exponent");
-  api.emitter.emit_op(0x50, "С/П", "show display mask", source_line);
+  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
 }
 
 void emit_variable_leading_tail_digit(DisplayEmitApi& api, const DisplayItem& source, int split,
@@ -451,17 +452,18 @@ void emit_variable_leading_tail_digit(DisplayEmitApi& api, const DisplayItem& so
 
 bool emit_variable_leading_high_body(DisplayEmitApi& api,
                                      const VariableLeadingDisplayMaskTemplate& template_plan,
-                                     const std::string& scratch, int source_line) {
+                                     const std::string& scratch, const std::string& display_name,
+                                     int source_line) {
   emit_variable_leading_tail_digit(api, *template_plan.source, template_plan.split, source_line);
-  api.emit_store(scratch, "display mask trailing digit");
+  api.emit_store(scratch, "display " + display_name + " trailing digit");
 
   api.emitter.emit_number("9");
   if (!api.emitter.items.empty())
-    api.emitter.items.back().comment = "display mask numeric anchor";
+    api.emitter.items.back().comment = "display " + display_name + " numeric anchor";
   api.emit_display_scale(std::to_string(template_plan.split), source_line);
   api.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
   api.emit_recall(scratch);
-  api.emitter.items.back().comment = "display mask trailing digit";
+  api.emitter.items.back().comment = "display " + display_name + " trailing digit";
   api.emitter.emit_op(0x10, "+", "packed display field append", source_line);
 
   for (const DisplayMaskBodyField& field : template_plan.high.body_fields) {
@@ -469,7 +471,7 @@ bool emit_variable_leading_high_body(DisplayEmitApi& api,
     api.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
     if (field.literal && field.value == "0")
       continue;
-    if (!emit_display_mask_field_value(api, field, "display source"))
+    if (!emit_display_mask_field_value(api, field, display_name))
       return false;
     api.emitter.emit_op(0x10, "+", "packed display field append", source_line);
   }
@@ -499,6 +501,88 @@ bool looks_like_mantissa_exponent_display_template(const std::vector<DisplayItem
          normalize_display_template_literal(items.at(3).text) == "-" &&
          items.at(5).kind == "literal" &&
          normalize_display_template_literal(items.at(5).text) == "-";
+}
+
+std::string display_template_name(const V2Statement& statement) {
+  if (statement.inline_name.has_value())
+    return *statement.inline_name;
+  if (statement.name.has_value())
+    return *statement.name;
+  return std::to_string(statement.line);
+}
+
+std::string display_template_value_scratch_name(const std::string& name) {
+  return "__display_value_" + name;
+}
+
+std::string display_template_loop_scratch_name(const std::string& name) {
+  return "__display_loop_" + name;
+}
+
+std::string display_template_mask_scratch_name(const std::string& name) {
+  return "__display_mask_" + name;
+}
+
+std::optional<std::pair<int, std::string>> display_loop_opcode(std::string_view register_name) {
+  if (register_name == "0")
+    return std::pair{0x5d, std::string{"F L0"}};
+  if (register_name == "1")
+    return std::pair{0x5b, std::string{"F L1"}};
+  if (register_name == "2")
+    return std::pair{0x58, std::string{"F L2"}};
+  if (register_name == "3")
+    return std::pair{0x5a, std::string{"F L3"}};
+  return std::nullopt;
+}
+
+std::optional<int> display_mask_literal_width(const DisplayItem& item) {
+  if (item.kind != "literal")
+    return std::nullopt;
+  const std::optional<std::vector<int>> cells = display_literal_mantissa_cells(item.text);
+  if (!cells.has_value())
+    return std::nullopt;
+  return static_cast<int>(cells->size());
+}
+
+bool looks_like_fixed_display_mask_template(const std::vector<DisplayItem>& items) {
+  if (items.size() < 2U || items_match_formatted_coord_report_shape(items))
+    return false;
+
+  int width = 1;
+  bool has_literal_cell = items.front().kind == "literal";
+
+  if (items.front().kind == "source") {
+    if (items.front().expr.has_value() || items.front().width.value_or(1) != 1)
+      return false;
+  } else if (items.front().kind == "literal") {
+    const std::optional<std::vector<int>> cells = display_literal_mantissa_cells(items.front().text);
+    if (!cells.has_value() || cells->empty() || cells->front() == 15)
+      return false;
+    width += static_cast<int>(cells->size()) - 1;
+  } else {
+    return false;
+  }
+
+  for (std::size_t index = 1; index < items.size(); ++index) {
+    const DisplayItem& item = items.at(index);
+    if (item.kind == "source") {
+      if (item.expr.has_value())
+        return false;
+      width += item.width.value_or(1);
+    } else if (item.kind == "literal") {
+      const std::optional<int> literal_width = display_mask_literal_width(item);
+      if (!literal_width.has_value())
+        return false;
+      has_literal_cell = has_literal_cell || *literal_width > 0;
+      width += *literal_width;
+    } else {
+      return false;
+    }
+    if (width > 8)
+      return false;
+  }
+
+  return has_literal_cell && width >= 2 && width <= 8;
 }
 
 struct FormattedCoordReportTemplate {
@@ -563,10 +647,17 @@ bool literal_needs_first_splice_scratch(const std::string& literal) {
 
 void collect_display_scratch_register_names(const V2Statement& statement,
                                             std::vector<std::string>& names) {
-  if (statement.kind == "v2_show" && statement.items.has_value() &&
+  const bool display_statement = statement.kind == "v2_show" || statement.kind == "v2_stop";
+  if (display_statement && statement.items.has_value() &&
       looks_like_mantissa_exponent_display_template(*statement.items)) {
-    names.push_back("__display_value_" + std::to_string(statement.line));
-    names.push_back("__display_loop_" + std::to_string(statement.line));
+    const std::string name = display_template_name(statement);
+    names.push_back(display_template_value_scratch_name(name));
+    names.push_back(display_template_loop_scratch_name(name));
+    names.push_back(display_template_mask_scratch_name(name));
+  }
+  if (display_statement && statement.items.has_value() &&
+      looks_like_fixed_display_mask_template(*statement.items)) {
+    names.push_back(display_template_value_scratch_name(display_template_name(statement)));
   }
   if (statement.kind == "v2_show" && statement.items.has_value()) {
     const std::optional<std::string> literal = literal_only_display_text(*statement.items);
@@ -585,6 +676,60 @@ void collect_display_scratch_register_names(const V2Statement& statement,
   }
   if (statement.otherwise != nullptr)
     collect_display_scratch_register_names(*statement.otherwise, names);
+}
+
+void collect_display_template_mask_scratch_register_names(const V2Statement& statement,
+                                                          std::vector<std::string>& names) {
+  const bool display_statement = statement.kind == "v2_show" || statement.kind == "v2_stop";
+  if (display_statement && statement.items.has_value() &&
+      looks_like_mantissa_exponent_display_template(*statement.items)) {
+    names.push_back(display_template_mask_scratch_name(display_template_name(statement)));
+  }
+  for (const V2Statement& child : statement.body)
+    collect_display_template_mask_scratch_register_names(child, names);
+  for (const V2Statement& child : statement.then_body)
+    collect_display_template_mask_scratch_register_names(child, names);
+  for (const V2Statement& child : statement.else_body)
+    collect_display_template_mask_scratch_register_names(child, names);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_display_template_mask_scratch_register_names(*match_case.action, names);
+  }
+  if (statement.otherwise != nullptr)
+    collect_display_template_mask_scratch_register_names(*statement.otherwise, names);
+}
+
+void collect_display_constant_preload_values(const LoweringContext& context,
+                                             const V2Statement& statement,
+                                             std::vector<std::string>& values) {
+  const bool display_statement = statement.kind == "v2_show" || statement.kind == "v2_stop";
+  if (display_statement && statement.items.has_value()) {
+    if (plan_mantissa_exponent_template(context, *statement.items).has_value()) {
+      values.push_back("1000");
+      values.push_back("10000000");
+    }
+    if (const std::optional<FixedDisplayMaskTemplate> fixed =
+            plan_fixed_display_mask_template(context, *statement.items)) {
+      values.push_back(fixed->mask);
+    }
+    if (const std::optional<VariableLeadingDisplayMaskTemplate> variable =
+            plan_variable_leading_display_mask_template(context, *statement.items)) {
+      values.push_back(variable->low.mask);
+      values.push_back(variable->high.mask);
+    }
+  }
+  for (const V2Statement& child : statement.body)
+    collect_display_constant_preload_values(context, child, values);
+  for (const V2Statement& child : statement.then_body)
+    collect_display_constant_preload_values(context, child, values);
+  for (const V2Statement& child : statement.else_body)
+    collect_display_constant_preload_values(context, child, values);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_display_constant_preload_values(context, *match_case.action, values);
+  }
+  if (statement.otherwise != nullptr)
+    collect_display_constant_preload_values(context, *statement.otherwise, values);
 }
 
 } // namespace
@@ -658,6 +803,32 @@ std::vector<std::string> display_scratch_register_names_for_program(const V2Prog
       collect_display_scratch_register_names(statement, names);
   }
   return names;
+}
+
+std::vector<std::string> display_template_mask_scratch_names_for_program(
+    const V2Program& program) {
+  std::vector<std::string> names;
+  for (const V2Statement& statement : program.body)
+    collect_display_template_mask_scratch_register_names(statement, names);
+  for (const V2Rule& rule : program.rules) {
+    for (const V2Statement& statement : rule.body)
+      collect_display_template_mask_scratch_register_names(statement, names);
+  }
+  std::sort(names.begin(), names.end());
+  names.erase(std::unique(names.begin(), names.end()), names.end());
+  return names;
+}
+
+std::vector<std::string> display_constant_preload_values_for_program(
+    const LoweringContext& context, const V2Program& program) {
+  std::vector<std::string> values;
+  for (const V2Statement& statement : program.body)
+    collect_display_constant_preload_values(context, statement, values);
+  for (const V2Rule& rule : program.rules) {
+    for (const V2Statement& statement : rule.body)
+      collect_display_constant_preload_values(context, statement, values);
+  }
+  return values;
 }
 
 std::optional<std::string> collapse_literal_only_display(const std::vector<DisplayItem>& items) {
@@ -956,89 +1127,84 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
 
 bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                                const std::vector<DisplayItem>& items,
-                                               int source_line) {
+                                               const std::string& display_name, int source_line) {
   const std::optional<MantissaExponentTemplate> template_plan =
       plan_mantissa_exponent_template(context, items);
   if (!template_plan.has_value())
     return false;
 
-  const std::string value_scratch = "__display_value_" + std::to_string(source_line);
-  const std::string loop_scratch = "__display_loop_" + std::to_string(source_line);
-  if (!api.ensure_hidden_register(value_scratch) || !api.ensure_hidden_register(loop_scratch)) {
+  const std::string value_scratch = display_template_value_scratch_name(display_name);
+  const std::string loop_scratch = display_template_loop_scratch_name(display_name);
+  const std::string mask_scratch = display_template_mask_scratch_name(display_name);
+  if (!api.ensure_hidden_register(value_scratch) || !api.ensure_hidden_register(loop_scratch) ||
+      !api.ensure_hidden_register(mask_scratch)) {
     return false;
   }
+  const std::optional<std::pair<int, std::string>> loop_opcode =
+      display_loop_opcode(api.register_text_for(loop_scratch));
+  if (!loop_opcode.has_value())
+    return false;
 
-  if (!api.lower_display_item_to_x(*template_plan->score, "display template score"))
+  if (!api.lower_display_item_to_x(*template_plan->score, "display " + display_name + " score"))
     return false;
   api.emit_display_scale("1000", source_line);
   api.emitter.emit_op(0x13, "/", "display template score shift", source_line);
-  if (!api.lower_display_item_to_x(*template_plan->total, "display template total"))
+  if (!api.lower_display_item_to_x(*template_plan->total, "display " + display_name + " total"))
     return false;
   api.emit_display_scale("10000000", source_line);
   api.emitter.emit_op(0x13, "/", "display template total shift", source_line);
   api.emitter.emit_op(0x10, "+", "display template total append", source_line);
   api.emitter.emit_op(0x09, "9", "display template numeric anchor", source_line);
   api.emitter.emit_op(0x10, "+", "display template numeric body", source_line);
-
-  const std::optional<DisplayLiteralProgram> mask_program = display_literal_program("8,-00-000");
-  if (!mask_program.has_value() ||
-      !emit_display_literal_program_to_x(api.emitter, *mask_program, source_line,
-                                         "display template separator mask")) {
-    context.diagnostics.push_back(Diagnostic{
-        .severity = DiagnosticSeverity::Error,
-        .code = "native-unsupported",
-        .message = "Native display template mask is not lowerable",
-    });
-    return false;
-  }
+  api.emit_recall(mask_scratch);
+  api.emitter.items.back().comment = "display " + display_name + " separator mask";
   api.emitter.emit_op(0x38, "К ∨", "display template body merge", source_line);
-  api.emit_store(value_scratch, "display template body");
+  api.emit_store(value_scratch, "display " + display_name + " body");
 
   const std::string exponent_zero_label = api.emitter.fresh_label("display_exponent_zero");
   const bool exponent_can_be_zero = display_source_can_be_zero(context, *template_plan->exponent);
-  if (!api.lower_display_item_to_x(*template_plan->exponent, "display template exponent"))
+  if (!api.lower_display_item_to_x(*template_plan->exponent,
+                                   "display " + display_name + " exponent"))
     return false;
   if (exponent_can_be_zero) {
     api.emitter.emit_jump(0x57, "F x!=0", exponent_zero_label, "display template zero exponent",
                           source_line);
   }
-  api.emit_store(loop_scratch, "display template exponent counter");
+  api.emit_store(loop_scratch, "display " + display_name + " exponent counter");
   api.emit_recall(value_scratch);
-  api.emitter.items.back().comment = "display template body";
+  api.emitter.items.back().comment = "display " + display_name + " body";
 
   const std::string loop_label = api.emitter.fresh_label("display_exponent_loop");
   api.emitter.emit_label(loop_label, {.hidden = true});
   api.emitter.emit_op(0x0c, "ВП", "display template exponent entry", source_line);
   api.emitter.emit_op(0x01, "1", "display template exponent digit", source_line);
   api.emitter.emit_op(0x0b, "/-/", "display template exponent sign", source_line);
-  api.emit_store(value_scratch, "display template exponent body");
-  api.emit_recall(loop_scratch);
-  api.emitter.items.back().comment = "display template exponent counter";
-  api.emitter.emit_number("1");
-  api.emitter.emit_op(0x11, "-", "display template exponent decrement", source_line);
-  api.emit_store(loop_scratch, "display template exponent counter");
-  api.emitter.emit_jump(0x5e, "F x=0", loop_label, "display template exponent loop", source_line);
+  api.emitter.emit_jump(loop_opcode->first, loop_opcode->second, loop_label,
+                        "display template exponent loop", source_line);
+  api.emit_store(value_scratch, "display " + display_name + " exponent body");
 
   if (exponent_can_be_zero)
     api.emitter.emit_label(exponent_zero_label, {.hidden = true});
 
-  if (!api.lower_display_item_to_x(*template_plan->leader, "display template leader"))
+  if (!api.lower_display_item_to_x(*template_plan->leader, "display " + display_name + " leader"))
     return false;
   api.emit_recall(value_scratch);
-  api.emitter.items.back().comment = "display template body";
+  api.emitter.items.back().comment = "display " + display_name + " body";
   api.emitter.emit_op(0x14, "<->", "display template leader merge", source_line);
   api.emitter.emit_op(0x54, "К НОП", "display template leader preserve", source_line, true);
   api.emitter.emit_op(0x0c, "ВП", "display template leader restore", source_line);
-  api.emitter.emit_op(0x50, "С/П", "show display template", source_line);
+  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "display-byte-x2-lowering",
-      .detail = "Built literal-separated show(...) through a mantissa/exponent video template.",
+      .detail = "Built literal-separated screen " + display_name +
+                " through a mantissa/exponent video template.",
   });
   return true;
 }
 
 bool lower_variable_leading_display_mask_statement(DisplayEmitApi& api, LoweringContext& context,
                                                    const std::vector<DisplayItem>& items,
+                                                   const std::string& display_name,
                                                    int source_line) {
   const std::optional<VariableLeadingDisplayMaskTemplate> template_plan =
       plan_variable_leading_display_mask_template(context, items);
@@ -1051,92 +1217,88 @@ bool lower_variable_leading_display_mask_statement(DisplayEmitApi& api, Lowering
   if (!low_mask.has_value() || !high_mask.has_value())
     return false;
 
-  const std::string scratch = "__display_mask_body_" + std::to_string(source_line);
+  const std::string scratch = display_template_value_scratch_name(display_name);
   if (!api.ensure_hidden_register(scratch))
     return false;
 
   const std::string low_label = api.emitter.fresh_label("display_mask_low");
   const std::string end_label = api.emitter.fresh_label("display_mask_end");
   api.emit_recall(template_plan->source->name);
-  api.emitter.items.back().comment = "display mask leading field";
+  api.emitter.items.back().comment = "display " + display_name + " leading field";
   api.emit_display_scale(std::to_string(template_plan->split), source_line);
   api.emitter.emit_op(0x11, "-", "display mask leading width test", source_line);
   api.emitter.emit_jump(0x59, "F x>=0", low_label, "display mask low branch", source_line);
 
-  if (!emit_variable_leading_high_body(api, *template_plan, scratch, source_line))
+  if (!emit_variable_leading_high_body(api, *template_plan, scratch, display_name, source_line))
     return false;
-  emit_mantissa_mask_body_merge(api, *high_mask, scratch, source_line, "display mask high");
+  emit_mantissa_mask_body_merge(api, *high_mask, scratch, display_name, source_line);
   emit_variable_leading_high_leader(api, *template_plan->source, template_plan->split, source_line);
-  emit_mantissa_mask_leader_splice(api, scratch, template_plan->high.width, source_line,
+  emit_mantissa_mask_leader_splice(api, scratch, template_plan->high.width, display_name,
+                                   source_line,
                                    "display mask high");
   api.emitter.emit_jump(0x51, "БП", end_label, "display mask end", source_line);
 
   api.emitter.emit_label(low_label, {.hidden = true});
-  if (!lower_display_mask_body_fields(api, template_plan->low.body_fields, source_line))
+  if (!lower_display_mask_body_fields(api, template_plan->low.body_fields, display_name,
+                                      source_line))
     return false;
-  emit_mantissa_mask_body_merge(api, *low_mask, scratch, source_line, "display mask");
+  emit_mantissa_mask_body_merge(api, *low_mask, scratch, display_name, source_line);
   api.emit_recall(template_plan->source->name);
-  api.emitter.items.back().comment = "display mask leader";
-  emit_mantissa_mask_leader_splice(api, scratch, template_plan->low.width, source_line,
+  api.emitter.items.back().comment = "display " + display_name + " leader";
+  emit_mantissa_mask_leader_splice(api, scratch, template_plan->low.width, display_name,
+                                   source_line,
                                    "display mask");
   api.emitter.emit_label(end_label, {.hidden = true});
   context.optimizations.push_back(OptimizationReport{
       .name = "display-byte-variable-mask-lowering",
-      .detail = "Built variable-width literal-separated show(...) through calculator video masks.",
+      .detail = "Built variable-width literal-separated screen " + display_name +
+                " through calculator video masks.",
   });
   return true;
 }
 
 bool lower_fixed_display_mask_statement(DisplayEmitApi& api, LoweringContext& context,
-                                        const std::vector<DisplayItem>& items, int source_line) {
+                                        const std::vector<DisplayItem>& items,
+                                        const std::string& display_name, int source_line) {
   const std::optional<FixedDisplayMaskTemplate> template_plan =
       plan_fixed_display_mask_template(context, items);
   if (!template_plan.has_value())
     return false;
 
-  const std::string scratch = "__display_mask_body_" + std::to_string(source_line);
+  const std::string scratch = display_template_value_scratch_name(display_name);
   if (!api.ensure_hidden_register(scratch))
     return false;
-  if (!lower_display_mask_body_fields(api, template_plan->body_fields, source_line))
+  if (!lower_display_mask_body_fields(api, template_plan->body_fields, display_name, source_line))
     return false;
-
-  const std::optional<DisplayLiteralProgram> mask_program =
-      display_literal_program(template_plan->mask);
-  if (!mask_program.has_value() ||
-      !emit_display_literal_program_to_x(api.emitter, *mask_program, source_line,
-                                         "display mask literal")) {
-    context.diagnostics.push_back(Diagnostic{
-        .severity = DiagnosticSeverity::Error,
-        .code = "native-unsupported",
-        .message = "Native display mask literal is not lowerable",
-    });
+  const std::optional<std::string> mask_register = api.ensure_preloaded_number(template_plan->mask);
+  if (!mask_register.has_value())
     return false;
-  }
-  api.emitter.emit_op(0x38, "К ∨", "display mask body merge", source_line);
-  api.emit_store(scratch, "display mask body");
+  emit_mantissa_mask_body_merge(api, *mask_register, scratch, display_name, source_line);
 
   if (template_plan->leader_item != nullptr) {
-    if (!api.lower_display_item_to_x(*template_plan->leader_item, "display mask leader"))
+    if (!api.lower_display_item_to_x(*template_plan->leader_item,
+                                     "display " + display_name + " leader"))
       return false;
   } else if (template_plan->leader_cell.has_value()) {
     if (!emit_display_first_digit(context, *template_plan->leader_cell, source_line,
-                                  "display mask leader"))
+                                  "display " + display_name + " leader"))
       return false;
   } else {
     return false;
   }
 
   api.emit_recall(scratch);
-  api.emitter.items.back().comment = "display mask body";
+  api.emitter.items.back().comment = "display " + display_name + " body";
   api.emitter.emit_op(0x14, "<->", "display mask leader merge", source_line);
   api.emitter.emit_op(0x54, "К НОП", "display mask leader preserve", source_line, true);
   api.emitter.emit_op(0x0c, "ВП", "display mask leader restore", source_line);
   emit_display_exponent(api.emitter, template_plan->width - 1, source_line,
                         "display mask exponent");
-  api.emitter.emit_op(0x50, "С/П", "show display mask", source_line);
+  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "display-byte-mask-lowering",
-      .detail = "Built literal-separated show(...) through a calculator video mask.",
+      .detail = "Built literal-separated screen " + display_name +
+                " through a calculator video mask.",
   });
   return true;
 }
