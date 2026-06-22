@@ -27,6 +27,10 @@ struct DisplayEmitApi {
 };
 
 std::vector<std::string> display_scratch_register_names_for_program(const V2Program& program);
+std::vector<std::string> display_template_mask_scratch_names_for_program(
+    const V2Program& program);
+std::vector<std::string> display_constant_preload_values_for_program(
+    const LoweringContext& context, const V2Program& program);
 std::string first_splice_display_scratch_name(int source_line);
 std::optional<std::string> collapse_literal_only_display(const std::vector<DisplayItem>& items);
 bool emit_display_literal_program_to_x(MachineEmitter& emitter,
@@ -52,12 +56,14 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
                                               int source_line);
 bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                                const std::vector<DisplayItem>& items,
-                                               int source_line);
+                                               const std::string& display_name, int source_line);
 bool lower_variable_leading_display_mask_statement(DisplayEmitApi& api, LoweringContext& context,
                                                    const std::vector<DisplayItem>& items,
+                                                   const std::string& display_name,
                                                    int source_line);
 bool lower_fixed_display_mask_statement(DisplayEmitApi& api, LoweringContext& context,
-                                        const std::vector<DisplayItem>& items, int source_line);
+                                        const std::vector<DisplayItem>& items,
+                                        const std::string& display_name, int source_line);
 bool items_match_formatted_coord_report_shape(const std::vector<DisplayItem>& items);
 bool program_uses_formatted_coord_report(const V2Program& program);
 bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, LoweringContext& context,

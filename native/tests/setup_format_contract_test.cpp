@@ -36,7 +36,8 @@ void setup_formatting_matches_typescript_contract() {
     require(*setup_block ==
                 "`R5=0; R0=0; R7=0; R4=0; R6=0; Ra=20; Rb=100; Rc=1E3; Rd=1E7; "
                 "Re=8,-00-000; R8=L3; R9=С4`",
-            "setup-format should render the same deterministic setup block");
+            "setup-format should render the same deterministic setup block; actual " +
+                *setup_block);
   }
 
   {
@@ -77,7 +78,7 @@ void setup_formatting_matches_typescript_contract() {
             "setup-format should show compact setup load for decimal constant");
     require(rambo.listing.find("   02 |   -  | 0.5") != std::string::npos,
             "setup-format should show compact setup load for 0.5");
-    require(rambo.listing.find("   04 |  41  | X→П 1") != std::string::npos,
+    require(rambo.listing.find("   05 |  41  | X→П 1") != std::string::npos,
             "setup-format should show setup program register moves");
     require(rambo.listing.find("# Setup Listing") != std::string::npos,
             "setup-format should show setup listing for over-budget programs");
@@ -90,10 +91,10 @@ void setup_formatting_matches_typescript_contract() {
         {.address = 2, .opcode = 0x54, .hex = "54", .mnemonic = "ВП", .comment = "halt"},
     };
     const std::string listing = format_listing_steps(steps);
-    require(listing.find("01 05") == std::string::npos,
-            "formatListing should not keep unmerged setup key-value dumps");
-    require(listing.find("01  ... 05") != std::string::npos,
-            "formatListing should merge adjacent number-entry tokens");
+    require(listing.find("01 05 54") != std::string::npos,
+            "formatListing should keep short merged number-entry token groups explicit");
+    require(listing.find("15E") != std::string::npos,
+            "formatListing should merge adjacent number-entry commands");
     require(listing.find("halt") != std::string::npos,
             "formatListing should preserve trailing instruction comment");
   }

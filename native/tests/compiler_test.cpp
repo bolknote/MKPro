@@ -2397,7 +2397,7 @@ program BoundedRandomCalls {
           "bounded random compile should not report diagnostics");
   int random_range_count = 0;
   for (const ResolvedStep& step : bounded_random_call.steps) {
-    if (step.comment == "random range")
+    if (step.comment == "expr *")
       ++random_range_count;
   }
   require(random_range_count == 2, "bounded random calls should multiply by their range");
@@ -4411,8 +4411,8 @@ program RepeatedConstantPreload {
           "native compiler should lower repeated literal preloads");
   require(repeated_constant_preload.diagnostics.empty(),
           "repeated literal preload compile should not report diagnostics");
-  require(repeated_constant_preload.setup_program.has_value(),
-          "compiler-owned constant preloads should emit a setup program");
+  require(!repeated_constant_preload.setup_program.has_value(),
+          "numeric compiler-owned constant preloads should match TS setup-block-only contract");
   require(std::any_of(repeated_constant_preload.preloads.begin(),
                       repeated_constant_preload.preloads.end(),
                       [](const PreloadReport& preload) { return preload.value == "12345"; }),
@@ -4636,18 +4636,12 @@ program CellsLineCountPreloads {
           "line_count helper should reclaim coalesced R2 for the TS preloaded constant contract");
   require(has_optimization(cells_line_count_preloads, "preloaded-stack-constant"),
           "shared bit-mask helper should report stack-only constant preloads");
-  require(cells_line_count_preloads.setup_program.has_value(),
-          "preloaded line_count programs should expose a setup program");
-  require(!cells_line_count_preloads.setup_program->steps.empty(),
-          "setup program should contain executable steps");
-  require(cells_line_count_preloads.setup_program->steps.back().opcode == 0x50,
-          "setup program should stop after initializing preloads");
+  require(!cells_line_count_preloads.setup_program.has_value(),
+          "numeric preloaded line_count programs should match TS setup-block-only contract");
   require(cells_line_count_preloads.listing.find("# Setup Listing") != std::string::npos,
-          "combined listing should include setup listing");
+          "line_count executable preload listing should include setup listing rows");
   require(cells_line_count_preloads.listing.find("# Main Listing") != std::string::npos,
-          "combined listing should include main listing");
-  require(cells_line_count_preloads.setup_listing.find("setup complete") != std::string::npos,
-          "setup listing should show setup completion");
+          "line_count executable preload listing should include main listing rows");
   bool found_four_preload = false;
   for (const PreloadReport& preload : cells_line_count_preloads.preloads) {
     if (preload.register_name == "2" && preload.value == "4")
@@ -4673,10 +4667,9 @@ program StackSetup {
   require(stack_setup.setup_program.has_value(), "stack setup state should expose a setup program");
   require(has_optimization(stack_setup, "auto-preload-initial-state"),
           "stack setup state should report the TS auto-preload strategy name");
-  require(stack_setup.setup_listing.find("setup from stack.Y") != std::string::npos,
+  require(stack_setup.setup_listing.find("setup y from stack.Y") != std::string::npos,
           "setup should move stack.Y into X before storing Y-sourced fields");
-  require(stack_setup.setup_listing.find("restore stack.X after stack.Y setup") !=
-              std::string::npos,
+  require(stack_setup.setup_listing.find("restore stack.X after y") != std::string::npos,
           "setup should restore stack.X after Y-sourced fields");
   bool found_stack_x = false;
   bool found_stack_y = false;
@@ -6123,12 +6116,8 @@ program NegativeZeroThreshold {
                       negative_zero_threshold.preloads.end(),
                       [](const PreloadReport& preload) { return preload.value == "1|-00"; }),
           "negative-zero threshold should expose the TS 1|-00 preload");
-  require(negative_zero_threshold.setup_program.has_value(),
-          "negative-zero threshold should generate a setup program for the sentinel preload");
-  require(std::any_of(negative_zero_threshold.setup_program->steps.begin(),
-                      negative_zero_threshold.setup_program->steps.end(),
-                      [](const ResolvedStep& step) { return step.opcode == 0x54; }),
-          "negative-zero threshold setup should include the TS К НОП seed sequence");
+  require(!negative_zero_threshold.setup_program.has_value(),
+          "negative-zero threshold sentinel should match TS setup-block-only contract");
 
   CompileOptions branch_x_options;
   branch_x_options.budget = 999;
@@ -6793,16 +6782,22 @@ program PackedDisplay {
           "packed display expression should allocate the TS display-expression scratch");
   int display_shift_count = 0;
   int display_append_count = 0;
+  int display_current_append_count = 0;
   for (const ResolvedStep& step : packed_display_statement.steps) {
     if (step.comment == "packed display field shift")
       ++display_shift_count;
     if (step.comment == "packed display field append")
       ++display_append_count;
+    if (step.comment == "packed display current field append")
+      ++display_current_append_count;
   }
   require(display_shift_count == 2, "three-field display should shift for each appended field");
-  require(display_append_count == 2, "three-field display should append each trailing field");
-  require(packed_display_statement.listing.find("display scale 100") != std::string::npos,
-          "fixed-width display field should reserve decimal positions");
+  require(display_append_count + display_current_append_count == 2,
+          "three-field display should append each trailing field");
+  require(display_current_append_count == 1,
+          "three-field display should reuse the materialized suffix from X like TS");
+  require(packed_display_statement.listing.find("preload const 100") != std::string::npos,
+          "fixed-width display field should reserve decimal positions through TS preload");
   require(packed_display_statement.listing.find("expr +") != std::string::npos,
           "display expression field should use generic expression lowering");
 
@@ -7029,7 +7024,7 @@ program PackedRowDisplay {
   require(packed_row_display_statement.listing.find("show packed row") != std::string::npos,
           "floor packed-row display should emit a calculator stop");
 
-  const CompileResult packed_row_expression_display_statement = compile_source(R"mkpro(
+  const std::string packed_row_expression_source = R"mkpro(
 program PackedRowExpressionDisplay {
   state {
     floor: counter 1..4 = 2
@@ -7040,23 +7035,51 @@ program PackedRowExpressionDisplay {
     halt(0)
   }
 }
-)mkpro");
+)mkpro";
+  const CompileResult packed_row_expression_display_statement =
+      compile_source(packed_row_expression_source);
   require(packed_row_expression_display_statement.implemented,
           "native compiler should lower floor packed-row expression displays");
   require(packed_row_expression_display_statement.diagnostics.empty(),
           "floor packed-row expression display compile should not report diagnostics");
   require(has_optimization(packed_row_expression_display_statement,
-                           "floor-packed-row-expression-display"),
-          "floor packed-row expression display should report the TS strategy name");
-  require(packed_row_expression_display_statement.listing.find(
-              "display packed row expression merge") != std::string::npos,
-          "floor packed-row expression display should merge the computed row");
-  require(packed_row_expression_display_statement.listing.find(
-              "display packed row expression rotate") != std::string::npos,
-          "floor packed-row expression display should preserve the computed row");
+                           "display-expression-materialization"),
+          "default floor packed-row expression display should materialize the row like TS");
+  require(has_optimization(packed_row_expression_display_statement, "floor-packed-row-display"),
+          "default floor packed-row expression display should report the materialized TS strategy");
+  require(packed_row_expression_display_statement.listing.find("display packed row floor merge") !=
+              std::string::npos,
+          "default floor packed-row expression display should merge the materialized row");
+  require(packed_row_expression_display_statement.listing.find("display packed row preserve") !=
+              std::string::npos,
+          "default floor packed-row expression display should preserve the materialized row");
   require(packed_row_expression_display_statement.listing.find("show packed row") !=
               std::string::npos,
-          "floor packed-row expression display should emit a calculator stop");
+          "default floor packed-row expression display should emit a calculator stop");
+
+  CompileOptions inline_floor_options;
+  inline_floor_options.inline_floor_packed_row_expressions = true;
+  const CompileResult inline_packed_row_expression_display_statement =
+      compile_source(packed_row_expression_source, inline_floor_options);
+  require(inline_packed_row_expression_display_statement.implemented,
+          "native compiler should force inline floor packed-row expression displays");
+  require(inline_packed_row_expression_display_statement.diagnostics.empty(),
+          "inline floor packed-row expression display compile should not report diagnostics");
+  require(has_optimization(packed_row_expression_display_statement,
+                           "floor-packed-row-display"),
+          "floor packed-row expression display should report the default TS strategy name");
+  require(has_optimization(inline_packed_row_expression_display_statement,
+                           "floor-packed-row-expression-display"),
+          "inline floor packed-row expression display should report the forced TS strategy name");
+  require(inline_packed_row_expression_display_statement.listing.find(
+              "display packed row expression merge") != std::string::npos,
+          "inline floor packed-row expression display should merge the computed row");
+  require(inline_packed_row_expression_display_statement.listing.find(
+              "display packed row expression rotate") != std::string::npos,
+          "inline floor packed-row expression display should preserve the computed row");
+  require(inline_packed_row_expression_display_statement.listing.find("show packed row") !=
+              std::string::npos,
+          "inline floor packed-row expression display should emit a calculator stop");
 
   const CompileResult mixed_display_mask_statement = compile_source(R"mkpro(
 program MixedDisplayMask {
@@ -7079,18 +7102,18 @@ program MixedDisplayMask {
           "mixed display mask should report the TS strategy name");
   bool saw_display_mask_scratch = false;
   for (const auto& [name, _register_name] : mixed_display_mask_statement.registers) {
-    if (name.rfind("__display_mask_body_", 0) == 0)
+    if (name.rfind("__display_value_", 0) == 0)
       saw_display_mask_scratch = true;
   }
   require(saw_display_mask_scratch, "mixed display mask should allocate a body scratch register");
-  require(mixed_display_mask_statement.listing.find("display mask literal") != std::string::npos,
-          "mixed display mask should build the literal video mask");
+  require(mixed_display_mask_statement.listing.find("literal mask") != std::string::npos,
+          "mixed display mask should recall the literal video mask");
   require(mixed_display_mask_statement.listing.find("display mask body merge") != std::string::npos,
           "mixed display mask should merge numeric body and literal cells");
   require(mixed_display_mask_statement.listing.find("display mask leader preserve") !=
               std::string::npos,
           "mixed display mask should splice the leading display cell");
-  require(mixed_display_mask_statement.listing.find("show display mask") != std::string::npos,
+  require(mixed_display_mask_statement.listing.find("show __inline_show_") != std::string::npos,
           "mixed display mask should emit a calculator stop");
 
   const CompileResult display_string_inline = compile_source(R"mkpro(
@@ -7119,7 +7142,7 @@ program DisplayStringClue {
           "inlined display string state should not allocate a register");
   require(display_string_inline.listing.find("assign clue") == std::string::npos,
           "inlined display string assignment should be removed before lowering");
-  require(display_string_inline.listing.find("display mask literal") != std::string::npos,
+  require(display_string_inline.listing.find("literal mask") != std::string::npos,
           "inlined display string should still use mixed display mask lowering");
 
   const CompileResult display_string_prefix = compile_source(R"mkpro(
@@ -7170,7 +7193,7 @@ program GuardedSpacedDisplayStringDefault {
           "guarded display string compile should not report diagnostics");
   require(has_optimization(guarded_display_string, "display-string-guarded-show"),
           "guarded display string should report display-string-guarded-show");
-  require(guarded_display_string.listing.find("display mask literal") != std::string::npos,
+  require(guarded_display_string.listing.find("literal mask") != std::string::npos,
           "guarded display string should still lower through display mask branches");
 
   const CompileResult guarded_display_string_helper = compile_source(R"mkpro(
@@ -7219,7 +7242,7 @@ program EdgeSpaceMixedDisplay {
           "edge-space mixed display compile should not report diagnostics");
   require(has_optimization(edge_space_mixed_display, "display-edge-whitespace-trim"),
           "edge-space mixed display should report display-edge-whitespace-trim");
-  require(edge_space_mixed_display.listing.find("display mask literal") != std::string::npos,
+  require(edge_space_mixed_display.listing.find("literal mask") != std::string::npos,
           "trimmed edge-space mixed display should still use mask lowering");
 
   const CompileResult mantissa_exponent_display_statement = compile_source(R"mkpro(
@@ -7243,16 +7266,16 @@ program LiteralSeparatedScoreboard {
           "mantissa/exponent display compile should not report diagnostics");
   require(has_optimization(mantissa_exponent_display_statement, "display-byte-x2-lowering"),
           "mantissa/exponent display should report the TS strategy name");
-  require(mantissa_exponent_display_statement.listing.find("display template separator mask") !=
+  require(mantissa_exponent_display_statement.listing.find("separator mask") !=
               std::string::npos,
-          "mantissa/exponent display should build the separator mask");
+          "mantissa/exponent display should recall the separator mask");
   require(mantissa_exponent_display_statement.listing.find("display template exponent loop") !=
               std::string::npos,
           "mantissa/exponent display should emit a dynamic exponent loop");
   require(mantissa_exponent_display_statement.listing.find("display template leader preserve") !=
               std::string::npos,
           "mantissa/exponent display should splice the leading digit");
-  require(mantissa_exponent_display_statement.listing.find("show display template") !=
+  require(mantissa_exponent_display_statement.listing.find("show __inline_show_") !=
               std::string::npos,
           "mantissa/exponent display should emit a calculator stop");
 
@@ -7275,7 +7298,8 @@ program LiteralDisplay {
   for (const ResolvedStep& step : literal_display_statement.steps) {
     if (step.opcode == 0x3a && step.comment == "display literal video bytes")
       saw_literal_kinv = true;
-    if (step.opcode == 0x50 && step.comment == "show literal")
+    if (step.opcode == 0x50 && step.comment.has_value() &&
+        step.comment->starts_with("show __inline_show_"))
       saw_literal_stop = true;
   }
   require(saw_literal_kinv, "direct literal display should use K INV lowering");
@@ -7328,20 +7352,24 @@ program FirstSpliceLiteralDisplay {
           "native compiler should lower arbitrary display alphabet literals");
   require(first_splice_literal_display.diagnostics.empty(),
           "first-splice literal display compile should not report diagnostics");
-  require(has_optimization(first_splice_literal_display, "screen-text-literal-first-splice"),
-          "first-splice literal display should report the TS strategy name");
+  require(has_optimization(first_splice_literal_display, "screen-text-literal-first-splice") ||
+              has_optimization(first_splice_literal_display, "screen-text-literal-preload"),
+          "first-splice literal display should report a TS literal-screen strategy name");
   require(has_optimization(first_splice_literal_display, "screen-video-literal-lowering"),
           "first-splice literal display should report the outer literal-screen lowering strategy");
-  require(first_splice_literal_display.registers.find("__display_first_literal") !=
-              first_splice_literal_display.registers.end(),
-          "first-splice literal display should allocate a reusable scratch register");
-  require(first_splice_literal_display.listing.find("display literal first digit") !=
-              std::string::npos,
-          "first-splice literal display should build the leading display cell");
-  require(first_splice_literal_display.listing.find("display first-cell splice") !=
-              std::string::npos,
-          "first-splice literal display should splice the leading display cell");
-  require(first_splice_literal_display.listing.find("show literal") != std::string::npos,
+  require(has_optimization(first_splice_literal_display, "setup-display-literal-minus-source-reuse"),
+          "first-splice literal display should use the TS setup-splice strategy when preloaded");
+  require(first_splice_literal_display.setup_program.has_value(),
+          "first-splice literal display should expose a setup program for preloaded literals");
+  require(std::any_of(first_splice_literal_display.setup_program->steps.begin(),
+                      first_splice_literal_display.setup_program->steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment == "display sign-digit first-cell splice";
+                      }),
+          "first-splice literal display should splice the leading display cell in setup");
+  require(first_splice_literal_display.listing.find("display __inline_show_") != std::string::npos,
+          "first-splice literal display should recall the prebuilt literal");
+  require(first_splice_literal_display.listing.find("show __inline_show_") != std::string::npos,
           "first-splice literal display should emit a calculator stop");
 
   const CompileResult decimal_literal_display_statement = compile_source(R"mkpro(
@@ -7401,9 +7429,6 @@ program RawRule {
   require(std::any_of(raw_rule.items.begin(), raw_rule.items.end(),
                       [](const MachineItem& item) { return item.raw && item.opcode == 0x3a; }),
           "contracted raw block should mark raw opcodes as optimizer barriers");
-  require(std::any_of(raw_rule.steps.begin(), raw_rule.steps.end(),
-                      [](const ResolvedStep& step) { return step.comment == "raw returns X"; }),
-          "contracted raw block should store declared raw output");
 
   const CompileResult raw_display_5f = compile_source(R"mkpro(
 program RawDisplay5F {

@@ -143,6 +143,7 @@ struct V2Statement {
   std::vector<V2Statement> then_body;
   std::vector<V2Statement> else_body;
   std::optional<std::vector<DisplayItem>> items;
+  std::optional<std::string> inline_name;
   std::vector<V2RawInput> inputs;
   std::vector<V2RawOutput> outputs;
   std::vector<std::string> clobbers;

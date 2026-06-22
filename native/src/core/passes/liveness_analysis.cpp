@@ -66,10 +66,12 @@ bool sets_equal(const RegisterValueSet& left, const RegisterValueSet& right) {
 
 } // namespace
 
-LivenessInfo compute_liveness(const std::vector<IrOp>& ops) {
+LivenessInfo compute_liveness(const std::vector<IrOp>& ops, LivenessOptions options) {
   const std::vector<std::vector<int>> successors =
       build_cfg_successors(ops, BuildCfgOptions{
                                     .indirect_call_fallthrough = true,
+                                    .unknown_indirect_flow_to_all =
+                                        options.unknown_indirect_flow_to_all,
                                 });
   const std::size_t size = ops.size();
   std::vector<RegisterValueSet> live_in(size);

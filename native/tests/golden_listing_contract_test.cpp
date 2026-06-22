@@ -132,6 +132,12 @@ const std::vector<LoweringVariant> kLoweringVariants = {
      configure_shared_bit_mask_helper_calls_with_shared_helpers},
 };
 
+std::string token_line(const std::vector<ResolvedStep>& steps) {
+  std::string value = format_program_tokens(steps);
+  std::replace(value.begin(), value.end(), '\n', ' ');
+  return value;
+}
+
 std::vector<std::filesystem::path> collect_examples(const std::filesystem::path& dir) {
   std::vector<std::filesystem::path> files;
   for (const auto& entry : std::filesystem::directory_iterator(dir)) {
@@ -147,16 +153,18 @@ std::string variant_fingerprint(const std::string& source, const CompileOptions&
   std::ostringstream lines;
   for (const auto& variant : kLoweringVariants) {
     CompileOptions options = base_options;
+    options.disable_candidate_search = true;
     variant.configure(options);
     const CompileResult result = compile_source(source, options);
-    require(result.implemented, std::string(variant.name) + " lowering variant should compile");
     if (!result.diagnostics.empty()) {
-      throw std::runtime_error(std::string(variant.name) + " lowering variant reported diagnostics");
+      lines << variant.name << ": throws " << result.diagnostics.front().message << '\n';
+      continue;
     }
-    const std::string hex = format_program_tokens(result.steps);
+    require(result.implemented, std::string(variant.name) + " lowering variant should compile");
+    const std::string hex = token_line(result.steps);
     std::string setup;
     if (result.setup_program.has_value()) {
-      setup = format_program_tokens(result.setup_program->steps);
+      setup = token_line(result.setup_program->steps);
     }
     lines << variant.name << ": steps=" << result.steps.size() << " | " << hex;
     if (!setup.empty()) {
@@ -170,6 +178,27 @@ std::string variant_fingerprint(const std::string& source, const CompileOptions&
     value.pop_back();
   }
   return value;
+}
+
+std::string first_different_line(const std::string& actual, const std::string& expected) {
+  std::istringstream actual_lines(actual);
+  std::istringstream expected_lines(expected);
+  std::string actual_line;
+  std::string expected_line;
+  int line = 1;
+  while (true) {
+    const bool has_actual = static_cast<bool>(std::getline(actual_lines, actual_line));
+    const bool has_expected = static_cast<bool>(std::getline(expected_lines, expected_line));
+    if (!has_actual && !has_expected)
+      return "";
+    if (!has_actual || !has_expected || actual_line != expected_line) {
+      std::ostringstream out;
+      out << " at line " << line << "; actual='" << (has_actual ? actual_line : "<missing>")
+          << "' expected='" << (has_expected ? expected_line : "<missing>") << "'";
+      return out.str();
+    }
+    ++line;
+  }
 }
 
 } // namespace
@@ -212,10 +241,16 @@ void golden_listing_contract_matches_typescript_contract() {
             "example listing should match the TS oracle for " + name);
     require(result.hex == trim_newlines(read_text(oracle_example_root / "hex.txt")),
             "example hex should match the TS oracle for " + name);
-    require(result.setup_listing == trim_newlines(read_text(oracle_example_root / "setup.txt")),
+    const std::string setup_program =
+        result.setup_program.has_value() ? format_program_tokens(result.setup_program->steps) : "";
+    require(setup_program == trim_newlines(read_text(oracle_example_root / "setup.txt")),
             "example setup listing should match the TS oracle for " + name);
-    require(variant_fingerprint(source, base_options) == trim_newlines(read_text(oracle_example_root / "variants.txt")),
-            "example lowering variants should match TS oracle for " + name);
+    const std::string actual_variants = variant_fingerprint(source, base_options);
+    const std::string expected_variants =
+        trim_newlines(read_text(oracle_example_root / "variants.txt"));
+    require(actual_variants == expected_variants,
+            "example lowering variants should match TS oracle for " + name +
+                first_different_line(actual_variants, expected_variants));
   }
 }
 

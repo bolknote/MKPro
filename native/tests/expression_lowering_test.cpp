@@ -183,6 +183,19 @@ void expression_lowering_helpers_match_typescript_contract() {
 
   {
     ExpressionHarness harness;
+    harness.context.emitter.current_x_variable = "score";
+    require(harness.lower(call_expr("abs", {identifier_expr("score")})),
+            "current-X unary call should lower");
+    require(harness.context.emitter.items.size() == 1,
+            "current-X unary call should emit the unary opcode");
+    require(harness.context.emitter.items.back().opcode == 0x31,
+            "current-X unary call should emit abs opcode");
+    require(harness.context.emitter.items.back().comment == "current-X abs",
+            "current-X unary call should preserve TS comment");
+  }
+
+  {
+    ExpressionHarness harness;
     Expression indexed = indexed_expr("bank", std::string("cell"), identifier_expr("i"));
     harness.context.emitter.current_x_expression = std::make_shared<Expression>(indexed);
     require(harness.lower(indexed), "current-X indexed expression should lower");

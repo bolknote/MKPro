@@ -74,7 +74,8 @@ PassResult dead_store_elimination(const std::vector<IrOp>& ops, const PassContex
   if (ops.empty())
     return PassResult{.ops = {}, .applied = 0, .optimizations = {}};
 
-  const LivenessInfo liveness = compute_liveness(ops);
+  const LivenessInfo liveness =
+      compute_liveness(ops, LivenessOptions{.unknown_indirect_flow_to_all = true});
   std::set<int> removed;
 
   for (std::size_t index = 0; index < ops.size(); ++index) {

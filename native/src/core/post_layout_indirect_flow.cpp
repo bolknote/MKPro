@@ -10,6 +10,7 @@
 #include <cctype>
 #include <map>
 #include <optional>
+#include <regex>
 #include <set>
 #include <string>
 #include <utility>
@@ -75,6 +76,12 @@ struct BranchRewrite {
 };
 
 struct RetargetedMachine {
+  std::vector<MachineItem> items;
+  std::vector<PreloadReport> preloads;
+};
+
+struct RetargetedIr {
+  std::vector<IrOp> ops;
   std::vector<MachineItem> items;
   std::vector<PreloadReport> preloads;
 };
@@ -242,6 +249,18 @@ std::optional<int> fixed_address_actual_target(const MachineItem& address) {
   return std::nullopt;
 }
 
+bool fixed_address_targets_survive_removal(const std::vector<MachineItem>& items,
+                                           int removed_address) {
+  for (const MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Address)
+      continue;
+    const std::optional<int> fixed_target = fixed_address_actual_target(item);
+    if (fixed_target.has_value() && *fixed_target >= removed_address)
+      return false;
+  }
+  return true;
+}
+
 std::optional<int> address_opcode_for_item(const std::vector<MachineItem>& items,
                                            const MachineItem& item) {
   if (item.kind != MachineItemKind::Address)
@@ -345,6 +364,38 @@ bool can_overlay_address_continuation(MachineReturnAnalyzer& target_may_return,
     return true;
   if (branch.opcode == 0x53)
     return !target_may_return(address.target);
+  return false;
+}
+
+std::optional<int> previous_non_label_index(const std::vector<MachineItem>& items, int before) {
+  for (int index = before - 1; index >= 0; --index) {
+    if (items.at(static_cast<std::size_t>(index)).kind != MachineItemKind::Label)
+      return index;
+  }
+  return std::nullopt;
+}
+
+bool labels_have_no_linear_fallthrough(const std::vector<MachineItem>& items, int labels_start,
+                                       MachineReturnAnalyzer& target_may_return) {
+  const std::optional<int> previous_index = previous_non_label_index(items, labels_start);
+  if (!previous_index.has_value())
+    return false;
+  const MachineItem& previous = items.at(static_cast<std::size_t>(*previous_index));
+  if (previous.kind == MachineItemKind::Op)
+    return previous.opcode == 0x50 || previous.opcode == 0x52;
+  if (previous.kind != MachineItemKind::Address)
+    return false;
+
+  const std::optional<int> branch_index = previous_non_label_index(items, *previous_index);
+  if (!branch_index.has_value())
+    return false;
+  const MachineItem& branch = items.at(static_cast<std::size_t>(*branch_index));
+  if (branch.kind != MachineItemKind::Op)
+    return false;
+  if (branch.opcode == 0x51)
+    return true;
+  if (branch.opcode == 0x53)
+    return !target_may_return(previous.target);
   return false;
 }
 
@@ -468,9 +519,10 @@ std::vector<MachineItem> immediate_overlay_candidate(const std::vector<MachineIt
 std::optional<PostLayoutIndirectFlowResult>
 apply_address_code_overlay(const std::vector<MachineItem>& items) {
   const std::map<int, int> address_by_item = machine_address_by_item_index(items);
+  const MachineLayout layout = machine_layout(items);
   MachineReturnAnalyzer target_may_return{
       .items = items,
-      .layout = machine_layout(items),
+      .layout = layout,
   };
   for (int index = 0; index < static_cast<int>(items.size()) - 2; ++index) {
     const MachineItem& branch = items.at(static_cast<std::size_t>(index));
@@ -527,6 +579,98 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
         .items = std::move(candidate),
         .applied = 1,
     };
+  }
+
+  const std::set<std::string> referenced = referenced_machine_labels(items);
+  for (int index = 0; index < static_cast<int>(items.size()) - 2; ++index) {
+    const MachineItem& branch = items.at(static_cast<std::size_t>(index));
+    const MachineItem& address = items.at(static_cast<std::size_t>(index + 1));
+    if (branch.kind != MachineItemKind::Op || address.kind != MachineItemKind::Address)
+      continue;
+    if (branch.opcode != 0x51)
+      continue;
+
+    for (int labels_start = index + 3; labels_start < static_cast<int>(items.size()) - 1;
+         ++labels_start) {
+      if (items.at(static_cast<std::size_t>(labels_start)).kind != MachineItemKind::Label)
+        continue;
+
+      int labels_end = labels_start;
+      std::vector<MachineItem> labels;
+      while (labels_end < static_cast<int>(items.size()) &&
+             items.at(static_cast<std::size_t>(labels_end)).kind == MachineItemKind::Label) {
+        labels.push_back(items.at(static_cast<std::size_t>(labels_end)));
+        ++labels_end;
+      }
+      const bool has_referenced_label =
+          std::any_of(labels.begin(), labels.end(), [&](const MachineItem& label) {
+            return referenced.contains(label.name);
+          });
+      if (labels.empty() || !has_referenced_label)
+        continue;
+      if (!labels_have_no_linear_fallthrough(items, labels_start, target_may_return))
+        continue;
+      if (!can_overlay_executable_cell_at(items, labels_end))
+        continue;
+
+      const std::optional<OverlayExecutable> executable = overlay_executable_at(items, labels_end);
+      if (!executable.has_value() || is_address_taking_opcode(executable->opcode))
+        continue;
+
+      const auto removed_address_it = layout.address_by_item_index.find(labels_end);
+      if (removed_address_it == layout.address_by_item_index.end() ||
+          !fixed_address_targets_survive_removal(items, removed_address_it->second)) {
+        continue;
+      }
+
+      const std::optional<int> branch_target_address =
+          resolved_machine_target(address.target, layout.labels);
+      if (branch_target_address.has_value() &&
+          *branch_target_address == removed_address_it->second &&
+          !can_overlay_address_continuation(target_may_return, branch, address)) {
+        continue;
+      }
+
+      std::vector<MachineItem> provisional;
+      provisional.reserve(items.size() - 1);
+      provisional.insert(provisional.end(), items.begin(), items.begin() + index + 1);
+      provisional.insert(provisional.end(), labels.begin(), labels.end());
+      provisional.push_back(address);
+      provisional.insert(provisional.end(), items.begin() + index + 2,
+                         items.begin() + labels_start);
+      provisional.insert(provisional.end(), items.begin() + labels_end + 1, items.end());
+
+      const int provisional_address_index = index + 1 + static_cast<int>(labels.size());
+      if (!can_move_overlay_opcode_to(items, labels_end, provisional, provisional_address_index,
+                                      executable->opcode)) {
+        continue;
+      }
+
+      const std::optional<MachineItem> candidate_address = choose_overlay_address_item(
+          provisional, address, executable->opcode, executable->mnemonic);
+      if (!candidate_address.has_value())
+        continue;
+
+      std::vector<MachineItem> candidate;
+      candidate.reserve(items.size() - 1);
+      candidate.insert(candidate.end(), items.begin(), items.begin() + index + 1);
+      candidate.insert(candidate.end(), labels.begin(), labels.end());
+      candidate.push_back(*candidate_address);
+      candidate.insert(candidate.end(), items.begin() + index + 2, items.begin() + labels_start);
+      candidate.insert(candidate.end(), items.begin() + labels_end + 1, items.end());
+
+      const std::optional<int> overlaid_opcode =
+          address_opcode_for_item(candidate, *candidate_address);
+      if (!overlaid_opcode.has_value() || *overlaid_opcode != executable->opcode)
+        continue;
+      if (machine_cell_count(candidate) >= machine_cell_count(items))
+        continue;
+
+      return PostLayoutIndirectFlowResult{
+          .items = std::move(candidate),
+          .applied = 1,
+      };
+    }
   }
 
   return std::nullopt;
@@ -730,7 +874,8 @@ IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
   const int offset = register_index(register_name);
   const std::string suffix = "preloaded R" + register_name + "=" + selector_value +
                              " indirect-target=" + std::to_string(target) +
-                             (super_dark ? " super-dark" : "") + " indirect flow";
+                             (super_dark ? " super-dark" : "") +
+                             " shifted-forward indirect flow";
   IrOp result = op;
   result.register_name = register_name;
   result.target = 0;
@@ -750,6 +895,79 @@ IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
   }
   result.meta = append_comment(result.meta, suffix);
   return result;
+}
+
+std::optional<std::string> fractional_selector_suffix(const std::string& value) {
+  static const std::regex pattern(R"(^(\d+)(\.\d+)$)");
+  std::smatch match;
+  if (!std::regex_match(value, match, pattern) || match[1].str() == "0")
+    return std::nullopt;
+  return match[2].str();
+}
+
+std::string regex_escape(std::string_view value) {
+  std::string escaped;
+  for (const char ch : value) {
+    switch (ch) {
+    case '.':
+    case '^':
+    case '$':
+    case '|':
+    case '(':
+    case ')':
+    case '[':
+    case ']':
+    case '{':
+    case '}':
+    case '*':
+    case '+':
+    case '?':
+    case '\\':
+      escaped.push_back('\\');
+      break;
+    default:
+      break;
+    }
+    escaped.push_back(ch);
+  }
+  return escaped;
+}
+
+std::optional<std::string> replace_indirect_target_comment(
+    const std::optional<std::string>& comment, const std::string& register_name,
+    const std::string& selector_value, int target) {
+  if (!comment.has_value())
+    return std::nullopt;
+  const std::regex pattern("preloaded R" + regex_escape(register_name) +
+                           R"(=[^\s;]+ indirect-target=\d+)",
+                           std::regex_constants::icase);
+  if (!std::regex_search(*comment, pattern))
+    return comment;
+  return std::regex_replace(*comment, pattern,
+                            "preloaded R" + register_name + "=" + selector_value +
+                                " indirect-target=" + std::to_string(target));
+}
+
+std::vector<MachineItem>
+retarget_machine_selector_comments(std::vector<MachineItem> items,
+                                   const std::map<std::string, std::string>& selector_by_register) {
+  for (MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Op)
+      continue;
+    const std::optional<std::string> register_name = register_from_indirect_opcode(item.opcode);
+    if (!register_name.has_value())
+      continue;
+    const auto selector_it = selector_by_register.find(*register_name);
+    if (selector_it == selector_by_register.end())
+      continue;
+    const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
+        *register_name, selector_it->second, IndirectOperationKind::Flow);
+    if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
+      continue;
+    item.comment = replace_indirect_target_comment(
+        item.comment, *register_name, selector_it->second, *decoded->actual_flow_target);
+  }
+  return items;
 }
 
 std::optional<SelectorValue> selector_value_for_register(
@@ -1101,18 +1319,14 @@ apply_empty_stack_tail_call_rewrite(const std::vector<MachineItem>& items,
 std::optional<std::string> retargeted_selector_value(const std::string& register_name,
                                                      const std::string& previous_value,
                                                      int shifted_target) {
-  if (const std::optional<std::string> candidate = selector_for_actual_target(shifted_target)) {
+  if (const std::optional<std::string> suffix = fractional_selector_suffix(previous_value)) {
+    const std::string candidate = std::to_string(shifted_target) + *suffix;
     const std::optional<IndirectAddressEvaluation> decoded =
-        evaluate_indirect_address(register_name, *candidate, IndirectOperationKind::Flow);
+        evaluate_indirect_address(register_name, candidate, IndirectOperationKind::Flow);
     if (decoded.has_value() && decoded->actual_flow_target == shifted_target)
       return candidate;
   }
-
-  const std::optional<IndirectAddressEvaluation> previous =
-      evaluate_indirect_address(register_name, previous_value, IndirectOperationKind::Flow);
-  if (previous.has_value() && previous->actual_flow_target == shifted_target)
-    return previous_value;
-  return std::nullopt;
+  return selector_for_actual_target(shifted_target);
 }
 
 std::optional<int> first_executable_op_index_at_address(const std::vector<IrOp>& ops,
@@ -1125,15 +1339,21 @@ std::optional<int> first_executable_op_index_at_address(const std::vector<IrOp>&
   return std::nullopt;
 }
 
-std::optional<std::vector<PreloadReport>> retarget_existing_selectors_after_shift(
+std::optional<RetargetedIr> retarget_existing_selectors_after_shift(
     const std::vector<IrOp>& before_ops, const std::vector<IrOp>& after_ops,
     const std::vector<PreloadReport>& preloads) {
-  if (preloads.empty())
-    return preloads;
+  if (preloads.empty()) {
+    return RetargetedIr{
+        .ops = after_ops,
+        .items = lower_ir_to_machine(after_ops),
+        .preloads = {},
+    };
+  }
   const std::vector<int> before_addresses = address_by_index(before_ops);
   const std::vector<int> after_addresses = address_by_index(after_ops);
   std::vector<PreloadReport> next_preloads;
   next_preloads.reserve(preloads.size());
+  std::map<std::string, std::string> next_by_register;
 
   for (const PreloadReport& preload : preloads) {
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
@@ -1160,8 +1380,29 @@ std::optional<std::vector<PreloadReport>> retarget_existing_selectors_after_shif
         .value = *selector_value,
         .counts_against_program = preload.counts_against_program,
     });
+    next_by_register[preload.register_name] = *selector_value;
   }
-  return next_preloads;
+
+  std::vector<IrOp> retargeted = after_ops;
+  for (IrOp& op : retargeted) {
+    if (!is_indirect_branch_op(op))
+      continue;
+    const auto selector_it = next_by_register.find(op.register_name);
+    if (selector_it == next_by_register.end())
+      continue;
+    const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
+        op.register_name, selector_it->second, IndirectOperationKind::Flow);
+    if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
+      continue;
+    op.meta.comment = replace_indirect_target_comment(
+        op.meta.comment, op.register_name, selector_it->second, *decoded->actual_flow_target);
+  }
+
+  return RetargetedIr{
+      .ops = retargeted,
+      .items = lower_ir_to_machine(retargeted),
+      .preloads = std::move(next_preloads),
+  };
 }
 
 std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deletion(
@@ -1173,6 +1414,7 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
       machine_address_by_item_index(after_items);
   std::vector<PreloadReport> next_preloads;
   next_preloads.reserve(preloads.size());
+  std::map<std::string, std::string> next_by_register;
   for (const PreloadReport& preload : preloads) {
     const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
         preload.register_name, preload.value, IndirectOperationKind::Flow);
@@ -1208,10 +1450,11 @@ std::optional<RetargetedMachine> retarget_selector_preloads_after_machine_deleti
         .value = *selector_value,
         .counts_against_program = preload.counts_against_program,
     });
+    next_by_register[preload.register_name] = *selector_value;
   }
 
   return RetargetedMachine{
-      .items = std::move(after_items),
+      .items = retarget_machine_selector_comments(std::move(after_items), next_by_register),
       .preloads = std::move(next_preloads),
   };
 }
@@ -1821,13 +2064,13 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
       break;
 
     const std::vector<IrOp> before_ops = raise_machine_to_ir(current);
-    const std::optional<std::vector<PreloadReport>> retargeted =
+    const std::optional<RetargetedIr> retargeted =
         retarget_existing_selectors_after_shift(before_ops, step->ops, preloads);
     if (!retargeted.has_value())
       break;
 
-    current = step->items;
-    preloads = *retargeted;
+    current = retargeted->items;
+    preloads = retargeted->preloads;
     if (step->existing_preload) {
       existing_selector_applied += step->converted;
       immutable_targets.insert(immutable_targets.end(), step->protected_targets.begin(),

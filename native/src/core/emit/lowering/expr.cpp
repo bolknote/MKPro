@@ -735,7 +735,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       });
       return false;
     }
-    if (compile_current_x_derivation(api, expression.args.at(0), unary_opcodes)) {
+    if (compile_current_x_derivation(api, expression, unary_opcodes)) {
       context.optimizations.push_back(OptimizationReport{
           .name = "current-x-unary-derivation",
           .detail = "Reused value already in X for " + expression.callee + "().",

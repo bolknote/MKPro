@@ -9725,13 +9725,13 @@ bool lower_random_span_call_to_x(LoweringContext& context, int span, int base,
                                  std::string_view domain_kind, int source_line) {
   context.emitter.emit_op(0x3b, "К СЧ", "random()", source_line);
   emit_number_or_preload(context, std::to_string(span), std::nullopt, source_line);
-  context.emitter.emit_op(0x12, "*", "random range", source_line);
+  context.emitter.emit_op(0x12, "*", "expr *", source_line);
   context.emitter.emit_op(0x0e, "В↑", "random int keep scaled draw", source_line);
   context.emitter.emit_op(0x35, "К {x}", "random int fractional part", source_line);
   context.emitter.emit_op(0x11, "-", "random int floor", source_line);
   if (base != 0) {
     emit_number_or_preload(context, std::to_string(base), std::nullopt, source_line);
-    context.emitter.emit_op(0x10, "+", "random domain base", source_line);
+    context.emitter.emit_op(0x10, "+", "expr +", source_line);
   }
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_aliases.clear();
@@ -10451,6 +10451,10 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
                                                             occurrences);
     collect_display_scale_preload_values_from_statements(program, rule.body, values);
   }
+  for (const std::string& value :
+       core::emit::display_constant_preload_values_for_program(context, program)) {
+    values.insert(normalize_preload_key(value));
+  }
 
   std::vector<std::string> ranked = values.ordered;
   ranked.erase(std::remove_if(ranked.begin(), ranked.end(),
@@ -10581,6 +10585,13 @@ std::string legacy_preloaded_number_name(const std::string& value) {
   return name;
 }
 
+void remember_preloaded_number(LoweringContext& context, const std::string& key,
+                               const std::string& name) {
+  if (!context.preloaded_numbers.contains(key))
+    context.preloaded_number_order.push_back(key);
+  context.preloaded_numbers[key] = name;
+}
+
 bool reserve_preloaded_number(LoweringContext& context, const std::string& value) {
   const std::string key = normalize_preload_key(value);
   if (context.suppress_constant_preloads.contains(key))
@@ -10590,7 +10601,7 @@ bool reserve_preloaded_number(LoweringContext& context, const std::string& value
   for (const std::string& name :
        {preloaded_number_name(key), legacy_preloaded_number_name(key), "__display_scale_" + key}) {
     if (context.registers.contains(name)) {
-      context.preloaded_numbers[key] = name;
+      remember_preloaded_number(context, key, name);
       return true;
     }
   }
@@ -10601,7 +10612,7 @@ bool reserve_preloaded_number(LoweringContext& context, const std::string& value
 
   const std::string name = preloaded_number_name(key);
   bind_register(context, name, *index);
-  context.preloaded_numbers[key] = name;
+  remember_preloaded_number(context, key, name);
   return true;
 }
 
@@ -10610,7 +10621,7 @@ void reserve_preloaded_number_at(LoweringContext& context, const std::string& re
   const std::string key = normalize_preload_key(value);
   const std::string name = preloaded_number_name(key);
   bind_register(context, name, register_index(register_name));
-  context.preloaded_numbers[key] = name;
+  remember_preloaded_number(context, key, name);
 }
 
 bool reserve_bit_mask_helper_preloads(LoweringContext& context) {
@@ -10684,7 +10695,7 @@ void plan_spatial_line_count_preloads(LoweringContext& context, const V2Program&
     assign_register(context, name);
     if (has_errors(context.diagnostics))
       return;
-    context.preloaded_numbers[candidate.value] = name;
+    remember_preloaded_number(context, candidate.value, name);
   }
 }
 
@@ -12284,6 +12295,27 @@ numeric_source_display_fields(const LoweringContext& context,
   return fields;
 }
 
+std::optional<std::string> unlowerable_decimal_display_literal(
+    const std::vector<DisplayItem>& items) {
+  std::vector<PackedDisplayField> fields;
+  for (const DisplayItem& item : items) {
+    if (item.kind == "literal") {
+      if (const std::optional<PackedDisplayField> literal =
+              decimal_display_literal_field(item, fields.empty())) {
+        fields.push_back(*literal);
+        continue;
+      }
+      return item.text;
+    }
+    if (item.kind == "source" && !item.expr.has_value()) {
+      fields.push_back(PackedDisplayField{.item = &item});
+      continue;
+    }
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
 void report_packed_display_lowering(LoweringContext& context) {
   const bool can_use_display_bytes = machine_supports(mk61_profile(), "display-bytes");
   context.optimizations.push_back(OptimizationReport{
@@ -12373,23 +12405,6 @@ int estimate_packed_storage_reuse_display_cost(const LoweringContext& context,
   const int recalled =
       current_index >= 0 ? static_cast<int>(fields.size()) - 1 : static_cast<int>(fields.size());
   return recalled + std::max(0, static_cast<int>(fields.size()) - 1) + 1;
-}
-
-std::string select_packed_display_strategy(
-    LoweringContext& context, const std::vector<PackedDisplayField>& decimal_fields,
-    const std::optional<std::vector<PackedDisplayField>>& storage_fields) {
-  const int decimal_cost = estimate_decimal_packed_display_cost(context, decimal_fields, true);
-  const int storage_cost =
-      storage_fields.has_value()
-          ? estimate_packed_storage_reuse_display_cost(context, *storage_fields, true)
-          : std::numeric_limits<int>::max();
-  const std::string selected =
-      storage_cost < decimal_cost ? "packed-storage-reuse" : "decimal-pack";
-  context.optimizations.push_back(OptimizationReport{
-      .name = "display-strategy-selection",
-      .detail = "Selected " + selected + " for display.",
-  });
-  return selected;
 }
 
 bool lower_packed_display_field_to_x(LoweringContext& context, const PackedDisplayField& field,
@@ -12587,24 +12602,6 @@ bool lower_packed_storage_reuse_display_statement(LoweringContext& context,
   return true;
 }
 
-bool lower_selected_packed_display_statement(LoweringContext& context,
-                                             const std::vector<DisplayItem>& items,
-                                             int source_line) {
-  const std::optional<std::vector<PackedDisplayField>> decimal_fields =
-      numeric_source_display_fields(context, items);
-  if (!decimal_fields.has_value() || decimal_fields->size() < 2)
-    return false;
-  const std::optional<std::vector<PackedDisplayField>> storage_fields =
-      packed_storage_reuse_display_fields(context, items);
-  const std::string selected =
-      select_packed_display_strategy(context, *decimal_fields, storage_fields);
-  if (selected == "packed-storage-reuse" &&
-      lower_packed_storage_reuse_display_statement(context, items, source_line)) {
-    return true;
-  }
-  return lower_packed_numeric_display_statement(context, items, source_line);
-}
-
 core::emit::DisplayEmitApi display_emit_api(LoweringContext& context) {
   return core::emit::DisplayEmitApi{
       .emitter = context.emitter,
@@ -12656,8 +12653,8 @@ void report_screen_video_literal_lowering(LoweringContext& context, int line) {
                                      " as a literal calculator video string.");
 }
 
-bool lower_preloaded_display_literal(LoweringContext& context, const std::string& literal,
-                                     int line) {
+bool lower_preloaded_display_literal(LoweringContext& context, const std::string& display_name,
+                                     const std::string& literal, int line) {
   if (!should_use_preloaded_display_literal(literal))
     return false;
   const std::string key = normalize_preload_key(literal);
@@ -12667,19 +12664,20 @@ bool lower_preloaded_display_literal(LoweringContext& context, const std::string
 
   emit_recall(context, preload_it->second);
   if (!context.emitter.items.empty()) {
-    context.emitter.items.back().comment = "display literal preload";
+    context.emitter.items.back().comment = "display " + display_name + " literal";
     context.emitter.items.back().source_line = line;
   }
-  context.emitter.emit_op(0x50, "С/П", "show literal", line);
+  context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
   report_screen_literal_lowering(context, "screen-text-literal-preload",
-                                 "Displayed screen literal at line " + std::to_string(line) +
+                                 "Displayed screen " + display_name +
                                      " from prebuilt literal R" +
                                      register_text_for(context, preload_it->second) + ".");
   return true;
 }
 
-bool lower_leading_zero_hex_product_display(LoweringContext& context, const std::string& literal,
-                                            int line) {
+bool lower_leading_zero_hex_product_display(LoweringContext& context,
+                                            const std::string& display_name,
+                                            const std::string& literal, int line) {
   const std::optional<LeadingZeroHexProductPlan> plan =
       leading_zero_hex_product_display_program(literal);
   if (!plan.has_value() || !machine_supports(mk61_profile(), "display-bytes"))
@@ -12692,16 +12690,16 @@ bool lower_leading_zero_hex_product_display(LoweringContext& context, const std:
 
   emit_recall(context, preload_it->second);
   if (!context.emitter.items.empty()) {
-    context.emitter.items.back().comment = "display literal hex zero source";
+    context.emitter.items.back().comment = "display " + display_name + " hex zero source";
     context.emitter.items.back().source_line = line;
   }
   context.emitter.emit_op(0x34, "К [x]", "display leading-zero hex source", line);
   emit_number_or_preload(context, plan->factor);
   context.emitter.emit_op(0x12, "*", "display leading-zero hex product", line);
-  context.emitter.emit_op(0x50, "С/П", "show literal", line);
+  context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
   report_screen_literal_lowering(
       context, "screen-leading-zero-hex-lowering",
-      "Lowered screen literal at line " + std::to_string(line) +
+      "Lowered screen " + display_name +
           " through hex mantissa multiplication to preserve the leading zero.");
   report_screen_literal_lowering(context, "hex-mantissa-arithmetic",
                                  "Used " + plan->source_literal + " * " + plan->factor +
@@ -12719,7 +12717,8 @@ bool fixed_scratch_registers_available(const LoweringContext& context,
   });
 }
 
-bool lower_zero_digit_tail_display(LoweringContext& context, const std::string& literal, int line) {
+bool lower_zero_digit_tail_display(LoweringContext& context, const std::string& display_name,
+                                   const std::string& literal, int line) {
   const std::optional<ZeroDigitTailDisplayProgram> program =
       zero_digit_tail_display_program(literal);
   if (!program.has_value())
@@ -12740,9 +12739,9 @@ bool lower_zero_digit_tail_display(LoweringContext& context, const std::string& 
   context.emitter.emit_op(0x6c, "П->X c", "display zero-digit tail hidden tail", line);
   context.emitter.emit_op(0x0c, "ВП", "display zero-digit tail restore", line);
   context.emitter.emit_op(0x07, "7", "display zero-digit tail exponent", line);
-  context.emitter.emit_op(0x50, "С/П", "show literal", line);
+  context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
   report_screen_literal_lowering(context, "screen-zero-digit-tail-lowering",
-                                 "Lowered screen literal at line " + std::to_string(line) +
+                                 "Lowered screen " + display_name +
                                      " through the 0C tail sign-digit display trick.");
   return true;
 }
@@ -12792,8 +12791,8 @@ void emit_sign_digit_indirect_step(MachineEmitter& emitter, int reg, int line) {
   emit_register_op(emitter, 0x60, reg, "П->X", "display sign-digit indirect body", line);
 }
 
-bool lower_sign_digit_literal_display(LoweringContext& context, const std::string& literal,
-                                      int line) {
+bool lower_sign_digit_literal_display(LoweringContext& context, const std::string& display_name,
+                                      const std::string& literal, int line) {
   const std::optional<SignDigitLiteralDisplayProgram> program =
       sign_digit_literal_display_program(literal);
   if (!program.has_value())
@@ -12831,9 +12830,9 @@ bool lower_sign_digit_literal_display(LoweringContext& context, const std::strin
   }
   emit_register_op(context.emitter, 0x60, indirect, "П->X", "display sign-digit final body", line);
   emit_sign_digit_first_cell_splice(context.emitter, line);
-  context.emitter.emit_op(0x50, "С/П", "show literal", line);
+  context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
   report_screen_literal_lowering(context, "screen-sign-digit-literal-lowering",
-                                 "Lowered screen literal at line " + std::to_string(line) +
+                                 "Lowered screen " + display_name +
                                      " through indirect sign-digit display construction.");
   return true;
 }
@@ -12908,7 +12907,9 @@ bool should_share_packed_display(LoweringContext& context, const V2Statement& st
     return false;
   const std::optional<std::vector<PackedDisplayField>> fields =
       numeric_display_fields(context, *statement.items);
-  if (!fields.has_value() || fields->size() < 2)
+  if (!fields.has_value())
+    return false;
+  if (fields->size() < 2)
     return false;
   const auto uses_it = context.packed_display_use_counts.find(*key);
   if (uses_it == context.packed_display_use_counts.end() || uses_it->second < 2)
@@ -12966,12 +12967,14 @@ bool lower_display_byte_body(LoweringContext& context, const V2Statement& statem
   if (!statement.items.has_value())
     return false;
   auto display_api = display_emit_api(context);
-  return core::emit::lower_mantissa_exponent_display_statement(display_api, context,
-                                                               *statement.items, statement.line) ||
+  const std::string display_name =
+      statement.inline_name.value_or(statement.name.value_or(std::to_string(statement.line)));
+  return core::emit::lower_mantissa_exponent_display_statement(
+             display_api, context, *statement.items, display_name, statement.line) ||
          core::emit::lower_variable_leading_display_mask_statement(
-             display_api, context, *statement.items, statement.line) ||
+             display_api, context, *statement.items, display_name, statement.line) ||
          core::emit::lower_fixed_display_mask_statement(display_api, context, *statement.items,
-                                                        statement.line);
+                                                        display_name, statement.line);
 }
 
 std::optional<int> estimate_display_byte_body_cost(const LoweringContext& context,
@@ -13044,15 +13047,94 @@ bool lower_shared_display_byte_call(LoweringContext& context, const V2Statement&
   return true;
 }
 
-bool lower_literal_display_body(LoweringContext& context, const std::string& literal, int line) {
+struct DisplayStrategyCandidate {
+  std::string variant;
+  int steps = std::numeric_limits<int>::max();
+  bool available = false;
+};
+
+int display_source_item_count(const std::vector<DisplayItem>& items) {
+  return static_cast<int>(std::count_if(items.begin(), items.end(), [](const DisplayItem& item) {
+    return item.kind == "source";
+  }));
+}
+
+std::optional<std::string> select_display_strategy(LoweringContext& context,
+                                                   const V2Statement& statement) {
+  if (!statement.items.has_value())
+    return std::nullopt;
+
+  constexpr int kUnavailable = std::numeric_limits<int>::max() / 4;
+  const std::optional<std::vector<PackedDisplayField>> decimal_fields =
+      numeric_display_fields(context, *statement.items);
+  const std::optional<std::vector<PackedDisplayField>> storage_fields =
+      packed_storage_reuse_display_fields(context, *statement.items);
+  const bool packed_helper_available = should_share_packed_display(context, statement);
+  const bool display_byte_helper_available = should_share_display_byte(context, statement);
+  const std::optional<int> display_byte_cost =
+      display_source_item_count(*statement.items) == 0 ? std::nullopt
+                                                       : estimate_display_byte_body_cost(context, statement);
+
+  std::vector<DisplayStrategyCandidate> candidates{
+      DisplayStrategyCandidate{
+          .variant = "decimal-pack",
+          .steps = decimal_fields.has_value()
+                       ? estimate_decimal_packed_display_cost(context, *decimal_fields, true)
+                       : kUnavailable,
+          .available = decimal_fields.has_value(),
+      },
+      DisplayStrategyCandidate{
+          .variant = "packed-storage-reuse",
+          .steps = storage_fields.has_value()
+                       ? estimate_packed_storage_reuse_display_cost(context, *storage_fields, true)
+                       : kUnavailable,
+          .available = storage_fields.has_value(),
+      },
+      DisplayStrategyCandidate{
+          .variant = "packed-display-helper",
+          .steps = packed_helper_available ? 2 : kUnavailable,
+          .available = packed_helper_available,
+      },
+      DisplayStrategyCandidate{
+          .variant = "display-byte-helper",
+          .steps = display_byte_helper_available ? 2 : kUnavailable,
+          .available = display_byte_helper_available,
+      },
+      DisplayStrategyCandidate{
+          .variant = "display-byte-builder",
+          .steps = display_byte_cost.value_or(kUnavailable),
+          .available = display_byte_cost.has_value(),
+      },
+  };
+
+  const auto selected = std::min_element(
+      candidates.begin(), candidates.end(), [](const DisplayStrategyCandidate& lhs,
+                                               const DisplayStrategyCandidate& rhs) {
+        if (lhs.available != rhs.available)
+          return lhs.available;
+        if (!lhs.available)
+          return false;
+        return lhs.steps < rhs.steps;
+      });
+  if (selected == candidates.end() || !selected->available)
+    return std::nullopt;
+
+  context.optimizations.push_back(OptimizationReport{
+      .name = "display-strategy-selection",
+      .detail = "Selected " + selected->variant + " for display.",
+  });
+  return selected->variant;
+}
+
+bool lower_literal_display_body(LoweringContext& context, const std::string& display_name,
+                                const std::string& literal, int line) {
   if (literal.empty()) {
-    context.emitter.emit_op(0x50, "С/П", "show literal", line);
+    context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
     report_screen_literal_lowering(context, "screen-empty-literal-lowering",
-                                   "Lowered empty screen literal at line " + std::to_string(line) +
-                                       " as a plain pause.");
+                                   "Lowered empty screen " + display_name + " as a plain pause.");
     return true;
   }
-  if (lower_preloaded_display_literal(context, literal, line))
+  if (lower_preloaded_display_literal(context, display_name, literal, line))
     return true;
   if (const std::optional<DisplayLiteralProgram> program = display_literal_program(literal)) {
     if (program->kind == "error") {
@@ -13077,22 +13159,22 @@ bool lower_literal_display_body(LoweringContext& context, const std::string& lit
     }
     if (program->negative)
       context.emitter.emit_op(0x0b, "/-/", "display literal sign", line);
-    context.emitter.emit_op(0x50, "С/П", "show literal", line);
+    context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
     return true;
   }
   if (const std::optional<std::string> decimal = decimal_display_literal_number(literal)) {
     context.emitter.emit_number(*decimal);
-    context.emitter.emit_op(0x50, "С/П", "show literal", line);
+    context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
     report_screen_literal_lowering(context, "screen-decimal-literal-lowering",
-                                   "Lowered screen literal at line " + std::to_string(line) +
+                                   "Lowered screen " + display_name +
                                        " as an ordinary decimal display literal.");
     return true;
   }
-  if (lower_leading_zero_hex_product_display(context, literal, line))
+  if (lower_leading_zero_hex_product_display(context, display_name, literal, line))
     return true;
-  if (lower_zero_digit_tail_display(context, literal, line))
+  if (lower_zero_digit_tail_display(context, display_name, literal, line))
     return true;
-  if (lower_sign_digit_literal_display(context, literal, line))
+  if (lower_sign_digit_literal_display(context, display_name, literal, line))
     return true;
   if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
           preferred_first_splice_display_literal_program(literal)) {
@@ -13103,10 +13185,10 @@ bool lower_literal_display_body(LoweringContext& context, const std::string& lit
     if (!core::emit::emit_first_splice_display_literal_program(display_api, context, *first_splice,
                                                                scratch, line))
       return false;
-    context.emitter.emit_op(0x50, "С/П", "show literal", line);
+    context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
     report_screen_literal_lowering(
         context, "screen-text-literal-first-splice",
-        "Lowered screen literal at line " + std::to_string(line) +
+        "Lowered screen " + display_name +
             " by building a literal mantissa and splicing its first digit.");
     return true;
   }
@@ -13119,23 +13201,41 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
                                              "Native display lowering expects display fields"));
     return false;
   }
+  const std::string show_comment =
+      statement.inline_name.has_value() ? "show " + *statement.inline_name : "show";
+  const std::string display_source_comment =
+      statement.inline_name.has_value() ? "display " + *statement.inline_name + " source"
+                                        : "display source";
+  const std::string display_name = statement.inline_name.value_or(
+      statement.name.value_or("display"));
   if (statement.items->empty()) {
-    context.emitter.emit_number("0");
-    context.emitter.emit_op(0x50, "С/П", "show", statement.line);
-    return true;
+    return lower_literal_display_body(context, display_name, "", statement.line);
   }
 
   if (const std::optional<std::string> literal =
           core::emit::collapse_literal_only_display(*statement.items)) {
     if (lower_shared_literal_display_call(context, *literal, statement.line))
       return true;
-    if (lower_literal_display_body(context, *literal, statement.line)) {
+    if (lower_literal_display_body(context, display_name, *literal, statement.line)) {
       report_screen_video_literal_lowering(context, statement.line);
       return true;
     }
   }
 
   auto display_api = display_emit_api(context);
+
+  if (context.hoist_shared_helpers) {
+    if (const std::optional<std::string> literal =
+            unlowerable_decimal_display_literal(*statement.items)) {
+      const std::string screen =
+          statement.inline_name.value_or(statement.name.value_or("display"));
+      context.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Error, "native-unsupported",
+          "Screen '" + screen + "' contains display literal \"" + *literal +
+              "\" that is not lowerable yet."));
+      return false;
+    }
+  }
 
   if (lower_text_display_statement(context, *statement.items, statement.line))
     return true;
@@ -13156,23 +13256,25 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
                                                                  *statement.items, statement.line))
     return true;
 
-  if (lower_shared_display_byte_call(context, statement))
+  const std::optional<std::string> strategy = select_display_strategy(context, statement);
+  if (strategy == "packed-display-helper" && lower_shared_packed_display_call(context, statement))
+    return true;
+  if (strategy == "display-byte-helper" && lower_shared_display_byte_call(context, statement))
+    return true;
+  if (strategy == "packed-storage-reuse" &&
+      lower_packed_storage_reuse_display_statement(context, *statement.items, statement.line))
+    return true;
+  if (strategy == "display-byte-builder" && lower_display_byte_body(context, statement))
+    return true;
+  if ((strategy == "decimal-pack" || strategy.has_value()) &&
+      lower_packed_numeric_display_statement(context, *statement.items, statement.line))
     return true;
 
-  if (lower_display_byte_body(context, statement))
-    return true;
-
-  if (lower_shared_packed_display_call(context, statement))
-    return true;
-
-  if (lower_selected_packed_display_statement(context, *statement.items, statement.line))
-    return true;
-
-  if (!lower_display_item_to_x(context, statement.items->at(0), "display source"))
+  if (!lower_display_item_to_x(context, statement.items->at(0), display_source_comment))
     return false;
 
   if (statement.items->size() == 1) {
-    context.emitter.emit_op(0x50, "С/П", "show", statement.line);
+    context.emitter.emit_op(0x50, "С/П", show_comment, statement.line);
     return true;
   }
 
@@ -13180,11 +13282,11 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
     const DisplayItem& item = statement.items->at(index);
     emit_display_scale(context, display_scale_for_item(item), statement.line);
     context.emitter.emit_op(0x12, "*", "packed display field shift", statement.line);
-    if (!lower_display_item_to_x(context, item, "display source"))
+    if (!lower_display_item_to_x(context, item, display_source_comment))
       return false;
     context.emitter.emit_op(0x10, "+", "packed display field append", statement.line);
   }
-  context.emitter.emit_op(0x50, "С/П", "show", statement.line);
+  context.emitter.emit_op(0x50, "С/П", show_comment, statement.line);
   return true;
 }
 
@@ -13215,7 +13317,7 @@ bool lower_literal_terminal_stop(LoweringContext& context, const std::string& li
     }
   }
 
-  if (lower_literal_display_body(context, literal, line)) {
+  if (lower_literal_display_body(context, "__halt_literal_" + std::to_string(line), literal, line)) {
     report_terminal_literal_stop(context, literal, line);
     return true;
   }
@@ -15504,7 +15606,7 @@ bool lower_random_call_to_x(LoweringContext& context, const Expression& expressi
   context.emitter.emit_op(0x3b, "К СЧ", "random()");
   if (!lower_expression_to_x(context, expression.args.at(0)))
     return false;
-  context.emitter.emit_op(0x12, "*", "random range");
+  context.emitter.emit_op(0x12, "*", "expr *");
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_aliases.clear();
   context.optimizations.push_back(OptimizationReport{
@@ -22902,6 +23004,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
           core::emit::collapse_literal_only_display(*statement.items);
       if (literal.has_value())
         return lower_literal_terminal_stop(context, *literal, statement.line);
+      return lower_display_statement(context, statement);
     }
     if (statement.target.has_value()) {
       const Expression expression = parse_expression(*statement.target, statement.line);
@@ -27843,8 +27946,18 @@ bool lower_packed_display_helpers(LoweringContext& context) {
       return false;
     const std::optional<std::vector<PackedDisplayField>> fields =
         numeric_display_fields(context, *helper.statement.items);
-    if (!fields.has_value())
+    if (!fields.has_value()) {
+      if (const std::optional<std::string> literal =
+              unlowerable_decimal_display_literal(*helper.statement.items)) {
+        const std::string screen =
+            helper.statement.inline_name.value_or(helper.statement.name.value_or("display"));
+        context.diagnostics.push_back(diagnostic(
+            DiagnosticSeverity::Error, "native-unsupported",
+            "Screen '" + screen + "' contains display literal \"" + *literal +
+                "\" that is not lowerable yet."));
+      }
       return false;
+    }
 
     context.emitter.emit_label(
         helper.label,
@@ -27917,7 +28030,7 @@ bool lower_literal_display_helpers(LoweringContext& context) {
         {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
     const bool previous = context.emitting_literal_display_helper;
     context.emitting_literal_display_helper = true;
-    const bool lowered = lower_literal_display_body(context, helper.literal, helper.line);
+    const bool lowered = lower_literal_display_body(context, helper.label, helper.literal, helper.line);
     context.emitting_literal_display_helper = previous;
     if (!lowered)
       return false;
@@ -28433,14 +28546,189 @@ std::map<std::string, int> machine_item_label_address_map(const std::vector<Mach
   return result;
 }
 
+std::vector<std::pair<std::string, std::string>>
+ordered_preloaded_numbers(const LoweringContext& context) {
+  std::vector<std::pair<std::string, std::string>> result;
+  std::set<std::string> seen;
+  for (const std::string& key : context.preloaded_number_order) {
+    const auto it = context.preloaded_numbers.find(key);
+    if (it == context.preloaded_numbers.end())
+      continue;
+    result.push_back(*it);
+    seen.insert(key);
+  }
+  for (const auto& entry : context.preloaded_numbers) {
+    if (!seen.contains(entry.first))
+      result.push_back(entry);
+  }
+  return result;
+}
+
+std::optional<unsigned long long> js_object_integer_key(const std::string& key) {
+  if (key.empty())
+    return std::nullopt;
+  if (key.size() > 1U && key.front() == '0')
+    return std::nullopt;
+  unsigned long long value = 0;
+  for (char ch : key) {
+    if (std::isdigit(static_cast<unsigned char>(ch)) == 0)
+      return std::nullopt;
+    value = value * 10ULL + static_cast<unsigned long long>(ch - '0');
+    if (value > 4294967294ULL)
+      return std::nullopt;
+  }
+  return value;
+}
+
+std::vector<std::pair<std::string, std::string>>
+preloaded_numbers_in_js_object_order(const LoweringContext& context) {
+  std::vector<std::pair<std::string, std::string>> result = ordered_preloaded_numbers(context);
+  std::stable_sort(result.begin(), result.end(),
+                   [](const auto& left, const auto& right) {
+                     const std::optional<unsigned long long> left_index =
+                         js_object_integer_key(left.first);
+                     const std::optional<unsigned long long> right_index =
+                         js_object_integer_key(right.first);
+                     if (left_index.has_value() != right_index.has_value())
+                       return left_index.has_value();
+                     if (left_index.has_value() && right_index.has_value())
+                       return *left_index < *right_index;
+                     return false;
+                   });
+  return result;
+}
+
+std::optional<std::vector<int>> decimal_literal_mantissa_cells(const std::string& raw) {
+  static const std::regex pattern(R"(^(-)?(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$)",
+                                  std::regex_constants::icase);
+  std::smatch match;
+  const std::string trimmed = trim_ascii(raw);
+  if (!std::regex_match(trimmed, match, pattern))
+    return std::nullopt;
+
+  int exponent = 0;
+  if (match[4].matched) {
+    try {
+      exponent = std::stoi(match[4].str());
+    } catch (const std::exception&) {
+      return std::nullopt;
+    }
+  }
+  if (std::abs(exponent) > 18)
+    return std::nullopt;
+
+  const std::string integer_part = match[2].str();
+  const std::string fractional_part = match[3].matched ? match[3].str() : "";
+  std::string digits = integer_part + fractional_part;
+  const std::size_t first_non_zero = digits.find_first_not_of('0');
+  if (first_non_zero == std::string::npos)
+    return std::vector<int>(8, 0);
+  digits.erase(0, first_non_zero);
+
+  const int scale = static_cast<int>(fractional_part.size()) - exponent;
+  if (scale < 0)
+    digits.append(static_cast<std::size_t>(-scale), '0');
+  if (digits.size() < 8U)
+    digits.append(8U - digits.size(), '0');
+  if (digits.size() > 8U)
+    digits.resize(8U);
+
+  std::vector<int> cells;
+  cells.reserve(8U);
+  for (const char digit : digits) {
+    if (digit < '0' || digit > '9')
+      return std::nullopt;
+    cells.push_back(digit - '0');
+  }
+  return cells;
+}
+
+int mk61_bitwise_nibble(int left, int right, const std::string& op) {
+  if (op == "bit_and")
+    return left & right;
+  if (op == "bit_or")
+    return left | right;
+  return left ^ right;
+}
+
+std::optional<std::vector<int>> mk61_bitwise_mantissa_cells(const Expression& expression) {
+  if (expression.kind == "number")
+    return decimal_literal_mantissa_cells(expression.raw);
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr)
+    return mk61_bitwise_mantissa_cells(*expression.expr);
+  if (expression.kind != "call")
+    return std::nullopt;
+
+  const std::string callee = lower_ascii(expression.callee);
+  if (callee == "bit_not") {
+    if (expression.args.size() != 1U)
+      return std::nullopt;
+    const std::optional<std::vector<int>> source =
+        mk61_bitwise_mantissa_cells(expression.args.front());
+    if (!source.has_value())
+      return std::nullopt;
+    std::vector<int> result = {8};
+    for (std::size_t index = 1; index < 8U; ++index)
+      result.push_back((~source->at(index)) & 0x0f);
+    return result;
+  }
+
+  if (callee != "bit_and" && callee != "bit_or" && callee != "bit_xor")
+    return std::nullopt;
+  if (expression.args.size() != 2U)
+    return std::nullopt;
+  const std::optional<std::vector<int>> left =
+      mk61_bitwise_mantissa_cells(expression.args.at(0));
+  const std::optional<std::vector<int>> right =
+      mk61_bitwise_mantissa_cells(expression.args.at(1));
+  if (!left.has_value() || !right.has_value())
+    return std::nullopt;
+  std::vector<int> result = {8};
+  for (std::size_t index = 1; index < 8U; ++index)
+    result.push_back(mk61_bitwise_nibble(left->at(index), right->at(index), callee));
+  return result;
+}
+
+std::optional<std::string> mk61_display_literal_from_cells(const std::vector<int>& cells) {
+  static constexpr std::array<std::string_view, 16> glyphs = {
+      "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "-", "L", "С", "Г", "Е", "_"};
+  if (cells.size() != 8U)
+    return std::nullopt;
+  std::string result;
+  for (std::size_t index = 0; index < cells.size(); ++index) {
+    const int cell = cells.at(index);
+    if (cell < 0 || cell > 15)
+      return std::nullopt;
+    if (index == 1U)
+      result.push_back('.');
+    result += glyphs.at(static_cast<std::size_t>(cell));
+  }
+  return result;
+}
+
+std::optional<std::string> mk61_bitwise_display_literal_for_expression(
+    const Expression& expression) {
+  if (expression.kind != "call")
+    return std::nullopt;
+  const std::string callee = lower_ascii(expression.callee);
+  if (callee != "bit_and" && callee != "bit_or" && callee != "bit_xor" &&
+      callee != "bit_not") {
+    return std::nullopt;
+  }
+  const std::optional<std::vector<int>> cells = mk61_bitwise_mantissa_cells(expression);
+  return cells.has_value() ? mk61_display_literal_from_cells(*cells) : std::nullopt;
+}
+
 std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
                                                  const V2Program& program,
                                                  const std::vector<MachineItem>& items) {
   std::vector<PreloadReport> preloads;
+  std::vector<PreloadReport> deferred_indexed_initializer_preloads;
   auto add_preload = [&](const std::string& register_name, const std::string& value,
                          std::optional<std::string> setup_target_name = std::nullopt,
                          bool setup_expression = false,
-                         std::optional<int> setup_source_line = std::nullopt) {
+                         std::optional<int> setup_source_line = std::nullopt,
+                         std::optional<std::string> setup_expression_text = std::nullopt) {
     const auto duplicate =
         std::find_if(preloads.begin(), preloads.end(), [&](const PreloadReport& preload) {
           return preload.register_name == register_name;
@@ -28453,8 +28741,13 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         .counts_against_program = false,
         .setup_target_name = std::move(setup_target_name),
         .setup_expression = setup_expression,
+        .setup_expression_text = std::move(setup_expression_text),
         .setup_source_line = setup_source_line,
     });
+  };
+  auto add_preload_report = [&](const PreloadReport& preload) {
+    add_preload(preload.register_name, preload.value, preload.setup_target_name,
+                preload.setup_expression, preload.setup_source_line, preload.setup_expression_text);
   };
 
   auto inline_setup_constants = [&](const auto& self, const Expression& expression,
@@ -28501,6 +28794,8 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     if (expression.kind != "call")
       return false;
     const std::string callee = lower_ascii(expression.callee);
+    if (callee == "pi")
+      return expression.args.empty();
     if (callee == "random")
       return expression.args.size() <= 2U &&
              std::all_of(expression.args.begin(), expression.args.end(),
@@ -28518,6 +28813,13 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
   struct SetupPreloadValue {
     std::string value;
     bool setup_expression = false;
+    std::optional<std::string> setup_expression_text;
+  };
+
+  auto is_setup_literal_expression = [](const Expression& expression) {
+    return expression.kind == "number" ||
+           (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr &&
+            expression.expr->kind == "number");
   };
 
   auto setup_preload_value_for_initial =
@@ -28525,6 +28827,14 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     try {
       Expression initial = parse_expression(initial_text, line);
       initial = inline_setup_constants(inline_setup_constants, initial);
+      if (const std::optional<std::string> bitwise_literal =
+              mk61_bitwise_display_literal_for_expression(initial)) {
+        return SetupPreloadValue{
+            .value = *bitwise_literal,
+            .setup_expression = true,
+            .setup_expression_text = expression_to_source(initial),
+        };
+      }
       const std::optional<double> numeric = numeric_value_of_expression(context, initial);
       if (numeric.has_value())
         return SetupPreloadValue{.value = format_number_literal(*numeric)};
@@ -28593,8 +28903,17 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
           const std::string element = state_bank_element_name(*field, index);
           const auto register_it = context.registers.find(element);
           if (register_it != context.registers.end()) {
-            add_preload(register_it->second, preload_value->value, element,
-                        preload_value->setup_expression, field->line);
+            deferred_indexed_initializer_preloads.push_back(PreloadReport{
+                .register_name = register_it->second,
+                .value = preload_value->value,
+                .counts_against_program = false,
+                .setup_target_name = preload_value->setup_expression
+                                         ? std::optional<std::string>{element}
+                                         : std::nullopt,
+                .setup_expression = preload_value->setup_expression,
+                .setup_expression_text = preload_value->setup_expression_text,
+                .setup_source_line = field->line,
+            });
           }
         }
         continue;
@@ -28602,9 +28921,11 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     }
 
     std::optional<std::string> value;
+    std::optional<std::string> setup_target_name;
     bool setup_expression = false;
     if (field->initial_stack.has_value()) {
       value = "stack." + *field->initial_stack;
+      setup_target_name = field->name;
     } else if (field->initial.has_value()) {
       const std::string initial_text = trim_ascii(*field->initial);
       if (field->type == "cells" && initial_text == "random()") {
@@ -28613,10 +28934,18 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
                  initial_text == "random(" + *field->domain + ")" &&
                  context.boards.contains(*field->domain)) {
         value = initial_text;
-      } else if (const std::optional<SetupPreloadValue> preload_value =
-                     setup_preload_value_for_initial(initial_text, field->line)) {
-        value = preload_value->value;
-        setup_expression = preload_value->setup_expression;
+        setup_target_name = field->name;
+      } else {
+        value = initial_text;
+        try {
+          const Expression initial = parse_expression(initial_text, field->line);
+          setup_expression = !is_setup_literal_expression(initial);
+          if (setup_expression)
+            setup_target_name = field->name;
+        } catch (const std::exception&) {
+          setup_expression = true;
+          setup_target_name = field->name;
+        }
       }
     }
     if (!value.has_value())
@@ -28629,15 +28958,22 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         const std::string element = state_bank_element_name(*field, index);
         const auto register_it = context.registers.find(element);
         if (register_it != context.registers.end())
-          add_preload(register_it->second, *value, element, setup_expression, field->line);
+          add_preload(register_it->second, *value,
+                      (field->initial_stack.has_value() || setup_expression)
+                          ? std::optional<std::string>{element}
+                          : std::nullopt,
+                      setup_expression, field->line);
       }
       continue;
     }
 
     const auto register_it = context.registers.find(field->name);
     if (register_it != context.registers.end())
-      add_preload(register_it->second, *value, field->name, setup_expression, field->line);
+      add_preload(register_it->second, *value, setup_target_name, setup_expression, field->line);
   }
+
+  for (const PreloadReport& preload : deferred_indexed_initializer_preloads)
+    add_preload_report(preload);
 
   if (context.uses_formatted_coord_report) {
     const auto register_it = context.registers.find(std::string(kCoordListDx));
@@ -28645,7 +28981,7 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
       add_preload(register_it->second, "8,-00--_");
   }
 
-  for (const auto& [value, name] : context.preloaded_numbers) {
+  for (const auto& [value, name] : preloaded_numbers_in_js_object_order(context)) {
     const auto register_it = context.registers.find(name);
     if (register_it == context.registers.end())
       continue;
@@ -28655,6 +28991,13 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         selector.has_value() ? fractional_selector_preload_value(value, selector->target)
                              : std::nullopt;
     add_preload(register_it->second, selector_value.value_or(value));
+  }
+
+  for (const std::string& name :
+       core::emit::display_template_mask_scratch_names_for_program(program)) {
+    const auto register_it = context.registers.find(name);
+    if (register_it != context.registers.end())
+      add_preload(register_it->second, "8,-00-000");
   }
 
   if (context.negative_zero_degree_register.has_value() &&
@@ -28682,7 +29025,7 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
 std::map<std::string, std::string>
 planned_preloaded_constant_registers(const LoweringContext& context) {
   std::map<std::string, std::string> registers;
-  for (const auto& [value, name] : context.preloaded_numbers) {
+  for (const auto& [value, name] : ordered_preloaded_numbers(context)) {
     const auto register_it = context.registers.find(name);
     if (register_it != context.registers.end()) {
       const std::optional<FractionalConstantSelectorPlan> selector =
@@ -28703,7 +29046,7 @@ fractional_selector_setup_preloads(const std::vector<PreloadReport>& setup_prelo
     return {};
 
   std::set<std::string> registers;
-  for (const auto& [value, name] : context.preloaded_numbers) {
+  for (const auto& [value, name] : ordered_preloaded_numbers(context)) {
     if (!fractional_constant_selector_for_value(context, value).has_value())
       continue;
     const auto register_it = context.registers.find(name);
@@ -28727,11 +29070,124 @@ void merge_planned_preloaded_constant_registers(CompileOptions& options,
   }
 }
 
+std::optional<std::string> stack_preload_source(const std::string& value) {
+  if (value == "stack.X")
+    return "X";
+  if (value == "stack.Y")
+    return "Y";
+  return std::nullopt;
+}
+
+std::vector<ManualSetupInput>
+collect_manual_setup_inputs(const V2Program& program,
+                            const std::map<std::string, std::string>& registers,
+                            const std::vector<PreloadReport>& preloads) {
+  std::vector<ManualSetupInput> inputs;
+  std::set<std::string> seen;
+  for (const PreloadReport& preload : preloads) {
+    const std::optional<std::string> stack = stack_preload_source(preload.value);
+    if (!stack.has_value())
+      continue;
+
+    for (const V2StateField& field : program.state) {
+      if (!field.initial_stack.has_value() || *field.initial_stack != *stack)
+        continue;
+
+      auto add_field = [&](const std::string& name) {
+        const auto register_it = registers.find(name);
+        if (register_it == registers.end() || register_it->second != preload.register_name)
+          return;
+        const std::string key = name + ":" + *stack;
+        if (seen.contains(key))
+          return;
+        seen.insert(key);
+        inputs.push_back(ManualSetupInput{
+            .name = name,
+            .stack = *stack,
+            .min = field.min,
+            .max = field.max,
+        });
+      };
+
+      if (field.bank.has_value()) {
+        for (int index = field.bank->min; index <= field.bank->max; ++index)
+          add_field(state_bank_element_name(field, index));
+      } else {
+        add_field(field.name);
+      }
+    }
+  }
+  return inputs;
+}
+
 std::string combine_listing(const CompileResult& result) {
-  if (!result.setup_program.has_value())
-    return format_listing_steps(result.steps);
-  return "# Setup Listing\n" + format_listing_steps(result.setup_program->steps) +
-         "\n\n# Main Listing\n" + format_listing_steps(result.steps);
+  const std::optional<std::string> setup_block =
+      !result.setup_program.has_value() && result.manual_setup_inputs.empty()
+          ? format_setup_block(result.preloads)
+          : std::nullopt;
+  const std::optional<std::string> setup_preload_listing =
+      setup_block.has_value() ? format_setup_preload_listing_steps(result.preloads)
+                              : std::nullopt;
+
+  const bool has_setup_rows = !result.manual_setup_inputs.empty() ||
+                              result.setup_program.has_value() ||
+                              (setup_preload_listing.has_value() &&
+                               !setup_preload_listing->empty());
+  if (has_setup_rows) {
+    std::string listing;
+    if (setup_block.has_value())
+      listing += "Setup Block:\n  " + *setup_block + "\n\n";
+    listing += "# Setup Listing\n";
+    if (result.setup_program.has_value()) {
+      listing += format_setup_listing_steps(result.manual_setup_inputs, result.setup_program->steps);
+    } else if (setup_preload_listing.has_value()) {
+      listing += *setup_preload_listing;
+    } else {
+      listing += format_setup_listing_steps(result.manual_setup_inputs, {});
+    }
+    listing += "\n\n# Main Listing\n" + format_listing_steps(result.steps);
+    return listing;
+  }
+
+  if (setup_block.has_value())
+    return "Setup Block:\n  " + *setup_block + "\n\n" + format_listing_steps(result.steps);
+
+  return format_listing_steps(result.steps);
+}
+
+std::optional<std::string> executable_setup_value(const std::string& value);
+
+bool preload_is_display_literal_setup(const PreloadReport& preload) {
+  if (executable_setup_value(preload.value).has_value())
+    return false;
+  if (const std::optional<DisplayLiteralProgram> literal =
+          display_literal_program(preload.value)) {
+    if (literal->kind != "error")
+      return true;
+  }
+  return preferred_first_splice_display_literal_program(preload.value).has_value();
+}
+
+bool preload_requires_generated_setup_program(const PreloadReport& preload) {
+  if (preload.setup_expression || preload.setup_target_name.has_value())
+    return true;
+  if (preload.value == "stack.X" || preload.value == "stack.Y")
+    return true;
+  if (executable_setup_value(preload.value).has_value())
+    return false;
+  if (preload_is_display_literal_setup(preload))
+    return true;
+  return preload.value == "random()" || preload.value.starts_with("random(") ||
+         preload.value.starts_with("random_unique(") ||
+         preload.value.starts_with("__seg_bitplane_random_unique(");
+}
+
+bool needs_generated_setup_program(const LoweringContext& context,
+                                   const std::vector<PreloadReport>& preloads) {
+  if (context.uses_formatted_coord_report)
+    return true;
+  return std::any_of(preloads.begin(), preloads.end(),
+                     preload_requires_generated_setup_program);
 }
 
 bool expression_is_deterministic_for_if_chain(const Expression& expression) {
@@ -30470,6 +30926,45 @@ bool can_inline_floor_packed_row_display_expression(const V2Program& program,
   return floor_width == 1 && floor_min >= 0 && floor_max <= 9;
 }
 
+bool statement_has_inline_floor_packed_row_display_expression(const V2Program& program,
+                                                             const V2Statement& statement);
+
+bool statements_have_inline_floor_packed_row_display_expression(
+    const V2Program& program, const std::vector<V2Statement>& statements) {
+  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
+    return statement_has_inline_floor_packed_row_display_expression(program, statement);
+  });
+}
+
+bool statement_has_inline_floor_packed_row_display_expression(const V2Program& program,
+                                                             const V2Statement& statement) {
+  if (statement_has_materializable_display_items(statement) &&
+      can_inline_floor_packed_row_display_expression(program, statement, 2U)) {
+    return true;
+  }
+  if (statements_have_inline_floor_packed_row_display_expression(program, statement.body) ||
+      statements_have_inline_floor_packed_row_display_expression(program, statement.then_body) ||
+      statements_have_inline_floor_packed_row_display_expression(program, statement.else_body)) {
+    return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr &&
+        statement_has_inline_floor_packed_row_display_expression(program, *match_case.action)) {
+      return true;
+    }
+  }
+  return statement.otherwise != nullptr &&
+         statement_has_inline_floor_packed_row_display_expression(program, *statement.otherwise);
+}
+
+bool program_has_inline_floor_packed_row_display_expression(const V2Program& program) {
+  if (statements_have_inline_floor_packed_row_display_expression(program, program.body))
+    return true;
+  return std::any_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
+    return statements_have_inline_floor_packed_row_display_expression(program, rule.body);
+  });
+}
+
 std::vector<V2Statement> materialize_display_expression_statements(
     const V2Program& program, std::vector<V2Statement> statements,
     std::vector<V2StateField>& materialized_fields, int& materialized, int& residual_elisions,
@@ -30568,6 +31063,9 @@ std::vector<V2Statement> materialize_display_expression_statements(
 void materialize_display_expressions(V2Program& program,
                                      std::vector<OptimizationReport>& optimizations,
                                      bool inline_floor_packed_row_expressions) {
+  const bool inlines_floor_packed_row_expression =
+      inline_floor_packed_row_expressions &&
+      program_has_inline_floor_packed_row_display_expression(program);
   int materialized = 0;
   int residual_elisions = 0;
   std::vector<V2StateField> materialized_fields;
@@ -30585,6 +31083,13 @@ void materialize_display_expressions(V2Program& program,
         .detail = "Kept " + std::to_string(residual_elisions) +
                   " residual display expression field" + (residual_elisions == 1 ? "" : "s") +
                   " inline for direct branch-X reuse.",
+    });
+  }
+  if (inlines_floor_packed_row_expression) {
+    optimizations.push_back(OptimizationReport{
+        .name = "inline-floor-packed-row-expression",
+        .detail = "Computed floor-packed display row expressions inline to free their hidden "
+                  "display register.",
     });
   }
   if (materialized == 0)
@@ -31530,6 +32035,130 @@ void trim_display_edge_whitespace(V2Program& program,
   });
 }
 
+std::set<std::string> packed_decimal_zero_run_floor_sources(const V2Program& program) {
+  std::set<std::string> domains;
+  for (const V2World& world : program.worlds) {
+    if (world.position.has_value() && world.position->encoding == "packed_decimal_zero_run")
+      domains.insert(world.name);
+  }
+  std::set<std::string> names;
+  for (const V2StateField& field : program.state) {
+    if (field.type == "coord" && field.domain.has_value() && domains.contains(*field.domain))
+      names.insert(field.name);
+  }
+  return names;
+}
+
+void rewrite_packed_floor_text(std::optional<std::string>& text, const std::set<std::string>& names) {
+  if (!text.has_value())
+    return;
+  for (const std::string& name : names) {
+    const std::regex floor_regex("\\b" + name + "\\.floor\\b");
+    *text = std::regex_replace(*text, floor_regex, "int(" + name + ")");
+  }
+}
+
+void rewrite_packed_floor_text(std::string& text, const std::set<std::string>& names) {
+  for (const std::string& name : names) {
+    const std::regex floor_regex("\\b" + name + "\\.floor\\b");
+    text = std::regex_replace(text, floor_regex, "int(" + name + ")");
+  }
+}
+
+bool expression_is_numeric_literal(const Expression& expression, double value) {
+  if (expression.kind != "number")
+    return false;
+  try {
+    return std::stod(expression.raw.empty() ? expression.text : expression.raw) == value;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+Expression rewrite_packed_floor_expression(Expression expression, const std::set<std::string>& names) {
+  if (expression.index != nullptr)
+    expression.index =
+        std::make_shared<Expression>(rewrite_packed_floor_expression(*expression.index, names));
+  if (expression.expr != nullptr)
+    expression.expr =
+        std::make_shared<Expression>(rewrite_packed_floor_expression(*expression.expr, names));
+  if (expression.left != nullptr)
+    expression.left =
+        std::make_shared<Expression>(rewrite_packed_floor_expression(*expression.left, names));
+  if (expression.right != nullptr)
+    expression.right =
+        std::make_shared<Expression>(rewrite_packed_floor_expression(*expression.right, names));
+  for (Expression& arg : expression.args)
+    arg = rewrite_packed_floor_expression(std::move(arg), names);
+
+  if (expression.kind == "call" && lower_ascii(expression.callee) == "int" &&
+      expression.args.size() == 1U) {
+    const Expression& arg = expression.args.front();
+    if (arg.kind == "binary" && arg.op == "/" && arg.left != nullptr && arg.right != nullptr &&
+        arg.left->kind == "identifier" && names.contains(arg.left->name) &&
+        expression_is_numeric_literal(*arg.right, 100.0)) {
+      return int_expression(identifier_expression(arg.left->name));
+    }
+  }
+  return expression;
+}
+
+void rewrite_packed_floor_display_items(std::optional<std::vector<DisplayItem>>& items,
+                                        const std::set<std::string>& names) {
+  if (!items.has_value())
+    return;
+  for (DisplayItem& item : *items) {
+    if (item.expr.has_value())
+      item.expr = rewrite_packed_floor_expression(std::move(*item.expr), names);
+  }
+}
+
+void rewrite_packed_floor_statement(V2Statement& statement, const std::set<std::string>& names) {
+  rewrite_packed_floor_text(statement.target, names);
+  rewrite_packed_floor_text(statement.expr, names);
+  for (std::string& arg : statement.args)
+    rewrite_packed_floor_text(arg, names);
+  if (statement.predicate.has_value()) {
+    rewrite_packed_floor_text(statement.predicate->left, names);
+    rewrite_packed_floor_text(statement.predicate->right, names);
+    rewrite_packed_floor_text(statement.predicate->collection, names);
+    rewrite_packed_floor_text(statement.predicate->item, names);
+  }
+  rewrite_packed_floor_display_items(statement.items, names);
+  for (V2RawInput& input : statement.inputs)
+    rewrite_packed_floor_text(input.expr, names);
+  for (V2RawOutput& output : statement.outputs)
+    rewrite_packed_floor_text(output.target, names);
+  for (V2Statement& child : statement.body)
+    rewrite_packed_floor_statement(child, names);
+  for (V2Statement& child : statement.then_body)
+    rewrite_packed_floor_statement(child, names);
+  for (V2Statement& child : statement.else_body)
+    rewrite_packed_floor_statement(child, names);
+  for (V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      rewrite_packed_floor_statement(*match_case.action, names);
+  }
+  if (statement.otherwise != nullptr)
+    rewrite_packed_floor_statement(*statement.otherwise, names);
+}
+
+void rewrite_packed_decimal_zero_run_floor_access(V2Program& program) {
+  const std::set<std::string> names = packed_decimal_zero_run_floor_sources(program);
+  if (names.empty())
+    return;
+  for (V2Const& constant : program.consts)
+    rewrite_packed_floor_text(constant.expr, names);
+  for (V2StateField& field : program.state)
+    rewrite_packed_floor_text(field.initial, names);
+  for (V2Statement& statement : program.body)
+    rewrite_packed_floor_statement(statement, names);
+  for (V2Rule& rule : program.rules) {
+    for (V2Statement& statement : rule.body)
+      rewrite_packed_floor_statement(statement, names);
+  }
+}
+
 std::optional<V2Statement>
 inline_indexed_bit_report_branch_temp(const V2Program& program, const V2Statement& assign,
                                       const V2Statement& temp, const V2Statement& branch,
@@ -31749,6 +32378,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                                             "Native compiler currently supports V2 programs only"));
     return result;
   }
+  rewrite_packed_decimal_zero_run_floor_access(*ast.v2);
 
   validate_v2_return_contracts(*ast.v2, result.diagnostics);
   validate_v2_function_call_contracts(*ast.v2, result.diagnostics);
@@ -31781,6 +32411,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.dead_source_residual_temp_reuse = options.dead_source_residual_temp_reuse;
   context.single_bit_mask_op_copy_reuse = options.single_bit_mask_op_copy_reuse;
   context.share_random_cell = options.share_random_cell;
+  context.hoist_shared_helpers = options.hoist_shared_helpers;
   context.aggressive_terminal_direct = options.aggressive_terminal_direct;
   context.preloaded_indirect_flow = options.preloaded_indirect_flow;
   context.invert_branch_order = options.invert_branch_order;
@@ -32116,8 +32747,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     if (!setup_preload_register_present(preload.register_name))
       setup_program_preloads.push_back(preload);
   };
-  for (const PreloadReport& preload : setup_preloads)
-    add_unique_setup_program_preload(preload);
+  for (const PreloadReport& preload : setup_preloads) {
+    if (!preload_register_present(stop_tail_preloads, preload.register_name))
+      add_unique_setup_program_preload(preload);
+  }
   for (const PreloadReport& preload : optimized.preloads)
     add_unique_setup_program_preload(preload);
   for (const PreloadReport& preload : stop_tail_preloads)
@@ -32131,7 +32764,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     add_unique_preload(preload);
   for (const PreloadReport& preload : stop_tail_preloads)
     add_unique_preload(preload);
-  if (!setup_program_preloads.empty()) {
+  result.manual_setup_inputs =
+      collect_manual_setup_inputs(*ast.v2, context.registers, result.preloads);
+  if (!setup_program_preloads.empty() &&
+      needs_generated_setup_program(context, setup_program_preloads)) {
     result.setup_program = core::emit::lowering::compile_setup_program_with_preloads(
         context.boards, context.registers, setup_program_preloads, options);
     result.optimizations.push_back(OptimizationReport{

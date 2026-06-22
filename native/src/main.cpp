@@ -216,6 +216,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.indirect_underflow_decrement = true;
     } else if (arg == "--tail-branch-inversion") {
       options.tail_branch_inversion = true;
+    } else if (arg == "--invert-branch-order") {
+      options.invert_branch_order = true;
     } else if (arg == "--conditional-branch-trampoline") {
       options.conditional_branch_trampoline = true;
     } else if (arg == "--preloaded-indirect-flow") {
