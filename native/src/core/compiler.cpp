@@ -34032,6 +34032,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                     std::to_string(tail_layout.cfg_tail_valid_chain_candidates) +
                     " 2..5-length chain candidate" +
                     (tail_layout.cfg_tail_valid_chain_candidates == 1 ? "" : "s") +
+                    " (short=" +
+                    std::to_string(tail_layout.cfg_tail_short_chain_candidates) +
+                    ", too-long=" +
+                    std::to_string(tail_layout.cfg_tail_too_long_chain_candidates) +
+                    ", broken=" +
+                    std::to_string(tail_layout.cfg_tail_broken_chain_candidates) + ")" +
                     ", rejected " +
                     std::to_string(tail_layout.cfg_tail_external_entry_rejections) +
                     " by external CFG entries"));

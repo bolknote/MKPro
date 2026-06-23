@@ -742,6 +742,9 @@ struct IrTailChainCandidate {
 struct IrTailChainSearchStats {
   int entry_candidates = 0;
   int valid_chain_candidates = 0;
+  int short_chain_candidates = 0;
+  int too_long_chain_candidates = 0;
+  int broken_chain_candidates = 0;
   int external_entry_rejections = 0;
 };
 
@@ -1326,8 +1329,19 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
       break;
     }
 
-    if (!valid_chain || tail_indices.size() < 2U ||
-        tail_indices.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
+    if (!valid_chain) {
+      if (stats != nullptr)
+        ++stats->broken_chain_candidates;
+      continue;
+    }
+    if (tail_indices.size() < 2U) {
+      if (stats != nullptr)
+        ++stats->short_chain_candidates;
+      continue;
+    }
+    if (tail_indices.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
+      if (stats != nullptr)
+        ++stats->too_long_chain_candidates;
       continue;
     }
     if (stats != nullptr)
@@ -1885,6 +1899,9 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
       candidate = embedded_tail_chain_opportunity(*blocks, rejection, &stats);
       search.cfg_tail_entry_candidates = stats.entry_candidates;
       search.cfg_tail_valid_chain_candidates = stats.valid_chain_candidates;
+      search.cfg_tail_short_chain_candidates = stats.short_chain_candidates;
+      search.cfg_tail_too_long_chain_candidates = stats.too_long_chain_candidates;
+      search.cfg_tail_broken_chain_candidates = stats.broken_chain_candidates;
       search.cfg_tail_external_entry_rejections = stats.external_entry_rejections;
     }
   }

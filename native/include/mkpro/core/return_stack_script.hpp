@@ -80,6 +80,9 @@ struct ReturnStackIrTailLayoutSearch {
   int extracted_existing_callsite_fragments = 0;
   int cfg_tail_entry_candidates = 0;
   int cfg_tail_valid_chain_candidates = 0;
+  int cfg_tail_short_chain_candidates = 0;
+  int cfg_tail_too_long_chain_candidates = 0;
+  int cfg_tail_broken_chain_candidates = 0;
   int cfg_tail_external_entry_rejections = 0;
   int symbolic_existing_callsite_hints = 0;
   ReturnStackLayoutOpportunityAnalysis analysis;

@@ -674,6 +674,22 @@ void return_stack_script_matches_mk61_strategy_contract() {
   {
     std::vector<IrOp> ops;
     ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(!search.has_opportunity && search.cfg_tail_entry_candidates == 1 &&
+                search.cfg_tail_short_chain_candidates == 1 &&
+                search.cfg_tail_valid_chain_candidates == 0,
+            "IR tail layout scanner should expose one-tail candidates as short CFG chains");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
     ops.push_back(ir_plain(9));
     ops.push_back(ir_plain(8));
     ops.push_back(ir_plain(7));
