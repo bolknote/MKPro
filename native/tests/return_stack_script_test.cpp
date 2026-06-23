@@ -66,6 +66,14 @@ IrOp ir_stop() {
   return op;
 }
 
+IrOp ir_return() {
+  IrOp op;
+  op.kind = IrKind::Return;
+  op.opcode = 0x52;
+  op.meta.mnemonic = "В/О";
+  return op;
+}
+
 IrOp ir_jump(const std::string& target) {
   IrOp op;
   op.kind = IrKind::Jump;
@@ -748,6 +756,29 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "IR tail layout scanner should split internal flow boundaries into CFG tail blocks");
     require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
             "internally split CFG tail chains should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "call_tail"));
+    ops.push_back(ir_label("call_tail"));
+    ops.push_back(ir_call("helper"));
+    ops.push_back(ir_label("after_helper"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("helper"));
+    ops.push_back(ir_return());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized,
+            "IR tail layout scanner should allow a terminal ПП fragment only as the final stop "
+            "tail after scripted returns are consumed");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "terminal stop ПП fragments should remain provable post-layout");
   }
 
   {

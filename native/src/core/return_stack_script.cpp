@@ -300,6 +300,31 @@ std::optional<TerminalJump> terminal_jump_from(const std::vector<MachineItem>& i
   return std::nullopt;
 }
 
+bool terminal_return_from(const std::vector<MachineItem>& items, const MachineLayout& layout,
+                          int start_address) {
+  std::set<int> seen;
+  int address = start_address;
+  for (int steps = 0; steps < machine_cell_count(items) + 1; ++steps) {
+    if (seen.contains(address))
+      return false;
+    seen.insert(address);
+    const auto item_it = layout.item_index_by_address.find(address);
+    if (item_it == layout.item_index_by_address.end())
+      return false;
+    const MachineItem& item = items.at(static_cast<std::size_t>(item_it->second));
+    if (item.kind != MachineItemKind::Op || item.raw)
+      return false;
+    if (item.opcode == 0x52)
+      return true;
+    if (item.opcode == 0x50 || item.opcode == 0x51 || item.opcode == 0x53 ||
+        is_address_taking_opcode(item.opcode) || is_indirect_flow_opcode(item.opcode)) {
+      return false;
+    }
+    ++address;
+  }
+  return false;
+}
+
 bool terminal_stop_from(const std::vector<MachineItem>& items, const MachineLayout& layout,
                         int start_address) {
   std::set<int> seen;
@@ -316,7 +341,14 @@ bool terminal_stop_from(const std::vector<MachineItem>& items, const MachineLayo
       return false;
     if (item.opcode == 0x50)
       return true;
-    if (item.opcode == 0x52 || item.opcode == 0x53 || is_address_taking_opcode(item.opcode) ||
+    if (item.opcode == 0x53) {
+      const std::optional<CallSite> call = call_site_at_address(items, layout, address);
+      if (!call.has_value() || !terminal_return_from(items, layout, call->target_address))
+        return false;
+      address = call->continuation_address;
+      continue;
+    }
+    if (item.opcode == 0x52 || is_address_taking_opcode(item.opcode) ||
         is_indirect_flow_opcode(item.opcode)) {
       return false;
     }
@@ -764,6 +796,12 @@ struct IrCallContinuation {
   std::set<std::string> alias_labels;
 };
 
+struct IrResolvedTailBlock {
+  std::string label;
+  std::vector<IrOp> body;
+  std::set<std::string> moved_labels;
+};
+
 struct ExtractedIrFragments {
   int tail_fragments = 0;
   int existing_callsite_fragments = 0;
@@ -1188,6 +1226,71 @@ std::optional<IrCallContinuation> cfg_call_continuation_block(
   return cfg_non_empty_block_from_label(blocks, by_label, cfg, cursor);
 }
 
+bool cfg_labels_have_only_allowed_predecessors(
+    const IrCfg& cfg, const std::set<std::string>& labels,
+    const std::set<std::string>& allowed_predecessors) {
+  for (const std::string& label : labels) {
+    const std::set<std::string> predecessors =
+        cfg.predecessors.contains(label) ? cfg.predecessors.at(label)
+                                         : std::set<std::string>{};
+    for (const std::string& predecessor : predecessors) {
+      if (!allowed_predecessors.contains(predecessor))
+        return false;
+    }
+  }
+  return true;
+}
+
+std::optional<IrResolvedTailBlock> cfg_resolved_tail_block_from_label(
+    const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
+    const IrCfg& cfg, const std::string& start_label) {
+  const std::optional<IrCallContinuation> resolved =
+      cfg_non_empty_block_from_label(blocks, by_label, cfg, start_label);
+  if (!resolved.has_value())
+    return std::nullopt;
+
+  const IrLabelBlock& block = blocks.at(resolved->block_index);
+  IrResolvedTailBlock tail{
+      .label = block.label,
+      .body = block.body,
+      .moved_labels = resolved->alias_labels,
+  };
+  tail.moved_labels.insert(block.label);
+  if (terminal_jump_target_from_ir_body(tail.body).has_value() ||
+      terminal_stop_from_ir_body(tail.body)) {
+    return tail;
+  }
+
+  const std::optional<std::string> call_target = single_call_block_target(block);
+  if (!call_target.has_value())
+    return std::nullopt;
+  const std::optional<IrCallContinuation> continuation =
+      cfg_call_continuation_block(blocks, by_label, cfg, resolved->block_index, *call_target);
+  if (!continuation.has_value())
+    return std::nullopt;
+
+  const IrLabelBlock& continuation_block = blocks.at(continuation->block_index);
+  std::vector<IrOp> combined = block.body;
+  combined.insert(combined.end(), continuation_block.body.begin(), continuation_block.body.end());
+  if (!terminal_stop_from_ir_body(combined))
+    return std::nullopt;
+
+  std::set<std::string> protected_continuation_labels = continuation->alias_labels;
+  protected_continuation_labels.insert(continuation_block.label);
+  std::set<std::string> allowed_predecessors = continuation->alias_labels;
+  allowed_predecessors.insert(block.label);
+  if (!cfg_labels_have_only_allowed_predecessors(cfg, protected_continuation_labels,
+                                                 allowed_predecessors)) {
+    return std::nullopt;
+  }
+
+  tail.body = std::move(combined);
+  tail.moved_labels.insert(continuation->alias_labels.begin(),
+                           continuation->alias_labels.end());
+  tail.moved_labels.insert(continuation_block.label);
+  return tail;
+}
+
 bool existing_call_chain_has_safe_cfg_entries(
     const IrCfg& cfg, const std::set<std::string>& moved_labels,
     const std::string& first_call_label, const std::string& entry_label,
@@ -1546,33 +1649,44 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
     IrTailChainBrokenReason broken_reason = IrTailChainBrokenReason::None;
     std::string broken_label;
     while (cursor.has_value()) {
-      const std::optional<IrCallContinuation> resolved =
-          cfg_non_empty_block_from_label(blocks, by_label, cfg, *cursor);
-      if (!resolved.has_value() || resolved->block_index == entry_index) {
+      const std::optional<IrResolvedTailBlock> resolved =
+          cfg_resolved_tail_block_from_label(blocks, by_label, cfg, *cursor);
+      if (!resolved.has_value()) {
+        valid_chain = false;
+        const std::optional<IrCallContinuation> raw_block =
+            cfg_non_empty_block_from_label(blocks, by_label, cfg, *cursor);
+        if (raw_block.has_value()) {
+          broken_reason = IrTailChainBrokenReason::NonTerminal;
+          broken_label = blocks.at(raw_block->block_index).label;
+        } else {
+          broken_reason = IrTailChainBrokenReason::Unresolved;
+        }
+        break;
+      }
+      const auto tail_index = by_label.find(resolved->label);
+      if (tail_index == by_label.end() || tail_index->second == entry_index) {
         valid_chain = false;
         broken_reason = IrTailChainBrokenReason::Unresolved;
         break;
       }
-      const IrLabelBlock& tail = blocks.at(resolved->block_index);
-      if (seen_tail_labels.contains(tail.label)) {
+      if (seen_tail_labels.contains(resolved->label)) {
         valid_chain = false;
         broken_reason = IrTailChainBrokenReason::Repeated;
         break;
       }
-      seen_tail_labels.insert(tail.label);
-      moved_labels.insert(tail.label);
-      moved_labels.insert(resolved->alias_labels.begin(), resolved->alias_labels.end());
-      tail_indices.push_back(resolved->block_index);
+      seen_tail_labels.insert(resolved->label);
+      moved_labels.insert(resolved->moved_labels.begin(), resolved->moved_labels.end());
+      tail_indices.push_back(tail_index->second);
 
-      const std::optional<std::string> next = terminal_jump_target_from_ir_body(tail.body);
+      const std::optional<std::string> next = terminal_jump_target_from_ir_body(resolved->body);
       if (next.has_value()) {
         cursor = next;
         continue;
       }
-      if (!terminal_stop_from_ir_body(tail.body)) {
+      if (!terminal_stop_from_ir_body(resolved->body)) {
         valid_chain = false;
         broken_reason = IrTailChainBrokenReason::NonTerminal;
-        broken_label = tail.label;
+        broken_label = resolved->label;
       }
       break;
     }
@@ -1621,15 +1735,23 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
     std::vector<ReturnStackTailBlock> tails;
     tails.reserve(tail_indices.size());
     for (std::size_t index = 0; index < tail_indices.size(); ++index) {
-      const IrLabelBlock& tail = blocks.at(tail_indices.at(index));
-      std::vector<IrOp> body = tail.body;
+      const std::optional<IrResolvedTailBlock> resolved =
+          cfg_resolved_tail_block_from_label(blocks, by_label, cfg,
+                                             blocks.at(tail_indices.at(index)).label);
+      if (!resolved.has_value()) {
+        valid_chain = false;
+        break;
+      }
+      std::vector<IrOp> body = resolved->body;
       if (index + 1U < tail_indices.size())
         body.back().target = blocks.at(tail_indices.at(index + 1U)).label;
       tails.push_back(ReturnStackTailBlock{
-          .label = tail.label,
+          .label = resolved->label,
           .body = std::move(body),
       });
     }
+    if (!valid_chain)
+      continue;
 
     IrTailChainCandidate candidate{
         .opportunity = ReturnStackLayoutOpportunity{
