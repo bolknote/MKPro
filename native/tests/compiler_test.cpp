@@ -4003,8 +4003,9 @@ program CellsSpatial {
           "spatial-hit helper should return a 0/1 hit value");
   require(cells_spatial.listing.find("set marks") != std::string::npos,
           "cells += should lower through bit-set semantics");
-  require(cells_spatial.listing.find("bit_clear mask complement") != std::string::npos,
-          "cells -= should lower through bit-clear semantics");
+  require(cells_spatial.listing.find("bit_not()") != std::string::npos &&
+              cells_spatial.listing.find("bit_and()") != std::string::npos,
+          "cells -= should lower through the TS visible bit_not/bit_and clear sequence");
   require(cells_spatial.listing.find("line_count total") != std::string::npos,
           "cells line_count should lower to a result");
   require(cells_spatial.listing.find("neighbor_count result") != std::string::npos ||
@@ -4892,8 +4893,8 @@ program CoordListUniqueSetup {
     if (step.hex == "B5" && step.comment.has_value() && *step.comment == "random coord store")
       ++unique_indirect_stores;
   }
-  require(unique_preloads == 3,
-          "coord_list random_unique setup should report one generated preload per item");
+  require(unique_preloads == 0,
+          "coord_list random_unique setup should keep generated item preloads internal to setup");
   require(unique_seed_draws == 1, "coord_list random_unique setup should draw one raw random seed");
   require(unique_collision_branches == 1,
           "coord_list random_unique setup should use one compact collision branch");
