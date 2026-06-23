@@ -621,6 +621,32 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("charge1"));
+    ops.push_back(ir_raw_call("charge2"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("charge2"));
+    ops.push_back(ir_raw_call("entry"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized,
+            "IR tail layout scanner should detect raw ПП existing charge chains");
+    require(search.analysis.plan.existing_call_sites == 2 &&
+                search.analysis.plan.paid_call_sites == 0 &&
+                search.analysis.plan.profitable,
+            "raw ПП existing charge chains should remove injected charge cost");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "raw ПП existing charge-chain materialization should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("short_charge1"));
     ops.push_back(ir_call("short_charge2"));
     ops.push_back(ir_label("short_t1"));
