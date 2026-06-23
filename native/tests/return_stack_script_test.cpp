@@ -96,6 +96,13 @@ IrOp ir_call(const std::string& target) {
   return op;
 }
 
+IrOp ir_raw_call(const std::string& target) {
+  IrOp op = ir_plain(0x53);
+  op.target = target;
+  op.meta.mnemonic = "ПП";
+  return op;
+}
+
 IrOp ir_label(const std::string& name) {
   IrOp op;
   op.kind = IrKind::Label;
@@ -850,6 +857,34 @@ void return_stack_script_matches_mk61_strategy_contract() {
                 std::next(prefix_it)->kind == MachineItemKind::Op &&
                 std::next(prefix_it)->opcode == 9,
             "terminal ПП suffix extraction should preserve prefix work before the hidden callsite");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("prefix_raw"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_raw_call("charge2"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("charge2"));
+    ops.push_back(ir_call("entry"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.extracted_existing_callsite_fragments == 1 &&
+                search.symbolic_existing_callsite_hints == 2 && search.has_opportunity &&
+                search.materialized,
+            "IR scanner should extract terminal raw ПП suffixes into CFG callsite blocks");
+    require(search.analysis.plan.existing_call_sites == 2 &&
+                search.analysis.plan.paid_call_sites == 0,
+            "extracted terminal raw ПП suffixes should count as free existing charge sites");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "terminal raw ПП suffix extraction should remain provable post-layout");
   }
 
   {

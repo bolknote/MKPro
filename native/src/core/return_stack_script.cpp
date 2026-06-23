@@ -977,6 +977,12 @@ std::optional<std::string> ir_label_target(const IrOp& op) {
   return *label;
 }
 
+std::optional<std::string> direct_symbolic_call_target(const IrOp& op) {
+  if (op.kind != IrKind::Call && op.opcode != 0x53)
+    return std::nullopt;
+  return ir_label_target(op);
+}
+
 bool ir_op_can_reference_label(const IrOp& op) {
   switch (op.kind) {
   case IrKind::Jump:
@@ -1083,9 +1089,7 @@ bool terminal_call_fragment_candidate(const IrLabelBlock& block) {
   if (block.body.size() < 2U)
     return false;
   const IrOp& terminal = block.body.back();
-  if (terminal.kind != IrKind::Call)
-    return false;
-  if (!ir_label_target(terminal).has_value())
+  if (!direct_symbolic_call_target(terminal).has_value())
     return false;
   return !ir_op_always_transfers_control(block.body.at(block.body.size() - 2U));
 }
@@ -1322,9 +1326,7 @@ std::vector<std::string> symbolic_existing_callsite_hint_targets(
     if (block.body.empty())
       continue;
     const IrOp& tail = block.body.back();
-    if (tail.kind != IrKind::Call)
-      continue;
-    const std::optional<std::string> target = ir_label_target(tail);
+    const std::optional<std::string> target = direct_symbolic_call_target(tail);
     if (!target.has_value())
       continue;
     targets.insert(cfg_canonical_symbolic_callsite_target_label(blocks, by_label, cfg, *target));
@@ -1342,9 +1344,7 @@ std::map<std::string, int> symbolic_existing_callsite_hint_counts_by_target(
     if (block.body.empty())
       continue;
     const IrOp& tail = block.body.back();
-    if (tail.kind != IrKind::Call)
-      continue;
-    const std::optional<std::string> target = ir_label_target(tail);
+    const std::optional<std::string> target = direct_symbolic_call_target(tail);
     if (!target.has_value())
       continue;
     ++counts[cfg_canonical_symbolic_callsite_target_label(blocks, by_label, cfg, *target)];
@@ -1359,7 +1359,7 @@ int count_symbolic_existing_callsite_hints(const std::vector<IrLabelBlock>& bloc
     if (block.body.empty())
       continue;
     const IrOp& tail = block.body.back();
-    if (tail.kind != IrKind::Call || !ir_label_target(tail).has_value())
+    if (!direct_symbolic_call_target(tail).has_value())
       continue;
     ++hints;
   }
@@ -1369,10 +1369,7 @@ int count_symbolic_existing_callsite_hints(const std::vector<IrLabelBlock>& bloc
 std::optional<std::string> single_call_block_target(const IrLabelBlock& block) {
   if (block.body.size() != 1U)
     return std::nullopt;
-  const IrOp& op = block.body.front();
-  if (op.kind != IrKind::Call && op.opcode != 0x53)
-    return std::nullopt;
-  return ir_label_target(op);
+  return direct_symbolic_call_target(block.body.front());
 }
 
 bool noop_return_block(const IrLabelBlock& block) {
