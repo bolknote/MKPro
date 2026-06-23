@@ -33316,6 +33316,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   std::vector<core::passes::AppliedOptimization> post_layout_optimizations;
 
   if (!exact_decimal_series) {
+    const int indirect_flow_rescue_above =
+        (options.aggressive_post_layout_indirect_flow || options.preloaded_indirect_flow)
+            ? 0
+            : reference_indirect_flow_rescue_above(ast, options);
     if (options.return_stack_script) {
       const std::size_t return_stack_budget =
           options.budget.has_value() && *options.budget > 0
@@ -33332,13 +33336,19 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         const core::ReturnStackStartupLayoutPlan& plan = tail_layout.analysis.plan;
         const core::PostLayoutIndirectFlowResult current_overlay =
             core::optimize_post_layout_address_code_overlay(post_layout_items);
+        const core::PostLayoutIndirectFlowResult current_flow =
+            core::optimize_post_layout_indirect_flow(current_overlay.items, pass_options,
+                                                     indirect_flow_rescue_above);
         const core::PostLayoutIndirectFlowResult candidate_script =
             core::optimize_post_layout_return_stack_script(tail_layout.materialized_items);
         const core::PostLayoutIndirectFlowResult candidate_overlay =
             core::optimize_post_layout_address_code_overlay(candidate_script.items);
+        const core::PostLayoutIndirectFlowResult candidate_flow =
+            core::optimize_post_layout_indirect_flow(candidate_overlay.items, pass_options,
+                                                     indirect_flow_rescue_above);
         const bool layout_aware_profitable =
-            core::machine_cell_count(candidate_overlay.items) <
-            core::machine_cell_count(current_overlay.items);
+            core::machine_cell_count(candidate_flow.items) <
+            core::machine_cell_count(current_flow.items);
         if (plan.profitable || layout_aware_profitable) {
           post_layout_items = tail_layout.materialized_items;
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
@@ -33359,6 +33369,22 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         result.diagnostics.push_back(diagnostic(
             DiagnosticSeverity::Note, "return-stack-layout-not-applied",
             tail_layout.rejection_reason));
+        if (tail_layout.extracted_tail_fragments > 0) {
+          result.diagnostics.push_back(diagnostic(
+              DiagnosticSeverity::Note, "return-stack-tail-fragments",
+              "extracted " + std::to_string(tail_layout.extracted_tail_fragments) +
+                  " terminal IR tail fragment" +
+                  (tail_layout.extracted_tail_fragments == 1 ? "" : "s") +
+                  " before profitability/layout proof"));
+        }
+        if (tail_layout.symbolic_existing_callsite_hints > 0) {
+          result.diagnostics.push_back(diagnostic(
+              DiagnosticSeverity::Note, "return-stack-existing-callsite-hints",
+              "found " + std::to_string(tail_layout.symbolic_existing_callsite_hints) +
+                  " symbolic terminal Call/ПП hint" +
+                  (tail_layout.symbolic_existing_callsite_hints == 1 ? "" : "s") +
+                  "; not counted as free charge sites until retargeting is implemented"));
+        }
       }
 
       const core::PostLayoutIndirectFlowResult return_stack_script =
@@ -33406,10 +33432,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       }
     }
 
-    const int indirect_flow_rescue_above =
-        (options.aggressive_post_layout_indirect_flow || options.preloaded_indirect_flow)
-            ? 0
-            : reference_indirect_flow_rescue_above(ast, options);
     const core::PostLayoutIndirectFlowResult post_layout_flow =
         core::optimize_post_layout_indirect_flow(post_layout_items, pass_options,
                                                  indirect_flow_rescue_above);

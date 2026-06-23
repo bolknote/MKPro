@@ -408,6 +408,24 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_plain(8));
+    append(ops, ir_jump_body("t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.extracted_tail_fragments == 1,
+            "IR tail layout scanner should extract terminal fragments from inside labelled blocks");
+  }
+
+
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("prefix"));
     append(ops, ir_jump_body("entry"));
     ops.push_back(ir_label("entry"));

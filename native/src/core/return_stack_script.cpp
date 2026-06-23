@@ -644,6 +644,87 @@ IrCfg build_ir_cfg(const std::vector<IrLabelBlock>& blocks) {
   return cfg;
 }
 
+IrOp synthetic_ir_jump_to_label(const std::string& target) {
+  IrOp op;
+  op.kind = IrKind::Jump;
+  op.opcode = 0x51;
+  op.target = target;
+  op.meta.mnemonic = "БП";
+  op.meta.comment = "return-stack extracted tail fragment";
+  return op;
+}
+
+bool terminal_tail_fragment_candidate(const IrLabelBlock& block) {
+  if (block.body.size() < 3U)
+    return false;
+  const IrOp& terminal = block.body.back();
+  if (terminal.kind == IrKind::Jump) {
+    return ir_label_target(terminal).has_value();
+  }
+  return terminal.kind == IrKind::Stop || terminal.opcode == 0x50;
+}
+
+std::string unique_tail_fragment_label(const std::set<std::string>& labels, int ordinal) {
+  std::string candidate = "__return_stack_tail_fragment_" + std::to_string(ordinal);
+  int suffix = ordinal;
+  while (labels.contains(candidate)) {
+    ++suffix;
+    candidate = "__return_stack_tail_fragment_" + std::to_string(suffix);
+  }
+  return candidate;
+}
+
+int extract_terminal_tail_fragments(std::vector<IrLabelBlock>& blocks) {
+  std::set<std::string> labels;
+  for (const IrLabelBlock& block : blocks)
+    labels.insert(block.label);
+
+  const std::size_t original_count = blocks.size();
+  int extracted = 0;
+  for (std::size_t index = 0; index < original_count; ++index) {
+    IrLabelBlock& block = blocks.at(index);
+    if (!terminal_tail_fragment_candidate(block))
+      continue;
+
+    const std::size_t suffix_start = block.body.size() - 2U;
+    if (suffix_start == 0U)
+      continue;
+    if (ir_op_always_transfers_control(block.body.at(suffix_start - 1U)))
+      continue;
+
+    const std::string fragment_label = unique_tail_fragment_label(labels, extracted);
+    labels.insert(fragment_label);
+
+    std::vector<IrOp> suffix(block.body.begin() + static_cast<std::ptrdiff_t>(suffix_start),
+                             block.body.end());
+    block.body.erase(block.body.begin() + static_cast<std::ptrdiff_t>(suffix_start),
+                     block.body.end());
+    block.body.push_back(synthetic_ir_jump_to_label(fragment_label));
+
+    blocks.push_back(IrLabelBlock{
+        .label = fragment_label,
+        .body = std::move(suffix),
+        .hidden = true,
+    });
+    ++extracted;
+  }
+  return extracted;
+}
+
+int count_symbolic_existing_callsite_hints(const std::vector<IrLabelBlock>& blocks) {
+  int hints = 0;
+  for (std::size_t index = 0; index + 1U < blocks.size(); ++index) {
+    const IrLabelBlock& block = blocks.at(index);
+    if (block.body.empty())
+      continue;
+    const IrOp& tail = block.body.back();
+    if (tail.kind != IrKind::Call || !ir_label_target(tail).has_value())
+      continue;
+    ++hints;
+  }
+  return hints;
+}
+
 std::map<std::string, std::set<std::string>> expected_tail_predecessors(
     const std::vector<IrLabelBlock>& blocks, const IrTailChainCandidate& candidate) {
   std::map<std::string, std::set<std::string>> expected;
@@ -1191,11 +1272,13 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
     const std::vector<IrOp>& ops, const ReturnStackStartupLayoutOptions& options) {
   ReturnStackIrTailLayoutSearch search;
   std::string rejection;
-  const std::optional<std::vector<IrLabelBlock>> blocks = split_label_blocks(ops, rejection);
+  std::optional<std::vector<IrLabelBlock>> blocks = split_label_blocks(ops, rejection);
   if (!blocks.has_value()) {
     search.rejection_reason = rejection;
     return search;
   }
+  search.symbolic_existing_callsite_hints = count_symbolic_existing_callsite_hints(*blocks);
+  search.extracted_tail_fragments = extract_terminal_tail_fragments(*blocks);
   const std::optional<IrTailChainCandidate> candidate =
       embedded_tail_chain_opportunity(*blocks, rejection);
   if (!candidate.has_value()) {
