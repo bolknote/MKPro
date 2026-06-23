@@ -1239,13 +1239,44 @@ std::vector<std::vector<std::size_t>> bounded_noop_call_subgroups(
   std::vector<std::vector<std::size_t>> result;
   if (call_indices.size() < 2U)
     return result;
+
+  constexpr std::size_t kMaxNoopSubgroups = 256U;
   const std::size_t max_size =
       std::min(call_indices.size(), static_cast<std::size_t>(kMaxScriptReturns));
+  std::set<std::vector<std::size_t>> seen;
+  auto add_group = [&](std::vector<std::size_t> group) {
+    if (result.size() >= kMaxNoopSubgroups)
+      return;
+    if (seen.insert(group).second)
+      result.push_back(std::move(group));
+  };
+
   for (std::size_t size = max_size; size >= 2U; --size) {
     for (std::size_t start = 0; start + size <= call_indices.size(); ++start) {
-      result.emplace_back(call_indices.begin() + static_cast<std::ptrdiff_t>(start),
-                          call_indices.begin() + static_cast<std::ptrdiff_t>(start + size));
+      add_group(std::vector<std::size_t>(
+          call_indices.begin() + static_cast<std::ptrdiff_t>(start),
+          call_indices.begin() + static_cast<std::ptrdiff_t>(start + size)));
     }
+
+    std::vector<std::size_t> current;
+    auto choose = [&](auto& self, std::size_t offset) -> void {
+      if (result.size() >= kMaxNoopSubgroups)
+        return;
+      if (current.size() == size) {
+        add_group(current);
+        return;
+      }
+      const std::size_t remaining = size - current.size();
+      for (std::size_t index = offset; index + remaining <= call_indices.size(); ++index) {
+        current.push_back(call_indices.at(index));
+        self(self, index + 1U);
+        current.pop_back();
+        if (result.size() >= kMaxNoopSubgroups)
+          return;
+      }
+    };
+    choose(choose, 0U);
+
     if (size == 2U)
       break;
   }
