@@ -616,6 +616,8 @@ void return_stack_script_matches_mk61_strategy_contract() {
                 search.materialized,
             "IR scanner should extract terminal ПП suffixes into CFG callsite blocks");
     require(search.symbolic_existing_callsite_hints == 2 &&
+                search.symbolic_existing_callsite_target_groups == 2 &&
+                search.symbolic_existing_callsite_largest_target_group == 1 &&
                 search.symbolic_existing_callsite_target_labels ==
                     std::vector<std::string>({"charge2", "entry"}),
             "IR scanner should expose symbolic terminal ПП hint target labels before retargeting");
@@ -634,6 +636,31 @@ void return_stack_script_matches_mk61_strategy_contract() {
                 std::next(prefix_it)->kind == MachineItemKind::Op &&
                 std::next(prefix_it)->opcode == 9,
             "terminal ПП suffix extraction should preserve prefix work before the hidden callsite");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("first"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_call("shared_helper"));
+    ops.push_back(ir_label("after_first"));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("second"));
+    ops.push_back(ir_plain(2));
+    ops.push_back(ir_call("shared_helper"));
+    ops.push_back(ir_label("after_second"));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("shared_helper"));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.symbolic_existing_callsite_hints == 2 &&
+                search.symbolic_existing_callsite_target_groups == 1 &&
+                search.symbolic_existing_callsite_largest_target_group == 2 &&
+                search.symbolic_existing_callsite_target_labels ==
+                    std::vector<std::string>({"shared_helper"}),
+            "IR scanner should group symbolic terminal ПП hints by shared target label");
   }
 
   {

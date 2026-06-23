@@ -1105,6 +1105,24 @@ std::vector<std::string> symbolic_existing_callsite_hint_targets(
   return std::vector<std::string>(targets.begin(), targets.end());
 }
 
+std::map<std::string, int> symbolic_existing_callsite_hint_counts_by_target(
+    const std::vector<IrLabelBlock>& blocks) {
+  std::map<std::string, int> counts;
+  for (std::size_t index = 0; index + 1U < blocks.size(); ++index) {
+    const IrLabelBlock& block = blocks.at(index);
+    if (block.body.empty())
+      continue;
+    const IrOp& tail = block.body.back();
+    if (tail.kind != IrKind::Call)
+      continue;
+    const std::optional<std::string> target = ir_label_target(tail);
+    if (!target.has_value())
+      continue;
+    ++counts[*target];
+  }
+  return counts;
+}
+
 int count_symbolic_existing_callsite_hints(const std::vector<IrLabelBlock>& blocks) {
   int hints = 0;
   for (std::size_t index = 0; index + 1U < blocks.size(); ++index) {
@@ -2009,6 +2027,15 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
   search.symbolic_existing_callsite_hints = count_symbolic_existing_callsite_hints(*blocks);
   search.symbolic_existing_callsite_target_labels =
       symbolic_existing_callsite_hint_targets(*blocks);
+  const std::map<std::string, int> symbolic_hint_groups =
+      symbolic_existing_callsite_hint_counts_by_target(*blocks);
+  search.symbolic_existing_callsite_target_groups =
+      static_cast<int>(symbolic_hint_groups.size());
+  for (const auto& [target, count] : symbolic_hint_groups) {
+    (void)target;
+    search.symbolic_existing_callsite_largest_target_group =
+        std::max(search.symbolic_existing_callsite_largest_target_group, count);
+  }
   std::optional<IrTailChainCandidate> candidate =
       existing_call_chain_opportunity(*blocks, rejection);
   const bool unsafe_existing_call_chain =

@@ -34084,6 +34084,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               "found " + std::to_string(tail_layout.symbolic_existing_callsite_hints) +
                   " symbolic terminal Call/ПП hint" +
                   (tail_layout.symbolic_existing_callsite_hints == 1 ? "" : "s") +
+                  "; target groups=" +
+                  std::to_string(tail_layout.symbolic_existing_callsite_target_groups) +
+                  ", largest group=" +
+                  std::to_string(tail_layout.symbolic_existing_callsite_largest_target_group) +
                   target_labels +
                   "; not counted as free charge sites until retargeting is implemented"));
         }
