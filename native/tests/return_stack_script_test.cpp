@@ -647,6 +647,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
             {27, 35, 43, 51, 59}, 6, layout,
             {.size_rescue = true, .max_padding_cells = 4});
     require(allocation.allocated && allocation.padding_cells == 3 &&
+                allocation.fixed_point_rounds == 1 && allocation.size_rescue_only &&
                 allocation.dispatch.layout_proved,
             "dirty dispatch allocator should append safe executable cells up to a dirty target");
   }

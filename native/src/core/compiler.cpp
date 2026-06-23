@@ -33432,7 +33432,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                   std::to_string(dirty_allocator_padding) +
                   " executable padding cell" +
                   (dirty_allocator_padding == 1 ? "" : "s") +
-                  "; automatic dirty dispatch insertion is still disabled"));
+                  " in size-rescue-only mode; automatic dirty dispatch insertion is still "
+                  "disabled"));
         } else if (!dirty_dispatch_proved) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-not-applied",

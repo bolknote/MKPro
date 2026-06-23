@@ -1649,36 +1649,68 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
     return allocation;
   }
 
-  const int padding = max_target + 1 - current_cells;
-  if (padding > options.max_padding_cells) {
+  if (!options.allow_append_padding) {
     allocation.dispatch = std::move(existing);
-    allocation.rejection_reason = "dirty return-stack dispatch allocator would need " +
-                                  std::to_string(padding) + " padding cells, above limit " +
-                                  std::to_string(options.max_padding_cells);
+    allocation.rejection_reason =
+        "dirty return-stack dispatch allocator append-padding search is disabled";
     return allocation;
   }
 
   std::vector<MachineItem> candidate = layout_items;
-  for (int index = 0; index < padding; ++index) {
-    MachineItem pad = MachineItem::op(0x10, "+");
-    pad.comment = "return-stack dirty dispatch safe padding";
-    candidate.push_back(std::move(pad));
+  int total_padding = 0;
+  const int max_rounds = std::max(1, options.max_fixed_point_rounds);
+  for (int round = 0; round < max_rounds; ++round) {
+    const int candidate_cells = machine_cell_count(candidate);
+    if (max_target < candidate_cells) {
+      allocation.dispatch = plan_dirty_return_stack_dispatch(stack, return_count, candidate, options);
+      allocation.rejection_reason =
+          "dirty return-stack dispatch allocator cannot repair an unsafe existing target cell "
+          "without shifting layout";
+      return allocation;
+    }
+
+    const int padding = max_target + 1 - candidate_cells;
+    if (total_padding + padding > options.max_padding_cells) {
+      allocation.dispatch = std::move(existing);
+      allocation.rejection_reason = "dirty return-stack dispatch allocator would need " +
+                                    std::to_string(total_padding + padding) +
+                                    " padding cells, above limit " +
+                                    std::to_string(options.max_padding_cells);
+      return allocation;
+    }
+
+    for (int index = 0; index < padding; ++index) {
+      MachineItem pad = MachineItem::op(0x10, "+");
+      pad.comment = "return-stack dirty dispatch safe padding";
+      candidate.push_back(std::move(pad));
+    }
+    total_padding += padding;
+
+    DirtyReturnStackDispatchPlan padded =
+        plan_dirty_return_stack_dispatch(stack, return_count, candidate, options);
+    if (padded.enabled && padded.layout_proved) {
+      allocation.dispatch = std::move(padded);
+      allocation.items = std::move(candidate);
+      allocation.padding_cells = total_padding;
+      allocation.fixed_point_rounds = round + 1;
+      allocation.allocated = true;
+      allocation.size_rescue_only = true;
+      return allocation;
+    }
+
+    if (padding == 0) {
+      allocation.dispatch = std::move(padded);
+      allocation.rejection_reason = allocation.dispatch.rejection_reason.empty()
+                                        ? "dirty return-stack dispatch padding failed proof"
+                                        : allocation.dispatch.rejection_reason;
+      return allocation;
+    }
   }
 
-  DirtyReturnStackDispatchPlan padded =
-      plan_dirty_return_stack_dispatch(std::move(stack), return_count, candidate, options);
-  if (!padded.enabled || !padded.layout_proved) {
-    allocation.dispatch = std::move(padded);
-    allocation.rejection_reason = allocation.dispatch.rejection_reason.empty()
-                                      ? "dirty return-stack dispatch padding failed proof"
-                                      : allocation.dispatch.rejection_reason;
-    return allocation;
-  }
-
-  allocation.dispatch = std::move(padded);
-  allocation.items = std::move(candidate);
-  allocation.padding_cells = padding;
-  allocation.allocated = true;
+  allocation.dispatch = plan_dirty_return_stack_dispatch(stack, return_count, candidate, options);
+  allocation.rejection_reason = "dirty return-stack dispatch allocator did not converge within " +
+                                std::to_string(max_rounds) + " fixed-point round" +
+                                (max_rounds == 1 ? "" : "s");
   return allocation;
 }
 

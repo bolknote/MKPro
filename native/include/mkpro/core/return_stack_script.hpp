@@ -116,7 +116,9 @@ struct DirtyReturnStackDispatchAllocationPlan {
   DirtyReturnStackDispatchPlan dispatch;
   std::vector<MachineItem> items;
   int padding_cells = 0;
+  int fixed_point_rounds = 0;
   bool allocated = false;
+  bool size_rescue_only = true;
   std::string rejection_reason;
 };
 
@@ -125,6 +127,8 @@ struct DirtyReturnStackDispatchOptions {
   int min_dirty_targets = 1;
   bool expect_fallthrough = true;
   int max_padding_cells = 12;
+  int max_fixed_point_rounds = 4;
+  bool allow_append_padding = true;
 };
 
 std::vector<int> mk61_return_stack_after_call(std::vector<int> stack,
