@@ -34583,7 +34583,26 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       core::analyze_return_stack_ir_tail_layout(
           raise_machine_to_ir(best.items),
           core::ReturnStackStartupLayoutOptions{.size_rescue = needs_size_rescue});
-  if (return_stack_script_scan.possible || return_stack_tail_layout_scan.has_opportunity) {
+  bool dirty_dispatch_allocator_signal = false;
+  if (needs_size_rescue) {
+    const std::vector<std::vector<int>> dirty_dispatch_stacks = {
+        {19, 27, 35, 43, 51},
+        {27, 35, 43, 51, 59},
+        {35, 43, 51, 59, 67},
+        {43, 51, 59, 67, 75},
+    };
+    for (const std::vector<int>& stack : dirty_dispatch_stacks) {
+      const core::DirtyReturnStackDispatchAllocationPlan allocation =
+          core::allocate_dirty_return_stack_dispatch_layout(
+              stack, 6, best.items, core::DirtyReturnStackDispatchOptions{.size_rescue = true});
+      if (allocation.allocated && allocation.dispatch.layout_proved) {
+        dirty_dispatch_allocator_signal = true;
+        break;
+      }
+    }
+  }
+  if (return_stack_script_scan.possible || return_stack_tail_layout_scan.has_opportunity ||
+      dirty_dispatch_allocator_signal) {
     add_candidate(
         [](CompileOptions& candidate_options) { candidate_options.return_stack_script = true; },
         "return-stack-script",
