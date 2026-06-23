@@ -1078,11 +1078,8 @@ IrOp synthetic_ir_jump_to_label(const std::string& target) {
 bool terminal_tail_fragment_candidate(const IrLabelBlock& block) {
   if (block.body.size() < 3U)
     return false;
-  const IrOp& terminal = block.body.back();
-  if (terminal.kind == IrKind::Jump) {
-    return ir_label_target(terminal).has_value();
-  }
-  return terminal.kind == IrKind::Stop || terminal.opcode == 0x50;
+  return terminal_jump_target_from_ir_body(block.body).has_value() ||
+         terminal_stop_from_ir_body(block.body);
 }
 
 std::optional<std::size_t> terminal_tail_fragment_suffix_start(

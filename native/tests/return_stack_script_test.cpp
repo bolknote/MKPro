@@ -1511,6 +1511,26 @@ void return_stack_script_matches_mk61_strategy_contract() {
     ops.push_back(ir_plain(9));
     ops.push_back(ir_plain(8));
     ops.push_back(ir_plain(7));
+    ops.push_back(ir_raw_jump("t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.extracted_tail_fragments == 1 && search.has_opportunity && search.materialized,
+            "IR tail layout scanner should extract terminal raw БП suffixes from inside labelled "
+            "blocks");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "terminal raw БП suffix extraction should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_plain(8));
+    ops.push_back(ir_plain(7));
     append(ops, ir_jump_body("t1"));
     ops.push_back(ir_label("alternate"));
     ops.push_back(ir_plain(6));
