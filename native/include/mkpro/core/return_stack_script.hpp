@@ -92,6 +92,20 @@ struct ReturnStackScriptOpportunityScan {
   std::string rejection_reason;
 };
 
+struct ReturnStackPostLayoutPipelineReport {
+  int input_cells = 0;
+  int return_stack_script_applied = 0;
+  int address_overlay_applied = 0;
+  int indirect_flow_applied = 0;
+  int final_cells = 0;
+};
+
+struct ReturnStackPostLayoutPipelineComparison {
+  ReturnStackPostLayoutPipelineReport current;
+  ReturnStackPostLayoutPipelineReport candidate;
+  bool candidate_better = false;
+};
+
 struct DirtyReturnStackDispatchCellProof {
   int dirty_return_address = 0;
   int actual_pc = 0;
@@ -168,5 +182,11 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
 
 PostLayoutIndirectFlowResult
 optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items);
+ReturnStackPostLayoutPipelineReport measure_return_stack_post_layout_pipeline(
+    const std::vector<MachineItem>& items, const CompileOptions& options,
+    int indirect_flow_rescue_above = 105);
+ReturnStackPostLayoutPipelineComparison compare_return_stack_post_layout_pipeline(
+    const std::vector<MachineItem>& current, const std::vector<MachineItem>& candidate,
+    const CompileOptions& options, int indirect_flow_rescue_above = 105);
 
 } // namespace mkpro::core

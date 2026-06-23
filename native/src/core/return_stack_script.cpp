@@ -1922,4 +1922,40 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   };
 }
 
+ReturnStackPostLayoutPipelineReport measure_return_stack_post_layout_pipeline(
+    const std::vector<MachineItem>& items, const CompileOptions& options,
+    int indirect_flow_rescue_above) {
+  ReturnStackPostLayoutPipelineReport report{
+      .input_cells = machine_cell_count(items),
+  };
+
+  const PostLayoutIndirectFlowResult script =
+      optimize_post_layout_return_stack_script(items);
+  report.return_stack_script_applied = script.applied;
+
+  const PostLayoutIndirectFlowResult overlay =
+      optimize_post_layout_address_code_overlay(script.items);
+  report.address_overlay_applied = overlay.applied;
+
+  const PostLayoutIndirectFlowResult flow =
+      optimize_post_layout_indirect_flow(overlay.items, options, indirect_flow_rescue_above);
+  report.indirect_flow_applied = flow.applied;
+  report.final_cells = machine_cell_count(flow.items);
+  return report;
+}
+
+ReturnStackPostLayoutPipelineComparison compare_return_stack_post_layout_pipeline(
+    const std::vector<MachineItem>& current, const std::vector<MachineItem>& candidate,
+    const CompileOptions& options, int indirect_flow_rescue_above) {
+  ReturnStackPostLayoutPipelineComparison comparison{
+      .current =
+          measure_return_stack_post_layout_pipeline(current, options, indirect_flow_rescue_above),
+      .candidate =
+          measure_return_stack_post_layout_pipeline(candidate, options, indirect_flow_rescue_above),
+  };
+  comparison.candidate_better =
+      comparison.candidate.final_cells < comparison.current.final_cells;
+  return comparison;
+}
+
 } // namespace mkpro::core

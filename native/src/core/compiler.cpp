@@ -33989,21 +33989,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               });
       if (tail_layout.materialized) {
         const core::ReturnStackStartupLayoutPlan& plan = tail_layout.analysis.plan;
-        const core::PostLayoutIndirectFlowResult current_overlay =
-            core::optimize_post_layout_address_code_overlay(post_layout_items);
-        const core::PostLayoutIndirectFlowResult current_flow =
-            core::optimize_post_layout_indirect_flow(current_overlay.items, pass_options,
-                                                     indirect_flow_rescue_above);
-        const core::PostLayoutIndirectFlowResult candidate_script =
-            core::optimize_post_layout_return_stack_script(tail_layout.materialized_items);
-        const core::PostLayoutIndirectFlowResult candidate_overlay =
-            core::optimize_post_layout_address_code_overlay(candidate_script.items);
-        const core::PostLayoutIndirectFlowResult candidate_flow =
-            core::optimize_post_layout_indirect_flow(candidate_overlay.items, pass_options,
-                                                     indirect_flow_rescue_above);
+        const core::ReturnStackPostLayoutPipelineComparison pipeline =
+            core::compare_return_stack_post_layout_pipeline(
+                post_layout_items, tail_layout.materialized_items, pass_options,
+                indirect_flow_rescue_above);
         const bool layout_aware_profitable =
-            core::machine_cell_count(candidate_flow.items) <
-            core::machine_cell_count(current_flow.items);
+            pipeline.candidate_better;
         if (plan.profitable || layout_aware_profitable) {
           post_layout_items = tail_layout.materialized_items;
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
@@ -34012,7 +34003,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                         " IR tail block" + (plan.transitions == 1 ? "" : "s") +
                         " as a proven ПП return-stack charge chain before post-layout rewrite" +
                         (layout_aware_profitable && !plan.profitable
-                             ? " after layout-aware overlay comparison."
+                             ? " after layout-aware full-pipeline comparison."
                              : "."),
           });
         } else if (options.analysis && !tail_layout.rejection_reason.empty()) {

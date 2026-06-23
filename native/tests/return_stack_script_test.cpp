@@ -727,6 +727,19 @@ void return_stack_script_matches_mk61_strategy_contract() {
   }
 
   {
+    const std::vector<MachineItem> program = three_step_script_program();
+    const core::ReturnStackPostLayoutPipelineComparison comparison =
+        core::compare_return_stack_post_layout_pipeline(program, program, CompileOptions{});
+    require(comparison.current.return_stack_script_applied == 3 &&
+                comparison.candidate.return_stack_script_applied == 3,
+            "layout-aware pipeline comparison should run return-stack-script on both baseline "
+            "and materialized candidates");
+    require(comparison.current.final_cells == comparison.candidate.final_cells &&
+                !comparison.candidate_better,
+            "identical layouts should tie after the full return-stack-script/overlay/flow pipeline");
+  }
+
+  {
     std::vector<MachineItem> ambiguous = three_step_script_program();
     ambiguous.push_back(MachineItem::label("external"));
     append(ambiguous, jump("t2"));
