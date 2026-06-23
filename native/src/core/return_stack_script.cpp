@@ -1535,13 +1535,16 @@ std::optional<IrTailChainCandidate> existing_call_chain_opportunity(
           .source_address = -1,
       });
 
-      const auto next_it = by_label.find(*target);
-      if (next_it == by_label.end()) {
+      const std::optional<IrCallContinuation> target_block =
+          cfg_non_empty_block_from_label(blocks, by_label, cfg, *target);
+      if (!target_block.has_value()) {
         valid = false;
         break;
       }
-      if (!single_call_block_target(blocks.at(next_it->second)).has_value()) {
-        const std::size_t entry_index = next_it->second;
+      moved_labels.insert(target_block->alias_labels.begin(),
+                          target_block->alias_labels.end());
+      if (!single_call_block_target(blocks.at(target_block->block_index)).has_value()) {
+        const std::size_t entry_index = target_block->block_index;
         if (tails.size() < 2U || tails.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
           valid = false;
           break;
@@ -1579,7 +1582,7 @@ std::optional<IrTailChainCandidate> existing_call_chain_opportunity(
           best_candidate = std::move(candidate);
         break;
       }
-      call_index = next_it->second;
+      call_index = target_block->block_index;
     }
     if (!valid && rejection_reason.empty())
       rejection_reason = "return-stack existing ПП chain candidate was incomplete";
