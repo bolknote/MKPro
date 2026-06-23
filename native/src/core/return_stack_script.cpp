@@ -3451,11 +3451,11 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   std::vector<MachineItem> current = items;
   int applied = 0;
   int scripts = 0;
-  int dirty_allocator_padding = 0;
-  int dirty_allocator_rounds = 0;
-  int dirty_allocator_dirty_returns = 0;
-  std::set<int> dirty_allocator_return_addresses;
-  std::set<int> dirty_allocator_targets;
+  int dirty_dispatch_padding = 0;
+  int dirty_dispatch_rounds = 0;
+  int dirty_dispatch_dirty_returns = 0;
+  std::set<int> dirty_dispatch_return_addresses;
+  std::set<int> dirty_dispatch_targets;
 
   for (int round = 0; round < kMaxRewriteRounds; ++round) {
     const std::optional<ScriptPlan> plan = find_best_script_plan(current);
@@ -3463,11 +3463,11 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       break;
     const MachineLayout current_layout = machine_layout(current);
     std::vector<MachineItem> candidate = apply_script_plan(current, *plan);
-    int candidate_dirty_allocator_padding = 0;
-    int candidate_dirty_allocator_rounds = 0;
-    int candidate_dirty_allocator_dirty_returns = 0;
-    std::set<int> candidate_dirty_allocator_return_addresses;
-    std::set<int> candidate_dirty_allocator_targets;
+    int candidate_dirty_dispatch_padding = 0;
+    int candidate_dirty_dispatch_rounds = 0;
+    int candidate_dirty_dispatch_dirty_returns = 0;
+    std::set<int> candidate_dirty_dispatch_return_addresses;
+    std::set<int> candidate_dirty_dispatch_targets;
     std::optional<DirtyReturnStackDispatchPlan> candidate_dirty_proof =
         proved_dirty_overflow_script_dispatch(current_layout, candidate, *plan);
     if (plan->dirty_jump.has_value() && !candidate_dirty_proof.has_value()) {
@@ -3476,38 +3476,38 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       if (!allocation.has_value())
         break;
       candidate = allocation->items;
-      candidate_dirty_allocator_padding = allocation->padding_cells;
-      candidate_dirty_allocator_rounds = allocation->fixed_point_rounds;
-      candidate_dirty_allocator_dirty_returns =
+      candidate_dirty_dispatch_padding = allocation->padding_cells;
+      candidate_dirty_dispatch_rounds = allocation->fixed_point_rounds;
+      candidate_dirty_dispatch_dirty_returns =
           static_cast<int>(allocation->dispatch.dirty_return_addresses.size());
       for (const int return_address : allocation->dispatch.dirty_return_addresses)
-        candidate_dirty_allocator_return_addresses.insert(return_address);
+        candidate_dirty_dispatch_return_addresses.insert(return_address);
       for (const int target : allocation->dispatch.dirty_targets)
-        candidate_dirty_allocator_targets.insert(target);
+        candidate_dirty_dispatch_targets.insert(target);
       candidate_dirty_proof =
           proved_dirty_overflow_script_dispatch(current_layout, candidate, *plan);
       if (!candidate_dirty_proof.has_value())
         break;
     }
-    if (candidate_dirty_proof.has_value() && candidate_dirty_allocator_dirty_returns == 0) {
-      candidate_dirty_allocator_dirty_returns =
+    if (candidate_dirty_proof.has_value() && candidate_dirty_dispatch_dirty_returns == 0) {
+      candidate_dirty_dispatch_dirty_returns =
           static_cast<int>(candidate_dirty_proof->dirty_return_addresses.size());
       for (const int return_address : candidate_dirty_proof->dirty_return_addresses)
-        candidate_dirty_allocator_return_addresses.insert(return_address);
+        candidate_dirty_dispatch_return_addresses.insert(return_address);
       for (const int target : candidate_dirty_proof->dirty_targets)
-        candidate_dirty_allocator_targets.insert(target);
+        candidate_dirty_dispatch_targets.insert(target);
     }
     if (machine_cell_count(candidate) >= machine_cell_count(current))
       break;
     if (!return_stack_candidate_beats_address_overlay(current, candidate))
       break;
-    dirty_allocator_padding += candidate_dirty_allocator_padding;
-    dirty_allocator_rounds += candidate_dirty_allocator_rounds;
-    dirty_allocator_dirty_returns += candidate_dirty_allocator_dirty_returns;
-    dirty_allocator_return_addresses.insert(candidate_dirty_allocator_return_addresses.begin(),
-                                            candidate_dirty_allocator_return_addresses.end());
-    dirty_allocator_targets.insert(candidate_dirty_allocator_targets.begin(),
-                                   candidate_dirty_allocator_targets.end());
+    dirty_dispatch_padding += candidate_dirty_dispatch_padding;
+    dirty_dispatch_rounds += candidate_dirty_dispatch_rounds;
+    dirty_dispatch_dirty_returns += candidate_dirty_dispatch_dirty_returns;
+    dirty_dispatch_return_addresses.insert(candidate_dirty_dispatch_return_addresses.begin(),
+                                            candidate_dirty_dispatch_return_addresses.end());
+    dirty_dispatch_targets.insert(candidate_dirty_dispatch_targets.begin(),
+                                   candidate_dirty_dispatch_targets.end());
     applied += script_plan_rewrite_count(*plan);
     ++scripts;
     current = std::move(candidate);
@@ -3520,40 +3520,40 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   }
 
   std::vector<passes::AppliedOptimization> optimizations;
-  if (dirty_allocator_dirty_returns > 0) {
+  if (dirty_dispatch_dirty_returns > 0) {
     std::string detail;
-    if (dirty_allocator_padding > 0) {
-      detail = "Inserted " + std::to_string(dirty_allocator_padding) +
+    if (dirty_dispatch_padding > 0) {
+      detail = "Inserted " + std::to_string(dirty_dispatch_padding) +
                " executable dirty-dispatch cell" +
-               (dirty_allocator_padding == 1 ? "" : "s") + " across " +
-               std::to_string(dirty_allocator_rounds) + " fixed-point repair round" +
-               (dirty_allocator_rounds == 1 ? "" : "s");
+               (dirty_dispatch_padding == 1 ? "" : "s") + " across " +
+               std::to_string(dirty_dispatch_rounds) + " fixed-point repair round" +
+               (dirty_dispatch_rounds == 1 ? "" : "s");
     } else {
       detail = "Proved existing executable dirty-dispatch cell";
-      detail += dirty_allocator_targets.size() == 1U ? "" : "s";
+      detail += dirty_dispatch_targets.size() == 1U ? "" : "s";
     }
     detail += " before rewriting dirty overflow continuation jumps";
-    if (dirty_allocator_dirty_returns > 0) {
-      detail += " covering " + std::to_string(dirty_allocator_dirty_returns) +
+    if (dirty_dispatch_dirty_returns > 0) {
+      detail += " covering " + std::to_string(dirty_dispatch_dirty_returns) +
                 " dirty return" +
-                (dirty_allocator_dirty_returns == 1 ? "" : "s");
+                (dirty_dispatch_dirty_returns == 1 ? "" : "s");
     }
-    if (!dirty_allocator_targets.empty()) {
+    if (!dirty_dispatch_targets.empty()) {
       detail += " for dirty target cell";
-      detail += dirty_allocator_targets.size() == 1U ? " " : "s ";
+      detail += dirty_dispatch_targets.size() == 1U ? " " : "s ";
       bool first = true;
-      for (const int target : dirty_allocator_targets) {
+      for (const int target : dirty_dispatch_targets) {
         if (!first)
           detail += ",";
         detail += std::to_string(target);
         first = false;
       }
     }
-    if (!dirty_allocator_return_addresses.empty()) {
+    if (!dirty_dispatch_return_addresses.empty()) {
       detail += " from dirty return address";
-      detail += dirty_allocator_return_addresses.size() == 1U ? " " : "es ";
+      detail += dirty_dispatch_return_addresses.size() == 1U ? " " : "es ";
       bool first = true;
-      for (const int return_address : dirty_allocator_return_addresses) {
+      for (const int return_address : dirty_dispatch_return_addresses) {
         if (!first)
           detail += ",";
         detail += std::to_string(return_address);
@@ -3562,7 +3562,7 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
     }
     detail += ".";
     optimizations.push_back(passes::AppliedOptimization{
-        .name = dirty_allocator_padding > 0 ? "return-stack-dirty-dispatch-allocator"
+        .name = dirty_dispatch_padding > 0 ? "return-stack-dirty-dispatch-allocator"
                                             : "return-stack-dirty-dispatch",
         .detail = std::move(detail),
     });
