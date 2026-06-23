@@ -3449,6 +3449,7 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   int scripts = 0;
   int dirty_allocator_padding = 0;
   int dirty_allocator_rounds = 0;
+  int dirty_allocator_dirty_returns = 0;
   std::set<int> dirty_allocator_return_addresses;
   std::set<int> dirty_allocator_targets;
 
@@ -3460,6 +3461,7 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
     std::vector<MachineItem> candidate = apply_script_plan(current, *plan);
     int candidate_dirty_allocator_padding = 0;
     int candidate_dirty_allocator_rounds = 0;
+    int candidate_dirty_allocator_dirty_returns = 0;
     std::set<int> candidate_dirty_allocator_return_addresses;
     std::set<int> candidate_dirty_allocator_targets;
     if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan)) {
@@ -3470,6 +3472,8 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       candidate = allocation->items;
       candidate_dirty_allocator_padding = allocation->padding_cells;
       candidate_dirty_allocator_rounds = allocation->fixed_point_rounds;
+      candidate_dirty_allocator_dirty_returns =
+          static_cast<int>(allocation->dispatch.dirty_return_addresses.size());
       for (const int return_address : allocation->dispatch.dirty_return_addresses)
         candidate_dirty_allocator_return_addresses.insert(return_address);
       for (const int target : allocation->dispatch.dirty_targets)
@@ -3483,6 +3487,7 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       break;
     dirty_allocator_padding += candidate_dirty_allocator_padding;
     dirty_allocator_rounds += candidate_dirty_allocator_rounds;
+    dirty_allocator_dirty_returns += candidate_dirty_allocator_dirty_returns;
     dirty_allocator_return_addresses.insert(candidate_dirty_allocator_return_addresses.begin(),
                                             candidate_dirty_allocator_return_addresses.end());
     dirty_allocator_targets.insert(candidate_dirty_allocator_targets.begin(),
@@ -3507,6 +3512,11 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
         std::to_string(dirty_allocator_rounds) + " fixed-point repair round" +
         (dirty_allocator_rounds == 1 ? "" : "s") +
         " before rewriting dirty overflow continuation jumps";
+    if (dirty_allocator_dirty_returns > 0) {
+      detail += " covering " + std::to_string(dirty_allocator_dirty_returns) +
+                " dirty return" +
+                (dirty_allocator_dirty_returns == 1 ? "" : "s");
+    }
     if (!dirty_allocator_targets.empty()) {
       detail += " for dirty target cell";
       detail += dirty_allocator_targets.size() == 1U ? " " : "s ";

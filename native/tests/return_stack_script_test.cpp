@@ -2229,6 +2229,9 @@ void return_stack_script_matches_mk61_strategy_contract() {
     require(optimization_detail_contains(result, "return-stack-dirty-dispatch-allocator",
                                          "dirty return address 77"),
             "dirty-overflow repair metadata should expose the dirty stored return address");
+    require(optimization_detail_contains(result, "return-stack-dirty-dispatch-allocator",
+                                         "covering 1 dirty return"),
+            "dirty-overflow repair metadata should expose how many dirty returns were covered");
     require(count_opcode(result.items, 0x52) == 6,
             "dirty-overflow repair should still emit six В/О commands");
     const core::DirtyReturnStackDispatchPlan dirty =
