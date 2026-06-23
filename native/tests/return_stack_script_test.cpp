@@ -1726,7 +1726,9 @@ void return_stack_script_matches_mk61_strategy_contract() {
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
     require(!search.materialized && search.cfg_tail_external_entry_rejections >= 1 &&
-                search.cfg_tail_external_entry_labels == std::vector<std::string>({"t2"}),
+                search.cfg_tail_external_entry_labels == std::vector<std::string>({"t2"}) &&
+                search.cfg_tail_external_predecessor_labels ==
+                    std::vector<std::string>({"external"}),
             "embedded tail-chain scanner should treat semantic conditional jump targets as "
             "external CFG entries into a candidate tail chain");
   }

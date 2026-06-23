@@ -787,6 +787,7 @@ struct IrTailChainSearchStats {
   std::vector<std::string> nonterminal_break_labels;
   int external_entry_rejections = 0;
   std::vector<std::string> external_entry_labels;
+  std::vector<std::string> external_predecessor_labels;
 };
 
 enum class IrTailChainBrokenReason {
@@ -2192,7 +2193,8 @@ std::set<std::string> collapsed_tail_predecessors(
 
 bool tail_chain_has_only_internal_tail_entries(
     const std::vector<IrLabelBlock>& blocks, const IrTailChainCandidate& candidate,
-    const IrCfg& cfg, std::string& rejection_reason, std::string* rejected_tail_label = nullptr) {
+    const IrCfg& cfg, std::string& rejection_reason, std::string* rejected_tail_label = nullptr,
+    std::vector<std::string>* rejected_predecessor_labels = nullptr) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
   const std::map<std::string, std::set<std::string>> expected =
       expected_tail_predecessors(blocks, candidate);
@@ -2211,6 +2213,12 @@ bool tail_chain_has_only_internal_tail_entries(
     if (actual_predecessors != expected_predecessors || expected_predecessors.size() != 1U) {
       if (rejected_tail_label != nullptr)
         *rejected_tail_label = tail.label;
+      if (rejected_predecessor_labels != nullptr) {
+        for (const std::string& predecessor : actual_predecessors) {
+          if (!expected_predecessors.contains(predecessor))
+            rejected_predecessor_labels->push_back(predecessor);
+        }
+      }
       rejection_reason = "return-stack IR tail layout requires CFG predecessors of tail block " +
                          tail.label + " to be exactly the internal tail-chain predecessor";
       return false;
@@ -2364,14 +2372,24 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
     };
 
     std::string rejected_tail_label;
+    std::vector<std::string> rejected_predecessor_labels;
     if (!tail_chain_has_only_internal_tail_entries(blocks, candidate, cfg, rejection_reason,
-                                                   &rejected_tail_label)) {
+                                                   &rejected_tail_label,
+                                                   &rejected_predecessor_labels)) {
       if (stats != nullptr && rejection_reason.find("CFG predecessors") != std::string::npos) {
         ++stats->external_entry_rejections;
         if (!rejected_tail_label.empty() && stats->external_entry_labels.size() < 5U &&
             std::find(stats->external_entry_labels.begin(), stats->external_entry_labels.end(),
                       rejected_tail_label) == stats->external_entry_labels.end()) {
           stats->external_entry_labels.push_back(rejected_tail_label);
+        }
+        for (const std::string& predecessor_label : rejected_predecessor_labels) {
+          if (!predecessor_label.empty() && stats->external_predecessor_labels.size() < 5U &&
+              std::find(stats->external_predecessor_labels.begin(),
+                        stats->external_predecessor_labels.end(),
+                        predecessor_label) == stats->external_predecessor_labels.end()) {
+            stats->external_predecessor_labels.push_back(predecessor_label);
+          }
         }
       }
       continue;
@@ -2956,6 +2974,7 @@ IrTailChainCandidateCollection collect_return_stack_ir_tail_candidates(
   collection.search.cfg_tail_nonterminal_break_labels = stats.nonterminal_break_labels;
   collection.search.cfg_tail_external_entry_rejections = stats.external_entry_rejections;
   collection.search.cfg_tail_external_entry_labels = stats.external_entry_labels;
+  collection.search.cfg_tail_external_predecessor_labels = stats.external_predecessor_labels;
 
   if (collection.candidates.empty())
     collection.search.rejection_reason = remembered_rejection;

@@ -91,6 +91,7 @@ struct ReturnStackIrTailLayoutSearch {
   std::vector<std::string> cfg_tail_nonterminal_break_labels;
   int cfg_tail_external_entry_rejections = 0;
   std::vector<std::string> cfg_tail_external_entry_labels;
+  std::vector<std::string> cfg_tail_external_predecessor_labels;
   int symbolic_existing_callsite_hints = 0;
   int symbolic_existing_callsite_target_groups = 0;
   int symbolic_existing_callsite_largest_target_group = 0;
