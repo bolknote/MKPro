@@ -2459,50 +2459,59 @@ ReturnStackStartupLayoutPlan build_return_stack_startup_layout(
   return materialize_return_stack_layout(analysis);
 }
 
-ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
-    const std::vector<IrOp>& ops, const ReturnStackStartupLayoutOptions& options) {
+struct IrTailChainCandidateMaterialization {
+  IrTailChainCandidate candidate;
+  std::vector<IrLabelBlock> blocks;
+};
+
+struct IrTailChainCandidateCollection {
   ReturnStackIrTailLayoutSearch search;
+  std::vector<IrTailChainCandidateMaterialization> candidates;
+};
+
+IrTailChainCandidateCollection collect_return_stack_ir_tail_candidates(
+    const std::vector<IrOp>& ops) {
+  IrTailChainCandidateCollection collection;
   std::string rejection;
   std::optional<std::vector<IrLabelBlock>> blocks = split_label_blocks(ops, rejection);
   if (!blocks.has_value()) {
-    search.rejection_reason = rejection;
-    return search;
+    collection.search.rejection_reason = rejection;
+    return collection;
   }
-  search.symbolic_existing_callsite_hints = count_symbolic_existing_callsite_hints(*blocks);
-  search.symbolic_existing_callsite_target_labels =
+  collection.search.symbolic_existing_callsite_hints =
+      count_symbolic_existing_callsite_hints(*blocks);
+  collection.search.symbolic_existing_callsite_target_labels =
       symbolic_existing_callsite_hint_targets(*blocks);
   const std::map<std::string, int> symbolic_hint_groups =
       symbolic_existing_callsite_hint_counts_by_target(*blocks);
-  search.symbolic_existing_callsite_target_groups =
+  collection.search.symbolic_existing_callsite_target_groups =
       static_cast<int>(symbolic_hint_groups.size());
   for (const auto& [target, count] : symbolic_hint_groups) {
     (void)target;
-    search.symbolic_existing_callsite_largest_target_group =
-        std::max(search.symbolic_existing_callsite_largest_target_group, count);
+    collection.search.symbolic_existing_callsite_largest_target_group =
+        std::max(collection.search.symbolic_existing_callsite_largest_target_group, count);
   }
 
-  std::optional<IrTailChainCandidate> candidate;
-  std::vector<IrLabelBlock> candidate_blocks;
-  auto consider_candidate = [&](std::optional<IrTailChainCandidate> next,
+  auto consider_candidate = [&](std::optional<IrTailChainCandidate> candidate,
                                 const std::vector<IrLabelBlock>& source_blocks) {
-    if (!next.has_value())
+    if (!candidate.has_value())
       return;
-    if (return_stack_candidate_better(candidate, *next)) {
-      candidate = std::move(*next);
-      candidate_blocks = source_blocks;
-    }
+    collection.candidates.push_back(IrTailChainCandidateMaterialization{
+        .candidate = std::move(*candidate),
+        .blocks = source_blocks,
+    });
   };
 
   std::string remembered_rejection;
   std::string direct_rejection;
   consider_candidate(existing_call_chain_opportunity(*blocks, direct_rejection), *blocks);
-  if (!direct_rejection.empty())
-    remember_return_stack_rejection(remembered_rejection, direct_rejection);
+  remember_return_stack_rejection(remembered_rejection, direct_rejection);
 
   std::vector<IrLabelBlock> extracted_blocks = *blocks;
   const ExtractedIrFragments extracted = extract_terminal_tail_fragments(extracted_blocks);
-  search.extracted_tail_fragments = extracted.tail_fragments;
-  search.extracted_existing_callsite_fragments = extracted.existing_callsite_fragments;
+  collection.search.extracted_tail_fragments = extracted.tail_fragments;
+  collection.search.extracted_existing_callsite_fragments =
+      extracted.existing_callsite_fragments;
   if (extracted.total() > 0) {
     std::string extracted_rejection;
     consider_candidate(existing_call_chain_opportunity(extracted_blocks, extracted_rejection),
@@ -2527,23 +2536,29 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
                                                      &stats),
                      extracted_blocks);
   remember_return_stack_rejection(remembered_rejection, embedded_rejection);
-  search.cfg_tail_entry_candidates = stats.entry_candidates;
-  search.cfg_tail_valid_chain_candidates = stats.valid_chain_candidates;
-  search.cfg_tail_short_chain_candidates = stats.short_chain_candidates;
-  search.cfg_tail_too_long_chain_candidates = stats.too_long_chain_candidates;
-  search.cfg_tail_broken_chain_candidates = stats.broken_chain_candidates;
-  search.cfg_tail_unresolved_chain_candidates = stats.unresolved_chain_candidates;
-  search.cfg_tail_repeated_chain_candidates = stats.repeated_chain_candidates;
-  search.cfg_tail_nonterminal_chain_candidates = stats.nonterminal_chain_candidates;
-  search.cfg_tail_nonterminal_break_labels = stats.nonterminal_break_labels;
-  search.cfg_tail_external_entry_rejections = stats.external_entry_rejections;
+  collection.search.cfg_tail_entry_candidates = stats.entry_candidates;
+  collection.search.cfg_tail_valid_chain_candidates = stats.valid_chain_candidates;
+  collection.search.cfg_tail_short_chain_candidates = stats.short_chain_candidates;
+  collection.search.cfg_tail_too_long_chain_candidates = stats.too_long_chain_candidates;
+  collection.search.cfg_tail_broken_chain_candidates = stats.broken_chain_candidates;
+  collection.search.cfg_tail_unresolved_chain_candidates = stats.unresolved_chain_candidates;
+  collection.search.cfg_tail_repeated_chain_candidates = stats.repeated_chain_candidates;
+  collection.search.cfg_tail_nonterminal_chain_candidates = stats.nonterminal_chain_candidates;
+  collection.search.cfg_tail_nonterminal_break_labels = stats.nonterminal_break_labels;
+  collection.search.cfg_tail_external_entry_rejections = stats.external_entry_rejections;
 
-  if (!candidate.has_value()) {
-    search.rejection_reason = remembered_rejection;
-    return search;
-  }
+  if (collection.candidates.empty())
+    collection.search.rejection_reason = remembered_rejection;
+  return collection;
+}
+
+ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_candidate(
+    ReturnStackIrTailLayoutSearch search,
+    const IrTailChainCandidateMaterialization& materialization,
+    const ReturnStackStartupLayoutOptions& options) {
   search.has_opportunity = true;
-  search.analysis = analyze_return_stack_layout_opportunity(candidate->opportunity, options);
+  search.analysis = analyze_return_stack_layout_opportunity(
+      materialization.candidate.opportunity, options);
   const ReturnStackStartupLayoutPlan& plan = search.analysis.plan;
   const bool structurally_proved = plan.tail_order_proved && plan.one_shot_proved &&
                                    plan.no_backward_charge_jumps &&
@@ -2551,12 +2566,104 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
                                    plan.unique_entry_after_charge;
   if (structurally_proved) {
     search.materialized = true;
-    search.materialized_items =
-        materialize_embedded_tail_chain_layout(candidate_blocks, *candidate, search.analysis);
+    search.materialized_items = materialize_embedded_tail_chain_layout(
+        materialization.blocks, materialization.candidate, search.analysis);
   }
   if (!search.analysis.plan.rejection_reason.empty())
     search.rejection_reason = search.analysis.plan.rejection_reason;
   return search;
+}
+
+std::optional<std::size_t> strongest_return_stack_ir_candidate_index(
+    const std::vector<IrTailChainCandidateMaterialization>& candidates) {
+  std::optional<std::size_t> best_index;
+  std::optional<IrTailChainCandidate> best_candidate;
+  for (std::size_t index = 0; index < candidates.size(); ++index) {
+    if (return_stack_candidate_better(best_candidate, candidates.at(index).candidate)) {
+      best_candidate = candidates.at(index).candidate;
+      best_index = index;
+    }
+  }
+  return best_index;
+}
+
+ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
+    const std::vector<IrOp>& ops, const ReturnStackStartupLayoutOptions& options) {
+  const IrTailChainCandidateCollection collection =
+      collect_return_stack_ir_tail_candidates(ops);
+  const std::optional<std::size_t> best_index =
+      strongest_return_stack_ir_candidate_index(collection.candidates);
+  if (!best_index.has_value())
+    return collection.search;
+  return analyze_return_stack_ir_tail_candidate(
+      collection.search, collection.candidates.at(*best_index), options);
+}
+
+ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
+    const std::vector<IrOp>& ops, const std::vector<MachineItem>& current_items,
+    const CompileOptions& compile_options, const ReturnStackStartupLayoutOptions& options,
+    int indirect_flow_rescue_above) {
+  const IrTailChainCandidateCollection collection =
+      collect_return_stack_ir_tail_candidates(ops);
+  if (collection.candidates.empty())
+    return collection.search;
+
+  const ReturnStackPostLayoutPipelineReport current_pipeline =
+      measure_return_stack_post_layout_pipeline(current_items, compile_options,
+                                                indirect_flow_rescue_above);
+  std::optional<ReturnStackIrTailLayoutSearch> best_search;
+  std::optional<ReturnStackIrTailLayoutSearch> best_fallback_search;
+  std::optional<IrTailChainCandidate> best_candidate;
+  std::optional<IrTailChainCandidate> best_fallback_candidate;
+  int best_final_cells = 0;
+  int best_fallback_final_cells = 0;
+
+  for (const IrTailChainCandidateMaterialization& candidate : collection.candidates) {
+    ReturnStackIrTailLayoutSearch candidate_search = analyze_return_stack_ir_tail_candidate(
+        collection.search, candidate, options);
+    if (!candidate_search.materialized)
+      continue;
+
+    const ReturnStackPostLayoutPipelineReport candidate_pipeline =
+        measure_return_stack_post_layout_pipeline(candidate_search.materialized_items,
+                                                  compile_options,
+                                                  indirect_flow_rescue_above);
+    const bool eligible = candidate_search.analysis.plan.profitable ||
+                          candidate_pipeline.final_cells < current_pipeline.final_cells;
+    auto candidate_wins_tie = [&](const std::optional<IrTailChainCandidate>& current) {
+      return return_stack_candidate_better(current, candidate.candidate);
+    };
+
+    if (!best_fallback_search.has_value() ||
+        candidate_pipeline.final_cells < best_fallback_final_cells ||
+        (candidate_pipeline.final_cells == best_fallback_final_cells &&
+         candidate_wins_tie(best_fallback_candidate))) {
+      best_fallback_search = candidate_search;
+      best_fallback_candidate = candidate.candidate;
+      best_fallback_final_cells = candidate_pipeline.final_cells;
+    }
+
+    if (!eligible)
+      continue;
+    if (!best_search.has_value() || candidate_pipeline.final_cells < best_final_cells ||
+        (candidate_pipeline.final_cells == best_final_cells && candidate_wins_tie(best_candidate))) {
+      best_search = std::move(candidate_search);
+      best_candidate = candidate.candidate;
+      best_final_cells = candidate_pipeline.final_cells;
+    }
+  }
+
+  if (best_search.has_value())
+    return *best_search;
+  if (best_fallback_search.has_value())
+    return *best_fallback_search;
+
+  const std::optional<std::size_t> best_index =
+      strongest_return_stack_ir_candidate_index(collection.candidates);
+  if (!best_index.has_value())
+    return collection.search;
+  return analyze_return_stack_ir_tail_candidate(
+      collection.search, collection.candidates.at(*best_index), options);
 }
 
 ReturnStackScriptOpportunityScan scan_return_stack_script_opportunity(

@@ -33982,11 +33982,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       const bool return_stack_needs_size_rescue =
           core::machine_cell_count(post_layout_items) > static_cast<int>(return_stack_budget);
       const core::ReturnStackIrTailLayoutSearch tail_layout =
-          core::analyze_return_stack_ir_tail_layout(
-              raise_machine_to_ir(post_layout_items),
+          core::analyze_return_stack_ir_tail_layout_with_pipeline(
+              raise_machine_to_ir(post_layout_items), post_layout_items, pass_options,
               core::ReturnStackStartupLayoutOptions{
                   .size_rescue = return_stack_needs_size_rescue,
-              });
+              },
+              indirect_flow_rescue_above);
       if (tail_layout.materialized) {
         const core::ReturnStackStartupLayoutPlan& plan = tail_layout.analysis.plan;
         const core::ReturnStackPostLayoutPipelineComparison pipeline =

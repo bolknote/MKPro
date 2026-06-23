@@ -179,6 +179,11 @@ ReturnStackStartupLayoutPlan build_return_stack_startup_layout(
 ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
     const std::vector<IrOp>& ops,
     const ReturnStackStartupLayoutOptions& options = {});
+ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
+    const std::vector<IrOp>& ops, const std::vector<MachineItem>& current_items,
+    const CompileOptions& compile_options,
+    const ReturnStackStartupLayoutOptions& options = {},
+    int indirect_flow_rescue_above = 105);
 ReturnStackScriptOpportunityScan scan_return_stack_script_opportunity(
     const std::vector<MachineItem>& items);
 std::string explain_return_stack_script_rejection(const std::vector<MachineItem>& items);
