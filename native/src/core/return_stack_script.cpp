@@ -810,6 +810,10 @@ struct ExtractedIrFragments {
   int total() const {
     return tail_fragments + existing_callsite_fragments;
   }
+
+  int rewrites() const {
+    return total() + reused_existing_tail_fragments;
+  }
 };
 
 
@@ -2899,7 +2903,7 @@ IrTailChainCandidateCollection collect_return_stack_ir_tail_candidates(
       extracted.reused_existing_tail_fragments;
   collection.search.extracted_existing_callsite_fragments =
       extracted.existing_callsite_fragments;
-  if (extracted.total() > 0) {
+  if (extracted.rewrites() > 0) {
     std::string extracted_rejection;
     consider_candidate(existing_call_chain_opportunity(extracted_blocks, extracted_rejection),
                        extracted_blocks);

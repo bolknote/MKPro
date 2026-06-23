@@ -1513,6 +1513,34 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("charge1"));
+    ops.push_back(ir_call("charge2"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(7));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("charge2"));
+    ops.push_back(ir_call("entry"));
+    ops.push_back(ir_label("t2"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_plain(7));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.reused_existing_tail_fragments == 1 &&
+                search.extracted_tail_fragments == 0 &&
+                search.has_opportunity && search.materialized &&
+                search.analysis.plan.existing_call_sites == 2 &&
+                search.analysis.plan.paid_call_sites == 0 &&
+                search.analysis.plan.profitable,
+            "IR tail layout scanner should rescan existing-call chains after rewrite-only "
+            "whole-tail reuse");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("entry"));
     append(ops, ir_jump_body("body"));
     ops.push_back(ir_label("body"));
