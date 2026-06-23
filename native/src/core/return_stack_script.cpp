@@ -831,6 +831,18 @@ bool return_stack_candidate_better(const std::optional<IrTailChainCandidate>& cu
   return candidate.entry_block_index < current->entry_block_index;
 }
 
+void remember_return_stack_rejection(std::string& remembered,
+                                     const std::string& candidate) {
+  if (candidate.empty())
+    return;
+  const bool remembered_external =
+      remembered.find("external CFG entry") != std::string::npos;
+  const bool candidate_external =
+      candidate.find("external CFG entry") != std::string::npos;
+  if (remembered.empty() || (!remembered_external && candidate_external))
+    remembered = candidate;
+}
+
 std::string unique_synthetic_entry_label(const std::set<std::string>& labels) {
   std::string candidate = "__return_stack_synthetic_entry";
   int suffix = 0;
@@ -2470,40 +2482,36 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
   }
   std::optional<IrTailChainCandidate> candidate =
       existing_call_chain_opportunity(*blocks, rejection);
-  const bool unsafe_existing_call_chain =
-      !candidate.has_value() && rejection.find("external CFG entry") != std::string::npos;
-  if (!candidate.has_value() && !unsafe_existing_call_chain) {
+  std::string remembered_rejection = rejection;
+  if (!candidate.has_value()) {
     const ExtractedIrFragments extracted = extract_terminal_tail_fragments(*blocks);
     search.extracted_tail_fragments = extracted.tail_fragments;
     search.extracted_existing_callsite_fragments = extracted.existing_callsite_fragments;
     if (extracted.total() > 0) {
       std::string extracted_rejection;
       candidate = existing_call_chain_opportunity(*blocks, extracted_rejection);
-      if (!candidate.has_value() && extracted_rejection.find("external CFG entry") !=
-                                        std::string::npos) {
-        rejection = extracted_rejection;
-      }
+      if (!candidate.has_value())
+        remember_return_stack_rejection(remembered_rejection, extracted_rejection);
     }
-    if (!candidate.has_value() && rejection.find("external CFG entry") == std::string::npos) {
+    if (!candidate.has_value()) {
       std::string retarget_rejection;
       candidate = same_target_call_group_opportunity(*blocks, retarget_rejection);
-      if (!candidate.has_value() &&
-          retarget_rejection.find("external CFG entry") != std::string::npos) {
-        rejection = retarget_rejection;
-      }
+      if (!candidate.has_value())
+        remember_return_stack_rejection(remembered_rejection, retarget_rejection);
     }
-    if (!candidate.has_value() && rejection.find("external CFG entry") == std::string::npos) {
+    if (!candidate.has_value()) {
       std::string noop_retarget_rejection;
       candidate = same_target_noop_helper_call_group_opportunity(*blocks,
                                                                  noop_retarget_rejection);
-      if (!candidate.has_value() &&
-          noop_retarget_rejection.find("external CFG entry") != std::string::npos) {
-        rejection = noop_retarget_rejection;
-      }
+      if (!candidate.has_value())
+        remember_return_stack_rejection(remembered_rejection, noop_retarget_rejection);
     }
-    if (!candidate.has_value() && rejection.find("external CFG entry") == std::string::npos) {
+    if (!candidate.has_value()) {
       IrTailChainSearchStats stats;
-      candidate = embedded_tail_chain_opportunity(*blocks, rejection, &stats);
+      std::string embedded_rejection;
+      candidate = embedded_tail_chain_opportunity(*blocks, embedded_rejection, &stats);
+      if (!candidate.has_value())
+        remember_return_stack_rejection(remembered_rejection, embedded_rejection);
       search.cfg_tail_entry_candidates = stats.entry_candidates;
       search.cfg_tail_valid_chain_candidates = stats.valid_chain_candidates;
       search.cfg_tail_short_chain_candidates = stats.short_chain_candidates;
@@ -2517,7 +2525,7 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
     }
   }
   if (!candidate.has_value()) {
-    search.rejection_reason = rejection;
+    search.rejection_reason = remembered_rejection;
     return search;
   }
   search.has_opportunity = true;

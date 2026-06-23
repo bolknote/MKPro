@@ -641,6 +641,42 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("external"));
+    append(ops, ir_jump_body("bad_t1"));
+    ops.push_back(ir_label("bad_charge1"));
+    ops.push_back(ir_call("bad_charge2"));
+    ops.push_back(ir_label("bad_t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("bad_charge2"));
+    ops.push_back(ir_call("bad_entry"));
+    ops.push_back(ir_label("bad_t2"));
+    append(ops, direct_tail(2, "bad_t1"));
+    ops.push_back(ir_label("bad_entry"));
+    append(ops, ir_jump_body("bad_t2"));
+    ops.push_back(ir_label("good_charge1"));
+    ops.push_back(ir_call("good_entry"));
+    ops.push_back(ir_label("good_t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("good_charge2"));
+    ops.push_back(ir_call("good_entry"));
+    ops.push_back(ir_label("good_t2"));
+    append(ops, direct_tail(2, "good_t1"));
+    ops.push_back(ir_label("good_entry"));
+    append(ops, ir_jump_body("good_t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized &&
+                search.analysis.plan.existing_call_sites == 2 &&
+                search.analysis.plan.transitions == 2,
+            "unsafe existing ПП CFG candidates should not block later independent safe "
+            "retargeting candidates");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("prefix"));
     ops.push_back(ir_plain(9));
     ops.push_back(ir_call("charge2"));
