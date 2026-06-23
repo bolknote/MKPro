@@ -77,6 +77,7 @@ struct ReturnStackIrTailLayoutSearch {
   bool has_opportunity = false;
   bool materialized = false;
   int extracted_tail_fragments = 0;
+  int rewritten_tail_fragments = 0;
   int reused_existing_tail_fragments = 0;
   int extracted_existing_callsite_fragments = 0;
   int cfg_tail_entry_candidates = 0;

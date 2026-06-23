@@ -34918,13 +34918,23 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         result.diagnostics.push_back(diagnostic(
             DiagnosticSeverity::Note, "return-stack-layout-not-applied",
             tail_layout.rejection_reason));
-        if (tail_layout.extracted_tail_fragments > 0) {
+        if (tail_layout.rewritten_tail_fragments > 0) {
+          std::string detail =
+              "rewrote " + std::to_string(tail_layout.rewritten_tail_fragments) +
+              " terminal IR tail suffix" +
+              (tail_layout.rewritten_tail_fragments == 1 ? "" : "es") +
+              " into " + std::to_string(tail_layout.extracted_tail_fragments) +
+              " extracted fragment" +
+              (tail_layout.extracted_tail_fragments == 1 ? "" : "s");
+          if (tail_layout.reused_existing_tail_fragments > 0) {
+            detail += " and reused " +
+                      std::to_string(tail_layout.reused_existing_tail_fragments) +
+                      " existing whole-tail fragment" +
+                      (tail_layout.reused_existing_tail_fragments == 1 ? "" : "s");
+          }
+          detail += " before profitability/layout proof";
           result.diagnostics.push_back(diagnostic(
-              DiagnosticSeverity::Note, "return-stack-tail-fragments",
-              "extracted " + std::to_string(tail_layout.extracted_tail_fragments) +
-                  " terminal IR tail fragment" +
-                  (tail_layout.extracted_tail_fragments == 1 ? "" : "s") +
-                  " before profitability/layout proof"));
+              DiagnosticSeverity::Note, "return-stack-tail-fragments", detail));
           if (!tail_layout.materialized) {
             std::string nonterminal_labels;
             if (!tail_layout.cfg_tail_nonterminal_break_labels.empty()) {

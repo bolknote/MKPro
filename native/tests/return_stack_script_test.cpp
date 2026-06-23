@@ -1731,7 +1731,8 @@ void return_stack_script_matches_mk61_strategy_contract() {
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
     require(search.reused_existing_tail_fragments == 1 &&
-                search.extracted_tail_fragments == 1,
+                search.extracted_tail_fragments == 1 &&
+                search.rewritten_tail_fragments >= 2,
             "IR tail layout scanner should reuse whole existing tail blocks instead of "
             "duplicating longer common suffixes");
   }
@@ -1756,6 +1757,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
         core::analyze_return_stack_ir_tail_layout(ops);
     require(search.reused_existing_tail_fragments == 1 &&
                 search.extracted_tail_fragments == 0 &&
+                search.rewritten_tail_fragments == 1 &&
                 search.has_opportunity && search.materialized &&
                 search.analysis.plan.existing_call_sites == 2 &&
                 search.analysis.plan.paid_call_sites == 0 &&
@@ -1855,7 +1857,8 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(search.extracted_tail_fragments == 1 && search.has_opportunity && search.materialized,
+    require(search.extracted_tail_fragments == 1 && search.rewritten_tail_fragments == 1 &&
+                search.has_opportunity && search.materialized,
             "IR tail layout scanner should extract terminal suffixes from inside labelled blocks");
     const auto fragment_it =
         std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
@@ -1899,7 +1902,8 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(search.extracted_tail_fragments == 1 && search.has_opportunity && search.materialized,
+    require(search.extracted_tail_fragments == 1 && search.rewritten_tail_fragments == 1 &&
+                search.has_opportunity && search.materialized,
             "IR tail layout scanner should extract terminal raw БП suffixes from inside labelled "
             "blocks");
     require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
@@ -1923,7 +1927,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(search.extracted_tail_fragments == 1,
+    require(search.extracted_tail_fragments == 1 && search.rewritten_tail_fragments == 2,
             "IR tail layout scanner should materialize identical terminal suffix bodies once");
   }
 
@@ -1953,7 +1957,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(search.extracted_tail_fragments == 1,
+    require(search.extracted_tail_fragments == 1 && search.rewritten_tail_fragments == 2,
             "IR tail layout scanner should deduplicate semantically identical suffixes even when "
             "comments differ");
   }
@@ -1980,7 +1984,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(search.extracted_tail_fragments == 2,
+    require(search.extracted_tail_fragments == 2 && search.rewritten_tail_fragments == 3,
             "IR tail layout scanner should prefer longer common terminal suffixes when they "
             "are shared by multiple blocks");
   }
