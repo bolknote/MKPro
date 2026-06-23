@@ -1365,6 +1365,41 @@ DirtyReturnStackDispatchCellProof prove_dirty_dispatch_cell(
   return proof;
 }
 
+MachineItem dirty_dispatch_safe_padding_cell() {
+  MachineItem pad = MachineItem::op(0x10, "+");
+  pad.comment = "return-stack dirty dispatch safe padding";
+  return pad;
+}
+
+bool layout_has_numeric_address_targets(const std::vector<MachineItem>& items) {
+  return std::any_of(items.begin(), items.end(), [](const MachineItem& item) {
+    return item.kind == MachineItemKind::Address && std::holds_alternative<int>(item.target);
+  });
+}
+
+std::optional<int> insertion_index_preserving_labels_at_address(
+    const std::vector<MachineItem>& items, const MachineLayout& layout, int address) {
+  const std::optional<int> item_index = item_index_for_address(layout, address);
+  if (!item_index.has_value())
+    return std::nullopt;
+
+  int insertion_index = *item_index;
+  while (insertion_index > 0 &&
+         items.at(static_cast<std::size_t>(insertion_index - 1)).kind == MachineItemKind::Label) {
+    --insertion_index;
+  }
+  return insertion_index;
+}
+
+std::optional<DirtyReturnStackDispatchCellProof> first_unsafe_dirty_dispatch_cell(
+    const DirtyReturnStackDispatchPlan& plan) {
+  for (const DirtyReturnStackDispatchCellProof& proof : plan.cell_proofs) {
+    if (!proof.safe)
+      return proof;
+  }
+  return std::nullopt;
+}
+
 } // namespace
 
 std::vector<int> mk61_return_stack_after_call(std::vector<int> stack,
@@ -1797,38 +1832,46 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
     return allocation;
   }
 
-  const int current_cells = machine_cell_count(layout_items);
-  if (max_target < current_cells) {
-    allocation.dispatch = std::move(existing);
-    allocation.rejection_reason =
-        "dirty return-stack dispatch allocator cannot repair an unsafe existing target cell "
-        "without shifting layout";
-    return allocation;
-  }
-
-  if (!options.allow_append_padding) {
-    allocation.dispatch = std::move(existing);
-    allocation.rejection_reason =
-        "dirty return-stack dispatch allocator append-padding search is disabled";
-    return allocation;
-  }
-
   std::vector<MachineItem> candidate = layout_items;
   int total_padding = 0;
   const int max_rounds = std::max(1, options.max_fixed_point_rounds);
   for (int round = 0; round < max_rounds; ++round) {
-    const int candidate_cells = machine_cell_count(candidate);
-    if (max_target < candidate_cells) {
-      allocation.dispatch = plan_dirty_return_stack_dispatch(stack, return_count, candidate, options);
-      allocation.rejection_reason =
-          "dirty return-stack dispatch allocator cannot repair an unsafe existing target cell "
-          "without shifting layout";
+    DirtyReturnStackDispatchPlan current =
+        plan_dirty_return_stack_dispatch(stack, return_count, candidate, options);
+    if (current.enabled && current.layout_proved) {
+      allocation.dispatch = std::move(current);
+      allocation.items = std::move(candidate);
+      allocation.padding_cells = total_padding;
+      allocation.fixed_point_rounds = round;
+      allocation.allocated = true;
+      allocation.size_rescue_only = true;
+      allocation.control_flow_rewrite_enabled = false;
       return allocation;
     }
 
-    const int padding = max_target + 1 - candidate_cells;
+    const std::optional<DirtyReturnStackDispatchCellProof> unsafe =
+        first_unsafe_dirty_dispatch_cell(current);
+    if (!unsafe.has_value()) {
+      allocation.dispatch = std::move(current);
+      allocation.rejection_reason = allocation.dispatch.rejection_reason.empty()
+                                        ? "dirty return-stack dispatch allocator found no unsafe "
+                                          "cell to repair"
+                                        : allocation.dispatch.rejection_reason;
+      return allocation;
+    }
+
+    const int candidate_cells = machine_cell_count(candidate);
+    const int target = unsafe->actual_pc;
+    if (target < 0 || target > 104) {
+      allocation.dispatch = std::move(current);
+      allocation.rejection_reason =
+          "dirty return-stack dispatch allocator target is outside official 00..A4 cells";
+      return allocation;
+    }
+
+    const int padding = target >= candidate_cells ? target + 1 - candidate_cells : 1;
     if (total_padding + padding > options.max_padding_cells) {
-      allocation.dispatch = std::move(existing);
+      allocation.dispatch = std::move(current);
       allocation.rejection_reason = "dirty return-stack dispatch allocator would need " +
                                     std::to_string(total_padding + padding) +
                                     " padding cells, above limit " +
@@ -1836,36 +1879,49 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
       return allocation;
     }
 
-    for (int index = 0; index < padding; ++index) {
-      MachineItem pad = MachineItem::op(0x10, "+");
-      pad.comment = "return-stack dirty dispatch safe padding";
-      candidate.push_back(std::move(pad));
-    }
-    total_padding += padding;
-
-    DirtyReturnStackDispatchPlan padded =
-        plan_dirty_return_stack_dispatch(stack, return_count, candidate, options);
-    if (padded.enabled && padded.layout_proved) {
-      allocation.dispatch = std::move(padded);
-      allocation.items = std::move(candidate);
-      allocation.padding_cells = total_padding;
-      allocation.fixed_point_rounds = round + 1;
-      allocation.allocated = true;
-      allocation.size_rescue_only = true;
-      allocation.control_flow_rewrite_enabled = false;
-      return allocation;
+    if (target >= candidate_cells) {
+      if (!options.allow_append_padding) {
+        allocation.dispatch = std::move(current);
+        allocation.rejection_reason =
+            "dirty return-stack dispatch allocator append-padding search is disabled";
+        return allocation;
+      }
+      for (int index = 0; index < padding; ++index)
+        candidate.push_back(dirty_dispatch_safe_padding_cell());
+      total_padding += padding;
+      continue;
     }
 
-    if (padding == 0) {
-      allocation.dispatch = std::move(padded);
-      allocation.rejection_reason = allocation.dispatch.rejection_reason.empty()
-                                        ? "dirty return-stack dispatch padding failed proof"
-                                        : allocation.dispatch.rejection_reason;
+    if (layout_has_numeric_address_targets(candidate)) {
+      allocation.dispatch = std::move(current);
+      allocation.rejection_reason =
+          "dirty return-stack dispatch allocator cannot shift layouts with numeric address operands";
       return allocation;
     }
+    const MachineLayout candidate_layout = machine_layout(candidate);
+    const std::optional<int> insertion_index =
+        insertion_index_preserving_labels_at_address(candidate, candidate_layout, target);
+    if (!insertion_index.has_value()) {
+      allocation.dispatch = std::move(current);
+      allocation.rejection_reason =
+          "dirty return-stack dispatch allocator could not find an insertion point for unsafe "
+          "dirty target";
+      return allocation;
+    }
+    candidate.insert(candidate.begin() + *insertion_index, dirty_dispatch_safe_padding_cell());
+    total_padding += 1;
   }
 
   allocation.dispatch = plan_dirty_return_stack_dispatch(stack, return_count, candidate, options);
+  if (allocation.dispatch.enabled && allocation.dispatch.layout_proved) {
+    allocation.items = std::move(candidate);
+    allocation.padding_cells = total_padding;
+    allocation.fixed_point_rounds = max_rounds;
+    allocation.allocated = true;
+    allocation.size_rescue_only = true;
+    allocation.control_flow_rewrite_enabled = false;
+    return allocation;
+  }
   allocation.rejection_reason = "dirty return-stack dispatch allocator did not converge within " +
                                 std::to_string(max_rounds) + " fixed-point round" +
                                 (max_rounds == 1 ? "" : "s");
