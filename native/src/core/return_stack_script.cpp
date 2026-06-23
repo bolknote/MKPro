@@ -618,7 +618,7 @@ std::optional<std::string> terminal_jump_target_from_ir_body(
   if (body.empty())
     return std::nullopt;
   const IrOp& tail = body.back();
-  if (tail.kind != IrKind::Jump)
+  if (tail.kind != IrKind::Jump && tail.opcode != 0x51)
     return std::nullopt;
   const auto* label = std::get_if<std::string>(&tail.target);
   if (label != nullptr && !label->empty())

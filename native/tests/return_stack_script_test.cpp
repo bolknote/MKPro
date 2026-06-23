@@ -87,6 +87,13 @@ std::vector<IrOp> ir_jump_body(const std::string& target) {
   return {ir_jump(target)};
 }
 
+IrOp ir_raw_jump(const std::string& target) {
+  IrOp op = ir_plain(0x51);
+  op.target = target;
+  op.meta.mnemonic = "БП";
+  return op;
+}
+
 IrOp ir_call(const std::string& target) {
   IrOp op;
   op.kind = IrKind::Call;
@@ -1317,6 +1324,25 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "embedded tail-chain scanner should follow CFG fallthrough through empty aliases");
     require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
             "CFG alias-normalized embedded tail chains should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
+    ops.push_back(ir_raw_jump("t2"));
+    ops.push_back(ir_label("t2"));
+    ops.push_back(ir_plain(2));
+    ops.push_back(ir_raw_jump("t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized,
+            "embedded tail-chain scanner should treat raw БП opcodes as terminal jumps");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "raw БП embedded tail chains should remain provable post-layout");
   }
 
   {

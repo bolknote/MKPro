@@ -64,6 +64,13 @@ bool takes_address(int opcode) {
   }
 }
 
+bool plain_addressed_opcode_with_label_target(const IrOp& op) {
+  if (op.kind != IrKind::Plain || !takes_address(op.opcode))
+    return false;
+  const auto* label = std::get_if<std::string>(&op.target);
+  return label != nullptr && !label->empty();
+}
+
 bool is_in_range(int opcode, int base) {
   return opcode >= base && opcode <= base + 0xe;
 }
@@ -527,6 +534,12 @@ std::vector<IrOp> raise_machine_to_ir(const std::vector<MachineItem>& items) {
 std::vector<MachineItem> lower_ir_to_machine(const std::vector<IrOp>& ops) {
   std::vector<MachineItem> result;
   for (const IrOp& op : ops) {
+    if (plain_addressed_opcode_with_label_target(op)) {
+      result.push_back(machine_op_from_meta(op.opcode, op.meta));
+      result.push_back(machine_address_from_meta(op.target, op.target_meta));
+      continue;
+    }
+
     switch (op.kind) {
     case IrKind::Label: {
       MachineItem item = MachineItem::label(op.name);
@@ -657,7 +670,7 @@ LowerLayoutResult lower_ir_to_layout(const std::vector<IrOp>& ops,
     ++address;
 
     if (op.kind == IrKind::Jump || op.kind == IrKind::CondJump || op.kind == IrKind::Call ||
-        op.kind == IrKind::Loop) {
+        op.kind == IrKind::Loop || plain_addressed_opcode_with_label_target(op)) {
       int target_value = 0;
       if (const auto* numeric = std::get_if<int>(&op.target)) {
         target_value = *numeric;
