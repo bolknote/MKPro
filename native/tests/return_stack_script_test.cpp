@@ -1091,8 +1091,11 @@ void return_stack_script_matches_mk61_strategy_contract() {
                 search.symbolic_existing_callsite_target_groups == 1 &&
                 search.symbolic_existing_callsite_largest_target_group == 2 &&
                 search.symbolic_existing_callsite_target_labels ==
-                    std::vector<std::string>({"shared_helper"}),
-            "IR scanner should group symbolic terminal ПП hints by shared target label");
+                    std::vector<std::string>({"shared_helper"}) &&
+                search.symbolic_existing_callsite_source_labels ==
+                    std::vector<std::string>({"first", "second"}),
+            "IR scanner should group symbolic terminal ПП hints by shared target label and "
+            "expose their source labels");
   }
 
   {

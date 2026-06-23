@@ -96,6 +96,7 @@ struct ReturnStackIrTailLayoutSearch {
   int symbolic_existing_callsite_target_groups = 0;
   int symbolic_existing_callsite_largest_target_group = 0;
   std::vector<std::string> symbolic_existing_callsite_target_labels;
+  std::vector<std::string> symbolic_existing_callsite_source_labels;
   ReturnStackLayoutOpportunityAnalysis analysis;
   std::vector<MachineItem> materialized_items;
   bool pipeline_compared = false;
