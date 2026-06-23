@@ -518,6 +518,14 @@ struct IrLabelBlock {
   std::vector<IrOp> body;
 };
 
+struct IrTailChainCandidate {
+  ReturnStackLayoutOpportunity opportunity;
+  std::set<std::string> moved_tail_labels;
+  std::string original_entry_label;
+  std::string generated_entry_label;
+  std::size_t entry_block_index = 0;
+};
+
 std::optional<std::vector<IrLabelBlock>> split_label_blocks(const std::vector<IrOp>& ops,
                                                             std::string& rejection_reason) {
   std::vector<IrLabelBlock> blocks;
@@ -555,9 +563,101 @@ std::map<std::string, std::size_t> block_index_by_label(const std::vector<IrLabe
   return result;
 }
 
-std::optional<ReturnStackLayoutOpportunity> whole_program_tail_chain_opportunity(
+std::optional<std::string> ir_label_target(const IrOp& op) {
+  const auto* label = std::get_if<std::string>(&op.target);
+  if (label == nullptr || label->empty())
+    return std::nullopt;
+  return *label;
+}
+
+bool ir_op_can_reference_label(const IrOp& op) {
+  switch (op.kind) {
+  case IrKind::Jump:
+  case IrKind::CondJump:
+  case IrKind::Call:
+  case IrKind::Loop:
+    return true;
+  default:
+    return false;
+  }
+}
+
+std::map<std::string, int> direct_ir_label_ref_counts(const std::vector<IrLabelBlock>& blocks) {
+  std::map<std::string, int> counts;
+  for (const IrLabelBlock& block : blocks) {
+    for (const IrOp& op : block.body) {
+      if (!ir_op_can_reference_label(op))
+        continue;
+      if (const std::optional<std::string> target = ir_label_target(op))
+        ++counts[*target];
+    }
+  }
+  return counts;
+}
+
+bool ir_block_ends_without_fallthrough(const IrLabelBlock& block) {
+  if (block.body.empty())
+    return false;
+  const IrOp& tail = block.body.back();
+  if (tail.kind == IrKind::Jump || tail.kind == IrKind::IndirectJump ||
+      tail.kind == IrKind::Return || tail.kind == IrKind::Stop) {
+    return true;
+  }
+  return tail.opcode == 0x50 || tail.opcode == 0x51 || tail.opcode == 0x52;
+}
+
+bool has_unproved_fallthrough_into_block(const std::vector<IrLabelBlock>& blocks,
+                                         std::size_t block_index) {
+  if (block_index == 0U)
+    return false;
+  return !ir_block_ends_without_fallthrough(blocks.at(block_index - 1U));
+}
+
+bool tail_chain_has_only_internal_tail_entries(
+    const std::vector<IrLabelBlock>& blocks, const IrTailChainCandidate& candidate,
+    const std::map<std::string, int>& ref_counts, std::string& rejection_reason) {
+  std::map<std::string, int> expected_tail_refs;
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  std::optional<std::string> cursor = terminal_jump_target_from_ir_body(candidate.opportunity.entry_body);
+  while (cursor.has_value()) {
+    ++expected_tail_refs[*cursor];
+    const auto block_index = by_label.find(*cursor);
+    if (block_index == by_label.end())
+      break;
+    const std::optional<std::string> next =
+        terminal_jump_target_from_ir_body(blocks.at(block_index->second).body);
+    if (!next.has_value())
+      break;
+    cursor = next;
+  }
+
+  for (const ReturnStackTailBlock& tail : candidate.opportunity.tails) {
+    const int actual_refs = ref_counts.contains(tail.label) ? ref_counts.at(tail.label) : 0;
+    const int expected_refs = expected_tail_refs.contains(tail.label) ? expected_tail_refs.at(tail.label) : 0;
+    if (actual_refs != expected_refs || expected_refs != 1) {
+      rejection_reason = "return-stack IR tail layout requires unique internal entry into tail block " +
+                         tail.label;
+      return false;
+    }
+    const auto tail_index = by_label.find(tail.label);
+    if (tail_index == by_label.end()) {
+      rejection_reason = "return-stack IR tail layout lost a candidate tail block";
+      return false;
+    }
+    if (has_unproved_fallthrough_into_block(blocks, tail_index->second)) {
+      rejection_reason = "return-stack IR tail layout cannot move tail block " + tail.label +
+                         " because a previous block can fall through into it";
+      return false;
+    }
+  }
+  return true;
+}
+
+std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
     const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  const std::map<std::string, int> ref_counts = direct_ir_label_ref_counts(blocks);
+
   for (std::size_t entry_index = 0; entry_index < blocks.size(); ++entry_index) {
     const IrLabelBlock& entry = blocks.at(entry_index);
     std::optional<std::string> cursor = terminal_jump_target_from_ir_body(entry.body);
@@ -591,25 +691,59 @@ std::optional<ReturnStackLayoutOpportunity> whole_program_tail_chain_opportunity
       break;
     }
 
-    if (!valid_chain || tails.size() < 2U)
+    if (!valid_chain || tails.size() < 2U || tails.size() > static_cast<std::size_t>(kMaxScriptReturns))
       continue;
-    if (tails.size() + 1U != blocks.size()) {
-      rejection_reason = "return-stack IR tail layout currently supports only whole-program tail chains";
-      continue;
-    }
-    return ReturnStackLayoutOpportunity{
-        .tails = tails,
-        .entry_body = entry.body,
-        .entry_label = entry.label,
-        .entry_at_address_zero = entry_index == 0U,
-        .single_start_jump = false,
+
+    IrTailChainCandidate candidate{
+        .opportunity = ReturnStackLayoutOpportunity{
+            .tails = tails,
+            .entry_body = entry.body,
+            .entry_label = "__return_stack_entry_" + std::to_string(entry_index),
+            .entry_at_address_zero = entry_index == 0U,
+            .single_start_jump = entry_index != 0U,
+        },
+        .moved_tail_labels = seen_tail_labels,
+        .original_entry_label = entry.label,
+        .generated_entry_label = "__return_stack_entry_" + std::to_string(entry_index),
+        .entry_block_index = entry_index,
     };
+
+    if (!tail_chain_has_only_internal_tail_entries(blocks, candidate, ref_counts, rejection_reason))
+      continue;
+    return candidate;
   }
 
   if (rejection_reason.empty()) {
-    rejection_reason = "return-stack IR tail layout found no entry block that jumps through a 2..5 tail chain ending in С/П";
+    rejection_reason = "return-stack IR tail layout found no movable entry block that jumps through a 2..5 tail chain ending in С/П";
   }
   return std::nullopt;
+}
+
+void append_ir_block_as_machine(std::vector<MachineItem>& out, const IrLabelBlock& block) {
+  out.push_back(MachineItem::label(block.label));
+  append_ir_items(out, block.body);
+}
+
+std::vector<MachineItem> materialize_embedded_tail_chain_layout(
+    const std::vector<IrLabelBlock>& blocks, const IrTailChainCandidate& candidate,
+    const ReturnStackLayoutOpportunityAnalysis& analysis) {
+  const ReturnStackStartupLayoutPlan plan = materialize_return_stack_layout(analysis);
+  std::vector<MachineItem> out;
+  for (std::size_t index = 0; index < blocks.size(); ++index) {
+    const IrLabelBlock& block = blocks.at(index);
+    if (candidate.moved_tail_labels.contains(block.label))
+      continue;
+    if (index != candidate.entry_block_index) {
+      append_ir_block_as_machine(out, block);
+      continue;
+    }
+
+    MachineItem wrapper = MachineItem::label(candidate.original_entry_label);
+    wrapper.hidden = false;
+    out.push_back(std::move(wrapper));
+    out.insert(out.end(), plan.items.begin(), plan.items.end());
+  }
+  return out;
 }
 
 std::optional<int> valid_concrete_existing_call_site_count(
@@ -1017,14 +1151,19 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
     search.rejection_reason = rejection;
     return search;
   }
-  std::optional<ReturnStackLayoutOpportunity> opportunity =
-      whole_program_tail_chain_opportunity(*blocks, rejection);
-  if (!opportunity.has_value()) {
+  const std::optional<IrTailChainCandidate> candidate =
+      embedded_tail_chain_opportunity(*blocks, rejection);
+  if (!candidate.has_value()) {
     search.rejection_reason = rejection;
     return search;
   }
   search.has_opportunity = true;
-  search.analysis = analyze_return_stack_layout_opportunity(std::move(*opportunity), options);
+  search.analysis = analyze_return_stack_layout_opportunity(candidate->opportunity, options);
+  if (search.analysis.plan.profitable) {
+    search.materialized = true;
+    search.materialized_items =
+        materialize_embedded_tail_chain_layout(*blocks, *candidate, search.analysis);
+  }
   if (!search.analysis.plan.rejection_reason.empty())
     search.rejection_reason = search.analysis.plan.rejection_reason;
   return search;

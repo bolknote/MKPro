@@ -33317,12 +33317,20 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
   if (!exact_decimal_series) {
     if (options.return_stack_script) {
+      const std::size_t return_stack_budget =
+          options.budget.has_value() && *options.budget > 0
+              ? static_cast<std::size_t>(*options.budget)
+              : static_cast<std::size_t>(105);
       const core::ReturnStackIrTailLayoutSearch tail_layout =
-          core::analyze_return_stack_ir_tail_layout(raise_machine_to_ir(post_layout_items));
-      if (tail_layout.has_opportunity && tail_layout.analysis.plan.profitable) {
-        const core::ReturnStackStartupLayoutPlan plan =
-            core::materialize_return_stack_layout(tail_layout.analysis);
-        post_layout_items = plan.items;
+          core::analyze_return_stack_ir_tail_layout(
+              raise_machine_to_ir(post_layout_items),
+              core::ReturnStackStartupLayoutOptions{
+                  .size_rescue = core::machine_cell_count(post_layout_items) >
+                                 static_cast<int>(return_stack_budget),
+              });
+      if (tail_layout.materialized) {
+        const core::ReturnStackStartupLayoutPlan& plan = tail_layout.analysis.plan;
+        post_layout_items = tail_layout.materialized_items;
         post_layout_optimizations.push_back(core::passes::AppliedOptimization{
             .name = "return-stack-startup-layout",
             .detail = std::string("Materialized ") + std::to_string(plan.transitions) +
@@ -33347,6 +33355,35 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         if (!rejection.empty()) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-script-not-applied", rejection));
+        }
+
+        bool dirty_dispatch_proved = false;
+        const std::vector<std::vector<int>> dirty_dispatch_stacks = {
+            {19, 27, 35, 43, 51},
+            {27, 35, 43, 51, 59},
+            {35, 43, 51, 59, 67},
+            {43, 51, 59, 67, 75},
+        };
+        std::string dirty_rejection;
+        for (const std::vector<int>& stack : dirty_dispatch_stacks) {
+          const core::DirtyReturnStackDispatchPlan dirty_plan =
+              core::plan_dirty_return_stack_dispatch(
+                  stack, 6, post_layout_items,
+                  core::DirtyReturnStackDispatchOptions{.size_rescue = true});
+          if (dirty_plan.enabled && dirty_plan.layout_proved) {
+            dirty_dispatch_proved = true;
+            break;
+          }
+          if (dirty_rejection.empty() && !dirty_plan.rejection_reason.empty())
+            dirty_rejection = dirty_plan.rejection_reason;
+        }
+        if (!dirty_dispatch_proved) {
+          result.diagnostics.push_back(diagnostic(
+              DiagnosticSeverity::Note, "return-stack-dirty-dispatch-not-applied",
+              dirty_rejection.empty()
+                  ? "dirty return-stack dispatch requires a layout with safe executable dirty "
+                    "return target cells"
+                  : dirty_rejection));
         }
       }
     }
@@ -34476,7 +34513,11 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   };
   const core::ReturnStackScriptOpportunityScan return_stack_script_scan =
       core::scan_return_stack_script_opportunity(best.items);
-  if (return_stack_script_scan.possible) {
+  const core::ReturnStackIrTailLayoutSearch return_stack_tail_layout_scan =
+      core::analyze_return_stack_ir_tail_layout(
+          raise_machine_to_ir(best.items),
+          core::ReturnStackStartupLayoutOptions{.size_rescue = needs_size_rescue});
+  if (return_stack_script_scan.possible || return_stack_tail_layout_scan.has_opportunity) {
     add_candidate(
         [](CompileOptions& candidate_options) { candidate_options.return_stack_script = true; },
         "return-stack-script",

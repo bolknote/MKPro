@@ -75,7 +75,9 @@ struct ReturnStackLayoutOpportunityAnalysis {
 
 struct ReturnStackIrTailLayoutSearch {
   bool has_opportunity = false;
+  bool materialized = false;
   ReturnStackLayoutOpportunityAnalysis analysis;
+  std::vector<MachineItem> materialized_items;
   std::string rejection_reason;
 };
 

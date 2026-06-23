@@ -388,6 +388,26 @@ void return_stack_script_matches_mk61_strategy_contract() {
   }
 
   {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("prefix"));
+    append(ops, ir_jump_body("entry"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity,
+            "IR tail layout scanner should detect embedded movable tail chains");
+    require(search.analysis.plan.rejection_reason.find("net-savings") != std::string::npos,
+            "embedded injected-charge chains should still be rejected when they are not profitable");
+  }
+
+  {
     const std::vector<MachineItem> program = three_step_script_program();
     const core::ReturnStackScriptOpportunityScan scan =
         core::scan_return_stack_script_opportunity(program);
