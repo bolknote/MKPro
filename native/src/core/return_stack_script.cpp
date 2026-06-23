@@ -1132,7 +1132,7 @@ bool terminal_call_fragment_candidate(const IrLabelBlock& block) {
   const IrOp& terminal = block.body.back();
   if (!direct_symbolic_call_target(terminal).has_value())
     return false;
-  return !ir_op_always_transfers_control(block.body.at(block.body.size() - 2U));
+  return !ir_op_splits_internal_basic_block(block.body.at(block.body.size() - 2U));
 }
 
 std::string unique_tail_fragment_label(const std::set<std::string>& labels, int ordinal) {

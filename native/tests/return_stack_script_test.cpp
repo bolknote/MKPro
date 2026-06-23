@@ -1508,6 +1508,9 @@ void return_stack_script_matches_mk61_strategy_contract() {
         core::analyze_return_stack_ir_tail_layout(ops);
     require(search.has_opportunity && search.materialized,
             "embedded tail-chain scanner should split direct-call prefixes before a chain");
+    require(search.extracted_existing_callsite_fragments == 0,
+            "direct-call prefixes should stay CFG prefixes instead of becoming callsite "
+            "fragments");
     const auto entry_it =
         std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
                      [](const MachineItem& item) {
