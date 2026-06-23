@@ -1346,6 +1346,33 @@ void return_stack_script_matches_mk61_strategy_contract() {
   }
 
   {
+    std::vector<MachineItem> layout = repeated_stop_layout(102);
+    layout.at(100) = digit(8);
+    layout.at(78) = stop();
+    const std::vector<core::DirtyReturnStackDispatchAllocationPlan> allocations =
+        core::allocate_dirty_return_stack_dispatch_layouts(
+            layout, {.size_rescue = true, .max_padding_cells = 2});
+
+    const auto safe_first =
+        std::find_if(allocations.begin(), allocations.end(),
+                     [](const core::DirtyReturnStackDispatchAllocationPlan& allocation) {
+                       return allocation.allocated && allocation.dispatch.layout_proved &&
+                              allocation.padding_cells == 0 &&
+                              allocation.dispatch.dirty_targets == std::vector<int>({100});
+                     });
+    const auto repaired_later =
+        std::find_if(allocations.begin(), allocations.end(),
+                     [](const core::DirtyReturnStackDispatchAllocationPlan& allocation) {
+                       return allocation.allocated && allocation.dispatch.layout_proved &&
+                              allocation.padding_cells == 1 &&
+                              allocation.dispatch.dirty_targets == std::vector<int>({78});
+                     });
+    require(safe_first != allocations.end() && repaired_later != allocations.end(),
+            "dirty dispatch layout search should keep scanning after an already-safe stack and "
+            "also expose later repair allocations");
+  }
+
+  {
     std::vector<MachineItem> layout = repeated_stop_layout(80);
     layout.at(78) = MachineItem::op(0x51, "БП");
     const core::DirtyReturnStackDispatchPlan plan =

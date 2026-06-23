@@ -201,6 +201,9 @@ DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
 DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layout(
     std::vector<int> stack, int return_count, const std::vector<MachineItem>& layout,
     const DirtyReturnStackDispatchOptions& options = {});
+std::vector<DirtyReturnStackDispatchAllocationPlan>
+allocate_dirty_return_stack_dispatch_layouts(const std::vector<MachineItem>& layout,
+                                             const DirtyReturnStackDispatchOptions& options = {});
 
 PostLayoutIndirectFlowResult
 optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items);

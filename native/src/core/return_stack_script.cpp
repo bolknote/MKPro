@@ -2932,6 +2932,29 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
   return allocation;
 }
 
+std::vector<std::vector<int>> dirty_return_stack_dispatch_candidate_stacks() {
+  return {
+      {19, 27, 35, 43, 51},
+      {27, 35, 43, 51, 59},
+      {35, 43, 51, 59, 67},
+      {43, 51, 59, 67, 75},
+  };
+}
+
+std::vector<DirtyReturnStackDispatchAllocationPlan>
+allocate_dirty_return_stack_dispatch_layouts(const std::vector<MachineItem>& layout,
+                                             const DirtyReturnStackDispatchOptions& options) {
+  std::vector<DirtyReturnStackDispatchAllocationPlan> allocations;
+  const std::vector<std::vector<int>> stacks =
+      dirty_return_stack_dispatch_candidate_stacks();
+  allocations.reserve(stacks.size());
+  for (const std::vector<int>& stack : stacks) {
+    allocations.push_back(
+        allocate_dirty_return_stack_dispatch_layout(stack, 6, layout, options));
+  }
+  return allocations;
+}
+
 PostLayoutIndirectFlowResult
 optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) {
   if (!scan_return_stack_script_opportunity(items).possible) {

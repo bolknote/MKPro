@@ -34116,41 +34116,54 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         core::DirtyReturnStackDispatchAllocationPlan best_dirty_allocation;
         int dirty_allocator_padding = 0;
         int dirty_allocator_rounds = 0;
-        const std::vector<std::vector<int>> dirty_dispatch_stacks = {
-            {19, 27, 35, 43, 51},
-            {27, 35, 43, 51, 59},
-            {35, 43, 51, 59, 67},
-            {43, 51, 59, 67, 75},
-        };
         std::string dirty_rejection;
         if (return_stack_needs_size_rescue) {
-          for (const std::vector<int>& stack : dirty_dispatch_stacks) {
-            const core::DirtyReturnStackDispatchAllocationPlan dirty_allocation =
-                core::allocate_dirty_return_stack_dispatch_layout(
-                    stack, 6, post_layout_items,
-                    core::DirtyReturnStackDispatchOptions{.size_rescue = true});
+          const std::vector<core::DirtyReturnStackDispatchAllocationPlan> dirty_allocations =
+              core::allocate_dirty_return_stack_dispatch_layouts(
+                  post_layout_items, core::DirtyReturnStackDispatchOptions{.size_rescue = true});
+          std::optional<int> current_flow_cells;
+          int best_candidate_flow_cells = 0;
+          for (const core::DirtyReturnStackDispatchAllocationPlan& dirty_allocation :
+               dirty_allocations) {
             if (dirty_allocation.allocated && dirty_allocation.dispatch.layout_proved) {
               dirty_dispatch_proved = true;
-              dirty_allocator_available = dirty_allocation.padding_cells > 0;
-              dirty_allocator_padding = dirty_allocation.padding_cells;
-              dirty_allocator_rounds = dirty_allocation.fixed_point_rounds;
-              if (dirty_allocator_available) {
-                const core::PostLayoutIndirectFlowResult current_flow_probe =
-                    core::optimize_post_layout_indirect_flow(post_layout_items, pass_options,
-                                                             indirect_flow_rescue_above);
+              if (dirty_allocation.padding_cells > 0) {
+                dirty_allocator_available = true;
+                if (!current_flow_cells.has_value()) {
+                  const core::PostLayoutIndirectFlowResult current_flow_probe =
+                      core::optimize_post_layout_indirect_flow(post_layout_items, pass_options,
+                                                               indirect_flow_rescue_above);
+                  current_flow_cells = core::machine_cell_count(current_flow_probe.items);
+                }
                 const core::PostLayoutIndirectFlowResult candidate_flow_probe =
                     core::optimize_post_layout_indirect_flow(dirty_allocation.items, pass_options,
                                                              indirect_flow_rescue_above);
-                if (core::machine_cell_count(candidate_flow_probe.items) <
-                    core::machine_cell_count(current_flow_probe.items)) {
+                const int candidate_flow_cells =
+                    core::machine_cell_count(candidate_flow_probe.items);
+                const bool better_candidate = !dirty_allocator_applied ||
+                                              candidate_flow_cells < best_candidate_flow_cells ||
+                                              (candidate_flow_cells == best_candidate_flow_cells &&
+                                               dirty_allocation.padding_cells <
+                                                   best_dirty_allocation.padding_cells);
+                if (candidate_flow_cells < *current_flow_cells && better_candidate) {
                   dirty_allocator_applied = true;
+                  best_candidate_flow_cells = candidate_flow_cells;
                   best_dirty_allocation = dirty_allocation;
                 }
+                if (!dirty_allocator_applied &&
+                    (dirty_allocator_padding == 0 ||
+                     dirty_allocation.padding_cells < dirty_allocator_padding)) {
+                  dirty_allocator_padding = dirty_allocation.padding_cells;
+                  dirty_allocator_rounds = dirty_allocation.fixed_point_rounds;
+                }
               }
-              break;
             }
             if (dirty_rejection.empty() && !dirty_allocation.rejection_reason.empty())
               dirty_rejection = dirty_allocation.rejection_reason;
+          }
+          if (dirty_allocator_applied) {
+            dirty_allocator_padding = best_dirty_allocation.padding_cells;
+            dirty_allocator_rounds = best_dirty_allocation.fixed_point_rounds;
           }
         } else {
           dirty_rejection =
@@ -35346,16 +35359,10 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           core::ReturnStackStartupLayoutOptions{.size_rescue = needs_size_rescue});
   bool dirty_dispatch_allocator_signal = false;
   if (needs_size_rescue) {
-    const std::vector<std::vector<int>> dirty_dispatch_stacks = {
-        {19, 27, 35, 43, 51},
-        {27, 35, 43, 51, 59},
-        {35, 43, 51, 59, 67},
-        {43, 51, 59, 67, 75},
-    };
-    for (const std::vector<int>& stack : dirty_dispatch_stacks) {
-      const core::DirtyReturnStackDispatchAllocationPlan allocation =
-          core::allocate_dirty_return_stack_dispatch_layout(
-              stack, 6, best.items, core::DirtyReturnStackDispatchOptions{.size_rescue = true});
+    const std::vector<core::DirtyReturnStackDispatchAllocationPlan> allocations =
+        core::allocate_dirty_return_stack_dispatch_layouts(
+            best.items, core::DirtyReturnStackDispatchOptions{.size_rescue = true});
+    for (const core::DirtyReturnStackDispatchAllocationPlan& allocation : allocations) {
       if (allocation.allocated && allocation.dispatch.layout_proved) {
         dirty_dispatch_allocator_signal = true;
         break;
