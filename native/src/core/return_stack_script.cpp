@@ -460,6 +460,33 @@ bool dirty_overflow_script_plan_proved(const MachineLayout& original_layout,
                      [&](const int target) { return target == adjusted_dirty_target; });
 }
 
+std::optional<DirtyReturnStackDispatchAllocationPlan> repair_dirty_overflow_script_candidate(
+    const MachineLayout& original_layout, const std::vector<MachineItem>& candidate,
+    const ScriptPlan& plan) {
+  if (!plan.dirty_jump.has_value())
+    return std::nullopt;
+
+  const std::set<int> removed = removed_address_indexes_for_script_plan(plan);
+  const int adjusted_dirty_target = adjusted_address_after_removing_indexes(
+      original_layout, plan.dirty_jump->target_address, removed);
+  DirtyReturnStackDispatchAllocationPlan allocation =
+      allocate_dirty_return_stack_dispatch_layout(
+          adjusted_return_stack_from_calls(original_layout, plan),
+          static_cast<int>(plan.calls.size()) + 1, candidate,
+          DirtyReturnStackDispatchOptions{.size_rescue = true});
+  if (!allocation.allocated || !allocation.dispatch.layout_proved)
+    return std::nullopt;
+  if (allocation.dispatch.dirty_targets.empty())
+    return std::nullopt;
+  const bool targets_match =
+      std::all_of(allocation.dispatch.dirty_targets.begin(),
+                  allocation.dispatch.dirty_targets.end(),
+                  [&](const int target) { return target == adjusted_dirty_target; });
+  if (!targets_match)
+    return std::nullopt;
+  return allocation;
+}
+
 int best_cell_count_with_address_overlay(const std::vector<MachineItem>& items) {
   const PostLayoutIndirectFlowResult overlay = optimize_post_layout_address_code_overlay(items);
   return machine_cell_count(overlay.items);
@@ -2007,6 +2034,8 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   std::vector<MachineItem> current = items;
   int applied = 0;
   int scripts = 0;
+  int dirty_allocator_padding = 0;
+  int dirty_allocator_rounds = 0;
 
   for (int round = 0; round < kMaxRewriteRounds; ++round) {
     const std::optional<ScriptPlan> plan = find_best_script_plan(current);
@@ -2014,8 +2043,17 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       break;
     const MachineLayout current_layout = machine_layout(current);
     std::vector<MachineItem> candidate = apply_script_plan(current, *plan);
-    if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan))
-      break;
+    if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan)) {
+      const std::optional<DirtyReturnStackDispatchAllocationPlan> allocation =
+          repair_dirty_overflow_script_candidate(current_layout, candidate, *plan);
+      if (!allocation.has_value())
+        break;
+      candidate = allocation->items;
+      dirty_allocator_padding += allocation->padding_cells;
+      dirty_allocator_rounds += allocation->fixed_point_rounds;
+      if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan))
+        break;
+    }
     if (machine_cell_count(candidate) >= machine_cell_count(current))
       break;
     if (!return_stack_candidate_beats_address_overlay(current, candidate))
@@ -2031,20 +2069,30 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
     };
   }
 
+  std::vector<passes::AppliedOptimization> optimizations;
+  if (dirty_allocator_padding > 0) {
+    optimizations.push_back(passes::AppliedOptimization{
+        .name = "return-stack-dirty-dispatch-allocator",
+        .detail = "Inserted " + std::to_string(dirty_allocator_padding) +
+                  " executable dirty-dispatch cell" +
+                  (dirty_allocator_padding == 1 ? "" : "s") + " across " +
+                  std::to_string(dirty_allocator_rounds) + " fixed-point repair round" +
+                  (dirty_allocator_rounds == 1 ? "" : "s") +
+                  " before rewriting dirty overflow continuation jumps.",
+    });
+  }
+  optimizations.push_back(passes::AppliedOptimization{
+      .name = "return-stack-script",
+      .detail = "Replaced " + std::to_string(applied) +
+                " fixed scripted continuation jump" +
+                (applied == 1 ? "" : "s") + " with В/О using " +
+                std::to_string(scripts) + " proven existing ПП charge chain" +
+                (scripts == 1 ? "" : "s") + ".",
+  });
+
   return PostLayoutIndirectFlowResult{
       .items = std::move(current),
-      .optimizations =
-          {
-              passes::AppliedOptimization{
-                  .name = "return-stack-script",
-                  .detail = "Replaced " + std::to_string(applied) +
-                            " fixed scripted continuation jump" +
-                            (applied == 1 ? "" : "s") +
-                            " with В/О using " + std::to_string(scripts) +
-                            " proven existing ПП charge chain" +
-                            (scripts == 1 ? "" : "s") + ".",
-              },
-          },
+      .optimizations = std::move(optimizations),
       .applied = applied,
   };
 }

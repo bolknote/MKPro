@@ -132,7 +132,7 @@ std::vector<MachineItem> counted_script_program(int count) {
   return items;
 }
 
-std::vector<MachineItem> dirty_overflow_script_program() {
+std::vector<MachineItem> dirty_overflow_script_program(bool safe_dirty_target = true) {
   std::vector<MachineItem> items;
   while (core::machine_cell_count(items) < 26)
     items.push_back(plus_op());
@@ -150,7 +150,7 @@ std::vector<MachineItem> dirty_overflow_script_program() {
   while (core::machine_cell_count(items) < 84)
     items.push_back(plus_op());
   items.push_back(MachineItem::label("dirty_target"));
-  items.push_back(plus_op());
+  items.push_back(safe_dirty_target ? plus_op() : stop());
   return items;
 }
 
@@ -738,6 +738,27 @@ void return_stack_script_matches_mk61_strategy_contract() {
     require(dirty.enabled && dirty.layout_proved &&
                 dirty.dirty_targets == std::vector<int>({78}),
             "dirty-overflow return-stack script should leave the shifted dirty target executable");
+  }
+
+  {
+    const std::vector<MachineItem> program = dirty_overflow_script_program(false);
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_return_stack_script(program);
+
+    require(result.applied == 6,
+            "dirty-overflow return-stack script should repair unsafe dirty cells before rewrite");
+    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 5,
+            "dirty-overflow repair should still be profitable after inserting one safe cell");
+    require(has_optimization(result, "return-stack-dirty-dispatch-allocator"),
+            "dirty-overflow repair should report allocator metadata");
+    require(count_opcode(result.items, 0x52) == 6,
+            "dirty-overflow repair should still emit six В/О commands");
+    const core::DirtyReturnStackDispatchPlan dirty =
+        core::plan_dirty_return_stack_dispatch({27, 31, 35, 39, 43}, 6, result.items,
+                                               {.size_rescue = true});
+    require(dirty.enabled && dirty.layout_proved &&
+                dirty.dirty_targets == std::vector<int>({78}),
+            "dirty-overflow repair should prove the inserted dirty target cell");
   }
 
   {
