@@ -119,6 +119,7 @@ struct DirtyReturnStackDispatchAllocationPlan {
   int fixed_point_rounds = 0;
   bool allocated = false;
   bool size_rescue_only = true;
+  bool control_flow_rewrite_enabled = false;
   std::string rejection_reason;
 };
 

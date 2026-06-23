@@ -1617,6 +1617,8 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
   if (existing.enabled && existing.layout_proved) {
     allocation.dispatch = std::move(existing);
     allocation.allocated = true;
+    allocation.size_rescue_only = true;
+    allocation.control_flow_rewrite_enabled = false;
     return allocation;
   }
 
@@ -1695,6 +1697,7 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
       allocation.fixed_point_rounds = round + 1;
       allocation.allocated = true;
       allocation.size_rescue_only = true;
+      allocation.control_flow_rewrite_enabled = false;
       return allocation;
     }
 

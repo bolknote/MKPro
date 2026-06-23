@@ -33439,7 +33439,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               (dirty_allocator_padding == 1 ? "" : "s") + " after " +
               std::to_string(dirty_allocator_rounds) + " fixed-point round" +
               (dirty_allocator_rounds == 1 ? "" : "s") +
-              "; allocator is size-rescue-only and does not enable control-flow rewrite.";
+              "; allocator is size-rescue-only and proof-only; control-flow rewrite remains disabled.";
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
               .name = "return-stack-dirty-dispatch-allocator",
               .detail = dirty_allocator_detail,
