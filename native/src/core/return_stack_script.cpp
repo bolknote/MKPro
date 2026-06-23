@@ -2480,50 +2480,64 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
     search.symbolic_existing_callsite_largest_target_group =
         std::max(search.symbolic_existing_callsite_largest_target_group, count);
   }
-  std::optional<IrTailChainCandidate> candidate =
-      existing_call_chain_opportunity(*blocks, rejection);
-  std::string remembered_rejection = rejection;
-  if (!candidate.has_value()) {
-    const ExtractedIrFragments extracted = extract_terminal_tail_fragments(*blocks);
-    search.extracted_tail_fragments = extracted.tail_fragments;
-    search.extracted_existing_callsite_fragments = extracted.existing_callsite_fragments;
-    if (extracted.total() > 0) {
-      std::string extracted_rejection;
-      candidate = existing_call_chain_opportunity(*blocks, extracted_rejection);
-      if (!candidate.has_value())
-        remember_return_stack_rejection(remembered_rejection, extracted_rejection);
+
+  std::optional<IrTailChainCandidate> candidate;
+  std::vector<IrLabelBlock> candidate_blocks;
+  auto consider_candidate = [&](std::optional<IrTailChainCandidate> next,
+                                const std::vector<IrLabelBlock>& source_blocks) {
+    if (!next.has_value())
+      return;
+    if (return_stack_candidate_better(candidate, *next)) {
+      candidate = std::move(*next);
+      candidate_blocks = source_blocks;
     }
-    if (!candidate.has_value()) {
-      std::string retarget_rejection;
-      candidate = same_target_call_group_opportunity(*blocks, retarget_rejection);
-      if (!candidate.has_value())
-        remember_return_stack_rejection(remembered_rejection, retarget_rejection);
-    }
-    if (!candidate.has_value()) {
-      std::string noop_retarget_rejection;
-      candidate = same_target_noop_helper_call_group_opportunity(*blocks,
-                                                                 noop_retarget_rejection);
-      if (!candidate.has_value())
-        remember_return_stack_rejection(remembered_rejection, noop_retarget_rejection);
-    }
-    if (!candidate.has_value()) {
-      IrTailChainSearchStats stats;
-      std::string embedded_rejection;
-      candidate = embedded_tail_chain_opportunity(*blocks, embedded_rejection, &stats);
-      if (!candidate.has_value())
-        remember_return_stack_rejection(remembered_rejection, embedded_rejection);
-      search.cfg_tail_entry_candidates = stats.entry_candidates;
-      search.cfg_tail_valid_chain_candidates = stats.valid_chain_candidates;
-      search.cfg_tail_short_chain_candidates = stats.short_chain_candidates;
-      search.cfg_tail_too_long_chain_candidates = stats.too_long_chain_candidates;
-      search.cfg_tail_broken_chain_candidates = stats.broken_chain_candidates;
-      search.cfg_tail_unresolved_chain_candidates = stats.unresolved_chain_candidates;
-      search.cfg_tail_repeated_chain_candidates = stats.repeated_chain_candidates;
-      search.cfg_tail_nonterminal_chain_candidates = stats.nonterminal_chain_candidates;
-      search.cfg_tail_nonterminal_break_labels = stats.nonterminal_break_labels;
-      search.cfg_tail_external_entry_rejections = stats.external_entry_rejections;
-    }
+  };
+
+  std::string remembered_rejection;
+  std::string direct_rejection;
+  consider_candidate(existing_call_chain_opportunity(*blocks, direct_rejection), *blocks);
+  if (!direct_rejection.empty())
+    remember_return_stack_rejection(remembered_rejection, direct_rejection);
+
+  std::vector<IrLabelBlock> extracted_blocks = *blocks;
+  const ExtractedIrFragments extracted = extract_terminal_tail_fragments(extracted_blocks);
+  search.extracted_tail_fragments = extracted.tail_fragments;
+  search.extracted_existing_callsite_fragments = extracted.existing_callsite_fragments;
+  if (extracted.total() > 0) {
+    std::string extracted_rejection;
+    consider_candidate(existing_call_chain_opportunity(extracted_blocks, extracted_rejection),
+                       extracted_blocks);
+    remember_return_stack_rejection(remembered_rejection, extracted_rejection);
   }
+
+  std::string retarget_rejection;
+  consider_candidate(same_target_call_group_opportunity(extracted_blocks, retarget_rejection),
+                     extracted_blocks);
+  remember_return_stack_rejection(remembered_rejection, retarget_rejection);
+
+  std::string noop_retarget_rejection;
+  consider_candidate(same_target_noop_helper_call_group_opportunity(
+                         extracted_blocks, noop_retarget_rejection),
+                     extracted_blocks);
+  remember_return_stack_rejection(remembered_rejection, noop_retarget_rejection);
+
+  IrTailChainSearchStats stats;
+  std::string embedded_rejection;
+  consider_candidate(embedded_tail_chain_opportunity(extracted_blocks, embedded_rejection,
+                                                     &stats),
+                     extracted_blocks);
+  remember_return_stack_rejection(remembered_rejection, embedded_rejection);
+  search.cfg_tail_entry_candidates = stats.entry_candidates;
+  search.cfg_tail_valid_chain_candidates = stats.valid_chain_candidates;
+  search.cfg_tail_short_chain_candidates = stats.short_chain_candidates;
+  search.cfg_tail_too_long_chain_candidates = stats.too_long_chain_candidates;
+  search.cfg_tail_broken_chain_candidates = stats.broken_chain_candidates;
+  search.cfg_tail_unresolved_chain_candidates = stats.unresolved_chain_candidates;
+  search.cfg_tail_repeated_chain_candidates = stats.repeated_chain_candidates;
+  search.cfg_tail_nonterminal_chain_candidates = stats.nonterminal_chain_candidates;
+  search.cfg_tail_nonterminal_break_labels = stats.nonterminal_break_labels;
+  search.cfg_tail_external_entry_rejections = stats.external_entry_rejections;
+
   if (!candidate.has_value()) {
     search.rejection_reason = remembered_rejection;
     return search;
@@ -2538,7 +2552,7 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
   if (structurally_proved) {
     search.materialized = true;
     search.materialized_items =
-        materialize_embedded_tail_chain_layout(*blocks, *candidate, search.analysis);
+        materialize_embedded_tail_chain_layout(candidate_blocks, *candidate, search.analysis);
   }
   if (!search.analysis.plan.rejection_reason.empty())
     search.rejection_reason = search.analysis.plan.rejection_reason;

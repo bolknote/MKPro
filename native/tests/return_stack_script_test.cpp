@@ -566,6 +566,44 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("early_charge1"));
+    ops.push_back(ir_call("early_charge2"));
+    ops.push_back(ir_label("early_t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("early_charge2"));
+    ops.push_back(ir_call("early_entry"));
+    ops.push_back(ir_label("early_t2"));
+    append(ops, direct_tail(2, "early_t1"));
+    ops.push_back(ir_label("early_entry"));
+    append(ops, ir_jump_body("early_t2"));
+    ops.push_back(ir_label("later_charge1"));
+    ops.push_back(ir_call("later_entry"));
+    ops.push_back(ir_label("later_t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("later_charge2"));
+    ops.push_back(ir_call("later_entry"));
+    ops.push_back(ir_label("later_t2"));
+    append(ops, direct_tail(2, "later_t1"));
+    ops.push_back(ir_label("later_charge3"));
+    ops.push_back(ir_call("later_entry"));
+    ops.push_back(ir_label("later_t3"));
+    append(ops, direct_tail(3, "later_t2"));
+    ops.push_back(ir_label("later_entry"));
+    append(ops, ir_jump_body("later_t3"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized &&
+                search.analysis.plan.existing_call_sites == 3 &&
+                search.analysis.plan.transitions == 3,
+            "top-level IR scanner should choose a stronger same-target candidate over an earlier "
+            "existing-chain candidate");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("charge1"));
     ops.push_back(ir_call("charge2"));
     ops.push_back(ir_label("t1_alias"));
