@@ -1325,25 +1325,28 @@ std::optional<IrCallContinuation> cfg_call_continuation_block(
   return cfg_non_empty_block_from_label(blocks, by_label, cfg, cursor);
 }
 
-bool cfg_target_is_noop_return_block(const std::vector<IrLabelBlock>& blocks,
-                                     const std::map<std::string, std::size_t>& by_label,
-                                     const IrCfg& cfg, const std::string& target_label) {
+std::optional<std::string> cfg_noop_return_target_label(
+    const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
+    const IrCfg& cfg, const std::string& target_label) {
   const std::optional<IrCallContinuation> resolved =
       cfg_non_empty_block_from_label(blocks, by_label, cfg, target_label);
-  if (!resolved.has_value())
-    return false;
-  return noop_return_block(blocks.at(resolved->block_index));
+  if (!resolved.has_value() || !noop_return_block(blocks.at(resolved->block_index)))
+    return std::nullopt;
+  return blocks.at(resolved->block_index).label;
 }
 
 std::vector<std::vector<std::size_t>> chain_derived_noop_call_subgroups(
     const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
     const IrCfg& cfg, const std::vector<std::size_t>& call_indices,
-    const std::string& target_label) {
+    const std::map<std::size_t, std::string>& target_by_call) {
   std::map<std::string, std::size_t> call_by_continuation;
   std::map<std::string, std::vector<IrOp>> body_by_continuation;
   for (const std::size_t call_index : call_indices) {
+    const auto target_it = target_by_call.find(call_index);
+    if (target_it == target_by_call.end())
+      continue;
     const std::optional<IrCallContinuation> continuation =
-        cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_label);
+        cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_it->second);
     if (!continuation.has_value())
       continue;
     const IrLabelBlock& continuation_block = blocks.at(continuation->block_index);
@@ -1725,20 +1728,25 @@ std::optional<IrTailChainCandidate> same_target_noop_helper_call_group_opportuni
     labels.insert(block.label);
 
   std::map<std::string, std::vector<std::size_t>> calls_by_target;
+  std::map<std::size_t, std::string> target_by_call;
   for (std::size_t index = 0; index < blocks.size(); ++index) {
     const std::optional<std::string> target = single_call_block_target(blocks.at(index));
-    if (target.has_value())
-      calls_by_target[*target].push_back(index);
+    if (!target.has_value())
+      continue;
+    const std::optional<std::string> canonical_target =
+        cfg_noop_return_target_label(blocks, by_label, cfg, *target);
+    if (!canonical_target.has_value())
+      continue;
+    calls_by_target[*canonical_target].push_back(index);
+    target_by_call[index] = *target;
   }
 
   int synthetic_ordinal = 0;
   for (const auto& [target_label, all_call_indices] : calls_by_target) {
-    if (!cfg_target_is_noop_return_block(blocks, by_label, cfg, target_label))
-      continue;
-
+    (void)target_label;
     std::vector<std::vector<std::size_t>> subgroups =
         chain_derived_noop_call_subgroups(blocks, by_label, cfg, all_call_indices,
-                                          target_label);
+                                          target_by_call);
     std::set<std::vector<std::size_t>> seen_subgroups(subgroups.begin(), subgroups.end());
     for (std::vector<std::size_t> subgroup : bounded_noop_call_subgroups(all_call_indices)) {
       if (seen_subgroups.insert(subgroup).second)
@@ -1752,9 +1760,14 @@ std::optional<IrTailChainCandidate> same_target_noop_helper_call_group_opportuni
       std::set<std::string> moved_labels;
       bool valid = true;
       for (const std::size_t call_index : call_indices) {
+        const auto target_it = target_by_call.find(call_index);
+        if (target_it == target_by_call.end()) {
+          valid = false;
+          break;
+        }
         const IrLabelBlock& call_block = blocks.at(call_index);
         const std::optional<IrCallContinuation> continuation_block =
-            cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_label);
+            cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_it->second);
         if (!continuation_block.has_value()) {
           valid = false;
           break;
@@ -1775,7 +1788,7 @@ std::optional<IrTailChainCandidate> same_target_noop_helper_call_group_opportuni
         });
         existing_sites.push_back(ReturnStackExistingCallSite{
             .label = call_block.label,
-            .target_label = target_label,
+            .target_label = target_it->second,
             .continuation_label = continuation.label,
             .source_address = -1,
         });
