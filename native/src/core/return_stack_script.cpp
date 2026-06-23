@@ -877,7 +877,23 @@ bool ir_op_splits_internal_basic_block(const IrOp& op) {
   default:
     break;
   }
-  return op.opcode == 0x50 || op.opcode == 0x51 || op.opcode == 0x52 || op.opcode == 0x53;
+  switch (op.opcode) {
+  case 0x50:
+  case 0x51:
+  case 0x52:
+  case 0x53:
+  case 0x57:
+  case 0x58:
+  case 0x59:
+  case 0x5a:
+  case 0x5b:
+  case 0x5c:
+  case 0x5d:
+  case 0x5e:
+    return true;
+  default:
+    return false;
+  }
 }
 
 void split_internal_basic_blocks(std::vector<IrLabelBlock>& blocks,

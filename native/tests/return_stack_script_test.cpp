@@ -94,6 +94,13 @@ IrOp ir_raw_jump(const std::string& target) {
   return op;
 }
 
+IrOp ir_raw_cond_jump(int opcode, const std::string& target) {
+  IrOp op = ir_plain(opcode);
+  op.target = target;
+  op.meta.mnemonic = "x?0";
+  return op;
+}
+
 IrOp ir_call(const std::string& target) {
   IrOp op;
   op.kind = IrKind::Call;
@@ -1324,6 +1331,37 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "embedded tail-chain scanner should follow CFG fallthrough through empty aliases");
     require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
             "CFG alias-normalized embedded tail chains should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
+    ops.push_back(ir_raw_cond_jump(0x57, "skip"));
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("skip"));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized,
+            "embedded tail-chain scanner should split raw conditional prefixes before a chain");
+    const auto entry_it =
+        std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
+                     [](const MachineItem& item) {
+                       return item.kind == MachineItemKind::Label && item.name == "entry";
+                     });
+    require(entry_it != search.materialized_items.end() &&
+                std::next(entry_it) != search.materialized_items.end() &&
+                std::next(entry_it)->kind == MachineItemKind::Op &&
+                std::next(entry_it)->opcode == 0x57,
+            "raw conditional prefixes should stay before the materialized charge chain");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "raw conditional-prefix embedded tail chains should remain provable post-layout");
   }
 
   {
