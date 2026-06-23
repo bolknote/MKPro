@@ -3143,6 +3143,13 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
   }
   if (best_fallback_search.has_value()) {
     best_fallback_search->pipeline_candidates_measured = measured_pipeline_candidates;
+    if (best_fallback_search->pipeline_compared &&
+        !best_fallback_search->pipeline_candidate_better) {
+      best_fallback_search->rejection_reason += " after measuring " +
+                                                std::to_string(measured_pipeline_candidates) +
+                                                " materialized candidate" +
+                                                (measured_pipeline_candidates == 1 ? "" : "s");
+    }
     return *best_fallback_search;
   }
 
