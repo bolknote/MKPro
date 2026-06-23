@@ -565,7 +565,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
 
   if (const std::optional<Expression> macro =
           packed_grid_expression_macro_impl(callee, expression.args)) {
-    if (!api.lower_expression_to_x(*macro))
+    if (!api.lower_expression_to_x_no_constant_fold(*macro))
       return false;
     context.optimizations.push_back(OptimizationReport{
         .name = "packed-grid-primitive-lowering",

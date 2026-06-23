@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdlib>
+#include <iostream>
 #include <map>
 #include <optional>
 #include <regex>
@@ -27,6 +29,11 @@ constexpr std::array<std::string_view, 8> kStableRegisters = {"7", "8", "9", "a"
 constexpr std::array<int, 10> kAddressTakingOpcodes = {
     0x51, 0x53, 0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e,
 };
+
+bool trace_post_layout_enabled() {
+  static const bool enabled = std::getenv("MKPRO_NATIVE_TRACE_POST_LAYOUT") != nullptr;
+  return enabled;
+}
 
 struct OverlayExecutable {
   int opcode = 0;
@@ -682,7 +689,14 @@ NumericTargetView numeric_target_view(const std::vector<IrOp>& ops,
   view.numeric.reserve(ops.size());
   view.target_labels.reserve(ops.size());
   std::map<int, std::string> labels_by_address;
-  for (const auto& [label, address] : labels) {
+  int label_scan_address = 0;
+  for (const IrOp& op : ops) {
+    if (op.kind != IrKind::Label) {
+      label_scan_address += passes::cells_per_op(op);
+      continue;
+    }
+    const int address = label_scan_address;
+    const std::string& label = op.name;
     if (!labels_by_address.contains(address))
       labels_by_address[address] = label;
   }
@@ -1688,9 +1702,21 @@ std::optional<RewriteStep> validate_forward_rewrite_group(
 std::optional<RewriteStep> apply_forward_rewrite(
     const std::vector<IrOp>& ir, const std::vector<std::optional<std::string>>& target_labels,
     const std::vector<MachineItem>& items, const std::set<std::string>& reserved) {
+  const bool trace = trace_post_layout_enabled();
   const std::optional<std::string> register_name = first_spare_stable_register(ir, reserved);
-  if (!register_name.has_value())
+  if (!register_name.has_value()) {
+    if (trace) {
+      const std::set<std::string> used = used_registers(ir);
+      std::cerr << "[post-layout] forward no spare register; used=";
+      for (const std::string& name : used)
+        std::cerr << name;
+      std::cerr << " reserved=";
+      for (const std::string& name : reserved)
+        std::cerr << name;
+      std::cerr << "\n";
+    }
     return std::nullopt;
+  }
 
   const std::map<std::string, int> labels = passes::calculate_label_addresses(ir);
   const std::vector<int> addresses = address_by_index(ir);
@@ -1715,12 +1741,33 @@ std::optional<RewriteStep> apply_forward_rewrite(
     }
   }
 
+  if (trace) {
+    std::cerr << "[post-layout] forward spare=R" << *register_name
+              << " groups=" << groups.size() << "\n";
+    for (const auto& [label, indices] : groups) {
+      const auto target_it = labels.find(label);
+      std::cerr << "[post-layout] forward group label=" << label
+                << " target=" << (target_it == labels.end() ? -1 : target_it->second)
+                << " sites=" << indices.size() << "\n";
+    }
+  }
+
   std::optional<RewriteStep> best;
   for (const auto& [label, indices] : groups) {
     (void)label;
-    best = better_rewrite(
-        std::move(best),
-        validate_forward_rewrite_group(indices, ir, target_labels, *register_name, items));
+    std::optional<RewriteStep> candidate =
+        validate_forward_rewrite_group(indices, ir, target_labels, *register_name, items);
+    if (trace) {
+      std::cerr << "[post-layout] forward candidate label=" << label
+                << " valid=" << (candidate.has_value() ? "yes" : "no");
+      if (candidate.has_value()) {
+        std::cerr << " converted=" << candidate->converted << " selector=R"
+                  << candidate->preload.register_name << "=" << candidate->preload.value
+                  << " cells_after=" << machine_cell_count(candidate->items);
+      }
+      std::cerr << "\n";
+    }
+    best = better_rewrite(std::move(best), std::move(candidate));
   }
   return best;
 }
@@ -1736,6 +1783,7 @@ CompileOptions options_with_reserved_preloads(const CompileOptions& options,
 std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& items,
                                              const CompileOptions& options,
                                              const std::vector<PreloadReport>& existing_preloads) {
+  const bool trace = trace_post_layout_enabled();
   CompileOptions round_options = options_with_reserved_preloads(options, existing_preloads);
   round_options.preloaded_indirect_flow = true;
 
@@ -1748,11 +1796,38 @@ std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& ite
   const std::vector<IrOp> ir = raise_machine_to_ir(items);
   const std::map<std::string, int> labels = passes::calculate_label_addresses(ir);
   const NumericTargetView view = numeric_target_view(ir, labels);
+  if (trace) {
+    const std::vector<int> numeric_addresses = address_by_index(view.numeric);
+    int direct_branches = 0;
+    int numeric_targets = 0;
+    int backward_targets = 0;
+    for (std::size_t index = 0; index < view.numeric.size(); ++index) {
+      const IrOp& op = view.numeric.at(index);
+      if (!is_direct_branch_op(op))
+        continue;
+      ++direct_branches;
+      const auto* target = std::get_if<int>(&op.target);
+      if (target == nullptr)
+        continue;
+      ++numeric_targets;
+      if (*target <= numeric_addresses.at(index))
+        ++backward_targets;
+    }
+    std::cerr << "[post-layout] numeric-view direct=" << direct_branches
+              << " numeric_targets=" << numeric_targets
+              << " backward_targets=" << backward_targets << "\n";
+  }
   std::optional<RewriteStep> best;
 
   const passes::PassResult pass = passes::run_preloaded_indirect_flow(
       view.numeric, passes::PassContext{.options = round_options},
       passes::IndirectFlowOptions{.relax_max_target_guard = true});
+  if (trace) {
+    std::cerr << "[post-layout] apply-one cells=" << machine_cell_count(items)
+              << " ir=" << ir.size() << " pass_applied=" << pass.applied
+              << " pass_preloads=" << pass.preloads.size()
+              << " existing_preloads=" << existing_preloads.size() << "\n";
+  }
   if (pass.applied > 0) {
     std::vector<std::pair<std::string, std::vector<int>>> groups;
     for (std::size_t index = 0; index < pass.ops.size(); ++index) {
@@ -1780,12 +1855,29 @@ std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& ite
         group = validate_rewrite_at(indices.front(), ir, view.numeric, view.target_labels, pass,
                                     items, round_options);
       }
+      if (trace) {
+        std::cerr << "[post-layout] group register=" << register_name
+                  << " indices=" << indices.size()
+                  << " valid=" << (group.has_value() ? "yes" : "no") << "\n";
+      }
       best = better_rewrite(std::move(best), std::move(group));
     }
   }
 
-  return better_rewrite(std::move(best),
-                        apply_forward_rewrite(ir, view.target_labels, items, reserved));
+  std::optional<RewriteStep> forward = apply_forward_rewrite(ir, view.target_labels, items, reserved);
+  if (trace) {
+    std::cerr << "[post-layout] forward_valid=" << (forward.has_value() ? "yes" : "no");
+    if (forward.has_value()) {
+      std::cerr << " converted=" << forward->converted << " selector=R"
+                << forward->preload.register_name << "=" << forward->preload.value;
+    }
+    if (best.has_value()) {
+      std::cerr << " best_before_forward converted=" << best->converted << " selector=R"
+                << best->preload.register_name << "=" << best->preload.value;
+    }
+    std::cerr << "\n";
+  }
+  return better_rewrite(std::move(best), std::move(forward));
 }
 
 std::vector<StopTailReuseBase> stop_tail_reuse_bases(const std::vector<MachineItem>& items,
@@ -2036,7 +2128,16 @@ int machine_cell_count(const std::vector<MachineItem>& items) {
 PostLayoutIndirectFlowResult
 optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
                                    const CompileOptions& options, int rescue_above) {
+  const bool trace = trace_post_layout_enabled();
+  if (trace) {
+    std::cerr << "[post-layout] start cells=" << machine_cell_count(items)
+              << " rescue_above=" << rescue_above
+              << " aggressive=" << options.aggressive_post_layout_indirect_flow
+              << " preloaded=" << options.preloaded_indirect_flow << "\n";
+  }
   if (machine_cell_count(items) <= rescue_above) {
+    if (trace)
+      std::cerr << "[post-layout] skipped by threshold\n";
     return PostLayoutIndirectFlowResult{
         .items = items,
     };
@@ -2051,8 +2152,19 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
   std::vector<int> immutable_targets;
   for (int round = 0; round < kMaxRewrites; ++round) {
     const std::optional<RewriteStep> step = apply_one_rewrite(current, options, preloads);
-    if (!step.has_value())
+    if (!step.has_value()) {
+      if (trace)
+        std::cerr << "[post-layout] round=" << round << " no-step\n";
       break;
+    }
+    if (trace) {
+      std::cerr << "[post-layout] round=" << round << " step converted=" << step->converted
+                << " selector=R" << step->preload.register_name << "=" << step->preload.value
+                << " cells_before=" << machine_cell_count(current)
+                << " cells_after_step=" << machine_cell_count(step->items)
+                << " dark=" << step->dark_entry << " super_dark=" << step->super_dark
+                << " existing=" << step->existing_preload << "\n";
+    }
     const bool crosses_immutable_target =
         std::any_of(step->converted_addresses.begin(), step->converted_addresses.end(),
                     [&](int address) {
@@ -2065,8 +2177,11 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
     const std::vector<IrOp> before_ops = raise_machine_to_ir(current);
     const std::optional<RetargetedIr> retargeted =
         retarget_existing_selectors_after_shift(before_ops, step->ops, preloads);
-    if (!retargeted.has_value())
+    if (!retargeted.has_value()) {
+      if (trace)
+        std::cerr << "[post-layout] round=" << round << " retarget failed\n";
       break;
+    }
 
     current = retargeted->items;
     preloads = retargeted->preloads;
@@ -2085,6 +2200,8 @@ optimize_post_layout_indirect_flow(const std::vector<MachineItem>& items,
   }
 
   if (applied == 0) {
+    if (trace)
+      std::cerr << "[post-layout] no rewrites applied\n";
     return PostLayoutIndirectFlowResult{
         .items = items,
     };

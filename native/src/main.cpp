@@ -205,6 +205,14 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
     } else if (arg == "--collect-coalesce-shares") {
       options.collect_coalesce_shares = true;
       options.analysis = true;
+    } else if (arg == "--x-param-value-functions") {
+      options.x_param_value_functions = true;
+    } else if (arg == "--canonicalize-repeated-unary-update-args") {
+      options.canonicalize_repeated_unary_update_args = true;
+    } else if (arg == "--coalesce-copies") {
+      options.coalesce_copies = true;
+    } else if (arg == "--shared-straight-line-call-bodies") {
+      options.shared_straight_line_call_bodies = true;
     } else if (arg == "--segmented-bitplanes") {
       options.segmented_bitplanes = true;
     } else if (arg == "--segmented-line-count-scan") {
@@ -212,6 +220,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.segmented_line_count_scan = true;
     } else if (arg == "--compact-bit-mask-helper-body") {
       options.compact_bit_mask_helper_body = true;
+    } else if (arg == "--shared-bit-mask-helper-calls") {
+      options.shared_bit_mask_helper_calls = true;
     } else if (arg == "--general-constant-preloads") {
       options.general_constant_preloads = true;
     } else if (arg == "--dual-use-constant-indirect-flow") {

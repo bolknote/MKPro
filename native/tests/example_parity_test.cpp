@@ -39,7 +39,9 @@ void supported_examples_match_native_oracles() {
       "fox-hunt-mk61",     "functions-demo", "game-100-pig",
       "giants-country",    "human",          "jack-pot",
       "labyrinth777",      "lunar",          "minesweeper-9x7",
-      "minesweeper-9x9",   "raja-yoga",      "tiny-game",
+      "minesweeper-9x9",   "raja-yoga",      "river-battle",
+      "sea-battle",        "teleport",       "tiny-game",
+      "wumpus",
   };
 
   for (const std::string& name : supported_examples) {
