@@ -1137,6 +1137,76 @@ std::optional<std::string> existing_tail_fragment_label_for_body(
   return std::nullopt;
 }
 
+bool valid_terminal_tail_fragment_suffix_start(const IrLabelBlock& block,
+                                               std::size_t suffix_start) {
+  if (!terminal_tail_fragment_candidate(block) || suffix_start == 0U ||
+      suffix_start + 1U >= block.body.size()) {
+    return false;
+  }
+  if (ir_op_always_transfers_control(block.body.at(suffix_start - 1U)))
+    return false;
+
+  for (std::size_t index = suffix_start; index + 1U < block.body.size(); ++index) {
+    if (ir_op_always_transfers_control(block.body.at(index)))
+      return false;
+  }
+  return true;
+}
+
+bool ir_tail_fragment_suffix_equal(const IrLabelBlock& left, std::size_t left_start,
+                                   const IrLabelBlock& right, std::size_t right_start) {
+  const std::size_t left_size = left.body.size() - left_start;
+  if (right.body.size() - right_start != left_size)
+    return false;
+  for (std::size_t offset = 0; offset < left_size; ++offset) {
+    if (!ir_op_equal_for_tail_fragment(left.body.at(left_start + offset),
+                                       right.body.at(right_start + offset))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::optional<std::size_t> common_terminal_tail_fragment_suffix_start(
+    const std::vector<IrLabelBlock>& blocks, std::size_t block_index) {
+  const IrLabelBlock& block = blocks.at(block_index);
+  const std::optional<std::size_t> fallback = terminal_tail_fragment_suffix_start(block);
+  if (!fallback.has_value())
+    return std::nullopt;
+
+  const std::size_t max_suffix_length = block.body.size() - 1U;
+  for (std::size_t suffix_length = max_suffix_length; suffix_length >= 2U; --suffix_length) {
+    const std::size_t suffix_start = block.body.size() - suffix_length;
+    if (!valid_terminal_tail_fragment_suffix_start(block, suffix_start)) {
+      if (suffix_length == 2U)
+        break;
+      continue;
+    }
+
+    bool shared = false;
+    for (std::size_t other_index = 0; other_index < blocks.size(); ++other_index) {
+      if (other_index == block_index)
+        continue;
+      const IrLabelBlock& other = blocks.at(other_index);
+      if (other.body.size() <= suffix_length)
+        continue;
+      const std::size_t other_start = other.body.size() - suffix_length;
+      if (!valid_terminal_tail_fragment_suffix_start(other, other_start))
+        continue;
+      if (ir_tail_fragment_suffix_equal(block, suffix_start, other, other_start)) {
+        shared = true;
+        break;
+      }
+    }
+    if (shared)
+      return suffix_start;
+    if (suffix_length == 2U)
+      break;
+  }
+
+  return fallback;
+}
+
 ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& blocks) {
   std::set<std::string> labels;
   for (const IrLabelBlock& block : blocks)
@@ -1148,7 +1218,7 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
   std::vector<IrLabelBlock> appended_fragments;
   ExtractedIrFragments extracted;
   for (std::size_t index = 0; index < original_count; ++index) {
-    IrLabelBlock block = std::move(blocks.at(index));
+    IrLabelBlock block = blocks.at(index);
     if (terminal_call_fragment_candidate(block)) {
       const std::string fragment_label =
           unique_callsite_fragment_label(labels, extracted.existing_callsite_fragments);
@@ -1170,7 +1240,7 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
     }
 
     const std::optional<std::size_t> suffix_start =
-        terminal_tail_fragment_suffix_start(block);
+        common_terminal_tail_fragment_suffix_start(blocks, index);
     if (!suffix_start.has_value()) {
       rewritten.push_back(std::move(block));
       continue;
