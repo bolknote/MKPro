@@ -611,8 +611,8 @@ std::optional<std::vector<IrLabelBlock>> split_label_blocks(const std::vector<Ir
     }
     blocks.back().body.push_back(op);
   }
-  if (blocks.size() < 3U) {
-    rejection_reason = "return-stack IR tail layout requires one entry block and at least two tail blocks";
+  if (blocks.size() < 2U) {
+    rejection_reason = "return-stack IR tail layout requires an entry block and at least one tail block";
     return std::nullopt;
   }
   return blocks;
@@ -1046,11 +1046,15 @@ std::optional<int> valid_concrete_existing_call_site_count(
   std::set<std::pair<std::string, std::string>> required;
   for (std::size_t physical_index = 0; physical_index < tail_order.size();
        ++physical_index) {
-    const std::string expected_target = charge_target_for_physical_tail(
-        opportunity, tail_order, physical_index, existing_by_continuation);
     const std::string expected_continuation =
         opportunity.tails.at(tail_order.at(physical_index)).label;
-    required.insert({expected_target, expected_continuation});
+    const std::string canonical_target = physical_index + 1U >= tail_order.size()
+                                            ? opportunity.entry_label
+                                            : charge_label_name(physical_index + 1U);
+    const std::string existing_target = charge_target_for_physical_tail(
+        opportunity, tail_order, physical_index, existing_by_continuation);
+    required.insert({canonical_target, expected_continuation});
+    required.insert({existing_target, expected_continuation});
   }
 
   std::set<std::pair<std::string, std::string>> used_edges;
@@ -1327,6 +1331,12 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
   const MachineLayout layout = machine_layout(plan.items);
   const std::vector<FlowReference> refs = direct_flow_references(plan.items, layout);
   const std::map<int, std::vector<FlowReference>> incoming = incoming_by_target(refs);
+  const std::map<std::string, ReturnStackExistingCallSite> physical_existing_by_continuation =
+      existing_callsite_by_continuation(input);
+  auto physical_charge_label = [&](int index) {
+    return charge_label_for_physical_tail(input, tail_order, static_cast<std::size_t>(index),
+                                          physical_existing_by_continuation);
+  };
 
   plan.one_shot_proved = input.entry_at_address_zero || input.single_start_jump;
   if (plan.one_shot_proved) {
@@ -1337,7 +1347,7 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
 
   plan.no_backward_charge_jumps = true;
   for (int index = 0; index < plan.transitions; ++index) {
-    const auto label_it = layout.labels.find("__return_stack_charge_" + std::to_string(index));
+    const auto label_it = layout.labels.find(physical_charge_label(index));
     if (label_it == layout.labels.end()) {
       plan.no_backward_charge_jumps = false;
       break;
@@ -1353,13 +1363,12 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
 
   plan.no_external_charge_entries = true;
   for (int index = 1; index < plan.transitions; ++index) {
-    const auto label_it = layout.labels.find("__return_stack_charge_" + std::to_string(index));
+    const auto label_it = layout.labels.find(physical_charge_label(index));
     if (label_it == layout.labels.end()) {
       plan.no_external_charge_entries = false;
       break;
     }
-    const auto previous_label_it =
-        layout.labels.find("__return_stack_charge_" + std::to_string(index - 1));
+    const auto previous_label_it = layout.labels.find(physical_charge_label(index - 1));
     if (previous_label_it == layout.labels.end()) {
       plan.no_external_charge_entries = false;
       break;
@@ -1379,8 +1388,7 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
   const auto entry_it = layout.labels.find(input.entry_label);
   plan.unique_entry_after_charge = false;
   if (entry_it != layout.labels.end() && plan.transitions > 0) {
-    const auto final_charge_it =
-        layout.labels.find("__return_stack_charge_" + std::to_string(plan.transitions - 1));
+    const auto final_charge_it = layout.labels.find(physical_charge_label(plan.transitions - 1));
     if (final_charge_it != layout.labels.end()) {
       const std::optional<CallSite> final_call =
           call_site_at_address(plan.items, layout, final_charge_it->second);
@@ -1451,7 +1459,9 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
   search.symbolic_existing_callsite_hints = count_symbolic_existing_callsite_hints(*blocks);
   std::optional<IrTailChainCandidate> candidate =
       existing_call_chain_opportunity(*blocks, rejection);
-  if (!candidate.has_value()) {
+  const bool unsafe_existing_call_chain =
+      !candidate.has_value() && rejection.find("external CFG entry") != std::string::npos;
+  if (!candidate.has_value() && !unsafe_existing_call_chain) {
     search.extracted_tail_fragments = extract_terminal_tail_fragments(*blocks);
     candidate = embedded_tail_chain_opportunity(*blocks, rejection);
   }
