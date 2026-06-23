@@ -36264,12 +36264,9 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     const std::vector<core::DirtyReturnStackDispatchAllocationPlan> allocations =
         core::allocate_dirty_return_stack_dispatch_layouts(
             best.items, core::DirtyReturnStackDispatchOptions{.size_rescue = true});
-    for (const core::DirtyReturnStackDispatchAllocationPlan& allocation : allocations) {
-      if (allocation.allocated && allocation.dispatch.layout_proved) {
-        dirty_dispatch_allocator_signal = true;
-        break;
-      }
-    }
+    dirty_dispatch_allocator_signal =
+        !allocations.empty() && allocations.front().allocated &&
+        allocations.front().dispatch.layout_proved;
   }
   if (return_stack_script_scan.possible || return_stack_tail_layout_scan.has_opportunity ||
       dirty_dispatch_allocator_signal) {
