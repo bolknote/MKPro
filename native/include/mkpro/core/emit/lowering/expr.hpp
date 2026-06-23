@@ -7,6 +7,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace mkpro::core::emit {
 
@@ -31,5 +32,8 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
 std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
                                                        LoweringContext& context,
                                                        const Expression& expression);
+std::optional<std::size_t> packed_grid_macro_arity(const std::string& name);
+std::optional<Expression> packed_grid_expression_macro(const std::string& name,
+                                                       const std::vector<Expression>& args);
 
 } // namespace mkpro::core::emit

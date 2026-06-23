@@ -27,8 +27,8 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -86,6 +86,8 @@ using core::emit::normalize_display_template_literal;
 using core::emit::number_expression;
 using core::emit::offset_expression;
 using core::emit::one_minus_expression;
+using core::emit::packed_grid_expression_macro;
+using core::emit::packed_grid_macro_arity;
 using core::emit::pow10_expression;
 using core::emit::preferred_first_splice_display_literal_program;
 using core::emit::should_use_preloaded_display_literal;
@@ -127,10 +129,12 @@ bool statements_guarantee_return(const std::vector<V2Statement>& statements);
 void validate_v2_function_call_contracts(const V2Program& program,
                                          std::vector<Diagnostic>& diagnostics);
 const V2Board* board_for_cells_mask(const LoweringContext& context, const Expression& mask);
-std::optional<Expression> cell_set_mask_expression_for_collection(
-    const LoweringContext& context, const std::string& collection, const Expression& cell);
-std::optional<Expression> cell_mask_expression_for_collection(
-    const LoweringContext& context, const std::string& collection, const Expression& cell);
+std::optional<Expression> cell_set_mask_expression_for_collection(const LoweringContext& context,
+                                                                  const std::string& collection,
+                                                                  const Expression& cell);
+std::optional<Expression> cell_mask_expression_for_collection(const LoweringContext& context,
+                                                              const std::string& collection,
+                                                              const Expression& cell);
 
 bool statement_contains_return(const V2Statement& statement) {
   if (statement.kind == "v2_return")
@@ -306,8 +310,8 @@ std::vector<std::string> split_top_level_args(std::string_view text) {
   return args;
 }
 
-std::optional<std::vector<std::string>>
-indexed_initializer_list_values(std::string_view initial, int expected) {
+std::optional<std::vector<std::string>> indexed_initializer_list_values(std::string_view initial,
+                                                                        int expected) {
   const std::string trimmed = trim_ascii(std::string(initial));
   if (trimmed.size() < 2 || trimmed.front() != '[' || trimmed.back() != ']')
     return std::nullopt;
@@ -384,10 +388,9 @@ std::string js_number_string(long double value) {
   std::array<char, 128> buffer{};
   const double number = static_cast<double>(value);
   const auto [end, error] =
-      use_exponent
-          ? std::to_chars(buffer.data(), buffer.data() + buffer.size(), number)
-          : std::to_chars(buffer.data(), buffer.data() + buffer.size(), number,
-                          std::chars_format::fixed);
+      use_exponent ? std::to_chars(buffer.data(), buffer.data() + buffer.size(), number)
+                   : std::to_chars(buffer.data(), buffer.data() + buffer.size(), number,
+                                   std::chars_format::fixed);
   if (error == std::errc{}) {
     std::string text(buffer.data(), end);
     return use_exponent ? normalize_exponent_text(lower_ascii(text)) : text;
@@ -866,7 +869,7 @@ int count_identifier_reads_in_program(const V2Program& program, const std::strin
 int count_ephemeral_read_count_statement(const V2Statement& statement, const std::string& name);
 
 int count_ephemeral_read_count_statements(const std::vector<V2Statement>& statements,
-                                         const std::string& name) {
+                                          const std::string& name) {
   int count = 0;
   for (const V2Statement& statement : statements)
     count += count_ephemeral_read_count_statement(statement, name);
@@ -935,8 +938,7 @@ bool branch_reads_only_input_target(const V2Program& program, const V2Statement&
     return false;
   const int branch_reads =
       count_identifier_reads_in_predicate(*branch.predicate, target, branch.line);
-  return branch_reads > 0 &&
-         count_ephemeral_read_count_program(program, target) == branch_reads;
+  return branch_reads > 0 && count_ephemeral_read_count_program(program, target) == branch_reads;
 }
 
 bool statement_reads_only_input_target(const V2Program& program, const V2Statement& statement,
@@ -3322,8 +3324,7 @@ std::optional<std::string> constant_indexed_state_storage_name(const V2Program& 
 }
 
 Expression rewrite_constant_indexed_state_expression(const V2Program& program,
-                                                     const Expression& expression,
-                                                     int& resolved) {
+                                                     const Expression& expression, int& resolved) {
   if (expression.kind == "number" || expression.kind == "string" ||
       expression.kind == "identifier") {
     return expression;
@@ -3395,8 +3396,7 @@ void rewrite_constant_indexed_state_predicate(const V2Program& program, V2Predic
 }
 
 void rewrite_constant_indexed_state_statements(V2Program& program,
-                                               std::vector<V2Statement>& statements,
-                                               int& resolved);
+                                               std::vector<V2Statement>& statements, int& resolved);
 
 void rewrite_constant_indexed_state_action(V2Program& program, V2StatementPtr& action,
                                            int& resolved) {
@@ -3540,8 +3540,8 @@ std::optional<std::string> residual_temp_reuse_source(const V2Statement& assignm
   }
 }
 
-ResidualTempAvailability merge_residual_temp_availability(
-    const std::vector<ResidualTempAvailability>& values) {
+ResidualTempAvailability
+merge_residual_temp_availability(const std::vector<ResidualTempAvailability>& values) {
   if (values.empty())
     return ResidualTempAvailability::Mixed;
   const ResidualTempAvailability first = values.front();
@@ -3676,8 +3676,8 @@ void rewrite_residual_temp_statement(V2Statement& statement, ResidualTempRewrite
         const Expression target = parse_expression(*statement.target, statement.line);
         if (target.index != nullptr) {
           Expression rewritten_target = target;
-          rewritten_target.index = std::make_shared<Expression>(
-              rewrite_residual_temp_expression(*target.index, state));
+          rewritten_target.index =
+              std::make_shared<Expression>(rewrite_residual_temp_expression(*target.index, state));
           if (!expression_equals(target, rewritten_target))
             statement.target = expression_to_source(rewritten_target);
         }
@@ -3738,9 +3738,8 @@ void rewrite_residual_temp_statement(V2Statement& statement, ResidualTempRewrite
     }
     ResidualTempRewriteState otherwise_state = state;
     if (statement.otherwise != nullptr) {
-      std::vector<V2Statement> rewritten =
-          rewrite_residual_temp_suffix(std::vector<V2Statement>{*statement.otherwise},
-                                       otherwise_state);
+      std::vector<V2Statement> rewritten = rewrite_residual_temp_suffix(
+          std::vector<V2Statement>{*statement.otherwise}, otherwise_state);
       *statement.otherwise = statement_from_rewritten_vector(std::move(rewritten), statement.line);
     }
     states.push_back(otherwise_state);
@@ -3776,7 +3775,8 @@ std::vector<V2Statement> rewrite_residual_temp_children(std::vector<V2Statement>
 
 std::vector<V2Statement> rewrite_residual_temp_block(std::vector<V2Statement> statements,
                                                      int& reused) {
-  std::vector<V2Statement> rewritten = rewrite_residual_temp_children(std::move(statements), reused);
+  std::vector<V2Statement> rewritten =
+      rewrite_residual_temp_children(std::move(statements), reused);
   for (std::size_t index = 0; index < rewritten.size(); ++index) {
     V2Statement& assignment = rewritten.at(index);
     const std::optional<std::string> source = residual_temp_reuse_source(assignment);
@@ -3813,8 +3813,7 @@ void reuse_dead_source_residual_temps(V2Program& program,
   optimizations.push_back(OptimizationReport{
       .name = "dead-source-residual-temp-reuse",
       .detail = "Reused " + std::to_string(reused) + " dead source register" +
-                (reused == 1 ? "" : "s") +
-                " for residual temporary values before allocation.",
+                (reused == 1 ? "" : "s") + " for residual temporary values before allocation.",
   });
 }
 
@@ -4681,6 +4680,102 @@ void hoist_common_branch_tails(V2Program& program, std::vector<OptimizationRepor
   }
 }
 
+std::vector<V2Statement> lower_small_case_match_statements(std::vector<V2Statement> statements,
+                                                           int& lowered);
+
+std::vector<V2Statement> lower_small_case_match_action(const V2StatementPtr& action, int& lowered,
+                                                       int line) {
+  (void)line;
+  if (action == nullptr)
+    return {};
+  if (action->kind == "v2_block")
+    return lower_small_case_match_statements(action->body, lowered);
+  return lower_small_case_match_statements({*action}, lowered);
+}
+
+void replace_match_action_with_lowered(V2StatementPtr& action, int& lowered, int line) {
+  if (action == nullptr)
+    return;
+  std::vector<V2Statement> body = lower_small_case_match_action(action, lowered, line);
+  action = std::make_shared<V2Statement>(statement_from_rewritten_vector(std::move(body), line));
+}
+
+std::vector<V2Statement> lower_small_case_match_statement(V2Statement statement, int& lowered) {
+  if (statement.kind == "v2_loop" || statement.kind == "v2_while" || statement.kind == "v2_block") {
+    statement.body = lower_small_case_match_statements(std::move(statement.body), lowered);
+    return {std::move(statement)};
+  }
+  if (statement.kind == "v2_if") {
+    statement.then_body =
+        lower_small_case_match_statements(std::move(statement.then_body), lowered);
+    statement.else_body =
+        lower_small_case_match_statements(std::move(statement.else_body), lowered);
+    return {std::move(statement)};
+  }
+  if (statement.kind != "v2_match" || !statement.expr.has_value())
+    return {std::move(statement)};
+
+  for (V2MatchCase& match_case : statement.cases)
+    replace_match_action_with_lowered(match_case.action, lowered, match_case.line);
+  replace_match_action_with_lowered(statement.otherwise, lowered, statement.line);
+
+  if (statement.cases.empty()) {
+    ++lowered;
+    return lower_small_case_match_action(statement.otherwise, lowered, statement.line);
+  }
+
+  std::vector<std::pair<std::string, V2MatchCase*>> rows;
+  for (V2MatchCase& match_case : statement.cases) {
+    for (const std::string& value : match_case.values)
+      rows.emplace_back(value, &match_case);
+  }
+  const bool single_value_per_case =
+      std::all_of(statement.cases.begin(), statement.cases.end(),
+                  [](const V2MatchCase& match_case) { return match_case.values.size() == 1U; });
+  const bool lowerable_small_match =
+      rows.size() == 1U && single_value_per_case &&
+      (statement.otherwise != nullptr || statement.cases.size() == 1U);
+  if (!lowerable_small_match)
+    return {std::move(statement)};
+
+  V2MatchCase& match_case = *rows.front().second;
+  V2Statement branch;
+  branch.kind = "v2_if";
+  branch.predicate = V2Predicate{
+      .kind = "v2_compare",
+      .left = *statement.expr,
+      .op = "==",
+      .right = rows.front().first,
+  };
+  branch.then_body = lower_small_case_match_action(match_case.action, lowered, match_case.line);
+  branch.line = statement.line;
+  if (statement.otherwise != nullptr) {
+    branch.has_else_body = true;
+    branch.else_body = lower_small_case_match_action(statement.otherwise, lowered, statement.line);
+  }
+  ++lowered;
+  return {std::move(branch)};
+}
+
+std::vector<V2Statement> lower_small_case_match_statements(std::vector<V2Statement> statements,
+                                                           int& lowered) {
+  std::vector<V2Statement> result;
+  for (V2Statement& statement : statements) {
+    std::vector<V2Statement> rewritten =
+        lower_small_case_match_statement(std::move(statement), lowered);
+    result.insert(result.end(), std::make_move_iterator(rewritten.begin()),
+                  std::make_move_iterator(rewritten.end()));
+  }
+  return result;
+}
+
+void lower_small_case_matches(V2Program& program) {
+  int lowered = 0;
+  program.body = lower_small_case_match_statements(std::move(program.body), lowered);
+  for (V2Rule& rule : program.rules)
+    rule.body = lower_small_case_match_statements(std::move(rule.body), lowered);
+}
+
 bool guarded_statement_list_terminates_statically(const V2Program& program,
                                                   const std::vector<V2Statement>& statements,
                                                   std::set<std::string>& seen_rules);
@@ -4797,6 +4892,14 @@ int guarded_estimate_negative_zero_threshold_raw_cost(const Expression& value,
 
 int guarded_estimate_call_cost(const Expression& expression) {
   const std::string name = lower_ascii(expression.callee);
+  if (const std::optional<std::size_t> arity = packed_grid_macro_arity(name)) {
+    if (expression.args.size() != *arity)
+      return std::numeric_limits<int>::max() / 4;
+    if (const std::optional<Expression> macro =
+            packed_grid_expression_macro(name, expression.args)) {
+      return guarded_estimate_expression_cost(*macro);
+    }
+  }
   if (name == kNegativeZeroDegreeSelectorGe) {
     if (expression.args.size() != 2U)
       return std::numeric_limits<int>::max() / 4;
@@ -4871,13 +4974,19 @@ int guarded_estimate_expression_cost(const Expression& expression) {
 }
 
 int guarded_estimate_expression_cost_for_condition(
-    const Expression& expression,
-    const std::map<std::string, std::string>* preloaded_numbers);
+    const Expression& expression, const std::map<std::string, std::string>* preloaded_numbers);
 
 int guarded_estimate_call_cost_for_condition(
-    const Expression& expression,
-    const std::map<std::string, std::string>* preloaded_numbers) {
+    const Expression& expression, const std::map<std::string, std::string>* preloaded_numbers) {
   const std::string name = lower_ascii(expression.callee);
+  if (const std::optional<std::size_t> arity = packed_grid_macro_arity(name)) {
+    if (expression.args.size() != *arity)
+      return std::numeric_limits<int>::max() / 4;
+    if (const std::optional<Expression> macro =
+            packed_grid_expression_macro(name, expression.args)) {
+      return guarded_estimate_expression_cost_for_condition(*macro, preloaded_numbers);
+    }
+  }
   if (name == kNegativeZeroDegreeSelectorGe) {
     if (expression.args.size() != 2U)
       return std::numeric_limits<int>::max() / 4;
@@ -4888,13 +4997,13 @@ int guarded_estimate_call_cost_for_condition(
   if (name == "random") {
     if (expression.args.size() == 1U)
       return guarded_estimate_expression_cost_for_condition(expression.args.front(),
-                                                           preloaded_numbers) +
+                                                            preloaded_numbers) +
              2;
     if (expression.args.size() == 2U)
       return guarded_estimate_expression_cost_for_condition(expression.args.at(0),
-                                                           preloaded_numbers) +
+                                                            preloaded_numbers) +
              guarded_estimate_expression_cost_for_condition(expression.args.at(1),
-                                                           preloaded_numbers) +
+                                                            preloaded_numbers) +
              2;
     return 1;
   }
@@ -4905,35 +5014,31 @@ int guarded_estimate_call_cost_for_condition(
   if (name == "pow") {
     if (expression.args.size() >= 2U && is_numeric_literal_value(expression.args.at(1), 2))
       return guarded_estimate_expression_cost_for_condition(expression.args.at(0),
-                                                           preloaded_numbers) +
+                                                            preloaded_numbers) +
              1;
     if (expression.args.size() >= 2U && is_numeric_literal_value(expression.args.at(0), 10))
       return guarded_estimate_expression_cost_for_condition(expression.args.at(1),
-                                                           preloaded_numbers) +
+                                                            preloaded_numbers) +
              1;
   }
   if (name == "min" || name == "max" || name == "safe_min" || name == "safe_max" ||
       name == "bit_and" || name == "bit_or" || name == "bit_xor" || name == "pow") {
-    return (expression.args.empty()
-                ? 0
-                : guarded_estimate_expression_cost_for_condition(expression.args.at(0),
-                                                                 preloaded_numbers)) +
-           (expression.args.size() < 2U
-                ? 0
-                : guarded_estimate_expression_cost_for_condition(expression.args.at(1),
-                                                                 preloaded_numbers)) +
+    return (expression.args.empty() ? 0
+                                    : guarded_estimate_expression_cost_for_condition(
+                                          expression.args.at(0), preloaded_numbers)) +
+           (expression.args.size() < 2U ? 0
+                                        : guarded_estimate_expression_cost_for_condition(
+                                              expression.args.at(1), preloaded_numbers)) +
            1;
   }
-  return (expression.args.empty()
-              ? 0
-              : guarded_estimate_expression_cost_for_condition(expression.args.front(),
-                                                               preloaded_numbers)) +
+  return (expression.args.empty() ? 0
+                                  : guarded_estimate_expression_cost_for_condition(
+                                        expression.args.front(), preloaded_numbers)) +
          1;
 }
 
 bool expression_number_is_preloaded_for_condition(
-    const Expression& expression,
-    const std::map<std::string, std::string>* preloaded_numbers) {
+    const Expression& expression, const std::map<std::string, std::string>* preloaded_numbers) {
   if (preloaded_numbers == nullptr)
     return false;
   if (expression.kind == "number")
@@ -4946,8 +5051,7 @@ bool expression_number_is_preloaded_for_condition(
 }
 
 int guarded_estimate_expression_cost_for_condition(
-    const Expression& expression,
-    const std::map<std::string, std::string>* preloaded_numbers) {
+    const Expression& expression, const std::map<std::string, std::string>* preloaded_numbers) {
   if (expression_number_is_preloaded_for_condition(expression, preloaded_numbers))
     return 1;
   if (expression.kind == "string")
@@ -4957,22 +5061,21 @@ int guarded_estimate_expression_cost_for_condition(
   if (expression.kind == "identifier")
     return 1;
   if (expression.kind == "indexed")
-    return (expression.index == nullptr
-                ? 0
-                : guarded_estimate_expression_cost_for_condition(*expression.index,
-                                                                 preloaded_numbers)) +
+    return (expression.index == nullptr ? 0
+                                        : guarded_estimate_expression_cost_for_condition(
+                                              *expression.index, preloaded_numbers)) +
            2;
   if (expression.kind == "unary")
-    return (expression.expr == nullptr
-                ? 0
-                : guarded_estimate_expression_cost_for_condition(*expression.expr,
-                                                                 preloaded_numbers)) +
+    return (expression.expr == nullptr ? 0
+                                       : guarded_estimate_expression_cost_for_condition(
+                                             *expression.expr, preloaded_numbers)) +
            1;
   if (expression.kind == "binary") {
     if (expression.op == "*" && expression.left != nullptr && expression.right != nullptr &&
         expression_equals(*expression.left, *expression.right) &&
         expression_pure_for_substitution(*expression.left)) {
-      return guarded_estimate_expression_cost_for_condition(*expression.left, preloaded_numbers) + 1;
+      return guarded_estimate_expression_cost_for_condition(*expression.left, preloaded_numbers) +
+             1;
     }
     if (expression.op == "/" && expression.left != nullptr && expression.right != nullptr &&
         is_numeric_literal_value(*expression.left, 1)) {
@@ -4982,19 +5085,16 @@ int guarded_estimate_expression_cost_for_condition(
     if (const std::optional<core::emit::RemainderByConstantMatch> remainder =
             match_remainder_by_constant(expression)) {
       return guarded_estimate_expression_cost_for_condition(remainder->value, preloaded_numbers) +
-             guarded_estimate_expression_cost_for_condition(remainder->divisor,
-                                                            preloaded_numbers) *
+             guarded_estimate_expression_cost_for_condition(remainder->divisor, preloaded_numbers) *
                  2 +
              3;
     }
-    return (expression.left == nullptr
-                ? 0
-                : guarded_estimate_expression_cost_for_condition(*expression.left,
-                                                                 preloaded_numbers)) +
-           (expression.right == nullptr
-                ? 0
-                : guarded_estimate_expression_cost_for_condition(*expression.right,
-                                                                 preloaded_numbers)) +
+    return (expression.left == nullptr ? 0
+                                       : guarded_estimate_expression_cost_for_condition(
+                                             *expression.left, preloaded_numbers)) +
+           (expression.right == nullptr ? 0
+                                        : guarded_estimate_expression_cost_for_condition(
+                                              *expression.right, preloaded_numbers)) +
            1;
   }
   if (expression.kind == "call")
@@ -5063,8 +5163,7 @@ int guarded_condition_compile_cost(
       const std::optional<double> divisor =
           remainder.has_value() ? numeric_literal_value(remainder->divisor) : std::nullopt;
       if (remainder.has_value() && divisor.has_value() && *divisor != 0.0) {
-        return guarded_estimate_expression_cost_for_condition(remainder->value,
-                                                              preloaded_numbers) +
+        return guarded_estimate_expression_cost_for_condition(remainder->value, preloaded_numbers) +
                guarded_estimate_expression_cost_for_condition(remainder->divisor,
                                                               preloaded_numbers) +
                4;
@@ -5708,6 +5807,50 @@ void add_register_variable(RegisterCollection& collection, std::string name) {
     collection.variables.insert(std::move(name));
 }
 
+bool dispatch_scratch_needed_for_match_selector(const V2Statement& statement) {
+  if (statement.kind != "v2_match" || !statement.expr.has_value())
+    return false;
+  try {
+    const Expression selector = parse_expression(*statement.expr, statement.line);
+    return selector.kind != "identifier";
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+void collect_dispatch_scratch_registers_from_statement(RegisterCollection& collection,
+                                                       const V2Statement& statement,
+                                                       int& next_id) {
+  if (dispatch_scratch_needed_for_match_selector(statement)) {
+    add_register_variable(collection, "__dispatch_" + std::to_string(next_id));
+    ++next_id;
+  }
+  for (const V2Statement& child : statement.body)
+    collect_dispatch_scratch_registers_from_statement(collection, child, next_id);
+  for (const V2Statement& child : statement.then_body)
+    collect_dispatch_scratch_registers_from_statement(collection, child, next_id);
+  for (const V2Statement& child : statement.else_body)
+    collect_dispatch_scratch_registers_from_statement(collection, child, next_id);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_dispatch_scratch_registers_from_statement(collection, *match_case.action, next_id);
+  }
+  if (statement.otherwise != nullptr)
+    collect_dispatch_scratch_registers_from_statement(collection, *statement.otherwise, next_id);
+}
+
+void collect_dispatch_scratch_registers(LoweringContext& context, RegisterCollection& collection,
+                                        const V2Program& program) {
+  (void)context;
+  int next_id = 0;
+  for (const V2Statement& statement : program.body)
+    collect_dispatch_scratch_registers_from_statement(collection, statement, next_id);
+  for (const V2Rule& rule : program.rules) {
+    for (const V2Statement& statement : rule.body)
+      collect_dispatch_scratch_registers_from_statement(collection, statement, next_id);
+  }
+}
+
 void add_state_bank_selector(RegisterCollection& collection, std::string name) {
   if (collection.seen_state_bank_selectors.insert(name).second)
     collection.state_bank_selectors.push_back(name);
@@ -6212,7 +6355,8 @@ void collect_assignment_target(LoweringContext& context, RegisterCollection& col
   add_register_variable(collection, target);
 }
 
-bool collection_unit_increment_expression(const Expression& expression, const std::string& pointer) {
+bool collection_unit_increment_expression(const Expression& expression,
+                                          const std::string& pointer) {
   if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
       expression.right == nullptr) {
     return false;
@@ -6362,25 +6506,23 @@ void collect_locals_from_statement(LoweringContext& context, RegisterCollection&
       collect_locals_from_display_item(context, collection, item);
   }
   for (std::size_t index = 0; index < statement.body.size(); ++index) {
-    collect_locals_from_statement(context, collection, statement.body.at(index),
-                                  index + 1U < statement.body.size()
-                                      ? &statement.body.at(index + 1U)
-                                      : nullptr);
+    collect_locals_from_statement(
+        context, collection, statement.body.at(index),
+        index + 1U < statement.body.size() ? &statement.body.at(index + 1U) : nullptr);
   }
-  const bool skip_membership_clear_prefix = cells_contains_clear_prefix_statement(context, statement);
+  const bool skip_membership_clear_prefix =
+      cells_contains_clear_prefix_statement(context, statement);
   for (std::size_t index = 0; index < statement.then_body.size(); ++index) {
     if (skip_membership_clear_prefix && index == 0)
       continue;
-    collect_locals_from_statement(context, collection, statement.then_body.at(index),
-                                  index + 1U < statement.then_body.size()
-                                      ? &statement.then_body.at(index + 1U)
-                                      : nullptr);
+    collect_locals_from_statement(
+        context, collection, statement.then_body.at(index),
+        index + 1U < statement.then_body.size() ? &statement.then_body.at(index + 1U) : nullptr);
   }
   for (std::size_t index = 0; index < statement.else_body.size(); ++index) {
-    collect_locals_from_statement(context, collection, statement.else_body.at(index),
-                                  index + 1U < statement.else_body.size()
-                                      ? &statement.else_body.at(index + 1U)
-                                      : nullptr);
+    collect_locals_from_statement(
+        context, collection, statement.else_body.at(index),
+        index + 1U < statement.else_body.size() ? &statement.else_body.at(index + 1U) : nullptr);
   }
   for (const V2MatchCase& match_case : statement.cases) {
     if (match_case.action != nullptr)
@@ -6610,14 +6752,12 @@ void collect_state_bank_selector_requirements_from_statement(
   for (std::size_t index = 0; index < statement.then_body.size(); ++index) {
     collect_state_bank_selector_requirements_from_statement(
         context, collection, hints, statement.then_body.at(index), required, required_order,
-        index + 1U < statement.then_body.size() ? &statement.then_body.at(index + 1U)
-                                                : nullptr);
+        index + 1U < statement.then_body.size() ? &statement.then_body.at(index + 1U) : nullptr);
   }
   for (std::size_t index = 0; index < statement.else_body.size(); ++index) {
     collect_state_bank_selector_requirements_from_statement(
         context, collection, hints, statement.else_body.at(index), required, required_order,
-        index + 1U < statement.else_body.size() ? &statement.else_body.at(index + 1U)
-                                                : nullptr);
+        index + 1U < statement.else_body.size() ? &statement.else_body.at(index + 1U) : nullptr);
   }
   for (const V2MatchCase& match_case : statement.cases) {
     for (const std::string& value : match_case.values)
@@ -6725,9 +6865,8 @@ void apply_coord_list_cell_register_hints(LoweringContext& context, const V2Prog
       collect_coord_list_packed_report_targets(context, program);
   for (const std::string& cell : collect_coord_list_cell_names(context, program)) {
     if (collection.variables.contains(cell) && !hints.contains(cell))
-      hints[cell] =
-          RegisterHint{.mode = RegisterHintMode::Prefer,
-                       .index = packed_targets.empty() ? 0x4 : 0x3};
+      hints[cell] = RegisterHint{.mode = RegisterHintMode::Prefer,
+                                 .index = packed_targets.empty() ? 0x4 : 0x3};
   }
 }
 
@@ -6849,17 +6988,16 @@ void collect_preincrement_indexed_store_pointers_from_statements(
     std::set<std::string>& pointers) {
   for (std::size_t index = 0; index < statements.size(); ++index) {
     const V2Statement& statement = statements.at(index);
-    const V2Statement* next =
-        index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
-    if (collection_preincrement_indexed_store_shape(context, statement, next) &&
-        next != nullptr && next->target.has_value()) {
+    const V2Statement* next = index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
+    if (collection_preincrement_indexed_store_shape(context, statement, next) && next != nullptr &&
+        next->target.has_value()) {
       pointers.insert(*next->target);
     }
     collect_preincrement_indexed_store_pointers_from_statements(context, statement.body, pointers);
     collect_preincrement_indexed_store_pointers_from_statements(context, statement.then_body,
-                                                               pointers);
+                                                                pointers);
     collect_preincrement_indexed_store_pointers_from_statements(context, statement.else_body,
-                                                               pointers);
+                                                                pointers);
     for (const V2MatchCase& match_case : statement.cases) {
       if (match_case.action != nullptr) {
         collect_preincrement_indexed_store_pointers_from_statements(
@@ -6873,8 +7011,8 @@ void collect_preincrement_indexed_store_pointers_from_statements(
   }
 }
 
-std::set<std::string> collect_preincrement_indexed_store_pointers(
-    const LoweringContext& context, const V2Program& program) {
+std::set<std::string> collect_preincrement_indexed_store_pointers(const LoweringContext& context,
+                                                                  const V2Program& program) {
   std::set<std::string> pointers;
   collect_preincrement_indexed_store_pointers_from_statements(context, program.body, pointers);
   for (const V2Rule& rule : program.rules) {
@@ -6916,9 +7054,9 @@ void apply_unit_update_hints(const LoweringContext& context, const V2Program& pr
   for (const std::string& variable : increments) {
     if (!collection.variables.contains(variable) || hints.contains(variable))
       continue;
-    const std::vector<int>& increment_preference =
-        preincrement_pointers.contains(variable) ? preincrement_increment_preference
-                                                 : default_increment_preference;
+    const std::vector<int>& increment_preference = preincrement_pointers.contains(variable)
+                                                       ? preincrement_increment_preference
+                                                       : default_increment_preference;
     const auto candidate =
         std::find_if(increment_preference.begin(), increment_preference.end(),
                      [&hints](int index) { return !hint_register_is_used(hints, index); });
@@ -7082,8 +7220,9 @@ Expression ts_decimal_ones_expression(const Expression& expression) {
       multiply_expression(number_expression("10"), ts_decimal_tens_expression(expression)));
 }
 
-std::optional<Expression> cell_set_mask_expression_for_collection(
-    const LoweringContext& context, const std::string& collection, const Expression& cell) {
+std::optional<Expression> cell_set_mask_expression_for_collection(const LoweringContext& context,
+                                                                  const std::string& collection,
+                                                                  const Expression& cell) {
   const V2Board* board = board_for_cells_mask(context, identifier_expression(collection));
   if (board == nullptr)
     return std::nullopt;
@@ -8028,9 +8167,8 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   suppress_packed_score_inline_rules(context, program);
   for (std::size_t index = 0; index < program.body.size(); ++index) {
     collect_locals_from_statement(context, collection, program.body.at(index),
-                                  index + 1U < program.body.size()
-                                      ? &program.body.at(index + 1U)
-                                      : nullptr);
+                                  index + 1U < program.body.size() ? &program.body.at(index + 1U)
+                                                                   : nullptr);
   }
   for (const V2Rule& rule : program.rules) {
     if (match_x_param_stack_stop_risk_rule(rule).has_value())
@@ -8055,12 +8193,12 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
       }
       for (std::size_t index = start; index < rule.body.size(); ++index) {
         collect_locals_from_statement(context, collection, rule.body.at(index),
-                                      index + 1U < rule.body.size()
-                                          ? &rule.body.at(index + 1U)
-                                          : nullptr);
+                                      index + 1U < rule.body.size() ? &rule.body.at(index + 1U)
+                                                                    : nullptr);
       }
     }
   }
+  collect_dispatch_scratch_registers(context, collection, program);
   collect_spatial_count_scratch_registers(collection);
   if (context.packed_line_family_mutating_selector_update_check_tail)
     apply_packed_line_family_mutating_selector_hints(context, program, collection, hints);
@@ -8329,7 +8467,8 @@ bool try_emit_constant_synthesis(LoweringContext& context, const std::string& ke
               context.optimizations.push_back(OptimizationReport{
                   .name = "constant-synthesis",
                   .detail = "Built constant " + key + " by changed the sign of preloaded R" +
-                            register_text_for(context, name) + " (" + value + ") (2 cells instead "
+                            register_text_for(context, name) + " (" + value +
+                            ") (2 cells instead "
                             "of direct " +
                             std::to_string(direct_cost) + ").",
               });
@@ -8522,8 +8661,7 @@ void emit_number_or_preload(LoweringContext& context, const std::string& value,
                            : std::nullopt;
   const std::string preload_key =
       selector_value.has_value() ? normalize_number_key(*selector_value) : key;
-  const bool stack_literal = comment.has_value() &&
-                             comment->starts_with("preload stack const ") &&
+  const bool stack_literal = comment.has_value() && comment->starts_with("preload stack const ") &&
                              is_stack_literal_preload_only_constant(key);
   const auto preload_it = context.preloaded_numbers.find(preload_key);
   if (preload_it != context.preloaded_numbers.end() &&
@@ -9665,11 +9803,11 @@ struct CoordListLineCountAssignmentForHints {
   Expression expression;
 };
 
-std::optional<CoordListLineCountAssignmentForHints> coord_list_line_count_assignment_for_hints(
-    LoweringContext& context, const V2Statement& statement,
-    const std::map<std::string, const V2Rule*>& rules) {
-  const auto from_assign = [&](const V2Statement& assign)
-      -> std::optional<CoordListLineCountAssignmentForHints> {
+std::optional<CoordListLineCountAssignmentForHints>
+coord_list_line_count_assignment_for_hints(LoweringContext& context, const V2Statement& statement,
+                                           const std::map<std::string, const V2Rule*>& rules) {
+  const auto from_assign =
+      [&](const V2Statement& assign) -> std::optional<CoordListLineCountAssignmentForHints> {
     if (assign.kind != "v2_assign" || !assign.target.has_value() || !assign.expr.has_value())
       return std::nullopt;
     try {
@@ -9987,8 +10125,9 @@ std::optional<Expression> one_dimensional_cell_mask_expression_for_collection(
   return std::nullopt;
 }
 
-std::optional<Expression> cell_mask_expression_for_collection(
-    const LoweringContext& context, const std::string& collection, const Expression& cell) {
+std::optional<Expression> cell_mask_expression_for_collection(const LoweringContext& context,
+                                                              const std::string& collection,
+                                                              const Expression& cell) {
   if (const std::optional<Expression> one_dimensional =
           one_dimensional_cell_mask_expression_for_collection(context, collection, cell)) {
     return one_dimensional;
@@ -10130,6 +10269,15 @@ void collect_preload_number_literals(const Expression& expression, ValueSet& val
           cell_mask_expression(expression.args.at(0), expression.args.at(1)), values, occurrences);
       return;
     }
+    if (callee == "digit_at" && expression.args.size() == 2U) {
+      collect_preload_number_literals(
+          int_expression(multiply_expression(
+              frac_expression(divide_expression(expression.args.at(0),
+                                                pow10_expression(expression.args.at(1)))),
+              number_expression("10"))),
+          values, occurrences);
+      return;
+    }
   }
   for (const Expression& arg : expression.args)
     collect_preload_number_literals(arg, values, occurrences);
@@ -10249,9 +10397,8 @@ void collect_derived_preload_number_literals_from_statements(
         const Expression target = parse_expression(*statement.target, statement.line);
         if (target.kind == "identifier" && is_cells_state_name(context, target.name)) {
           const Expression item = parse_expression(*statement.expr, statement.line);
-          const Expression mask =
-              cell_mask_expression_for_collection(context, target.name, item)
-                  .value_or(bit_mask_expression(item));
+          const Expression mask = cell_mask_expression_for_collection(context, target.name, item)
+                                      .value_or(bit_mask_expression(item));
           collect_preload_number_literals(mask, values, occurrences);
         }
       } catch (const std::exception&) {
@@ -10270,8 +10417,8 @@ void collect_derived_preload_number_literals_from_statements(
     }
     for (const V2MatchCase& match_case : statement.cases) {
       if (match_case.action != nullptr) {
-        collect_derived_preload_number_literals_from_statements(
-            context, {*match_case.action}, values, occurrences);
+        collect_derived_preload_number_literals_from_statements(context, {*match_case.action},
+                                                                values, occurrences);
       }
     }
     if (statement.otherwise != nullptr) {
@@ -10553,8 +10700,7 @@ std::optional<int> standalone_synthesized_constant_cost(const std::string& value
   if (!exponent.has_value())
     return std::nullopt;
   const int cost = guarded_estimate_number_cost(std::to_string(*exponent)) + 1;
-  return cost < guarded_estimate_number_cost(value) ? std::optional<int>{cost}
-                                                    : std::nullopt;
+  return cost < guarded_estimate_number_cost(value) ? std::optional<int>{cost} : std::nullopt;
 }
 
 std::optional<std::string> executable_setup_value(const std::string& value) {
@@ -10666,15 +10812,14 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
     return weight * (guarded_estimate_number_cost(value) - 1) + bonus +
            dual_use_address_constant_preload_bonus(value);
   };
-  std::stable_sort(ranked.begin(), ranked.end(),
-                   [&](const std::string& left, const std::string& right) {
-                     const int left_savings = savings(left);
-                     const int right_savings = savings(right);
-                     if (left_savings != right_savings)
-                       return left_savings > right_savings;
-                     return guarded_estimate_number_cost(left) >
-                            guarded_estimate_number_cost(right);
-                   });
+  std::stable_sort(
+      ranked.begin(), ranked.end(), [&](const std::string& left, const std::string& right) {
+        const int left_savings = savings(left);
+        const int right_savings = savings(right);
+        if (left_savings != right_savings)
+          return left_savings > right_savings;
+        return guarded_estimate_number_cost(left) > guarded_estimate_number_cost(right);
+      });
   return ranked;
 }
 
@@ -11513,13 +11658,13 @@ bool lower_bit_mask_to_x_with_quotient_scratch(LoweringContext& context, const E
 }
 
 bool lower_bit_mask_to_x(LoweringContext& context, const Expression& index, int source_line) {
-  return lower_bit_mask_to_x_with_quotient_scratch(
-      context, index, bit_mask_helper_scratch(context), source_line);
+  return lower_bit_mask_to_x_with_quotient_scratch(context, index, bit_mask_helper_scratch(context),
+                                                   source_line);
 }
 
 bool lower_membership_clear_operands_to_stack(LoweringContext& context,
-                                              const std::string& collection,
-                                              const Expression& item, int source_line) {
+                                              const std::string& collection, const Expression& item,
+                                              int source_line) {
   const std::string scratch = spatial_hit_scratch_name(collection);
   if (context.register_index_by_name.contains(scratch)) {
     if (!lower_expression_to_x(context, item))
@@ -12277,16 +12422,14 @@ bool lower_coord_list_line_count_assignment(LoweringContext& context, const std:
     if (!lower_coord_ones_digit_to_x(context, indirect->cell, source_line))
       return false;
     context.emitter.emit_op(0x11, "-", "coord_list dx", source_line);
-    context.emitter.emit_jump(0x57, "F x!=0", visible_label, "coord_list same column",
-                              source_line);
+    context.emitter.emit_jump(0x57, "F x!=0", visible_label, "coord_list same column", source_line);
 
     if (!lower_coord_tens_digit_to_x(context, current, source_line))
       return false;
     if (!lower_coord_tens_digit_to_x(context, indirect->cell, source_line))
       return false;
     context.emitter.emit_op(0x11, "-", "coord_list dy", source_line);
-    context.emitter.emit_jump(0x57, "F x!=0", visible_label, "coord_list same row",
-                              source_line);
+    context.emitter.emit_jump(0x57, "F x!=0", visible_label, "coord_list same row", source_line);
     context.emitter.emit_op(0x31, "К |x|", "coord_list |dy|", source_line);
     context.emitter.emit_op(0x14, "<->", "coord_list dx", source_line);
     context.emitter.emit_op(0x31, "К |x|", "coord_list |dx|", source_line);
@@ -12486,8 +12629,8 @@ numeric_source_display_fields(const LoweringContext& context,
   return fields;
 }
 
-std::optional<std::string> unlowerable_decimal_display_literal(
-    const std::vector<DisplayItem>& items) {
+std::optional<std::string>
+unlowerable_decimal_display_literal(const std::vector<DisplayItem>& items) {
   std::vector<PackedDisplayField> fields;
   for (const DisplayItem& item : items) {
     if (item.kind == "literal") {
@@ -12619,13 +12762,10 @@ bool source_field_matches_current_x(const LoweringContext& context,
          context.emitter.current_x_variable == field.item->name;
 }
 
-bool lower_packed_display_fields_in_order(LoweringContext& context,
-                                          const std::vector<PackedDisplayField>& fields,
-                                          int source_line, bool reuse_current_x,
-                                          const std::string& display_source_comment =
-                                              "display source",
-                                          const std::string& digit_literal_comment =
-                                              "display digit literal") {
+bool lower_packed_display_fields_in_order(
+    LoweringContext& context, const std::vector<PackedDisplayField>& fields, int source_line,
+    bool reuse_current_x, const std::string& display_source_comment = "display source",
+    const std::string& digit_literal_comment = "display digit literal") {
   if (fields.empty()) {
     context.emitter.emit_number("0");
     return true;
@@ -12680,14 +12820,11 @@ packed_storage_reuse_display_fields(const LoweringContext& context,
   return fields;
 }
 
-bool lower_packed_numeric_display_statement(LoweringContext& context,
-                                            const std::vector<DisplayItem>& items,
-                                            int source_line,
-                                            const std::string& display_source_comment =
-                                                "display source",
-                                            const std::string& digit_literal_comment =
-                                                "display digit literal",
-                                            const std::string& show_comment = "show") {
+bool lower_packed_numeric_display_statement(
+    LoweringContext& context, const std::vector<DisplayItem>& items, int source_line,
+    const std::string& display_source_comment = "display source",
+    const std::string& digit_literal_comment = "display digit literal",
+    const std::string& show_comment = "show") {
   const std::optional<std::vector<PackedDisplayField>> parsed_fields =
       numeric_display_fields(context, items);
   if (!parsed_fields.has_value() || parsed_fields->size() < 2)
@@ -12875,8 +13012,7 @@ bool lower_preloaded_display_literal(LoweringContext& context, const std::string
   }
   context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
   report_screen_literal_lowering(context, "screen-text-literal-preload",
-                                 "Displayed screen " + display_name +
-                                     " from prebuilt literal R" +
+                                 "Displayed screen " + display_name + " from prebuilt literal R" +
                                      register_text_for(context, preload_it->second) + ".");
   return true;
 }
@@ -13260,9 +13396,8 @@ struct DisplayStrategyCandidate {
 };
 
 int display_source_item_count(const std::vector<DisplayItem>& items) {
-  return static_cast<int>(std::count_if(items.begin(), items.end(), [](const DisplayItem& item) {
-    return item.kind == "source";
-  }));
+  return static_cast<int>(std::count_if(
+      items.begin(), items.end(), [](const DisplayItem& item) { return item.kind == "source"; }));
 }
 
 std::optional<std::string> select_display_strategy(LoweringContext& context,
@@ -13278,8 +13413,9 @@ std::optional<std::string> select_display_strategy(LoweringContext& context,
   const bool packed_helper_available = should_share_packed_display(context, statement);
   const bool display_byte_helper_available = should_share_display_byte(context, statement);
   const std::optional<int> display_byte_cost =
-      display_source_item_count(*statement.items) == 0 ? std::nullopt
-                                                       : estimate_display_byte_body_cost(context, statement);
+      display_source_item_count(*statement.items) == 0
+          ? std::nullopt
+          : estimate_display_byte_body_cost(context, statement);
 
   std::vector<DisplayStrategyCandidate> candidates{
       DisplayStrategyCandidate{
@@ -13314,8 +13450,8 @@ std::optional<std::string> select_display_strategy(LoweringContext& context,
   };
 
   const auto selected = std::min_element(
-      candidates.begin(), candidates.end(), [](const DisplayStrategyCandidate& lhs,
-                                               const DisplayStrategyCandidate& rhs) {
+      candidates.begin(), candidates.end(),
+      [](const DisplayStrategyCandidate& lhs, const DisplayStrategyCandidate& rhs) {
         if (lhs.available != rhs.available)
           return lhs.available;
         if (!lhs.available)
@@ -13411,11 +13547,11 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
   }
   const std::string show_comment =
       statement.inline_name.has_value() ? "show " + *statement.inline_name : "show";
-  const std::string display_source_comment =
-      statement.inline_name.has_value() ? "display " + *statement.inline_name + " source"
-                                        : "display source";
-  const std::string display_name = statement.inline_name.value_or(
-      statement.name.value_or("display"));
+  const std::string display_source_comment = statement.inline_name.has_value()
+                                                 ? "display " + *statement.inline_name + " source"
+                                                 : "display source";
+  const std::string display_name =
+      statement.inline_name.value_or(statement.name.value_or("display"));
   if (statement.items->empty()) {
     return lower_literal_display_body(context, display_name, "", statement.line);
   }
@@ -13435,12 +13571,11 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
   if (context.hoist_shared_helpers) {
     if (const std::optional<std::string> literal =
             unlowerable_decimal_display_literal(*statement.items)) {
-      const std::string screen =
-          statement.inline_name.value_or(statement.name.value_or("display"));
-      context.diagnostics.push_back(diagnostic(
-          DiagnosticSeverity::Error, "native-unsupported",
-          "Screen '" + screen + "' contains display literal \"" + *literal +
-              "\" that is not lowerable yet."));
+      const std::string screen = statement.inline_name.value_or(statement.name.value_or("display"));
+      context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                               "Screen '" + screen +
+                                                   "' contains display literal \"" + *literal +
+                                                   "\" that is not lowerable yet."));
       return false;
     }
   }
@@ -13460,9 +13595,8 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
                                                         statement.line))
     return true;
 
-  if (core::emit::lower_formatted_coord_report_display_statement(display_api, context,
-                                                                 *statement.items, display_name,
-                                                                 statement.line))
+  if (core::emit::lower_formatted_coord_report_display_statement(
+          display_api, context, *statement.items, display_name, statement.line))
     return true;
 
   const std::optional<std::string> strategy = select_display_strategy(context, statement);
@@ -13528,7 +13662,8 @@ bool lower_literal_terminal_stop(LoweringContext& context, const std::string& li
     }
   }
 
-  if (lower_literal_display_body(context, "__halt_literal_" + std::to_string(line), literal, line)) {
+  if (lower_literal_display_body(context, "__halt_literal_" + std::to_string(line), literal,
+                                 line)) {
     report_terminal_literal_stop(context, literal, line);
     return true;
   }
@@ -13807,8 +13942,14 @@ bool lower_decrement_update(LoweringContext& context, const std::string& target,
       (field_it->second->type == "range" || field_it->second->type == "counter") &&
       field_it->second->min.has_value() && *field_it->second->min >= 1 &&
       field_it->second->max.has_value() && *field_it->second->max <= 14;
+  const bool fits_terminal_underflow_decrement =
+      context.indirect_underflow_decrement && field_it != context.state_fields.end() &&
+      field_it->second != nullptr &&
+      (field_it->second->type == "range" || field_it->second->type == "counter") &&
+      field_it->second->min.has_value() && *field_it->second->min >= 0 &&
+      context.terminal_underflow_unit_decrements.contains({target, source_line});
   const int index = register_index_for(context, target);
-  if (fits_indirect_decrement && index >= 0 && index <= 3) {
+  if ((fits_indirect_decrement || fits_terminal_underflow_decrement) && index >= 0 && index <= 3) {
     context.emitter.emit_op(0xd0 + index, "К П->X " + register_text_for(context, target),
                             "decrement " + target, source_line);
     context.emitter.current_x_variable.reset();
@@ -13947,6 +14088,7 @@ bool lower_tiny_match(LoweringContext& context, const V2Statement& statement) {
 
   const std::string residual_label = context.emitter.fresh_label("match_residual");
   const std::string otherwise_label = context.emitter.fresh_label("match_otherwise");
+  const std::string end_label = context.emitter.fresh_label("match_end");
 
   context.emitter.machine_entry_open = true;
   context.emitter.emit_number(statement.cases.at(0).values.at(0));
@@ -13954,7 +14096,7 @@ bool lower_tiny_match(LoweringContext& context, const V2Statement& statement) {
   context.emitter.emit_jump(0x5e, "F x=0", residual_label, "case mismatch", statement.line);
   if (!lower_tiny_terminal_call(context, *first_rule))
     return false;
-  context.emitter.emit_jump(0x51, "БП", 0, "dispatch end", statement.line);
+  context.emitter.emit_jump(0x51, "БП", end_label, "dispatch end", statement.line);
 
   context.emitter.emit_label(residual_label, {.hidden = true});
   const int residual_value =
@@ -13966,7 +14108,10 @@ bool lower_tiny_match(LoweringContext& context, const V2Statement& statement) {
     return false;
 
   context.emitter.emit_label(otherwise_label, {.hidden = true});
-  return lower_tiny_terminal_call(context, *otherwise_rule);
+  if (!lower_tiny_terminal_call(context, *otherwise_rule))
+    return false;
+  context.emitter.emit_label(end_label, {.hidden = true});
+  return true;
 }
 
 bool lower_human_match(LoweringContext& context, const V2Statement& statement) {
@@ -13987,6 +14132,7 @@ bool lower_human_match(LoweringContext& context, const V2Statement& statement) {
 
   const std::string residual_label = context.emitter.fresh_label("match_residual");
   const std::string otherwise_label = context.emitter.fresh_label("match_otherwise");
+  const std::string end_label = context.emitter.fresh_label("match_end");
 
   context.emitter.machine_entry_open = true;
   context.emitter.emit_number(statement.cases.at(0).values.at(0));
@@ -13994,7 +14140,7 @@ bool lower_human_match(LoweringContext& context, const V2Statement& statement) {
   context.emitter.emit_jump(0x5e, "F x=0", residual_label, "case mismatch", statement.line);
   if (!lower_human_terminal_call(context, *first_rule))
     return false;
-  context.emitter.emit_jump(0x51, "БП", 0, "dispatch end", statement.line);
+  context.emitter.emit_jump(0x51, "БП", end_label, "dispatch end", statement.line);
 
   context.emitter.emit_label(residual_label, {.hidden = true});
   const int residual_value =
@@ -14007,7 +14153,10 @@ bool lower_human_match(LoweringContext& context, const V2Statement& statement) {
   context.emitter.emit_op(0x51, "БП", "dispatch end", statement.line);
   context.emitter.emit_label(otherwise_label, {.hidden = true});
   context.emitter.emit_address(0, "dispatch end", statement.line);
-  return lower_human_terminal_call(context, *otherwise_rule);
+  if (!lower_human_terminal_call(context, *otherwise_rule))
+    return false;
+  context.emitter.emit_label(end_label, {.hidden = true});
+  return true;
 }
 
 bool lower_cave_sketch_match(LoweringContext& context, const V2Statement& statement) {
@@ -14339,6 +14488,37 @@ bool lower_x_param_rule_call(LoweringContext& context, const V2Rule& rule,
     context.emitter.current_x_aliases.clear();
   }
   return true;
+}
+
+bool lower_inline_param_rule_call(LoweringContext& context, const V2Rule& rule,
+                                  const std::vector<Expression>& args, int line) {
+  if (!context.inline_statement_rules.contains(rule.name) || rule.params.size() != 1U ||
+      args.size() != 1U || rule.body.empty() || statements_contain_return(rule.body) ||
+      count_identifier_reads_in_statements(rule.body, rule.params.front()) != 1 ||
+      context.inline_call_stack.contains(rule.name)) {
+    return false;
+  }
+
+  if (!lower_expression_to_x(context, args.front()))
+    return false;
+
+  context.inline_call_stack.insert(rule.name);
+  mark_current_x(context, rule.params.front());
+  context.emitter.current_x_known_zero = false;
+  const bool lowered = lower_statement_block(context, rule.body);
+  context.inline_call_stack.erase(rule.name);
+  if (lowered) {
+    const int uses =
+        context.proc_call_counts.contains(rule.name) ? context.proc_call_counts[rule.name] : 1;
+    context.optimizations.push_back(OptimizationReport{
+        .name = uses == 1 ? "single-use-rule-inline" : "size-model-rule-inline",
+        .detail = uses == 1 ? "Inlined single-use rule " + rule.name + " at line " +
+                                  std::to_string(line) + "."
+                            : "Inlined " + std::to_string(uses) + "-use rule " + rule.name +
+                                  " because it is smaller than a ПП/В/О subroutine.",
+    });
+  }
+  return lowered;
 }
 
 bool compile_x_param_return_decay_body(LoweringContext& context, const XParamReturnDecay& decay) {
@@ -14843,8 +15023,7 @@ std::optional<FractionalReportTail> fractional_report_tail(const LoweringContext
       const auto build_fractional =
           [&](const Expression& fractional_report,
               const Expression& zero) -> std::optional<FractionalReportTail> {
-        if (fractional_report.kind != "call" ||
-            lower_ascii(fractional_report.callee) != "frac" ||
+        if (fractional_report.kind != "call" || lower_ascii(fractional_report.callee) != "frac" ||
             fractional_report.args.size() != 1 || !is_zero_expression(context, zero)) {
           return std::nullopt;
         }
@@ -14854,9 +15033,8 @@ std::optional<FractionalReportTail> fractional_report_tail(const LoweringContext
             !expression_equals(halt_expr, report_expression)) {
           return std::nullopt;
         }
-        return FractionalReportTail{.mask = *mask,
-                                    .branch_line = branch.line,
-                                    .halt_line = branch.then_body.front().line};
+        return FractionalReportTail{
+            .mask = *mask, .branch_line = branch.line, .halt_line = branch.then_body.front().line};
       };
       if (std::optional<FractionalReportTail> report = build_fractional(left, right))
         return report;
@@ -15615,12 +15793,10 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
 
   if (context.x_param_y_stack_stored_entry) {
     emit_store(context, match->selector, "set " + match->selector + " from X parameter");
-    context.emitter.emit_op(0x14, "X↔Y", "stack-carried packed digit index",
-                            match->update_line);
+    context.emitter.emit_op(0x14, "X↔Y", "stack-carried packed digit index", match->update_line);
     mark_current_x(context, match->y_name);
     context.emitter.emit_label(x_param_y_stack_stored_entry_label(rule.name), {.hidden = true});
-    context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10",
-                            match->update_line);
+    context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10", match->update_line);
     if (!lower_expression_to_x(context, match->factor))
       return false;
     context.emitter.emit_op(0x12, "*", "stack-carried packed digit delta", match->update_line);
@@ -15644,10 +15820,8 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
                             match->branch_line);
     const std::string halt_label = context.emitter.fresh_label("packed_frac_report_x2_halt");
     context.emitter.emit_jump(0x5e, "F x=0", halt_label,
-                              "true branch for packed fractional report !=",
-                              match->branch_line);
-    context.emitter.emit_op(0x52, "В/О", "packed fractional report return",
-                            match->branch_line);
+                              "true branch for packed fractional report !=", match->branch_line);
+    context.emitter.emit_op(0x52, "В/О", "packed fractional report return", match->branch_line);
     context.emitter.emit_label(halt_label);
     context.emitter.emit_op(0x0a, ".", "updated packed fractional report X2 restore",
                             match->branch_line);
@@ -16380,7 +16554,8 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
     if (risk_rule.has_value() && uses == 1) {
       context.emitter.emit_op(0x0e, "В↑", "x-param inline keep displayed value");
       const std::string display_name =
-          rule.body.empty() ? risk_rule->param : rule.body.front().inline_name.value_or(risk_rule->param);
+          rule.body.empty() ? risk_rule->param
+                            : rule.body.front().inline_name.value_or(risk_rule->param);
       context.emitter.emit_op(0x50, "С/П", "show " + display_name);
       compile_stack_stop_risk_tail(context, risk_rule->risk, rule.body.back().line,
                                    rule.body.back().line);
@@ -16559,13 +16734,12 @@ bool lower_coord_list_contains_false_branch(LoweringContext& context, const V2Pr
       context.emitter.emit_label(true_label, {.hidden = true});
       context.optimizations.push_back(OptimizationReport{
           .name = scaled ? "coord-list-scaled-membership" : "coord-list-indirect-membership",
-          .detail = scaled
-                        ? "Lowered coord_list membership through scaled decimal coordinates at "
-                          "line " +
-                              std::to_string(source_line) + "."
-                        : "Lowered coord_list membership through an indirect register walk at "
-                          "line " +
-                              std::to_string(source_line) + ".",
+          .detail = scaled ? "Lowered coord_list membership through scaled decimal coordinates at "
+                             "line " +
+                                 std::to_string(source_line) + "."
+                           : "Lowered coord_list membership through an indirect register walk at "
+                             "line " +
+                                 std::to_string(source_line) + ".",
       });
       return true;
     }
@@ -16865,8 +17039,7 @@ std::pair<V2Predicate, bool> select_cheaper_equivalent_condition(const LoweringC
   V2Predicate best = predicate;
   int best_cost = guarded_condition_compile_cost(predicate, line, &context.preloaded_numbers);
   for (const V2Predicate& candidate : equivalent_condition_candidates(context, predicate, line)) {
-    const int cost =
-        guarded_condition_compile_cost(candidate, line, &context.preloaded_numbers);
+    const int cost = guarded_condition_compile_cost(candidate, line, &context.preloaded_numbers);
     if (cost < best_cost) {
       best = candidate;
       best_cost = cost;
@@ -16906,8 +17079,7 @@ bool lower_direct_zero_false_branch(LoweringContext& context, const V2Predicate&
                             source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "zero-condition-test",
-      .detail = "Tested " + predicate.op +
-                " 0 without materializing a zero literal at line " +
+      .detail = "Tested " + predicate.op + " 0 without materializing a zero literal at line " +
                 std::to_string(source_line) + ".",
   });
   return true;
@@ -18692,8 +18864,9 @@ bool residual_guarded_update_saves(LoweringContext& context,
     // TS runs this check after V2 lowering, where `room++` has become the full
     // expression `room + 1` plus a store. Native keeps the sugar longer, so the
     // RHS-only expression cost would underprice the ordinary update path.
-    ordinary_update_cost = 1 + guarded_estimate_expression_cost(parse_expression(
-                                   *update.assignment.expr, update.assignment.line)) +
+    ordinary_update_cost = 1 +
+                           guarded_estimate_expression_cost(
+                               parse_expression(*update.assignment.expr, update.assignment.line)) +
                            1 + 1;
   }
   const int residual_update_cost =
@@ -18746,8 +18919,8 @@ residual_expression_for_guarded_update_display(const V2Statement& statement) {
 }
 
 std::optional<Expression> branch_residual_expression(LoweringContext& context,
-                                                     const V2Predicate& predicate,
-                                                     bool negated, int line) {
+                                                     const V2Predicate& predicate, bool negated,
+                                                     int line) {
   if (predicate.kind != "v2_compare")
     return std::nullopt;
   V2Predicate effective = predicate;
@@ -18854,11 +19027,9 @@ bool compile_residual_head_statement(LoweringContext& context, const V2Statement
   return false;
 }
 
-std::vector<V2Statement>
-compile_residual_head_if_possible(LoweringContext& context,
-                                  const std::vector<V2Statement>& statements,
-                                  const std::optional<Expression>& residual, int line,
-                                  const std::string& branch) {
+std::vector<V2Statement> compile_residual_head_if_possible(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    const std::optional<Expression>& residual, int line, const std::string& branch) {
   if (!residual.has_value() || statements.empty())
     return statements;
   if (!compile_residual_head_statement(context, statements.front(), *residual, line, branch))
@@ -19195,10 +19366,12 @@ bool direct_statement_invokes_rule(const V2Statement& statement, const std::stri
     return true;
   }
   for (const V2MatchCase& match_case : statement.cases) {
-    if (match_case.action != nullptr && direct_statement_invokes_rule(*match_case.action, rule_name))
+    if (match_case.action != nullptr &&
+        direct_statement_invokes_rule(*match_case.action, rule_name))
       return true;
   }
-  return statement.otherwise != nullptr && direct_statement_invokes_rule(*statement.otherwise, rule_name);
+  return statement.otherwise != nullptr &&
+         direct_statement_invokes_rule(*statement.otherwise, rule_name);
 }
 
 bool rule_is_directly_recursive(const V2Rule& rule) {
@@ -19207,9 +19380,8 @@ bool rule_is_directly_recursive(const V2Rule& rule) {
 
 bool compiler_straight_line_assignment_body(const std::vector<V2Statement>& statements) {
   return !statements.empty() &&
-         std::all_of(statements.begin(), statements.end(), [](const V2Statement& statement) {
-           return statement.kind == "v2_assign";
-         });
+         std::all_of(statements.begin(), statements.end(),
+                     [](const V2Statement& statement) { return statement.kind == "v2_assign"; });
 }
 
 std::set<std::string> compiler_inline_statement_rule_names(const LoweringContext& context,
@@ -19220,8 +19392,6 @@ std::set<std::string> compiler_inline_statement_rule_names(const LoweringContext
     const auto uses_it = counts.find(rule.name);
     const int uses = uses_it == counts.end() ? 0 : uses_it->second;
     if (uses == 0)
-      continue;
-    if (!rule.params.empty())
       continue;
     if (statements_contain_return(rule.body))
       continue;
@@ -19334,6 +19504,291 @@ bool direct_terminal_statements_stop(LoweringContext& context,
                                      const std::vector<V2Statement>& statements) {
   std::set<std::string> seen_rules;
   return direct_terminal_statements_stop(context, statements, seen_rules);
+}
+
+std::set<std::string> intersect_sets(const std::set<std::string>& left,
+                                     const std::set<std::string>& right) {
+  std::set<std::string> result;
+  for (const std::string& value : left) {
+    if (right.contains(value))
+      result.insert(value);
+  }
+  return result;
+}
+
+std::set<std::string> kill_expression_text_reads(const std::optional<std::string>& expression,
+                                                 const std::set<std::string>& pending_after,
+                                                 int line) {
+  std::set<std::string> pending = pending_after;
+  if (!expression.has_value())
+    return pending;
+  for (const std::string& name : pending_after) {
+    if (expression_text_contains_identifier(*expression, name, line))
+      pending.erase(name);
+  }
+  return pending;
+}
+
+std::set<std::string> kill_predicate_reads(const std::optional<V2Predicate>& predicate,
+                                           const std::set<std::string>& pending_after) {
+  std::set<std::string> pending = pending_after;
+  if (!predicate.has_value())
+    return pending;
+  for (const std::string& name : pending_after) {
+    if (predicate_reads_identifier(*predicate, name))
+      pending.erase(name);
+  }
+  return pending;
+}
+
+std::optional<std::string> terminal_underflow_unit_decrement_target(const V2Statement& statement) {
+  if (statement.kind == "v2_update" && statement.target.has_value() &&
+      statement_is_unit_decrement(statement)) {
+    return *statement.target;
+  }
+  if (statement.kind != "v2_assign" || !statement.target.has_value() ||
+      !statement.expr.has_value()) {
+    return std::nullopt;
+  }
+  try {
+    const Expression target = parse_expression(*statement.target, statement.line);
+    const Expression expression = parse_expression(*statement.expr, statement.line);
+    if (target.kind == "identifier" && expression.kind == "binary" && expression.op == "-" &&
+        expression.left != nullptr && expression.right != nullptr &&
+        expression_equals(*expression.left, target) &&
+        is_numeric_literal_value(*expression.right, 1)) {
+      return target.name;
+    }
+  } catch (const std::exception&) {
+  }
+  return std::nullopt;
+}
+
+bool terminal_underflow_statement_may_write_identifier(LoweringContext& context,
+                                                       const V2Statement& statement,
+                                                       const std::string& name,
+                                                       std::set<std::string>& seen_rules);
+
+bool terminal_underflow_statements_may_write_identifier(LoweringContext& context,
+                                                        const std::vector<V2Statement>& statements,
+                                                        const std::string& name,
+                                                        std::set<std::string>& seen_rules) {
+  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& child) {
+    std::set<std::string> child_seen = seen_rules;
+    return terminal_underflow_statement_may_write_identifier(context, child, name, child_seen);
+  });
+}
+
+bool terminal_underflow_statement_may_write_identifier(LoweringContext& context,
+                                                       const V2Statement& statement,
+                                                       const std::string& name,
+                                                       std::set<std::string>& seen_rules) {
+  if ((statement.kind == "v2_assign" || statement.kind == "v2_update") &&
+      statement.target.has_value() && *statement.target == name) {
+    return true;
+  }
+  if (statement.kind == "v2_raw") {
+    if (std::any_of(statement.outputs.begin(), statement.outputs.end(),
+                    [&](const V2RawOutput& output) { return output.target == name; }))
+      return true;
+    if (std::find(statement.clobbers.begin(), statement.clobbers.end(), name) !=
+        statement.clobbers.end())
+      return true;
+  }
+  if (statement.kind == "v2_if") {
+    std::set<std::string> then_seen = seen_rules;
+    std::set<std::string> else_seen = seen_rules;
+    return terminal_underflow_statements_may_write_identifier(context, statement.then_body, name,
+                                                              then_seen) ||
+           terminal_underflow_statements_may_write_identifier(context, statement.else_body, name,
+                                                              else_seen);
+  }
+  if (statement.kind == "v2_loop" || statement.kind == "v2_while" || statement.kind == "v2_block") {
+    return terminal_underflow_statements_may_write_identifier(context, statement.body, name,
+                                                              seen_rules);
+  }
+  if (statement.kind == "v2_match") {
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.action != nullptr) {
+        std::set<std::string> case_seen = seen_rules;
+        if (terminal_underflow_statement_may_write_identifier(context, *match_case.action, name,
+                                                              case_seen)) {
+          return true;
+        }
+      }
+    }
+    if (statement.otherwise != nullptr) {
+      std::set<std::string> otherwise_seen = seen_rules;
+      if (terminal_underflow_statement_may_write_identifier(context, *statement.otherwise, name,
+                                                            otherwise_seen)) {
+        return true;
+      }
+    }
+  }
+  if (statement.kind == "v2_invoke" && statement.name.has_value()) {
+    if (seen_rules.contains(*statement.name))
+      return true;
+    const auto rule_it = context.rules.find(*statement.name);
+    if (rule_it == context.rules.end())
+      return true;
+    seen_rules.insert(*statement.name);
+    return terminal_underflow_statements_may_write_identifier(context, rule_it->second->body, name,
+                                                              seen_rules);
+  }
+  return false;
+}
+
+std::set<std::string>
+kill_statement_touches_for_terminal_underflow(LoweringContext& context,
+                                              const V2Statement& statement,
+                                              const std::set<std::string>& pending_after) {
+  std::set<std::string> pending = pending_after;
+  for (const std::string& name : pending_after) {
+    std::set<std::string> seen_rules;
+    if (statement_reads_identifier(statement, name, false) ||
+        terminal_underflow_statement_may_write_identifier(context, statement, name, seen_rules)) {
+      pending.erase(name);
+    }
+  }
+  return pending;
+}
+
+std::optional<std::string> terminal_nonpositive_guard_variable(LoweringContext& context,
+                                                               const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value() || statement.has_else_body ||
+      !statement.else_body.empty() ||
+      !direct_terminal_statements_stop(context, statement.then_body))
+    return std::nullopt;
+  const std::optional<NormalizedZeroComparison> normalized =
+      normalize_zero_comparison(context, *statement.predicate, statement.negated, statement.line);
+  if (!normalized.has_value() || normalized->expression.kind != "identifier")
+    return std::nullopt;
+  if (normalized->op == "<" || normalized->op == "<=")
+    return normalized->expression.name;
+  return std::nullopt;
+}
+
+std::set<std::string> analyze_terminal_underflow_statement_list(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    const std::set<std::string>& pending_after, std::set<std::string>& seen_inline,
+    std::set<std::pair<std::string, int>>& protected_decrements);
+
+std::set<std::string>
+analyze_terminal_underflow_statement(LoweringContext& context, const V2Statement& statement,
+                                     const std::set<std::string>& pending_after,
+                                     std::set<std::string>& seen_inline,
+                                     std::set<std::pair<std::string, int>>& protected_decrements) {
+  if (const std::optional<std::string> terminal_guard =
+          terminal_nonpositive_guard_variable(context, statement)) {
+    std::set<std::string> pending = pending_after;
+    pending.insert(*terminal_guard);
+    return pending;
+  }
+
+  if (statement.kind == "v2_assign" || statement.kind == "v2_update") {
+    std::set<std::string> pending =
+        kill_expression_text_reads(statement.expr, pending_after, statement.line);
+    if (statement.target.has_value() && *statement.target != "" && statement.kind == "v2_assign") {
+      pending = kill_expression_text_reads(statement.target, pending, statement.line);
+    }
+    const std::optional<std::string> decrement_target =
+        terminal_underflow_unit_decrement_target(statement);
+    if (decrement_target.has_value() && pending_after.contains(*decrement_target)) {
+      protected_decrements.insert({*decrement_target, statement.line});
+      pending.erase(*decrement_target);
+      return pending;
+    }
+    if (statement.target.has_value())
+      pending.erase(*statement.target);
+    return pending;
+  }
+
+  if (statement.kind == "v2_if") {
+    std::set<std::string> then_seen = seen_inline;
+    std::set<std::string> else_seen = seen_inline;
+    const std::set<std::string> then_pending = analyze_terminal_underflow_statement_list(
+        context, statement.then_body, pending_after, then_seen, protected_decrements);
+    const std::set<std::string> else_pending =
+        statement.has_else_body
+            ? analyze_terminal_underflow_statement_list(context, statement.else_body, pending_after,
+                                                        else_seen, protected_decrements)
+            : pending_after;
+    return kill_predicate_reads(statement.predicate, intersect_sets(then_pending, else_pending));
+  }
+
+  if (statement.kind == "v2_match") {
+    std::set<std::string> pending =
+        statement.otherwise == nullptr
+            ? pending_after
+            : analyze_terminal_underflow_statement(context, *statement.otherwise, pending_after,
+                                                   seen_inline, protected_decrements);
+    for (const V2MatchCase& match_case : statement.cases) {
+      const std::set<std::string> case_pending =
+          match_case.action == nullptr
+              ? pending_after
+              : analyze_terminal_underflow_statement(context, *match_case.action, pending_after,
+                                                     seen_inline, protected_decrements);
+      pending = intersect_sets(pending, case_pending);
+      for (const std::string& value : match_case.values)
+        pending = kill_expression_text_reads(value, pending, match_case.line);
+    }
+    return kill_expression_text_reads(statement.expr, pending, statement.line);
+  }
+
+  if (statement.kind == "v2_invoke" && statement.name.has_value()) {
+    const auto rule_it = context.rules.find(*statement.name);
+    const bool inlineable = rule_it != context.rules.end() &&
+                            (context.inline_statement_rules.contains(*statement.name) ||
+                             context.proc_call_counts[*statement.name] == 1) &&
+                            !seen_inline.contains(*statement.name);
+    if (inlineable) {
+      std::set<std::string> next_seen = seen_inline;
+      next_seen.insert(*statement.name);
+      return analyze_terminal_underflow_statement_list(
+          context, rule_it->second->body, pending_after, next_seen, protected_decrements);
+    }
+    return kill_statement_touches_for_terminal_underflow(context, statement, pending_after);
+  }
+
+  if (statement.kind == "v2_loop" || statement.kind == "v2_while") {
+    std::set<std::string> ignored_seen = seen_inline;
+    (void)analyze_terminal_underflow_statement_list(context, statement.body, {}, ignored_seen,
+                                                    protected_decrements);
+    return kill_statement_touches_for_terminal_underflow(context, statement, pending_after);
+  }
+
+  if (statement.kind == "v2_block") {
+    return analyze_terminal_underflow_statement_list(context, statement.body, pending_after,
+                                                     seen_inline, protected_decrements);
+  }
+
+  return kill_statement_touches_for_terminal_underflow(context, statement, pending_after);
+}
+
+std::set<std::string> analyze_terminal_underflow_statement_list(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    const std::set<std::string>& pending_after, std::set<std::string>& seen_inline,
+    std::set<std::pair<std::string, int>>& protected_decrements) {
+  std::set<std::string> pending = pending_after;
+  for (auto it = statements.rbegin(); it != statements.rend(); ++it)
+    pending = analyze_terminal_underflow_statement(context, *it, pending, seen_inline,
+                                                   protected_decrements);
+  return pending;
+}
+
+std::set<std::pair<std::string, int>>
+collect_terminal_underflow_unit_decrements(LoweringContext& context, const V2Program& program) {
+  std::set<std::pair<std::string, int>> protected_decrements;
+  std::set<std::string> seen_inline;
+  (void)analyze_terminal_underflow_statement_list(context, program.body, {}, seen_inline,
+                                                  protected_decrements);
+  for (const V2Rule& rule : program.rules) {
+    std::set<std::string> rule_seen;
+    rule_seen.insert(rule.name);
+    (void)analyze_terminal_underflow_statement_list(context, rule.body, {}, rule_seen,
+                                                    protected_decrements);
+  }
+  return protected_decrements;
 }
 
 std::optional<std::string> direct_terminal_call_target(LoweringContext& context,
@@ -19772,8 +20227,8 @@ std::optional<Expression> arithmetic_if_boolean_identifier(const LoweringContext
   return std::nullopt;
 }
 
-std::optional<Expression> arithmetic_if_one_minus_boolean_identifier(
-    const LoweringContext& context, const Expression& expression) {
+std::optional<Expression> arithmetic_if_one_minus_boolean_identifier(const LoweringContext& context,
+                                                                     const Expression& expression) {
   if (expression.kind != "binary" || expression.op != "-" || expression.left == nullptr ||
       expression.right == nullptr) {
     return std::nullopt;
@@ -20553,9 +21008,8 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
                   std::to_string(selected.line) + ".",
     });
   }
-  const std::vector<V2Statement> then_body =
-      compile_residual_head_if_possible(context, selected.then_body, branch_residual,
-                                        selected.line, "fallthrough");
+  const std::vector<V2Statement> then_body = compile_residual_head_if_possible(
+      context, selected.then_body, branch_residual, selected.line, "fallthrough");
   if (!lower_statement_block(context, then_body))
     return false;
 
@@ -20583,9 +21037,8 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     }
     const std::optional<ExcludedNumericValues> excluded =
         false_branch_excluded_numeric_values(context, *selected.predicate, selected.line);
-    const std::vector<V2Statement> else_body =
-        compile_residual_head_if_possible(context, selected.else_body, branch_residual,
-                                          selected.line, "false branch");
+    const std::vector<V2Statement> else_body = compile_residual_head_if_possible(
+        context, selected.else_body, branch_residual, selected.line, "false branch");
     if (!lower_statement_block_with_excluded_values(context, else_body, excluded))
       return false;
     if (!then_stops)
@@ -21038,14 +21491,12 @@ bool lower_match_action(LoweringContext& context, const V2Statement& action) {
   return lower_statement(context, action, nullptr);
 }
 
-bool match_action_terminates_statically(const LoweringContext& context,
-                                        const V2Statement* action) {
+bool match_action_terminates_statically(const LoweringContext& context, const V2Statement* action) {
   if (context.program == nullptr || action == nullptr)
     return false;
   std::set<std::string> seen_rules;
   if (action->kind == "v2_block")
-    return guarded_statement_list_terminates_statically(*context.program, action->body,
-                                                        seen_rules);
+    return guarded_statement_list_terminates_statically(*context.program, action->body, seen_rules);
   return guarded_statement_terminates_statically(*context.program, *action, seen_rules);
 }
 
@@ -21757,6 +22208,8 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
   for (std::size_t index = 0; index < statement.args.size(); ++index) {
     args.push_back(parse_expression(statement.args.at(index), statement.line));
   }
+  if (lower_inline_param_rule_call(context, rule, args, statement.line))
+    return true;
   if (lower_x_param_value_function_call(context, rule, args, statement.line))
     return true;
   if (lower_x_param_return_decay_call(context, rule, args, statement.line))
@@ -21766,8 +22219,8 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
   if (args.empty() && context.emitter.current_x_known_zero) {
     const std::optional<PackedLineFamilyScoreRule> score_rule =
         packed_line_family_score_rule(context, rule);
-      if (score_rule.has_value() && context.stack_only_state_fields.contains(score_rule->score)) {
-        context.emitter.emit_jump(0x53, "ПП", packed_line_family_score_zero_entry_label(rule.name),
+    if (score_rule.has_value() && context.stack_only_state_fields.contains(score_rule->score)) {
+      context.emitter.emit_jump(0x53, "ПП", packed_line_family_score_zero_entry_label(rule.name),
                                 "proc call " + rule.name + " zero-accumulator entry",
                                 statement.line);
       mark_current_x(context, score_rule->score);
@@ -21923,8 +22376,7 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
         context.emitter.emit_op(0x3a, "К ИНВ", "bit_not()", statement.line);
       context.emitter.emit_op(*statement.op == "+=" ? 0x38 : 0x37,
                               *statement.op == "+=" ? "К ∨" : "К ∧",
-                              *statement.op == "+=" ? "bit_or()" : "bit_and()",
-                              statement.line);
+                              *statement.op == "+=" ? "bit_or()" : "bit_and()", statement.line);
       emit_store(context, target_expression.name, "set " + target_expression.name);
       return true;
     };
@@ -21950,9 +22402,9 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
       return false;
     if (statement.op == "-=")
       context.emitter.emit_op(0x3a, "К ИНВ", "bit_not()", statement.line);
-    context.emitter.emit_op(
-        statement.op == "+=" ? 0x38 : 0x37, statement.op == "+=" ? "К ∨" : "К ∧",
-        statement.op == "+=" ? "bit_or()" : "bit_and()", statement.line);
+    context.emitter.emit_op(statement.op == "+=" ? 0x38 : 0x37,
+                            statement.op == "+=" ? "К ∨" : "К ∧",
+                            statement.op == "+=" ? "bit_or()" : "bit_and()", statement.line);
     emit_store(context, target_expression.name, "set " + target_expression.name);
     return true;
   }
@@ -22008,6 +22460,25 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
     if (!lower_expression_to_x(context, target))
       return false;
     context.emitter.emit_op(0x10, "+", "expr +", statement.line);
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_aliases.clear();
+    emit_store(context, *statement.target, "set " + *statement.target);
+    return true;
+  }
+  if (statement.op == "+=" && delta.kind == "binary" && delta.op == "-" && delta.left != nullptr &&
+      delta.right != nullptr && common_branch_expression_is_deterministic(*delta.left) &&
+      common_branch_expression_is_deterministic(*delta.right)) {
+    const bool numeric_left = delta.left->kind == "number";
+    if (!lower_expression_to_x(context, numeric_left ? *delta.left : target))
+      return false;
+    if (!lower_expression_to_x(context, numeric_left ? target : *delta.left))
+      return false;
+    context.emitter.emit_op(0x10, "+", "expr +", statement.line);
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_aliases.clear();
+    if (!lower_expression_to_x(context, *delta.right))
+      return false;
+    context.emitter.emit_op(0x11, "-", "expr -", statement.line);
     context.emitter.current_x_variable.reset();
     context.emitter.current_x_aliases.clear();
     emit_store(context, *statement.target, "set " + *statement.target);
@@ -23061,8 +23532,7 @@ bool lower_loop_carried_prompt_statement(LoweringContext& context, const V2State
   const std::string label = context.emitter.fresh_label("loop_prompt");
   context.emitter.emit_label(label);
   mark_current_x(context, prompt_name);
-  context.emitter.emit_op(0x50, "С/П", "show " + show.inline_name.value_or(prompt_name),
-                          show.line);
+  context.emitter.emit_op(0x50, "С/П", "show " + show.inline_name.value_or(prompt_name), show.line);
   mark_current_x(context, input_it->second);
 
   std::vector<V2Statement> body(statement.body.begin() + 2, statement.body.end());
@@ -23309,8 +23779,8 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
         expression.kind == "number" ||
         (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr &&
          expression.expr->kind == "number");
-    if (literal_assignment && is_zero_expression(context, expression) && !context.emitter.items.empty() &&
-        !context.emitter.items.back().comment.has_value()) {
+    if (literal_assignment && is_zero_expression(context, expression) &&
+        !context.emitter.items.empty() && !context.emitter.items.back().comment.has_value()) {
       context.emitter.items.back().comment = "set " + *statement.target;
     }
     mark_current_x(context, *statement.target);
@@ -23349,8 +23819,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       if (!lower_expression_to_x(context, expression))
         return false;
       if (expression.kind == "number" && normalize_number_key(expression.raw) == "0" &&
-          !context.emitter.items.empty() &&
-          !context.emitter.items.back().comment.has_value()) {
+          !context.emitter.items.empty() && !context.emitter.items.back().comment.has_value()) {
         context.emitter.items.back().comment = "halt";
       }
     }
@@ -23547,9 +24016,8 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
     if (!lower_statement_block(context, rest))
       return false;
     context.current_y_variable = previous_y;
-    if (!rule.body.empty() &&
-        (rule.body.back().kind == "v2_return" ||
-         direct_terminal_statements_stop(context, rule.body)))
+    if (!rule.body.empty() && (rule.body.back().kind == "v2_return" ||
+                               direct_terminal_statements_stop(context, rule.body)))
       return true;
     context.emitter.emit_op(0x52, "В/О", "implicit return from proc", rule.line);
     return true;
@@ -23864,23 +24332,203 @@ bool statement_is_delayed_unit_decrement(const V2Statement& statement, const std
   }
 }
 
+bool expression_is_affine_self_update(const Expression& expression, const std::string& target) {
+  int coefficient = 0;
+  bool ok = true;
+  std::function<void(const Expression&, int)> visit = [&](const Expression& current, int sign) {
+    if (!ok)
+      return;
+    if (current.kind == "identifier" && current.name == target) {
+      coefficient += sign;
+      return;
+    }
+    if (!core::emit::expression_references_identifier(current, target))
+      return;
+    if (current.kind == "binary" && (current.op == "+" || current.op == "-") &&
+        current.left != nullptr && current.right != nullptr) {
+      visit(*current.left, sign);
+      visit(*current.right, current.op == "+" ? sign : -sign);
+      return;
+    }
+    ok = false;
+  };
+  visit(expression, 1);
+  return ok && coefficient == 1;
+}
+
+bool delayed_statement_may_write_identifier(LoweringContext& context, const V2Statement& statement,
+                                            const std::string& target,
+                                            std::set<std::string>& seen_rules);
+
+bool delayed_statements_may_write_identifier(LoweringContext& context,
+                                             const std::vector<V2Statement>& statements,
+                                             const std::string& target,
+                                             std::set<std::string>& seen_rules) {
+  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
+    std::set<std::string> child_seen = seen_rules;
+    return delayed_statement_may_write_identifier(context, statement, target, child_seen);
+  });
+}
+
+bool delayed_statement_may_write_identifier(LoweringContext& context, const V2Statement& statement,
+                                            const std::string& target,
+                                            std::set<std::string>& seen_rules) {
+  const std::optional<std::string> assignment_target = scalar_assignment_target_name(statement);
+  if (assignment_target.has_value() && *assignment_target == target)
+    return true;
+  if (statement.kind == "v2_raw") {
+    for (const V2RawOutput& output : statement.outputs) {
+      if (output.target == target)
+        return true;
+    }
+  }
+  if (delayed_statements_may_write_identifier(context, statement.body, target, seen_rules) ||
+      delayed_statements_may_write_identifier(context, statement.then_body, target, seen_rules) ||
+      delayed_statements_may_write_identifier(context, statement.else_body, target, seen_rules)) {
+    return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr &&
+        delayed_statement_may_write_identifier(context, *match_case.action, target, seen_rules)) {
+      return true;
+    }
+  }
+  if (statement.otherwise != nullptr &&
+      delayed_statement_may_write_identifier(context, *statement.otherwise, target, seen_rules)) {
+    return true;
+  }
+  if (statement.kind == "v2_invoke" && statement.name.has_value()) {
+    const auto rule_it = context.rules.find(*statement.name);
+    if (rule_it == context.rules.end() || rule_it->second == nullptr ||
+        seen_rules.contains(*statement.name)) {
+      return true;
+    }
+    seen_rules.insert(*statement.name);
+    const bool writes =
+        delayed_statements_may_write_identifier(context, rule_it->second->body, target, seen_rules);
+    seen_rules.erase(*statement.name);
+    return writes;
+  }
+  return false;
+}
+
 bool delayed_statement_commutes_with_unit_decrement(LoweringContext& context,
                                                     const V2Statement& statement,
-                                                    const std::string& target) {
-  (void)context;
-  if (statement_reads_identifier(statement, target, false))
+                                                    const std::string& target,
+                                                    std::set<std::string>& seen_rules);
+
+bool delayed_statements_commute_with_unit_decrement(LoweringContext& context,
+                                                    const std::vector<V2Statement>& statements,
+                                                    std::size_t start, const std::string& target,
+                                                    std::set<std::string>& seen_rules) {
+  for (std::size_t index = start; index < statements.size(); ++index) {
+    std::set<std::string> child_seen = seen_rules;
+    if (!delayed_statement_commutes_with_unit_decrement(context, statements.at(index), target,
+                                                        child_seen)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool delayed_statement_commutes_with_unit_decrement(LoweringContext& context,
+                                                    const V2Statement& statement,
+                                                    const std::string& target,
+                                                    std::set<std::string>& seen_rules) {
+  const std::optional<std::string> assignment_target = scalar_assignment_target_name(statement);
+  if (assignment_target.has_value() && *assignment_target == target) {
+    if (statement.kind == "v2_assign" && statement.expr.has_value()) {
+      try {
+        return expression_is_affine_self_update(parse_expression(*statement.expr, statement.line),
+                                                target);
+      } catch (const std::exception&) {
+        return false;
+      }
+    }
+    if (statement.kind == "v2_update" && statement.expr.has_value() && statement.op.has_value() &&
+        (*statement.op == "+=" || *statement.op == "-=")) {
+      try {
+        const Expression delta = parse_expression(*statement.expr, statement.line);
+        return !core::emit::expression_references_identifier(delta, target);
+      } catch (const std::exception&) {
+        return false;
+      }
+    }
     return false;
-  return count_identifier_writes_in_statement(statement, target) == 0;
+  }
+
+  if (statement.kind == "v2_if") {
+    if (!statement.predicate.has_value() ||
+        predicate_reads_identifier(*statement.predicate, target))
+      return false;
+    std::set<std::string> then_seen = seen_rules;
+    std::set<std::string> else_seen = seen_rules;
+    return delayed_statements_commute_with_unit_decrement(context, statement.then_body, 0, target,
+                                                          then_seen) &&
+           delayed_statements_commute_with_unit_decrement(context, statement.else_body, 0, target,
+                                                          else_seen);
+  }
+
+  if (statement.kind == "v2_match") {
+    if (statement.expr.has_value() &&
+        expression_text_contains_identifier(*statement.expr, target, statement.line)) {
+      return false;
+    }
+    for (const V2MatchCase& match_case : statement.cases) {
+      for (const std::string& value : match_case.values) {
+        if (expression_text_contains_identifier(value, target, match_case.line))
+          return false;
+      }
+      if (match_case.action != nullptr) {
+        std::set<std::string> case_seen = seen_rules;
+        if (!delayed_statement_commutes_with_unit_decrement(context, *match_case.action, target,
+                                                            case_seen)) {
+          return false;
+        }
+      }
+    }
+    if (statement.otherwise != nullptr) {
+      std::set<std::string> otherwise_seen = seen_rules;
+      return delayed_statement_commutes_with_unit_decrement(context, *statement.otherwise, target,
+                                                            otherwise_seen);
+    }
+    return true;
+  }
+
+  if (statement.kind == "v2_invoke" && statement.name.has_value()) {
+    for (const std::string& arg : statement.args) {
+      if (expression_text_contains_identifier(arg, target, statement.line))
+        return false;
+    }
+    const auto rule_it = context.rules.find(*statement.name);
+    if (rule_it == context.rules.end() || rule_it->second == nullptr ||
+        seen_rules.contains(*statement.name)) {
+      return false;
+    }
+    seen_rules.insert(*statement.name);
+    const bool commutes = delayed_statements_commute_with_unit_decrement(
+        context, rule_it->second->body, 0, target, seen_rules);
+    seen_rules.erase(*statement.name);
+    return commutes;
+  }
+
+  if (statement.kind == "v2_loop" || statement.kind == "v2_while") {
+    std::set<std::string> write_seen = seen_rules;
+    return !statement_reads_identifier(statement, target, false) &&
+           !delayed_statement_may_write_identifier(context, statement, target, write_seen);
+  }
+
+  std::set<std::string> write_seen = seen_rules;
+  return !statement_reads_identifier(statement, target, false) &&
+         !delayed_statement_may_write_identifier(context, statement, target, write_seen);
 }
 
 bool delayed_statements_commute_with_unit_decrement(LoweringContext& context,
                                                     const std::vector<V2Statement>& statements,
                                                     std::size_t start, const std::string& target) {
-  for (std::size_t index = start; index < statements.size(); ++index) {
-    if (!delayed_statement_commutes_with_unit_decrement(context, statements.at(index), target))
-      return false;
-  }
-  return true;
+  std::set<std::string> seen_rules;
+  return delayed_statements_commute_with_unit_decrement(context, statements, start, target,
+                                                        seen_rules);
 }
 
 bool statement_may_terminate_before_delayed_decrement(LoweringContext& context,
@@ -23968,12 +24616,15 @@ delayed_unit_decrement_branch_plan(LoweringContext& context,
 
   for (std::size_t index = 0; index < statements.size(); ++index) {
     const V2Statement& candidate = statements.at(index);
-    if (!statement_is_delayed_unit_decrement(candidate, target))
+    if (!statement_is_delayed_unit_decrement(candidate, target)) {
       continue;
-    if (target.rfind("__packed_counter_", 0) == 0)
+    }
+    if (target.rfind("__packed_counter_", 0) == 0) {
       continue;
-    if (!delayed_statements_commute_with_unit_decrement(context, statements, index + 1U, target))
+    }
+    if (!delayed_statements_commute_with_unit_decrement(context, statements, index + 1U, target)) {
       continue;
+    }
 
     std::vector<V2Statement> body;
     body.insert(body.end(), statements.begin(),
@@ -23981,8 +24632,9 @@ delayed_unit_decrement_branch_plan(LoweringContext& context,
     body.insert(body.end(), statements.begin() + static_cast<std::ptrdiff_t>(index + 1U),
                 statements.end());
     std::set<std::string> seen_rules;
-    if (statements_may_terminate_before_delayed_decrement(context, body, seen_rules))
+    if (statements_may_terminate_before_delayed_decrement(context, body, seen_rules)) {
       continue;
+    }
     return DelayedUnitDecrementBranchPlan{
         .body = std::move(body),
         .decrement = candidate,
@@ -24006,21 +24658,21 @@ void emit_delayed_indirect_unit_decrement(LoweringContext& context, const V2Stat
   });
 }
 
-std::optional<std::vector<V2Statement>>
-delayed_unit_decrement_tail_with_guard(LoweringContext& context,
-                                       const std::vector<V2Statement>& statements,
-                                       const V2Statement& decrement, const std::string& target,
-                                       std::set<std::string>& seen_rules) {
-  if (statements.empty())
+std::optional<std::vector<V2Statement>> delayed_unit_decrement_tail_with_guard(
+    LoweringContext& context, const std::vector<V2Statement>& statements,
+    const V2Statement& decrement, const std::string& target, std::set<std::string>& seen_rules) {
+  if (statements.empty()) {
     return std::nullopt;
+  }
 
   const V2Statement& last = statements.back();
   if (last.kind == "v2_if" && !last.has_else_body && last.else_body.empty() &&
       delayed_unit_decrement_guard_matches(context, target, last) &&
       statements_always_stop(context, last.then_body)) {
     std::vector<V2Statement> prefix(statements.begin(), statements.end() - 1);
-    if (!delayed_statements_commute_with_unit_decrement(context, prefix, 0, target))
+    if (!delayed_statements_commute_with_unit_decrement(context, prefix, 0, target)) {
       return std::nullopt;
+    }
 
     std::vector<V2Statement> result = std::move(prefix);
     result.push_back(decrement);
@@ -24028,14 +24680,17 @@ delayed_unit_decrement_tail_with_guard(LoweringContext& context,
     return result;
   }
 
-  if (last.kind != "v2_if" || !last.has_else_body || !last.predicate.has_value())
+  if (last.kind != "v2_if" || !last.has_else_body || !last.predicate.has_value()) {
     return std::nullopt;
-  if (count_identifier_reads_in_predicate(*last.predicate, target, last.line) != 0)
+  }
+  if (count_identifier_reads_in_predicate(*last.predicate, target, last.line) != 0) {
     return std::nullopt;
+  }
 
   std::vector<V2Statement> prefix(statements.begin(), statements.end() - 1);
-  if (!delayed_statements_commute_with_unit_decrement(context, prefix, 0, target))
+  if (!delayed_statements_commute_with_unit_decrement(context, prefix, 0, target)) {
     return std::nullopt;
+  }
 
   std::set<std::string> then_seen = seen_rules;
   std::set<std::string> else_seen = seen_rules;
@@ -24043,8 +24698,9 @@ delayed_unit_decrement_tail_with_guard(LoweringContext& context,
       delayed_unit_decrement_tail_with_guard(context, last.then_body, decrement, target, then_seen);
   std::optional<std::vector<V2Statement>> else_body =
       delayed_unit_decrement_tail_with_guard(context, last.else_body, decrement, target, else_seen);
-  if (!then_body.has_value() || !else_body.has_value())
+  if (!then_body.has_value() || !else_body.has_value()) {
     return std::nullopt;
+  }
 
   V2Statement rewritten = last;
   rewritten.then_body = std::move(*then_body);
@@ -24055,57 +24711,47 @@ delayed_unit_decrement_tail_with_guard(LoweringContext& context,
   return result;
 }
 
-bool lower_delayed_unit_decrement_underflow_guard_run(
-    LoweringContext& context, const std::vector<V2Statement>& statements, std::size_t index,
-    std::size_t& consumed) {
+bool lower_delayed_unit_decrement_underflow_guard_run(LoweringContext& context,
+                                                      const std::vector<V2Statement>& statements,
+                                                      std::size_t index, std::size_t& consumed) {
   consumed = 0;
-  auto trace = [](const std::string&) {};
   if (!context.indirect_underflow_decrement || index >= statements.size()) {
-    trace("not enabled");
     return false;
   }
 
   const V2Statement& decrement = statements.at(index);
   const std::optional<std::string> target = scalar_statement_target_name(decrement);
   if (!target.has_value() || !statement_is_delayed_unit_decrement(decrement, *target)) {
-    trace("not unit decrement");
     return false;
   }
   if (target->rfind("__packed_counter_", 0) == 0) {
-    trace("packed counter target");
     return false;
   }
 
   const std::size_t guard_index = statements.size() - 1U;
   if (index >= guard_index) {
-    trace("no following tail");
     return false;
   }
 
   const auto register_it = context.register_index_by_name.find(*target);
   if (register_it == context.register_index_by_name.end() || register_it->second < 0 ||
       register_it->second > 3) {
-    trace("target " + *target + " is not predecrement indirect");
     return false;
   }
   const auto field_it = context.state_fields.find(*target);
   if (field_it == context.state_fields.end() || field_it->second == nullptr ||
       (field_it->second->type != "range" && field_it->second->type != "counter") ||
       !field_it->second->min.has_value() || *field_it->second->min < 0) {
-    trace("target " + *target + " has incompatible field type");
     return false;
   }
 
   const V2Statement& guard = statements.at(guard_index);
-  trace("target " + *target + " tail guard line " + std::to_string(guard.line));
   if (guard.kind == "v2_if" && !guard.has_else_body && guard.else_body.empty() &&
       delayed_unit_decrement_guard_matches(context, *target, guard) &&
       statements_always_stop(context, guard.then_body)) {
-    std::vector<V2Statement> middle(
-        statements.begin() + static_cast<std::ptrdiff_t>(index + 1U),
-        statements.begin() + static_cast<std::ptrdiff_t>(guard_index));
+    std::vector<V2Statement> middle(statements.begin() + static_cast<std::ptrdiff_t>(index + 1U),
+                                    statements.begin() + static_cast<std::ptrdiff_t>(guard_index));
     if (!delayed_statements_commute_with_unit_decrement(context, middle, 0, *target)) {
-      trace("middle does not commute");
       return false;
     }
     if (!lower_statement_block(context, middle))
@@ -24123,7 +24769,6 @@ bool lower_delayed_unit_decrement_underflow_guard_run(
   std::optional<std::vector<V2Statement>> transformed =
       delayed_unit_decrement_tail_with_guard(context, tail, decrement, *target, seen_rules);
   if (!transformed.has_value()) {
-    trace("tail-with-guard transform unavailable");
     return false;
   }
   if (!lower_statement_block(context, *transformed))
@@ -24153,52 +24798,57 @@ bool lower_delayed_unit_decrement_branch_body(
 bool lower_branch_local_delayed_unit_decrement_guard(LoweringContext& context,
                                                      const V2Statement& branch,
                                                      const V2Statement& guard) {
-  auto trace = [](const std::string&) {};
   if (!context.indirect_underflow_decrement || branch.kind != "v2_if" ||
       !branch.predicate.has_value()) {
-    trace("not enabled or not branch");
     return false;
   }
   const std::optional<std::string> target = delayed_unit_decrement_guard_target(context, guard);
   if (!target.has_value()) {
-    trace("guard has no delayed target");
     return false;
   }
   if (!statements_always_stop(context, guard.then_body)) {
-    trace("guard body does not terminate for target " + *target);
     return false;
   }
   if (statements_read_identifier(guard.then_body, *target, false)) {
-    trace("guard body reads target " + *target);
     return false;
   }
 
-  const std::optional<DelayedUnitDecrementBranchPlan> then_plan =
+  const std::optional<DelayedUnitDecrementBranchPlan> original_then_plan =
       delayed_unit_decrement_branch_plan(context, branch.then_body, *target);
-  const std::optional<DelayedUnitDecrementBranchPlan> else_plan =
+  const std::optional<DelayedUnitDecrementBranchPlan> original_else_plan =
       branch.has_else_body ? delayed_unit_decrement_branch_plan(context, branch.else_body, *target)
                            : std::nullopt;
-  trace("target " + *target + " then_plan=" + (then_plan.has_value() ? "1" : "0") +
-        " else_plan=" + (else_plan.has_value() ? "1" : "0"));
+  if (!original_then_plan.has_value() && !original_else_plan.has_value())
+    return false;
+
+  const V2Statement selected = branch_order_statement(context, branch);
+  if (!selected.predicate.has_value())
+    return false;
+  const std::optional<DelayedUnitDecrementBranchPlan> then_plan =
+      delayed_unit_decrement_branch_plan(context, selected.then_body, *target);
+  const std::optional<DelayedUnitDecrementBranchPlan> else_plan =
+      selected.has_else_body
+          ? delayed_unit_decrement_branch_plan(context, selected.else_body, *target)
+          : std::nullopt;
   if (!then_plan.has_value() && !else_plan.has_value())
     return false;
 
-  const bool has_else = branch.has_else_body;
+  const bool has_else = selected.has_else_body;
   const std::string false_label = context.emitter.fresh_label(has_else ? "if_else" : "if_end");
-  const bool then_stops = statements_always_stop(context, branch.then_body);
+  const bool then_stops = statements_always_stop(context, selected.then_body);
   const std::string end_label =
       has_else && !then_stops ? context.emitter.fresh_label("if_end") : false_label;
-  if (!lower_condition_false_branch(context, *branch.predicate, branch.negated, false_label,
-                                    branch.line))
+  if (!lower_condition_false_branch(context, *selected.predicate, selected.negated, false_label,
+                                    selected.line))
     return false;
-  if (!lower_delayed_unit_decrement_branch_body(context, then_plan, branch.then_body, guard,
+  if (!lower_delayed_unit_decrement_branch_body(context, then_plan, selected.then_body, guard,
                                                 *target))
     return false;
   if (has_else) {
     if (!then_stops)
-      context.emitter.emit_jump(0x51, "БП", end_label, "if end", branch.line);
+      context.emitter.emit_jump(0x51, "БП", end_label, "if end", selected.line);
     context.emitter.emit_label(false_label, {.hidden = true});
-    if (!lower_delayed_unit_decrement_branch_body(context, else_plan, branch.else_body, guard,
+    if (!lower_delayed_unit_decrement_branch_body(context, else_plan, selected.else_body, guard,
                                                   *target))
       return false;
     if (!then_stops)
@@ -25721,8 +26371,7 @@ void warn_undeclared_allocations(const V2Program& program, bool strict,
 }
 
 void warn_show_halt_style_statements(const std::vector<V2Statement>& statements,
-                                     std::set<int>& seen_lines,
-                                     std::vector<std::string>& warnings);
+                                     std::set<int>& seen_lines, std::vector<std::string>& warnings);
 
 bool is_bare_halt_zero(const V2Statement& statement) {
   return statement.kind == "v2_stop" && !statement.items.has_value() &&
@@ -25757,8 +26406,8 @@ void warn_show_halt_style_statements(const std::vector<V2Statement>& statements,
       seen_lines.insert(line);
       warnings.push_back(
           "show(...) immediately followed by halt() at line " + std::to_string(line) +
-              ": for one final screen put the visible value directly in halt(...) instead of "
-              "describing two display effects");
+          ": for one final screen put the visible value directly in halt(...) instead of "
+          "describing two display effects");
     }
     warn_show_halt_style_statement_children(statement, seen_lines, warnings);
   }
@@ -28318,8 +28967,7 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
     std::size_t single_use_stack_temp_consumed = 0;
-    if (lower_single_use_stack_temp(context, statements, index,
-                                    single_use_stack_temp_consumed)) {
+    if (lower_single_use_stack_temp(context, statements, index, single_use_stack_temp_consumed)) {
       index += single_use_stack_temp_consumed - 1U;
       continue;
     }
@@ -28545,10 +29193,10 @@ bool lower_packed_display_helpers(LoweringContext& context) {
               unlowerable_decimal_display_literal(*helper.statement.items)) {
         const std::string screen =
             helper.statement.inline_name.value_or(helper.statement.name.value_or("display"));
-        context.diagnostics.push_back(diagnostic(
-            DiagnosticSeverity::Error, "native-unsupported",
-            "Screen '" + screen + "' contains display literal \"" + *literal +
-                "\" that is not lowerable yet."));
+        context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                                 "Screen '" + screen +
+                                                     "' contains display literal \"" + *literal +
+                                                     "\" that is not lowerable yet."));
       }
       return false;
     }
@@ -28624,7 +29272,8 @@ bool lower_literal_display_helpers(LoweringContext& context) {
         {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
     const bool previous = context.emitting_literal_display_helper;
     context.emitting_literal_display_helper = true;
-    const bool lowered = lower_literal_display_body(context, helper.label, helper.literal, helper.line);
+    const bool lowered =
+        lower_literal_display_body(context, helper.label, helper.literal, helper.line);
     context.emitting_literal_display_helper = previous;
     if (!lowered)
       return false;
@@ -28764,8 +29413,7 @@ bool lower_line_count_helper_body(LoweringContext& context, const std::string& h
       if (!lower_expression_to_x(context, progression.step))
         return false;
       emit_store(context, core::emit::spatial_count_step_scratch_name(), "line_count step");
-      emit_number_or_preload(context, std::to_string(progression.count), std::nullopt,
-                             source_line);
+      emit_number_or_preload(context, std::to_string(progression.count), std::nullopt, source_line);
       emit_store(context, spatial_count_counter_name(context), "line_count counter");
       context.emitter.emit_jump(0x53, "ПП", helper, "line_count line progression", source_line);
       emit_recall(context, core::emit::spatial_count_total_scratch_name());
@@ -28795,8 +29443,7 @@ bool lower_line_count_helper_body(LoweringContext& context, const std::string& h
         counter_it != context.register_index_by_name.end() &&
         fl_loop_opcode_for_register(counter_it->second).has_value();
     if (!is_numeric_literal_value(progression.step, progression.count))
-      emit_number_or_preload(context, std::to_string(progression.count), std::nullopt,
-                             source_line);
+      emit_number_or_preload(context, std::to_string(progression.count), std::nullopt, source_line);
     if (!helper_takes_counter_in_x)
       emit_store(context, spatial_count_counter_name(context), "line_count counter");
     context.emitter.emit_jump(0x53, "ПП", helper, "line_count progression", source_line);
@@ -29183,18 +29830,15 @@ std::optional<unsigned long long> js_object_integer_key(const std::string& key) 
 std::vector<std::pair<std::string, std::string>>
 preloaded_numbers_in_js_object_order(const LoweringContext& context) {
   std::vector<std::pair<std::string, std::string>> result = ordered_preloaded_numbers(context);
-  std::stable_sort(result.begin(), result.end(),
-                   [](const auto& left, const auto& right) {
-                     const std::optional<unsigned long long> left_index =
-                         js_object_integer_key(left.first);
-                     const std::optional<unsigned long long> right_index =
-                         js_object_integer_key(right.first);
-                     if (left_index.has_value() != right_index.has_value())
-                       return left_index.has_value();
-                     if (left_index.has_value() && right_index.has_value())
-                       return *left_index < *right_index;
-                     return false;
-                   });
+  std::stable_sort(result.begin(), result.end(), [](const auto& left, const auto& right) {
+    const std::optional<unsigned long long> left_index = js_object_integer_key(left.first);
+    const std::optional<unsigned long long> right_index = js_object_integer_key(right.first);
+    if (left_index.has_value() != right_index.has_value())
+      return left_index.has_value();
+    if (left_index.has_value() && right_index.has_value())
+      return *left_index < *right_index;
+    return false;
+  });
   return result;
 }
 
@@ -29277,10 +29921,8 @@ std::optional<std::vector<int>> mk61_bitwise_mantissa_cells(const Expression& ex
     return std::nullopt;
   if (expression.args.size() != 2U)
     return std::nullopt;
-  const std::optional<std::vector<int>> left =
-      mk61_bitwise_mantissa_cells(expression.args.at(0));
-  const std::optional<std::vector<int>> right =
-      mk61_bitwise_mantissa_cells(expression.args.at(1));
+  const std::optional<std::vector<int>> left = mk61_bitwise_mantissa_cells(expression.args.at(0));
+  const std::optional<std::vector<int>> right = mk61_bitwise_mantissa_cells(expression.args.at(1));
   if (!left.has_value() || !right.has_value())
     return std::nullopt;
   std::vector<int> result = {8};
@@ -29306,13 +29948,12 @@ std::optional<std::string> mk61_display_literal_from_cells(const std::vector<int
   return result;
 }
 
-std::optional<std::string> mk61_bitwise_display_literal_for_expression(
-    const Expression& expression) {
+std::optional<std::string>
+mk61_bitwise_display_literal_for_expression(const Expression& expression) {
   if (expression.kind != "call")
     return std::nullopt;
   const std::string callee = lower_ascii(expression.callee);
-  if (callee != "bit_and" && callee != "bit_or" && callee != "bit_xor" &&
-      callee != "bit_not") {
+  if (callee != "bit_and" && callee != "bit_or" && callee != "bit_xor" && callee != "bit_not") {
     return std::nullopt;
   }
   const std::optional<std::vector<int>> cells = mk61_bitwise_mantissa_cells(expression);
@@ -29422,8 +30063,8 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
             expression.expr->kind == "number");
   };
 
-  auto setup_preload_value_for_initial =
-      [&](const std::string& initial_text, int line) -> std::optional<SetupPreloadValue> {
+  auto setup_preload_value_for_initial = [&](const std::string& initial_text,
+                                             int line) -> std::optional<SetupPreloadValue> {
     try {
       Expression initial = parse_expression(initial_text, line);
       initial = inline_setup_constants(inline_setup_constants, initial);
@@ -29529,7 +30170,16 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     } else if (field->initial.has_value()) {
       const std::string initial_text = trim_ascii(*field->initial);
       if (field->type == "cells" && initial_text == "random()") {
-        value = "random()";
+        const auto world_it =
+            field->domain.has_value() ? context.worlds.find(*field->domain) : context.worlds.end();
+        if (world_it != context.worlds.end() && world_it->second != nullptr &&
+            world_it->second->position.has_value() &&
+            world_it->second->position->encoding == "decimal_player") {
+          value = "int(random() * 999999999) + 1";
+          setup_expression = true;
+        } else {
+          value = "random()";
+        }
         setup_target_name = field->name;
       } else if (field->type == "coord" && field->domain.has_value() &&
                  initial_text == "random(" + *field->domain + ")" &&
@@ -29736,20 +30386,19 @@ std::string combine_listing(const CompileResult& result) {
           ? format_setup_block(result.preloads)
           : std::nullopt;
   const std::optional<std::string> setup_preload_listing =
-      setup_block.has_value() ? format_setup_preload_listing_steps(result.preloads)
-                              : std::nullopt;
+      setup_block.has_value() ? format_setup_preload_listing_steps(result.preloads) : std::nullopt;
 
-  const bool has_setup_rows = !result.manual_setup_inputs.empty() ||
-                              result.setup_program.has_value() ||
-                              (setup_preload_listing.has_value() &&
-                               !setup_preload_listing->empty());
+  const bool has_setup_rows =
+      !result.manual_setup_inputs.empty() || result.setup_program.has_value() ||
+      (setup_preload_listing.has_value() && !setup_preload_listing->empty());
   if (has_setup_rows) {
     std::string listing;
     if (setup_block.has_value())
       listing += "Setup Block:\n  " + *setup_block + "\n\n";
     listing += "# Setup Listing\n";
     if (result.setup_program.has_value()) {
-      listing += format_setup_listing_steps(result.manual_setup_inputs, result.setup_program->steps);
+      listing +=
+          format_setup_listing_steps(result.manual_setup_inputs, result.setup_program->steps);
     } else if (setup_preload_listing.has_value()) {
       listing += *setup_preload_listing;
     } else {
@@ -29770,8 +30419,7 @@ std::optional<std::string> executable_setup_value(const std::string& value);
 bool preload_is_display_literal_setup(const PreloadReport& preload) {
   if (executable_setup_value(preload.value).has_value())
     return false;
-  if (const std::optional<DisplayLiteralProgram> literal =
-          display_literal_program(preload.value)) {
+  if (const std::optional<DisplayLiteralProgram> literal = display_literal_program(preload.value)) {
     if (literal->kind != "error")
       return true;
   }
@@ -29811,8 +30459,7 @@ bool needs_generated_setup_program(const LoweringContext& context,
                                    const std::vector<PreloadReport>& preloads) {
   if (context.uses_formatted_coord_report)
     return true;
-  return std::any_of(preloads.begin(), preloads.end(),
-                     preload_requires_generated_setup_program);
+  return std::any_of(preloads.begin(), preloads.end(), preload_requires_generated_setup_program);
 }
 
 bool expression_is_deterministic_for_if_chain(const Expression& expression) {
@@ -30218,16 +30865,16 @@ void lift_function_calls_in_expression_text(std::string& text, std::vector<V2Sta
 }
 
 void lift_function_calls_in_expression_text(std::optional<std::string>& text,
-                                            std::vector<V2Statement>& prelude,
-                                            bool allow_root_call, int line,
-                                            FunctionCallLiftState& state) {
+                                            std::vector<V2Statement>& prelude, bool allow_root_call,
+                                            int line, FunctionCallLiftState& state) {
   if (!text.has_value())
     return;
   lift_function_calls_in_expression_text(*text, prelude, allow_root_call, line, state);
 }
 
-std::vector<V2Statement> lift_function_calls_in_statements(
-    const std::vector<V2Statement>& statements, FunctionCallLiftState& state);
+std::vector<V2Statement>
+lift_function_calls_in_statements(const std::vector<V2Statement>& statements,
+                                  FunctionCallLiftState& state);
 
 V2StatementPtr lift_function_calls_in_match_action(const V2StatementPtr& action,
                                                    FunctionCallLiftState& state) {
@@ -30249,8 +30896,7 @@ std::vector<V2Statement> lift_function_calls_in_statement(const V2Statement& sta
   std::vector<V2Statement> prelude;
   V2Statement rebuilt = statement;
 
-  if (rebuilt.kind == "v2_assign" || rebuilt.kind == "v2_preview" ||
-      rebuilt.kind == "v2_return") {
+  if (rebuilt.kind == "v2_assign" || rebuilt.kind == "v2_preview" || rebuilt.kind == "v2_return") {
     lift_function_calls_in_expression_text(rebuilt.expr, prelude, true, rebuilt.line, state);
   } else if (rebuilt.kind == "v2_stop") {
     if (!rebuilt.items.has_value())
@@ -30261,14 +30907,14 @@ std::vector<V2Statement> lift_function_calls_in_statement(const V2Statement& sta
     lift_function_calls_in_expression_text(rebuilt.expr, prelude, false, rebuilt.line, state);
   } else if (rebuilt.kind == "v2_if" || rebuilt.kind == "v2_while") {
     if (rebuilt.predicate.has_value()) {
-      lift_function_calls_in_expression_text(rebuilt.predicate->left, prelude, false,
-                                             rebuilt.line, state);
-      lift_function_calls_in_expression_text(rebuilt.predicate->right, prelude, false,
-                                             rebuilt.line, state);
+      lift_function_calls_in_expression_text(rebuilt.predicate->left, prelude, false, rebuilt.line,
+                                             state);
+      lift_function_calls_in_expression_text(rebuilt.predicate->right, prelude, false, rebuilt.line,
+                                             state);
       lift_function_calls_in_expression_text(rebuilt.predicate->collection, prelude, false,
                                              rebuilt.line, state);
-      lift_function_calls_in_expression_text(rebuilt.predicate->item, prelude, false,
-                                             rebuilt.line, state);
+      lift_function_calls_in_expression_text(rebuilt.predicate->item, prelude, false, rebuilt.line,
+                                             state);
     }
   } else if (rebuilt.kind == "v2_match") {
     lift_function_calls_in_expression_text(rebuilt.expr, prelude, false, rebuilt.line, state);
@@ -30293,8 +30939,9 @@ std::vector<V2Statement> lift_function_calls_in_statement(const V2Statement& sta
   return prelude;
 }
 
-std::vector<V2Statement> lift_function_calls_in_statements(
-    const std::vector<V2Statement>& statements, FunctionCallLiftState& state) {
+std::vector<V2Statement>
+lift_function_calls_in_statements(const std::vector<V2Statement>& statements,
+                                  FunctionCallLiftState& state) {
   std::vector<V2Statement> result;
   for (const V2Statement& statement : statements) {
     std::vector<V2Statement> lifted = lift_function_calls_in_statement(statement, state);
@@ -30454,8 +31101,9 @@ int fold_grd_statement_constants(V2Statement& statement,
   return assumptions;
 }
 
-[[maybe_unused]] int fold_grd_angle_mode_constants(
-    V2Program& program, const std::map<std::string, Expression>& constants) {
+[[maybe_unused]] int
+fold_grd_angle_mode_constants(V2Program& program,
+                              const std::map<std::string, Expression>& constants) {
   if (!program.angle_mode.has_value() || program.angle_mode->mode != "grd")
     return 0;
 
@@ -31552,7 +32200,7 @@ bool can_inline_floor_packed_row_display_expression(const V2Program& program,
 }
 
 bool statement_has_inline_floor_packed_row_display_expression(const V2Program& program,
-                                                             const V2Statement& statement);
+                                                              const V2Statement& statement);
 
 bool statements_have_inline_floor_packed_row_display_expression(
     const V2Program& program, const std::vector<V2Statement>& statements) {
@@ -31562,7 +32210,7 @@ bool statements_have_inline_floor_packed_row_display_expression(
 }
 
 bool statement_has_inline_floor_packed_row_display_expression(const V2Program& program,
-                                                             const V2Statement& statement) {
+                                                              const V2Statement& statement) {
   if (statement_has_materializable_display_items(statement) &&
       can_inline_floor_packed_row_display_expression(program, statement, 2U)) {
     return true;
@@ -32674,7 +33322,8 @@ std::set<std::string> packed_decimal_zero_run_floor_sources(const V2Program& pro
   return names;
 }
 
-void rewrite_packed_floor_text(std::optional<std::string>& text, const std::set<std::string>& names) {
+void rewrite_packed_floor_text(std::optional<std::string>& text,
+                               const std::set<std::string>& names) {
   if (!text.has_value())
     return;
   for (const std::string& name : names) {
@@ -32700,7 +33349,8 @@ bool expression_is_numeric_literal(const Expression& expression, double value) {
   }
 }
 
-Expression rewrite_packed_floor_expression(Expression expression, const std::set<std::string>& names) {
+Expression rewrite_packed_floor_expression(Expression expression,
+                                           const std::set<std::string>& names) {
   if (expression.index != nullptr)
     expression.index =
         std::make_shared<Expression>(rewrite_packed_floor_expression(*expression.index, names));
@@ -32981,8 +33631,8 @@ void run_interprocedural_ast_passes(const CompileOptions& options, V2Program& pr
 std::vector<PreloadReport>
 preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items);
 
-void append_missing_preloaded_indirect_flow_comments(
-    std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads);
+void append_missing_preloaded_indirect_flow_comments(std::vector<MachineItem>& items,
+                                                     const std::vector<PreloadReport>& preloads);
 
 int reference_indirect_flow_rescue_above(const ProgramAst& ast, const CompileOptions& options);
 
@@ -33022,6 +33672,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     result.implemented = false;
     return result;
   }
+  lower_small_case_matches(*ast.v2);
 
   LoweringContext context;
   context.program = &*ast.v2;
@@ -33128,8 +33779,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               .name = "expression-constant-folder",
               .detail = "Folded " + std::to_string(refolded_constants.applied) +
                         " comparison guarded correction expression node" +
-                        (refolded_constants.applied == 1 ? "" : "s") +
-                        " before code generation.",
+                        (refolded_constants.applied == 1 ? "" : "s") + " before code generation.",
           });
         }
         if (refolded_constants.grd_angle_assumptions > 0) {
@@ -33214,6 +33864,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         collect_expression_use_counts(context, *ast.v2);
         trace_stage("metadata-index-rules");
         index_rules(context, *ast.v2);
+        if (context.indirect_underflow_decrement) {
+          context.terminal_underflow_unit_decrements =
+              collect_terminal_underflow_unit_decrements(context, *ast.v2);
+        }
         trace_stage("metadata-collect-registers");
         collect_registers(context, *ast.v2);
         trace_stage("metadata-forced-shares-preloads");
@@ -33456,8 +34110,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       if (const std::optional<std::vector<std::string>> values =
               indexed_initializer_list_values(*field.initial, expected)) {
         for (int index = field.bank->min; index <= field.bank->max; ++index) {
-          const std::string value = trim_ascii(values->at(static_cast<std::size_t>(
-              index - field.bank->min)));
+          const std::string value =
+              trim_ascii(values->at(static_cast<std::size_t>(index - field.bank->min)));
           if (value != "stack.X" && value != "stack.Y")
             continue;
           const std::string element = state_bank_element_name(field, index);
@@ -33665,10 +34319,8 @@ std::string implemented_candidate_key(const CompileOptions& options) {
 
 std::string compile_once_cache_key(const CompileOptions& options) {
   std::ostringstream out;
-  out << implemented_candidate_key(options)
-      << ";delivery=" << static_cast<int>(options.delivery)
-      << ";output=" << static_cast<int>(options.output)
-      << ";analysis=" << options.analysis
+  out << implemented_candidate_key(options) << ";delivery=" << static_cast<int>(options.delivery)
+      << ";output=" << static_cast<int>(options.output) << ";analysis=" << options.analysis
       << ";strict=" << options.strict
       << ";disable_candidate_search=" << options.disable_candidate_search;
   if (options.budget.has_value())
@@ -33806,8 +34458,9 @@ int reference_indirect_flow_rescue_above(const ProgramAst& ast, const CompileOpt
   const std::optional<int> span = resolve_reference_span(*ast.reference);
   if (!span.has_value())
     return kPostLayoutOfficialProgramLimit;
-  const int budget = options.budget.has_value() && *options.budget > 0 ? *options.budget
-                                                                       : kPostLayoutOfficialProgramLimit;
+  const int budget = options.budget.has_value() && *options.budget > 0
+                         ? *options.budget
+                         : kPostLayoutOfficialProgramLimit;
   return std::min(*span, budget);
 }
 
@@ -34027,9 +34680,8 @@ std::optional<std::string> indirect_register_from_opcode(int opcode) {
 
 std::vector<PreloadReport>
 preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items) {
-  static const std::regex preload_pattern(
-      R"(preloaded R([0-9a-e])=[^\s;]+ indirect-target=(\d+))",
-      std::regex_constants::icase);
+  static const std::regex preload_pattern(R"(preloaded R([0-9a-e])=[^\s;]+ indirect-target=(\d+))",
+                                          std::regex_constants::icase);
 
   std::vector<PreloadReport> preloads;
   for (const MachineItem& item : items) {
@@ -34051,8 +34703,7 @@ preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items) 
     if (ec != std::errc{} || ptr != target_text.data() + target_text.size())
       continue;
 
-    const std::optional<std::string> selector =
-        indirect_flow_selector_for_actual_target(target);
+    const std::optional<std::string> selector = indirect_flow_selector_for_actual_target(target);
     if (!selector.has_value())
       continue;
     const bool duplicate =
@@ -34067,15 +34718,15 @@ preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items) 
         .counts_against_program = false,
     });
   }
-  std::sort(preloads.begin(), preloads.end(), [](const PreloadReport& left,
-                                                 const PreloadReport& right) {
-    return register_index(left.register_name) < register_index(right.register_name);
-  });
+  std::sort(preloads.begin(), preloads.end(),
+            [](const PreloadReport& left, const PreloadReport& right) {
+              return register_index(left.register_name) < register_index(right.register_name);
+            });
   return preloads;
 }
 
-void append_missing_preloaded_indirect_flow_comments(
-    std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads) {
+void append_missing_preloaded_indirect_flow_comments(std::vector<MachineItem>& items,
+                                                     const std::vector<PreloadReport>& preloads) {
   std::map<std::string, std::string> selector_by_register;
   for (const PreloadReport& preload : preloads)
     selector_by_register[preload.register_name] = preload.value;
@@ -34109,9 +34760,8 @@ void append_missing_preloaded_indirect_flow_comments(
       ++address;
       continue;
     }
-    const std::optional<core::IndirectAddressEvaluation> decoded =
-        core::evaluate_indirect_address(*register_name, selector_it->second,
-                                        core::IndirectOperationKind::Flow);
+    const std::optional<core::IndirectAddressEvaluation> decoded = core::evaluate_indirect_address(
+        *register_name, selector_it->second, core::IndirectOperationKind::Flow);
     if (!decoded.has_value() || !decoded->actual_flow_target.has_value()) {
       ++address;
       continue;
@@ -34329,8 +34979,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   const bool needs_size_rescue = !best.implemented || best.steps.size() > rescue_threshold;
   const bool allow_aggressive_post_layout =
       needs_size_rescue || source_has_reference_declaration(source);
-  const bool may_use_dead_source_residual =
-      source_has_dead_source_residual_temp_candidate(source);
+  const bool may_use_dead_source_residual = source_has_dead_source_residual_temp_candidate(source);
   std::optional<V2Program> selector_probe_program;
   try {
     ProgramAst ast = parse_program(source);
@@ -34427,6 +35076,9 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       });
       best = std::move(result);
     }
+  };
+  auto selected_still_overflows_now = [&]() {
+    return best.implemented && best.steps.size() > kOfficialProgramLimit;
   };
 
   add_candidate(
@@ -34539,7 +35191,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         candidate_options.conditional_branch_trampoline = true;
       },
       "dual-use-constant-conditional-trampoline-layout",
-      "Combined dual-use constant indirect-flow selectors with conditional branch trampolines after "
+      "Combined dual-use constant indirect-flow selectors with conditional branch trampolines "
+      "after "
       "full layout",
       CandidateGate::SizeRescue);
   add_candidate(
@@ -34667,10 +35320,11 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       },
       "free-residual-dispatch-scratch-with-if-chain",
       "Combined residual-dispatch scratch freeing with if/else-if dispatch canonicalization");
-  add_candidate([](CompileOptions& candidate_options) { candidate_options.share_random_cell = true; },
-                "share-random-cell-helper",
-                "Shared a repeated random-coordinate expression through one helper despite a "
-                "marginal predicted saving");
+  add_candidate(
+      [](CompileOptions& candidate_options) { candidate_options.share_random_cell = true; },
+      "share-random-cell-helper",
+      "Shared a repeated random-coordinate expression through one helper despite a "
+      "marginal predicted saving");
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.share_random_cell = true;
@@ -35047,634 +35701,644 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   // providers instead of being searched as an extra first-stage matrix.
   bool include_legacy_native_candidate_block = false;
   if (include_legacy_native_candidate_block) {
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.stack_resident_temps = true; },
-      "stack-resident-temps",
-      "Kept short-lived single-use temporaries on the X/Y/Z/T stack instead of spilling them to "
-      "registers");
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.general_constant_preloads = true; },
-      "general-constant-preloads",
-      "Preloaded high-value runtime numeric literals through compiler-owned setup registers");
-  add_candidate([](CompileOptions& candidate_options) { candidate_options.coalesce_copies = true; },
-                "coalesce-copies", "Coalesced copy-related registers that never diverge");
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.tail_branch_inversion = true; },
-      "late-layout-tail-branch-inversion", "Selected tail-branch inversion after full layout");
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.guarded_prologue_gadgets = true; },
-      "guarded-prologue-gadget-layout",
-      "Selected guarded prologue gadget extraction after full layout");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.guarded_prologue_gadgets = true;
-        candidate_options.hoist_shared_helpers = true;
-        candidate_options.hoist_procs = true;
-      },
-      "guarded-prologue-hoisted-proc-layout",
-      "Selected guarded prologue gadget extraction with hoisted procedure layout");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.conditional_branch_trampoline = true;
-      },
-      "conditional-branch-trampoline-layout",
-      "Retargeted repeated condition branches through later identical conditionals",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.tail_branch_inversion = true;
-        candidate_options.conditional_branch_trampoline = true;
-      },
-      "late-layout-tail-branch-conditional-trampoline",
-      "Selected tail-branch inversion plus conditional branch trampolines after full layout",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.shared_straight_line_call_bodies = true;
-      },
-      "shared-call-body-helper",
-      "Shared repeated straight-line bodies that contain direct subroutine calls");
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.canonicalize_if_chains = true; },
-      "if-chain-dispatch-canonicalization",
-      "Selected single-evaluation dispatch for a repeated expensive if/else-if selector");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.free_residual_dispatch_scratch = true;
-      },
-      "free-residual-dispatch-scratch",
-      "Freed the unused residual-dispatch scratch register to unlock more preloaded constants");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.preserve_dispatch_case_order = true;
-      },
-      "source-order-dispatch-layout",
-      "Kept numeric dispatch cases in source order for full-layout selection",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.preserve_dispatch_case_order = true;
-        candidate_options.free_residual_dispatch_scratch = true;
-      },
-      "source-order-dispatch-free-scratch",
-      "Combined source-order numeric dispatch layout with residual scratch freeing",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.recall_stored_input_after_decrement = true;
-      },
-      "stored-input-decrement-recall-sync",
-      "Restored stored prompt input with П->X after decrement guards", CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.single_bit_mask_op_copy_reuse = true;
-      },
-      "single-bit-mask-op-copy-reuse",
-      "Copied a mask source once and reused the live X value for a following single-bit mask "
-      "update",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.hoist_shared_helpers = true; },
-      "hoisted-helper-indirect-layout",
-      "Hoisted shared helpers to the front so their calls become single-cell preloaded indirect "
-      "flow");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.hoist_shared_helpers = true;
-        candidate_options.hoist_procs = true;
-      },
-      "hoisted-proc-indirect-layout",
-      "Hoisted ordinary rule procs to the front so repeated calls become single-cell preloaded "
-      "indirect flow");
-  if (source_has_multiple_procs(source) && needs_size_rescue) {
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.stack_resident_temps = true; },
+        "stack-resident-temps",
+        "Kept short-lived single-use temporaries on the X/Y/Z/T stack instead of spilling them to "
+        "registers");
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.order_procs_by_call_count = true;
+          candidate_options.general_constant_preloads = true;
         },
-        "call-count-proc-layout",
-        "Emitted procedures in descending call-count order so hot helpers occupy the cheapest "
-        "addresses");
+        "general-constant-preloads",
+        "Preloaded high-value runtime numeric literals through compiler-owned setup registers");
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.coalesce_copies = true; },
+        "coalesce-copies", "Coalesced copy-related registers that never diverge");
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.tail_branch_inversion = true; },
+        "late-layout-tail-branch-inversion", "Selected tail-branch inversion after full layout");
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.proc_layout_strategy = "size-asc";
+          candidate_options.guarded_prologue_gadgets = true;
         },
-        "size-asc-proc-layout",
-        "Emitted the smallest procedures first to pack hot helpers into the cheapest addresses");
+        "guarded-prologue-gadget-layout",
+        "Selected guarded prologue gadget extraction after full layout");
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.proc_layout_strategy = "size-desc";
-        },
-        "size-desc-proc-layout", "Emitted the largest procedures first");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.proc_layout_strategy = "reverse";
-        },
-        "reverse-proc-layout", "Emitted procedures in reverse source order");
-  }
-  if (source_may_use_segmented_line_count_scan(source)) {
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.segmented_bitplanes = true;
-          candidate_options.segmented_line_count_scan = true;
-        },
-        "segmented-bitplane-line-count-scan-layout",
-        "Scanned 10x10 segmented bitplanes through one alignment-tested board loop instead of "
-        "four generic progressions");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.segmented_bitplanes = true;
-          candidate_options.segmented_line_count_scan = true;
+          candidate_options.guarded_prologue_gadgets = true;
           candidate_options.hoist_shared_helpers = true;
+          candidate_options.hoist_procs = true;
         },
-        "segmented-bitplane-line-count-scan-hoisted",
-        "Combined the segmented 10x10 line_count scan with hoisted helpers");
-  }
-  if (source_may_use_bit_mask_helper(source)) {
+        "guarded-prologue-hoisted-proc-layout",
+        "Selected guarded prologue gadget extraction with hoisted procedure layout");
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.shared_bit_mask_helper_calls = true;
+          candidate_options.conditional_branch_trampoline = true;
         },
-        "shared-bit-mask-helper-layout", "Selected shared bit_mask helper calls after full layout");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.shared_bit_mask_helper_calls = true;
-          candidate_options.hoist_shared_helpers = true;
-        },
-        "shared-bit-mask-helper-hoisted-layout",
-        "Selected shared bit_mask helper calls with hoisted helper layout");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.compact_bit_mask_helper_body = true;
-        },
-        "compact-bit-mask-helper-body",
-        "Selected compact shared bit_mask helper body after full layout",
+        "conditional-branch-trampoline-layout",
+        "Retargeted repeated condition branches through later identical conditionals",
         CandidateGate::SizeRescue);
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.compact_bit_mask_helper_body = true;
           candidate_options.tail_branch_inversion = true;
+          candidate_options.conditional_branch_trampoline = true;
         },
-        "compact-bit-mask-helper-tail-branch",
-        "Combined compact shared bit_mask helper body with tail-branch inversion",
+        "late-layout-tail-branch-conditional-trampoline",
+        "Selected tail-branch inversion plus conditional branch trampolines after full layout",
         CandidateGate::SizeRescue);
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.compact_bit_mask_helper_body = true;
-          candidate_options.indirect_underflow_decrement = true;
-        },
-        "compact-bit-mask-indirect-underflow",
-        "Combined compact shared bit_mask helper body with indirect underflow decrement lowering",
-        CandidateGate::SizeRescue);
-  }
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.signed_abs_match_pairs = true; },
-      "signed-abs-match-pair",
-      "Selected abs/sign lowering for signed match pairs after full layout");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.signed_abs_match_pairs = true;
-        candidate_options.shared_bit_mask_helper_calls = true;
-        candidate_options.hoist_shared_helpers = true;
-      },
-      "signed-abs-shared-bit-helper-hoisted-layout",
-      "Combined signed match-pair lowering with hoisted shared bit-mask helpers");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.signed_abs_match_pairs = true;
-        candidate_options.shared_bit_mask_helper_calls = true;
-        candidate_options.hoist_shared_helpers = true;
-        candidate_options.hoist_procs = true;
-      },
-      "signed-abs-shared-bit-helper-hoisted-proc-layout",
-      "Combined signed match-pair lowering with hoisted shared bit-mask helpers and procedures");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.synthesize_parametric_siblings = true;
-      },
-      "parametric-sibling-proc",
-      "Synthesized a shared one-parameter helper for sibling dispatch procedure arms");
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.pack_counter_stripes = true; },
-      "packed-counter-stripes",
-      "Packed compatible fixed-width counters into one hidden decimal-striped register");
-  for (const std::vector<std::string>& names :
-       discover_packed_counter_stripe_variant_names(source)) {
-    add_candidate(
-        [names](CompileOptions& candidate_options) {
-          candidate_options.pack_counter_stripes = true;
-          candidate_options.pack_counter_stripe_names = names;
-        },
-        "packed-counter-stripes:" + join_strings(names, "+"),
-        "Packed counters " + join_strings(names, ", ") +
-            " into one hidden decimal-striped register");
-  }
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.canonicalize_repeated_unary_update_args = true;
-      },
-      "repeated-unary-update-arg-temp",
-      "Canonicalized repeated X-transform unary-call arguments through a hidden scratch");
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.x_param_value_functions = true; },
-      "x-param-value-function",
-      "Passed simple value-function arguments through X instead of allocating a parameter "
-      "register");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.x_param_value_functions = true;
-        candidate_options.canonicalize_repeated_unary_update_args = true;
-      },
-      "x-param-value-function-with-unary-arg-temp",
-      "Combined X-parameter value functions with repeated unary-call argument canonicalization");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.x_param_value_functions = true;
-        candidate_options.canonicalize_repeated_unary_update_args = true;
-        candidate_options.coalesce_copies = true;
-      },
-      "x-param-value-function-unary-arg-temp-coalesce",
-      "Combined X-parameter value functions, unary-call argument canonicalization, and copy "
-      "coalescing");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.x_param_value_functions = true;
-        candidate_options.canonicalize_repeated_unary_update_args = true;
-        candidate_options.shared_straight_line_call_bodies = true;
-        candidate_options.hoist_shared_helpers = true;
-        candidate_options.hoist_procs = true;
-      },
-      "x-param-unary-arg-shared-call-hoisted-proc",
-      "Combined X-parameter value functions, unary-call canonicalization, shared call-body "
-      "helpers, and hoisted procs");
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.unroll_counted_loops = true; },
-      "counted-loop-unroll", "Fully unrolled small constant-trip counted loops");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.setup_only_counted_loop_init = true;
-      },
-      "setup-only-counted-loop-init", "Kept eligible countdown-loop initializers in setup",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.unroll_counted_loops = true;
-        candidate_options.startup_aware_constant_preloads = true;
-      },
-      "startup-aware-constant-preloads",
-      "Kept setup-expensive synthesizable constants inline while preserving main cell count");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.unroll_counted_loops = true;
-        candidate_options.free_residual_dispatch_scratch = true;
-      },
-      "counted-loop-unroll-free-scratch",
-      "Combined counted-loop unrolling with residual-dispatch scratch freeing");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.stack_resident_temps = true;
-        candidate_options.setup_only_counted_loop_init = true;
-      },
-      "stack-resident-temps-setup-counted-loop",
-      "Combined stack-resident temporaries with setup-only counted-loop initializers",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.stack_resident_temps = true;
-        candidate_options.hoist_shared_helpers = true;
-      },
-      "stack-resident-temps-hoisted", "Kept temporaries stack-resident and hoisted helpers");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.stack_resident_temps = true;
-        candidate_options.hoist_shared_helpers = true;
-        candidate_options.hoist_procs = true;
-      },
-      "stack-resident-temps-hoisted-proc",
-      "Kept temporaries stack-resident with hoisted helper and procedure layout");
-  if (source_may_contain_error_trap(source)) {
-    add_candidate(
-        [](CompileOptions& candidate_options) { candidate_options.domain_error_guards = true; },
-        "domain-error-guards", "Replaced terminal-error guards with self-trapping domain opcodes");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.domain_error_guards = true;
-          candidate_options.unroll_counted_loops = true;
-        },
-        "domain-error-guards-unroll", "Combined domain-error guards with counted-loop unrolling");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.domain_error_guards = true;
-          candidate_options.setup_only_counted_loop_init = true;
-        },
-        "domain-error-guards-setup-counted-loop",
-        "Combined domain-error guards with setup-only counted-loop initializers",
-        CandidateGate::SizeRescue);
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.domain_error_guards = true;
-          candidate_options.unroll_counted_loops = true;
-          candidate_options.setup_only_counted_loop_init = true;
-        },
-        "domain-error-guards-unroll-setup-counted-loop",
-        "Combined domain-error guards, counted-loop unrolling, and setup-only counted loops",
-        CandidateGate::SizeRescue);
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.domain_error_guards = true;
-          candidate_options.setup_only_counted_loop_init = true;
-          candidate_options.stack_resident_temps = true;
-        },
-        "domain-error-guards-setup-counted-loop-stack-temps",
-        "Combined domain-error guards, setup-only counted loops, and stack-resident temporaries",
-        CandidateGate::SizeRescue);
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.domain_error_guards = true;
-          candidate_options.show_read_guarded_transfer = true;
-        },
-        "show-read-guarded-transfer",
-        "Kept read/decrement/increment guarded transfers on the calculator stack");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.domain_error_guards = true;
-          candidate_options.unroll_counted_loops = true;
-          candidate_options.show_read_guarded_transfer = true;
-        },
-        "show-read-guarded-transfer-unroll",
-        "Combined stack-resident guarded transfers with counted-loop unrolling");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.domain_error_guards = true;
-          candidate_options.setup_only_counted_loop_init = true;
-          candidate_options.show_read_guarded_transfer = true;
-        },
-        "show-read-guarded-transfer-setup-counted-loop",
-        "Combined guarded transfers with setup-only counted loops", CandidateGate::SizeRescue);
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.domain_error_guards = true;
-          candidate_options.unroll_counted_loops = true;
-          candidate_options.setup_only_counted_loop_init = true;
-          candidate_options.show_read_guarded_transfer = true;
-        },
-        "show-read-guarded-transfer-unroll-setup-counted-loop",
-        "Combined guarded transfers, counted-loop unrolling, and setup-only counted loops",
-        CandidateGate::SizeRescue);
-  }
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.inline_floor_packed_row_expressions = true;
-      },
-      "inline-floor-packed-row-expression",
-      "Computed floor-packed display row expressions inline to free their hidden display register");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.inline_floor_packed_row_expressions = true;
-        candidate_options.hoist_shared_helpers = true;
-        candidate_options.hoist_procs = true;
-        candidate_options.tail_branch_inversion = true;
-      },
-      "inline-floor-hoisted-proc-tail-layout",
-      "Combined inline floor-row display expressions with hoisted procs and tail-branch inversion");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.x_param_y_stack_stored_entry = true;
-      },
-      "x-param-y-stack-stored-entry",
-      "Tried secondary entries for X-parameter procedures with a stack-carried value",
-      CandidateGate::SizeRescue);
-  if (allow_aggressive_post_layout) {
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.dead_source_residual_temp_reuse = true;
-        },
-        "dead-source-residual-temp-reuse",
-        "Reused dead source registers for residual temporary values when whole-program layout "
-        "wins");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.dead_source_residual_temp_reuse = true;
-          candidate_options.tail_branch_inversion = true;
-        },
-        "dead-source-residual-tail-branch",
-        "Combined dead-source residual temp reuse with tail-branch inversion");
-  }
-  if (allow_aggressive_post_layout) {
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.aggressive_post_layout_indirect_flow = true;
-        },
-        "aggressive-post-layout-indirect-flow",
-        "Tried proven post-layout indirect-flow and dark-entry rewrites even though the primary "
-        "layout already fit");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.aggressive_post_layout_indirect_flow = true;
-          candidate_options.invert_branch_order = true;
-        },
-        "aggressive-post-layout-branch-order",
-        "Combined proven post-layout indirect-flow with inverted branch-order layout");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.aggressive_post_layout_indirect_flow = true;
-          candidate_options.tail_branch_inversion = true;
-        },
-        "aggressive-post-layout-tail-branch",
-        "Combined proven post-layout indirect-flow with tail-branch inversion");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.dead_source_residual_temp_reuse = true;
-          candidate_options.aggressive_post_layout_indirect_flow = true;
-        },
-        "dead-source-residual-aggressive-post-layout",
-        "Combined dead-source residual temp reuse with proven post-layout indirect-flow");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.dead_source_residual_temp_reuse = true;
-          candidate_options.aggressive_post_layout_indirect_flow = true;
-          candidate_options.tail_branch_inversion = true;
-        },
-        "dead-source-residual-aggressive-tail-branch",
-        "Combined dead-source residual temp reuse, proven post-layout indirect-flow, and "
-        "tail-branch inversion");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.aggressive_post_layout_indirect_flow = true;
           candidate_options.shared_straight_line_call_bodies = true;
         },
-        "aggressive-post-layout-shared-call-body",
-        "Combined proven post-layout indirect-flow with shared call-body helpers");
+        "shared-call-body-helper",
+        "Shared repeated straight-line bodies that contain direct subroutine calls");
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.canonicalize_if_chains = true; },
+        "if-chain-dispatch-canonicalization",
+        "Selected single-evaluation dispatch for a repeated expensive if/else-if selector");
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.aggressive_post_layout_indirect_flow = true;
+          candidate_options.free_residual_dispatch_scratch = true;
+        },
+        "free-residual-dispatch-scratch",
+        "Freed the unused residual-dispatch scratch register to unlock more preloaded constants");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.preserve_dispatch_case_order = true;
+        },
+        "source-order-dispatch-layout",
+        "Kept numeric dispatch cases in source order for full-layout selection",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.preserve_dispatch_case_order = true;
+          candidate_options.free_residual_dispatch_scratch = true;
+        },
+        "source-order-dispatch-free-scratch",
+        "Combined source-order numeric dispatch layout with residual scratch freeing",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.recall_stored_input_after_decrement = true;
+        },
+        "stored-input-decrement-recall-sync",
+        "Restored stored prompt input with П->X after decrement guards", CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.single_bit_mask_op_copy_reuse = true;
+        },
+        "single-bit-mask-op-copy-reuse",
+        "Copied a mask source once and reused the live X value for a following single-bit mask "
+        "update",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.hoist_shared_helpers = true; },
+        "hoisted-helper-indirect-layout",
+        "Hoisted shared helpers to the front so their calls become single-cell preloaded indirect "
+        "flow");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.hoist_shared_helpers = true;
+          candidate_options.hoist_procs = true;
+        },
+        "hoisted-proc-indirect-layout",
+        "Hoisted ordinary rule procs to the front so repeated calls become single-cell preloaded "
+        "indirect flow");
+    if (source_has_multiple_procs(source) && needs_size_rescue) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.order_procs_by_call_count = true;
+          },
+          "call-count-proc-layout",
+          "Emitted procedures in descending call-count order so hot helpers occupy the cheapest "
+          "addresses");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.proc_layout_strategy = "size-asc";
+          },
+          "size-asc-proc-layout",
+          "Emitted the smallest procedures first to pack hot helpers into the cheapest addresses");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.proc_layout_strategy = "size-desc";
+          },
+          "size-desc-proc-layout", "Emitted the largest procedures first");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.proc_layout_strategy = "reverse";
+          },
+          "reverse-proc-layout", "Emitted procedures in reverse source order");
+    }
+    if (source_may_use_segmented_line_count_scan(source)) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.segmented_bitplanes = true;
+            candidate_options.segmented_line_count_scan = true;
+          },
+          "segmented-bitplane-line-count-scan-layout",
+          "Scanned 10x10 segmented bitplanes through one alignment-tested board loop instead of "
+          "four generic progressions");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.segmented_bitplanes = true;
+            candidate_options.segmented_line_count_scan = true;
+            candidate_options.hoist_shared_helpers = true;
+          },
+          "segmented-bitplane-line-count-scan-hoisted",
+          "Combined the segmented 10x10 line_count scan with hoisted helpers");
+    }
+    if (source_may_use_bit_mask_helper(source)) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.shared_bit_mask_helper_calls = true;
+          },
+          "shared-bit-mask-helper-layout",
+          "Selected shared bit_mask helper calls after full layout");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.shared_bit_mask_helper_calls = true;
+            candidate_options.hoist_shared_helpers = true;
+          },
+          "shared-bit-mask-helper-hoisted-layout",
+          "Selected shared bit_mask helper calls with hoisted helper layout");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.compact_bit_mask_helper_body = true;
+          },
+          "compact-bit-mask-helper-body",
+          "Selected compact shared bit_mask helper body after full layout",
+          CandidateGate::SizeRescue);
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.compact_bit_mask_helper_body = true;
+            candidate_options.tail_branch_inversion = true;
+          },
+          "compact-bit-mask-helper-tail-branch",
+          "Combined compact shared bit_mask helper body with tail-branch inversion",
+          CandidateGate::SizeRescue);
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.compact_bit_mask_helper_body = true;
+            candidate_options.indirect_underflow_decrement = true;
+          },
+          "compact-bit-mask-indirect-underflow",
+          "Combined compact shared bit_mask helper body with indirect underflow decrement lowering",
+          CandidateGate::SizeRescue);
+    }
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.signed_abs_match_pairs = true; },
+        "signed-abs-match-pair",
+        "Selected abs/sign lowering for signed match pairs after full layout");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.signed_abs_match_pairs = true;
+          candidate_options.shared_bit_mask_helper_calls = true;
+          candidate_options.hoist_shared_helpers = true;
+        },
+        "signed-abs-shared-bit-helper-hoisted-layout",
+        "Combined signed match-pair lowering with hoisted shared bit-mask helpers");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.signed_abs_match_pairs = true;
+          candidate_options.shared_bit_mask_helper_calls = true;
+          candidate_options.hoist_shared_helpers = true;
+          candidate_options.hoist_procs = true;
+        },
+        "signed-abs-shared-bit-helper-hoisted-proc-layout",
+        "Combined signed match-pair lowering with hoisted shared bit-mask helpers and procedures");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.synthesize_parametric_siblings = true;
+        },
+        "parametric-sibling-proc",
+        "Synthesized a shared one-parameter helper for sibling dispatch procedure arms");
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.pack_counter_stripes = true; },
+        "packed-counter-stripes",
+        "Packed compatible fixed-width counters into one hidden decimal-striped register");
+    for (const std::vector<std::string>& names :
+         discover_packed_counter_stripe_variant_names(source)) {
+      add_candidate(
+          [names](CompileOptions& candidate_options) {
+            candidate_options.pack_counter_stripes = true;
+            candidate_options.pack_counter_stripe_names = names;
+          },
+          "packed-counter-stripes:" + join_strings(names, "+"),
+          "Packed counters " + join_strings(names, ", ") +
+              " into one hidden decimal-striped register");
+    }
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.canonicalize_repeated_unary_update_args = true;
+        },
+        "repeated-unary-update-arg-temp",
+        "Canonicalized repeated X-transform unary-call arguments through a hidden scratch");
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.x_param_value_functions = true; },
+        "x-param-value-function",
+        "Passed simple value-function arguments through X instead of allocating a parameter "
+        "register");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.x_param_value_functions = true;
+          candidate_options.canonicalize_repeated_unary_update_args = true;
+        },
+        "x-param-value-function-with-unary-arg-temp",
+        "Combined X-parameter value functions with repeated unary-call argument canonicalization");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.x_param_value_functions = true;
+          candidate_options.canonicalize_repeated_unary_update_args = true;
+          candidate_options.coalesce_copies = true;
+        },
+        "x-param-value-function-unary-arg-temp-coalesce",
+        "Combined X-parameter value functions, unary-call argument canonicalization, and copy "
+        "coalescing");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.x_param_value_functions = true;
+          candidate_options.canonicalize_repeated_unary_update_args = true;
+          candidate_options.shared_straight_line_call_bodies = true;
+          candidate_options.hoist_shared_helpers = true;
+          candidate_options.hoist_procs = true;
+        },
+        "x-param-unary-arg-shared-call-hoisted-proc",
+        "Combined X-parameter value functions, unary-call canonicalization, shared call-body "
+        "helpers, and hoisted procs");
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.unroll_counted_loops = true; },
+        "counted-loop-unroll", "Fully unrolled small constant-trip counted loops");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.setup_only_counted_loop_init = true;
+        },
+        "setup-only-counted-loop-init", "Kept eligible countdown-loop initializers in setup",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.unroll_counted_loops = true;
+          candidate_options.startup_aware_constant_preloads = true;
+        },
+        "startup-aware-constant-preloads",
+        "Kept setup-expensive synthesizable constants inline while preserving main cell count");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.unroll_counted_loops = true;
+          candidate_options.free_residual_dispatch_scratch = true;
+        },
+        "counted-loop-unroll-free-scratch",
+        "Combined counted-loop unrolling with residual-dispatch scratch freeing");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.stack_resident_temps = true;
+          candidate_options.setup_only_counted_loop_init = true;
+        },
+        "stack-resident-temps-setup-counted-loop",
+        "Combined stack-resident temporaries with setup-only counted-loop initializers",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.stack_resident_temps = true;
+          candidate_options.hoist_shared_helpers = true;
+        },
+        "stack-resident-temps-hoisted", "Kept temporaries stack-resident and hoisted helpers");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.stack_resident_temps = true;
+          candidate_options.hoist_shared_helpers = true;
+          candidate_options.hoist_procs = true;
+        },
+        "stack-resident-temps-hoisted-proc",
+        "Kept temporaries stack-resident with hoisted helper and procedure layout");
+    if (source_may_contain_error_trap(source)) {
+      add_candidate(
+          [](CompileOptions& candidate_options) { candidate_options.domain_error_guards = true; },
+          "domain-error-guards",
+          "Replaced terminal-error guards with self-trapping domain opcodes");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.domain_error_guards = true;
+            candidate_options.unroll_counted_loops = true;
+          },
+          "domain-error-guards-unroll", "Combined domain-error guards with counted-loop unrolling");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.domain_error_guards = true;
+            candidate_options.setup_only_counted_loop_init = true;
+          },
+          "domain-error-guards-setup-counted-loop",
+          "Combined domain-error guards with setup-only counted-loop initializers",
+          CandidateGate::SizeRescue);
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.domain_error_guards = true;
+            candidate_options.unroll_counted_loops = true;
+            candidate_options.setup_only_counted_loop_init = true;
+          },
+          "domain-error-guards-unroll-setup-counted-loop",
+          "Combined domain-error guards, counted-loop unrolling, and setup-only counted loops",
+          CandidateGate::SizeRescue);
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.domain_error_guards = true;
+            candidate_options.setup_only_counted_loop_init = true;
+            candidate_options.stack_resident_temps = true;
+          },
+          "domain-error-guards-setup-counted-loop-stack-temps",
+          "Combined domain-error guards, setup-only counted loops, and stack-resident temporaries",
+          CandidateGate::SizeRescue);
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.domain_error_guards = true;
+            candidate_options.show_read_guarded_transfer = true;
+          },
+          "show-read-guarded-transfer",
+          "Kept read/decrement/increment guarded transfers on the calculator stack");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.domain_error_guards = true;
+            candidate_options.unroll_counted_loops = true;
+            candidate_options.show_read_guarded_transfer = true;
+          },
+          "show-read-guarded-transfer-unroll",
+          "Combined stack-resident guarded transfers with counted-loop unrolling");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.domain_error_guards = true;
+            candidate_options.setup_only_counted_loop_init = true;
+            candidate_options.show_read_guarded_transfer = true;
+          },
+          "show-read-guarded-transfer-setup-counted-loop",
+          "Combined guarded transfers with setup-only counted loops", CandidateGate::SizeRescue);
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.domain_error_guards = true;
+            candidate_options.unroll_counted_loops = true;
+            candidate_options.setup_only_counted_loop_init = true;
+            candidate_options.show_read_guarded_transfer = true;
+          },
+          "show-read-guarded-transfer-unroll-setup-counted-loop",
+          "Combined guarded transfers, counted-loop unrolling, and setup-only counted loops",
+          CandidateGate::SizeRescue);
+    }
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.inline_floor_packed_row_expressions = true;
+        },
+        "inline-floor-packed-row-expression",
+        "Computed floor-packed display row expressions inline to free their hidden display "
+        "register");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.inline_floor_packed_row_expressions = true;
+          candidate_options.hoist_shared_helpers = true;
+          candidate_options.hoist_procs = true;
+          candidate_options.tail_branch_inversion = true;
+        },
+        "inline-floor-hoisted-proc-tail-layout",
+        "Combined inline floor-row display expressions with hoisted procs and tail-branch "
+        "inversion");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.x_param_y_stack_stored_entry = true;
+        },
+        "x-param-y-stack-stored-entry",
+        "Tried secondary entries for X-parameter procedures with a stack-carried value",
+        CandidateGate::SizeRescue);
+    if (allow_aggressive_post_layout) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.dead_source_residual_temp_reuse = true;
+          },
+          "dead-source-residual-temp-reuse",
+          "Reused dead source registers for residual temporary values when whole-program layout "
+          "wins");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.dead_source_residual_temp_reuse = true;
+            candidate_options.tail_branch_inversion = true;
+          },
+          "dead-source-residual-tail-branch",
+          "Combined dead-source residual temp reuse with tail-branch inversion");
+    }
+    if (allow_aggressive_post_layout) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+          },
+          "aggressive-post-layout-indirect-flow",
+          "Tried proven post-layout indirect-flow and dark-entry rewrites even though the primary "
+          "layout already fit");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+            candidate_options.invert_branch_order = true;
+          },
+          "aggressive-post-layout-branch-order",
+          "Combined proven post-layout indirect-flow with inverted branch-order layout");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+            candidate_options.tail_branch_inversion = true;
+          },
+          "aggressive-post-layout-tail-branch",
+          "Combined proven post-layout indirect-flow with tail-branch inversion");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.dead_source_residual_temp_reuse = true;
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+          },
+          "dead-source-residual-aggressive-post-layout",
+          "Combined dead-source residual temp reuse with proven post-layout indirect-flow");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.dead_source_residual_temp_reuse = true;
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+            candidate_options.tail_branch_inversion = true;
+          },
+          "dead-source-residual-aggressive-tail-branch",
+          "Combined dead-source residual temp reuse, proven post-layout indirect-flow, and "
+          "tail-branch inversion");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+            candidate_options.shared_straight_line_call_bodies = true;
+          },
+          "aggressive-post-layout-shared-call-body",
+          "Combined proven post-layout indirect-flow with shared call-body helpers");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+            candidate_options.dual_use_constant_indirect_flow = true;
+          },
+          "aggressive-post-layout-dual-use-constant",
+          "Combined proven post-layout indirect-flow with dual-use constant selectors");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+            candidate_options.dual_use_constant_indirect_flow = true;
+            candidate_options.tail_branch_inversion = true;
+          },
+          "aggressive-post-layout-dual-use-tail-branch",
+          "Combined proven post-layout indirect-flow, dual-use constant selectors, and tail-branch "
+          "inversion");
+    }
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.indirect_underflow_decrement = true;
+        },
+        "indirect-underflow-decrement",
+        "Used R0..R3 indirect pre-decrement for terminal underflow guards",
+        CandidateGate::SizeRescue);
+    add_candidate([](CompileOptions& candidate_options) { candidate_options.alias_x_reuse = true; },
+                  "alias-x-reuse", "Reused X for copy-equivalent variables at scalar sites");
+    if (source_has_comparison_guarded_update(source)) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.comparison_guarded_update_selectors = true;
+          },
+          "comparison-guarded-update-selector",
+          "Tried abs/sign comparison masks for guarded arithmetic updates after full layout");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.comparison_guarded_update_selectors = true;
+            candidate_options.invert_branch_order = true;
+          },
+          "comparison-guarded-update-branch-order",
+          "Combined comparison guarded update masks with inverted branch-order layout");
+    }
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.free_residual_dispatch_scratch = true;
+          candidate_options.canonicalize_if_chains = true;
+        },
+        "free-residual-dispatch-scratch-with-if-chain",
+        "Combined residual-dispatch scratch freeing with if/else-if dispatch canonicalization");
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.share_random_cell = true; },
+        "share-random-cell-helper",
+        "Shared a repeated random-coordinate expression through one helper");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.share_random_cell = true;
+          candidate_options.hoist_shared_helpers = true;
+        },
+        "share-random-cell-helper-hoisted",
+        "Shared a repeated random-coordinate expression and hoisted helpers");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.packed_line_family_update_check_tail = true;
+        },
+        "packed-line-family-update-check-tail",
+        "Tried a local shared packed-line update/check tail", CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
+        },
+        "packed-line-family-mutating-selector-update-check-tail",
+        "Tried a descending R0..R3 mutating-selector packed-line update/check tail",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.packed_line_family_borrowed_mutating_selector_update_check_tail = true;
+        },
+        "packed-line-family-borrowed-mutating-selector-update-check-tail",
+        "Tried borrowing a dead R0..R3 register for descending packed-line update/check tails",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.hoist_shared_helpers = true;
+          candidate_options.canonicalize_if_chains = true;
+          candidate_options.tail_branch_inversion = true;
+        },
+        "hoisted-helper-if-chain-tail-branch-layout",
+        "Combined helper hoisting, if-chain canonicalization, and tail-branch inversion after full "
+        "layout");
+    add_candidate(
+        [](CompileOptions& candidate_options) {
           candidate_options.dual_use_constant_indirect_flow = true;
         },
-        "aggressive-post-layout-dual-use-constant",
-        "Combined proven post-layout indirect-flow with dual-use constant selectors");
+        "dual-use-constant-indirect-flow",
+        "Reused existing setup constant preloads as indirect-flow selectors",
+        CandidateGate::SizeRescue);
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.aggressive_post_layout_indirect_flow = true;
+          candidate_options.general_constant_preloads = true;
+          candidate_options.dual_use_constant_indirect_flow = true;
+        },
+        "general-preload-dual-use-constant-indirect-flow",
+        "Preloaded runtime constants and reused them as indirect-flow selectors",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
           candidate_options.dual_use_constant_indirect_flow = true;
           candidate_options.tail_branch_inversion = true;
         },
-        "aggressive-post-layout-dual-use-tail-branch",
-        "Combined proven post-layout indirect-flow, dual-use constant selectors, and tail-branch "
-        "inversion");
-  }
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.indirect_underflow_decrement = true;
-      },
-      "indirect-underflow-decrement",
-      "Used R0..R3 indirect pre-decrement for terminal underflow guards",
-      CandidateGate::SizeRescue);
-  add_candidate([](CompileOptions& candidate_options) { candidate_options.alias_x_reuse = true; },
-                "alias-x-reuse", "Reused X for copy-equivalent variables at scalar sites");
-  if (source_has_comparison_guarded_update(source)) {
+        "dual-use-constant-tail-branch-layout",
+        "Combined dual-use constant indirect-flow selectors with tail-branch inversion",
+        CandidateGate::SizeRescue);
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.comparison_guarded_update_selectors = true;
+          candidate_options.general_constant_preloads = true;
+          candidate_options.dual_use_constant_indirect_flow = true;
+          candidate_options.tail_branch_inversion = true;
         },
-        "comparison-guarded-update-selector",
-        "Tried abs/sign comparison masks for guarded arithmetic updates after full layout");
+        "general-preload-dual-use-constant-tail-branch-layout",
+        "Combined runtime constant preloads, dual-use constant selectors, and tail-branch "
+        "inversion",
+        CandidateGate::SizeRescue);
     add_candidate(
         [](CompileOptions& candidate_options) {
-          candidate_options.comparison_guarded_update_selectors = true;
-          candidate_options.invert_branch_order = true;
+          candidate_options.conditional_branch_trampoline = true;
+          candidate_options.dual_use_constant_indirect_flow = true;
         },
-        "comparison-guarded-update-branch-order",
-        "Combined comparison guarded update masks with inverted branch-order layout");
-  }
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.free_residual_dispatch_scratch = true;
-        candidate_options.canonicalize_if_chains = true;
-      },
-      "free-residual-dispatch-scratch-with-if-chain",
-      "Combined residual-dispatch scratch freeing with if/else-if dispatch canonicalization");
-  add_candidate(
-      [](CompileOptions& candidate_options) { candidate_options.share_random_cell = true; },
-      "share-random-cell-helper",
-      "Shared a repeated random-coordinate expression through one helper");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.share_random_cell = true;
-        candidate_options.hoist_shared_helpers = true;
-      },
-      "share-random-cell-helper-hoisted",
-      "Shared a repeated random-coordinate expression and hoisted helpers");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.packed_line_family_update_check_tail = true;
-      },
-      "packed-line-family-update-check-tail", "Tried a local shared packed-line update/check tail",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.packed_line_family_mutating_selector_update_check_tail = true;
-      },
-      "packed-line-family-mutating-selector-update-check-tail",
-      "Tried a descending R0..R3 mutating-selector packed-line update/check tail",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.packed_line_family_borrowed_mutating_selector_update_check_tail = true;
-      },
-      "packed-line-family-borrowed-mutating-selector-update-check-tail",
-      "Tried borrowing a dead R0..R3 register for descending packed-line update/check tails",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.hoist_shared_helpers = true;
-        candidate_options.canonicalize_if_chains = true;
-        candidate_options.tail_branch_inversion = true;
-      },
-      "hoisted-helper-if-chain-tail-branch-layout",
-      "Combined helper hoisting, if-chain canonicalization, and tail-branch inversion after full "
-      "layout");
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.dual_use_constant_indirect_flow = true;
-      },
-      "dual-use-constant-indirect-flow",
-      "Reused existing setup constant preloads as indirect-flow selectors",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.general_constant_preloads = true;
-        candidate_options.dual_use_constant_indirect_flow = true;
-      },
-      "general-preload-dual-use-constant-indirect-flow",
-      "Preloaded runtime constants and reused them as indirect-flow selectors",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.dual_use_constant_indirect_flow = true;
-        candidate_options.tail_branch_inversion = true;
-      },
-      "dual-use-constant-tail-branch-layout",
-      "Combined dual-use constant indirect-flow selectors with tail-branch inversion",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.general_constant_preloads = true;
-        candidate_options.dual_use_constant_indirect_flow = true;
-        candidate_options.tail_branch_inversion = true;
-      },
-      "general-preload-dual-use-constant-tail-branch-layout",
-      "Combined runtime constant preloads, dual-use constant selectors, and tail-branch inversion",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.conditional_branch_trampoline = true;
-        candidate_options.dual_use_constant_indirect_flow = true;
-      },
-      "dual-use-constant-conditional-trampoline-layout",
-      "Combined dual-use constant indirect-flow selectors with conditional branch trampolines",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.general_constant_preloads = true;
-        candidate_options.conditional_branch_trampoline = true;
-        candidate_options.dual_use_constant_indirect_flow = true;
-      },
-      "general-preload-dual-use-constant-conditional-trampoline-layout",
-      "Combined runtime constant preloads, dual-use selectors, and conditional trampolines",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.conditional_branch_trampoline = true;
-        candidate_options.dual_use_constant_indirect_flow = true;
-        candidate_options.tail_branch_inversion = true;
-      },
-      "dual-use-constant-tail-conditional-trampoline-layout",
-      "Combined dual-use constant selectors, tail-branch inversion, and conditional trampolines",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.general_constant_preloads = true;
-        candidate_options.conditional_branch_trampoline = true;
-        candidate_options.dual_use_constant_indirect_flow = true;
-        candidate_options.tail_branch_inversion = true;
-      },
-      "general-preload-dual-use-constant-tail-conditional-trampoline-layout",
-      "Combined runtime constant preloads, dual-use selectors, tail-branch inversion, and "
-      "conditional trampolines",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.runtime_indirect_call_flow = true;
-      },
-      "runtime-indirect-call-flow", "Tried runtime indirect-call selector rewrites",
-      CandidateGate::SizeRescue);
-  add_candidate(
-      [](CompileOptions& candidate_options) {
-        candidate_options.runtime_indirect_call_flow = true;
-        candidate_options.aggressive_indirect_call_threshold = true;
-      },
-      "runtime-indirect-call-flow-aggressive",
-      "Tried runtime indirect-call selector rewrites with the aggressive call threshold",
-      CandidateGate::SizeRescue);
+        "dual-use-constant-conditional-trampoline-layout",
+        "Combined dual-use constant indirect-flow selectors with conditional branch trampolines",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.general_constant_preloads = true;
+          candidate_options.conditional_branch_trampoline = true;
+          candidate_options.dual_use_constant_indirect_flow = true;
+        },
+        "general-preload-dual-use-constant-conditional-trampoline-layout",
+        "Combined runtime constant preloads, dual-use selectors, and conditional trampolines",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.conditional_branch_trampoline = true;
+          candidate_options.dual_use_constant_indirect_flow = true;
+          candidate_options.tail_branch_inversion = true;
+        },
+        "dual-use-constant-tail-conditional-trampoline-layout",
+        "Combined dual-use constant selectors, tail-branch inversion, and conditional trampolines",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.general_constant_preloads = true;
+          candidate_options.conditional_branch_trampoline = true;
+          candidate_options.dual_use_constant_indirect_flow = true;
+          candidate_options.tail_branch_inversion = true;
+        },
+        "general-preload-dual-use-constant-tail-conditional-trampoline-layout",
+        "Combined runtime constant preloads, dual-use selectors, tail-branch inversion, and "
+        "conditional trampolines",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.runtime_indirect_call_flow = true;
+        },
+        "runtime-indirect-call-flow", "Tried runtime indirect-call selector rewrites",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.runtime_indirect_call_flow = true;
+          candidate_options.aggressive_indirect_call_threshold = true;
+        },
+        "runtime-indirect-call-flow-aggressive",
+        "Tried runtime indirect-call selector rewrites with the aggressive call threshold",
+        CandidateGate::SizeRescue);
   }
 
   std::set<std::string> tried_reclaims;
@@ -35820,8 +36484,29 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
 
   evaluate_queued_candidates();
 
-  const bool selected_still_overflows =
-      best.implemented && best.steps.size() > kOfficialProgramLimit;
+  if (needs_size_rescue && selected_still_overflows_now()) {
+    CompileOptions early_demote_base = options;
+    early_demote_base.shared_bit_mask_helper_calls = true;
+    early_demote_base.hoist_shared_helpers = true;
+    try {
+      CompileOptions probe_options = early_demote_base;
+      probe_options.analysis = true;
+      const CompileResult probe = cached_compile_source_once(probe_options);
+      for (const std::string& value : demotable_indirect_flow_preload_values(probe)) {
+        CompileOptions candidate_options = early_demote_base;
+        candidate_options.suppress_constant_preloads.insert(value);
+        add_configured_candidate(std::move(candidate_options), "demote-constant-indirect-flow",
+                                 "Inlined single-use constant " + value +
+                                     " to free a register for post-layout indirect flow");
+        evaluate_queued_candidates();
+        if (!selected_still_overflows_now())
+          break;
+      }
+    } catch (const std::exception&) {
+    }
+  }
+
+  const bool selected_still_overflows = selected_still_overflows_now();
   if (needs_size_rescue && selected_still_overflows && source_has_multiple_procs(source)) {
     struct ExpansionSpec {
       std::function<void(CompileOptions&)> configure;
@@ -36039,6 +36724,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     }
 
     std::set<std::string> tried_demotions;
+    bool stop_demote_search = false;
     auto add_demote_candidate = [&](const CompileOptions& base_options,
                                     const std::vector<std::string>& values, std::string name,
                                     std::string detail) {
@@ -36053,6 +36739,9 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           .detail = std::move(detail),
           .gate = CandidateGate::Always,
       });
+      evaluate_queued_candidates();
+      if (best.implemented && best.steps.size() < kOfficialProgramLimit)
+        stop_demote_search = true;
     };
     auto compile_demote_probe =
         [&](const CompileOptions& base_options) -> std::optional<CompileResult> {
@@ -36066,11 +36755,17 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     };
 
     std::set<std::string> tried_demoted_fractional_selectors;
+    std::vector<CompileOptions> chain_demote_bases;
     for (const CompileOptions& base_options : demote_bases) {
+      if (stop_demote_search)
+        break;
       const std::optional<CompileResult> probe = compile_demote_probe(base_options);
       if (!probe.has_value())
         continue;
+      chain_demote_bases.push_back(base_options);
       for (const std::string& value : demotable_indirect_flow_preload_values(*probe)) {
+        if (stop_demote_search)
+          break;
         add_demote_candidate(base_options, {value}, "demote-constant-indirect-flow",
                              "Inlined single-use constant " + value +
                                  " to free a register for post-layout indirect flow");
@@ -36087,24 +36782,34 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
               4U);
         }
       }
+    }
 
-      std::vector<std::string> chain_values;
-      std::set<std::string> suppressed;
-      for (int depth = 0; depth < 6; ++depth) {
-        CompileOptions chain_probe_options = base_options;
-        chain_probe_options.suppress_constant_preloads.insert(suppressed.begin(), suppressed.end());
-        const std::optional<CompileResult> chain_probe = compile_demote_probe(chain_probe_options);
-        if (!chain_probe.has_value())
+    if (!stop_demote_search) {
+      for (const CompileOptions& base_options : chain_demote_bases) {
+        if (stop_demote_search)
           break;
-        const std::vector<std::string> next_values =
-            demotable_indirect_flow_preload_values(*chain_probe, suppressed);
-        if (next_values.empty())
-          break;
-        chain_values.push_back(next_values.front());
-        suppressed.insert(next_values.front());
-        add_demote_candidate(base_options, chain_values, "demote-constant-chain-indirect-flow",
-                             "Inlined constants " + join_strings(chain_values, ", ") +
-                                 " to keep a register free for post-layout indirect flow");
+        std::vector<std::string> chain_values;
+        std::set<std::string> suppressed;
+        for (int depth = 0; depth < 6; ++depth) {
+          if (stop_demote_search)
+            break;
+          CompileOptions chain_probe_options = base_options;
+          chain_probe_options.suppress_constant_preloads.insert(suppressed.begin(),
+                                                                suppressed.end());
+          const std::optional<CompileResult> chain_probe =
+              compile_demote_probe(chain_probe_options);
+          if (!chain_probe.has_value())
+            break;
+          const std::vector<std::string> next_values =
+              demotable_indirect_flow_preload_values(*chain_probe, suppressed);
+          if (next_values.empty())
+            break;
+          chain_values.push_back(next_values.front());
+          suppressed.insert(next_values.front());
+          add_demote_candidate(base_options, chain_values, "demote-constant-chain-indirect-flow",
+                               "Inlined constants " + join_strings(chain_values, ", ") +
+                                   " to keep a register free for post-layout indirect flow");
+        }
       }
     }
   }

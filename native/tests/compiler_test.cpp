@@ -2226,10 +2226,10 @@ program DigitAtCall {
 )mkpro");
   require(digit_at_call.implemented, "native compiler should lower digit_at()");
   require(digit_at_call.diagnostics.empty(), "digit_at compile should not report diagnostics");
-  require(digit_at_call.listing.find("digit_at place") != std::string::npos,
-          "digit_at should compute a decimal place");
-  require(digit_at_call.listing.find("digit_at()") != std::string::npos,
-          "digit_at should extract an integer digit");
+  require(digit_at_call.listing.find("pow10()") != std::string::npos,
+          "digit_at should compute a decimal place through the TS macro expansion");
+  require(digit_at_call.listing.find("int()") != std::string::npos,
+          "digit_at should extract an integer digit through the TS macro expansion");
   require(has_optimization(digit_at_call, "packed-grid-primitive-lowering"),
           "digit_at should report the TS packed-grid strategy name");
 
