@@ -2929,9 +2929,11 @@ IrTailChainCandidateCollection collect_return_stack_ir_tail_candidates(
   collection.search.symbolic_existing_callsite_target_groups =
       static_cast<int>(symbolic_hint_groups.size());
   for (const auto& [target, count] : symbolic_hint_groups) {
-    (void)target;
     collection.search.symbolic_existing_callsite_largest_target_group =
         std::max(collection.search.symbolic_existing_callsite_largest_target_group, count);
+    if (collection.search.symbolic_existing_callsite_target_group_details.size() < 5U)
+      collection.search.symbolic_existing_callsite_target_group_details.push_back(
+          target + "=" + std::to_string(count));
   }
 
   auto consider_candidate = [&](std::optional<IrTailChainCandidate> candidate,
