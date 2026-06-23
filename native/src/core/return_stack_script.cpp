@@ -3458,18 +3458,22 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       break;
     const MachineLayout current_layout = machine_layout(current);
     std::vector<MachineItem> candidate = apply_script_plan(current, *plan);
+    int candidate_dirty_allocator_padding = 0;
+    int candidate_dirty_allocator_rounds = 0;
+    std::set<int> candidate_dirty_allocator_return_addresses;
+    std::set<int> candidate_dirty_allocator_targets;
     if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan)) {
       const std::optional<DirtyReturnStackDispatchAllocationPlan> allocation =
           repair_dirty_overflow_script_candidate(current_layout, candidate, *plan);
       if (!allocation.has_value())
         break;
       candidate = allocation->items;
-      dirty_allocator_padding += allocation->padding_cells;
-      dirty_allocator_rounds += allocation->fixed_point_rounds;
+      candidate_dirty_allocator_padding = allocation->padding_cells;
+      candidate_dirty_allocator_rounds = allocation->fixed_point_rounds;
       for (const int return_address : allocation->dispatch.dirty_return_addresses)
-        dirty_allocator_return_addresses.insert(return_address);
+        candidate_dirty_allocator_return_addresses.insert(return_address);
       for (const int target : allocation->dispatch.dirty_targets)
-        dirty_allocator_targets.insert(target);
+        candidate_dirty_allocator_targets.insert(target);
       if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan))
         break;
     }
@@ -3477,6 +3481,12 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       break;
     if (!return_stack_candidate_beats_address_overlay(current, candidate))
       break;
+    dirty_allocator_padding += candidate_dirty_allocator_padding;
+    dirty_allocator_rounds += candidate_dirty_allocator_rounds;
+    dirty_allocator_return_addresses.insert(candidate_dirty_allocator_return_addresses.begin(),
+                                            candidate_dirty_allocator_return_addresses.end());
+    dirty_allocator_targets.insert(candidate_dirty_allocator_targets.begin(),
+                                   candidate_dirty_allocator_targets.end());
     applied += script_plan_rewrite_count(*plan);
     ++scripts;
     current = std::move(candidate);
