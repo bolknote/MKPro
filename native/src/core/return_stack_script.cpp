@@ -871,6 +871,8 @@ bool ir_op_splits_internal_basic_block(const IrOp& op) {
   case IrKind::Call:
   case IrKind::Loop:
   case IrKind::IndirectJump:
+  case IrKind::IndirectCall:
+  case IrKind::IndirectCondJump:
   case IrKind::Return:
   case IrKind::Stop:
     return true;
