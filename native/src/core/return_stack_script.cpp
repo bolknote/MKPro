@@ -1608,10 +1608,11 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
       continue;
     }
 
-    const auto entry_it = by_label.find(target_label);
-    if (entry_it == by_label.end())
+    const std::optional<IrCallContinuation> entry_block =
+        cfg_non_empty_block_from_label(blocks, by_label, cfg, target_label);
+    if (!entry_block.has_value())
       continue;
-    const IrLabelBlock& entry = blocks.at(entry_it->second);
+    const IrLabelBlock& entry = blocks.at(entry_block->block_index);
     if (!terminal_jump_target_from_ir_body(entry.body).has_value())
       continue;
 
@@ -1654,6 +1655,7 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
     if (!valid)
       continue;
 
+    moved_labels.insert(entry_block->alias_labels.begin(), entry_block->alias_labels.end());
     moved_labels.insert(entry.label);
     ReturnStackLayoutOpportunity opportunity{
         .tails = tails,
