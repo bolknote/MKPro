@@ -717,6 +717,22 @@ bool terminal_tail_fragment_candidate(const IrLabelBlock& block) {
   return terminal.kind == IrKind::Stop || terminal.opcode == 0x50;
 }
 
+std::optional<std::size_t> terminal_tail_fragment_suffix_start(
+    const IrLabelBlock& block) {
+  if (!terminal_tail_fragment_candidate(block))
+    return std::nullopt;
+
+  const std::size_t suffix_start = 1U;
+  if (ir_op_always_transfers_control(block.body.at(suffix_start - 1U)))
+    return std::nullopt;
+
+  for (std::size_t index = suffix_start; index + 1U < block.body.size(); ++index) {
+    if (ir_op_always_transfers_control(block.body.at(index)))
+      return std::nullopt;
+  }
+  return suffix_start;
+}
+
 bool terminal_call_fragment_candidate(const IrLabelBlock& block) {
   if (block.body.size() < 2U)
     return false;
@@ -780,17 +796,9 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
       continue;
     }
 
-    if (!terminal_tail_fragment_candidate(block)) {
-      rewritten.push_back(std::move(block));
-      continue;
-    }
-
-    const std::size_t suffix_start = block.body.size() - 2U;
-    if (suffix_start == 0U) {
-      rewritten.push_back(std::move(block));
-      continue;
-    }
-    if (ir_op_always_transfers_control(block.body.at(suffix_start - 1U))) {
+    const std::optional<std::size_t> suffix_start =
+        terminal_tail_fragment_suffix_start(block);
+    if (!suffix_start.has_value()) {
       rewritten.push_back(std::move(block));
       continue;
     }
@@ -798,9 +806,9 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
     const std::string fragment_label = unique_tail_fragment_label(labels, extracted.total());
     labels.insert(fragment_label);
 
-    std::vector<IrOp> suffix(block.body.begin() + static_cast<std::ptrdiff_t>(suffix_start),
+    std::vector<IrOp> suffix(block.body.begin() + static_cast<std::ptrdiff_t>(*suffix_start),
                              block.body.end());
-    block.body.erase(block.body.begin() + static_cast<std::ptrdiff_t>(suffix_start),
+    block.body.erase(block.body.begin() + static_cast<std::ptrdiff_t>(*suffix_start),
                      block.body.end());
     block.body.push_back(synthetic_ir_jump_to_label(fragment_label));
 

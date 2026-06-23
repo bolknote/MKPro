@@ -604,6 +604,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
     ops.push_back(ir_label("entry"));
     ops.push_back(ir_plain(9));
     ops.push_back(ir_plain(8));
+    ops.push_back(ir_plain(7));
     append(ops, ir_jump_body("t1"));
     ops.push_back(ir_label("t1"));
     ops.push_back(ir_plain(1));
@@ -611,8 +612,24 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(search.extracted_tail_fragments == 1,
-            "IR tail layout scanner should extract terminal fragments from inside labelled blocks");
+    require(search.extracted_tail_fragments == 1 && search.has_opportunity && search.materialized,
+            "IR tail layout scanner should extract terminal suffixes from inside labelled blocks");
+    const auto fragment_it =
+        std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
+                     [](const MachineItem& item) {
+                       return item.kind == MachineItemKind::Label &&
+                              item.name == "__return_stack_tail_fragment_0";
+                     });
+    require(fragment_it != search.materialized_items.end(),
+            "IR tail layout scanner should materialize the extracted suffix as a hidden tail");
+    require(std::next(fragment_it) != search.materialized_items.end() &&
+                std::next(fragment_it)->kind == MachineItemKind::Op &&
+                std::next(fragment_it)->opcode == 8,
+            "IR tail layout scanner should keep the whole terminal suffix, not only the last op");
+    require(std::next(fragment_it, 2) != search.materialized_items.end() &&
+                std::next(fragment_it, 2)->kind == MachineItemKind::Op &&
+                std::next(fragment_it, 2)->opcode == 7,
+            "IR tail layout scanner should preserve suffix operation order");
   }
 
 
