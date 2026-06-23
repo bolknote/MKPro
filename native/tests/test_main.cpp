@@ -1,3 +1,5 @@
+#include <chrono>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <string>
@@ -89,7 +91,16 @@ using TestFn = std::function<void()>;
 struct TestCase {
   std::string name;
   TestFn run;
+  bool slow = false;
 };
+
+bool env_flag_enabled(const char* name) {
+  const char* value = std::getenv(name);
+  if (value == nullptr)
+    return false;
+  const std::string text = value;
+  return !text.empty() && text != "0" && text != "false" && text != "FALSE";
+}
 
 } // namespace
 
@@ -107,7 +118,7 @@ int main(int argc, char** argv) {
        mkpro::tests::compiler_coord_list_lowering_matches_typescript_contract},
       {"compiler_display_lowering_matches_typescript_contract",
        mkpro::tests::compiler_display_lowering_matches_typescript_contract},
-      {"compiler_lowers_initial_v2_subset", mkpro::tests::compiler_lowers_initial_v2_subset},
+      {"compiler_lowers_initial_v2_subset", mkpro::tests::compiler_lowers_initial_v2_subset, true},
       {"counted_loop_unroll_matches_typescript_contract",
        mkpro::tests::counted_loop_unroll_matches_typescript_contract},
       {"constant_folding_matches_typescript_contract",
@@ -131,11 +142,11 @@ int main(int argc, char** argv) {
       {"emitter_matches_initial_typescript_contract",
        mkpro::tests::emitter_matches_initial_typescript_contract},
       {"example_sizes_match_typescript_baselines",
-       mkpro::tests::example_sizes_match_typescript_baselines},
+       mkpro::tests::example_sizes_match_typescript_baselines, true},
       {"compiler_examples_match_typescript_contract",
-       mkpro::tests::compiler_examples_match_typescript_contract},
+       mkpro::tests::compiler_examples_match_typescript_contract, true},
       {"supported_examples_match_native_oracles",
-       mkpro::tests::supported_examples_match_native_oracles},
+       mkpro::tests::supported_examples_match_native_oracles, true},
       {"expression_helpers_match_typescript_contract",
        mkpro::tests::expression_helpers_match_typescript_contract},
       {"expression_lowering_helpers_match_typescript_contract",
@@ -145,7 +156,7 @@ int main(int argc, char** argv) {
       {"format_primitives_match_typescript_contract",
        mkpro::tests::format_primitives_match_typescript_contract},
       {"golden_listing_contract_matches_typescript_contract",
-       mkpro::tests::golden_listing_contract_matches_typescript_contract},
+       mkpro::tests::golden_listing_contract_matches_typescript_contract, true},
       {"functions_match_typescript_contract", mkpro::tests::functions_match_typescript_contract},
       {"indirect_addressing_matches_typescript_contract",
        mkpro::tests::indirect_addressing_matches_typescript_contract},
@@ -212,7 +223,7 @@ int main(int argc, char** argv) {
       {"show_optimization_strategies_match_typescript_contract",
        mkpro::tests::show_optimization_strategies_match_typescript_contract},
       {"setup_formatting_matches_typescript_contract",
-       mkpro::tests::setup_formatting_matches_typescript_contract},
+       mkpro::tests::setup_formatting_matches_typescript_contract, true},
       {"show_read_guarded_transfer_matches_typescript_contract",
        mkpro::tests::show_read_guarded_transfer_matches_typescript_contract},
       {"show_sequence_helpers_match_typescript_contract",
@@ -238,19 +249,37 @@ int main(int argc, char** argv) {
        mkpro::tests::x2_register_dataflow_matches_typescript_contract},
   };
 
+  const bool run_slow_tests = !filter.empty() ||
+                              env_flag_enabled("MKPRO_NATIVE_RUN_SLOW_TESTS") ||
+                              env_flag_enabled("CI");
   int failed = 0;
   int selected = 0;
+  int skipped = 0;
   for (const auto& test : tests) {
     if (!filter.empty() && test.name.find(filter) == std::string::npos) {
       continue;
     }
+    if (test.slow && !run_slow_tests) {
+      ++skipped;
+      std::cout << "[SKIP] " << test.name
+                << " (set MKPRO_NATIVE_RUN_SLOW_TESTS=1 to run slow example contracts)"
+                << std::endl;
+      continue;
+    }
     ++selected;
+    const auto started = std::chrono::steady_clock::now();
     try {
       test.run();
-      std::cout << "[PASS] " << test.name << std::endl;
+      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - started);
+      std::cout << "[PASS] " << test.name << " (" << elapsed.count() << " ms)"
+                << std::endl;
     } catch (const std::exception& error) {
+      const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - started);
       ++failed;
-      std::cerr << "[FAIL] " << test.name << ": " << error.what() << std::endl;
+      std::cerr << "[FAIL] " << test.name << " (" << elapsed.count() << " ms): "
+                << error.what() << std::endl;
     }
   }
 
@@ -262,6 +291,9 @@ int main(int argc, char** argv) {
     std::cerr << failed << " native test(s) failed" << std::endl;
     return 1;
   }
-  std::cout << selected << " native test(s) passed" << std::endl;
+  std::cout << selected << " native test(s) passed";
+  if (skipped > 0)
+    std::cout << ", " << skipped << " slow test(s) skipped";
+  std::cout << std::endl;
   return 0;
 }

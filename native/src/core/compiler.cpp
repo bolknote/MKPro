@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstdlib>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -39,6 +40,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -34310,9 +34312,68 @@ discover_fractional_constant_selector_plans(const CompileResult& result,
   return result_plans;
 }
 
+namespace {
+
+constexpr std::size_t kMaxCompileResultCacheEntries = 4096;
+
+bool compile_result_cache_enabled() {
+  const char* value = std::getenv("MKPRO_NATIVE_COMPILE_CACHE");
+  return value == nullptr || std::string(value) != "0";
+}
+
+std::string compile_result_cache_key(const std::string& source, const CompileOptions& options) {
+  std::string key = compile_once_cache_key(options);
+  key.push_back('\0');
+  key += source;
+  return key;
+}
+
+std::map<std::string, CompileResult>& compile_result_cache() {
+  static std::map<std::string, CompileResult> cache;
+  return cache;
+}
+
+std::mutex& compile_result_cache_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+std::optional<CompileResult> read_compile_result_cache(const std::string& source,
+                                                       const CompileOptions& options) {
+  if (!compile_result_cache_enabled())
+    return std::nullopt;
+  const std::string key = compile_result_cache_key(source, options);
+  std::lock_guard<std::mutex> lock(compile_result_cache_mutex());
+  const auto& cache = compile_result_cache();
+  const auto it = cache.find(key);
+  if (it == cache.end())
+    return std::nullopt;
+  return it->second;
+}
+
+void write_compile_result_cache(const std::string& source, const CompileOptions& options,
+                                const CompileResult& result) {
+  if (!compile_result_cache_enabled())
+    return;
+  const std::string key = compile_result_cache_key(source, options);
+  std::lock_guard<std::mutex> lock(compile_result_cache_mutex());
+  auto& cache = compile_result_cache();
+  if (cache.size() >= kMaxCompileResultCacheEntries)
+    cache.clear();
+  cache[key] = result;
+}
+
+} // namespace
+
 CompileResult compile_source(std::string source, const CompileOptions& options) {
-  if (has_explicit_lowering_variant(options))
-    return compile_source_once(std::move(source), options);
+  if (const std::optional<CompileResult> cached = read_compile_result_cache(source, options))
+    return *cached;
+
+  if (has_explicit_lowering_variant(options)) {
+    CompileResult result = compile_source_once(source, options);
+    write_compile_result_cache(source, options, result);
+    return result;
+  }
 
   std::map<std::string, CompileResult> once_cache;
   auto cached_compile_source_once = [&](const CompileOptions& compile_options) {
@@ -36121,6 +36182,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
 
   evaluate_queued_candidates();
 
+  write_compile_result_cache(source, options, best);
   return best;
 }
 
