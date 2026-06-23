@@ -727,6 +727,26 @@ void return_stack_script_matches_mk61_strategy_contract() {
   }
 
   {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("external"));
+    append(ops, ir_jump_body("t1"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(!search.materialized && search.cfg_tail_valid_chain_candidates == 1 &&
+                search.cfg_tail_external_entry_rejections == 1,
+            "IR tail layout scanner should expose CFG blockers for valid-length chains with "
+            "external tail entries");
+  }
+
+  {
     const std::vector<MachineItem> program = three_step_script_program();
     const core::ReturnStackScriptOpportunityScan scan =
         core::scan_return_stack_script_opportunity(program);

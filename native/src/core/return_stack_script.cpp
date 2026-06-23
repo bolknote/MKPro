@@ -739,6 +739,12 @@ struct IrTailChainCandidate {
   bool wrap_original_entry_label = true;
 };
 
+struct IrTailChainSearchStats {
+  int entry_candidates = 0;
+  int valid_chain_candidates = 0;
+  int external_entry_rejections = 0;
+};
+
 struct IrCallContinuation {
   std::size_t block_index = 0;
   std::set<std::string> alias_labels;
@@ -1276,7 +1282,8 @@ bool tail_chain_has_only_internal_tail_entries(
 }
 
 std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
-    const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
+    const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason,
+    IrTailChainSearchStats* stats = nullptr) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
   const IrCfg cfg = build_ir_cfg(blocks);
 
@@ -1285,6 +1292,8 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
     std::optional<std::string> cursor = terminal_jump_target_from_ir_body(entry.body);
     if (!cursor.has_value())
       continue;
+    if (stats != nullptr)
+      ++stats->entry_candidates;
 
     std::set<std::string> seen_tail_labels;
     std::vector<std::size_t> tail_indices;
@@ -1321,6 +1330,8 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
         tail_indices.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
       continue;
     }
+    if (stats != nullptr)
+      ++stats->valid_chain_candidates;
 
     std::vector<IrOp> entry_body = entry.body;
     entry_body.back().target = blocks.at(tail_indices.front()).label;
@@ -1352,8 +1363,11 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
         .entry_block_index = entry_index,
     };
 
-    if (!tail_chain_has_only_internal_tail_entries(blocks, candidate, cfg, rejection_reason))
+    if (!tail_chain_has_only_internal_tail_entries(blocks, candidate, cfg, rejection_reason)) {
+      if (stats != nullptr && rejection_reason.find("CFG predecessors") != std::string::npos)
+        ++stats->external_entry_rejections;
       continue;
+    }
     return candidate;
   }
 
@@ -1866,8 +1880,13 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
         rejection = extracted_rejection;
       }
     }
-    if (!candidate.has_value() && rejection.find("external CFG entry") == std::string::npos)
-      candidate = embedded_tail_chain_opportunity(*blocks, rejection);
+    if (!candidate.has_value() && rejection.find("external CFG entry") == std::string::npos) {
+      IrTailChainSearchStats stats;
+      candidate = embedded_tail_chain_opportunity(*blocks, rejection, &stats);
+      search.cfg_tail_entry_candidates = stats.entry_candidates;
+      search.cfg_tail_valid_chain_candidates = stats.valid_chain_candidates;
+      search.cfg_tail_external_entry_rejections = stats.external_entry_rejections;
+    }
   }
   if (!candidate.has_value()) {
     search.rejection_reason = rejection;

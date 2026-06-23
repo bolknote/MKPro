@@ -34022,6 +34022,20 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                   " terminal IR tail fragment" +
                   (tail_layout.extracted_tail_fragments == 1 ? "" : "s") +
                   " before profitability/layout proof"));
+          if (!tail_layout.materialized) {
+            result.diagnostics.push_back(diagnostic(
+                DiagnosticSeverity::Note, "return-stack-tail-fragment-chain-stats",
+                "CFG tail-fragment chain scan considered " +
+                    std::to_string(tail_layout.cfg_tail_entry_candidates) +
+                    " terminal entry candidate" +
+                    (tail_layout.cfg_tail_entry_candidates == 1 ? "" : "s") + ", found " +
+                    std::to_string(tail_layout.cfg_tail_valid_chain_candidates) +
+                    " 2..5-length chain candidate" +
+                    (tail_layout.cfg_tail_valid_chain_candidates == 1 ? "" : "s") +
+                    ", rejected " +
+                    std::to_string(tail_layout.cfg_tail_external_entry_rejections) +
+                    " by external CFG entries"));
+          }
         }
         if (tail_layout.extracted_existing_callsite_fragments > 0) {
           result.diagnostics.push_back(diagnostic(
