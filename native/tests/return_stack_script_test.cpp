@@ -2222,6 +2222,23 @@ void return_stack_script_matches_mk61_strategy_contract() {
       require(allocation_it != allocations.end(),
               "dirty dispatch allocator search should include every generated matrix family");
     }
+
+    std::vector<MachineItem> combined_layout = repeated_stop_layout(102);
+    for (const std::vector<int>& row : matrix)
+      combined_layout.at(static_cast<std::size_t>(row.at(6))) = digit(8);
+    const std::vector<core::DirtyReturnStackDispatchAllocationPlan> allocations =
+        core::allocate_dirty_return_stack_dispatch_layouts(combined_layout,
+                                                           {.size_rescue = true});
+    std::set<int> proved_dirty_targets;
+    for (const core::DirtyReturnStackDispatchAllocationPlan& allocation : allocations) {
+      if (allocation.allocated && allocation.dispatch.layout_proved &&
+          allocation.padding_cells == 0 && allocation.dispatch.dirty_targets.size() == 1U) {
+        proved_dirty_targets.insert(allocation.dispatch.dirty_targets.front());
+      }
+    }
+    require(proved_dirty_targets == std::set<int>({12, 34, 56, 78, 100}),
+            "dirty dispatch allocator search should stop after one full distinct dirty-target "
+            "cycle");
   }
 
   {
