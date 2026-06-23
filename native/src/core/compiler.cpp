@@ -33433,15 +33433,20 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               "dirty return-stack dispatch allocator is disabled outside size-rescue mode";
         }
         if (dirty_allocator_available) {
+          const std::string dirty_allocator_detail =
+              "Proved dirty return-stack dispatch padding with " +
+              std::to_string(dirty_allocator_padding) + " executable cell" +
+              (dirty_allocator_padding == 1 ? "" : "s") + " after " +
+              std::to_string(dirty_allocator_rounds) + " fixed-point round" +
+              (dirty_allocator_rounds == 1 ? "" : "s") +
+              "; allocator is size-rescue-only and does not enable control-flow rewrite.";
+          post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+              .name = "return-stack-dirty-dispatch-allocator",
+              .detail = dirty_allocator_detail,
+          });
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-allocator",
-              "dirty return-stack dispatch could be made safe by appending " +
-                  std::to_string(dirty_allocator_padding) +
-                  " executable padding cell" +
-                  (dirty_allocator_padding == 1 ? "" : "s") + " after " +
-                  std::to_string(dirty_allocator_rounds) + " fixed-point round" +
-                  (dirty_allocator_rounds == 1 ? "" : "s") +
-                  "; automatic dirty dispatch control-flow rewrite is still disabled"));
+              dirty_allocator_detail));
         } else if (!dirty_dispatch_proved) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-not-applied",
