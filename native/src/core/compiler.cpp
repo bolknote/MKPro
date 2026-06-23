@@ -34058,6 +34058,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
         bool dirty_dispatch_proved = false;
         bool dirty_allocator_available = false;
+        bool dirty_allocator_applied = false;
+        core::DirtyReturnStackDispatchAllocationPlan best_dirty_allocation;
         int dirty_allocator_padding = 0;
         int dirty_allocator_rounds = 0;
         const std::vector<std::vector<int>> dirty_dispatch_stacks = {
@@ -34078,6 +34080,19 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               dirty_allocator_available = dirty_allocation.padding_cells > 0;
               dirty_allocator_padding = dirty_allocation.padding_cells;
               dirty_allocator_rounds = dirty_allocation.fixed_point_rounds;
+              if (dirty_allocator_available) {
+                const core::PostLayoutIndirectFlowResult current_flow_probe =
+                    core::optimize_post_layout_indirect_flow(post_layout_items, pass_options,
+                                                             indirect_flow_rescue_above);
+                const core::PostLayoutIndirectFlowResult candidate_flow_probe =
+                    core::optimize_post_layout_indirect_flow(dirty_allocation.items, pass_options,
+                                                             indirect_flow_rescue_above);
+                if (core::machine_cell_count(candidate_flow_probe.items) <
+                    core::machine_cell_count(current_flow_probe.items)) {
+                  dirty_allocator_applied = true;
+                  best_dirty_allocation = dirty_allocation;
+                }
+              }
               break;
             }
             if (dirty_rejection.empty() && !dirty_allocation.rejection_reason.empty())
@@ -34087,20 +34102,32 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           dirty_rejection =
               "dirty return-stack dispatch allocator is disabled outside size-rescue mode";
         }
-        if (dirty_allocator_available) {
+        if (dirty_allocator_applied) {
+          post_layout_items = best_dirty_allocation.items;
           const std::string dirty_allocator_detail =
-              "Proved dirty return-stack dispatch padding with " +
+              "Applied dirty return-stack dispatch layout allocation with " +
               std::to_string(dirty_allocator_padding) + " executable cell" +
               (dirty_allocator_padding == 1 ? "" : "s") + " after " +
               std::to_string(dirty_allocator_rounds) + " fixed-point round" +
               (dirty_allocator_rounds == 1 ? "" : "s") +
-              "; allocator is size-rescue-only and proof-only; control-flow rewrite remains disabled.";
+              " because the post-allocation indirect-flow pipeline is smaller.";
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
               .name = "return-stack-dirty-dispatch-allocator",
               .detail = dirty_allocator_detail,
           });
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-allocator",
+              dirty_allocator_detail));
+        } else if (dirty_allocator_available) {
+          const std::string dirty_allocator_detail =
+              "Proved dirty return-stack dispatch layout allocation with " +
+              std::to_string(dirty_allocator_padding) + " executable cell" +
+              (dirty_allocator_padding == 1 ? "" : "s") + " after " +
+              std::to_string(dirty_allocator_rounds) + " fixed-point round" +
+              (dirty_allocator_rounds == 1 ? "" : "s") +
+              ", but did not apply it because the full post-allocation pipeline was not smaller.";
+          result.diagnostics.push_back(diagnostic(
+              DiagnosticSeverity::Note, "return-stack-dirty-dispatch-allocator-not-applied",
               dirty_allocator_detail));
         } else if (!dirty_dispatch_proved) {
           result.diagnostics.push_back(diagnostic(
