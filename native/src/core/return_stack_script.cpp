@@ -3449,6 +3449,7 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   int scripts = 0;
   int dirty_allocator_padding = 0;
   int dirty_allocator_rounds = 0;
+  std::set<int> dirty_allocator_return_addresses;
   std::set<int> dirty_allocator_targets;
 
   for (int round = 0; round < kMaxRewriteRounds; ++round) {
@@ -3465,6 +3466,8 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       candidate = allocation->items;
       dirty_allocator_padding += allocation->padding_cells;
       dirty_allocator_rounds += allocation->fixed_point_rounds;
+      for (const int return_address : allocation->dispatch.dirty_return_addresses)
+        dirty_allocator_return_addresses.insert(return_address);
       for (const int target : allocation->dispatch.dirty_targets)
         dirty_allocator_targets.insert(target);
       if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan))
@@ -3502,6 +3505,17 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
         if (!first)
           detail += ",";
         detail += std::to_string(target);
+        first = false;
+      }
+    }
+    if (!dirty_allocator_return_addresses.empty()) {
+      detail += " from dirty return address";
+      detail += dirty_allocator_return_addresses.size() == 1U ? " " : "es ";
+      bool first = true;
+      for (const int return_address : dirty_allocator_return_addresses) {
+        if (!first)
+          detail += ",";
+        detail += std::to_string(return_address);
         first = false;
       }
     }
