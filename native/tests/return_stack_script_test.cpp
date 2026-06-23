@@ -35,6 +35,13 @@ std::vector<MachineItem> call(const std::string& target) {
   };
 }
 
+MachineItem proven_indirect_call(int opcode, int target_address) {
+  MachineItem item = MachineItem::op(opcode, "К ПП");
+  item.comment = "preloaded indirect-target=" + std::to_string(target_address) +
+                 " indirect flow";
+  return item;
+}
+
 std::vector<MachineItem> jump(const std::string& target) {
   return {
       MachineItem::op(0x51, "БП"),
@@ -199,6 +206,25 @@ std::vector<MachineItem> overlay_tie_script_program() {
   append(items, jump("t2"));
   items.push_back(MachineItem::label("overlay_entry"));
   items.push_back(digit(6));
+  return items;
+}
+
+std::vector<MachineItem> proven_indirect_call_script_program() {
+  std::vector<MachineItem> items;
+  items.push_back(MachineItem::label("charge_t1"));
+  items.push_back(proven_indirect_call(0xa0, 3));
+  items.push_back(MachineItem::label("t1"));
+  items.push_back(digit(1));
+  items.push_back(stop());
+
+  items.push_back(MachineItem::label("charge_t2"));
+  items.push_back(proven_indirect_call(0xa1, 7));
+  items.push_back(MachineItem::label("t2"));
+  items.push_back(digit(2));
+  append(items, jump("t1"));
+
+  items.push_back(MachineItem::label("entry"));
+  append(items, jump("t2"));
   return items;
 }
 
@@ -723,6 +749,25 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "return-stack script should keep the existing ПП charge chain");
     require(has_optimization(result, "return-stack-script"),
             "return-stack script should report optimization metadata");
+  }
+
+  {
+    const std::vector<MachineItem> program = proven_indirect_call_script_program();
+    const core::ReturnStackScriptOpportunityScan scan =
+        core::scan_return_stack_script_opportunity(program);
+    require(scan.possible && scan.direct_call_sites == 2 && scan.chained_call_sites == 1,
+            "return-stack pre-scan should accept proven indirect К ПП charge-chain callsites");
+
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_return_stack_script(program);
+    require(result.applied == 2,
+            "return-stack script should rewrite reverse tails charged by proven indirect К ПП");
+    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 2,
+            "proven indirect К ПП return-stack script should save one cell per rewritten tail");
+    require(count_opcode(result.items, 0x52) == 2,
+            "proven indirect К ПП return-stack script should emit В/О continuations");
+    require(count_opcode(result.items, 0xa0) == 1 && count_opcode(result.items, 0xa1) == 1,
+            "proven indirect К ПП return-stack script should keep the existing charge calls");
   }
 
   {

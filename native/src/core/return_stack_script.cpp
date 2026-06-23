@@ -80,6 +80,33 @@ bool is_indirect_flow_opcode(int opcode) {
          base == 0xe0;
 }
 
+bool is_proven_indirect_call_opcode(int opcode) {
+  return (opcode & 0xf0) == 0xa0;
+}
+
+std::optional<int> proven_indirect_target_from_comment(const MachineItem& item) {
+  if (!item.comment.has_value())
+    return std::nullopt;
+
+  constexpr const char* kMarker = "indirect-target=";
+  const std::string& comment = *item.comment;
+  const std::size_t marker = comment.find(kMarker);
+  if (marker == std::string::npos)
+    return std::nullopt;
+
+  std::size_t cursor = marker + std::string(kMarker).size();
+  int value = 0;
+  bool saw_digit = false;
+  while (cursor < comment.size() && comment.at(cursor) >= '0' && comment.at(cursor) <= '9') {
+    saw_digit = true;
+    value = value * 10 + (comment.at(cursor) - '0');
+    ++cursor;
+  }
+  if (!saw_digit)
+    return std::nullopt;
+  return value;
+}
+
 MachineLayout machine_layout(const std::vector<MachineItem>& items) {
   MachineLayout layout;
   int address = 0;
@@ -141,12 +168,39 @@ std::optional<FlowReference> direct_flow_reference_at(
   };
 }
 
+std::optional<FlowReference> proven_indirect_call_reference_at(
+    const std::vector<MachineItem>& items, const MachineLayout& layout, int op_index) {
+  if (op_index < 0 || op_index >= static_cast<int>(items.size()))
+    return std::nullopt;
+  const MachineItem& op = items.at(static_cast<std::size_t>(op_index));
+  if (op.kind != MachineItemKind::Op || op.raw || !is_proven_indirect_call_opcode(op.opcode))
+    return std::nullopt;
+  const auto source_it = layout.address_by_item_index.find(op_index);
+  if (source_it == layout.address_by_item_index.end())
+    return std::nullopt;
+  const std::optional<int> target = proven_indirect_target_from_comment(op);
+  if (!target.has_value())
+    return std::nullopt;
+  return FlowReference{
+      .op_index = op_index,
+      .address_index = op_index,
+      .source_address = source_it->second,
+      .target_address = *target,
+      .opcode = op.opcode,
+  };
+}
+
 std::vector<FlowReference> direct_flow_references(const std::vector<MachineItem>& items,
                                                   const MachineLayout& layout) {
   std::vector<FlowReference> result;
   for (int index = 0; index + 1 < static_cast<int>(items.size()); ++index) {
     if (const std::optional<FlowReference> ref =
             direct_flow_reference_at(items, layout, index)) {
+      result.push_back(*ref);
+      continue;
+    }
+    if (const std::optional<FlowReference> ref =
+            proven_indirect_call_reference_at(items, layout, index)) {
       result.push_back(*ref);
     }
   }
@@ -167,23 +221,40 @@ std::optional<CallSite> call_site_at_address(const std::vector<MachineItem>& ite
   if (item_it == layout.item_index_by_address.end())
     return std::nullopt;
   const int op_index = item_it->second;
-  if (op_index + 1 >= static_cast<int>(items.size()))
-    return std::nullopt;
   const MachineItem& op = items.at(static_cast<std::size_t>(op_index));
-  const MachineItem& target = items.at(static_cast<std::size_t>(op_index + 1));
-  if (op.kind != MachineItemKind::Op || op.opcode != 0x53 || op.raw ||
-      target.kind != MachineItemKind::Address || !address_target_is_label(target)) {
+  if (op.kind != MachineItemKind::Op || op.raw)
+    return std::nullopt;
+
+  if (op.opcode == 0x53) {
+    if (op_index + 1 >= static_cast<int>(items.size()))
+      return std::nullopt;
+    const MachineItem& target = items.at(static_cast<std::size_t>(op_index + 1));
+    if (target.kind != MachineItemKind::Address || !address_target_is_label(target))
+      return std::nullopt;
+    const std::optional<int> target_address = resolved_target(target, layout);
+    if (!target_address.has_value())
+      return std::nullopt;
+    return CallSite{
+        .op_index = op_index,
+        .address_index = op_index + 1,
+        .source_address = address,
+        .target_address = *target_address,
+        .continuation_address = address + 2,
+    };
+  }
+
+  if (!is_proven_indirect_call_opcode(op.opcode))
+    return std::nullopt;
+  const std::optional<int> target_address = proven_indirect_target_from_comment(op);
+  if (!target_address.has_value()) {
     return std::nullopt;
   }
-  const std::optional<int> target_address = resolved_target(target, layout);
-  if (!target_address.has_value())
-    return std::nullopt;
   return CallSite{
       .op_index = op_index,
-      .address_index = op_index + 1,
+      .address_index = op_index,
       .source_address = address,
       .target_address = *target_address,
-      .continuation_address = address + 2,
+      .continuation_address = address + 1,
   };
 }
 
@@ -357,8 +428,10 @@ std::optional<ScriptPlan> find_best_script_plan(const std::vector<MachineItem>& 
   std::optional<ScriptPlan> best;
   for (const auto& [address, item_index] : layout.item_index_by_address) {
     const MachineItem& item = items.at(static_cast<std::size_t>(item_index));
-    if (item.kind != MachineItemKind::Op || item.opcode != 0x53)
+    if (item.kind != MachineItemKind::Op ||
+        (item.opcode != 0x53 && !is_proven_indirect_call_opcode(item.opcode))) {
       continue;
+    }
     const std::optional<ScriptPlan> plan =
         script_plan_from_call_chain(items, layout, incoming, address);
     if (!plan.has_value())
@@ -1832,7 +1905,7 @@ ReturnStackScriptOpportunityScan scan_return_stack_script_opportunity(
     const MachineItem& item = items.at(static_cast<std::size_t>(item_index));
     if (item.kind != MachineItemKind::Op || item.raw)
       continue;
-    if (item.opcode == 0x53) {
+    if (item.opcode == 0x53 || is_proven_indirect_call_opcode(item.opcode)) {
       if (const std::optional<CallSite> call = call_site_at_address(items, layout, address)) {
         calls.push_back(*call);
         call_addresses.insert(call->source_address);
