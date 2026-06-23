@@ -3069,6 +3069,10 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
     candidate_search.pipeline_candidate_final_cells = candidate_pipeline.final_cells;
     candidate_search.pipeline_candidate_better =
         candidate_pipeline.final_cells < current_pipeline.final_cells;
+    if (!candidate_search.pipeline_candidate_better) {
+      candidate_search.rejection_reason =
+          "return-stack startup layout does not improve the full post-layout pipeline";
+    }
     const bool eligible = candidate_search.pipeline_candidate_better;
     auto candidate_wins_tie = [&](const std::optional<IrTailChainCandidate>& current) {
       return return_stack_candidate_better(current, candidate.candidate);
