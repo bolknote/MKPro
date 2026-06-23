@@ -811,6 +811,26 @@ struct ExtractedIrFragments {
   }
 };
 
+
+bool return_stack_candidate_better(const std::optional<IrTailChainCandidate>& current,
+                                   const IrTailChainCandidate& candidate) {
+  if (!current.has_value())
+    return true;
+  const std::size_t candidate_existing =
+      candidate.opportunity.existing_call_sites.size();
+  const std::size_t current_existing =
+      current->opportunity.existing_call_sites.size();
+  if (candidate_existing != current_existing)
+    return candidate_existing > current_existing;
+
+  const std::size_t candidate_tails = candidate.opportunity.tails.size();
+  const std::size_t current_tails = current->opportunity.tails.size();
+  if (candidate_tails != current_tails)
+    return candidate_tails > current_tails;
+
+  return candidate.entry_block_index < current->entry_block_index;
+}
+
 std::string unique_synthetic_entry_label(const std::set<std::string>& labels) {
   std::string candidate = "__return_stack_synthetic_entry";
   int suffix = 0;
@@ -1344,6 +1364,7 @@ std::optional<IrTailChainCandidate> existing_call_chain_opportunity(
     const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
   const IrCfg cfg = build_ir_cfg(blocks);
+  std::optional<IrTailChainCandidate> best_candidate;
   for (std::size_t first_call_index = 0; first_call_index < blocks.size(); ++first_call_index) {
     const std::optional<std::string> first_target =
         single_call_block_target(blocks.at(first_call_index));
@@ -1434,20 +1455,23 @@ std::optional<IrTailChainCandidate> existing_call_chain_opportunity(
           valid = false;
           break;
         }
-        return candidate;
+        if (return_stack_candidate_better(best_candidate, candidate))
+          best_candidate = std::move(candidate);
+        break;
       }
       call_index = next_it->second;
     }
     if (!valid && rejection_reason.empty())
       rejection_reason = "return-stack existing ПП chain candidate was incomplete";
   }
-  return std::nullopt;
+  return best_candidate;
 }
 
 std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
     const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
   const IrCfg cfg = build_ir_cfg(blocks);
+  std::optional<IrTailChainCandidate> best_candidate;
   std::map<std::string, std::vector<std::size_t>> calls_by_target;
   for (std::size_t index = 0; index < blocks.size(); ++index) {
     const std::optional<std::string> target = single_call_block_target(blocks.at(index));
@@ -1559,16 +1583,18 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
                                                   entry.label, rejection_reason)) {
       continue;
     }
-    return candidate;
+    if (return_stack_candidate_better(best_candidate, candidate))
+      best_candidate = std::move(candidate);
   }
 
-  return std::nullopt;
+  return best_candidate;
 }
 
 std::optional<IrTailChainCandidate> same_target_noop_helper_call_group_opportunity(
     const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
   const IrCfg cfg = build_ir_cfg(blocks);
+  std::optional<IrTailChainCandidate> best_candidate;
   std::set<std::string> labels;
   for (const IrLabelBlock& block : blocks)
     labels.insert(block.label);
@@ -1699,10 +1725,11 @@ std::optional<IrTailChainCandidate> same_target_noop_helper_call_group_opportuni
                                                   entry_label, rejection_reason)) {
       continue;
     }
-    return candidate;
+    if (return_stack_candidate_better(best_candidate, candidate))
+      best_candidate = std::move(candidate);
   }
 
-  return std::nullopt;
+  return best_candidate;
 }
 
 std::map<std::string, std::set<std::string>> expected_tail_predecessors(
@@ -1931,10 +1958,8 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
         ++stats->external_entry_rejections;
       continue;
     }
-    if (!best_candidate.has_value() ||
-        candidate.opportunity.tails.size() > best_candidate->opportunity.tails.size()) {
+    if (return_stack_candidate_better(best_candidate, candidate))
       best_candidate = std::move(candidate);
-    }
   }
 
   if (best_candidate.has_value())

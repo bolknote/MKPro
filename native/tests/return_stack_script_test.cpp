@@ -529,6 +529,43 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("short_charge1"));
+    ops.push_back(ir_call("short_charge2"));
+    ops.push_back(ir_label("short_t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("short_charge2"));
+    ops.push_back(ir_call("short_entry"));
+    ops.push_back(ir_label("short_t2"));
+    append(ops, direct_tail(2, "short_t1"));
+    ops.push_back(ir_label("short_entry"));
+    append(ops, ir_jump_body("short_t2"));
+    ops.push_back(ir_label("long_charge1"));
+    ops.push_back(ir_call("long_charge2"));
+    ops.push_back(ir_label("long_t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("long_charge2"));
+    ops.push_back(ir_call("long_charge3"));
+    ops.push_back(ir_label("long_t2"));
+    append(ops, direct_tail(2, "long_t1"));
+    ops.push_back(ir_label("long_charge3"));
+    ops.push_back(ir_call("long_entry"));
+    ops.push_back(ir_label("long_t3"));
+    append(ops, direct_tail(3, "long_t2"));
+    ops.push_back(ir_label("long_entry"));
+    append(ops, ir_jump_body("long_t3"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized &&
+                search.analysis.plan.existing_call_sites == 3 &&
+                search.analysis.plan.transitions == 3,
+            "existing ПП scanner should keep scanning and choose the larger free charge chain");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("charge1"));
     ops.push_back(ir_call("charge2"));
     ops.push_back(ir_label("t1_alias"));
@@ -696,6 +733,43 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "same-target terminal ПП retargeting should reuse existing callsites as free charges");
     require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
             "same-target terminal ПП retargeting should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("a_charge1"));
+    ops.push_back(ir_call("a_entry"));
+    ops.push_back(ir_label("a_t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("a_charge2"));
+    ops.push_back(ir_call("a_entry"));
+    ops.push_back(ir_label("a_t2"));
+    append(ops, direct_tail(2, "a_t1"));
+    ops.push_back(ir_label("a_entry"));
+    append(ops, ir_jump_body("a_t2"));
+    ops.push_back(ir_label("b_charge1"));
+    ops.push_back(ir_call("b_entry"));
+    ops.push_back(ir_label("b_t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("b_charge2"));
+    ops.push_back(ir_call("b_entry"));
+    ops.push_back(ir_label("b_t2"));
+    append(ops, direct_tail(2, "b_t1"));
+    ops.push_back(ir_label("b_charge3"));
+    ops.push_back(ir_call("b_entry"));
+    ops.push_back(ir_label("b_t3"));
+    append(ops, direct_tail(3, "b_t2"));
+    ops.push_back(ir_label("b_entry"));
+    append(ops, ir_jump_body("b_t3"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized &&
+                search.analysis.plan.existing_call_sites == 3 &&
+                search.analysis.plan.transitions == 3,
+            "same-target ПП retargeting should keep scanning and choose the larger free call group");
   }
 
   {
