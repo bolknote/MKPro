@@ -35594,7 +35594,6 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       "layout");
   add_candidate(
       [](CompileOptions& candidate_options) {
-        candidate_options.preloaded_indirect_flow = true;
         candidate_options.dual_use_constant_indirect_flow = true;
       },
       "dual-use-constant-indirect-flow",
@@ -35603,7 +35602,6 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.general_constant_preloads = true;
-        candidate_options.preloaded_indirect_flow = true;
         candidate_options.dual_use_constant_indirect_flow = true;
       },
       "general-preload-dual-use-constant-indirect-flow",
@@ -35611,7 +35609,6 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       CandidateGate::SizeRescue);
   add_candidate(
       [](CompileOptions& candidate_options) {
-        candidate_options.preloaded_indirect_flow = true;
         candidate_options.dual_use_constant_indirect_flow = true;
         candidate_options.tail_branch_inversion = true;
       },
@@ -35621,7 +35618,6 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.general_constant_preloads = true;
-        candidate_options.preloaded_indirect_flow = true;
         candidate_options.dual_use_constant_indirect_flow = true;
         candidate_options.tail_branch_inversion = true;
       },
@@ -35631,7 +35627,6 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.conditional_branch_trampoline = true;
-        candidate_options.preloaded_indirect_flow = true;
         candidate_options.dual_use_constant_indirect_flow = true;
       },
       "dual-use-constant-conditional-trampoline-layout",
@@ -35641,7 +35636,6 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       [](CompileOptions& candidate_options) {
         candidate_options.general_constant_preloads = true;
         candidate_options.conditional_branch_trampoline = true;
-        candidate_options.preloaded_indirect_flow = true;
         candidate_options.dual_use_constant_indirect_flow = true;
       },
       "general-preload-dual-use-constant-conditional-trampoline-layout",
@@ -35650,7 +35644,6 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.conditional_branch_trampoline = true;
-        candidate_options.preloaded_indirect_flow = true;
         candidate_options.dual_use_constant_indirect_flow = true;
         candidate_options.tail_branch_inversion = true;
       },
@@ -35661,7 +35654,6 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       [](CompileOptions& candidate_options) {
         candidate_options.general_constant_preloads = true;
         candidate_options.conditional_branch_trampoline = true;
-        candidate_options.preloaded_indirect_flow = true;
         candidate_options.dual_use_constant_indirect_flow = true;
         candidate_options.tail_branch_inversion = true;
       },
