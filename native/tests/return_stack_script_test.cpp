@@ -996,6 +996,42 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    for (int index = 1; index <= 12; ++index) {
+      ops.push_back(ir_label("noise_charge" + std::to_string(index)));
+      ops.push_back(ir_call("noop"));
+      ops.push_back(ir_label("noise_tail" + std::to_string(index)));
+      ops.push_back(ir_plain(index % 10));
+      ops.push_back(ir_stop());
+    }
+    ops.push_back(ir_label("charge1"));
+    ops.push_back(ir_call("noop"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("charge2"));
+    ops.push_back(ir_call("noop"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("charge3"));
+    ops.push_back(ir_call("noop"));
+    ops.push_back(ir_label("t3"));
+    append(ops, direct_tail(3, "t2"));
+    ops.push_back(ir_label("noop"));
+    ops.push_back(ir_return());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized &&
+                search.analysis.plan.existing_call_sites == 3 &&
+                search.analysis.plan.transitions == 3,
+            "same-target no-op helper retargeting should derive tail-chain subgroups before the "
+            "bounded combination search cap is exhausted");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 3,
+            "chain-derived no-op helper subgroup retargeting should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
     append(ops, ir_jump_body("entry"));
     ops.push_back(ir_label("entry"));
     append(ops, ir_jump_body("t2"));

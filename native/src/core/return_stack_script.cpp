@@ -1325,6 +1325,56 @@ std::optional<IrCallContinuation> cfg_call_continuation_block(
   return cfg_non_empty_block_from_label(blocks, by_label, cfg, cursor);
 }
 
+
+std::vector<std::vector<std::size_t>> chain_derived_noop_call_subgroups(
+    const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
+    const IrCfg& cfg, const std::vector<std::size_t>& call_indices,
+    const std::string& target_label) {
+  std::map<std::string, std::size_t> call_by_continuation;
+  std::map<std::string, std::vector<IrOp>> body_by_continuation;
+  for (const std::size_t call_index : call_indices) {
+    const std::optional<IrCallContinuation> continuation =
+        cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_label);
+    if (!continuation.has_value())
+      continue;
+    const IrLabelBlock& continuation_block = blocks.at(continuation->block_index);
+    call_by_continuation.emplace(continuation_block.label, call_index);
+    body_by_continuation.emplace(continuation_block.label, continuation_block.body);
+  }
+
+  std::vector<std::vector<std::size_t>> result;
+  std::set<std::vector<std::size_t>> seen_groups;
+  for (const auto& [start_label, start_call_index] : call_by_continuation) {
+    (void)start_call_index;
+    std::vector<std::size_t> group;
+    std::set<std::string> seen_labels;
+    std::string cursor = start_label;
+    while (true) {
+      const auto call_it = call_by_continuation.find(cursor);
+      const auto body_it = body_by_continuation.find(cursor);
+      if (call_it == call_by_continuation.end() || body_it == body_by_continuation.end() ||
+          !seen_labels.insert(cursor).second) {
+        break;
+      }
+      group.push_back(call_it->second);
+
+      const std::optional<std::string> next = terminal_jump_target_from_ir_body(body_it->second);
+      if (next.has_value()) {
+        if (group.size() >= static_cast<std::size_t>(kMaxScriptReturns))
+          break;
+        cursor = *next;
+        continue;
+      }
+      if (terminal_stop_from_ir_body(body_it->second) && group.size() >= 2U &&
+          seen_groups.insert(group).second) {
+        result.push_back(group);
+      }
+      break;
+    }
+  }
+  return result;
+}
+
 bool cfg_labels_have_only_allowed_predecessors(
     const IrCfg& cfg, const std::set<std::string>& labels,
     const std::set<std::string>& allowed_predecessors) {
@@ -1673,8 +1723,16 @@ std::optional<IrTailChainCandidate> same_target_noop_helper_call_group_opportuni
     if (target_it == by_label.end() || !noop_return_block(blocks.at(target_it->second)))
       continue;
 
-    for (const std::vector<std::size_t>& call_indices :
-         bounded_noop_call_subgroups(all_call_indices)) {
+    std::vector<std::vector<std::size_t>> subgroups =
+        chain_derived_noop_call_subgroups(blocks, by_label, cfg, all_call_indices,
+                                          target_label);
+    std::set<std::vector<std::size_t>> seen_subgroups(subgroups.begin(), subgroups.end());
+    for (std::vector<std::size_t> subgroup : bounded_noop_call_subgroups(all_call_indices)) {
+      if (seen_subgroups.insert(subgroup).second)
+        subgroups.push_back(std::move(subgroup));
+    }
+
+    for (const std::vector<std::size_t>& call_indices : subgroups) {
       std::vector<ReturnStackTailBlock> tails;
       std::vector<ReturnStackExistingCallSite> existing_sites;
       std::map<std::string, std::size_t> site_by_continuation;
