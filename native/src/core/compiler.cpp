@@ -10676,9 +10676,7 @@ bool program_contains_call(const V2Program& program, const std::string& name) {
   });
 }
 
-bool program_uses_bit_mask_or_spatial_primitives(const LoweringContext& context,
-                                                 const V2Program& program) {
-  (void)context;
+bool program_contains_named_bit_mask_or_spatial_primitives(const V2Program& program) {
   const std::set<std::string> names{"bit_mask",  "bit_has",    "bit_set",
                                     "bit_clear", "line_count", "neighbor_count"};
   if (statements_contain_call_named(program.body, names))
@@ -10750,10 +10748,17 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
   };
 
   const bool uses_line_count = program_contains_call(program, "line_count");
-  if (program_uses_bit_mask_or_spatial_primitives(context, program)) {
-    for (const std::string& value : {"1", "2", "4", "8"}) {
+  const bool uses_cells_bit_mask_sugar = program_uses_cells_bit_mask_sugar(context, program);
+  const bool uses_named_bit_mask_or_spatial =
+      program_contains_named_bit_mask_or_spatial_primitives(program);
+  if (uses_cells_bit_mask_sugar || uses_named_bit_mask_or_spatial) {
+    for (const std::string& value : {"1", "2", "4"}) {
       values.insert(value);
       add_bonus(value, 1);
+    }
+    if (uses_named_bit_mask_or_spatial) {
+      values.insert("8");
+      add_bonus("8", 1);
     }
   }
   if (uses_line_count) {
@@ -10775,15 +10780,17 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
   for (const V2Rule& rule : program.rules)
     collect_show_display_literal_preload_values_from_statements(rule.body, values);
 
+  collect_display_scale_preload_values_from_statements(program, program.body, values);
+  for (const V2Rule& rule : program.rules)
+    collect_display_scale_preload_values_from_statements(program, rule.body, values);
+
   collect_preload_number_literals_from_statements(program.body, values, occurrences);
   collect_derived_preload_number_literals_from_statements(context, program.body, values,
                                                           occurrences);
-  collect_display_scale_preload_values_from_statements(program, program.body, values);
   for (const V2Rule& rule : program.rules) {
     collect_preload_number_literals_from_statements(rule.body, values, occurrences);
     collect_derived_preload_number_literals_from_statements(context, rule.body, values,
                                                             occurrences);
-    collect_display_scale_preload_values_from_statements(program, rule.body, values);
   }
   for (const std::string& value :
        core::emit::display_constant_preload_values_for_program(context, program)) {
@@ -16805,6 +16812,7 @@ bool lower_cells_contains_false_branch_with_bit_mask_helper(
 
 void emit_membership_fraction_if_needed(LoweringContext& context, const Expression& mask,
                                         std::string comment, int line);
+bool expression_is_x2_preserving_decimal_membership_mask(const Expression& expression);
 
 bool lower_cells_contains_false_branch_with_mask_expression(
     LoweringContext& context, const V2Predicate& predicate, bool negated,
@@ -16822,9 +16830,12 @@ bool lower_cells_contains_false_branch_with_mask_expression(
   if (!mask.has_value())
     return false;
 
+  const bool collection_available_in_x2 =
+      x_holds_identifier(context, collection) &&
+      expression_is_x2_preserving_decimal_membership_mask(*mask);
   if (!lower_expression_to_x(context, *mask))
     return false;
-  if (!lower_expression_to_x(context, identifier_expression(collection)))
+  if (!collection_available_in_x2 && !lower_expression_to_x(context, identifier_expression(collection)))
     return false;
   context.emitter.emit_op(0x37, "К ∧", "bit_and()", source_line);
   emit_membership_fraction_if_needed(context, *mask, "bit membership fraction", source_line);
@@ -21151,6 +21162,22 @@ bool expression_is_known_fractional(const Expression& expression) {
          expression.args.size() == 1U;
 }
 
+bool expression_is_decimal_cell_mask(const Expression& expression) {
+  if (expression.kind != "call")
+    return false;
+  const std::string callee = lower_ascii(expression.callee);
+  return (callee == "pow10" && expression.args.size() == 1U) ||
+         (callee == "cell_mask" && expression.args.size() >= 2U);
+}
+
+bool expression_is_x2_preserving_decimal_membership_mask(const Expression& expression) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "pow10" ||
+      expression.args.size() != 1U) {
+    return false;
+  }
+  return expression.args.front().kind == "identifier";
+}
+
 void emit_membership_fraction_if_needed(LoweringContext& context, const Expression& mask,
                                         std::string comment, int line) {
   if (expression_is_known_fractional(mask)) {
@@ -21161,6 +21188,8 @@ void emit_membership_fraction_if_needed(LoweringContext& context, const Expressi
     });
     return;
   }
+  if (expression_is_decimal_cell_mask(mask))
+    return;
   context.emitter.emit_op(0x35, "К {x}", std::move(comment), line);
 }
 

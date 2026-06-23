@@ -1067,7 +1067,46 @@ void emit_setup_numeric_preload_action(MachineEmitter& setup,
   });
 }
 
-bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expression);
+bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expression,
+                                 const std::vector<PreloadReport>& preloads);
+
+std::optional<const PreloadReport*> setup_expression_negated_preload(
+    const std::vector<PreloadReport>& preloads, const std::string& raw) {
+  const std::optional<double> target = executable_setup_number(raw);
+  if (!target.has_value() || !std::isfinite(*target))
+    return std::nullopt;
+  const std::string normalized_raw = normalize_setup_constant_text(raw);
+  const std::string wanted = normalize_setup_constant_text(
+      normalized_raw.rfind("-", 0) == 0 ? normalized_raw.substr(1) : "-" + normalized_raw);
+  for (const PreloadReport& preload : preloads) {
+    if (preload.setup_expression)
+      continue;
+    const std::optional<std::string> executable = executable_setup_value(preload.value);
+    const std::string value = normalize_setup_constant_text(executable.value_or(preload.value));
+    if (value == wanted)
+      return &preload;
+  }
+  return std::nullopt;
+}
+
+bool emit_setup_number_or_negated_preload(MachineEmitter& setup,
+                                          const std::vector<PreloadReport>& preloads,
+                                          const std::string& raw) {
+  if (setup_number_entry_cost(raw) >= 2) {
+    const std::optional<const PreloadReport*> source =
+        setup_expression_negated_preload(preloads, raw);
+    if (source.has_value()) {
+      const std::string target_value = normalize_setup_constant_text(raw);
+      const std::string source_value = normalize_setup_constant_text((*source)->value);
+      emit_setup_recall(setup, (*source)->register_name,
+                        "constant " + target_value + " base " + source_value);
+      setup.emit_op(0x0b, "/-/", "constant " + target_value, std::nullopt, true);
+      return true;
+    }
+  }
+  setup.emit_number(raw);
+  return false;
+}
 
 bool setup_expression_contains_valid_random(const Expression& expression) {
   if (expression.kind == "number" || expression.kind == "string" || expression.kind == "identifier")
@@ -1091,14 +1130,15 @@ bool setup_expression_contains_valid_random(const Expression& expression) {
   return false;
 }
 
-bool lower_setup_random_call_to_x(MachineEmitter& setup, const Expression& expression) {
+bool lower_setup_random_call_to_x(MachineEmitter& setup, const Expression& expression,
+                                  const std::vector<PreloadReport>& preloads) {
   if (expression.args.empty()) {
     setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
     return true;
   }
   if (expression.args.size() == 1U) {
     setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
-    if (!lower_setup_expression_to_x(setup, expression.args.front()))
+    if (!lower_setup_expression_to_x(setup, expression.args.front(), preloads))
       return false;
     setup.emit_op(0x12, "×", "random range", std::nullopt, true);
     return true;
@@ -1106,19 +1146,21 @@ bool lower_setup_random_call_to_x(MachineEmitter& setup, const Expression& expre
   if (expression.args.size() == 2U) {
     Expression range = subtract_expression(expression.args.at(1), expression.args.at(0));
     Expression scaled = multiply_expression(call_expression("random", {}), std::move(range));
-    return lower_setup_expression_to_x(setup,
-                                       add_expression(expression.args.at(0), std::move(scaled)));
+    return lower_setup_expression_to_x(setup, add_expression(expression.args.at(0), std::move(scaled)),
+                                       preloads);
   }
   return false;
 }
 
-bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expression) {
+bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expression,
+                                 const std::vector<PreloadReport>& preloads) {
   if (expression.kind == "number") {
-    setup.emit_number(expression.raw.empty() ? expression.text : expression.raw);
+    const std::string raw = expression.raw.empty() ? expression.text : expression.raw;
+    emit_setup_number_or_negated_preload(setup, preloads, raw);
     return true;
   }
   if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr) {
-    if (!lower_setup_expression_to_x(setup, *expression.expr))
+    if (!lower_setup_expression_to_x(setup, *expression.expr, preloads))
       return false;
     setup.emit_op(0x0b, "/-/", "unary minus", std::nullopt, true);
     return true;
@@ -1127,8 +1169,8 @@ bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expres
     const std::optional<std::pair<int, std::string>> opcode = setup_binary_opcode(expression.op);
     if (!opcode.has_value())
       return false;
-    if (!lower_setup_expression_to_x(setup, *expression.left) ||
-        !lower_setup_expression_to_x(setup, *expression.right)) {
+    if (!lower_setup_expression_to_x(setup, *expression.left, preloads) ||
+        !lower_setup_expression_to_x(setup, *expression.right, preloads)) {
       return false;
     }
     setup.emit_op(opcode->first, opcode->second, "expr " + expression.op, std::nullopt, true);
@@ -1141,10 +1183,10 @@ bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expres
       return true;
     }
     if (callee == "random")
-      return lower_setup_random_call_to_x(setup, expression);
+      return lower_setup_random_call_to_x(setup, expression, preloads);
     if (callee == "int" && expression.args.size() == 1U &&
         setup_expression_contains_valid_random(expression.args.front())) {
-      if (!lower_setup_expression_to_x(setup, expression.args.front()))
+      if (!lower_setup_expression_to_x(setup, expression.args.front(), preloads))
         return false;
       setup.emit_op(0x0e, "В↑", "random int keep scaled draw", std::nullopt, true);
       setup.emit_op(0x35, "К {x}", "random int fractional part", std::nullopt, true);
@@ -1154,8 +1196,8 @@ bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expres
     if (const std::optional<std::pair<int, std::string>> opcode =
             setup_binary_call_opcode(callee)) {
       if (expression.args.size() != 2U ||
-          !lower_setup_expression_to_x(setup, expression.args.at(0)) ||
-          !lower_setup_expression_to_x(setup, expression.args.at(1))) {
+          !lower_setup_expression_to_x(setup, expression.args.at(0), preloads) ||
+          !lower_setup_expression_to_x(setup, expression.args.at(1), preloads)) {
         return false;
       }
       setup.emit_op(opcode->first, opcode->second, callee + "()", std::nullopt, true);
@@ -1164,7 +1206,8 @@ bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expres
     if (expression.args.size() != 1U)
       return false;
     const std::optional<std::pair<int, std::string>> opcode = setup_unary_opcode(callee);
-    if (!opcode.has_value() || !lower_setup_expression_to_x(setup, expression.args.front()))
+    if (!opcode.has_value() ||
+        !lower_setup_expression_to_x(setup, expression.args.front(), preloads))
       return false;
     setup.emit_op(opcode->first, opcode->second, callee + "()", std::nullopt, true);
     return true;
@@ -1216,6 +1259,7 @@ indexed_setup_preload_group_at(const std::vector<PreloadReport>& preloads,
 
 bool emit_indexed_setup_preload_group(MachineEmitter& setup,
                                       std::vector<OptimizationReport>& optimizations,
+                                      const std::vector<PreloadReport>& preloads,
                                       const PreloadReport& first,
                                       const IndexedSetupPreloadGroup& group) {
   const std::string& first_name = group.targets.front();
@@ -1225,7 +1269,7 @@ bool emit_indexed_setup_preload_group(MachineEmitter& setup,
   emit_setup_store(setup, "0", "setup indexed pointer " + first_name + ".." + last_name);
   setup.emit_label(label, {.hidden = true});
   const Expression expression = parse_expression(first.value, first.setup_source_line.value_or(0));
-  if (!lower_setup_expression_to_x(setup, expression))
+  if (!lower_setup_expression_to_x(setup, expression, preloads))
     return false;
   setup.emit_op(0xb0, "К X->П 0", "setup indexed " + first_name + ".." + last_name,
                 first.setup_source_line, true);
@@ -1782,7 +1826,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       const std::optional<IndexedSetupPreloadGroup> group =
           indexed_setup_preload_group_at(preloads, consumed, index);
       if (group.has_value()) {
-        if (emit_indexed_setup_preload_group(setup, optimizations, preload, *group)) {
+        if (emit_indexed_setup_preload_group(setup, optimizations, preloads, preload, *group)) {
           for (std::size_t consumed_index = index; consumed_index < group->end; ++consumed_index)
             consumed.insert(consumed_index);
           setup_r0_dirty = true;
@@ -1795,7 +1839,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       const Expression expression =
           parse_expression(preload.setup_expression_text.value_or(preload.value),
                            preload.setup_source_line.value_or(0));
-      if (lower_setup_expression_to_x(setup, expression)) {
+      if (lower_setup_expression_to_x(setup, expression, preloads)) {
         emit_setup_store(setup, preload.register_name,
                          "setup " +
                              preload.setup_target_name.value_or("R" + preload.register_name));
@@ -1941,7 +1985,12 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     }
     if (preload.value == "random()") {
       consumed.insert(index);
-      emit_random_int_setup(setup, "999");
+      setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
+      emit_setup_number_or_negated_preload(setup, preloads, "999");
+      setup.emit_op(0x12, "*", "expr *", std::nullopt, true);
+      setup.emit_op(0x0e, "В↑", "random int keep scaled draw", std::nullopt, true);
+      setup.emit_op(0x35, "К {x}", "random int fractional part", std::nullopt, true);
+      setup.emit_op(0x11, "-", "random int floor", std::nullopt, true);
       emit_setup_store(setup, preload.register_name, setup_store_comment(preload));
       continue;
     }
