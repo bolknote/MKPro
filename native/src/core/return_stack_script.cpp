@@ -3270,10 +3270,11 @@ allocate_dirty_return_stack_dispatch_layouts(const std::vector<MachineItem>& lay
   std::vector<DirtyReturnStackDispatchAllocationPlan> allocations;
   const std::vector<std::vector<int>> stacks =
       dirty_return_stack_dispatch_candidate_stacks();
+  const int return_count = kReturnStackDepth + std::max(1, options.min_dirty_targets);
   allocations.reserve(stacks.size());
   for (const std::vector<int>& stack : stacks) {
     allocations.push_back(
-        allocate_dirty_return_stack_dispatch_layout(stack, 6, layout, options));
+        allocate_dirty_return_stack_dispatch_layout(stack, return_count, layout, options));
   }
   return allocations;
 }

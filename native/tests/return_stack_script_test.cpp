@@ -1882,6 +1882,25 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(78) = digit(8);
+    const std::vector<core::DirtyReturnStackDispatchAllocationPlan> allocations =
+        core::allocate_dirty_return_stack_dispatch_layouts(
+            layout, {.size_rescue = true, .min_dirty_targets = 3});
+
+    const auto repeated_dirty =
+        std::find_if(allocations.begin(), allocations.end(),
+                     [](const core::DirtyReturnStackDispatchAllocationPlan& allocation) {
+                       return allocation.allocated && allocation.dispatch.layout_proved &&
+                              allocation.padding_cells == 0 &&
+                              allocation.dispatch.dirty_targets ==
+                                  std::vector<int>({78, 78, 78});
+                     });
+    require(repeated_dirty != allocations.end(),
+            "dirty dispatch allocator search should honor requested multi-dirty target counts");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
     layout.at(78) = digit(7);
     layout.at(79) = digit(8);
     const core::DirtyReturnStackDispatchPlan plan =
