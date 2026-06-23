@@ -89,6 +89,7 @@ struct ReturnStackIrTailLayoutSearch {
   std::vector<std::string> cfg_tail_nonterminal_break_labels;
   int cfg_tail_external_entry_rejections = 0;
   int symbolic_existing_callsite_hints = 0;
+  std::vector<std::string> symbolic_existing_callsite_target_labels;
   ReturnStackLayoutOpportunityAnalysis analysis;
   std::vector<MachineItem> materialized_items;
   std::string rejection_reason;

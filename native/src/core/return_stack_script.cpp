@@ -1087,6 +1087,24 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
   return extracted;
 }
 
+std::vector<std::string> symbolic_existing_callsite_hint_targets(
+    const std::vector<IrLabelBlock>& blocks) {
+  std::set<std::string> targets;
+  for (std::size_t index = 0; index + 1U < blocks.size(); ++index) {
+    const IrLabelBlock& block = blocks.at(index);
+    if (block.body.empty())
+      continue;
+    const IrOp& tail = block.body.back();
+    if (tail.kind != IrKind::Call)
+      continue;
+    const std::optional<std::string> target = ir_label_target(tail);
+    if (!target.has_value())
+      continue;
+    targets.insert(*target);
+  }
+  return std::vector<std::string>(targets.begin(), targets.end());
+}
+
 int count_symbolic_existing_callsite_hints(const std::vector<IrLabelBlock>& blocks) {
   int hints = 0;
   for (std::size_t index = 0; index + 1U < blocks.size(); ++index) {
@@ -1989,6 +2007,8 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
     return search;
   }
   search.symbolic_existing_callsite_hints = count_symbolic_existing_callsite_hints(*blocks);
+  search.symbolic_existing_callsite_target_labels =
+      symbolic_existing_callsite_hint_targets(*blocks);
   std::optional<IrTailChainCandidate> candidate =
       existing_call_chain_opportunity(*blocks, rejection);
   const bool unsafe_existing_call_chain =

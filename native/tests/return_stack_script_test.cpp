@@ -615,6 +615,10 @@ void return_stack_script_matches_mk61_strategy_contract() {
                 search.extracted_tail_fragments == 0 && search.has_opportunity &&
                 search.materialized,
             "IR scanner should extract terminal ПП suffixes into CFG callsite blocks");
+    require(search.symbolic_existing_callsite_hints == 2 &&
+                search.symbolic_existing_callsite_target_labels ==
+                    std::vector<std::string>({"charge2", "entry"}),
+            "IR scanner should expose symbolic terminal ПП hint target labels before retargeting");
     require(search.analysis.plan.existing_call_sites == 2 &&
                 search.analysis.plan.paid_call_sites == 0,
             "extracted terminal ПП suffixes should count as free existing charge sites");
