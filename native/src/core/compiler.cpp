@@ -33990,13 +33990,15 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               indirect_flow_rescue_above);
       if (tail_layout.materialized) {
         const core::ReturnStackStartupLayoutPlan& plan = tail_layout.analysis.plan;
-        const core::ReturnStackPostLayoutPipelineComparison pipeline =
-            core::compare_return_stack_post_layout_pipeline(
-                post_layout_items, tail_layout.materialized_items, pass_options,
-                indirect_flow_rescue_above);
-        const bool layout_aware_profitable =
-            pipeline.candidate_better;
-        if (plan.profitable || layout_aware_profitable) {
+        const bool layout_aware_profitable = tail_layout.pipeline_compared
+                                                 ? tail_layout.pipeline_candidate_better
+                                                 : core::compare_return_stack_post_layout_pipeline(
+                                                       post_layout_items,
+                                                       tail_layout.materialized_items,
+                                                       pass_options,
+                                                       indirect_flow_rescue_above)
+                                                       .candidate_better;
+        if (layout_aware_profitable) {
           post_layout_items = tail_layout.materialized_items;
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
               .name = "return-stack-startup-layout",

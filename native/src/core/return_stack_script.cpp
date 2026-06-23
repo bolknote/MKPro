@@ -2628,8 +2628,12 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
         measure_return_stack_post_layout_pipeline(candidate_search.materialized_items,
                                                   compile_options,
                                                   indirect_flow_rescue_above);
-    const bool eligible = candidate_search.analysis.plan.profitable ||
-                          candidate_pipeline.final_cells < current_pipeline.final_cells;
+    candidate_search.pipeline_compared = true;
+    candidate_search.pipeline_current_final_cells = current_pipeline.final_cells;
+    candidate_search.pipeline_candidate_final_cells = candidate_pipeline.final_cells;
+    candidate_search.pipeline_candidate_better =
+        candidate_pipeline.final_cells < current_pipeline.final_cells;
+    const bool eligible = candidate_search.pipeline_candidate_better;
     auto candidate_wins_tie = [&](const std::optional<IrTailChainCandidate>& current) {
       return return_stack_candidate_better(current, candidate.candidate);
     };
