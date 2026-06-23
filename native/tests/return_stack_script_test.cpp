@@ -1440,6 +1440,26 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized,
+            "synthetic-entry tail chains should preserve leading fallthrough prefix work before "
+            "the first real label");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "synthetic-entry fallthrough prefixes should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("short_entry"));
     append(ops, ir_jump_body("s2"));
     ops.push_back(ir_label("s2"));
