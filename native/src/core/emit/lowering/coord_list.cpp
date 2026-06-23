@@ -85,10 +85,9 @@ std::optional<CoordListIndirectContext> coord_list_indirect_context(
 
 void emit_coord_list_loop_setup(CoordListEmitApi& api,
                                 const CoordListIndirectContext& context, int source_line) {
-  api.emit_number_or_preload(std::to_string(context.pointer_start), "coord_list pointer",
-                             source_line);
+  api.emit_number_or_preload(std::to_string(context.pointer_start), std::nullopt, source_line);
   api.emit_store(context.pointer, "coord_list pointer");
-  api.emit_number_or_preload(std::to_string(context.count), "coord_list counter", source_line);
+  api.emit_number_or_preload(std::to_string(context.count), std::nullopt, source_line);
   api.emit_store(context.counter, "coord_list counter");
 }
 

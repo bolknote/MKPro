@@ -17,6 +17,8 @@ void print_usage(std::ostream& out) {
       << "  mkpro-native compile <file.mkpro> [--out listing|hex|json|keys|all]\n"
       << "                               [--delivery manual|loader|hex] [--budget N]\n"
       << "                               [--analysis] [--strict]\n"
+      << "                               [--share-random-cell] [--hoist-shared-helpers]\n"
+      << "                               [--hoist-procs]\n"
       << "  mkpro-native explain <file.mkpro> [--budget N] [--analysis] [--strict]\n";
 }
 
@@ -229,6 +231,12 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.aggressive_post_layout_indirect_flow = true;
     } else if (arg == "--dead-source-residual-temp-reuse") {
       options.dead_source_residual_temp_reuse = true;
+    } else if (arg == "--share-random-cell") {
+      options.share_random_cell = true;
+    } else if (arg == "--hoist-shared-helpers") {
+      options.hoist_shared_helpers = true;
+    } else if (arg == "--hoist-procs") {
+      options.hoist_procs = true;
     } else if (arg == "--suppress-constant-preload") {
       if (index + 1 >= args.size()) {
         std::cerr << "missing value for --suppress-constant-preload\n";

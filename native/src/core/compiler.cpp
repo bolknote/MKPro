@@ -31,6 +31,8 @@
 #include <charconv>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <initializer_list>
 #include <iomanip>
@@ -127,6 +129,8 @@ void validate_v2_function_call_contracts(const V2Program& program,
                                          std::vector<Diagnostic>& diagnostics);
 const V2Board* board_for_cells_mask(const LoweringContext& context, const Expression& mask);
 std::optional<Expression> cell_set_mask_expression_for_collection(
+    const LoweringContext& context, const std::string& collection, const Expression& cell);
+std::optional<Expression> cell_mask_expression_for_collection(
     const LoweringContext& context, const std::string& collection, const Expression& cell);
 
 bool statement_contains_return(const V2Statement& statement) {
@@ -4867,6 +4871,138 @@ int guarded_estimate_expression_cost(const Expression& expression) {
   return std::numeric_limits<int>::max() / 4;
 }
 
+int guarded_estimate_expression_cost_for_condition(
+    const Expression& expression,
+    const std::map<std::string, std::string>* preloaded_numbers);
+
+int guarded_estimate_call_cost_for_condition(
+    const Expression& expression,
+    const std::map<std::string, std::string>* preloaded_numbers) {
+  const std::string name = lower_ascii(expression.callee);
+  if (name == kNegativeZeroDegreeSelectorGe) {
+    if (expression.args.size() != 2U)
+      return std::numeric_limits<int>::max() / 4;
+    return guarded_estimate_expression_cost_for_condition(
+               divide_expression(expression.args.at(0), expression.args.at(1)), preloaded_numbers) +
+           4 + 1;
+  }
+  if (name == "random") {
+    if (expression.args.size() == 1U)
+      return guarded_estimate_expression_cost_for_condition(expression.args.front(),
+                                                           preloaded_numbers) +
+             2;
+    if (expression.args.size() == 2U)
+      return guarded_estimate_expression_cost_for_condition(expression.args.at(0),
+                                                           preloaded_numbers) +
+             guarded_estimate_expression_cost_for_condition(expression.args.at(1),
+                                                           preloaded_numbers) +
+             2;
+    return 1;
+  }
+  if (name == "pi")
+    return 1;
+  if (name == "e")
+    return 2;
+  if (name == "pow") {
+    if (expression.args.size() >= 2U && is_numeric_literal_value(expression.args.at(1), 2))
+      return guarded_estimate_expression_cost_for_condition(expression.args.at(0),
+                                                           preloaded_numbers) +
+             1;
+    if (expression.args.size() >= 2U && is_numeric_literal_value(expression.args.at(0), 10))
+      return guarded_estimate_expression_cost_for_condition(expression.args.at(1),
+                                                           preloaded_numbers) +
+             1;
+  }
+  if (name == "min" || name == "max" || name == "safe_min" || name == "safe_max" ||
+      name == "bit_and" || name == "bit_or" || name == "bit_xor" || name == "pow") {
+    return (expression.args.empty()
+                ? 0
+                : guarded_estimate_expression_cost_for_condition(expression.args.at(0),
+                                                                 preloaded_numbers)) +
+           (expression.args.size() < 2U
+                ? 0
+                : guarded_estimate_expression_cost_for_condition(expression.args.at(1),
+                                                                 preloaded_numbers)) +
+           1;
+  }
+  return (expression.args.empty()
+              ? 0
+              : guarded_estimate_expression_cost_for_condition(expression.args.front(),
+                                                               preloaded_numbers)) +
+         1;
+}
+
+bool expression_number_is_preloaded_for_condition(
+    const Expression& expression,
+    const std::map<std::string, std::string>* preloaded_numbers) {
+  if (preloaded_numbers == nullptr)
+    return false;
+  if (expression.kind == "number")
+    return preloaded_numbers->contains(normalize_preload_key(expression.raw));
+  if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr &&
+      expression.expr->kind == "number") {
+    return preloaded_numbers->contains(normalize_preload_key("-" + expression.expr->raw));
+  }
+  return false;
+}
+
+int guarded_estimate_expression_cost_for_condition(
+    const Expression& expression,
+    const std::map<std::string, std::string>* preloaded_numbers) {
+  if (expression_number_is_preloaded_for_condition(expression, preloaded_numbers))
+    return 1;
+  if (expression.kind == "string")
+    return 0;
+  if (expression.kind == "number")
+    return guarded_estimate_number_cost(expression.raw);
+  if (expression.kind == "identifier")
+    return 1;
+  if (expression.kind == "indexed")
+    return (expression.index == nullptr
+                ? 0
+                : guarded_estimate_expression_cost_for_condition(*expression.index,
+                                                                 preloaded_numbers)) +
+           2;
+  if (expression.kind == "unary")
+    return (expression.expr == nullptr
+                ? 0
+                : guarded_estimate_expression_cost_for_condition(*expression.expr,
+                                                                 preloaded_numbers)) +
+           1;
+  if (expression.kind == "binary") {
+    if (expression.op == "*" && expression.left != nullptr && expression.right != nullptr &&
+        expression_equals(*expression.left, *expression.right) &&
+        expression_pure_for_substitution(*expression.left)) {
+      return guarded_estimate_expression_cost_for_condition(*expression.left, preloaded_numbers) + 1;
+    }
+    if (expression.op == "/" && expression.left != nullptr && expression.right != nullptr &&
+        is_numeric_literal_value(*expression.left, 1)) {
+      return guarded_estimate_expression_cost_for_condition(*expression.right, preloaded_numbers) +
+             1;
+    }
+    if (const std::optional<core::emit::RemainderByConstantMatch> remainder =
+            match_remainder_by_constant(expression)) {
+      return guarded_estimate_expression_cost_for_condition(remainder->value, preloaded_numbers) +
+             guarded_estimate_expression_cost_for_condition(remainder->divisor,
+                                                            preloaded_numbers) *
+                 2 +
+             3;
+    }
+    return (expression.left == nullptr
+                ? 0
+                : guarded_estimate_expression_cost_for_condition(*expression.left,
+                                                                 preloaded_numbers)) +
+           (expression.right == nullptr
+                ? 0
+                : guarded_estimate_expression_cost_for_condition(*expression.right,
+                                                                 preloaded_numbers)) +
+           1;
+  }
+  if (expression.kind == "call")
+    return guarded_estimate_call_cost_for_condition(expression, preloaded_numbers);
+  return std::numeric_limits<int>::max() / 4;
+}
+
 std::string guarded_expression_to_text(const Expression& expression) {
   if (expression.kind == "number")
     return expression.raw;
@@ -4913,7 +5049,9 @@ bool guarded_can_test_against_zero_directly(const std::string& op) {
   return op == "==" || op == "!=" || op == ">=" || op == "<";
 }
 
-int guarded_condition_compile_cost(const V2Predicate& predicate, int line) {
+int guarded_condition_compile_cost(
+    const V2Predicate& predicate, int line,
+    const std::map<std::string, std::string>* preloaded_numbers = nullptr) {
   if (predicate.kind != "v2_compare")
     return std::numeric_limits<int>::max() / 4;
   try {
@@ -4926,13 +5064,17 @@ int guarded_condition_compile_cost(const V2Predicate& predicate, int line) {
       const std::optional<double> divisor =
           remainder.has_value() ? numeric_literal_value(remainder->divisor) : std::nullopt;
       if (remainder.has_value() && divisor.has_value() && *divisor != 0.0) {
-        return guarded_estimate_expression_cost(remainder->value) +
-               guarded_estimate_expression_cost(remainder->divisor) + 4;
+        return guarded_estimate_expression_cost_for_condition(remainder->value,
+                                                              preloaded_numbers) +
+               guarded_estimate_expression_cost_for_condition(remainder->divisor,
+                                                              preloaded_numbers) +
+               4;
       }
     }
     if (guarded_expression_is_zero(right) && guarded_can_test_against_zero_directly(predicate.op))
-      return guarded_estimate_expression_cost(left) + 2;
-    return guarded_estimate_expression_cost(left) + guarded_estimate_expression_cost(right) + 3;
+      return guarded_estimate_expression_cost_for_condition(left, preloaded_numbers) + 2;
+    return guarded_estimate_expression_cost_for_condition(left, preloaded_numbers) +
+           guarded_estimate_expression_cost_for_condition(right, preloaded_numbers) + 3;
   } catch (const std::exception&) {
     return std::numeric_limits<int>::max() / 4;
   }
@@ -5441,9 +5583,16 @@ void elide_x_param_return_state_fields(V2Program& program,
                                        std::vector<OptimizationReport>& optimizations) {
   std::set<std::string> params = x_param_proc_param_names(program);
   for (const V2Rule& rule : program.rules) {
-    const std::optional<XParamStackStopRiskRule> risk = match_x_param_stack_stop_risk_rule(rule);
-    if (risk.has_value() && !identifier_read_outside_proc(program, rule.name, risk->param))
+    if (const std::optional<XParamReturnDecay> decay = match_x_param_return_decay(rule);
+        decay.has_value() && !identifier_read_outside_proc(program, rule.name, decay->param)) {
+      params.insert(decay->param);
+      continue;
+    }
+    if (const std::optional<XParamStackStopRiskRule> risk =
+            match_x_param_stack_stop_risk_rule(rule);
+        risk.has_value() && !identifier_read_outside_proc(program, rule.name, risk->param)) {
       params.insert(risk->param);
+    }
   }
 
   int removed = 0;
@@ -5492,8 +5641,6 @@ std::optional<int> available_constant_register_index(const LoweringContext& cont
     (void)unused_name;
     used.insert(index);
   }
-  if (context.preloaded_indirect_flow && !context.cave_sketch_shape && !used.contains(0xe))
-    used.insert(0xe);
   return core::pick_constant_register_index(used);
 }
 
@@ -5778,61 +5925,6 @@ bool is_lunar_shape(const V2Program& program) {
       std::any_of(program.rules.begin(), program.rules.end(),
                   [](const V2Rule& rule) { return rule.name == "touchdown"; });
   return has_height && has_fuel && has_speed && has_accel && has_touchdown;
-}
-
-bool is_clock_shape(const V2Program& program) {
-  if (program.name != "MonatkodenisClock" || explicit_state_field_count(program) != 4)
-    return false;
-  const bool has_hour =
-      std::any_of(program.state.begin(), program.state.end(), [](const V2StateField& field) {
-        return field.name == "hour" && field.type == "counter" && field.initial_stack == "X";
-      });
-  const bool has_minute =
-      std::any_of(program.state.begin(), program.state.end(), [](const V2StateField& field) {
-        return field.name == "minute" && field.type == "counter" && field.initial_stack == "Y";
-      });
-  const bool has_outer =
-      std::any_of(program.state.begin(), program.state.end(), [](const V2StateField& field) {
-        return field.name == "outer_delay" && field.type == "counter" && field.initial == "10";
-      });
-  const bool has_inner =
-      std::any_of(program.state.begin(), program.state.end(), [](const V2StateField& field) {
-        return field.name == "inner_delay" && field.type == "counter" && field.initial == "11";
-      });
-  const bool has_wait_tick =
-      std::any_of(program.rules.begin(), program.rules.end(),
-                  [](const V2Rule& rule) { return rule.name == "wait_tick"; });
-  return has_hour && has_minute && has_outer && has_inner && has_wait_tick;
-}
-
-bool is_cave_sketch_shape(const V2Program& program) {
-  if (program.name != "CaveSketch")
-    return false;
-  const bool has_player =
-      std::any_of(program.state.begin(), program.state.end(), [](const V2StateField& field) {
-        return field.name == "player" && field.type == "coord";
-      });
-  const bool fields_match =
-      std::all_of(program.state.begin(), program.state.end(), [](const V2StateField& field) {
-        if (field.implicit)
-          return true;
-        if (field.name == "player")
-          return field.type == "coord";
-        if (field.name == "food")
-          return field.type == "counter" && field.initial == "9";
-        if (field.name == "dynamite")
-          return field.type == "counter" && field.initial == "4";
-        if (field.name == "treasure")
-          return field.type == "counter" && field.initial == "0";
-        return false;
-      });
-  const bool has_move_south =
-      std::any_of(program.rules.begin(), program.rules.end(),
-                  [](const V2Rule& rule) { return rule.name == "move_south"; });
-  const bool has_search_cache =
-      std::any_of(program.rules.begin(), program.rules.end(),
-                  [](const V2Rule& rule) { return rule.name == "search_cache"; });
-  return has_player && fields_match && has_move_south && has_search_cache;
 }
 
 bool is_ninety_nine_bottles_shape(const V2Program& program) {
@@ -6179,6 +6271,14 @@ bool cells_contains_clear_prefix_statement(const LoweringContext& context,
          trim_ascii(*clear.expr) == trim_ascii(predicate.item);
 }
 
+bool cells_update_uses_generic_bit_mask_index(const LoweringContext& context,
+                                              const std::string& collection,
+                                              const Expression& item) {
+  if (board_for_cells_mask(context, identifier_expression(collection)) == nullptr)
+    return false;
+  return !cell_mask_expression_for_collection(context, collection, item).has_value();
+}
+
 void collect_locals_from_statement(LoweringContext& context, RegisterCollection& collection,
                                    const V2Statement& statement,
                                    const V2Statement* next_statement = nullptr) {
@@ -6207,10 +6307,14 @@ void collect_locals_from_statement(LoweringContext& context, RegisterCollection&
         const Expression target = parse_expression(*statement.target, statement.line);
         if (target.kind == "identifier" && is_cells_state_name(context, target.name) &&
             !is_segmented_cells_name(context, target.name)) {
-          add_register_variable(collection, bit_mask_scratch_name(statement.line));
-          if (*statement.op == "+=") {
-            if (const std::optional<Expression> mask =
-                    cell_set_mask_expression_for_collection(context, target.name, expression)) {
+          std::optional<Expression> mask =
+              cell_set_mask_expression_for_collection(context, target.name, expression);
+          const bool generic_bit_mask =
+              !mask.has_value() &&
+              cells_update_uses_generic_bit_mask_index(context, target.name, expression);
+          if (mask.has_value() || generic_bit_mask) {
+            add_register_variable(collection, bit_mask_scratch_name(statement.line));
+            if (mask.has_value() && *statement.op == "+=") {
               collect_locals_from_expression(context, collection, *mask);
             }
           }
@@ -7739,8 +7843,14 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   context.tiny_game_shape = is_tiny_game_shape(program);
   context.human_game_shape = is_human_game_shape(program);
   context.lunar_shape = is_lunar_shape(program);
-  context.clock_shape = is_clock_shape(program);
-  context.cave_sketch_shape = context.cave_sketch_shape || is_cave_sketch_shape(program);
+  // Clock now goes through the generic lowering plus optimizer pipeline.  The
+  // legacy branch emitted indirect-flow-shaped opcodes before the normal
+  // lowering-variant fingerprint path, so primary variants diverged from TS.
+  context.clock_shape = false;
+  // CaveSketch now goes through the generic lowering plus post-layout pipeline.
+  // The legacy shape-specific branch emitted indirect-flow-shaped opcodes before
+  // the normal preload/setup reporting path could see them.
+  context.cave_sketch_shape = false;
   context.ninety_nine_bottles_shape = is_ninety_nine_bottles_shape(program);
   context.dungeon_shape = is_dungeon_shape(program);
   context.uses_formatted_coord_report = core::emit::program_uses_formatted_coord_report(program);
@@ -7815,11 +7925,10 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   }
   if (context.dungeon_shape) {
     bind_register(context, "plan", 0);
-    bind_register(context, "score", 1);
+    bind_register(context, "wall", 1);
     bind_register(context, "pos", 2);
     bind_register(context, "height", 3);
     bind_register(context, "mistakes", 4);
-    bind_register(context, "wall", 5);
     bind_register(context, "action", 6);
     bind_register(context, "__check_room_tail", 7);
     bind_register(context, "__loop_indirect", 8);
@@ -8179,10 +8288,16 @@ bool lower_text_display_statement(LoweringContext& context, const std::vector<Di
 
 bool try_emit_constant_synthesis(LoweringContext& context, const std::string& key,
                                  std::optional<int> source_line) {
-  const int direct_cost = number_entry_cost(key);
-  const std::optional<long long> target = safe_integer_number(key);
-  if (!target.has_value())
+  const int direct_cost = number_entry_cost(key) + (context.emitter.machine_entry_open ? 1 : 0);
+  long double target_number = 0.0L;
+  try {
+    std::size_t parsed = 0;
+    target_number = std::stold(key, &parsed);
+    if (parsed != key.size() || !std::isfinite(static_cast<double>(target_number)))
+      return false;
+  } catch (const std::exception&) {
     return false;
+  }
 
   struct SynthesisPlan {
     int cost = 0;
@@ -8198,6 +8313,39 @@ bool try_emit_constant_synthesis(LoweringContext& context, const std::string& ke
       return;
     best = std::move(plan);
   };
+
+  const std::string negated_key =
+      normalize_number_key(format_number_literal(static_cast<double>(-target_number)));
+  if (const auto negated = context.preloaded_numbers.find(negated_key);
+      negated != context.preloaded_numbers.end()) {
+    accept(SynthesisPlan{
+        .cost = 2,
+        .emit =
+            [&context, name = negated->second, value = negated_key, key, source_line,
+             direct_cost]() {
+              emit_recall(context, name);
+              if (!context.emitter.items.empty())
+                context.emitter.items.back().comment = "constant " + key + " base " + value;
+              context.emitter.emit_op(0x0b, "/-/", "constant " + key, source_line);
+              context.optimizations.push_back(OptimizationReport{
+                  .name = "constant-synthesis",
+                  .detail = "Built constant " + key + " by changed the sign of preloaded R" +
+                            register_text_for(context, name) + " (" + value + ") (2 cells instead "
+                            "of direct " +
+                            std::to_string(direct_cost) + ").",
+              });
+            },
+        .detail = "negate",
+    });
+  }
+
+  const std::optional<long long> target = safe_integer_number(key);
+  if (!target.has_value()) {
+    if (!best.has_value())
+      return false;
+    best->emit();
+    return true;
+  }
 
   if (*target >= 0) {
     for (const auto& [value, name] : context.preloaded_numbers) {
@@ -8856,12 +9004,10 @@ std::optional<PreparedIndexedSelector> prepare_indirect_index_selector(LoweringC
   const int effective_offset =
       offset + (affine.has_value() && !affine->integer_part ? affine->offset : 0);
   if (effective_offset > 0) {
-    emit_number_or_preload(context, std::to_string(effective_offset), "indexed selector offset",
-                           source_line);
+    emit_number_or_preload(context, std::to_string(effective_offset), std::nullopt, source_line);
     context.emitter.emit_op(0x10, "+", "indexed selector offset", source_line);
   } else if (effective_offset < 0) {
-    emit_number_or_preload(context, std::to_string(-effective_offset), "indexed selector offset",
-                           source_line);
+    emit_number_or_preload(context, std::to_string(-effective_offset), std::nullopt, source_line);
     context.emitter.emit_op(0x11, "-", "indexed selector offset", source_line);
   }
   emit_store(context, selector, "indexed selector " + key);
@@ -9050,7 +9196,6 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
                      const V2Statement* next_statement);
 bool lower_statement_block(LoweringContext& context, const std::vector<V2Statement>& statements);
 bool lower_return_statement(LoweringContext& context, const V2Statement& statement);
-bool statement_always_stops(LoweringContext& context, const V2Statement& statement);
 bool statements_always_stop(LoweringContext& context, const std::vector<V2Statement>& statements);
 void report_stack_only_state_field(LoweringContext& context, const std::string& target, int line);
 bool lower_branch_local_delayed_unit_decrement_guard(LoweringContext& context,
@@ -9822,6 +9967,47 @@ const V2Board* board_for_cells_mask(const LoweringContext& context, const Expres
   return board_it == context.boards.end() ? nullptr : board_it->second;
 }
 
+const V2World* world_for_cells_collection(const LoweringContext& context,
+                                          const std::string& collection) {
+  const V2StateField* field = state_field_named(context, collection);
+  if (field == nullptr || field->type != "cells" || !field->domain.has_value())
+    return nullptr;
+  const auto world_it = context.worlds.find(*field->domain);
+  return world_it == context.worlds.end() ? nullptr : world_it->second;
+}
+
+std::optional<Expression> one_dimensional_cell_mask_expression_for_collection(
+    const LoweringContext& context, const std::string& collection, const Expression& cell) {
+  const V2Board* board = board_for_cells_mask(context, identifier_expression(collection));
+  if (board == nullptr)
+    return std::nullopt;
+  if (board->height == 1 && board->x_min >= 0 && board->x_max <= 7)
+    return pow10_expression(cell);
+  if (board->width == 1 && board->y_min >= 0 && board->y_max <= 7)
+    return pow10_expression(cell);
+  return std::nullopt;
+}
+
+std::optional<Expression> cell_mask_expression_for_collection(
+    const LoweringContext& context, const std::string& collection, const Expression& cell) {
+  if (const std::optional<Expression> one_dimensional =
+          one_dimensional_cell_mask_expression_for_collection(context, collection, cell)) {
+    return one_dimensional;
+  }
+
+  const V2Board* board = board_for_cells_mask(context, identifier_expression(collection));
+  if (board != nullptr && is_source_shaped_four_by_four_board(*board)) {
+    return cell_mask_expression(ts_decimal_ones_expression(cell), ts_decimal_tens_expression(cell));
+  }
+
+  const V2World* world = world_for_cells_collection(context, collection);
+  if (world != nullptr && world->position.has_value() && world->position->encoding.has_value() &&
+      *world->position->encoding == "packed_decimal_zero_run") {
+    return frac_expression(cell);
+  }
+  return std::nullopt;
+}
+
 std::string spatial_count_counter_name(const LoweringContext& context) {
   if (context.spatial_count_counter_override.has_value())
     return *context.spatial_count_counter_override;
@@ -10010,10 +10196,9 @@ void collect_preload_number_literals_from_statements(const std::vector<V2Stateme
                                                      ValueSet& values,
                                                      std::map<std::string, int>& occurrences) {
   for (const V2Statement& statement : statements) {
-    if (statement.kind == "v2_stop")
-      collect_preload_number_literals_from_text(statement.target, statement.line, values,
-                                                occurrences);
     collect_preload_number_literals_from_text(statement.expr, statement.line, values, occurrences);
+    collect_preload_number_literals_from_text(statement.target, statement.line, values,
+                                              occurrences);
     collect_preload_number_literals_from_predicate(statement.predicate, statement.line, values,
                                                    occurrences);
     if (statement.items.has_value())
@@ -10065,7 +10250,10 @@ void collect_derived_preload_number_literals_from_statements(
         const Expression target = parse_expression(*statement.target, statement.line);
         if (target.kind == "identifier" && is_cells_state_name(context, target.name)) {
           const Expression item = parse_expression(*statement.expr, statement.line);
-          collect_preload_number_literals(bit_mask_expression(item), values, occurrences);
+          const Expression mask =
+              cell_mask_expression_for_collection(context, target.name, item)
+                  .value_or(bit_mask_expression(item));
+          collect_preload_number_literals(mask, values, occurrences);
         }
       } catch (const std::exception&) {
       }
@@ -10074,7 +10262,10 @@ void collect_derived_preload_number_literals_from_statements(
         expression_text_is_cells_state(context, statement.predicate->collection, statement.line)) {
       try {
         const Expression item = parse_expression(statement.predicate->item, statement.line);
-        collect_preload_number_literals(bit_mask_expression(item), values, occurrences);
+        const Expression mask =
+            cell_mask_expression_for_collection(context, statement.predicate->collection, item)
+                .value_or(bit_mask_expression(item));
+        collect_preload_number_literals(mask, values, occurrences);
       } catch (const std::exception&) {
       }
     }
@@ -10341,15 +10532,13 @@ bool program_contains_call(const V2Program& program, const std::string& name) {
 
 bool program_uses_bit_mask_or_spatial_primitives(const LoweringContext& context,
                                                  const V2Program& program) {
+  (void)context;
   const std::set<std::string> names{"bit_mask",  "bit_has",    "bit_set",
                                     "bit_clear", "line_count", "neighbor_count"};
   if (statements_contain_call_named(program.body, names))
     return true;
-  if (statements_use_cells_bit_mask_sugar(context, program.body))
-    return true;
   return std::any_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
-    return statements_contain_call_named(rule.body, names) ||
-           statements_use_cells_bit_mask_sugar(context, rule.body);
+    return statements_contain_call_named(rule.body, names);
   });
 }
 
@@ -10417,7 +10606,7 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
 
   const bool uses_line_count = program_contains_call(program, "line_count");
   if (program_uses_bit_mask_or_spatial_primitives(context, program)) {
-    for (const std::string& value : {"1", "2", "4"}) {
+    for (const std::string& value : {"1", "2", "4", "8"}) {
       values.insert(value);
       add_bonus(value, 1);
     }
@@ -11166,7 +11355,7 @@ bool lower_segmented_bitplane_line_count_scan_to_x(LoweringContext& context,
     return false;
   context.emitter.emit_op(0x11, "-", "line_count scan dx", source_line);
   context.emitter.emit_jump(0x57, "F x!=0", visible, "line_count scan same column", source_line);
-  emit_number_or_preload(context, "10", "line_count scan dx digit", source_line);
+  emit_number_or_preload(context, "10", std::nullopt, source_line);
   context.emitter.emit_op(0x12, "*", "line_count scan dx digit", source_line);
 
   if (!emit_segmented_line_count_tens_digit(context, candidate, source_line,
@@ -11342,7 +11531,9 @@ bool lower_membership_clear_operands_to_stack(LoweringContext& context,
     return true;
   }
   emit_recall(context, collection);
-  return lower_expression_to_x(context, bit_mask_expression(item));
+  const std::optional<Expression> mask =
+      cell_mask_expression_for_collection(context, collection, item);
+  return lower_expression_to_x(context, mask.value_or(bit_mask_expression(item)));
 }
 
 bool lower_bit_membership_to_x(LoweringContext& context, const Expression& mask,
@@ -11591,7 +11782,7 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
       if (!lower_expression_to_x(context, progression.step))
         return false;
       emit_store(context, step, "line_count step");
-      emit_number_or_preload(context, std::to_string(progression.count), "line_count counter");
+      emit_number_or_preload(context, std::to_string(progression.count));
       emit_store(context, spatial_count_counter_name(context), "line_count counter");
       context.emitter.emit_jump(0x53, "ПП", helper, "line_count line progression");
       emit_recall(context, core::emit::spatial_count_total_scratch_name());
@@ -11635,7 +11826,7 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
         counter_it != context.register_index_by_name.end() &&
         fl_loop_opcode_for_register(counter_it->second).has_value();
     if (!is_numeric_literal_value(progression.step, progression.count))
-      emit_number_or_preload(context, std::to_string(progression.count), "line_count counter");
+      emit_number_or_preload(context, std::to_string(progression.count));
     if (!helper_takes_counter_in_x)
       emit_store(context, spatial_count_counter_name(context), "line_count counter");
     if (const std::optional<std::string> indirect =
@@ -11690,7 +11881,7 @@ bool scale_coord_list_cell_in_place(LoweringContext& context, const Expression& 
     emit_recall(context, cell.name);
   if (!context.emitter.items.empty())
     context.emitter.items.back().comment = "coord_list raw cell";
-  emit_number_or_preload(context, "10", "coord_list scaled decimal divisor", source_line);
+  emit_number_or_preload(context, "10", std::nullopt, source_line);
   context.emitter.emit_op(0x13, "/", "coord_list scaled decimal cell", source_line);
   emit_store(context, cell.name, "coord_list scaled decimal cell");
   context.scaled_coord_variables.insert(cell.name);
@@ -11723,10 +11914,10 @@ bool lower_coord_ones_digit_to_x(LoweringContext& context, const Expression& exp
                                  int source_line) {
   if (!lower_expression_to_x(context, expression))
     return false;
-  emit_number_or_preload(context, "10", "coord quotient", source_line);
+  emit_number_or_preload(context, "10", std::nullopt, source_line);
   context.emitter.emit_op(0x13, "/", "coord quotient", source_line);
   context.emitter.emit_op(0x35, "К {x}", "coord fractional part", source_line);
-  emit_number_or_preload(context, "10", "coord ones digit", source_line);
+  emit_number_or_preload(context, "10", std::nullopt, source_line);
   context.emitter.emit_op(0x12, "*", "coord ones digit", source_line);
   return true;
 }
@@ -11735,7 +11926,7 @@ bool lower_coord_tens_digit_to_x(LoweringContext& context, const Expression& exp
                                  int source_line) {
   if (!lower_expression_to_x(context, expression))
     return false;
-  emit_number_or_preload(context, "10", "coord quotient", source_line);
+  emit_number_or_preload(context, "10", std::nullopt, source_line);
   context.emitter.emit_op(0x13, "/", "coord quotient", source_line);
   context.emitter.emit_op(0x34, "К [x]", "coord tens digit", source_line);
   return true;
@@ -11754,7 +11945,7 @@ bool emit_scaled_coord_list_visibility_test(LoweringContext& context, const Expr
   context.emitter.emit_op(0x11, "-", comment_prefix + " dx", source_line);
   context.emitter.emit_jump(0x57, "F x!=0", visible_label, comment_prefix + " same column",
                             source_line);
-  emit_number_or_preload(context, "10", comment_prefix + " dx digit", source_line);
+  emit_number_or_preload(context, "10", std::nullopt, source_line);
   context.emitter.emit_op(0x12, "*", comment_prefix + " dx digit", source_line);
 
   if (!lower_scaled_coord_integer_to_x(context, current, source_line,
@@ -11850,10 +12041,11 @@ formatted_coord_report_plan_after_line_count(LoweringContext& context, const std
 void emit_formatted_coord_report_cell_body(LoweringContext& context,
                                            const FormattedCoordReportPlan& plan, int source_line,
                                            const std::string& comment_prefix) {
-  if (context.emitter.current_x_variable != plan.fact.cell)
+  if (context.emitter.current_x_variable != plan.fact.cell) {
     emit_recall(context, plan.fact.cell);
-  if (!context.emitter.items.empty())
-    context.emitter.items.back().comment = comment_prefix + " cell";
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = comment_prefix + " cell";
+  }
   const int scale_exp =
       plan.cell_scale_exp + (context.scaled_coord_variables.contains(plan.fact.cell) ? 1 : 0);
   context.emitter.emit_number(std::to_string(scale_exp));
@@ -12408,11 +12600,12 @@ int estimate_packed_storage_reuse_display_cost(const LoweringContext& context,
 }
 
 bool lower_packed_display_field_to_x(LoweringContext& context, const PackedDisplayField& field,
-                                     std::string comment) {
+                                     std::string comment,
+                                     std::string literal_comment = "display digit literal") {
   if (field.literal) {
     context.emitter.emit_number(field.literal_value);
     if (!context.emitter.items.empty())
-      context.emitter.items.back().comment = "display digit literal";
+      context.emitter.items.back().comment = std::move(literal_comment);
     return true;
   }
   if (field.item == nullptr)
@@ -12429,7 +12622,11 @@ bool source_field_matches_current_x(const LoweringContext& context,
 
 bool lower_packed_display_fields_in_order(LoweringContext& context,
                                           const std::vector<PackedDisplayField>& fields,
-                                          int source_line, bool reuse_current_x) {
+                                          int source_line, bool reuse_current_x,
+                                          const std::string& display_source_comment =
+                                              "display source",
+                                          const std::string& digit_literal_comment =
+                                              "display digit literal") {
   if (fields.empty()) {
     context.emitter.emit_number("0");
     return true;
@@ -12447,14 +12644,16 @@ bool lower_packed_display_fields_in_order(LoweringContext& context,
       continue;
     }
     if (index == 0) {
-      if (!lower_packed_display_field_to_x(context, field, "display source"))
+      if (!lower_packed_display_field_to_x(context, field, display_source_comment,
+                                           digit_literal_comment))
         return false;
       continue;
     }
     emit_display_scale(context, display_scale_for_width(field.width), source_line);
     context.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
     if (!field.literal || field.literal_value != "0") {
-      if (!lower_packed_display_field_to_x(context, field, "display source"))
+      if (!lower_packed_display_field_to_x(context, field, display_source_comment,
+                                           digit_literal_comment))
         return false;
       context.emitter.emit_op(0x10, "+", "packed display field append", source_line);
     }
@@ -12484,7 +12683,12 @@ packed_storage_reuse_display_fields(const LoweringContext& context,
 
 bool lower_packed_numeric_display_statement(LoweringContext& context,
                                             const std::vector<DisplayItem>& items,
-                                            int source_line) {
+                                            int source_line,
+                                            const std::string& display_source_comment =
+                                                "display source",
+                                            const std::string& digit_literal_comment =
+                                                "display digit literal",
+                                            const std::string& show_comment = "show") {
   const std::optional<std::vector<PackedDisplayField>> parsed_fields =
       numeric_display_fields(context, items);
   if (!parsed_fields.has_value() || parsed_fields->size() < 2)
@@ -12505,7 +12709,8 @@ bool lower_packed_numeric_display_statement(LoweringContext& context,
 
   if (current_index > 0) {
     const std::vector<PackedDisplayField> prefix(fields.begin(), fields.begin() + current_index);
-    if (!lower_packed_display_fields_in_order(context, prefix, source_line, false))
+    if (!lower_packed_display_fields_in_order(context, prefix, source_line, false,
+                                              display_source_comment, digit_literal_comment))
       return false;
     const PackedDisplayField& current = fields.at(static_cast<std::size_t>(current_index));
     emit_display_scale(context, display_scale_for_width(current.width), source_line);
@@ -12519,12 +12724,13 @@ bool lower_packed_numeric_display_statement(LoweringContext& context,
       emit_display_scale(context, display_scale_for_width(field.width), source_line);
       context.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
       if (!field.literal || field.literal_value != "0") {
-        if (!lower_packed_display_field_to_x(context, field, "display source"))
+        if (!lower_packed_display_field_to_x(context, field, display_source_comment,
+                                             digit_literal_comment))
           return false;
         context.emitter.emit_op(0x10, "+", "packed display field append", source_line);
       }
     }
-    context.emitter.emit_op(0x50, "С/П", "show", source_line);
+    context.emitter.emit_op(0x50, "С/П", show_comment, source_line);
     context.optimizations.push_back(OptimizationReport{
         .name = current_index == static_cast<int>(fields.size()) - 1
                     ? "display-current-x-suffix-reuse"
@@ -12542,9 +12748,10 @@ bool lower_packed_numeric_display_statement(LoweringContext& context,
     return true;
   }
 
-  if (!lower_packed_display_fields_in_order(context, fields, source_line, true))
+  if (!lower_packed_display_fields_in_order(context, fields, source_line, true,
+                                            display_source_comment, digit_literal_comment))
     return false;
-  context.emitter.emit_op(0x50, "С/П", "show", source_line);
+  context.emitter.emit_op(0x50, "С/П", show_comment, source_line);
   if (has_literal_field) {
     context.optimizations.push_back(OptimizationReport{
         .name = "display-decimal-literal-field",
@@ -13164,7 +13371,9 @@ bool lower_literal_display_body(LoweringContext& context, const std::string& dis
   }
   if (const std::optional<std::string> decimal = decimal_display_literal_number(literal)) {
     context.emitter.emit_number(*decimal);
-    context.emitter.emit_op(0x50, "С/П", "show " + display_name, line);
+    const std::string comment =
+        display_name.starts_with("__inline_show_") ? "pause" : "show " + display_name;
+    context.emitter.emit_op(0x50, "С/П", comment, line);
     report_screen_literal_lowering(context, "screen-decimal-literal-lowering",
                                    "Lowered screen " + display_name +
                                        " as an ordinary decimal display literal.");
@@ -13253,7 +13462,8 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
     return true;
 
   if (core::emit::lower_formatted_coord_report_display_statement(display_api, context,
-                                                                 *statement.items, statement.line))
+                                                                 *statement.items, display_name,
+                                                                 statement.line))
     return true;
 
   const std::optional<std::string> strategy = select_display_strategy(context, statement);
@@ -13267,7 +13477,9 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
   if (strategy == "display-byte-builder" && lower_display_byte_body(context, statement))
     return true;
   if ((strategy == "decimal-pack" || strategy.has_value()) &&
-      lower_packed_numeric_display_statement(context, *statement.items, statement.line))
+      lower_packed_numeric_display_statement(context, *statement.items, statement.line,
+                                             display_source_comment, "display digit literal",
+                                             show_comment))
     return true;
 
   if (!lower_display_item_to_x(context, statement.items->at(0), display_source_comment))
@@ -13914,7 +14126,7 @@ bool lower_dungeon_match(LoweringContext& context, const V2Statement& statement)
   emit_store(context, "pos", "set pos");
   context.emitter.emit_op(0x3b, "К СЧ", "random()", statement.line);
   emit_store(context, "plan", "set plan");
-  context.emitter.emit_op(0x50, "С/П", "show", statement.line);
+  context.emitter.emit_op(0x50, "С/П", "pause", statement.line);
   context.emitter.emit_op(
       0x87, "К БП 7",
       "tail jump check_room; preloaded R7=51 indirect-target=51 shifted-forward indirect flow",
@@ -16167,8 +16379,10 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
     const int uses =
         context.proc_call_counts.contains(rule.name) ? context.proc_call_counts[rule.name] : 0;
     if (risk_rule.has_value() && uses == 1) {
-      context.emitter.emit_op(0x0e, "В↑", "x-param keep displayed value");
-      context.emitter.emit_op(0x50, "С/П", "show " + risk_rule->param);
+      context.emitter.emit_op(0x0e, "В↑", "x-param inline keep displayed value");
+      const std::string display_name =
+          rule.body.empty() ? risk_rule->param : rule.body.front().inline_name.value_or(risk_rule->param);
+      context.emitter.emit_op(0x50, "С/П", "show " + display_name);
       compile_stack_stop_risk_tail(context, risk_rule->risk, rule.body.back().line,
                                    rule.body.back().line);
       context.optimizations.push_back(OptimizationReport{
@@ -16399,7 +16613,7 @@ bool lower_cells_contains_false_branch_with_bit_mask_helper(
     return false;
   if (!lower_expression_to_x(context, identifier_expression(collection)))
     return false;
-  context.emitter.emit_op(0x37, "К ∧", "bit membership test", source_line);
+  context.emitter.emit_op(0x37, "К ∧", "bit_and()", source_line);
   context.emitter.emit_op(0x35, "К {x}", "bit membership fraction", source_line);
 
   const std::string op = negated ? "==" : "!=";
@@ -16413,6 +16627,40 @@ bool lower_cells_contains_false_branch_with_bit_mask_helper(
       .detail = "Tested bit_has() through the shared bit_mask helper at line " +
                 std::to_string(source_line) + ".",
   });
+  return true;
+}
+
+void emit_membership_fraction_if_needed(LoweringContext& context, const Expression& mask,
+                                        std::string comment, int line);
+
+bool lower_cells_contains_false_branch_with_mask_expression(
+    LoweringContext& context, const V2Predicate& predicate, bool negated,
+    const std::string& false_label, int source_line, std::optional<std::string> branch_comment) {
+  const std::string collection = trim_ascii(predicate.collection);
+  const V2StateField* collection_field = state_field_named(context, collection);
+  if (collection_field == nullptr || collection_field->type != "cells" ||
+      is_segmented_cells_name(context, collection)) {
+    return false;
+  }
+
+  const Expression item = parse_expression(predicate.item, source_line);
+  const std::optional<Expression> mask =
+      cell_mask_expression_for_collection(context, collection, item);
+  if (!mask.has_value())
+    return false;
+
+  if (!lower_expression_to_x(context, *mask))
+    return false;
+  if (!lower_expression_to_x(context, identifier_expression(collection)))
+    return false;
+  context.emitter.emit_op(0x37, "К ∧", "bit_and()", source_line);
+  emit_membership_fraction_if_needed(context, *mask, "bit membership fraction", source_line);
+
+  const std::string op = negated ? "==" : "!=";
+  const int branch_opcode = negated ? 0x5e : 0x57;
+  const std::string branch_mnemonic = negated ? "F x=0" : "F x!=0";
+  context.emitter.emit_jump(branch_opcode, branch_mnemonic, false_label,
+                            branch_comment.value_or("false branch for " + op), source_line);
   return true;
 }
 
@@ -16616,9 +16864,10 @@ std::pair<V2Predicate, bool> select_cheaper_equivalent_condition(const LoweringC
                                                                  const V2Predicate& predicate,
                                                                  int line) {
   V2Predicate best = predicate;
-  int best_cost = guarded_condition_compile_cost(predicate, line);
+  int best_cost = guarded_condition_compile_cost(predicate, line, &context.preloaded_numbers);
   for (const V2Predicate& candidate : equivalent_condition_candidates(context, predicate, line)) {
-    const int cost = guarded_condition_compile_cost(candidate, line);
+    const int cost =
+        guarded_condition_compile_cost(candidate, line, &context.preloaded_numbers);
     if (cost < best_cost) {
       best = candidate;
       best_cost = cost;
@@ -17250,6 +17499,13 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
       return false;
 
     if (lower_cells_contains_false_branch_with_spatial_hit_helper(
+            context, predicate, negated, false_label, source_line, branch_comment)) {
+      return true;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+
+    if (lower_cells_contains_false_branch_with_mask_expression(
             context, predicate, negated, false_label, source_line, branch_comment)) {
       return true;
     }
@@ -20554,11 +20810,52 @@ bool lower_cells_contains_clear_if(LoweringContext& context, const V2Statement& 
     return false;
   }
 
+  const Expression item = parse_expression(predicate.item, statement.line);
+  if (const std::optional<Expression> mask =
+          cell_mask_expression_for_collection(context, collection, item);
+      mask.has_value() && membership_mask_preserves_y(*mask)) {
+    const std::string false_label =
+        context.emitter.fresh_label(statement.else_body.empty() ? "if_end" : "if_else");
+    const std::string end_label =
+        statement.else_body.empty() ? false_label : context.emitter.fresh_label("if_end");
+
+    emit_recall(context, collection);
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "membership clear source " + collection;
+    if (!emit_y_preserving_membership_mask(context, *mask, statement.line))
+      return false;
+    context.emitter.emit_op(0x3a, "К ИНВ", "membership clear mask complement", statement.line);
+    context.emitter.emit_op(0x37, "К ∧", "clear membership bit before test", statement.line);
+    emit_store(context, collection, "set " + collection);
+    context.emitter.emit_op(0x11, "-", "membership clear delta test", statement.line);
+    context.emitter.emit_jump(0x57, "F x≠0", false_label, "false branch for !=", statement.line);
+
+    std::vector<V2Statement> rest(then_body.begin() + 1, then_body.end());
+    if (!lower_statement_block(context, rest))
+      return false;
+    if (!statement.else_body.empty()) {
+      context.emitter.emit_jump(0x51, "БП", end_label, "if end", statement.line);
+      context.emitter.emit_label(false_label, {.hidden = true});
+      context.emitter.current_x_known_zero = true;
+      if (!lower_statement_block(context, statement.else_body))
+        return false;
+      context.emitter.emit_label(end_label, {.hidden = true});
+    } else {
+      context.emitter.emit_label(false_label, {.hidden = true});
+    }
+    context.optimizations.push_back(OptimizationReport{
+        .name = "membership-clear-delta-branch",
+        .detail = "Cleared " + collection +
+                  " before branching and used the old value in Y to test membership at line " +
+                  std::to_string(statement.line) + ".",
+    });
+    return true;
+  }
+
   const std::string false_label =
       context.emitter.fresh_label(statement.else_body.empty() ? "if_end" : "if_else");
   const std::string end_label =
       statement.else_body.empty() ? false_label : context.emitter.fresh_label("if_end");
-  const Expression item = parse_expression(predicate.item, statement.line);
   const bool uses_shared_membership_helper =
       context.register_index_by_name.contains(spatial_hit_scratch_name(collection));
   if (!lower_membership_clear_operands_to_stack(context, collection, item, statement.line))
@@ -20720,6 +21017,11 @@ bool lower_while_statement(LoweringContext& context, const V2Statement& statemen
   const std::string start_label = context.emitter.fresh_label("while");
   const std::string end_label = context.emitter.fresh_label("while_end");
   context.emitter.emit_label(start_label, {.hidden = true});
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_aliases.clear();
+  context.emitter.current_x_known_zero = false;
+  context.emitter.current_x_expression.reset();
+  context.emitter.current_x_formatted_coord_report_body.reset();
   context.scaled_coord_variables.clear();
   if (!lower_condition_false_branch(context, *statement.predicate, false, end_label,
                                     statement.line))
@@ -20876,7 +21178,7 @@ void emit_residual_compare_delta(LoweringContext& context, double delta, const s
                                  int line) {
   if (std::fabs(delta) <= 1e-12)
     return;
-  context.emitter.emit_number(format_number_literal(std::fabs(delta)));
+  emit_number_or_preload(context, format_number_literal(std::fabs(delta)), std::nullopt, line);
   context.emitter.emit_op(delta < 0 ? 0x10 : 0x11, delta < 0 ? "+" : "-", comment, line);
 }
 
@@ -21194,17 +21496,11 @@ bool lower_numeric_residual_match_statement(LoweringContext& context,
   for (const NumericMatchCase& match_case : cases) {
     const std::string next_label = context.emitter.fresh_label("match_next");
     if (!has_compared_value) {
-      if (std::fabs(match_case.value) > 1e-12) {
-        context.emitter.emit_number(format_number_literal(match_case.value));
-        context.emitter.emit_op(0x11, "-", "dispatch compare", match_case.line);
-      }
+      emit_residual_compare_delta(context, match_case.value, "dispatch compare", match_case.line);
       has_compared_value = true;
     } else {
       const double delta = match_case.value - compared_value;
-      if (std::fabs(delta) > 1e-12) {
-        context.emitter.emit_number(format_number_literal(delta));
-        context.emitter.emit_op(0x11, "-", "dispatch residual compare", match_case.line);
-      }
+      emit_residual_compare_delta(context, delta, "dispatch residual compare", match_case.line);
     }
     compared_value = match_case.value;
     context.emitter.emit_jump(0x5e, "F x=0", next_label, "case mismatch", match_case.line);
@@ -21519,6 +21815,8 @@ bool lower_single_bit_mask_op_assignment(LoweringContext& context, const V2State
   }
 
   const std::string scratch = bit_mask_scratch_name(statement.line);
+  if (!context.registers.contains(scratch))
+    return false;
   const Expression item = parse_expression(*statement.expr, statement.line);
   if (!lower_expression_to_x(context, item))
     return false;
@@ -21612,24 +21910,51 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
   if (target_expression.kind == "identifier" &&
       is_cells_state_name(context, target_expression.name) &&
       (statement.op == "+=" || statement.op == "-=")) {
-    if (lower_single_bit_mask_op_assignment(context, statement, target_expression))
+    const Expression item = parse_expression(*statement.expr, statement.line);
+    const std::optional<Expression> mask =
+        cell_mask_expression_for_collection(context, target_expression.name, item);
+    auto lower_mask_update = [&]() -> bool {
+      if (!mask.has_value())
+        return false;
+      if (!lower_expression_to_x(context, identifier_expression(target_expression.name)))
+        return false;
+      if (!lower_expression_to_x(context, *mask))
+        return false;
+      if (*statement.op == "-=")
+        context.emitter.emit_op(0x3a, "К ИНВ", "bit_not()", statement.line);
+      context.emitter.emit_op(*statement.op == "+=" ? 0x38 : 0x37,
+                              *statement.op == "+=" ? "К ∨" : "К ∧",
+                              *statement.op == "+=" ? "bit_or()" : "bit_and()",
+                              statement.line);
+      emit_store(context, target_expression.name, "set " + target_expression.name);
+      return true;
+    };
+    if (mask.has_value() && mask->kind == "call" && lower_ascii(mask->callee) == "frac")
+      return lower_mask_update();
+
+    if ((mask.has_value() ||
+         cells_update_uses_generic_bit_mask_index(context, target_expression.name, item)) &&
+        lower_single_bit_mask_op_assignment(context, statement, target_expression))
       return true;
     if (has_errors(context.diagnostics))
       return false;
 
-    const Expression item = parse_expression(*statement.expr, statement.line);
+    if (mask.has_value()) {
+      if (!lower_mask_update())
+        return false;
+      return true;
+    }
+
     if (!lower_expression_to_x(context, identifier_expression(target_expression.name)))
       return false;
     if (!lower_bit_mask_to_x(context, item, statement.line))
       return false;
     if (statement.op == "-=")
-      context.emitter.emit_op(0x3a, "К ИНВ", "cells clear mask", statement.line);
+      context.emitter.emit_op(0x3a, "К ИНВ", "bit_not()", statement.line);
     context.emitter.emit_op(
         statement.op == "+=" ? 0x38 : 0x37, statement.op == "+=" ? "К ∨" : "К ∧",
-        statement.op == "+=" ? "cells bit set" : "cells bit clear", statement.line);
-    emit_store(context, target_expression.name,
-               statement.op == "+=" ? "cells set " + target_expression.name
-                                    : "cells clear " + target_expression.name);
+        statement.op == "+=" ? "bit_or()" : "bit_and()", statement.line);
+    emit_store(context, target_expression.name, "set " + target_expression.name);
     return true;
   }
 
@@ -22371,8 +22696,11 @@ bool lower_pause_statement(LoweringContext& context, const V2Statement& statemen
   if (statement.kind != "v2_show" || !statement.target.has_value())
     return false;
   const Expression expression = parse_expression(*statement.target, statement.line);
-  if (!lower_expression_to_x(context, expression))
+  if (is_zero_expression(context, expression)) {
+    emit_number_or_preload(context, "0", "pause", statement.line);
+  } else if (!lower_expression_to_x(context, expression)) {
     return false;
+  }
   context.emitter.emit_op(0x50, "С/П", "pause", statement.line);
   return true;
 }
@@ -22734,7 +23062,8 @@ bool lower_loop_carried_prompt_statement(LoweringContext& context, const V2State
   const std::string label = context.emitter.fresh_label("loop_prompt");
   context.emitter.emit_label(label);
   mark_current_x(context, prompt_name);
-  context.emitter.emit_op(0x50, "С/П", "show " + prompt_name, show.line);
+  context.emitter.emit_op(0x50, "С/П", "show " + show.inline_name.value_or(prompt_name),
+                          show.line);
   mark_current_x(context, input_it->second);
 
   std::vector<V2Statement> body(statement.body.begin() + 2, statement.body.end());
@@ -22832,7 +23161,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       context.emitter.emit_op(0x50, "С/П", "read " + *statement.target, statement.line);
       context.emitter.emit_op(0x0e, "В↑", "separate read entry before scaled coord",
                               statement.line);
-      emit_number_or_preload(context, "10", "read scaled decimal divisor", statement.line);
+      emit_number_or_preload(context, "10", std::nullopt, statement.line);
       context.emitter.emit_op(0x13, "/", "read scaled decimal coord", statement.line);
       emit_store(context, *statement.target, "read " + *statement.target);
       context.scaled_coord_variables.insert(*statement.target);
@@ -22977,6 +23306,14 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return false;
     if (!lower_expression_to_x(context, expression))
       return false;
+    const bool literal_assignment =
+        expression.kind == "number" ||
+        (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr &&
+         expression.expr->kind == "number");
+    if (literal_assignment && is_zero_expression(context, expression) && !context.emitter.items.empty() &&
+        !context.emitter.items.back().comment.has_value()) {
+      context.emitter.items.back().comment = "set " + *statement.target;
+    }
     mark_current_x(context, *statement.target);
     if (context.stack_only_state_fields.contains(*statement.target)) {
       report_stack_only_state_field(context, *statement.target, statement.line);
@@ -23012,6 +23349,11 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
         return lower_literal_terminal_stop(context, expression.text, statement.line);
       if (!lower_expression_to_x(context, expression))
         return false;
+      if (expression.kind == "number" && normalize_number_key(expression.raw) == "0" &&
+          !context.emitter.items.empty() &&
+          !context.emitter.items.back().comment.has_value()) {
+        context.emitter.items.back().comment = "halt";
+      }
     }
     context.emitter.emit_op(0x50, "С/П", "halt", statement.line);
     return true;
@@ -23186,11 +23528,13 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
         return false;
       }
       emit_recall(context, lowering.other);
+      if (!context.emitter.items.empty())
+        context.emitter.items.back().comment = rule.name + " " + *first.target + " base";
       context.emitter.emit_op(0x10, "+", rule.name + " " + *first.target + " from X parameter",
                               first.line);
       context.emitter.current_x_variable.reset();
       context.emitter.current_x_aliases.clear();
-      emit_store(context, *first.target, "set " + *first.target + " from X parameter");
+      emit_store(context, *first.target, "set " + *first.target);
       context.optimizations.push_back(OptimizationReport{
           .name = "x-param-proc-entry",
           .detail = "Added X parameter " + lowering.param + " into " + *first.target + " at " +
@@ -23208,7 +23552,7 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
         (rule.body.back().kind == "v2_return" ||
          direct_terminal_statements_stop(context, rule.body)))
       return true;
-    context.emitter.emit_op(0x52, "В/О", "implicit return from function " + rule.name, rule.line);
+    context.emitter.emit_op(0x52, "В/О", "implicit return from proc", rule.line);
     return true;
   }
 
@@ -23217,7 +23561,7 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
   if (!rule.body.empty() &&
       (rule.body.back().kind == "v2_return" || direct_terminal_statements_stop(context, rule.body)))
     return true;
-  context.emitter.emit_op(0x52, "В/О", "implicit return from function " + rule.name, rule.line);
+  context.emitter.emit_op(0x52, "В/О", "implicit return from proc", rule.line);
   return true;
 }
 
@@ -23492,6 +23836,13 @@ std::optional<std::string> delayed_unit_decrement_guard_target(LoweringContext& 
   return std::nullopt;
 }
 
+bool delayed_unit_decrement_guard_matches(LoweringContext& context, const std::string& target,
+                                          const V2Statement& guard) {
+  const std::optional<std::string> guard_target =
+      delayed_unit_decrement_guard_target(context, guard);
+  return guard_target.has_value() && *guard_target == target;
+}
+
 bool statement_is_delayed_unit_decrement(const V2Statement& statement, const std::string& target) {
   if (!statement.target.has_value())
     return false;
@@ -23656,6 +24007,138 @@ void emit_delayed_indirect_unit_decrement(LoweringContext& context, const V2Stat
   });
 }
 
+std::optional<std::vector<V2Statement>>
+delayed_unit_decrement_tail_with_guard(LoweringContext& context,
+                                       const std::vector<V2Statement>& statements,
+                                       const V2Statement& decrement, const std::string& target,
+                                       std::set<std::string>& seen_rules) {
+  if (statements.empty())
+    return std::nullopt;
+
+  const V2Statement& last = statements.back();
+  if (last.kind == "v2_if" && !last.has_else_body && last.else_body.empty() &&
+      delayed_unit_decrement_guard_matches(context, target, last) &&
+      statements_always_stop(context, last.then_body)) {
+    std::vector<V2Statement> prefix(statements.begin(), statements.end() - 1);
+    if (!delayed_statements_commute_with_unit_decrement(context, prefix, 0, target))
+      return std::nullopt;
+
+    std::vector<V2Statement> result = std::move(prefix);
+    result.push_back(decrement);
+    result.push_back(last);
+    return result;
+  }
+
+  if (last.kind != "v2_if" || !last.has_else_body || !last.predicate.has_value())
+    return std::nullopt;
+  if (count_identifier_reads_in_predicate(*last.predicate, target, last.line) != 0)
+    return std::nullopt;
+
+  std::vector<V2Statement> prefix(statements.begin(), statements.end() - 1);
+  if (!delayed_statements_commute_with_unit_decrement(context, prefix, 0, target))
+    return std::nullopt;
+
+  std::set<std::string> then_seen = seen_rules;
+  std::set<std::string> else_seen = seen_rules;
+  std::optional<std::vector<V2Statement>> then_body =
+      delayed_unit_decrement_tail_with_guard(context, last.then_body, decrement, target, then_seen);
+  std::optional<std::vector<V2Statement>> else_body =
+      delayed_unit_decrement_tail_with_guard(context, last.else_body, decrement, target, else_seen);
+  if (!then_body.has_value() || !else_body.has_value())
+    return std::nullopt;
+
+  V2Statement rewritten = last;
+  rewritten.then_body = std::move(*then_body);
+  rewritten.else_body = std::move(*else_body);
+
+  std::vector<V2Statement> result = std::move(prefix);
+  result.push_back(std::move(rewritten));
+  return result;
+}
+
+bool lower_delayed_unit_decrement_underflow_guard_run(
+    LoweringContext& context, const std::vector<V2Statement>& statements, std::size_t index,
+    std::size_t& consumed) {
+  consumed = 0;
+  auto trace = [](const std::string&) {};
+  if (!context.indirect_underflow_decrement || index >= statements.size()) {
+    trace("not enabled");
+    return false;
+  }
+
+  const V2Statement& decrement = statements.at(index);
+  const std::optional<std::string> target = scalar_statement_target_name(decrement);
+  if (!target.has_value() || !statement_is_delayed_unit_decrement(decrement, *target)) {
+    trace("not unit decrement");
+    return false;
+  }
+  if (target->rfind("__packed_counter_", 0) == 0) {
+    trace("packed counter target");
+    return false;
+  }
+
+  const std::size_t guard_index = statements.size() - 1U;
+  if (index >= guard_index) {
+    trace("no following tail");
+    return false;
+  }
+
+  const auto register_it = context.register_index_by_name.find(*target);
+  if (register_it == context.register_index_by_name.end() || register_it->second < 0 ||
+      register_it->second > 3) {
+    trace("target " + *target + " is not predecrement indirect");
+    return false;
+  }
+  const auto field_it = context.state_fields.find(*target);
+  if (field_it == context.state_fields.end() || field_it->second == nullptr ||
+      (field_it->second->type != "range" && field_it->second->type != "counter") ||
+      !field_it->second->min.has_value() || *field_it->second->min < 0) {
+    trace("target " + *target + " has incompatible field type");
+    return false;
+  }
+
+  const V2Statement& guard = statements.at(guard_index);
+  trace("target " + *target + " tail guard line " + std::to_string(guard.line));
+  if (guard.kind == "v2_if" && !guard.has_else_body && guard.else_body.empty() &&
+      delayed_unit_decrement_guard_matches(context, *target, guard) &&
+      statements_always_stop(context, guard.then_body)) {
+    std::vector<V2Statement> middle(
+        statements.begin() + static_cast<std::ptrdiff_t>(index + 1U),
+        statements.begin() + static_cast<std::ptrdiff_t>(guard_index));
+    if (!delayed_statements_commute_with_unit_decrement(context, middle, 0, *target)) {
+      trace("middle does not commute");
+      return false;
+    }
+    if (!lower_statement_block(context, middle))
+      return false;
+    emit_delayed_indirect_unit_decrement(context, decrement, register_it->second, guard, *target);
+    if (!lower_statement(context, guard, nullptr))
+      return false;
+    consumed = guard_index - index + 1U;
+    return true;
+  }
+
+  std::vector<V2Statement> tail(statements.begin() + static_cast<std::ptrdiff_t>(index + 1U),
+                                statements.end());
+  std::set<std::string> seen_rules;
+  std::optional<std::vector<V2Statement>> transformed =
+      delayed_unit_decrement_tail_with_guard(context, tail, decrement, *target, seen_rules);
+  if (!transformed.has_value()) {
+    trace("tail-with-guard transform unavailable");
+    return false;
+  }
+  if (!lower_statement_block(context, *transformed))
+    return false;
+  context.optimizations.push_back(OptimizationReport{
+      .name = "delayed-indirect-underflow-decrement",
+      .detail = "Sank " + *target + "-- at line " + std::to_string(decrement.line) +
+                " into terminal nonpositive branch tails so pre-decrement side effects stay "
+                "terminal on underflow.",
+  });
+  consumed = statements.size() - index;
+  return true;
+}
+
 bool lower_delayed_unit_decrement_branch_body(
     LoweringContext& context, const std::optional<DelayedUnitDecrementBranchPlan>& plan,
     const std::vector<V2Statement>& fallback, const V2Statement& guard, const std::string& target) {
@@ -23671,22 +24154,33 @@ bool lower_delayed_unit_decrement_branch_body(
 bool lower_branch_local_delayed_unit_decrement_guard(LoweringContext& context,
                                                      const V2Statement& branch,
                                                      const V2Statement& guard) {
+  auto trace = [](const std::string&) {};
   if (!context.indirect_underflow_decrement || branch.kind != "v2_if" ||
-      !branch.predicate.has_value())
+      !branch.predicate.has_value()) {
+    trace("not enabled or not branch");
     return false;
+  }
   const std::optional<std::string> target = delayed_unit_decrement_guard_target(context, guard);
-  if (!target.has_value())
+  if (!target.has_value()) {
+    trace("guard has no delayed target");
     return false;
-  if (!statements_always_stop(context, guard.then_body))
+  }
+  if (!statements_always_stop(context, guard.then_body)) {
+    trace("guard body does not terminate for target " + *target);
     return false;
-  if (statements_read_identifier(guard.then_body, *target, false))
+  }
+  if (statements_read_identifier(guard.then_body, *target, false)) {
+    trace("guard body reads target " + *target);
     return false;
+  }
 
   const std::optional<DelayedUnitDecrementBranchPlan> then_plan =
       delayed_unit_decrement_branch_plan(context, branch.then_body, *target);
   const std::optional<DelayedUnitDecrementBranchPlan> else_plan =
       branch.has_else_body ? delayed_unit_decrement_branch_plan(context, branch.else_body, *target)
                            : std::nullopt;
+  trace("target " + *target + " then_plan=" + (then_plan.has_value() ? "1" : "0") +
+        " else_plan=" + (else_plan.has_value() ? "1" : "0"));
   if (!then_plan.has_value() && !else_plan.has_value())
     return false;
 
@@ -24440,29 +24934,42 @@ bool lower_show_read_guarded_transfer(LoweringContext& context,
   return true;
 }
 
-bool statement_always_stops(LoweringContext& context, const V2Statement& statement);
+bool statement_always_stops_impl(LoweringContext& context, const V2Statement& statement,
+                                 std::set<std::string>& seen_rules);
 
-bool statements_always_stop(LoweringContext& context, const std::vector<V2Statement>& statements) {
+bool statements_always_stop_impl(LoweringContext& context,
+                                 const std::vector<V2Statement>& statements,
+                                 std::set<std::string>& seen_rules) {
   if (statements.empty())
     return false;
-  return statement_always_stops(context, statements.back());
+  return statement_always_stops_impl(context, statements.back(), seen_rules);
 }
 
-bool statement_always_stops(LoweringContext& context, const V2Statement& statement) {
+bool statements_always_stop(LoweringContext& context, const std::vector<V2Statement>& statements) {
+  std::set<std::string> seen_rules;
+  return statements_always_stop_impl(context, statements, seen_rules);
+}
+
+bool statement_always_stops_impl(LoweringContext& context, const V2Statement& statement,
+                                 std::set<std::string>& seen_rules) {
   if (statement.kind == "v2_stop")
     return true;
   if (statement.kind == "v2_loop")
     return true;
   if (statement.kind == "v2_block")
-    return statements_always_stop(context, statement.body);
-  if (statement.kind == "v2_invoke" && statement.name.has_value() && statement.args.empty() &&
-      context.inline_statement_rules.contains(*statement.name)) {
+    return statements_always_stop_impl(context, statement.body, seen_rules);
+  if (statement.kind == "v2_invoke" && statement.name.has_value() && statement.args.empty()) {
     const auto rule_it = context.rules.find(*statement.name);
-    return rule_it != context.rules.end() && statements_always_stop(context, rule_it->second->body);
+    if (rule_it == context.rules.end() || seen_rules.contains(*statement.name))
+      return false;
+    seen_rules.insert(*statement.name);
+    const bool stops = statements_always_stop_impl(context, rule_it->second->body, seen_rules);
+    seen_rules.erase(*statement.name);
+    return stops;
   }
   if (statement.kind == "v2_if" && !statement.else_body.empty())
-    return statements_always_stop(context, statement.then_body) &&
-           statements_always_stop(context, statement.else_body);
+    return statements_always_stop_impl(context, statement.then_body, seen_rules) &&
+           statements_always_stop_impl(context, statement.else_body, seen_rules);
   return false;
 }
 
@@ -27436,6 +27943,77 @@ bool lower_stack_resident_temps(LoweringContext& context,
   return consumed > 0U;
 }
 
+bool expression_calls_user_rule(const LoweringContext& context, const Expression& expression) {
+  if (expression.kind == "call" && context.rules.contains(expression.callee))
+    return true;
+  if (expression.index != nullptr && expression_calls_user_rule(context, *expression.index))
+    return true;
+  if (expression.expr != nullptr && expression_calls_user_rule(context, *expression.expr))
+    return true;
+  if (expression.left != nullptr && expression_calls_user_rule(context, *expression.left))
+    return true;
+  if (expression.right != nullptr && expression_calls_user_rule(context, *expression.right))
+    return true;
+  return std::any_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+    return expression_calls_user_rule(context, arg);
+  });
+}
+
+bool lower_single_use_stack_temp(LoweringContext& context,
+                                 const std::vector<V2Statement>& statements, std::size_t start,
+                                 std::size_t& consumed) {
+  consumed = 0;
+  if (start + 1U >= statements.size())
+    return false;
+  const V2Statement& temp = statements.at(start);
+  const V2Statement& consumer = statements.at(start + 1U);
+  if (temp.kind != "v2_assign" || !temp.target.has_value() || !temp.expr.has_value() ||
+      consumer.kind != "v2_assign" || !consumer.target.has_value() || !consumer.expr.has_value()) {
+    return false;
+  }
+
+  const Expression temp_expression = parse_expression(*temp.expr, temp.line);
+  if (!expression_pure_for_substitution(temp_expression) ||
+      expression_calls_user_rule(context, temp_expression) ||
+      expression_contains_identifier(temp_expression, *temp.target)) {
+    return false;
+  }
+
+  const Expression consumer_expression = parse_expression(*consumer.expr, consumer.line);
+  if (core::emit::count_identifier_reads(consumer_expression, *temp.target) != 1 ||
+      !can_compile_indexed_stack_temp_expression(consumer_expression, *temp.target)) {
+    return false;
+  }
+
+  const std::vector<V2Statement> tail(
+      statements.begin() + static_cast<std::vector<V2Statement>::difference_type>(start + 2U),
+      statements.end());
+  if (*consumer.target != *temp.target &&
+      statements_read_identifier_before_write(context, tail, *temp.target)) {
+    return false;
+  }
+
+  if (!lower_expression_to_x(context, temp_expression))
+    return false;
+  mark_current_x(context, *temp.target);
+  if (!lower_stack_resident_expression_to_x(context, consumer_expression, {*temp.target},
+                                            consumer.line)) {
+    return false;
+  }
+  if (!lower_loop_carried_prompt_assignment(context, *consumer.target, consumer_expression,
+                                            consumer.line)) {
+    emit_store(context, *consumer.target, "set " + *consumer.target);
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "stack-current-x-scheduling",
+      .detail = "Kept single-use temp " + *temp.target + " in X for the following " +
+                expression_to_source(consumer_expression) + " at line " +
+                std::to_string(consumer.line) + ".",
+  });
+  consumed = 2;
+  return true;
+}
+
 const V2Statement* coord_list_line_count_assignment_from_statement(LoweringContext& context,
                                                                    const V2Statement& statement) {
   if (statement.kind == "v2_assign" && statement.expr.has_value()) {
@@ -27642,6 +28220,15 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
 
+    std::size_t delayed_underflow_consumed = 0;
+    if (lower_delayed_unit_decrement_underflow_guard_run(context, statements, index,
+                                                         delayed_underflow_consumed)) {
+      index += delayed_underflow_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+
     std::size_t prior_random_consumed = 0;
     if (lower_prior_random_fractional_decrement_run(context, statements, index,
                                                     prior_random_consumed)) {
@@ -27727,6 +28314,14 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (lower_stack_unary_derived_assignments_run(context, statements, index,
                                                   stack_unary_consumed)) {
       index += stack_unary_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    std::size_t single_use_stack_temp_consumed = 0;
+    if (lower_single_use_stack_temp(context, statements, index,
+                                    single_use_stack_temp_consumed)) {
+      index += single_use_stack_temp_consumed - 1U;
       continue;
     }
     if (has_errors(context.diagnostics))
@@ -28170,7 +28765,7 @@ bool lower_line_count_helper_body(LoweringContext& context, const std::string& h
       if (!lower_expression_to_x(context, progression.step))
         return false;
       emit_store(context, core::emit::spatial_count_step_scratch_name(), "line_count step");
-      emit_number_or_preload(context, std::to_string(progression.count), "line_count counter",
+      emit_number_or_preload(context, std::to_string(progression.count), std::nullopt,
                              source_line);
       emit_store(context, spatial_count_counter_name(context), "line_count counter");
       context.emitter.emit_jump(0x53, "ПП", helper, "line_count line progression", source_line);
@@ -28201,7 +28796,7 @@ bool lower_line_count_helper_body(LoweringContext& context, const std::string& h
         counter_it != context.register_index_by_name.end() &&
         fl_loop_opcode_for_register(counter_it->second).has_value();
     if (!is_numeric_literal_value(progression.step, progression.count))
-      emit_number_or_preload(context, std::to_string(progression.count), "line_count counter",
+      emit_number_or_preload(context, std::to_string(progression.count), std::nullopt,
                              source_line);
     if (!helper_takes_counter_in_x)
       emit_store(context, spatial_count_counter_name(context), "line_count counter");
@@ -28337,12 +28932,15 @@ bool lower_spatial_sum_helpers(LoweringContext& context) {
     }
 
     emit_recall(context, core::emit::spatial_count_offset_scratch_name());
+    context.emitter.items.back().comment = helper.operation + " offset";
     emit_recall(context, core::emit::spatial_count_line_scratch_name());
+    context.emitter.items.back().comment = helper.operation + " step";
     context.emitter.emit_op(0x10, "+", helper.operation + " next offset");
     emit_store(context, core::emit::spatial_count_offset_scratch_name(),
                helper.operation + " offset");
     context.emitter.emit_op(0x14, "X↔Y", helper.operation + " restore hit count");
     emit_recall(context, core::emit::spatial_count_total_scratch_name());
+    context.emitter.items.back().comment = helper.operation + " accumulator";
     context.emitter.emit_op(0x10, "+", helper.operation + " add hit");
     emit_store(context, core::emit::spatial_count_total_scratch_name(),
                helper.operation + " accumulator");
@@ -28365,10 +28963,12 @@ bool lower_spatial_sum_helpers(LoweringContext& context) {
       });
     } else {
       emit_recall(context, helper.counter);
+      context.emitter.items.back().comment = helper.operation + " counter";
       context.emitter.emit_number("1");
       context.emitter.emit_op(0x11, "-", helper.operation + " decrement");
       emit_store(context, helper.counter, helper.operation + " counter");
       emit_recall(context, helper.counter);
+      context.emitter.items.back().comment = helper.operation + " counter";
       context.emitter.emit_jump(0x5e, "F x=0", start, helper.operation + " loop");
     }
     context.emitter.emit_op(0x52, "В/О", helper.operation + " progression return");
@@ -28405,6 +29005,7 @@ bool lower_bit_mask_helper(LoweringContext& context) {
     context.emitter.emit_op(0x10, "+", "bit mask round bias");
     context.emitter.emit_op(0x34, "К [x]", "bit mask round");
     emit_recall(context, scratch);
+    context.emitter.items.back().comment = "bit mask quotient";
     context.emitter.emit_op(0x34, "К [x]", "bit mask digit index");
     context.emitter.emit_number("1");
     context.emitter.emit_op(0x10, "+", "bit mask decade index");
@@ -28930,6 +29531,7 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
       const std::string initial_text = trim_ascii(*field->initial);
       if (field->type == "cells" && initial_text == "random()") {
         value = "random()";
+        setup_target_name = field->name;
       } else if (field->type == "coord" && field->domain.has_value() &&
                  initial_text == "random(" + *field->domain + ")" &&
                  context.boards.contains(*field->domain)) {
@@ -28991,6 +29593,15 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
         selector.has_value() ? fractional_selector_preload_value(value, selector->target)
                              : std::nullopt;
     add_preload(register_it->second, selector_value.value_or(value));
+  }
+
+  static constexpr std::string_view kDisplayScalePrefix = "__display_scale_";
+  for (const auto& [name, register_name] : context.registers) {
+    if (name.rfind(kDisplayScalePrefix, 0) != 0)
+      continue;
+    const std::string value = name.substr(kDisplayScalePrefix.size());
+    if (!value.empty())
+      add_preload(register_name, value);
   }
 
   for (const std::string& name :
@@ -29180,6 +29791,21 @@ bool preload_requires_generated_setup_program(const PreloadReport& preload) {
   return preload.value == "random()" || preload.value.starts_with("random(") ||
          preload.value.starts_with("random_unique(") ||
          preload.value.starts_with("__seg_bitplane_random_unique(");
+}
+
+bool preload_is_internal_collection_setup(const PreloadReport& preload) {
+  return preload.value.starts_with("random_unique(") ||
+         preload.value.starts_with("__seg_bitplane_random_unique(");
+}
+
+bool preload_must_reach_generated_setup_program(const PreloadReport& preload) {
+  if (preload.setup_expression || preload.setup_target_name.has_value())
+    return true;
+  if (preload.value == "stack.X" || preload.value == "stack.Y")
+    return true;
+  if (preload.value == "random()" || preload.value.starts_with("random("))
+    return true;
+  return preload_is_internal_collection_setup(preload);
 }
 
 bool needs_generated_setup_program(const LoweringContext& context,
@@ -32353,12 +32979,22 @@ void run_interprocedural_ast_passes(const CompileOptions& options, V2Program& pr
 
 } // namespace
 
+std::vector<PreloadReport>
+preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items);
+
+void append_missing_preloaded_indirect_flow_comments(
+    std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads);
+
+int reference_indirect_flow_rescue_above(const ProgramAst& ast, const CompileOptions& options);
+
 CompileResult compile_source_once(std::string source, const CompileOptions& options) {
   CompileResult result;
   result.implemented = true;
+  auto trace_stage = [](std::string_view) {};
 
   ProgramAst ast;
   try {
+    trace_stage("parse");
     ast = parse_program(
         source, ParseOptions{
                     .signed_abs_match_pairs = options.signed_abs_match_pairs,
@@ -32379,6 +33015,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     return result;
   }
   rewrite_packed_decimal_zero_run_floor_access(*ast.v2);
+  trace_stage("validated");
 
   validate_v2_return_contracts(*ast.v2, result.diagnostics);
   validate_v2_function_call_contracts(*ast.v2, result.diagnostics);
@@ -32389,7 +33026,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
   LoweringContext context;
   context.program = &*ast.v2;
-  context.cave_sketch_shape = is_cave_sketch_shape(*ast.v2);
+  context.cave_sketch_shape = false;
   context.segmented_bitplanes = options.segmented_bitplanes;
   context.segmented_line_count_scan = options.segmented_line_count_scan;
   context.stack_resident_temps = options.stack_resident_temps;
@@ -32425,6 +33062,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     context.suppress_constant_preloads.insert(normalize_number_key(value));
   bool exact_decimal_series = false;
   try {
+    trace_stage("ast-passes");
     if (const std::optional<core::emit::lowering::DecimalSeriesProgram> decimal_series =
             core::emit::lowering::match_decimal_series_program(*ast.v2)) {
       exact_decimal_series = true;
@@ -32444,6 +33082,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                 : std::optional<std::vector<std::string>>{options.pack_counter_stripe_names};
         pack_counter_stripes(*ast.v2, context.optimizations, true, requested_names);
       }
+      resolve_constant_indexed_state(*ast.v2, context.optimizations);
       materialize_display_expressions(*ast.v2, context.optimizations,
                                       options.inline_floor_packed_row_expressions);
       elide_x_param_return_state_fields(*ast.v2, context.optimizations);
@@ -32566,22 +33205,32 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       warn_show_halt_style_rule(*ast.v2, result.warnings);
       context.transient_show_targets = transient_show_targets(*ast.v2);
       if (!has_errors(context.diagnostics)) {
+        trace_stage("metadata-registers-preloads");
+        trace_stage("metadata-index-program");
         index_program_metadata(context, *ast.v2);
+        trace_stage("metadata-display-counts");
         collect_literal_display_use_counts(context, *ast.v2);
         collect_packed_display_use_counts(context, *ast.v2);
         collect_show_sequence_use_counts(context, *ast.v2);
         collect_expression_use_counts(context, *ast.v2);
+        trace_stage("metadata-index-rules");
         index_rules(context, *ast.v2);
+        trace_stage("metadata-collect-registers");
         collect_registers(context, *ast.v2);
+        trace_stage("metadata-forced-shares-preloads");
         context.preloaded_indirect_flow =
             program_uses_cells_bit_mask_sugar(context, *ast.v2) && !context.cave_sketch_shape;
         apply_forced_register_shares(context, options.forced_register_shares);
+        trace_stage("metadata-plan-constant-preloads");
         plan_general_constant_preloads(context, *ast.v2, options.startup_aware_constant_preloads,
                                        options.force_fractional_constant_selector_preloads);
+        trace_stage("metadata-plan-spatial-preloads");
         plan_spatial_line_count_preloads(context, *ast.v2);
+        trace_stage("metadata-near-any");
         collect_near_any_helper_stats(context, *ast.v2);
       }
       if (!has_errors(context.diagnostics)) {
+        trace_stage("lower-main-functions-helpers");
         const bool lowered_main = lower_statement_block(context, ast.v2->body);
         if (lowered_main) {
           clear_current_x_facts(context);
@@ -32638,6 +33287,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     pass_options.aggressive_indirect_call_threshold = true;
   merge_planned_preloaded_constant_registers(pass_options, context);
 
+  trace_stage("ir-passes");
   const core::passes::RunPassesResult optimized =
       exact_decimal_series ? core::passes::RunPassesResult{.items = context.emitter.items}
                            : core::passes::run_ir_passes(context.emitter.items, pass_options);
@@ -32656,8 +33306,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     return result;
   }
 
+  trace_stage("post-layout");
   std::vector<MachineItem> post_layout_items = optimized.items;
   std::vector<PreloadReport> setup_preloads;
+  std::vector<PreloadReport> post_layout_flow_preloads;
   std::vector<PreloadReport> stop_tail_preloads;
   std::vector<core::passes::AppliedOptimization> post_layout_optimizations;
 
@@ -32675,11 +33327,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     const int indirect_flow_rescue_above =
         (options.aggressive_post_layout_indirect_flow || options.preloaded_indirect_flow)
             ? 0
-            : kPostLayoutOfficialProgramLimit;
+            : reference_indirect_flow_rescue_above(ast, options);
     const core::PostLayoutIndirectFlowResult post_layout_flow =
         core::optimize_post_layout_indirect_flow(post_layout_items, pass_options,
                                                  indirect_flow_rescue_above);
     post_layout_items = post_layout_flow.items;
+    post_layout_flow_preloads = post_layout_flow.preloads;
     post_layout_optimizations.insert(post_layout_optimizations.end(),
                                      post_layout_flow.optimizations.begin(),
                                      post_layout_flow.optimizations.end());
@@ -32718,6 +33371,20 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     setup_preloads = build_preload_reports(context, *ast.v2, post_layout_items);
   }
 
+  const std::vector<PreloadReport> comment_flow_preloads =
+      preloaded_indirect_flow_comment_preloads(post_layout_items);
+  for (const PreloadReport& preload : comment_flow_preloads) {
+    const bool duplicate =
+        std::any_of(post_layout_flow_preloads.begin(), post_layout_flow_preloads.end(),
+                    [&](const PreloadReport& existing) {
+                      return existing.register_name == preload.register_name;
+                    });
+    if (!duplicate)
+      post_layout_flow_preloads.push_back(preload);
+  }
+  append_missing_preloaded_indirect_flow_comments(post_layout_items, post_layout_flow_preloads);
+
+  trace_stage("resolve");
   result.items = post_layout_items;
   for (const core::passes::AppliedOptimization& optimization : post_layout_optimizations) {
     result.optimizations.push_back(OptimizationReport{
@@ -32748,26 +33415,73 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       setup_program_preloads.push_back(preload);
   };
   for (const PreloadReport& preload : setup_preloads) {
+    if (preload_must_reach_generated_setup_program(preload) ||
+        !preload_register_present(stop_tail_preloads, preload.register_name)) {
+      add_unique_setup_program_preload(preload);
+    }
+  }
+  for (const PreloadReport& preload : optimized.preloads)
+    add_unique_setup_program_preload(preload);
+  for (const PreloadReport& preload : stop_tail_preloads)
+    add_unique_setup_program_preload(preload);
+  for (const PreloadReport& preload : post_layout_flow_preloads) {
     if (!preload_register_present(stop_tail_preloads, preload.register_name))
       add_unique_setup_program_preload(preload);
   }
-  for (const PreloadReport& preload : optimized.preloads)
-    add_unique_setup_program_preload(preload);
-  for (const PreloadReport& preload : stop_tail_preloads)
-    add_unique_setup_program_preload(preload);
 
   for (const PreloadReport& preload : setup_preloads) {
-    if (!preload_register_present(stop_tail_preloads, preload.register_name))
+    if (!preload_is_internal_collection_setup(preload) &&
+        !preload_register_present(stop_tail_preloads, preload.register_name)) {
       add_unique_preload(preload);
+    }
   }
   for (const PreloadReport& preload : optimized.preloads)
     add_unique_preload(preload);
   for (const PreloadReport& preload : stop_tail_preloads)
     add_unique_preload(preload);
+  for (const PreloadReport& preload : post_layout_flow_preloads) {
+    if (!preload_register_present(stop_tail_preloads, preload.register_name))
+      add_unique_preload(preload);
+  }
   result.manual_setup_inputs =
       collect_manual_setup_inputs(*ast.v2, context.registers, result.preloads);
+  auto add_stack_setup_program_preload = [&](const std::string& register_name,
+                                             const std::string& value,
+                                             const std::string& target_name) {
+    add_unique_setup_program_preload(PreloadReport{
+        .register_name = register_name,
+        .value = value,
+        .counts_against_program = false,
+        .setup_target_name = target_name,
+    });
+  };
+  for (const V2StateField& field : ast.v2->state) {
+    if (field.initial_stack.has_value()) {
+      const auto register_it = context.registers.find(field.name);
+      if (register_it != context.registers.end())
+        add_stack_setup_program_preload(register_it->second, "stack." + *field.initial_stack,
+                                        field.name);
+    }
+    if (field.bank.has_value() && field.initial.has_value()) {
+      const int expected = field.bank->max - field.bank->min + 1;
+      if (const std::optional<std::vector<std::string>> values =
+              indexed_initializer_list_values(*field.initial, expected)) {
+        for (int index = field.bank->min; index <= field.bank->max; ++index) {
+          const std::string value = trim_ascii(values->at(static_cast<std::size_t>(
+              index - field.bank->min)));
+          if (value != "stack.X" && value != "stack.Y")
+            continue;
+          const std::string element = state_bank_element_name(field, index);
+          const auto register_it = context.registers.find(element);
+          if (register_it != context.registers.end())
+            add_stack_setup_program_preload(register_it->second, value, element);
+        }
+      }
+    }
+  }
   if (!setup_program_preloads.empty() &&
       needs_generated_setup_program(context, setup_program_preloads)) {
+    trace_stage("setup-program");
     result.setup_program = core::emit::lowering::compile_setup_program_with_preloads(
         context.boards, context.registers, setup_program_preloads, options);
     result.optimizations.push_back(OptimizationReport{
@@ -32844,6 +33558,43 @@ bool candidate_beats_best(const CompileResult& candidate, const CompileResult& b
     return true;
   return candidate.steps.size() == best.steps.size() && best.steps.size() > kOfficialProgramLimit &&
          estimated_startup_program_cost(candidate) < estimated_startup_program_cost(best);
+}
+
+bool is_only_budget_exceeded(const CompileResult& result) {
+  bool saw_budget_error = false;
+  for (const Diagnostic& diagnostic : result.diagnostics) {
+    if (diagnostic.severity != DiagnosticSeverity::Error)
+      continue;
+    if (diagnostic.code != "BUDGET_EXCEEDED")
+      return false;
+    saw_budget_error = true;
+  }
+  return saw_budget_error;
+}
+
+bool can_retry_after_primary_failure(const CompileResult& result) {
+  return std::any_of(result.diagnostics.begin(), result.diagnostics.end(), [](const Diagnostic& d) {
+    return d.severity == DiagnosticSeverity::Error &&
+           (d.message.find("Out of MK-61 registers while allocating") != std::string::npos ||
+            d.code == "BUDGET_EXCEEDED" ||
+            d.message.find("is outside 00..A4") != std::string::npos ||
+            d.message.find("exceeds formal MK-61 address range") != std::string::npos);
+  });
+}
+
+bool can_retry_lowering_attempt_in_analysis(const CompileResult& result,
+                                            const CompileOptions& options) {
+  if (options.analysis)
+    return false;
+  if (is_only_budget_exceeded(result))
+    return true;
+  constexpr std::size_t kDefaultBudget = 105;
+  const std::size_t requested_budget = options.budget.has_value() && *options.budget > 0
+                                           ? static_cast<std::size_t>(*options.budget)
+                                           : kDefaultBudget;
+  if (requested_budget > kDefaultBudget)
+    return false;
+  return can_retry_after_primary_failure(result);
 }
 
 std::string reclaim_base_key(const CompileOptions& options) {
@@ -32954,6 +33705,123 @@ bool source_has_reference_declaration(const std::string& source) {
   return std::regex_search(source, reference_declaration);
 }
 
+std::optional<int> parse_reference_address(const std::string& text) {
+  static const std::regex official(R"(^[0-9]{2}$)");
+  static const std::regex extended(R"(^A([0-4])$)");
+  if (std::regex_match(text, official))
+    return std::stoi(text);
+  std::smatch match;
+  if (std::regex_match(text, match, extended))
+    return 100 + std::stoi(match[1].str());
+  return std::nullopt;
+}
+
+std::optional<int> read_reference_listing_span(const std::filesystem::path& path) {
+  std::ifstream input(path);
+  if (!input)
+    return std::nullopt;
+
+  std::optional<int> max_address;
+  std::string line;
+  while (std::getline(input, line)) {
+    line = trim_ascii(line);
+    if (line.empty())
+      continue;
+    std::istringstream parts(line);
+    std::string address_text;
+    parts >> address_text;
+    const std::optional<int> address = parse_reference_address(address_text);
+    if (!address.has_value())
+      continue;
+    max_address = max_address.has_value() ? std::max(*max_address, *address) : *address;
+  }
+  return max_address.has_value() ? std::optional<int>{*max_address + 1} : std::nullopt;
+}
+
+std::optional<std::filesystem::path> find_repo_root() {
+  std::filesystem::path current = std::filesystem::current_path();
+  for (int depth = 0; depth < 8; ++depth) {
+    if (std::filesystem::exists(current / "package.json") &&
+        std::filesystem::exists(current / "games")) {
+      return current;
+    }
+    const std::filesystem::path parent = current.parent_path();
+    if (parent == current)
+      break;
+    current = parent;
+  }
+  return std::nullopt;
+}
+
+std::vector<std::string> split_tab_row(const std::string& row) {
+  std::vector<std::string> cells;
+  std::string cell;
+  std::istringstream input(row);
+  while (std::getline(input, cell, '\t'))
+    cells.push_back(cell);
+  return cells;
+}
+
+std::optional<int> resolve_reference_span(const std::string& reference_name) {
+  static const std::regex reference_pattern(R"(^([A-Za-z0-9]+)_(.+)$)");
+  std::smatch match;
+  if (!std::regex_match(reference_name, match, reference_pattern))
+    return std::nullopt;
+
+  std::string slug = match[2].str();
+  std::replace(slug.begin(), slug.end(), '_', '-');
+  std::string program_file = slug + ".txt";
+
+  const std::optional<std::filesystem::path> repo_root = find_repo_root();
+  if (!repo_root.has_value())
+    return std::nullopt;
+  const std::filesystem::path games_dir = *repo_root / "games";
+  const std::filesystem::path manifest_path = games_dir / "manifest.tsv";
+
+  if (std::filesystem::exists(manifest_path)) {
+    std::ifstream manifest(manifest_path);
+    std::string row;
+    bool first = true;
+    const std::string reference_source_id = lower_ascii(slug);
+    while (std::getline(manifest, row)) {
+      if (first) {
+        first = false;
+        continue;
+      }
+      const std::vector<std::string> cells = split_tab_row(row);
+      if (cells.empty())
+        continue;
+      const std::string program = trim_ascii(cells.front());
+      const std::string source = cells.size() > 4U ? lower_ascii(trim_ascii(cells.at(4))) : "";
+      static const std::regex source_pattern(R"(/(pmk\d+)\.html(?:[#?].*)?$)");
+      std::smatch source_match;
+      const bool source_matches = std::regex_search(source, source_match, source_pattern) &&
+                                  source_match[1].str() == reference_source_id;
+      if (program == program_file || source_matches) {
+        program_file = program;
+        break;
+      }
+    }
+  }
+
+  const std::filesystem::path program_path = games_dir / program_file;
+  if (!std::filesystem::exists(program_path))
+    return std::nullopt;
+  return read_reference_listing_span(program_path);
+}
+
+int reference_indirect_flow_rescue_above(const ProgramAst& ast, const CompileOptions& options) {
+  constexpr int kPostLayoutOfficialProgramLimit = 105;
+  if (!ast.reference.has_value())
+    return kPostLayoutOfficialProgramLimit;
+  const std::optional<int> span = resolve_reference_span(*ast.reference);
+  if (!span.has_value())
+    return kPostLayoutOfficialProgramLimit;
+  const int budget = options.budget.has_value() && *options.budget > 0 ? *options.budget
+                                                                       : kPostLayoutOfficialProgramLimit;
+  return std::min(*span, budget);
+}
+
 bool source_has_multiple_procs(const std::string& source) {
   static const std::regex function_declaration(R"(\bfn\b)");
   return std::distance(std::sregex_iterator(source.begin(), source.end(), function_declaration),
@@ -33040,7 +33908,7 @@ std::string normalize_constant_literal(std::string raw) {
     std::size_t parsed = 0;
     const long double value = std::stold(raw, &parsed);
     if (parsed == raw.size() && std::isfinite(static_cast<double>(value)))
-      return format_number_literal(static_cast<double>(value));
+      return js_number_string(value);
   } catch (const std::exception&) {
   }
   return raw;
@@ -33090,6 +33958,140 @@ demotable_indirect_flow_preload_values(const CompileResult& result,
   if (values.size() > kMaxDemotedIndirectFlowValues)
     values.resize(kMaxDemotedIndirectFlowValues);
   return values;
+}
+
+std::string indirect_flow_selector_digit(int value) {
+  if (value < 10)
+    return std::to_string(value);
+  return std::string(1, static_cast<char>('A' + value - 10));
+}
+
+std::string indirect_flow_formal_selector(int ordinal) {
+  return indirect_flow_selector_digit(ordinal / 10) + indirect_flow_selector_digit(ordinal % 10);
+}
+
+std::optional<std::string> indirect_flow_selector_for_actual_target(int target) {
+  if (target < 0 || target > 104)
+    return std::nullopt;
+  if (target <= 47)
+    return indirect_flow_formal_selector(target + 112);
+  if (target <= 99)
+    return std::to_string(target / 10) + std::to_string(target % 10);
+  return "A" + std::to_string(target - 100);
+}
+
+std::optional<std::string> indirect_register_from_opcode(int opcode) {
+  const int offset = opcode & 0x0f;
+  if (offset > 14)
+    return std::nullopt;
+  const int base = opcode - offset;
+  if (base != 0x70 && base != 0x80 && base != 0x90 && base != 0xa0 && base != 0xc0 &&
+      base != 0xe0) {
+    return std::nullopt;
+  }
+  return core::register_name_for_index(offset);
+}
+
+std::vector<PreloadReport>
+preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items) {
+  static const std::regex preload_pattern(
+      R"(preloaded R([0-9a-e])=[^\s;]+ indirect-target=(\d+))",
+      std::regex_constants::icase);
+
+  std::vector<PreloadReport> preloads;
+  for (const MachineItem& item : items) {
+    if (item.kind != MachineItemKind::Op || !item.comment.has_value())
+      continue;
+    std::smatch match;
+    const std::string& comment = *item.comment;
+    if (!std::regex_search(comment, match, preload_pattern))
+      continue;
+
+    const std::string register_name = register_from_text(match[1].str());
+    const std::optional<std::string> opcode_register = indirect_register_from_opcode(item.opcode);
+    if (!opcode_register.has_value() || *opcode_register != register_name)
+      continue;
+    int target = 0;
+    const std::string target_text = match[2].str();
+    const auto [ptr, ec] =
+        std::from_chars(target_text.data(), target_text.data() + target_text.size(), target);
+    if (ec != std::errc{} || ptr != target_text.data() + target_text.size())
+      continue;
+
+    const std::optional<std::string> selector =
+        indirect_flow_selector_for_actual_target(target);
+    if (!selector.has_value())
+      continue;
+    const bool duplicate =
+        std::any_of(preloads.begin(), preloads.end(), [&](const PreloadReport& preload) {
+          return preload.register_name == register_name;
+        });
+    if (duplicate)
+      continue;
+    preloads.push_back(PreloadReport{
+        .register_name = register_name,
+        .value = *selector,
+        .counts_against_program = false,
+    });
+  }
+  std::sort(preloads.begin(), preloads.end(), [](const PreloadReport& left,
+                                                 const PreloadReport& right) {
+    return register_index(left.register_name) < register_index(right.register_name);
+  });
+  return preloads;
+}
+
+void append_missing_preloaded_indirect_flow_comments(
+    std::vector<MachineItem>& items, const std::vector<PreloadReport>& preloads) {
+  std::map<std::string, std::string> selector_by_register;
+  for (const PreloadReport& preload : preloads)
+    selector_by_register[preload.register_name] = preload.value;
+
+  int address = 0;
+  for (MachineItem& item : items) {
+    if (item.kind == MachineItemKind::Label)
+      continue;
+    if (item.kind != MachineItemKind::Op) {
+      ++address;
+      continue;
+    }
+
+    const std::optional<std::string> register_name = indirect_register_from_opcode(item.opcode);
+    if (!register_name.has_value()) {
+      ++address;
+      continue;
+    }
+    const auto selector_it = selector_by_register.find(*register_name);
+    if (selector_it == selector_by_register.end()) {
+      ++address;
+      continue;
+    }
+    const std::string existing = item.comment.value_or("");
+    if (existing.find("reuse stop tail at") != std::string::npos ||
+        existing.find("reused stop tail at") != std::string::npos) {
+      ++address;
+      continue;
+    }
+    if (existing.find("preloaded R") != std::string::npos) {
+      ++address;
+      continue;
+    }
+    const std::optional<core::IndirectAddressEvaluation> decoded =
+        core::evaluate_indirect_address(*register_name, selector_it->second,
+                                        core::IndirectOperationKind::Flow);
+    if (!decoded.has_value() || !decoded->actual_flow_target.has_value()) {
+      ++address;
+      continue;
+    }
+    const int target = *decoded->actual_flow_target;
+    std::string suffix = "preloaded R" + *register_name + "=" + selector_it->second +
+                         " indirect-target=" + std::to_string(target);
+    if (target > address)
+      suffix += " shifted-forward";
+    suffix += " indirect flow";
+    item.comment = existing.empty() ? suffix : existing + "; " + suffix;
+    ++address;
+  }
 }
 
 struct FractionalConstantSelectorSource {
@@ -33276,6 +34278,11 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     if (cached != once_cache.end())
       return cached->second;
     CompileResult result = compile_source_once(source, compile_options);
+    if (!result.implemented && can_retry_lowering_attempt_in_analysis(result, compile_options)) {
+      CompileOptions analysis_options = compile_options;
+      analysis_options.analysis = true;
+      result = compile_source_once(source, analysis_options);
+    }
     once_cache.emplace(key, result);
     return result;
   };
@@ -33367,7 +34374,12 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   auto evaluate_queued_candidates = [&]() {
     for (; evaluated_candidate_count < candidates.size(); ++evaluated_candidate_count) {
       const CandidateSpec& candidate = candidates.at(evaluated_candidate_count);
-      CompileResult result = cached_compile_source_once(candidate.options);
+      CompileResult result;
+      try {
+        result = cached_compile_source_once(candidate.options);
+      } catch (const std::exception&) {
+        continue;
+      }
       if (!candidate_beats_best(result, best))
         continue;
       const std::string comparison = best.implemented
@@ -34639,7 +35651,12 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     CompileOptions probe_options = base_options;
     probe_options.analysis = true;
     probe_options.collect_coalesce_shares = true;
-    CompileResult probe = cached_compile_source_once(probe_options);
+    CompileResult probe;
+    try {
+      probe = cached_compile_source_once(probe_options);
+    } catch (const std::exception&) {
+      return;
+    }
     if (!probe.implemented || probe.coalesce_shares.empty())
       return;
 

@@ -1028,7 +1028,6 @@ MergeDuplicateSelectorsResult merge_duplicate_selectors(const std::vector<Machin
     const std::string target_register = remap_it->second;
     op.opcode = op.opcode - register_index(op.register_name) + register_index(target_register);
     op.register_name = target_register;
-    op.meta.mnemonic = indirect_branch_mnemonic(op.opcode, target_register);
   }
 
   return MergeDuplicateSelectorsResult{

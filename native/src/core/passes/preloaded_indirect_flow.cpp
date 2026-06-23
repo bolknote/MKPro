@@ -506,8 +506,6 @@ IrPass runtime_indirect_call_flow_pass() {
 PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
                                        const PassContext& context,
                                        const IndirectFlowOptions& flow_options) {
-  if (!context.options.preloaded_indirect_flow)
-    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
   const std::set<std::string> reserved =
       reserved_preloaded_registers(context.options.preloaded_constant_registers);
   std::vector<std::string> registers = spare_stable_registers(ops, reserved);

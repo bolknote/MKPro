@@ -68,6 +68,7 @@ bool items_match_formatted_coord_report_shape(const std::vector<DisplayItem>& it
 bool program_uses_formatted_coord_report(const V2Program& program);
 bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                                     const std::vector<DisplayItem>& items,
+                                                    const std::string& display_name,
                                                     int source_line);
 
 } // namespace mkpro::core::emit

@@ -354,7 +354,7 @@ std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, Lowering
     }
     if (!api.lower_expression_to_x(*expression.expr))
       return false;
-    api.emitter.emit_op(0x0b, "/-/", "expr unary -");
+    api.emitter.emit_op(0x0b, "/-/", "unary minus");
     return true;
   }
 

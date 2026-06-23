@@ -232,7 +232,7 @@ void expression_lowering_helpers_match_typescript_contract() {
             "unary minus should recall operand and emit sign change");
     require(harness.context.emitter.items.back().opcode == 0x0b,
             "unary minus should emit sign-change opcode");
-    require(harness.context.emitter.items.back().comment == "expr unary -",
+    require(harness.context.emitter.items.back().comment == "unary minus",
             "unary minus should preserve comment");
   }
 

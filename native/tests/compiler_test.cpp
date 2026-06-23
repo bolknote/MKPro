@@ -2044,7 +2044,7 @@ program XParamStackStopRisk {
           "single-use X-parameter stack-stop-risk should report show/read lowering");
   require(has_optimization(x_param_stack_stop, "x-param-stack-stop-risk-inline"),
           "single-use X-parameter stack-stop-risk should inline the helper");
-  require(x_param_stack_stop.listing.find("x-param keep displayed value") != std::string::npos,
+  require(x_param_stack_stop.listing.find("x-param inline keep displayed value") != std::string::npos,
           "X-parameter stack-stop-risk lowering should park the displayed value in Y");
   require(x_param_stack_stop.listing.find("risk input read()") != std::string::npos,
           "X-parameter stack-stop-risk lowering should consume read() directly from X");

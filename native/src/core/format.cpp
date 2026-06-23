@@ -506,8 +506,10 @@ std::string to_keycaps(std::string mnemonic) {
     return "÷";
   if (mnemonic == "-")
     return "−";
-  if (mnemonic == "<->" || mnemonic == "X↔Y" || mnemonic == "X<->Y")
+  if (mnemonic == "<->")
     return "↔";
+  if (mnemonic == "X<->Y")
+    return "X↔Y";
   if (mnemonic == "F pi")
     return "F π";
   if (mnemonic == "F sqrt")

@@ -3,14 +3,18 @@
 #include "mkpro/core/emit/lowering_helpers.hpp"
 #include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/parser.hpp"
+#include "mkpro/core/state_banks.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <exception>
+#include <iomanip>
+#include <limits>
 #include <map>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -217,7 +221,7 @@ bool emit_setup_display_exponent(MachineEmitter& setup, int exponent, std::strin
 }
 
 void emit_setup_first_digit_splice(MachineEmitter& setup, std::string comment) {
-  setup.emit_op(0x14, "X↔Y", comment, std::nullopt, true);
+  setup.emit_op(0x14, "<->", comment, std::nullopt, true);
   setup.emit_op(0x54, "К НОП", comment, std::nullopt, true);
   setup.emit_op(0x0c, "ВП", std::move(comment), std::nullopt, true);
 }
@@ -504,6 +508,15 @@ std::string setup_store_comment(const PreloadReport& preload) {
   return "setup " + setup_target_name(preload);
 }
 
+bool is_formatted_coord_report_mask_preload(const PreloadReport& preload) {
+  return !preload.setup_expression && preload.value == "8,-00--_";
+}
+
+std::string setup_display_literal_comment(const PreloadReport& preload) {
+  return is_formatted_coord_report_mask_preload(preload) ? "setup formatted report mask"
+                                                         : setup_store_comment(preload);
+}
+
 void emit_setup_recall(MachineEmitter& setup, const std::string& register_name,
                        std::string comment) {
   const int reg_index = register_index(register_name);
@@ -580,6 +593,484 @@ setup_binary_call_opcode(const std::string& callee) {
   const auto it = opcodes.find(lower_ascii(callee));
   return it == opcodes.end() ? std::nullopt
                              : std::optional<std::pair<int, std::string>>{it->second};
+}
+
+struct NumericSetupPreload {
+  std::size_t preload_index = 0;
+  std::string register_name;
+  std::string value;
+};
+
+struct SetupSequenceOp {
+  int opcode = 0;
+  std::string mnemonic;
+  std::string comment;
+};
+
+struct SetupNumericPreloadAction {
+  std::string kind;
+  int target_index = 0;
+  int cost = 0;
+  std::vector<int> extra_target_indexes;
+  int source_index = -1;
+  int left_index = -1;
+  int right_index = -1;
+  int opcode = 0;
+  std::string mnemonic;
+  std::vector<SetupSequenceOp> ops;
+  std::string op;
+  std::string exponent;
+  std::string detail;
+};
+
+int setup_number_entry_cost(const std::string& value) {
+  MachineEmitter estimator;
+  estimator.emit_number(value);
+  return static_cast<int>(estimator.items.size());
+}
+
+std::string js_number_string(double value) {
+  if (std::isfinite(value) && std::floor(value) == value) {
+    const long long integer = static_cast<long long>(value);
+    if (static_cast<double>(integer) == value)
+      return std::to_string(integer);
+  }
+  std::ostringstream out;
+  const double abs_value = std::fabs(value);
+  if (abs_value >= 1e-6 && abs_value < 1e21) {
+    out << std::fixed << std::setprecision(15) << value;
+  } else {
+    out << std::scientific << std::setprecision(15) << value;
+  }
+  std::string text = out.str();
+  const std::size_t exponent = text.find('e');
+  std::string suffix;
+  if (exponent != std::string::npos) {
+    suffix = text.substr(exponent + 1U);
+    text.erase(exponent);
+  }
+  if (text.find('.') != std::string::npos) {
+    while (!text.empty() && text.back() == '0')
+      text.pop_back();
+    if (!text.empty() && text.back() == '.')
+      text.pop_back();
+  }
+  if (!suffix.empty()) {
+    char sign = '+';
+    if (suffix.front() == '+' || suffix.front() == '-') {
+      sign = suffix.front();
+      suffix.erase(suffix.begin());
+    }
+    while (suffix.size() > 1U && suffix.front() == '0')
+      suffix.erase(suffix.begin());
+    text += "e";
+    if (sign == '-')
+      text += "-";
+    text += suffix;
+  }
+  return text.empty() ? "0" : text;
+}
+
+std::optional<int> positive_integer_power_of_ten_exponent(const std::string& value) {
+  std::string normalized = normalize_setup_constant_text(value);
+  if (normalized.empty() || normalized.front() == '-')
+    return std::nullopt;
+  if (normalized == "1")
+    return 0;
+  if (normalized.front() != '1')
+    return std::nullopt;
+  for (std::size_t index = 1; index < normalized.size(); ++index) {
+    if (normalized.at(index) != '0')
+      return std::nullopt;
+  }
+  return static_cast<int>(normalized.size() - 1U);
+}
+
+void emit_setup_number_or_pow10(MachineEmitter& setup, const std::string& value,
+                                std::string comment) {
+  if (const std::optional<int> exponent = positive_integer_power_of_ten_exponent(value)) {
+    const std::string exponent_text = std::to_string(*exponent);
+    if (setup_number_entry_cost(exponent_text) + 1 < setup_number_entry_cost(value)) {
+      setup.emit_number(exponent_text);
+      setup.emit_op(0x15, "F 10^x", std::move(comment), std::nullopt, true);
+      return;
+    }
+  }
+  setup.emit_number(value);
+}
+
+std::vector<int> setup_numeric_action_target_indexes(const SetupNumericPreloadAction& action) {
+  std::vector<int> indexes{action.target_index};
+  indexes.insert(indexes.end(), action.extra_target_indexes.begin(),
+                 action.extra_target_indexes.end());
+  return indexes;
+}
+
+SetupNumericPreloadAction with_duplicate_setup_targets(SetupNumericPreloadAction action,
+                                                       const std::vector<std::string>& normalized,
+                                                       int loaded_mask) {
+  const std::string& value = normalized.at(static_cast<std::size_t>(action.target_index));
+  for (std::size_t index = static_cast<std::size_t>(action.target_index) + 1U;
+       index < normalized.size(); ++index) {
+    if ((loaded_mask & (1 << static_cast<int>(index))) != 0)
+      continue;
+    if (normalized.at(index) == value)
+      action.extra_target_indexes.push_back(static_cast<int>(index));
+  }
+  return action;
+}
+
+std::vector<SetupNumericPreloadAction>
+setup_constant_synthesis_actions(const std::vector<NumericSetupPreload>& preloads,
+                                 const std::vector<std::string>& normalized,
+                                 const std::vector<double>& numeric,
+                                 const std::vector<int>& direct_costs, int loaded_mask,
+                                 int target_index) {
+  const double target = numeric.at(static_cast<std::size_t>(target_index));
+  if (!std::isfinite(target))
+    return {};
+  const std::string& target_value = normalized.at(static_cast<std::size_t>(target_index));
+  const int direct_cost = direct_costs.at(static_cast<std::size_t>(target_index));
+  std::vector<SetupNumericPreloadAction> actions;
+  auto accept = [&](SetupNumericPreloadAction action) {
+    if (action.cost < direct_cost)
+      actions.push_back(std::move(action));
+  };
+
+  std::vector<int> loaded_indexes;
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if ((loaded_mask & (1 << static_cast<int>(index))) != 0)
+      loaded_indexes.push_back(static_cast<int>(index));
+  }
+
+  const std::string negated = normalize_setup_constant_text(js_number_string(-target));
+  const auto negated_it =
+      std::find_if(loaded_indexes.begin(), loaded_indexes.end(), [&](int index) {
+        return normalized.at(static_cast<std::size_t>(index)) == negated;
+      });
+  if (negated_it != loaded_indexes.end()) {
+    const int source_index = *negated_it;
+    accept(SetupNumericPreloadAction{
+        .kind = "unary",
+        .target_index = target_index,
+        .cost = 2,
+        .source_index = source_index,
+        .opcode = 0x0b,
+        .mnemonic = "/-/",
+        .detail = "changed the sign of setup R" +
+                  preloads.at(static_cast<std::size_t>(source_index)).register_name + " (" +
+                  normalized.at(static_cast<std::size_t>(source_index)) + ")",
+    });
+  }
+
+  if (std::floor(target) == target && target >= 0.0) {
+    for (const int source_index : loaded_indexes) {
+      const double source = numeric.at(static_cast<std::size_t>(source_index));
+      if (std::floor(source) != source)
+        continue;
+      const double squared = source * source;
+      if (std::floor(squared) != squared)
+        continue;
+      if (normalize_setup_constant_text(js_number_string(squared)) != target_value)
+        continue;
+      accept(SetupNumericPreloadAction{
+          .kind = "unary",
+          .target_index = target_index,
+          .cost = 2,
+          .source_index = source_index,
+          .opcode = 0x22,
+          .mnemonic = "F x^2",
+          .detail = "squared setup R" +
+                    preloads.at(static_cast<std::size_t>(source_index)).register_name + " (" +
+                    normalized.at(static_cast<std::size_t>(source_index)) + ")",
+      });
+    }
+  }
+
+  for (const int source_index : loaded_indexes) {
+    const double source = numeric.at(static_cast<std::size_t>(source_index));
+    if (std::floor(source) != source)
+      continue;
+    const double doubled = source * 2.0;
+    if (std::floor(doubled) == doubled &&
+        normalize_setup_constant_text(js_number_string(doubled)) == target_value) {
+      accept(SetupNumericPreloadAction{
+          .kind = "unary-sequence",
+          .target_index = target_index,
+          .cost = 3,
+          .source_index = source_index,
+          .ops = {SetupSequenceOp{.opcode = 0x0e, .mnemonic = "В↑", .comment = "stack"},
+                  SetupSequenceOp{.opcode = 0x10, .mnemonic = "+", .comment = ""}},
+          .detail = "doubled setup R" +
+                    preloads.at(static_cast<std::size_t>(source_index)).register_name + " (" +
+                    normalized.at(static_cast<std::size_t>(source_index)) + ")",
+      });
+    }
+    if (std::fmod(source, 2.0) == 0.0) {
+      const double half = source / 2.0;
+      if (std::floor(half) == half &&
+          normalize_setup_constant_text(js_number_string(half)) == target_value) {
+        accept(SetupNumericPreloadAction{
+            .kind = "unary-sequence",
+            .target_index = target_index,
+            .cost = 3,
+            .source_index = source_index,
+            .ops = {SetupSequenceOp{.opcode = 0x02, .mnemonic = "2", .comment = "divisor"},
+                    SetupSequenceOp{.opcode = 0x13, .mnemonic = "/", .comment = ""}},
+            .detail = "halved setup R" +
+                      preloads.at(static_cast<std::size_t>(source_index)).register_name + " (" +
+                      normalized.at(static_cast<std::size_t>(source_index)) + ")",
+        });
+      }
+    }
+  }
+
+  for (const int left_index : loaded_indexes) {
+    const double left = numeric.at(static_cast<std::size_t>(left_index));
+    if (std::floor(left) != left)
+      continue;
+    for (const int right_index : loaded_indexes) {
+      const double right = numeric.at(static_cast<std::size_t>(right_index));
+      if (std::floor(right) != right)
+        continue;
+      std::vector<std::pair<std::string, double>> candidates = {
+          {"+", left + right},
+          {"-", left - right},
+          {"*", left * right},
+      };
+      if (right != 0.0 && std::fmod(left, right) == 0.0)
+        candidates.push_back({"/", left / right});
+      if (left > 0.0 && right >= 0.0 && right <= 12.0)
+        candidates.push_back({"pow", std::pow(left, right)});
+      for (const auto& [op, value] : candidates) {
+        if (!std::isfinite(value) || std::floor(value) != value)
+          continue;
+        if (normalize_setup_constant_text(js_number_string(value)) != target_value)
+          continue;
+        accept(SetupNumericPreloadAction{
+            .kind = "binary",
+            .target_index = target_index,
+            .cost = 4,
+            .left_index = left_index,
+            .right_index = right_index,
+            .op = op,
+            .detail = "combined setup R" +
+                      preloads.at(static_cast<std::size_t>(left_index)).register_name + " (" +
+                      normalized.at(static_cast<std::size_t>(left_index)) + ") and R" +
+                      preloads.at(static_cast<std::size_t>(right_index)).register_name + " (" +
+                      normalized.at(static_cast<std::size_t>(right_index)) + ") with " +
+                      (op == "pow" ? "F x^y" : op),
+        });
+      }
+    }
+  }
+
+  if (const std::optional<int> exponent = positive_integer_power_of_ten_exponent(target_value)) {
+    accept(SetupNumericPreloadAction{
+        .kind = "pow10",
+        .target_index = target_index,
+        .cost = setup_number_entry_cost(std::to_string(*exponent)) + 1,
+        .exponent = std::to_string(*exponent),
+        .detail = "loaded exponent " + std::to_string(*exponent) + " and applied F 10^x",
+    });
+  }
+  return actions;
+}
+
+std::vector<SetupNumericPreloadAction>
+direct_setup_numeric_preload_actions(const std::vector<NumericSetupPreload>& preloads) {
+  std::vector<std::string> normalized;
+  normalized.reserve(preloads.size());
+  for (const NumericSetupPreload& preload : preloads)
+    normalized.push_back(normalize_setup_constant_text(preload.value));
+
+  std::set<int> covered;
+  std::vector<SetupNumericPreloadAction> actions;
+  for (std::size_t target_index = 0; target_index < preloads.size(); ++target_index) {
+    if (covered.contains(static_cast<int>(target_index)))
+      continue;
+    SetupNumericPreloadAction action{
+        .kind = "direct",
+        .target_index = static_cast<int>(target_index),
+        .cost = setup_number_entry_cost(preloads.at(target_index).value),
+    };
+    const std::string& value = normalized.at(target_index);
+    for (std::size_t index = target_index + 1U; index < preloads.size(); ++index) {
+      if (!covered.contains(static_cast<int>(index)) && normalized.at(index) == value)
+        action.extra_target_indexes.push_back(static_cast<int>(index));
+    }
+    for (const int index : setup_numeric_action_target_indexes(action))
+      covered.insert(index);
+    actions.push_back(std::move(action));
+  }
+  return actions;
+}
+
+std::vector<SetupNumericPreloadAction>
+setup_numeric_preload_actions(const std::vector<NumericSetupPreload>& preloads) {
+  std::string cache_key;
+  for (const NumericSetupPreload& preload : preloads) {
+    cache_key += preload.register_name;
+    cache_key += '=';
+    cache_key += preload.value;
+    cache_key += ';';
+  }
+  static thread_local std::map<std::string, std::vector<SetupNumericPreloadAction>> cache;
+  if (const auto cached = cache.find(cache_key); cached != cache.end())
+    return cached->second;
+
+  constexpr std::size_t kMaxExactSetupConstantSynthesisPreloads = 10;
+  const int count = static_cast<int>(preloads.size());
+  if (count == 0)
+    return {};
+  if (preloads.size() > kMaxExactSetupConstantSynthesisPreloads) {
+    std::vector<SetupNumericPreloadAction> direct = direct_setup_numeric_preload_actions(preloads);
+    cache.emplace(std::move(cache_key), direct);
+    return direct;
+  }
+
+  std::vector<std::string> normalized;
+  std::vector<double> numeric;
+  std::vector<int> direct_costs;
+  normalized.reserve(preloads.size());
+  numeric.reserve(preloads.size());
+  direct_costs.reserve(preloads.size());
+  for (const NumericSetupPreload& preload : preloads) {
+    const std::string normalized_value = normalize_setup_constant_text(preload.value);
+    normalized.push_back(normalized_value);
+    try {
+      numeric.push_back(std::stod(normalized_value));
+    } catch (const std::exception&) {
+      numeric.push_back(std::numeric_limits<double>::quiet_NaN());
+    }
+    direct_costs.push_back(setup_number_entry_cost(preload.value));
+  }
+
+  const int full_mask = (1 << count) - 1;
+  std::vector<int> best(static_cast<std::size_t>(full_mask + 1),
+                        std::numeric_limits<int>::max() / 4);
+  struct PreviousStep {
+    int mask = 0;
+    SetupNumericPreloadAction action;
+    bool present = false;
+  };
+  std::vector<PreviousStep> previous(static_cast<std::size_t>(full_mask + 1));
+  best.at(0) = 0;
+
+  auto apply = [&](int mask, SetupNumericPreloadAction action) {
+    const std::vector<int> targets = setup_numeric_action_target_indexes(action);
+    if (std::any_of(targets.begin(), targets.end(),
+                    [&](int target) { return (mask & (1 << target)) != 0; })) {
+      return;
+    }
+    int next_mask = mask;
+    for (const int target : targets)
+      next_mask |= 1 << target;
+    const int next_cost = best.at(static_cast<std::size_t>(mask)) + action.cost;
+    if (next_cost >= best.at(static_cast<std::size_t>(next_mask)))
+      return;
+    best.at(static_cast<std::size_t>(next_mask)) = next_cost;
+    previous.at(static_cast<std::size_t>(next_mask)) =
+        PreviousStep{.mask = mask, .action = std::move(action), .present = true};
+  };
+
+  for (int mask = 0; mask <= full_mask; ++mask) {
+    if (best.at(static_cast<std::size_t>(mask)) >= std::numeric_limits<int>::max() / 8)
+      continue;
+    for (int target_index = 0; target_index < count; ++target_index) {
+      if ((mask & (1 << target_index)) != 0)
+        continue;
+      apply(mask, with_duplicate_setup_targets(
+                      SetupNumericPreloadAction{
+                          .kind = "direct",
+                          .target_index = target_index,
+                          .cost = direct_costs.at(static_cast<std::size_t>(target_index)),
+                      },
+                      normalized, mask));
+      for (SetupNumericPreloadAction action : setup_constant_synthesis_actions(
+               preloads, normalized, numeric, direct_costs, mask, target_index)) {
+        apply(mask, with_duplicate_setup_targets(std::move(action), normalized, mask));
+      }
+    }
+  }
+
+  if (best.at(static_cast<std::size_t>(full_mask)) >= std::numeric_limits<int>::max() / 8) {
+    std::vector<SetupNumericPreloadAction> direct = direct_setup_numeric_preload_actions(preloads);
+    cache.emplace(std::move(cache_key), direct);
+    return direct;
+  }
+
+  std::vector<SetupNumericPreloadAction> actions;
+  for (int mask = full_mask; mask != 0;) {
+    const PreviousStep& step = previous.at(static_cast<std::size_t>(mask));
+    if (!step.present)
+      break;
+    actions.push_back(step.action);
+    mask = step.mask;
+  }
+  std::reverse(actions.begin(), actions.end());
+  cache.emplace(std::move(cache_key), actions);
+  return actions;
+}
+
+void emit_setup_numeric_preload_action(MachineEmitter& setup,
+                                       std::vector<OptimizationReport>& optimizations,
+                                       const std::vector<NumericSetupPreload>& preloads,
+                                       const SetupNumericPreloadAction& action) {
+  const NumericSetupPreload& target = preloads.at(static_cast<std::size_t>(action.target_index));
+  const std::string target_value = normalize_setup_constant_text(target.value);
+  if (action.kind == "direct") {
+    setup.emit_number(target.value);
+    return;
+  }
+  if (action.kind == "pow10") {
+    setup.emit_number(action.exponent);
+    setup.emit_op(0x15, "F 10^x", "setup constant " + target_value, std::nullopt, true);
+  } else if (action.kind == "unary") {
+    const NumericSetupPreload& source =
+        preloads.at(static_cast<std::size_t>(action.source_index));
+    emit_setup_recall(setup, source.register_name,
+                      "setup constant " + target_value + " base " +
+                          normalize_setup_constant_text(source.value));
+    setup.emit_op(action.opcode, action.mnemonic, "setup constant " + target_value,
+                  std::nullopt, true);
+  } else if (action.kind == "unary-sequence") {
+    const NumericSetupPreload& source =
+        preloads.at(static_cast<std::size_t>(action.source_index));
+    emit_setup_recall(setup, source.register_name,
+                      "setup constant " + target_value + " base " +
+                          normalize_setup_constant_text(source.value));
+    for (const SetupSequenceOp& op : action.ops) {
+      const std::string comment = op.comment.empty() ? "setup constant " + target_value
+                                                     : "setup constant " + target_value + " " +
+                                                           op.comment;
+      setup.emit_op(op.opcode, op.mnemonic, comment, std::nullopt, true);
+    }
+  } else {
+    const NumericSetupPreload& left = preloads.at(static_cast<std::size_t>(action.left_index));
+    const NumericSetupPreload& right = preloads.at(static_cast<std::size_t>(action.right_index));
+    emit_setup_recall(setup, left.register_name,
+                      "setup constant " + target_value + " left " +
+                          normalize_setup_constant_text(left.value));
+    setup.emit_op(0x0e, "В↑", "setup constant " + target_value + " stack", std::nullopt,
+                  true);
+    emit_setup_recall(setup, right.register_name,
+                      "setup constant " + target_value + " right " +
+                          normalize_setup_constant_text(right.value));
+    if (action.op == "pow") {
+      setup.emit_op(0x24, "F x^y", "setup constant " + target_value, std::nullopt, true);
+    } else if (const std::optional<std::pair<int, std::string>> opcode =
+                   setup_binary_opcode(action.op)) {
+      setup.emit_op(opcode->first, opcode->second, "setup constant " + target_value,
+                    std::nullopt, true);
+    }
+  }
+  optimizations.push_back(OptimizationReport{
+      .name = "constant-synthesis",
+      .detail = "Built setup constant " + target_value + " by " + action.detail + " (" +
+                std::to_string(action.cost) + " cells instead of direct " +
+                std::to_string(setup_number_entry_cost(target.value)) + ").",
+  });
 }
 
 bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expression);
@@ -748,7 +1239,7 @@ void emit_segmented_bitplane_random_candidate_setup(MachineEmitter& setup,
   setup.emit_op(0x12, "*", "segmented bitplane next random seed", std::nullopt, true);
   setup.emit_op(0x35, "К {x}", "segmented bitplane random seed fraction", std::nullopt, true);
   emit_setup_store(setup, seed_register, "segmented bitplane random seed");
-  setup.emit_number("100");
+  emit_setup_number_or_pow10(setup, "100", "constant 100");
   setup.emit_op(0x12, "*", "segmented bitplane random scaled seed", std::nullopt, true);
   setup.emit_op(0x34, "К [x]", "segmented bitplane random flat index", std::nullopt, true);
   emit_setup_store(setup, index_register, "segmented bitplane random candidate");
@@ -882,7 +1373,8 @@ void emit_random_unique_candidate_setup(MachineEmitter& setup, const V2Board& bo
   setup.emit_op(0x12, "*", "random coord next seed", std::nullopt, true);
   setup.emit_op(0x35, "К {x}", "random coord seed fraction", std::nullopt, true);
   emit_setup_store(setup, seed_register, "random coord seed");
-  setup.emit_number(std::to_string(board_cell_count(board)));
+  const std::string cell_count = std::to_string(board_cell_count(board));
+  emit_setup_number_or_pow10(setup, cell_count, "constant " + cell_count);
   setup.emit_op(0x12, "*", "random coord scaled seed", std::nullopt, true);
   setup.emit_op(0x34, "К [x]", "random coord flat index", std::nullopt, true);
   if (scaled_decimal && board.x_min == 0 && board.x_max == 9 && board.y_min == 0 &&
@@ -1136,6 +1628,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   std::vector<OptimizationReport> optimizations;
   std::set<std::size_t> consumed;
   bool setup_r0_dirty = false;
+  bool initialized_random_coord_list = false;
+  bool initialized_segmented_bitplanes = false;
   const bool r0_needs_non_numeric_restore =
       std::any_of(preloads.begin(), preloads.end(), [](const PreloadReport& preload) {
         return preload.register_name == "0" &&
@@ -1151,10 +1645,107 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       }
     }
   }
+  auto call_like_setup_value = [](const PreloadReport& preload) {
+    return preload.value.find('(') != std::string::npos ||
+           preload.value.find(')') != std::string::npos;
+  };
+  auto executable_setup_preload = [&](const PreloadReport& preload) {
+    return !preload.setup_expression && preload.value != "stack.X" && preload.value != "stack.Y" &&
+           !call_like_setup_value(preload);
+  };
+  auto deferred_direct_setup_preload = [&](const PreloadReport& preload) {
+    const bool call_like = preload.value.find('(') != std::string::npos ||
+                           preload.value.find(')') != std::string::npos;
+    return preload.setup_expression && preload.value != "stack.X" && preload.value != "stack.Y" &&
+           !call_like;
+  };
+  std::vector<std::size_t> preload_order;
+  preload_order.reserve(preloads.size());
   for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (executable_setup_preload(preloads.at(index)) &&
+        !is_formatted_coord_report_mask_preload(preloads.at(index))) {
+      preload_order.push_back(index);
+    }
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (deferred_direct_setup_preload(preloads.at(index)))
+      preload_order.push_back(index);
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (!executable_setup_preload(preloads.at(index)) &&
+        !deferred_direct_setup_preload(preloads.at(index)) && preloads.at(index).value == "stack.Y")
+      preload_order.push_back(index);
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (!executable_setup_preload(preloads.at(index)) &&
+        !deferred_direct_setup_preload(preloads.at(index)) && preloads.at(index).value == "stack.X")
+      preload_order.push_back(index);
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (!executable_setup_preload(preloads.at(index)) &&
+        !deferred_direct_setup_preload(preloads.at(index)) &&
+        preloads.at(index).value != "stack.Y" && preloads.at(index).value != "stack.X")
+      preload_order.push_back(index);
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (executable_setup_preload(preloads.at(index)) &&
+        is_formatted_coord_report_mask_preload(preloads.at(index))) {
+      preload_order.push_back(index);
+    }
+  }
+
+  std::vector<std::size_t> numeric_segment;
+  auto flush_numeric_segment = [&]() {
+    if (numeric_segment.empty())
+      return;
+    std::vector<NumericSetupPreload> numeric_preloads;
+    numeric_preloads.reserve(numeric_segment.size());
+    for (const std::size_t numeric_index : numeric_segment) {
+      const PreloadReport& preload = preloads.at(numeric_index);
+      numeric_preloads.push_back(NumericSetupPreload{
+          .preload_index = numeric_index,
+          .register_name = preload.register_name,
+          .value = executable_setup_value(preload.value).value_or(preload.value),
+      });
+    }
+    for (const SetupNumericPreloadAction& action :
+         setup_numeric_preload_actions(numeric_preloads)) {
+      emit_setup_numeric_preload_action(setup, optimizations, numeric_preloads, action);
+      const std::vector<int> targets = setup_numeric_action_target_indexes(action);
+      std::vector<std::string> stored_registers;
+      std::set<std::string> seen_registers;
+      for (const int target_index : targets) {
+        const NumericSetupPreload& preload =
+            numeric_preloads.at(static_cast<std::size_t>(target_index));
+        consumed.insert(preload.preload_index);
+        if (seen_registers.contains(preload.register_name))
+          continue;
+        seen_registers.insert(preload.register_name);
+        stored_registers.push_back(preload.register_name);
+        emit_setup_store(setup, preload.register_name,
+                         setup_store_comment(preloads.at(preload.preload_index)));
+      }
+      if (stored_registers.size() > 1U || stored_registers.size() < targets.size()) {
+        report_duplicate_preload_store_reuse(
+            optimizations,
+            normalize_setup_constant_text(
+                numeric_preloads.at(static_cast<std::size_t>(action.target_index)).value),
+            stored_registers, targets.size(),
+            numeric_preloads.at(static_cast<std::size_t>(action.target_index)).register_name);
+      }
+    }
+    numeric_segment.clear();
+  };
+
+  for (const std::size_t index : preload_order) {
     if (consumed.contains(index))
       continue;
     const PreloadReport& preload = preloads.at(index);
+    if (executable_setup_preload(preload) && has_executable_setup_number_value(preload.value)) {
+      numeric_segment.push_back(index);
+      continue;
+    }
+    flush_numeric_segment();
     if (uses_r0_setup_pointer && preload.register_name == "0" && !preload.setup_expression &&
         has_executable_setup_number_value(preload.value)) {
       consumed.insert(index);
@@ -1259,13 +1850,16 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
                                               optimizations)) {
         for (const std::size_t consumed_index : group_indices)
           consumed.insert(consumed_index);
+        initialized_random_coord_list = true;
         continue;
       }
       consumed.insert(index);
       const auto board_it = boards.find(unique->domain);
-      if (board_it != boards.end())
+      if (board_it != boards.end()) {
         emit_random_board_coordinate_setup(setup, *board_it->second, preload.register_name,
                                            setup_target_name(preload));
+        initialized_random_coord_list = true;
+      }
       continue;
     }
     if (const std::optional<RandomUniqueSegmentedBitplaneValue> segmented =
@@ -1314,6 +1908,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
           consumed.insert(*count_source_preload_index);
         for (const std::size_t consumed_index : group_indices)
           consumed.insert(consumed_index);
+        initialized_segmented_bitplanes = true;
         continue;
       }
       consumed.insert(index);
@@ -1322,9 +1917,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     if (preload.value == "random()") {
       consumed.insert(index);
       emit_random_int_setup(setup, "999");
-      const int reg_index = register_index(preload.register_name);
-      setup.emit_op(0x40 + reg_index, "X->П " + preload.register_name,
-                    "setup R" + preload.register_name, std::nullopt, true);
+      emit_setup_store(setup, preload.register_name, setup_store_comment(preload));
       continue;
     }
     if (const std::optional<std::string> random_domain = random_domain_value(preload.value)) {
@@ -1340,15 +1933,18 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       bool emitted_display_literal_preload = false;
       if (const std::optional<FirstSpliceDisplayLiteralProgram> first_splice =
               preferred_first_splice_display_literal_program(preload.value)) {
-        emitted_display_literal_preload = emit_first_splice_display_literal_program_to_x(
-            setup, *first_splice, preload.register_name, "setup R" + preload.register_name,
-            optimizations);
+        if (!is_formatted_coord_report_mask_preload(preload)) {
+          emitted_display_literal_preload = emit_first_splice_display_literal_program_to_x(
+              setup, *first_splice, preload.register_name, "setup R" + preload.register_name,
+              optimizations);
+        }
       }
       if (!emitted_display_literal_preload) {
         if (const std::optional<DisplayLiteralProgram> literal =
                 display_literal_program(preload.value)) {
           if (literal->kind != "error" &&
-              emit_display_literal_program_to_x(setup, *literal, "setup display literal")) {
+              emit_display_literal_program_to_x(setup, *literal,
+                                                setup_display_literal_comment(preload))) {
             emitted_display_literal_preload = true;
           }
         }
@@ -1360,7 +1956,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
           consumed.insert(other);
           const int reg_index = register_index(preloads.at(other).register_name);
           setup.emit_op(0x40 + reg_index, "X->П " + preloads.at(other).register_name,
-                        "setup R" + preloads.at(other).register_name, std::nullopt, true);
+                        setup_display_literal_comment(preloads.at(other)), std::nullopt, true);
         }
         continue;
       }
@@ -1395,8 +1991,11 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       setup.emit_op(0x14, "X↔Y", "restore stack.X after " + setup_target_name(preload),
                     std::nullopt, true);
   }
+  flush_numeric_segment();
   if (setup_r0_dirty)
     emit_restore_setup_pointer_r0(setup, preloads);
+  if (initialized_random_coord_list && !initialized_segmented_bitplanes)
+    setup.emit_number("7");
   setup.emit_op(0x50, "С/П", "setup complete", std::nullopt, true);
 
   const ResolvedProgram resolved = resolve_machine_items(setup.items, options);
