@@ -708,6 +708,45 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("long_charge1"));
+    ops.push_back(ir_call("long_entry"));
+    ops.push_back(ir_label("long_t2"));
+    append(ops, direct_tail(2, "long_t1"));
+    ops.push_back(ir_label("long_charge2"));
+    ops.push_back(ir_call("long_entry"));
+    ops.push_back(ir_label("long_t3"));
+    append(ops, direct_tail(3, "long_t2"));
+    ops.push_back(ir_label("long_t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("long_entry"));
+    append(ops, ir_jump_body("long_t3"));
+
+    ops.push_back(ir_label("short_charge1"));
+    ops.push_back(ir_call("short_entry"));
+    ops.push_back(ir_label("short_t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("short_charge2"));
+    ops.push_back(ir_call("short_entry"));
+    ops.push_back(ir_label("short_t2"));
+    append(ops, direct_tail(2, "short_t1"));
+    ops.push_back(ir_label("short_entry"));
+    append(ops, ir_jump_body("short_t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized &&
+                search.analysis.plan.transitions == 2 &&
+                search.analysis.plan.existing_call_sites == 2 &&
+                search.analysis.plan.paid_call_sites == 0 &&
+                search.analysis.plan.net_savings == 2,
+            "non-pipeline IR scanner should choose the better analyzed profitable candidate, "
+            "not just the longer pre-analysis candidate");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("charge1"));
     ops.push_back(ir_call("charge2"));
     ops.push_back(ir_label("t1_alias"));

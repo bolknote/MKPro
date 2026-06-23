@@ -2974,16 +2974,58 @@ std::optional<std::size_t> strongest_return_stack_ir_candidate_index(
   return best_index;
 }
 
+bool analyzed_return_stack_ir_candidate_better(
+    const std::optional<ReturnStackIrTailLayoutSearch>& current_search,
+    const std::optional<IrTailChainCandidate>& current_candidate,
+    const ReturnStackIrTailLayoutSearch& candidate_search,
+    const IrTailChainCandidate& candidate) {
+  if (!current_search.has_value())
+    return true;
+  if (candidate_search.materialized != current_search->materialized)
+    return candidate_search.materialized;
+
+  const ReturnStackStartupLayoutPlan& candidate_plan =
+      candidate_search.analysis.plan;
+  const ReturnStackStartupLayoutPlan& current_plan =
+      current_search->analysis.plan;
+  if (candidate_plan.profitable != current_plan.profitable)
+    return candidate_plan.profitable;
+  if (!candidate_plan.profitable)
+    return return_stack_candidate_better(current_candidate, candidate);
+  if (candidate_plan.net_savings != current_plan.net_savings)
+    return candidate_plan.net_savings > current_plan.net_savings;
+  if (candidate_plan.paid_call_sites != current_plan.paid_call_sites)
+    return candidate_plan.paid_call_sites < current_plan.paid_call_sites;
+  if (candidate_plan.existing_call_sites != current_plan.existing_call_sites)
+    return candidate_plan.existing_call_sites > current_plan.existing_call_sites;
+  if (candidate_plan.transitions != current_plan.transitions)
+    return candidate_plan.transitions > current_plan.transitions;
+  if (candidate_plan.charge_cost != current_plan.charge_cost)
+    return candidate_plan.charge_cost < current_plan.charge_cost;
+
+  return return_stack_candidate_better(current_candidate, candidate);
+}
+
 ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
     const std::vector<IrOp>& ops, const ReturnStackStartupLayoutOptions& options) {
   const IrTailChainCandidateCollection collection =
       collect_return_stack_ir_tail_candidates(ops);
-  const std::optional<std::size_t> best_index =
-      strongest_return_stack_ir_candidate_index(collection.candidates);
-  if (!best_index.has_value())
+  if (collection.candidates.empty())
     return collection.search;
-  return analyze_return_stack_ir_tail_candidate(
-      collection.search, collection.candidates.at(*best_index), options);
+
+  std::optional<ReturnStackIrTailLayoutSearch> best_search;
+  std::optional<IrTailChainCandidate> best_candidate;
+  for (const IrTailChainCandidateMaterialization& candidate : collection.candidates) {
+    ReturnStackIrTailLayoutSearch candidate_search =
+        analyze_return_stack_ir_tail_candidate(collection.search, candidate, options);
+    if (analyzed_return_stack_ir_candidate_better(best_search, best_candidate,
+                                                  candidate_search,
+                                                  candidate.candidate)) {
+      best_search = std::move(candidate_search);
+      best_candidate = candidate.candidate;
+    }
+  }
+  return best_search.value_or(collection.search);
 }
 
 ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
