@@ -33838,6 +33838,50 @@ bool source_may_use_bit_mask_helper(const std::string& source) {
   return std::regex_search(source, bit_call) || std::regex_search(source, membership);
 }
 
+bool statement_has_dead_source_residual_temp_candidate(const V2Statement& statement);
+
+bool action_has_dead_source_residual_temp_candidate(const V2StatementPtr& action) {
+  return action != nullptr && statement_has_dead_source_residual_temp_candidate(*action);
+}
+
+bool statements_have_dead_source_residual_temp_candidate(
+    const std::vector<V2Statement>& statements) {
+  return std::any_of(statements.begin(), statements.end(),
+                     statement_has_dead_source_residual_temp_candidate);
+}
+
+bool statement_has_dead_source_residual_temp_candidate(const V2Statement& statement) {
+  if (residual_temp_reuse_source(statement).has_value())
+    return true;
+  if (statements_have_dead_source_residual_temp_candidate(statement.body) ||
+      statements_have_dead_source_residual_temp_candidate(statement.then_body) ||
+      statements_have_dead_source_residual_temp_candidate(statement.else_body)) {
+    return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (action_has_dead_source_residual_temp_candidate(match_case.action))
+      return true;
+  }
+  return action_has_dead_source_residual_temp_candidate(statement.otherwise);
+}
+
+bool source_has_dead_source_residual_temp_candidate(const std::string& source) {
+  try {
+    ProgramAst ast = parse_program(source);
+    if (!ast.v2.has_value())
+      return false;
+    if (statements_have_dead_source_residual_temp_candidate(ast.v2->body))
+      return true;
+    for (const V2Rule& rule : ast.v2->rules) {
+      if (statements_have_dead_source_residual_temp_candidate(rule.body))
+        return true;
+    }
+  } catch (const std::exception&) {
+    return false;
+  }
+  return false;
+}
+
 bool statement_has_comparison_guarded_update(const std::map<std::string, std::string>& state_types,
                                              const V2Statement& statement);
 
@@ -34296,6 +34340,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   const bool needs_size_rescue = !best.implemented || best.steps.size() > rescue_threshold;
   const bool allow_aggressive_post_layout =
       needs_size_rescue || source_has_reference_declaration(source);
+  const bool may_use_dead_source_residual =
+      source_has_dead_source_residual_temp_candidate(source);
   std::optional<V2Program> selector_probe_program;
   try {
     ProgramAst ast = parse_program(source);
@@ -34517,7 +34563,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       "Combined dual-use constant indirect-flow selectors, tail-branch inversion, and conditional "
       "branch trampolines after full layout",
       CandidateGate::SizeRescue);
-  if (allow_aggressive_post_layout) {
+  if (allow_aggressive_post_layout && may_use_dead_source_residual) {
     add_candidate(
         [](CompileOptions& candidate_options) {
           candidate_options.dead_source_residual_temp_reuse = true;
@@ -34532,6 +34578,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         },
         "dead-source-residual-tail-branch",
         "Combined dead-source residual temp reuse with tail-branch inversion");
+  }
+  if (allow_aggressive_post_layout) {
     add_candidate(
         [](CompileOptions& candidate_options) {
           candidate_options.aggressive_post_layout_indirect_flow = true;
@@ -34553,22 +34601,24 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         },
         "aggressive-post-layout-tail-branch",
         "Combined proven post-layout indirect-flow with tail-branch inversion");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.dead_source_residual_temp_reuse = true;
-          candidate_options.aggressive_post_layout_indirect_flow = true;
-        },
-        "dead-source-residual-aggressive-post-layout",
-        "Combined dead-source residual temp reuse with proven post-layout indirect-flow");
-    add_candidate(
-        [](CompileOptions& candidate_options) {
-          candidate_options.dead_source_residual_temp_reuse = true;
-          candidate_options.aggressive_post_layout_indirect_flow = true;
-          candidate_options.tail_branch_inversion = true;
-        },
-        "dead-source-residual-aggressive-tail-branch",
-        "Combined dead-source residual temp reuse, proven post-layout indirect-flow, and "
-        "tail-branch inversion");
+    if (may_use_dead_source_residual) {
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.dead_source_residual_temp_reuse = true;
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+          },
+          "dead-source-residual-aggressive-post-layout",
+          "Combined dead-source residual temp reuse with proven post-layout indirect-flow");
+      add_candidate(
+          [](CompileOptions& candidate_options) {
+            candidate_options.dead_source_residual_temp_reuse = true;
+            candidate_options.aggressive_post_layout_indirect_flow = true;
+            candidate_options.tail_branch_inversion = true;
+          },
+          "dead-source-residual-aggressive-tail-branch",
+          "Combined dead-source residual temp reuse, proven post-layout indirect-flow, and "
+          "tail-branch inversion");
+    }
     add_candidate(
         [](CompileOptions& candidate_options) {
           candidate_options.aggressive_post_layout_indirect_flow = true;
@@ -35843,7 +35893,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
                         "compact-bit-mask-helper-tail-branch",
                         "compact shared bit_mask helper body with tail-branch inversion"});
     }
-    if (allow_aggressive_post_layout) {
+    if (may_use_dead_source_residual) {
       semantic_bundles.push_back(
           ExpansionSpec{[](CompileOptions& candidate_options) {
                           candidate_options.dead_source_residual_temp_reuse = true;

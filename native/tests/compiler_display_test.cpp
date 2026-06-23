@@ -48,8 +48,11 @@ program FormattedCoordReport {
           "formatted coord report should preload its verified video mask");
   require(result.listing.find("display formatted mask") != std::string::npos,
           "formatted coord report should recall the preloaded mask");
-  require(result.listing.find("show formatted coord report") != std::string::npos,
-          "formatted coord report should use the specialized display stop");
+  require(std::any_of(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+            return step.opcode == 0x50 && step.comment.has_value() &&
+                   step.comment->starts_with("show __inline_show_");
+          }),
+          "formatted coord report should use the TS inline display stop");
 
   const CompileResult leading_zero = compile_source(R"mkpro(
 program LeadingZeroLiteralDisplay {
