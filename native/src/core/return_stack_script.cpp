@@ -1423,6 +1423,91 @@ DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
   return plan;
 }
 
+DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layout(
+    std::vector<int> stack, int return_count, const std::vector<MachineItem>& layout_items,
+    const DirtyReturnStackDispatchOptions& options) {
+  DirtyReturnStackDispatchAllocationPlan allocation{
+      .items = layout_items,
+  };
+
+  DirtyReturnStackDispatchPlan target_plan =
+      plan_dirty_return_stack_dispatch(stack, return_count, options);
+  if (!target_plan.enabled) {
+    allocation.dispatch = std::move(target_plan);
+    allocation.rejection_reason = allocation.dispatch.rejection_reason;
+    return allocation;
+  }
+
+  DirtyReturnStackDispatchPlan existing =
+      plan_dirty_return_stack_dispatch(stack, return_count, layout_items, options);
+  if (existing.enabled && existing.layout_proved) {
+    allocation.dispatch = std::move(existing);
+    allocation.allocated = true;
+    return allocation;
+  }
+
+  if (!options.size_rescue) {
+    allocation.dispatch = std::move(existing);
+    allocation.rejection_reason = "dirty return-stack dispatch allocator requires size-rescue mode";
+    return allocation;
+  }
+  if (target_plan.dirty_targets.empty()) {
+    allocation.dispatch = std::move(target_plan);
+    allocation.rejection_reason = "dirty return-stack dispatch allocator has no dirty targets";
+    return allocation;
+  }
+
+  const int max_target = *std::max_element(target_plan.dirty_targets.begin(),
+                                           target_plan.dirty_targets.end());
+  if (max_target < 0 || max_target > 104) {
+    allocation.dispatch = std::move(target_plan);
+    allocation.rejection_reason =
+        "dirty return-stack dispatch allocator target is outside official 00..A4 cells";
+    return allocation;
+  }
+
+  const int current_cells = machine_cell_count(layout_items);
+  if (max_target < current_cells) {
+    allocation.dispatch = std::move(existing);
+    allocation.rejection_reason =
+        "dirty return-stack dispatch allocator cannot repair an unsafe existing target cell "
+        "without shifting layout";
+    return allocation;
+  }
+
+  const int padding = max_target + 1 - current_cells;
+  if (padding > options.max_padding_cells) {
+    allocation.dispatch = std::move(existing);
+    allocation.rejection_reason = "dirty return-stack dispatch allocator would need " +
+                                  std::to_string(padding) + " padding cells, above limit " +
+                                  std::to_string(options.max_padding_cells);
+    return allocation;
+  }
+
+  std::vector<MachineItem> candidate = layout_items;
+  for (int index = 0; index < padding; ++index) {
+    MachineItem pad = MachineItem::op(0x10, "+");
+    pad.comment = "return-stack dirty dispatch safe padding";
+    candidate.push_back(std::move(pad));
+  }
+
+  DirtyReturnStackDispatchPlan padded =
+      plan_dirty_return_stack_dispatch(std::move(stack), return_count, candidate, options);
+  if (!padded.enabled || !padded.layout_proved) {
+    allocation.dispatch = std::move(padded);
+    allocation.rejection_reason = allocation.dispatch.rejection_reason.empty()
+                                      ? "dirty return-stack dispatch padding failed proof"
+                                      : allocation.dispatch.rejection_reason;
+    return allocation;
+  }
+
+  allocation.dispatch = std::move(padded);
+  allocation.items = std::move(candidate);
+  allocation.padding_cells = padding;
+  allocation.allocated = true;
+  return allocation;
+}
+
 PostLayoutIndirectFlowResult
 optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) {
   if (!scan_return_stack_script_opportunity(items).possible) {

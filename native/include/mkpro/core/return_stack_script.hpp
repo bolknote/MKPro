@@ -112,10 +112,19 @@ struct DirtyReturnStackDispatchPlan {
   std::string rejection_reason;
 };
 
+struct DirtyReturnStackDispatchAllocationPlan {
+  DirtyReturnStackDispatchPlan dispatch;
+  std::vector<MachineItem> items;
+  int padding_cells = 0;
+  bool allocated = false;
+  std::string rejection_reason;
+};
+
 struct DirtyReturnStackDispatchOptions {
   bool size_rescue = false;
   int min_dirty_targets = 1;
   bool expect_fallthrough = true;
+  int max_padding_cells = 12;
 };
 
 std::vector<int> mk61_return_stack_after_call(std::vector<int> stack,
@@ -145,6 +154,9 @@ DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(std::vector<int> s
                                                               const DirtyReturnStackDispatchOptions&
                                                                   options = {});
 DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
+    std::vector<int> stack, int return_count, const std::vector<MachineItem>& layout,
+    const DirtyReturnStackDispatchOptions& options = {});
+DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layout(
     std::vector<int> stack, int return_count, const std::vector<MachineItem>& layout,
     const DirtyReturnStackDispatchOptions& options = {});
 

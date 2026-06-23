@@ -583,6 +583,17 @@ void return_stack_script_matches_mk61_strategy_contract() {
   }
 
   {
+    std::vector<MachineItem> layout = repeated_stop_layout(76);
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
+            {.size_rescue = true, .max_padding_cells = 4});
+    require(allocation.allocated && allocation.padding_cells == 3 &&
+                allocation.dispatch.layout_proved,
+            "dirty dispatch allocator should append safe executable cells up to a dirty target");
+  }
+
+  {
     std::vector<MachineItem> layout = repeated_stop_layout(80);
     layout.at(78) = digit(8);
     const core::DirtyReturnStackDispatchPlan plan =

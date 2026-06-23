@@ -33402,6 +33402,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         }
 
         bool dirty_dispatch_proved = false;
+        bool dirty_allocator_available = false;
+        int dirty_allocator_padding = 0;
         const std::vector<std::vector<int>> dirty_dispatch_stacks = {
             {19, 27, 35, 43, 51},
             {27, 35, 43, 51, 59},
@@ -33410,18 +33412,28 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         };
         std::string dirty_rejection;
         for (const std::vector<int>& stack : dirty_dispatch_stacks) {
-          const core::DirtyReturnStackDispatchPlan dirty_plan =
-              core::plan_dirty_return_stack_dispatch(
+          const core::DirtyReturnStackDispatchAllocationPlan dirty_allocation =
+              core::allocate_dirty_return_stack_dispatch_layout(
                   stack, 6, post_layout_items,
                   core::DirtyReturnStackDispatchOptions{.size_rescue = true});
-          if (dirty_plan.enabled && dirty_plan.layout_proved) {
+          if (dirty_allocation.allocated && dirty_allocation.dispatch.layout_proved) {
             dirty_dispatch_proved = true;
+            dirty_allocator_available = dirty_allocation.padding_cells > 0;
+            dirty_allocator_padding = dirty_allocation.padding_cells;
             break;
           }
-          if (dirty_rejection.empty() && !dirty_plan.rejection_reason.empty())
-            dirty_rejection = dirty_plan.rejection_reason;
+          if (dirty_rejection.empty() && !dirty_allocation.rejection_reason.empty())
+            dirty_rejection = dirty_allocation.rejection_reason;
         }
-        if (!dirty_dispatch_proved) {
+        if (dirty_allocator_available) {
+          result.diagnostics.push_back(diagnostic(
+              DiagnosticSeverity::Note, "return-stack-dirty-dispatch-allocator",
+              "dirty return-stack dispatch could be made safe by appending " +
+                  std::to_string(dirty_allocator_padding) +
+                  " executable padding cell" +
+                  (dirty_allocator_padding == 1 ? "" : "s") +
+                  "; automatic dirty dispatch insertion is still disabled"));
+        } else if (!dirty_dispatch_proved) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-not-applied",
               dirty_rejection.empty()
