@@ -3053,6 +3053,7 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
   std::optional<IrTailChainCandidate> best_fallback_candidate;
   int best_final_cells = 0;
   int best_fallback_final_cells = 0;
+  int measured_pipeline_candidates = 0;
 
   for (const IrTailChainCandidateMaterialization& candidate : collection.candidates) {
     ReturnStackIrTailLayoutSearch candidate_search = analyze_return_stack_ir_tail_candidate(
@@ -3064,6 +3065,7 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
         measure_return_stack_post_layout_pipeline(candidate_search.materialized_items,
                                                   compile_options,
                                                   indirect_flow_rescue_above);
+    ++measured_pipeline_candidates;
     candidate_search.pipeline_compared = true;
     candidate_search.pipeline_current_final_cells = current_pipeline.final_cells;
     candidate_search.pipeline_candidate_final_cells = candidate_pipeline.final_cells;
@@ -3100,10 +3102,14 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
     }
   }
 
-  if (best_search.has_value())
+  if (best_search.has_value()) {
+    best_search->pipeline_candidates_measured = measured_pipeline_candidates;
     return *best_search;
-  if (best_fallback_search.has_value())
+  }
+  if (best_fallback_search.has_value()) {
+    best_fallback_search->pipeline_candidates_measured = measured_pipeline_candidates;
     return *best_fallback_search;
+  }
 
   const std::optional<std::size_t> best_index =
       strongest_return_stack_ir_candidate_index(collection.candidates);

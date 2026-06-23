@@ -98,6 +98,7 @@ struct ReturnStackIrTailLayoutSearch {
   std::vector<MachineItem> materialized_items;
   bool pipeline_compared = false;
   bool pipeline_candidate_better = false;
+  int pipeline_candidates_measured = 0;
   int pipeline_current_final_cells = 0;
   int pipeline_candidate_final_cells = 0;
   std::string rejection_reason;

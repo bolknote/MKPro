@@ -767,8 +767,10 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "pipeline-aware IR scanner should materialize the selected candidate before measuring "
             "the post-layout pipeline");
     require(search.pipeline_compared && search.pipeline_candidate_better &&
+                search.pipeline_candidates_measured >= 2 &&
                 search.pipeline_candidate_final_cells < search.pipeline_current_final_cells,
-            "pipeline-aware IR scanner should expose the full-pipeline win used by the compiler");
+            "pipeline-aware IR scanner should expose the full-pipeline win used by the compiler "
+            "after measuring all materialized candidates");
   }
 
   {
