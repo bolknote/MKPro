@@ -63,6 +63,13 @@ std::vector<IrOp> ir_jump_body(const std::string& target) {
   return {ir_jump(target)};
 }
 
+IrOp ir_label(const std::string& name) {
+  IrOp op;
+  op.kind = IrKind::Label;
+  op.name = name;
+  return op;
+}
+
 std::vector<IrOp> direct_tail(int value, const std::string& target) {
   return {
       ir_plain(value),
@@ -75,6 +82,10 @@ std::vector<MachineItem> repeated_stop_layout(int cells) {
 }
 
 void append(std::vector<MachineItem>& items, const std::vector<MachineItem>& tail) {
+  items.insert(items.end(), tail.begin(), tail.end());
+}
+
+void append(std::vector<IrOp>& items, const std::vector<IrOp>& tail) {
   items.insert(items.end(), tail.begin(), tail.end());
 }
 
@@ -353,7 +364,37 @@ void return_stack_script_matches_mk61_strategy_contract() {
   }
 
   {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t3"));
+    ops.push_back(ir_label("t3"));
+    append(ops, direct_tail(3, "t2"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity,
+            "IR tail layout scanner should detect whole-program tail chains before layout");
+    require(search.analysis.plan.tail_order_proved &&
+                search.analysis.plan.ordered_tail_labels ==
+                    std::vector<std::string>({"t1", "t2", "t3"}),
+            "IR tail layout scanner should feed analyze_return_stack_layout_opportunity");
+    require(core::optimize_post_layout_return_stack_script(search.analysis.plan.items).applied == 3,
+            "pre-layout tail-chain materialization should create a provable charge chain");
+  }
+
+  {
     const std::vector<MachineItem> program = three_step_script_program();
+    const core::ReturnStackScriptOpportunityScan scan =
+        core::scan_return_stack_script_opportunity(program);
+    require(scan.possible && scan.direct_call_sites == 3 && scan.direct_jumps == 3 &&
+                scan.chained_call_sites >= 2,
+            "return-stack pre-scan should recognize possible scripted charge-chain programs");
+
     const core::PostLayoutIndirectFlowResult result =
         core::optimize_post_layout_return_stack_script(program);
 
@@ -384,6 +425,22 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "five-transition return-stack script should emit five В/О commands");
     require(count_opcode(result.items, 0x53) == 5,
             "five-transition return-stack script should keep five ПП charge sites");
+  }
+
+  {
+    std::vector<MachineItem> one_return;
+    one_return.push_back(MachineItem::label("charge"));
+    append(one_return, call("entry"));
+    one_return.push_back(MachineItem::label("tail"));
+    one_return.push_back(digit(1));
+    one_return.push_back(stop());
+    one_return.push_back(MachineItem::label("entry"));
+    append(one_return, jump("tail"));
+
+    const core::ReturnStackScriptOpportunityScan scan =
+        core::scan_return_stack_script_opportunity(one_return);
+    require(!scan.possible && scan.rejection_reason.find("at least two") != std::string::npos,
+            "return-stack pre-scan should cheaply reject one-transition programs");
   }
 
   {

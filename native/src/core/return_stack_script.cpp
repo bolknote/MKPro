@@ -513,6 +513,105 @@ std::vector<MachineItem> materialize_layout_items(
   return items;
 }
 
+struct IrLabelBlock {
+  std::string label;
+  std::vector<IrOp> body;
+};
+
+std::optional<std::vector<IrLabelBlock>> split_label_blocks(const std::vector<IrOp>& ops,
+                                                            std::string& rejection_reason) {
+  std::vector<IrLabelBlock> blocks;
+  std::set<std::string> labels;
+  for (const IrOp& op : ops) {
+    if (op.kind == IrKind::Label) {
+      if (op.name.empty()) {
+        rejection_reason = "return-stack IR tail layout requires named labels";
+        return std::nullopt;
+      }
+      if (!labels.insert(op.name).second) {
+        rejection_reason = "return-stack IR tail layout requires unique labels";
+        return std::nullopt;
+      }
+      blocks.push_back(IrLabelBlock{.label = op.name});
+      continue;
+    }
+    if (blocks.empty()) {
+      rejection_reason = "return-stack IR tail layout requires a leading entry label";
+      return std::nullopt;
+    }
+    blocks.back().body.push_back(op);
+  }
+  if (blocks.size() < 3U) {
+    rejection_reason = "return-stack IR tail layout requires one entry block and at least two tail blocks";
+    return std::nullopt;
+  }
+  return blocks;
+}
+
+std::map<std::string, std::size_t> block_index_by_label(const std::vector<IrLabelBlock>& blocks) {
+  std::map<std::string, std::size_t> result;
+  for (std::size_t index = 0; index < blocks.size(); ++index)
+    result[blocks.at(index).label] = index;
+  return result;
+}
+
+std::optional<ReturnStackLayoutOpportunity> whole_program_tail_chain_opportunity(
+    const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  for (std::size_t entry_index = 0; entry_index < blocks.size(); ++entry_index) {
+    const IrLabelBlock& entry = blocks.at(entry_index);
+    std::optional<std::string> cursor = terminal_jump_target_from_ir_body(entry.body);
+    if (!cursor.has_value())
+      continue;
+
+    std::set<std::string> seen_tail_labels;
+    std::vector<ReturnStackTailBlock> tails;
+    bool valid_chain = true;
+    while (cursor.has_value()) {
+      const auto block_it = by_label.find(*cursor);
+      if (block_it == by_label.end() || block_it->second == entry_index ||
+          seen_tail_labels.contains(*cursor)) {
+        valid_chain = false;
+        break;
+      }
+      const IrLabelBlock& tail = blocks.at(block_it->second);
+      seen_tail_labels.insert(tail.label);
+      tails.push_back(ReturnStackTailBlock{
+          .label = tail.label,
+          .body = tail.body,
+      });
+
+      const std::optional<std::string> next = terminal_jump_target_from_ir_body(tail.body);
+      if (next.has_value()) {
+        cursor = next;
+        continue;
+      }
+      if (!terminal_stop_from_ir_body(tail.body))
+        valid_chain = false;
+      break;
+    }
+
+    if (!valid_chain || tails.size() < 2U)
+      continue;
+    if (tails.size() + 1U != blocks.size()) {
+      rejection_reason = "return-stack IR tail layout currently supports only whole-program tail chains";
+      continue;
+    }
+    return ReturnStackLayoutOpportunity{
+        .tails = tails,
+        .entry_body = entry.body,
+        .entry_label = entry.label,
+        .entry_at_address_zero = entry_index == 0U,
+        .single_start_jump = false,
+    };
+  }
+
+  if (rejection_reason.empty()) {
+    rejection_reason = "return-stack IR tail layout found no entry block that jumps through a 2..5 tail chain ending in С/П";
+  }
+  return std::nullopt;
+}
+
 std::optional<int> valid_concrete_existing_call_site_count(
     const ReturnStackLayoutOpportunity& opportunity,
     const std::vector<std::size_t>& tail_order, ReturnStackStartupLayoutPlan& plan) {
@@ -909,6 +1008,99 @@ ReturnStackStartupLayoutPlan build_return_stack_startup_layout(
   return materialize_return_stack_layout(analysis);
 }
 
+ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
+    const std::vector<IrOp>& ops, const ReturnStackStartupLayoutOptions& options) {
+  ReturnStackIrTailLayoutSearch search;
+  std::string rejection;
+  const std::optional<std::vector<IrLabelBlock>> blocks = split_label_blocks(ops, rejection);
+  if (!blocks.has_value()) {
+    search.rejection_reason = rejection;
+    return search;
+  }
+  std::optional<ReturnStackLayoutOpportunity> opportunity =
+      whole_program_tail_chain_opportunity(*blocks, rejection);
+  if (!opportunity.has_value()) {
+    search.rejection_reason = rejection;
+    return search;
+  }
+  search.has_opportunity = true;
+  search.analysis = analyze_return_stack_layout_opportunity(std::move(*opportunity), options);
+  if (!search.analysis.plan.rejection_reason.empty())
+    search.rejection_reason = search.analysis.plan.rejection_reason;
+  return search;
+}
+
+ReturnStackScriptOpportunityScan scan_return_stack_script_opportunity(
+    const std::vector<MachineItem>& items) {
+  ReturnStackScriptOpportunityScan scan;
+  if (items.empty()) {
+    scan.rejection_reason = "return-stack script requires a non-empty machine layout";
+    return scan;
+  }
+
+  const MachineLayout layout = machine_layout(items);
+  std::set<int> call_addresses;
+  std::vector<CallSite> calls;
+  for (const auto& [address, item_index] : layout.item_index_by_address) {
+    const MachineItem& item = items.at(static_cast<std::size_t>(item_index));
+    if (item.kind != MachineItemKind::Op || item.raw)
+      continue;
+    if (item.opcode == 0x53) {
+      if (const std::optional<CallSite> call = call_site_at_address(items, layout, address)) {
+        calls.push_back(*call);
+        call_addresses.insert(call->source_address);
+      }
+    } else if (item.opcode == 0x51) {
+      if (const std::optional<FlowReference> jump =
+              direct_flow_reference_at(items, layout, item_index)) {
+        const MachineItem& operand = items.at(static_cast<std::size_t>(jump->address_index));
+        if (address_target_is_label(operand))
+          ++scan.direct_jumps;
+      }
+    }
+  }
+
+  scan.direct_call_sites = static_cast<int>(calls.size());
+  for (const CallSite& call : calls) {
+    if (call_addresses.contains(call.target_address))
+      ++scan.chained_call_sites;
+  }
+
+  if (scan.direct_call_sites < 2) {
+    scan.rejection_reason = "return-stack script requires at least two direct ПП call sites; found " +
+                            std::to_string(scan.direct_call_sites);
+  } else if (scan.direct_jumps == 0) {
+    scan.rejection_reason = "return-stack script requires at least one direct БП tail; found 0";
+  } else if (scan.chained_call_sites == 0) {
+    scan.rejection_reason = "return-stack script requires a direct ПП->ПП charge-chain edge; found 0";
+  } else {
+    scan.possible = true;
+    scan.rejection_reason = "return-stack script pre-scan found a possible ПП charge chain and БП tail";
+  }
+  return scan;
+}
+
+std::string explain_return_stack_script_rejection(const std::vector<MachineItem>& items) {
+  const ReturnStackScriptOpportunityScan scan = scan_return_stack_script_opportunity(items);
+  if (!scan.possible)
+    return scan.rejection_reason;
+
+  const std::optional<ScriptPlan> plan = find_best_script_plan(items);
+  if (!plan.has_value()) {
+    return "return-stack script found a possible charge shape, but no fully proven 2..5 ПП chain "
+           "followed by reverse БП continuations and terminal С/П";
+  }
+
+  const std::vector<MachineItem> candidate = apply_script_plan(items, *plan);
+  if (machine_cell_count(candidate) >= machine_cell_count(items))
+    return "return-stack script proof exists, but rewriting it would not reduce cell count";
+  if (!return_stack_candidate_beats_address_overlay(items, candidate)) {
+    return "return-stack script proof exists, but address-code-overlay is at least as small as "
+           "the return-stack rewrite";
+  }
+  return {};
+}
+
 DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
     std::vector<int> stack, int return_count, const DirtyReturnStackDispatchOptions& options) {
   DirtyReturnStackDispatchPlan plan;
@@ -961,6 +1153,12 @@ DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
 
 PostLayoutIndirectFlowResult
 optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) {
+  if (!scan_return_stack_script_opportunity(items).possible) {
+    return PostLayoutIndirectFlowResult{
+        .items = items,
+    };
+  }
+
   std::vector<MachineItem> current = items;
   int applied = 0;
   int scripts = 0;

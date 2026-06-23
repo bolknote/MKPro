@@ -73,6 +73,20 @@ struct ReturnStackLayoutOpportunityAnalysis {
   ReturnStackStartupLayoutPlan plan;
 };
 
+struct ReturnStackIrTailLayoutSearch {
+  bool has_opportunity = false;
+  ReturnStackLayoutOpportunityAnalysis analysis;
+  std::string rejection_reason;
+};
+
+struct ReturnStackScriptOpportunityScan {
+  bool possible = false;
+  int direct_call_sites = 0;
+  int direct_jumps = 0;
+  int chained_call_sites = 0;
+  std::string rejection_reason;
+};
+
 struct DirtyReturnStackDispatchCellProof {
   int dirty_return_address = 0;
   int actual_pc = 0;
@@ -116,6 +130,12 @@ ReturnStackStartupLayoutPlan build_return_stack_startup_layout(
     const std::vector<IrOp>& entry_body,
     const std::string& entry_label = "__return_stack_entry",
     const ReturnStackStartupLayoutOptions& options = {});
+ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
+    const std::vector<IrOp>& ops,
+    const ReturnStackStartupLayoutOptions& options = {});
+ReturnStackScriptOpportunityScan scan_return_stack_script_opportunity(
+    const std::vector<MachineItem>& items);
+std::string explain_return_stack_script_rejection(const std::vector<MachineItem>& items);
 DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(std::vector<int> stack,
                                                               int return_count,
                                                               const DirtyReturnStackDispatchOptions&

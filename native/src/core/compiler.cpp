@@ -33317,12 +33317,38 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
   if (!exact_decimal_series) {
     if (options.return_stack_script) {
+      const core::ReturnStackIrTailLayoutSearch tail_layout =
+          core::analyze_return_stack_ir_tail_layout(raise_machine_to_ir(post_layout_items));
+      if (tail_layout.has_opportunity && tail_layout.analysis.plan.profitable) {
+        const core::ReturnStackStartupLayoutPlan plan =
+            core::materialize_return_stack_layout(tail_layout.analysis);
+        post_layout_items = plan.items;
+        post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+            .name = "return-stack-startup-layout",
+            .detail = std::string("Materialized ") + std::to_string(plan.transitions) +
+                      " IR tail block" + (plan.transitions == 1 ? "" : "s") +
+                      " as a proven ПП return-stack charge chain before post-layout rewrite.",
+        });
+      } else if (options.analysis && !tail_layout.rejection_reason.empty()) {
+        result.diagnostics.push_back(diagnostic(
+            DiagnosticSeverity::Note, "return-stack-layout-not-applied",
+            tail_layout.rejection_reason));
+      }
+
       const core::PostLayoutIndirectFlowResult return_stack_script =
           core::optimize_post_layout_return_stack_script(post_layout_items);
       post_layout_items = return_stack_script.items;
       post_layout_optimizations.insert(post_layout_optimizations.end(),
                                        return_stack_script.optimizations.begin(),
                                        return_stack_script.optimizations.end());
+      if (options.analysis && return_stack_script.applied == 0) {
+        const std::string rejection =
+            core::explain_return_stack_script_rejection(post_layout_items);
+        if (!rejection.empty()) {
+          result.diagnostics.push_back(diagnostic(
+              DiagnosticSeverity::Note, "return-stack-script-not-applied", rejection));
+        }
+      }
     }
 
     const int indirect_flow_rescue_above =
@@ -33520,7 +33546,8 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.disable_interprocedural_opts || options.coalesce_copies ||
          options.aggressive_indirect_call_threshold || options.aggressive_indirect_call ||
          options.dual_use_constant_indirect_flow || options.aggressive_post_layout_indirect_flow ||
-         options.preloaded_indirect_flow || options.runtime_indirect_call_flow ||
+         options.return_stack_script || options.preloaded_indirect_flow ||
+         options.runtime_indirect_call_flow ||
          options.general_constant_preloads || options.stack_resident_temps ||
          options.share_random_cell || options.startup_aware_constant_preloads ||
          options.guarded_prologue_gadgets || options.shared_bit_mask_helper_calls ||
@@ -33619,6 +33646,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";aggressive_indirect_call=" << options.aggressive_indirect_call
       << ";dual_use_constant_indirect_flow=" << options.dual_use_constant_indirect_flow
       << ";aggressive_post_layout_indirect_flow=" << options.aggressive_post_layout_indirect_flow
+      << ";return_stack_script=" << options.return_stack_script
       << ";preloaded_indirect_flow=" << options.preloaded_indirect_flow
       << ";runtime_indirect_call_flow=" << options.runtime_indirect_call_flow
       << ";general_constant_preloads=" << options.general_constant_preloads
@@ -34441,6 +34469,14 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     add_configured_candidate(std::move(candidate_options), std::move(name), std::move(detail),
                              gate);
   };
+  const core::ReturnStackScriptOpportunityScan return_stack_script_scan =
+      core::scan_return_stack_script_opportunity(best.items);
+  if (return_stack_script_scan.possible) {
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.return_stack_script = true; },
+        "return-stack-script",
+        "Tried proven ПП return-stack charge-chain rewriting after cheap pre-scan");
+  }
   auto add_fractional_selector_candidates_for_base =
       [&](const CompileOptions& base_options, std::set<std::string>& tried, std::string name,
           const std::function<std::string(const FractionalConstantSelectorPlan&)>& detail,
