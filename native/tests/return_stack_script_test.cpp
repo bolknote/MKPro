@@ -1370,6 +1370,41 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_plain(9));
+    append(ops, ir_jump_body("entry"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized,
+            "synthetic-entry tail chains should preserve leading prefix work before the first "
+            "real label");
+    const auto generated_entry_it =
+        std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
+                     [](const MachineItem& item) {
+                       return item.kind == MachineItemKind::Label &&
+                              item.name == "__return_stack_entry_0";
+                     });
+    require(generated_entry_it != search.materialized_items.end(),
+            "synthetic-entry materialization should keep the generated charging entry label");
+    require(std::next(generated_entry_it) != search.materialized_items.end() &&
+                std::next(generated_entry_it)->kind == MachineItemKind::Op &&
+                std::next(generated_entry_it)->opcode == 9 &&
+                std::next(generated_entry_it, 2) != search.materialized_items.end() &&
+                std::next(generated_entry_it, 2)->kind == MachineItemKind::Op &&
+                std::next(generated_entry_it, 2)->opcode == 0x51,
+            "synthetic-entry materialization should keep leading work in the generated entry "
+            "before the original entry jump");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("short_entry"));
     append(ops, ir_jump_body("s2"));
     ops.push_back(ir_label("s2"));
