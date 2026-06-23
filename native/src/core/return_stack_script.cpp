@@ -3449,6 +3449,7 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   int scripts = 0;
   int dirty_allocator_padding = 0;
   int dirty_allocator_rounds = 0;
+  std::set<int> dirty_allocator_targets;
 
   for (int round = 0; round < kMaxRewriteRounds; ++round) {
     const std::optional<ScriptPlan> plan = find_best_script_plan(current);
@@ -3464,6 +3465,8 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       candidate = allocation->items;
       dirty_allocator_padding += allocation->padding_cells;
       dirty_allocator_rounds += allocation->fixed_point_rounds;
+      for (const int target : allocation->dispatch.dirty_targets)
+        dirty_allocator_targets.insert(target);
       if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan))
         break;
     }
@@ -3484,14 +3487,28 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
 
   std::vector<passes::AppliedOptimization> optimizations;
   if (dirty_allocator_padding > 0) {
+    std::string detail =
+        "Inserted " + std::to_string(dirty_allocator_padding) +
+        " executable dirty-dispatch cell" +
+        (dirty_allocator_padding == 1 ? "" : "s") + " across " +
+        std::to_string(dirty_allocator_rounds) + " fixed-point repair round" +
+        (dirty_allocator_rounds == 1 ? "" : "s") +
+        " before rewriting dirty overflow continuation jumps";
+    if (!dirty_allocator_targets.empty()) {
+      detail += " for dirty target cell";
+      detail += dirty_allocator_targets.size() == 1U ? " " : "s ";
+      bool first = true;
+      for (const int target : dirty_allocator_targets) {
+        if (!first)
+          detail += ",";
+        detail += std::to_string(target);
+        first = false;
+      }
+    }
+    detail += ".";
     optimizations.push_back(passes::AppliedOptimization{
         .name = "return-stack-dirty-dispatch-allocator",
-        .detail = "Inserted " + std::to_string(dirty_allocator_padding) +
-                  " executable dirty-dispatch cell" +
-                  (dirty_allocator_padding == 1 ? "" : "s") + " across " +
-                  std::to_string(dirty_allocator_rounds) + " fixed-point repair round" +
-                  (dirty_allocator_rounds == 1 ? "" : "s") +
-                  " before rewriting dirty overflow continuation jumps.",
+        .detail = std::move(detail),
     });
   }
   optimizations.push_back(passes::AppliedOptimization{

@@ -325,6 +325,15 @@ bool has_optimization(const core::PostLayoutIndirectFlowResult& result,
                      });
 }
 
+bool optimization_detail_contains(const core::PostLayoutIndirectFlowResult& result,
+                                  const std::string& name, const std::string& needle) {
+  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                     [&](const core::passes::AppliedOptimization& item) {
+                       return item.name == name &&
+                              item.detail.find(needle) != std::string::npos;
+                     });
+}
+
 } // namespace
 
 void return_stack_script_matches_mk61_strategy_contract() {
@@ -2214,6 +2223,9 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "dirty-overflow repair should still be profitable after inserting one safe cell");
     require(has_optimization(result, "return-stack-dirty-dispatch-allocator"),
             "dirty-overflow repair should report allocator metadata");
+    require(optimization_detail_contains(result, "return-stack-dirty-dispatch-allocator",
+                                         "dirty target cell 78"),
+            "dirty-overflow repair metadata should expose the proved dirty target cell");
     require(count_opcode(result.items, 0x52) == 6,
             "dirty-overflow repair should still emit six В/О commands");
     const core::DirtyReturnStackDispatchPlan dirty =
