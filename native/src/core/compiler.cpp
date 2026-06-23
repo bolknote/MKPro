@@ -33314,7 +33314,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   std::vector<core::passes::AppliedOptimization> post_layout_optimizations;
 
   if (!exact_decimal_series) {
-    constexpr int kPostLayoutOfficialProgramLimit = 105;
     if (options.return_stack_script) {
       const core::PostLayoutIndirectFlowResult return_stack_script =
           core::optimize_post_layout_return_stack_script(post_layout_items);
