@@ -1,9 +1,13 @@
+#include "mkpro/compiler.hpp"
 #include "mkpro/core/return_stack_script.hpp"
 
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -98,6 +102,13 @@ void append(std::vector<IrOp>& items, const std::vector<IrOp>& tail) {
   items.insert(items.end(), tail.begin(), tail.end());
 }
 
+std::string read_fixture_text(const std::filesystem::path& path) {
+  std::ifstream input(path);
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  return buffer.str();
+}
+
 std::vector<MachineItem> counted_script_program(int count) {
   std::vector<MachineItem> items;
   for (int index = 1; index <= count; ++index) {
@@ -181,6 +192,16 @@ bool has_optimization(const core::PostLayoutIndirectFlowResult& result,
 } // namespace
 
 void return_stack_script_matches_mk61_strategy_contract() {
+  {
+    const std::string source =
+        read_fixture_text(std::filesystem::current_path() / "examples" / "river-battle.mkpro");
+    CompileOptions options;
+    options.return_stack_script = true;
+    const CompileResult result = compile_source(source, options);
+    require(result.implemented,
+            "--return-stack-script should preserve successful non-return-stack rescue candidates");
+  }
+
   {
     const std::vector<core::ReturnStackReturnStep> steps =
         core::simulate_mk61_return_stack({19, 27, 35, 43, 51}, 6);

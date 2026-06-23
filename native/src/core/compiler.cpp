@@ -34309,8 +34309,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.disable_interprocedural_opts || options.coalesce_copies ||
          options.aggressive_indirect_call_threshold || options.aggressive_indirect_call ||
          options.dual_use_constant_indirect_flow || options.aggressive_post_layout_indirect_flow ||
-         options.return_stack_script || options.preloaded_indirect_flow ||
-         options.runtime_indirect_call_flow ||
+         options.preloaded_indirect_flow || options.runtime_indirect_call_flow ||
          options.general_constant_preloads || options.stack_resident_temps ||
          options.share_random_cell || options.startup_aware_constant_preloads ||
          options.guarded_prologue_gadgets || options.shared_bit_mask_helper_calls ||
@@ -34349,6 +34348,15 @@ bool candidate_beats_best(const CompileResult& candidate, const CompileResult& b
     return true;
   return candidate.steps.size() == best.steps.size() && best.steps.size() > kOfficialProgramLimit &&
          estimated_startup_program_cost(candidate) < estimated_startup_program_cost(best);
+}
+
+bool has_return_stack_optimization(const CompileResult& result) {
+  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                     [](const OptimizationReport& item) {
+                       return item.name == "return-stack-startup-layout" ||
+                              item.name == "return-stack-script" ||
+                              item.name == "return-stack-dirty-dispatch-allocator";
+                     });
 }
 
 bool is_only_budget_exceeded(const CompileResult& result) {
@@ -35179,6 +35187,28 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   };
 
   CompileResult best = cached_compile_source_once(options);
+  if (options.return_stack_script &&
+      (!best.implemented || has_return_stack_optimization(best))) {
+    CompileOptions fallback_options = options;
+    fallback_options.return_stack_script = false;
+    try {
+      CompileResult fallback = compile_source(source, fallback_options);
+      if (candidate_beats_best(fallback, best)) {
+        const std::string comparison = best.implemented
+                                           ? std::to_string(fallback.steps.size()) + " vs " +
+                                                 std::to_string(best.steps.size()) + " cells"
+                                           : "primary lowering failed";
+        fallback.optimizations.push_back(OptimizationReport{
+            .name = "return-stack-safe-fallback",
+            .detail = "Kept the successful baseline candidate because return-stack rewriting is "
+                      "opportunistic (" +
+                      comparison + ").",
+        });
+        best = std::move(fallback);
+      }
+    } catch (const std::exception&) {
+    }
+  }
   constexpr std::size_t kOfficialProgramLimit = 105;
   const std::size_t requested_budget = options.budget.has_value() && *options.budget > 0
                                            ? static_cast<std::size_t>(*options.budget)
