@@ -1116,11 +1116,11 @@ std::optional<std::size_t> terminal_tail_fragment_suffix_start(
     return std::nullopt;
 
   const std::size_t suffix_start = block.body.size() - 2U;
-  if (ir_op_always_transfers_control(block.body.at(suffix_start - 1U)))
+  if (ir_op_splits_internal_basic_block(block.body.at(suffix_start - 1U)))
     return std::nullopt;
 
   for (std::size_t index = suffix_start; index + 1U < block.body.size(); ++index) {
-    if (ir_op_always_transfers_control(block.body.at(index)))
+    if (ir_op_splits_internal_basic_block(block.body.at(index)))
       return std::nullopt;
   }
   return suffix_start;
@@ -1217,11 +1217,11 @@ bool valid_terminal_tail_fragment_suffix_start(const IrLabelBlock& block,
       suffix_start + 1U >= block.body.size()) {
     return false;
   }
-  if (ir_op_always_transfers_control(block.body.at(suffix_start - 1U)))
+  if (ir_op_splits_internal_basic_block(block.body.at(suffix_start - 1U)))
     return false;
 
   for (std::size_t index = suffix_start; index + 1U < block.body.size(); ++index) {
-    if (ir_op_always_transfers_control(block.body.at(index)))
+    if (ir_op_splits_internal_basic_block(block.body.at(index)))
       return false;
   }
   return true;
@@ -1234,7 +1234,7 @@ bool valid_terminal_tail_fragment_body(const IrLabelBlock& block) {
       !terminal_stop_from_ir_body(block.body))
     return false;
   for (std::size_t index = 0; index + 1U < block.body.size(); ++index) {
-    if (ir_op_always_transfers_control(block.body.at(index)))
+    if (ir_op_splits_internal_basic_block(block.body.at(index)))
       return false;
   }
   return true;

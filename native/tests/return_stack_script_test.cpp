@@ -1494,6 +1494,37 @@ void return_stack_script_matches_mk61_strategy_contract() {
   {
     std::vector<IrOp> ops;
     ops.push_back(ir_label("entry"));
+    ops.push_back(ir_call("helper"));
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("helper"));
+    ops.push_back(ir_return());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized,
+            "embedded tail-chain scanner should split direct-call prefixes before a chain");
+    const auto entry_it =
+        std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
+                     [](const MachineItem& item) {
+                       return item.kind == MachineItemKind::Label && item.name == "entry";
+                     });
+    require(entry_it != search.materialized_items.end() &&
+                std::next(entry_it) != search.materialized_items.end() &&
+                std::next(entry_it)->kind == MachineItemKind::Op &&
+                std::next(entry_it)->opcode == 0x53,
+            "direct-call prefixes should stay before the materialized charge chain");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "direct-call-prefix embedded tail chains should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
     ops.push_back(ir_indirect_call());
     append(ops, ir_jump_body("t2"));
     ops.push_back(ir_label("t2"));
