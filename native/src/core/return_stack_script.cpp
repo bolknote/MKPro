@@ -571,6 +571,20 @@ struct IrTailChainCandidate {
   bool wrap_original_entry_label = true;
 };
 
+struct IrCallContinuation {
+  std::size_t block_index = 0;
+  std::set<std::string> alias_labels;
+};
+
+struct ExtractedIrFragments {
+  int tail_fragments = 0;
+  int existing_callsite_fragments = 0;
+
+  int total() const {
+    return tail_fragments + existing_callsite_fragments;
+  }
+};
+
 std::string unique_synthetic_entry_label(const std::set<std::string>& labels) {
   std::string candidate = "__return_stack_synthetic_entry";
   int suffix = 0;
@@ -703,6 +717,17 @@ bool terminal_tail_fragment_candidate(const IrLabelBlock& block) {
   return terminal.kind == IrKind::Stop || terminal.opcode == 0x50;
 }
 
+bool terminal_call_fragment_candidate(const IrLabelBlock& block) {
+  if (block.body.size() < 2U)
+    return false;
+  const IrOp& terminal = block.body.back();
+  if (terminal.kind != IrKind::Call)
+    return false;
+  if (!ir_label_target(terminal).has_value())
+    return false;
+  return !ir_op_always_transfers_control(block.body.at(block.body.size() - 2U));
+}
+
 std::string unique_tail_fragment_label(const std::set<std::string>& labels, int ordinal) {
   std::string candidate = "__return_stack_tail_fragment_" + std::to_string(ordinal);
   int suffix = ordinal;
@@ -713,25 +738,64 @@ std::string unique_tail_fragment_label(const std::set<std::string>& labels, int 
   return candidate;
 }
 
-int extract_terminal_tail_fragments(std::vector<IrLabelBlock>& blocks) {
+std::string unique_callsite_fragment_label(const std::set<std::string>& labels, int ordinal) {
+  std::string candidate = "__return_stack_callsite_fragment_" + std::to_string(ordinal);
+  int suffix = ordinal;
+  while (labels.contains(candidate)) {
+    ++suffix;
+    candidate = "__return_stack_callsite_fragment_" + std::to_string(suffix);
+  }
+  return candidate;
+}
+
+ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& blocks) {
   std::set<std::string> labels;
   for (const IrLabelBlock& block : blocks)
     labels.insert(block.label);
 
   const std::size_t original_count = blocks.size();
-  int extracted = 0;
+  std::vector<IrLabelBlock> rewritten;
+  rewritten.reserve(original_count * 2U);
+  std::vector<IrLabelBlock> appended_fragments;
+  ExtractedIrFragments extracted;
   for (std::size_t index = 0; index < original_count; ++index) {
-    IrLabelBlock& block = blocks.at(index);
-    if (!terminal_tail_fragment_candidate(block))
+    IrLabelBlock block = std::move(blocks.at(index));
+    if (terminal_call_fragment_candidate(block)) {
+      const std::string fragment_label =
+          unique_callsite_fragment_label(labels, extracted.existing_callsite_fragments);
+      labels.insert(fragment_label);
+
+      std::vector<IrOp> suffix;
+      suffix.push_back(std::move(block.body.back()));
+      block.body.pop_back();
+      block.body.push_back(synthetic_ir_jump_to_label(fragment_label));
+
+      rewritten.push_back(std::move(block));
+      rewritten.push_back(IrLabelBlock{
+          .label = fragment_label,
+          .body = std::move(suffix),
+          .hidden = true,
+      });
+      ++extracted.existing_callsite_fragments;
       continue;
+    }
+
+    if (!terminal_tail_fragment_candidate(block)) {
+      rewritten.push_back(std::move(block));
+      continue;
+    }
 
     const std::size_t suffix_start = block.body.size() - 2U;
-    if (suffix_start == 0U)
+    if (suffix_start == 0U) {
+      rewritten.push_back(std::move(block));
       continue;
-    if (ir_op_always_transfers_control(block.body.at(suffix_start - 1U)))
+    }
+    if (ir_op_always_transfers_control(block.body.at(suffix_start - 1U))) {
+      rewritten.push_back(std::move(block));
       continue;
+    }
 
-    const std::string fragment_label = unique_tail_fragment_label(labels, extracted);
+    const std::string fragment_label = unique_tail_fragment_label(labels, extracted.total());
     labels.insert(fragment_label);
 
     std::vector<IrOp> suffix(block.body.begin() + static_cast<std::ptrdiff_t>(suffix_start),
@@ -740,13 +804,17 @@ int extract_terminal_tail_fragments(std::vector<IrLabelBlock>& blocks) {
                      block.body.end());
     block.body.push_back(synthetic_ir_jump_to_label(fragment_label));
 
-    blocks.push_back(IrLabelBlock{
+    appended_fragments.push_back(IrLabelBlock{
         .label = fragment_label,
         .body = std::move(suffix),
         .hidden = true,
     });
-    ++extracted;
+    rewritten.push_back(std::move(block));
+    ++extracted.tail_fragments;
   }
+  for (IrLabelBlock& fragment : appended_fragments)
+    rewritten.push_back(std::move(fragment));
+  blocks = std::move(rewritten);
   return extracted;
 }
 
@@ -773,12 +841,61 @@ std::optional<std::string> single_call_block_target(const IrLabelBlock& block) {
   return ir_label_target(op);
 }
 
+std::optional<IrCallContinuation> cfg_call_continuation_block(
+    const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
+    const IrCfg& cfg, std::size_t call_index, const std::string& call_target) {
+  if (call_index + 1U >= blocks.size())
+    return std::nullopt;
+
+  const IrLabelBlock& call_block = blocks.at(call_index);
+  std::string cursor = blocks.at(call_index + 1U).label;
+  const auto successor_it = cfg.successors.find(call_block.label);
+  if (successor_it == cfg.successors.end() || !successor_it->second.contains(cursor) ||
+      cursor == call_target) {
+    return std::nullopt;
+  }
+
+  std::set<std::string> seen;
+  IrCallContinuation continuation;
+  while (true) {
+    const auto block_it = by_label.find(cursor);
+    if (block_it == by_label.end() || !seen.insert(cursor).second)
+      return std::nullopt;
+
+    const IrLabelBlock& block = blocks.at(block_it->second);
+    if (!block.body.empty()) {
+      continuation.block_index = block_it->second;
+      return continuation;
+    }
+
+    continuation.alias_labels.insert(block.label);
+    const auto empty_successor_it = cfg.successors.find(block.label);
+    if (empty_successor_it == cfg.successors.end() ||
+        empty_successor_it->second.size() != 1U) {
+      return std::nullopt;
+    }
+    cursor = *empty_successor_it->second.begin();
+  }
+}
+
 bool existing_call_chain_has_safe_cfg_entries(
     const IrCfg& cfg, const std::set<std::string>& moved_labels,
     const std::string& first_call_label, const std::string& entry_label,
     std::string& rejection_reason) {
   for (const std::string& label : moved_labels) {
-    if (label == first_call_label || label == entry_label)
+    if (label == first_call_label) {
+      const std::set<std::string> predecessors =
+          cfg.predecessors.contains(label) ? cfg.predecessors.at(label) : std::set<std::string>{};
+      if (predecessors.size() > 1U ||
+          std::any_of(predecessors.begin(), predecessors.end(), [&](const std::string& predecessor) {
+            return moved_labels.contains(predecessor);
+          })) {
+        rejection_reason = "return-stack existing ПП chain has external CFG entry into " + label;
+        return false;
+      }
+      continue;
+    }
+    if (label == entry_label)
       continue;
     const std::set<std::string> predecessors =
         cfg.predecessors.contains(label) ? cfg.predecessors.at(label) : std::set<std::string>{};
@@ -796,7 +913,7 @@ std::optional<IrTailChainCandidate> existing_call_chain_opportunity(
     const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
   const IrCfg cfg = build_ir_cfg(blocks);
-  for (std::size_t first_call_index = 0; first_call_index + 1U < blocks.size(); ++first_call_index) {
+  for (std::size_t first_call_index = 0; first_call_index < blocks.size(); ++first_call_index) {
     const std::optional<std::string> first_target =
         single_call_block_target(blocks.at(first_call_index));
     if (!first_target.has_value())
@@ -823,8 +940,17 @@ std::optional<IrTailChainCandidate> existing_call_chain_opportunity(
       seen_calls.insert(call_block.label);
       call_indices.push_back(call_index);
 
-      const IrLabelBlock& continuation = blocks.at(call_index + 1U);
+      const std::optional<IrCallContinuation> continuation_block =
+          cfg_call_continuation_block(blocks, by_label, cfg, call_index, *target);
+      if (!continuation_block.has_value()) {
+        valid = false;
+        break;
+      }
+
+      const IrLabelBlock& continuation = blocks.at(continuation_block->block_index);
       moved_labels.insert(call_block.label);
+      moved_labels.insert(continuation_block->alias_labels.begin(),
+                          continuation_block->alias_labels.end());
       moved_labels.insert(continuation.label);
       tails.push_back(ReturnStackTailBlock{
           .label = continuation.label,
@@ -1462,8 +1588,19 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
   const bool unsafe_existing_call_chain =
       !candidate.has_value() && rejection.find("external CFG entry") != std::string::npos;
   if (!candidate.has_value() && !unsafe_existing_call_chain) {
-    search.extracted_tail_fragments = extract_terminal_tail_fragments(*blocks);
-    candidate = embedded_tail_chain_opportunity(*blocks, rejection);
+    const ExtractedIrFragments extracted = extract_terminal_tail_fragments(*blocks);
+    search.extracted_tail_fragments = extracted.tail_fragments;
+    search.extracted_existing_callsite_fragments = extracted.existing_callsite_fragments;
+    if (extracted.total() > 0) {
+      std::string extracted_rejection;
+      candidate = existing_call_chain_opportunity(*blocks, extracted_rejection);
+      if (!candidate.has_value() && extracted_rejection.find("external CFG entry") !=
+                                        std::string::npos) {
+        rejection = extracted_rejection;
+      }
+    }
+    if (!candidate.has_value() && rejection.find("external CFG entry") == std::string::npos)
+      candidate = embedded_tail_chain_opportunity(*blocks, rejection);
   }
   if (!candidate.has_value()) {
     search.rejection_reason = rejection;

@@ -34032,6 +34032,15 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                   (tail_layout.extracted_tail_fragments == 1 ? "" : "s") +
                   " before profitability/layout proof"));
         }
+        if (tail_layout.extracted_existing_callsite_fragments > 0) {
+          result.diagnostics.push_back(diagnostic(
+              DiagnosticSeverity::Note, "return-stack-existing-callsite-fragments",
+              "extracted " +
+                  std::to_string(tail_layout.extracted_existing_callsite_fragments) +
+                  " terminal Call/ПП IR fragment" +
+                  (tail_layout.extracted_existing_callsite_fragments == 1 ? "" : "s") +
+                  " before existing-callsite proof"));
+        }
         if (tail_layout.symbolic_existing_callsite_hints > 0) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-existing-callsite-hints",

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -464,6 +465,119 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "existing ПП charge chains should remove injected charge cost");
     require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
             "existing ПП charge-chain materialization should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("charge1"));
+    ops.push_back(ir_call("charge2"));
+    ops.push_back(ir_label("t1_alias"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("charge2"));
+    ops.push_back(ir_call("entry"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized,
+            "existing ПП scanner should use CFG fallthrough through empty alias labels");
+    require(search.analysis.plan.existing_call_sites == 2 &&
+                search.analysis.plan.paid_call_sites == 0,
+            "CFG-derived existing ПП continuations should still be counted as free charge sites");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "CFG-derived existing ПП materialization should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("external"));
+    append(ops, ir_jump_body("t1_alias"));
+    ops.push_back(ir_label("charge1"));
+    ops.push_back(ir_call("charge2"));
+    ops.push_back(ir_label("t1_alias"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("charge2"));
+    ops.push_back(ir_call("entry"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(!search.materialized &&
+                search.rejection_reason.find("external CFG entry") != std::string::npos,
+            "CFG-derived existing ПП aliases should reject external entries into moved labels");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("external"));
+    append(ops, ir_jump_body("charge1"));
+    ops.push_back(ir_label("prefix"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_label("charge1"));
+    ops.push_back(ir_call("charge2"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("charge2"));
+    ops.push_back(ir_call("entry"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(!search.materialized &&
+                search.rejection_reason.find("external CFG entry") != std::string::npos,
+            "existing ПП reuse should reject multiple external entries into the first charge site");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("prefix"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_call("charge2"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("charge2"));
+    ops.push_back(ir_call("entry"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.extracted_existing_callsite_fragments == 1 &&
+                search.extracted_tail_fragments == 0 && search.has_opportunity &&
+                search.materialized,
+            "IR scanner should extract terminal ПП suffixes into CFG callsite blocks");
+    require(search.analysis.plan.existing_call_sites == 2 &&
+                search.analysis.plan.paid_call_sites == 0,
+            "extracted terminal ПП suffixes should count as free existing charge sites");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "terminal ПП suffix extraction should remain provable post-layout");
+    const auto prefix_it =
+        std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
+                     [](const MachineItem& item) { return item.kind == MachineItemKind::Label &&
+                                                           item.name == "prefix"; });
+    require(prefix_it != search.materialized_items.end(),
+            "terminal ПП suffix extraction should preserve the original prefix label");
+    require(std::next(prefix_it) != search.materialized_items.end() &&
+                std::next(prefix_it)->kind == MachineItemKind::Op &&
+                std::next(prefix_it)->opcode == 9,
+            "terminal ПП suffix extraction should preserve prefix work before the hidden callsite");
   }
 
   {
