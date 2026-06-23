@@ -34992,10 +34992,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       post_layout_optimizations.insert(post_layout_optimizations.end(),
                                        return_stack_script.optimizations.begin(),
                                        return_stack_script.optimizations.end());
-      if (options.analysis && return_stack_script.applied == 0) {
+      if (return_stack_script.applied == 0) {
         const std::string rejection =
             core::explain_return_stack_script_rejection(post_layout_items);
-        if (!rejection.empty()) {
+        if (options.analysis && !rejection.empty()) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-script-not-applied", rejection));
         }
@@ -35072,10 +35072,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               .name = "return-stack-dirty-dispatch-allocator",
               .detail = dirty_allocator_detail,
           });
-          result.diagnostics.push_back(diagnostic(
-              DiagnosticSeverity::Note, "return-stack-dirty-dispatch-allocator",
-              dirty_allocator_detail));
-        } else if (dirty_allocator_available) {
+          if (options.analysis) {
+            result.diagnostics.push_back(diagnostic(
+                DiagnosticSeverity::Note, "return-stack-dirty-dispatch-allocator",
+                dirty_allocator_detail));
+          }
+        } else if (options.analysis && dirty_allocator_available) {
           const std::string dirty_allocator_detail =
               "Proved dirty return-stack dispatch layout allocation with " +
               std::to_string(dirty_allocator_padding) + " executable cell" +
@@ -35086,7 +35088,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-allocator-not-applied",
               dirty_allocator_detail));
-        } else if (!dirty_dispatch_proved) {
+        } else if (options.analysis && !dirty_dispatch_proved) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-not-applied",
               dirty_rejection.empty()
