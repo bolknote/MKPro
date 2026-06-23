@@ -24,6 +24,10 @@ MachineItem stop() {
   return MachineItem::op(0x50, "С/П");
 }
 
+MachineItem plus_op() {
+  return MachineItem::op(0x10, "+");
+}
+
 std::vector<MachineItem> call(const std::string& target) {
   return {
       MachineItem::op(0x53, "ПП"),
@@ -125,6 +129,28 @@ std::vector<MachineItem> counted_script_program(int count) {
   }
   items.push_back(MachineItem::label("entry"));
   append(items, jump("t" + std::to_string(count)));
+  return items;
+}
+
+std::vector<MachineItem> dirty_overflow_script_program() {
+  std::vector<MachineItem> items;
+  while (core::machine_cell_count(items) < 26)
+    items.push_back(plus_op());
+
+  for (int index = 1; index <= 5; ++index) {
+    items.push_back(MachineItem::label("charge_t" + std::to_string(index)));
+    append(items, call(index == 5 ? "entry" : "charge_t" + std::to_string(index + 1)));
+    items.push_back(MachineItem::label("t" + std::to_string(index)));
+    items.push_back(digit(index % 10));
+    append(items, jump(index == 1 ? "dirty_target" : "t" + std::to_string(index - 1)));
+  }
+  items.push_back(MachineItem::label("entry"));
+  append(items, jump("t5"));
+
+  while (core::machine_cell_count(items) < 84)
+    items.push_back(plus_op());
+  items.push_back(MachineItem::label("dirty_target"));
+  items.push_back(plus_op());
   return items;
 }
 
@@ -692,6 +718,26 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "five-transition return-stack script should emit five В/О commands");
     require(count_opcode(result.items, 0x53) == 5,
             "five-transition return-stack script should keep five ПП charge sites");
+  }
+
+  {
+    const std::vector<MachineItem> program = dirty_overflow_script_program();
+    const core::PostLayoutIndirectFlowResult result =
+        core::optimize_post_layout_return_stack_script(program);
+
+    require(result.applied == 6,
+            "dirty-overflow return-stack script should rewrite five clean jumps plus the dirty "
+            "dispatch jump");
+    require(core::machine_cell_count(result.items) == core::machine_cell_count(program) - 6,
+            "dirty-overflow return-stack script should save the dirty jump address cell too");
+    require(count_opcode(result.items, 0x52) == 6,
+            "dirty-overflow return-stack script should emit six В/О commands");
+    const core::DirtyReturnStackDispatchPlan dirty =
+        core::plan_dirty_return_stack_dispatch({27, 31, 35, 39, 43}, 6, result.items,
+                                               {.size_rescue = true});
+    require(dirty.enabled && dirty.layout_proved &&
+                dirty.dirty_targets == std::vector<int>({78}),
+            "dirty-overflow return-stack script should leave the shifted dirty target executable");
   }
 
   {

@@ -53,6 +53,7 @@ struct TerminalJump {
 struct ScriptPlan {
   std::vector<CallSite> calls;
   std::vector<TerminalJump> jumps;
+  std::optional<TerminalJump> dirty_jump;
 };
 
 bool is_address_taking_opcode(int opcode) {
@@ -329,12 +330,19 @@ std::optional<ScriptPlan> script_plan_from_call_chain(
     cursor = expected_target;
   }
 
-  if (!terminal_stop_from(items, layout, cursor))
-    return std::nullopt;
+  std::optional<TerminalJump> dirty_jump;
+  if (!terminal_stop_from(items, layout, cursor)) {
+    if (calls.size() != static_cast<std::size_t>(kMaxScriptReturns))
+      return std::nullopt;
+    dirty_jump = terminal_jump_from(items, layout, cursor);
+    if (!dirty_jump.has_value())
+      return std::nullopt;
+  }
 
   ScriptPlan plan{
       .calls = std::move(calls),
       .jumps = std::move(jumps),
+      .dirty_jump = std::move(dirty_jump),
   };
   if (!script_plan_has_unique_incoming(plan, incoming, script_start_address))
     return std::nullopt;
@@ -375,6 +383,10 @@ std::vector<MachineItem> apply_script_plan(const std::vector<MachineItem>& items
     replace_op_indexes.insert(jump.op_index);
     remove_address_indexes.insert(jump.address_index);
   }
+  if (plan.dirty_jump.has_value()) {
+    replace_op_indexes.insert(plan.dirty_jump->op_index);
+    remove_address_indexes.insert(plan.dirty_jump->address_index);
+  }
 
   std::vector<MachineItem> result;
   result.reserve(items.size() - remove_address_indexes.size());
@@ -390,6 +402,62 @@ std::vector<MachineItem> apply_script_plan(const std::vector<MachineItem>& items
     result.push_back(std::move(item));
   }
   return result;
+}
+
+int script_plan_rewrite_count(const ScriptPlan& plan) {
+  return static_cast<int>(plan.jumps.size()) + (plan.dirty_jump.has_value() ? 1 : 0);
+}
+
+std::set<int> removed_address_indexes_for_script_plan(const ScriptPlan& plan) {
+  std::set<int> result;
+  for (const TerminalJump& jump : plan.jumps)
+    result.insert(jump.address_index);
+  if (plan.dirty_jump.has_value())
+    result.insert(plan.dirty_jump->address_index);
+  return result;
+}
+
+int adjusted_address_after_removing_indexes(const MachineLayout& layout, int address,
+                                            const std::set<int>& removed_item_indexes) {
+  int shift = 0;
+  for (const int item_index : removed_item_indexes) {
+    const auto address_it = layout.address_by_item_index.find(item_index);
+    if (address_it != layout.address_by_item_index.end() && address_it->second < address)
+      ++shift;
+  }
+  return address - shift;
+}
+
+std::vector<int> adjusted_return_stack_from_calls(const MachineLayout& layout,
+                                                  const ScriptPlan& plan) {
+  const std::set<int> removed = removed_address_indexes_for_script_plan(plan);
+  std::vector<int> stack;
+  stack.reserve(plan.calls.size());
+  for (const CallSite& call : plan.calls) {
+    const int adjusted_source =
+        adjusted_address_after_removing_indexes(layout, call.source_address, removed);
+    stack.push_back(adjusted_source + 1);
+  }
+  return stack;
+}
+
+bool dirty_overflow_script_plan_proved(const MachineLayout& original_layout,
+                                       const std::vector<MachineItem>& candidate,
+                                       const ScriptPlan& plan) {
+  if (!plan.dirty_jump.has_value())
+    return true;
+
+  const std::set<int> removed = removed_address_indexes_for_script_plan(plan);
+  const int adjusted_dirty_target = adjusted_address_after_removing_indexes(
+      original_layout, plan.dirty_jump->target_address, removed);
+  const DirtyReturnStackDispatchPlan dirty = plan_dirty_return_stack_dispatch(
+      adjusted_return_stack_from_calls(original_layout, plan),
+      static_cast<int>(plan.calls.size()) + 1, candidate,
+      DirtyReturnStackDispatchOptions{.size_rescue = true});
+  if (!dirty.enabled || !dirty.layout_proved || dirty.dirty_targets.empty())
+    return false;
+  return std::all_of(dirty.dirty_targets.begin(), dirty.dirty_targets.end(),
+                     [&](const int target) { return target == adjusted_dirty_target; });
 }
 
 int best_cell_count_with_address_overlay(const std::vector<MachineItem>& items) {
@@ -1944,12 +2012,15 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
     const std::optional<ScriptPlan> plan = find_best_script_plan(current);
     if (!plan.has_value())
       break;
+    const MachineLayout current_layout = machine_layout(current);
     std::vector<MachineItem> candidate = apply_script_plan(current, *plan);
+    if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan))
+      break;
     if (machine_cell_count(candidate) >= machine_cell_count(current))
       break;
     if (!return_stack_candidate_beats_address_overlay(current, candidate))
       break;
-    applied += static_cast<int>(plan->jumps.size());
+    applied += script_plan_rewrite_count(*plan);
     ++scripts;
     current = std::move(candidate);
   }
