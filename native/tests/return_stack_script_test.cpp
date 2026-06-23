@@ -389,6 +389,25 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    append(ops, ir_jump_body("entry"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity,
+            "IR tail layout scanner should synthesize an entry label before leading IR ops");
+    require(search.materialized,
+            "synthetic-entry tail chains should still produce a structural materialization");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("prefix"));
     append(ops, ir_jump_body("entry"));
     ops.push_back(ir_label("entry"));

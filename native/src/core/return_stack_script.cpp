@@ -516,6 +516,12 @@ std::vector<MachineItem> materialize_layout_items(
 struct IrLabelBlock {
   std::string label;
   std::vector<IrOp> body;
+  bool hidden = false;
+};
+
+struct IrCfg {
+  std::map<std::string, std::set<std::string>> predecessors;
+  std::map<std::string, std::set<std::string>> successors;
 };
 
 struct IrTailChainCandidate {
@@ -526,8 +532,25 @@ struct IrTailChainCandidate {
   std::size_t entry_block_index = 0;
 };
 
+std::string unique_synthetic_entry_label(const std::set<std::string>& labels) {
+  std::string candidate = "__return_stack_synthetic_entry";
+  int suffix = 0;
+  while (labels.contains(candidate)) {
+    ++suffix;
+    candidate = "__return_stack_synthetic_entry_" + std::to_string(suffix);
+  }
+  return candidate;
+}
+
 std::optional<std::vector<IrLabelBlock>> split_label_blocks(const std::vector<IrOp>& ops,
                                                             std::string& rejection_reason) {
+  std::set<std::string> declared_labels;
+  for (const IrOp& op : ops) {
+    if (op.kind == IrKind::Label && !op.name.empty())
+      declared_labels.insert(op.name);
+  }
+  const std::string synthetic_entry = unique_synthetic_entry_label(declared_labels);
+
   std::vector<IrLabelBlock> blocks;
   std::set<std::string> labels;
   for (const IrOp& op : ops) {
@@ -540,12 +563,12 @@ std::optional<std::vector<IrLabelBlock>> split_label_blocks(const std::vector<Ir
         rejection_reason = "return-stack IR tail layout requires unique labels";
         return std::nullopt;
       }
-      blocks.push_back(IrLabelBlock{.label = op.name});
+      blocks.push_back(IrLabelBlock{.label = op.name, .hidden = op.hidden});
       continue;
     }
     if (blocks.empty()) {
-      rejection_reason = "return-stack IR tail layout requires a leading entry label";
-      return std::nullopt;
+      labels.insert(synthetic_entry);
+      blocks.push_back(IrLabelBlock{.label = synthetic_entry, .hidden = true});
     }
     blocks.back().body.push_back(op);
   }
@@ -582,45 +605,54 @@ bool ir_op_can_reference_label(const IrOp& op) {
   }
 }
 
-std::map<std::string, int> direct_ir_label_ref_counts(const std::vector<IrLabelBlock>& blocks) {
-  std::map<std::string, int> counts;
-  for (const IrLabelBlock& block : blocks) {
+bool ir_op_always_transfers_control(const IrOp& op) {
+  if (op.kind == IrKind::Jump || op.kind == IrKind::IndirectJump ||
+      op.kind == IrKind::Return || op.kind == IrKind::Stop) {
+    return true;
+  }
+  return op.opcode == 0x50 || op.opcode == 0x51 || op.opcode == 0x52;
+}
+
+void add_cfg_edge(IrCfg& cfg, const std::string& from, const std::string& to) {
+  if (from.empty() || to.empty())
+    return;
+  cfg.successors[from].insert(to);
+  cfg.predecessors[to].insert(from);
+}
+
+IrCfg build_ir_cfg(const std::vector<IrLabelBlock>& blocks) {
+  IrCfg cfg;
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  for (std::size_t index = 0; index < blocks.size(); ++index) {
+    const IrLabelBlock& block = blocks.at(index);
+    cfg.predecessors[block.label];
+    cfg.successors[block.label];
+
     for (const IrOp& op : block.body) {
       if (!ir_op_can_reference_label(op))
         continue;
-      if (const std::optional<std::string> target = ir_label_target(op))
-        ++counts[*target];
+      const std::optional<std::string> target = ir_label_target(op);
+      if (target.has_value() && by_label.contains(*target))
+        add_cfg_edge(cfg, block.label, *target);
     }
+
+    const bool has_fallthrough =
+        block.body.empty() || !ir_op_always_transfers_control(block.body.back());
+    if (has_fallthrough && index + 1U < blocks.size())
+      add_cfg_edge(cfg, block.label, blocks.at(index + 1U).label);
   }
-  return counts;
+  return cfg;
 }
 
-bool ir_block_ends_without_fallthrough(const IrLabelBlock& block) {
-  if (block.body.empty())
-    return false;
-  const IrOp& tail = block.body.back();
-  if (tail.kind == IrKind::Jump || tail.kind == IrKind::IndirectJump ||
-      tail.kind == IrKind::Return || tail.kind == IrKind::Stop) {
-    return true;
-  }
-  return tail.opcode == 0x50 || tail.opcode == 0x51 || tail.opcode == 0x52;
-}
-
-bool has_unproved_fallthrough_into_block(const std::vector<IrLabelBlock>& blocks,
-                                         std::size_t block_index) {
-  if (block_index == 0U)
-    return false;
-  return !ir_block_ends_without_fallthrough(blocks.at(block_index - 1U));
-}
-
-bool tail_chain_has_only_internal_tail_entries(
-    const std::vector<IrLabelBlock>& blocks, const IrTailChainCandidate& candidate,
-    const std::map<std::string, int>& ref_counts, std::string& rejection_reason) {
-  std::map<std::string, int> expected_tail_refs;
+std::map<std::string, std::set<std::string>> expected_tail_predecessors(
+    const std::vector<IrLabelBlock>& blocks, const IrTailChainCandidate& candidate) {
+  std::map<std::string, std::set<std::string>> expected;
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
-  std::optional<std::string> cursor = terminal_jump_target_from_ir_body(candidate.opportunity.entry_body);
+  std::string previous = candidate.original_entry_label;
+  std::optional<std::string> cursor =
+      terminal_jump_target_from_ir_body(candidate.opportunity.entry_body);
   while (cursor.has_value()) {
-    ++expected_tail_refs[*cursor];
+    expected[*cursor].insert(previous);
     const auto block_index = by_label.find(*cursor);
     if (block_index == by_label.end())
       break;
@@ -628,25 +660,34 @@ bool tail_chain_has_only_internal_tail_entries(
         terminal_jump_target_from_ir_body(blocks.at(block_index->second).body);
     if (!next.has_value())
       break;
+    previous = *cursor;
     cursor = next;
   }
+  return expected;
+}
+
+bool tail_chain_has_only_internal_tail_entries(
+    const std::vector<IrLabelBlock>& blocks, const IrTailChainCandidate& candidate,
+    const IrCfg& cfg, std::string& rejection_reason) {
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  const std::map<std::string, std::set<std::string>> expected =
+      expected_tail_predecessors(blocks, candidate);
 
   for (const ReturnStackTailBlock& tail : candidate.opportunity.tails) {
-    const int actual_refs = ref_counts.contains(tail.label) ? ref_counts.at(tail.label) : 0;
-    const int expected_refs = expected_tail_refs.contains(tail.label) ? expected_tail_refs.at(tail.label) : 0;
-    if (actual_refs != expected_refs || expected_refs != 1) {
-      rejection_reason = "return-stack IR tail layout requires unique internal entry into tail block " +
-                         tail.label;
-      return false;
-    }
     const auto tail_index = by_label.find(tail.label);
     if (tail_index == by_label.end()) {
       rejection_reason = "return-stack IR tail layout lost a candidate tail block";
       return false;
     }
-    if (has_unproved_fallthrough_into_block(blocks, tail_index->second)) {
-      rejection_reason = "return-stack IR tail layout cannot move tail block " + tail.label +
-                         " because a previous block can fall through into it";
+
+    const std::set<std::string> actual_predecessors =
+        cfg.predecessors.contains(tail.label) ? cfg.predecessors.at(tail.label)
+                                             : std::set<std::string>{};
+    const std::set<std::string> expected_predecessors =
+        expected.contains(tail.label) ? expected.at(tail.label) : std::set<std::string>{};
+    if (actual_predecessors != expected_predecessors || expected_predecessors.size() != 1U) {
+      rejection_reason = "return-stack IR tail layout requires CFG predecessors of tail block " +
+                         tail.label + " to be exactly the internal tail-chain predecessor";
       return false;
     }
   }
@@ -656,7 +697,7 @@ bool tail_chain_has_only_internal_tail_entries(
 std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
     const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
-  const std::map<std::string, int> ref_counts = direct_ir_label_ref_counts(blocks);
+  const IrCfg cfg = build_ir_cfg(blocks);
 
   for (std::size_t entry_index = 0; entry_index < blocks.size(); ++entry_index) {
     const IrLabelBlock& entry = blocks.at(entry_index);
@@ -691,8 +732,10 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
       break;
     }
 
-    if (!valid_chain || tails.size() < 2U || tails.size() > static_cast<std::size_t>(kMaxScriptReturns))
+    if (!valid_chain || tails.size() < 2U ||
+        tails.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
       continue;
+    }
 
     IrTailChainCandidate candidate{
         .opportunity = ReturnStackLayoutOpportunity{
@@ -708,7 +751,7 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
         .entry_block_index = entry_index,
     };
 
-    if (!tail_chain_has_only_internal_tail_entries(blocks, candidate, ref_counts, rejection_reason))
+    if (!tail_chain_has_only_internal_tail_entries(blocks, candidate, cfg, rejection_reason))
       continue;
     return candidate;
   }
@@ -720,7 +763,9 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
 }
 
 void append_ir_block_as_machine(std::vector<MachineItem>& out, const IrLabelBlock& block) {
-  out.push_back(MachineItem::label(block.label));
+  MachineItem label = MachineItem::label(block.label);
+  label.hidden = block.hidden;
+  out.push_back(std::move(label));
   append_ir_items(out, block.body);
 }
 
@@ -739,7 +784,7 @@ std::vector<MachineItem> materialize_embedded_tail_chain_layout(
     }
 
     MachineItem wrapper = MachineItem::label(candidate.original_entry_label);
-    wrapper.hidden = false;
+    wrapper.hidden = block.hidden;
     out.push_back(std::move(wrapper));
     out.insert(out.end(), plan.items.begin(), plan.items.end());
   }
@@ -1159,7 +1204,12 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
   }
   search.has_opportunity = true;
   search.analysis = analyze_return_stack_layout_opportunity(candidate->opportunity, options);
-  if (search.analysis.plan.profitable) {
+  const ReturnStackStartupLayoutPlan& plan = search.analysis.plan;
+  const bool structurally_proved = plan.tail_order_proved && plan.one_shot_proved &&
+                                   plan.no_backward_charge_jumps &&
+                                   plan.no_external_charge_entries &&
+                                   plan.unique_entry_after_charge;
+  if (structurally_proved) {
     search.materialized = true;
     search.materialized_items =
         materialize_embedded_tail_chain_layout(*blocks, *candidate, search.analysis);

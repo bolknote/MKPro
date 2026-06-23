@@ -33330,13 +33330,31 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               });
       if (tail_layout.materialized) {
         const core::ReturnStackStartupLayoutPlan& plan = tail_layout.analysis.plan;
-        post_layout_items = tail_layout.materialized_items;
-        post_layout_optimizations.push_back(core::passes::AppliedOptimization{
-            .name = "return-stack-startup-layout",
-            .detail = std::string("Materialized ") + std::to_string(plan.transitions) +
-                      " IR tail block" + (plan.transitions == 1 ? "" : "s") +
-                      " as a proven ПП return-stack charge chain before post-layout rewrite.",
-        });
+        const core::PostLayoutIndirectFlowResult current_overlay =
+            core::optimize_post_layout_address_code_overlay(post_layout_items);
+        const core::PostLayoutIndirectFlowResult candidate_script =
+            core::optimize_post_layout_return_stack_script(tail_layout.materialized_items);
+        const core::PostLayoutIndirectFlowResult candidate_overlay =
+            core::optimize_post_layout_address_code_overlay(candidate_script.items);
+        const bool layout_aware_profitable =
+            core::machine_cell_count(candidate_overlay.items) <
+            core::machine_cell_count(current_overlay.items);
+        if (plan.profitable || layout_aware_profitable) {
+          post_layout_items = tail_layout.materialized_items;
+          post_layout_optimizations.push_back(core::passes::AppliedOptimization{
+              .name = "return-stack-startup-layout",
+              .detail = std::string("Materialized ") + std::to_string(plan.transitions) +
+                        " IR tail block" + (plan.transitions == 1 ? "" : "s") +
+                        " as a proven ПП return-stack charge chain before post-layout rewrite" +
+                        (layout_aware_profitable && !plan.profitable
+                             ? " after layout-aware overlay comparison."
+                             : "."),
+          });
+        } else if (options.analysis && !tail_layout.rejection_reason.empty()) {
+          result.diagnostics.push_back(diagnostic(
+              DiagnosticSeverity::Note, "return-stack-layout-not-applied",
+              tail_layout.rejection_reason));
+        }
       } else if (options.analysis && !tail_layout.rejection_reason.empty()) {
         result.diagnostics.push_back(diagnostic(
             DiagnosticSeverity::Note, "return-stack-layout-not-applied",
