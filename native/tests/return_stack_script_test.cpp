@@ -503,6 +503,32 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("external_raw"));
+    IrOp raw_jump = ir_plain(0x51);
+    raw_jump.target = std::string("t2");
+    raw_jump.meta.mnemonic = "БП";
+    ops.push_back(raw_jump);
+    ops.push_back(ir_label("charge1"));
+    ops.push_back(ir_call("charge2"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("charge2"));
+    ops.push_back(ir_call("entry"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(!search.materialized &&
+                search.rejection_reason.find("external CFG entry") != std::string::npos,
+            "IR CFG should treat raw addressed БП opcodes as external entries into moved tails");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("charge1"));
     ops.push_back(ir_call("charge2"));
     ops.push_back(ir_label("t1"));
