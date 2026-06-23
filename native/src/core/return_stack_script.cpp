@@ -546,23 +546,27 @@ std::vector<int> adjusted_return_stack_from_calls(const MachineLayout& layout,
   return stack;
 }
 
-bool dirty_overflow_script_plan_proved(const MachineLayout& original_layout,
-                                       const std::vector<MachineItem>& candidate,
-                                       const ScriptPlan& plan) {
+std::optional<DirtyReturnStackDispatchPlan> proved_dirty_overflow_script_dispatch(
+    const MachineLayout& original_layout, const std::vector<MachineItem>& candidate,
+    const ScriptPlan& plan) {
   if (!plan.dirty_jump.has_value())
-    return true;
+    return std::nullopt;
 
   const std::set<int> removed = removed_address_indexes_for_script_plan(plan);
   const int adjusted_dirty_target = adjusted_address_after_removing_indexes(
       original_layout, plan.dirty_jump->target_address, removed);
-  const DirtyReturnStackDispatchPlan dirty = plan_dirty_return_stack_dispatch(
+  DirtyReturnStackDispatchPlan dirty = plan_dirty_return_stack_dispatch(
       adjusted_return_stack_from_calls(original_layout, plan),
       static_cast<int>(plan.calls.size()) + 1, candidate,
       DirtyReturnStackDispatchOptions{.size_rescue = true});
   if (!dirty.enabled || !dirty.layout_proved || dirty.dirty_targets.empty())
-    return false;
-  return std::all_of(dirty.dirty_targets.begin(), dirty.dirty_targets.end(),
-                     [&](const int target) { return target == adjusted_dirty_target; });
+    return std::nullopt;
+  const bool targets_match =
+      std::all_of(dirty.dirty_targets.begin(), dirty.dirty_targets.end(),
+                  [&](const int target) { return target == adjusted_dirty_target; });
+  if (!targets_match)
+    return std::nullopt;
+  return dirty;
 }
 
 std::optional<DirtyReturnStackDispatchAllocationPlan> repair_dirty_overflow_script_candidate(
@@ -3464,7 +3468,9 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
     int candidate_dirty_allocator_dirty_returns = 0;
     std::set<int> candidate_dirty_allocator_return_addresses;
     std::set<int> candidate_dirty_allocator_targets;
-    if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan)) {
+    std::optional<DirtyReturnStackDispatchPlan> candidate_dirty_proof =
+        proved_dirty_overflow_script_dispatch(current_layout, candidate, *plan);
+    if (plan->dirty_jump.has_value() && !candidate_dirty_proof.has_value()) {
       const std::optional<DirtyReturnStackDispatchAllocationPlan> allocation =
           repair_dirty_overflow_script_candidate(current_layout, candidate, *plan);
       if (!allocation.has_value())
@@ -3478,29 +3484,18 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
         candidate_dirty_allocator_return_addresses.insert(return_address);
       for (const int target : allocation->dispatch.dirty_targets)
         candidate_dirty_allocator_targets.insert(target);
-      if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan))
+      candidate_dirty_proof =
+          proved_dirty_overflow_script_dispatch(current_layout, candidate, *plan);
+      if (!candidate_dirty_proof.has_value())
         break;
     }
-    if (plan->dirty_jump.has_value() && candidate_dirty_allocator_dirty_returns == 0) {
-      const std::set<int> removed = removed_address_indexes_for_script_plan(*plan);
-      const int adjusted_dirty_target = adjusted_address_after_removing_indexes(
-          current_layout, plan->dirty_jump->target_address, removed);
-      const DirtyReturnStackDispatchPlan dirty = plan_dirty_return_stack_dispatch(
-          adjusted_return_stack_from_calls(current_layout, *plan),
-          static_cast<int>(plan->calls.size()) + 1, candidate,
-          DirtyReturnStackDispatchOptions{.size_rescue = true});
-      const bool dirty_targets_match =
-          dirty.enabled && dirty.layout_proved && !dirty.dirty_targets.empty() &&
-          std::all_of(dirty.dirty_targets.begin(), dirty.dirty_targets.end(),
-                      [&](const int target) { return target == adjusted_dirty_target; });
-      if (dirty_targets_match) {
-        candidate_dirty_allocator_dirty_returns =
-            static_cast<int>(dirty.dirty_return_addresses.size());
-        for (const int return_address : dirty.dirty_return_addresses)
-          candidate_dirty_allocator_return_addresses.insert(return_address);
-        for (const int target : dirty.dirty_targets)
-          candidate_dirty_allocator_targets.insert(target);
-      }
+    if (candidate_dirty_proof.has_value() && candidate_dirty_allocator_dirty_returns == 0) {
+      candidate_dirty_allocator_dirty_returns =
+          static_cast<int>(candidate_dirty_proof->dirty_return_addresses.size());
+      for (const int return_address : candidate_dirty_proof->dirty_return_addresses)
+        candidate_dirty_allocator_return_addresses.insert(return_address);
+      for (const int target : candidate_dirty_proof->dirty_targets)
+        candidate_dirty_allocator_targets.insert(target);
     }
     if (machine_cell_count(candidate) >= machine_cell_count(current))
       break;
