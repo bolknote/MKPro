@@ -864,6 +864,26 @@ std::string unique_internal_basic_block_label(const std::set<std::string>& label
   return candidate;
 }
 
+bool raw_indirect_jump_opcode(int opcode) {
+  return opcode >= 0x80 && opcode <= 0x8e;
+}
+
+bool raw_indirect_call_opcode(int opcode) {
+  return opcode >= 0xa0 && opcode <= 0xae;
+}
+
+bool raw_indirect_cond_jump_opcode(int opcode) {
+  return (opcode >= 0x70 && opcode <= 0x7e) ||
+         (opcode >= 0x90 && opcode <= 0x9e) ||
+         (opcode >= 0xc0 && opcode <= 0xce) ||
+         (opcode >= 0xe0 && opcode <= 0xee);
+}
+
+bool raw_indirect_control_opcode(int opcode) {
+  return raw_indirect_jump_opcode(opcode) || raw_indirect_call_opcode(opcode) ||
+         raw_indirect_cond_jump_opcode(opcode);
+}
+
 bool ir_op_splits_internal_basic_block(const IrOp& op) {
   switch (op.kind) {
   case IrKind::Jump:
@@ -894,7 +914,7 @@ bool ir_op_splits_internal_basic_block(const IrOp& op) {
   case 0x5e:
     return true;
   default:
-    return false;
+    return raw_indirect_control_opcode(op.opcode);
   }
 }
 
@@ -1033,7 +1053,8 @@ bool ir_op_always_transfers_control(const IrOp& op) {
       op.kind == IrKind::Return || op.kind == IrKind::Stop) {
     return true;
   }
-  return op.opcode == 0x50 || op.opcode == 0x51 || op.opcode == 0x52;
+  return op.opcode == 0x50 || op.opcode == 0x51 || op.opcode == 0x52 ||
+         raw_indirect_jump_opcode(op.opcode);
 }
 
 void add_cfg_edge(IrCfg& cfg, const std::string& from, const std::string& to) {
@@ -2156,6 +2177,10 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
 
   for (std::size_t entry_index = 0; entry_index < blocks.size(); ++entry_index) {
     const IrLabelBlock& entry = blocks.at(entry_index);
+    if (entry.hidden && entry_index != 0U &&
+        (!cfg.predecessors.contains(entry.label) || cfg.predecessors.at(entry.label).empty())) {
+      continue;
+    }
     std::optional<std::string> cursor = terminal_jump_target_from_ir_body(entry.body);
     if (!cursor.has_value())
       continue;

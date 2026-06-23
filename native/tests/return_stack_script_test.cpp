@@ -110,6 +110,12 @@ IrOp ir_indirect_call(int opcode = 0xa0) {
   return op;
 }
 
+IrOp ir_raw_indirect_jump(int opcode = 0x80) {
+  IrOp op = ir_plain(opcode);
+  op.meta.mnemonic = "К БП";
+  return op;
+}
+
 IrOp ir_call(const std::string& target) {
   IrOp op;
   op.kind = IrKind::Call;
@@ -1400,6 +1406,24 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "indirect-call prefixes should stay before the materialized charge chain");
     require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
             "indirect-call-prefix embedded tail chains should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
+    ops.push_back(ir_raw_indirect_jump());
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(!search.materialized,
+            "embedded tail-chain scanner should not materialize unreachable blocks after raw "
+            "indirect jumps");
   }
 
   {
