@@ -1151,14 +1151,11 @@ std::string unique_callsite_fragment_label(const std::set<std::string>& labels, 
 }
 
 bool ir_meta_equal(const IrMeta& left, const IrMeta& right) {
-  return left.mnemonic == right.mnemonic && left.comment == right.comment &&
-         left.source_line == right.source_line && left.raw == right.raw &&
-         left.roles == right.roles && left.tactic == right.tactic;
+  return left.mnemonic == right.mnemonic && left.raw == right.raw;
 }
 
 bool ir_target_meta_equal(const IrTargetMeta& left, const IrTargetMeta& right) {
-  return left.comment == right.comment && left.source_line == right.source_line &&
-         left.roles == right.roles && left.formal_opcode == right.formal_opcode;
+  return left.formal_opcode == right.formal_opcode;
 }
 
 bool ir_op_equal_for_tail_fragment(const IrOp& left, const IrOp& right) {

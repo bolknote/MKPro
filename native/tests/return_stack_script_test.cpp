@@ -1610,6 +1610,37 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    IrOp left_shared = ir_plain(7);
+    left_shared.meta.comment = "left source";
+    IrOp left_jump = ir_jump("t1");
+    left_jump.meta.comment = "left jump";
+    IrOp right_shared = ir_plain(7);
+    right_shared.meta.comment = "right source";
+    IrOp right_jump = ir_jump("t1");
+    right_jump.meta.comment = "right jump";
+
+    ops.push_back(ir_label("entry"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_plain(8));
+    ops.push_back(left_shared);
+    ops.push_back(left_jump);
+    ops.push_back(ir_label("alternate"));
+    ops.push_back(ir_plain(6));
+    ops.push_back(right_shared);
+    ops.push_back(right_jump);
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.extracted_tail_fragments == 1,
+            "IR tail layout scanner should deduplicate semantically identical suffixes even when "
+            "comments differ");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("entry"));
     ops.push_back(ir_plain(9));
     ops.push_back(ir_plain(6));
