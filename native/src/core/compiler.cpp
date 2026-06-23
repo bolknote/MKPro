@@ -34037,7 +34037,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                     ", too-long=" +
                     std::to_string(tail_layout.cfg_tail_too_long_chain_candidates) +
                     ", broken=" +
-                    std::to_string(tail_layout.cfg_tail_broken_chain_candidates) + ")" +
+                    std::to_string(tail_layout.cfg_tail_broken_chain_candidates) +
+                    " [unresolved=" +
+                    std::to_string(tail_layout.cfg_tail_unresolved_chain_candidates) +
+                    ", repeated=" +
+                    std::to_string(tail_layout.cfg_tail_repeated_chain_candidates) +
+                    ", nonterminal=" +
+                    std::to_string(tail_layout.cfg_tail_nonterminal_chain_candidates) + "])" +
                     ", rejected " +
                     std::to_string(tail_layout.cfg_tail_external_entry_rejections) +
                     " by external CFG entries"));

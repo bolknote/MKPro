@@ -745,7 +745,17 @@ struct IrTailChainSearchStats {
   int short_chain_candidates = 0;
   int too_long_chain_candidates = 0;
   int broken_chain_candidates = 0;
+  int unresolved_chain_candidates = 0;
+  int repeated_chain_candidates = 0;
+  int nonterminal_chain_candidates = 0;
   int external_entry_rejections = 0;
+};
+
+enum class IrTailChainBrokenReason {
+  None,
+  Unresolved,
+  Repeated,
+  NonTerminal,
 };
 
 struct IrCallContinuation {
@@ -1302,16 +1312,19 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
     std::vector<std::size_t> tail_indices;
     std::set<std::string> moved_labels;
     bool valid_chain = true;
+    IrTailChainBrokenReason broken_reason = IrTailChainBrokenReason::None;
     while (cursor.has_value()) {
       const std::optional<IrCallContinuation> resolved =
           cfg_non_empty_block_from_label(blocks, by_label, cfg, *cursor);
       if (!resolved.has_value() || resolved->block_index == entry_index) {
         valid_chain = false;
+        broken_reason = IrTailChainBrokenReason::Unresolved;
         break;
       }
       const IrLabelBlock& tail = blocks.at(resolved->block_index);
       if (seen_tail_labels.contains(tail.label)) {
         valid_chain = false;
+        broken_reason = IrTailChainBrokenReason::Repeated;
         break;
       }
       seen_tail_labels.insert(tail.label);
@@ -1324,14 +1337,30 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
         cursor = next;
         continue;
       }
-      if (!terminal_stop_from_ir_body(tail.body))
+      if (!terminal_stop_from_ir_body(tail.body)) {
         valid_chain = false;
+        broken_reason = IrTailChainBrokenReason::NonTerminal;
+      }
       break;
     }
 
     if (!valid_chain) {
-      if (stats != nullptr)
+      if (stats != nullptr) {
         ++stats->broken_chain_candidates;
+        switch (broken_reason) {
+        case IrTailChainBrokenReason::Unresolved:
+          ++stats->unresolved_chain_candidates;
+          break;
+        case IrTailChainBrokenReason::Repeated:
+          ++stats->repeated_chain_candidates;
+          break;
+        case IrTailChainBrokenReason::NonTerminal:
+          ++stats->nonterminal_chain_candidates;
+          break;
+        case IrTailChainBrokenReason::None:
+          break;
+        }
+      }
       continue;
     }
     if (tail_indices.size() < 2U) {
@@ -1902,6 +1931,9 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
       search.cfg_tail_short_chain_candidates = stats.short_chain_candidates;
       search.cfg_tail_too_long_chain_candidates = stats.too_long_chain_candidates;
       search.cfg_tail_broken_chain_candidates = stats.broken_chain_candidates;
+      search.cfg_tail_unresolved_chain_candidates = stats.unresolved_chain_candidates;
+      search.cfg_tail_repeated_chain_candidates = stats.repeated_chain_candidates;
+      search.cfg_tail_nonterminal_chain_candidates = stats.nonterminal_chain_candidates;
       search.cfg_tail_external_entry_rejections = stats.external_entry_rejections;
     }
   }
