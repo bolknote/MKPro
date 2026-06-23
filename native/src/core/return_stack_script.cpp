@@ -1184,6 +1184,24 @@ std::optional<std::string> single_call_block_target(const IrLabelBlock& block) {
   return ir_label_target(op);
 }
 
+bool noop_return_block(const IrLabelBlock& block) {
+  if (block.body.size() != 1U)
+    return false;
+  const IrOp& op = block.body.front();
+  return op.kind == IrKind::Return || op.opcode == 0x52;
+}
+
+std::string unique_same_target_entry_label(const std::set<std::string>& labels,
+                                           int ordinal) {
+  std::string candidate = "__return_stack_same_target_entry_" + std::to_string(ordinal);
+  int suffix = ordinal;
+  while (labels.contains(candidate)) {
+    ++suffix;
+    candidate = "__return_stack_same_target_entry_" + std::to_string(suffix);
+  }
+  return candidate;
+}
+
 std::optional<IrCallContinuation> cfg_non_empty_block_from_label(
     const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
     const IrCfg& cfg, const std::string& start_label) {
@@ -1539,6 +1557,146 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
 
     if (!existing_call_chain_has_safe_cfg_entries(cfg, moved_labels, first_call_label,
                                                   entry.label, rejection_reason)) {
+      continue;
+    }
+    return candidate;
+  }
+
+  return std::nullopt;
+}
+
+std::optional<IrTailChainCandidate> same_target_noop_helper_call_group_opportunity(
+    const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  const IrCfg cfg = build_ir_cfg(blocks);
+  std::set<std::string> labels;
+  for (const IrLabelBlock& block : blocks)
+    labels.insert(block.label);
+
+  std::map<std::string, std::vector<std::size_t>> calls_by_target;
+  for (std::size_t index = 0; index < blocks.size(); ++index) {
+    const std::optional<std::string> target = single_call_block_target(blocks.at(index));
+    if (target.has_value())
+      calls_by_target[*target].push_back(index);
+  }
+
+  int synthetic_ordinal = 0;
+  for (const auto& [target_label, call_indices] : calls_by_target) {
+    if (call_indices.size() < 2U ||
+        call_indices.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
+      continue;
+    }
+    const auto target_it = by_label.find(target_label);
+    if (target_it == by_label.end() || !noop_return_block(blocks.at(target_it->second)))
+      continue;
+
+    std::vector<ReturnStackTailBlock> tails;
+    std::vector<ReturnStackExistingCallSite> existing_sites;
+    std::map<std::string, std::size_t> site_by_continuation;
+    std::set<std::string> moved_labels;
+    bool valid = true;
+    for (const std::size_t call_index : call_indices) {
+      const IrLabelBlock& call_block = blocks.at(call_index);
+      const std::optional<IrCallContinuation> continuation_block =
+          cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_label);
+      if (!continuation_block.has_value()) {
+        valid = false;
+        break;
+      }
+      const IrLabelBlock& continuation = blocks.at(continuation_block->block_index);
+      if (site_by_continuation.contains(continuation.label)) {
+        valid = false;
+        break;
+      }
+      site_by_continuation[continuation.label] = existing_sites.size();
+      moved_labels.insert(call_block.label);
+      moved_labels.insert(continuation_block->alias_labels.begin(),
+                          continuation_block->alias_labels.end());
+      moved_labels.insert(continuation.label);
+      tails.push_back(ReturnStackTailBlock{
+          .label = continuation.label,
+          .body = continuation.body,
+      });
+      existing_sites.push_back(ReturnStackExistingCallSite{
+          .label = call_block.label,
+          .target_label = target_label,
+          .continuation_label = continuation.label,
+          .source_address = -1,
+      });
+    }
+    if (!valid)
+      continue;
+
+    for (const ReturnStackTailBlock& tail : tails) {
+      const std::optional<std::string> next = terminal_jump_target_from_ir_body(tail.body);
+      if (next.has_value() && !site_by_continuation.contains(*next)) {
+        valid = false;
+        break;
+      }
+      if (!next.has_value() && !terminal_stop_from_ir_body(tail.body)) {
+        valid = false;
+        break;
+      }
+    }
+    if (!valid)
+      continue;
+
+    const std::string entry_label = unique_same_target_entry_label(labels, synthetic_ordinal++);
+    ReturnStackLayoutOpportunity opportunity{
+        .tails = tails,
+        .entry_body = {synthetic_ir_jump_to_label(tails.front().label)},
+        .entry_label = entry_label,
+        .existing_call_sites = existing_sites,
+    };
+
+    std::optional<std::vector<std::size_t>> tail_order;
+    for (const ReturnStackTailBlock& tail : tails) {
+      opportunity.entry_body = {synthetic_ir_jump_to_label(tail.label)};
+      tail_order = proved_tail_order_from_ir(opportunity);
+      if (tail_order.has_value())
+        break;
+    }
+    if (!tail_order.has_value() || tail_order->size() != existing_sites.size())
+      continue;
+
+    for (std::size_t physical_index = 0; physical_index < tail_order->size();
+         ++physical_index) {
+      const std::string& continuation_label =
+          opportunity.tails.at(tail_order->at(physical_index)).label;
+      const auto site_it = site_by_continuation.find(continuation_label);
+      if (site_it == site_by_continuation.end()) {
+        valid = false;
+        break;
+      }
+      existing_sites.at(site_it->second).target_label =
+          physical_index + 1U >= tail_order->size()
+              ? entry_label
+              : existing_sites
+                    .at(site_by_continuation.at(
+                        opportunity.tails.at(tail_order->at(physical_index + 1U)).label))
+                    .label;
+    }
+    if (!valid)
+      continue;
+
+    opportunity.existing_call_sites = existing_sites;
+    const std::string& first_continuation = opportunity.tails.at(tail_order->front()).label;
+    const std::string& first_call_label =
+        existing_sites.at(site_by_continuation.at(first_continuation)).label;
+    const std::size_t entry_block_index = by_label.at(first_call_label);
+    IrTailChainCandidate candidate{
+        .opportunity = std::move(opportunity),
+        .moved_tail_labels = moved_labels,
+        .original_entry_label = first_call_label,
+        .generated_entry_label = entry_label,
+        .entry_block_index = entry_block_index,
+        .wrap_original_entry_label = false,
+    };
+    candidate.opportunity.entry_at_address_zero = entry_block_index == 0U;
+    candidate.opportunity.single_start_jump = entry_block_index != 0U;
+
+    if (!existing_call_chain_has_safe_cfg_entries(cfg, moved_labels, first_call_label,
+                                                  entry_label, rejection_reason)) {
       continue;
     }
     return candidate;
@@ -2301,6 +2459,15 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
       if (!candidate.has_value() &&
           retarget_rejection.find("external CFG entry") != std::string::npos) {
         rejection = retarget_rejection;
+      }
+    }
+    if (!candidate.has_value() && rejection.find("external CFG entry") == std::string::npos) {
+      std::string noop_retarget_rejection;
+      candidate = same_target_noop_helper_call_group_opportunity(*blocks,
+                                                                 noop_retarget_rejection);
+      if (!candidate.has_value() &&
+          noop_retarget_rejection.find("external CFG entry") != std::string::npos) {
+        rejection = noop_retarget_rejection;
       }
     }
     if (!candidate.has_value() && rejection.find("external CFG entry") == std::string::npos) {
