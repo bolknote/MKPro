@@ -15,6 +15,7 @@ struct ExpressionEmitApi {
   MachineEmitter& emitter;
   std::function<void(const std::string&)> emit_recall;
   std::function<bool(const Expression&)> lower_expression_to_x;
+  std::function<bool(const Expression&)> lower_expression_to_x_no_constant_fold;
   std::function<void(const std::string&, std::string)> emit_store;
   std::function<bool(const Expression&)> lower_call_to_x;
   std::function<bool(const Expression&)> call_needs_binary_temp;

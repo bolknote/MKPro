@@ -359,6 +359,33 @@ program SingleUseTailInline {
                         [](const ResolvedStep& step) { return step.hex == "50"; }) == 1,
           "single-use tail inline should expose one display stop");
 
+  const CompileResult parameterized_tail = compile_source(R"mkpro(
+program ParameterizedTailHoist {
+  state {
+    selector: counter 0..9 = 0
+  }
+
+  fn win(move) {
+    halt(move * 1000000)
+  }
+
+  loop {
+    if selector == 0 {
+      win(1)
+    }
+    else {
+      win(2)
+    }
+  }
+}
+)mkpro");
+  require(parameterized_tail.implemented,
+          "native compiler should hoist parameterized common tail calls");
+  require(parameterized_tail.diagnostics.empty(),
+          "parameterized tail compile should not report diagnostics");
+  require(has_optimization(parameterized_tail, "common-branch-tail-hoisting"),
+          "parameterized tail calls should report common-branch-tail-hoisting");
+
   const CompileResult compact_dispatch = compile_source(R"mkpro(
 program CompactDispatch {
   state {
@@ -503,17 +530,16 @@ program InvokeWithArg {
   require(invoked_with_arg.implemented, "native compiler should lower parameterized v2_invoke");
   require(invoked_with_arg.diagnostics.empty(),
           "parameterized invoke compile should not report diagnostics");
-  require(invoked_with_arg.registers.find("delta") != invoked_with_arg.registers.end(),
-          "parameterized invoke should allocate a register for the rule parameter");
-  require(invoked_with_arg.listing.find("arg delta for add") != std::string::npos,
-          "parameterized invoke listing should assign argument to parameter");
-  require(invoked_with_arg.listing.find("proc call add") != std::string::npos,
-          "parameterized invoke listing should include function call");
-  require(has_optimization(invoked_with_arg, "proc-call-lowering"),
-          "parameterized procedure call should report TS proc-call-lowering");
-  require(has_optimization_detail(invoked_with_arg, "proc-return-x-reuse",
-                                  "Tracked total in X after returning from rule add."),
-          "parameterized procedure call should report TS proc-return-x-reuse");
+  require(invoked_with_arg.registers.find("delta") == invoked_with_arg.registers.end(),
+          "single-use parameterized invoke should not materialize the rule parameter");
+  require(invoked_with_arg.listing.find("arg delta for add") == std::string::npos,
+          "single-use parameterized invoke should not assign an argument register");
+  require(invoked_with_arg.listing.find("proc call add") == std::string::npos,
+          "single-use parameterized invoke should not emit a function call");
+  require(has_optimization(invoked_with_arg, "single-use-rule-inline"),
+          "single-use parameterized procedure should report TS single-use-rule-inline");
+  require(has_optimization(invoked_with_arg, "dead-store-elimination"),
+          "single-use parameterized procedure should report TS dead-store-elimination");
 
   const CompileResult x_param_invoked = compile_source(R"mkpro(
 program XParamInvoke {
@@ -537,10 +563,12 @@ program XParamInvoke {
           "X-parameter transport should not allocate a register for the rule parameter");
   require(x_param_invoked.listing.find("arg value") == std::string::npos,
           "X-parameter call should not store an argument register before the call");
-  require(has_optimization(x_param_invoked, "x-param-proc-call"),
-          "X-parameter invocation should report the TS x-param call optimization");
-  require(has_optimization(x_param_invoked, "x-param-proc-entry"),
-          "X-parameter invocation should report the TS x-param entry optimization");
+  require(x_param_invoked.listing.find("proc call set_to") == std::string::npos,
+          "single-site copy invoke should inline instead of emitting a function call");
+  require(!has_optimization(x_param_invoked, "x-param-proc-call"),
+          "single-site copy invoke should not report x-param-proc-call");
+  require(!has_optimization(x_param_invoked, "x-param-proc-entry"),
+          "single-site copy invoke should not report x-param-proc-entry");
 
   const CompileResult x_param_rule = compile_source(R"mkpro(
 program XParamRule {
@@ -1050,8 +1078,8 @@ program LoopPromptDispatch {
           "native compiler should dispatch directly on loop prompt input");
   require(loop_prompt_dispatch.diagnostics.empty(),
           "loop prompt dispatch compile should not report diagnostics");
-  require(has_optimization(loop_prompt_dispatch, "loop-carried-prompt-input-dispatch"),
-          "loop prompt dispatch should report loop-carried-prompt-input-dispatch");
+  require(has_optimization(loop_prompt_dispatch, "loop-carried-prompt-input-branch"),
+          "loop prompt dispatch should report loop-carried-prompt-input-branch");
   require(loop_prompt_dispatch.registers.find("screen") == loop_prompt_dispatch.registers.end(),
           "loop prompt dispatch should not allocate the screen prompt");
   require(loop_prompt_dispatch.registers.find("key") == loop_prompt_dispatch.registers.end(),
@@ -1818,12 +1846,12 @@ program BitOrTestAndSet {
           "bit_or test-and-set branch compile should not report diagnostics");
   require(has_optimization(bit_or_test_and_set, "bit-or-test-and-set-branch"),
           "bit_or test-and-set branch should report the TS strategy name");
-  require(has_optimization(bit_or_test_and_set, "bit-or-test-and-set-negative-arg"),
-          "bit_or test-and-set negative argument should report the TS strategy name");
+  require(has_optimization(bit_or_test_and_set, "preloaded-constant"),
+          "bit_or test-and-set negative argument should use the current TS preloaded constant path");
   require(bit_or_test_and_set.listing.find("bit_or test-and-set occupied") != std::string::npos,
           "membership/update branch should fuse into bit_or test-and-set lowering");
-  require(bit_or_test_and_set.listing.find("bit_or test-and-set sign = -1") != std::string::npos,
-          "negative x-parameter argument should be derived from changed value");
+  require(bit_or_test_and_set.listing.find("preload const -1") != std::string::npos,
+          "negative x-parameter argument should be loaded through the current TS preload path");
   require(bit_or_test_and_set.listing.find("assign mask") == std::string::npos,
           "test-and-set mask temporary should not be spilled before the branch");
 
@@ -2140,14 +2168,16 @@ program BuiltinCalls {
           "built-in call listing should include abs()");
   require(builtin_call.listing.find("random int floor") != std::string::npos,
           "built-in call listing should include the TS random int lowering");
-  require(builtin_call.listing.find("bit_xor()") != std::string::npos,
-          "built-in call listing should include bit_xor()");
+  require(builtin_call.listing.find("bit_xor()") == std::string::npos,
+          "constant bitwise built-in calls should fold before code generation");
+  require(has_optimization(builtin_call, "expression-constant-folder"),
+          "constant bitwise built-in calls should report expression-constant-folder");
   require(builtin_call.listing.find("max()") != std::string::npos,
           "built-in call listing should include max()");
-  require(builtin_call.listing.find("min negated max") != std::string::npos,
-          "built-in call listing should include min()");
-  require(builtin_call.registers.find("__min_scratch") != builtin_call.registers.end(),
-          "min() should allocate a reusable scratch register");
+  require(builtin_call.listing.find("negative number") != std::string::npos,
+          "built-in call listing should include min() via a negated max operand");
+  require(builtin_call.registers.find("__min_scratch") == builtin_call.registers.end(),
+          "current TS min() lowering should not allocate a reusable scratch register");
   require(has_optimization(builtin_call, "min-via-max-lowering"),
           "min() should report the TS strategy name");
   require(builtin_call.listing.find("cos()") != std::string::npos,
@@ -5426,8 +5456,10 @@ program DispatchSourceRegister {
           "native compiler should reuse source registers for generic dispatch");
   require(source_register_dispatch.diagnostics.empty(),
           "source-register dispatch compile should not report diagnostics");
-  require(has_optimization(source_register_dispatch, "dispatch-source-register"),
-          "source-register dispatch should report the TS optimization name");
+  require(!has_optimization(source_register_dispatch, "dispatch-source-register"),
+          "register comparison dispatch should match TS and avoid source-register dispatch");
+  require(has_optimization(source_register_dispatch, "equality-zero-fallthrough"),
+          "register comparison dispatch should report the TS equality fallthrough optimization");
   require(std::none_of(source_register_dispatch.registers.begin(),
                        source_register_dispatch.registers.end(),
                        [](const auto& item) { return item.first.rfind("__match_value_", 0) == 0; }),

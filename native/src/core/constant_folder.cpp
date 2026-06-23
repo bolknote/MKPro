@@ -398,6 +398,60 @@ std::optional<Expression> decimal_number_expression(DecimalValue value) {
   return number_expression(raw);
 }
 
+std::vector<int> decimal_mantissa_digits(DecimalValue value) {
+  value = normalize_decimal(value);
+  std::vector<int> result(8, 0);
+  if (value.num == 0)
+    return result;
+  const std::string digits = int128_to_string(abs_int128(value.num));
+  for (std::size_t index = 0; index < result.size() && index < digits.size(); ++index)
+    result[index] = digits[index] - '0';
+  return result;
+}
+
+DecimalValue decimal_from_digits(const std::vector<int>& digits, int scale) {
+  __int128 num = 0;
+  for (const int digit : digits)
+    num = num * 10 + digit;
+  return normalize_decimal(DecimalValue{.num = num, .scale = scale});
+}
+
+int bitwise_nibble(int left, int right, const std::string& op) {
+  if (op == "and")
+    return left & right;
+  if (op == "or")
+    return left | right;
+  return left ^ right;
+}
+
+std::optional<DecimalValue> fold_bitwise(DecimalValue left, DecimalValue right,
+                                         const std::string& op) {
+  const std::vector<int> lhs = decimal_mantissa_digits(left);
+  const std::vector<int> rhs = decimal_mantissa_digits(right);
+  std::vector<int> digits = {8};
+  digits.reserve(8);
+  for (std::size_t index = 1; index < 8; ++index) {
+    const int digit = bitwise_nibble(lhs.at(index), rhs.at(index), op);
+    if (digit > 9)
+      return std::nullopt;
+    digits.push_back(digit);
+  }
+  return decimal_from_digits(digits, 7);
+}
+
+std::optional<DecimalValue> fold_bitwise_not(DecimalValue value) {
+  const std::vector<int> source = decimal_mantissa_digits(value);
+  std::vector<int> digits = {8};
+  digits.reserve(8);
+  for (std::size_t index = 1; index < 8; ++index) {
+    const int digit = (~source.at(index)) & 0x0f;
+    if (digit > 9)
+      return std::nullopt;
+    digits.push_back(digit);
+  }
+  return decimal_from_digits(digits, 7);
+}
+
 std::optional<double> numeric_literal_value(const Expression& expression) {
   if (expression.kind != "number")
     return std::nullopt;
@@ -975,6 +1029,14 @@ std::optional<Expression> fold_pure_constant_call(const std::string& callee,
     result = compare_decimal(values.at(0), values.at(1)) >= 0 ? values.at(0) : values.at(1);
   else if (name == "safe_min" && values.size() == 2U)
     result = compare_decimal(values.at(0), values.at(1)) <= 0 ? values.at(0) : values.at(1);
+  else if (name == "bit_and" && values.size() == 2U)
+    result = fold_bitwise(values.at(0), values.at(1), "and");
+  else if (name == "bit_or" && values.size() == 2U)
+    result = fold_bitwise(values.at(0), values.at(1), "or");
+  else if (name == "bit_xor" && values.size() == 2U)
+    result = fold_bitwise(values.at(0), values.at(1), "xor");
+  else if (name == "bit_not" && values.size() == 1U)
+    result = fold_bitwise_not(values.front());
 
   return result.has_value() ? decimal_number_expression(*result) : std::nullopt;
 }
