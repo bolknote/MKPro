@@ -1157,8 +1157,31 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
   return extracted;
 }
 
+std::string cfg_canonical_symbolic_callsite_target_label(
+    const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
+    const IrCfg& cfg, const std::string& target_label) {
+  std::string cursor = target_label;
+  std::set<std::string> seen;
+  while (true) {
+    const auto block_it = by_label.find(cursor);
+    if (block_it == by_label.end() || !seen.insert(cursor).second)
+      return target_label;
+
+    const IrLabelBlock& block = blocks.at(block_it->second);
+    if (!block.body.empty())
+      return block.label;
+
+    const auto successor_it = cfg.successors.find(block.label);
+    if (successor_it == cfg.successors.end() || successor_it->second.size() != 1U)
+      return target_label;
+    cursor = *successor_it->second.begin();
+  }
+}
+
 std::vector<std::string> symbolic_existing_callsite_hint_targets(
     const std::vector<IrLabelBlock>& blocks) {
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  const IrCfg cfg = build_ir_cfg(blocks);
   std::set<std::string> targets;
   for (std::size_t index = 0; index + 1U < blocks.size(); ++index) {
     const IrLabelBlock& block = blocks.at(index);
@@ -1170,13 +1193,15 @@ std::vector<std::string> symbolic_existing_callsite_hint_targets(
     const std::optional<std::string> target = ir_label_target(tail);
     if (!target.has_value())
       continue;
-    targets.insert(*target);
+    targets.insert(cfg_canonical_symbolic_callsite_target_label(blocks, by_label, cfg, *target));
   }
   return std::vector<std::string>(targets.begin(), targets.end());
 }
 
 std::map<std::string, int> symbolic_existing_callsite_hint_counts_by_target(
     const std::vector<IrLabelBlock>& blocks) {
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  const IrCfg cfg = build_ir_cfg(blocks);
   std::map<std::string, int> counts;
   for (std::size_t index = 0; index + 1U < blocks.size(); ++index) {
     const IrLabelBlock& block = blocks.at(index);
@@ -1188,7 +1213,7 @@ std::map<std::string, int> symbolic_existing_callsite_hint_counts_by_target(
     const std::optional<std::string> target = ir_label_target(tail);
     if (!target.has_value())
       continue;
-    ++counts[*target];
+    ++counts[cfg_canonical_symbolic_callsite_target_label(blocks, by_label, cfg, *target)];
   }
   return counts;
 }

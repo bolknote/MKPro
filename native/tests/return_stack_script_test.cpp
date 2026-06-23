@@ -853,6 +853,33 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("first"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_call("helper_a"));
+    ops.push_back(ir_label("after_first"));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("second"));
+    ops.push_back(ir_plain(2));
+    ops.push_back(ir_call("helper_b"));
+    ops.push_back(ir_label("after_second"));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("helper_a"));
+    ops.push_back(ir_label("helper_b"));
+    ops.push_back(ir_label("shared_helper"));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.symbolic_existing_callsite_hints == 2 &&
+                search.symbolic_existing_callsite_target_groups == 1 &&
+                search.symbolic_existing_callsite_largest_target_group == 2 &&
+                search.symbolic_existing_callsite_target_labels ==
+                    std::vector<std::string>({"shared_helper"}),
+            "IR scanner should group symbolic terminal ПП hints by CFG-resolved target aliases");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("charge1"));
     ops.push_back(ir_call("entry"));
     ops.push_back(ir_label("t1"));
