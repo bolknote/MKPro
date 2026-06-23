@@ -1095,6 +1095,48 @@ std::string unique_callsite_fragment_label(const std::set<std::string>& labels, 
   return candidate;
 }
 
+bool ir_meta_equal(const IrMeta& left, const IrMeta& right) {
+  return left.mnemonic == right.mnemonic && left.comment == right.comment &&
+         left.source_line == right.source_line && left.raw == right.raw &&
+         left.roles == right.roles && left.tactic == right.tactic;
+}
+
+bool ir_target_meta_equal(const IrTargetMeta& left, const IrTargetMeta& right) {
+  return left.comment == right.comment && left.source_line == right.source_line &&
+         left.roles == right.roles && left.formal_opcode == right.formal_opcode;
+}
+
+bool ir_op_equal_for_tail_fragment(const IrOp& left, const IrOp& right) {
+  return left.kind == right.kind && left.name == right.name &&
+         left.procedure_boundary == right.procedure_boundary &&
+         left.procedure_name == right.procedure_name && left.hidden == right.hidden &&
+         left.register_name == right.register_name && left.condition == right.condition &&
+         left.counter == right.counter && left.opcode == right.opcode &&
+         left.target == right.target && left.semantic == right.semantic &&
+         ir_meta_equal(left.meta, right.meta) &&
+         ir_target_meta_equal(left.target_meta, right.target_meta);
+}
+
+bool ir_tail_fragment_body_equal(const std::vector<IrOp>& left,
+                                 const std::vector<IrOp>& right) {
+  if (left.size() != right.size())
+    return false;
+  for (std::size_t index = 0; index < left.size(); ++index) {
+    if (!ir_op_equal_for_tail_fragment(left.at(index), right.at(index)))
+      return false;
+  }
+  return true;
+}
+
+std::optional<std::string> existing_tail_fragment_label_for_body(
+    const std::vector<IrLabelBlock>& fragments, const std::vector<IrOp>& body) {
+  for (const IrLabelBlock& fragment : fragments) {
+    if (ir_tail_fragment_body_equal(fragment.body, body))
+      return fragment.label;
+  }
+  return std::nullopt;
+}
+
 ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& blocks) {
   std::set<std::string> labels;
   for (const IrLabelBlock& block : blocks)
@@ -1134,22 +1176,29 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
       continue;
     }
 
-    const std::string fragment_label = unique_tail_fragment_label(labels, extracted.total());
-    labels.insert(fragment_label);
-
     std::vector<IrOp> suffix(block.body.begin() + static_cast<std::ptrdiff_t>(*suffix_start),
                              block.body.end());
+    std::string fragment_label;
+    const std::optional<std::string> existing_fragment =
+        existing_tail_fragment_label_for_body(appended_fragments, suffix);
+    if (existing_fragment.has_value()) {
+      fragment_label = *existing_fragment;
+    } else {
+      fragment_label = unique_tail_fragment_label(labels, extracted.total());
+      labels.insert(fragment_label);
+      appended_fragments.push_back(IrLabelBlock{
+          .label = fragment_label,
+          .body = suffix,
+          .hidden = true,
+      });
+      ++extracted.tail_fragments;
+    }
+
     block.body.erase(block.body.begin() + static_cast<std::ptrdiff_t>(*suffix_start),
                      block.body.end());
     block.body.push_back(synthetic_ir_jump_to_label(fragment_label));
 
-    appended_fragments.push_back(IrLabelBlock{
-        .label = fragment_label,
-        .body = std::move(suffix),
-        .hidden = true,
-    });
     rewritten.push_back(std::move(block));
-    ++extracted.tail_fragments;
   }
   for (IrLabelBlock& fragment : appended_fragments)
     rewritten.push_back(std::move(fragment));
