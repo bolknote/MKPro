@@ -32,8 +32,13 @@ std::string rstrip_newlines(std::string value) {
 void supported_examples_match_native_oracles() {
   const std::filesystem::path root = std::filesystem::current_path();
   const std::vector<std::string> supported_examples = {
-      "99-bottles",   "basic",          "cave-sketch", "clock", "dungeon",   "e-94-digits",
-      "fox-hunt-100", "functions-demo", "human",       "lunar", "tiny-game",
+      "99-bottles",        "basic",          "cave-highlevel-baseline",
+      "cave-sketch",       "cave-treasure",  "clock",
+      "dangerous-loading", "dungeon",        "e-94-digits",
+      "fox-hunt-100",      "fox-hunt-mk61",  "functions-demo",
+      "game-100-pig",      "giants-country", "human",
+      "jack-pot",          "labyrinth777",   "lunar",
+      "tiny-game",
   };
 
   for (const std::string& name : supported_examples) {

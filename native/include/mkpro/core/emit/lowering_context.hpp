@@ -8,6 +8,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace mkpro {
@@ -138,6 +139,7 @@ struct LoweringContext {
   std::map<std::string, const V2Rule*> rules;
   std::map<std::string, int> proc_call_counts;
   std::set<std::string> inline_statement_rules;
+  std::set<std::pair<std::string, int>> terminal_underflow_unit_decrements;
   std::map<std::string, XParamProcLowering> x_param_procs;
   std::map<std::string, XParamYStackProcLowering> x_param_y_stack_procs;
   std::optional<std::string> current_y_variable;

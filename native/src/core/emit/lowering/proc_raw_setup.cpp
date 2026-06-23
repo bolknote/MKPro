@@ -584,8 +584,7 @@ std::optional<std::pair<int, std::string>> setup_binary_opcode(const std::string
   return std::nullopt;
 }
 
-std::optional<std::pair<int, std::string>>
-setup_binary_call_opcode(const std::string& callee) {
+std::optional<std::pair<int, std::string>> setup_binary_call_opcode(const std::string& callee) {
   static const std::map<std::string, std::pair<int, std::string>> opcodes = {
       {"pow", {0x24, "F x^y"}},  {"max", {0x36, "К max"}},   {"bit_and", {0x37, "К ∧"}},
       {"bit_or", {0x38, "К ∨"}}, {"bit_xor", {0x39, "К ⊕"}},
@@ -720,12 +719,10 @@ SetupNumericPreloadAction with_duplicate_setup_targets(SetupNumericPreloadAction
   return action;
 }
 
-std::vector<SetupNumericPreloadAction>
-setup_constant_synthesis_actions(const std::vector<NumericSetupPreload>& preloads,
-                                 const std::vector<std::string>& normalized,
-                                 const std::vector<double>& numeric,
-                                 const std::vector<int>& direct_costs, int loaded_mask,
-                                 int target_index) {
+std::vector<SetupNumericPreloadAction> setup_constant_synthesis_actions(
+    const std::vector<NumericSetupPreload>& preloads, const std::vector<std::string>& normalized,
+    const std::vector<double>& numeric, const std::vector<int>& direct_costs, int loaded_mask,
+    int target_index) {
   const double target = numeric.at(static_cast<std::size_t>(target_index));
   if (!std::isfinite(target))
     return {};
@@ -1027,23 +1024,21 @@ void emit_setup_numeric_preload_action(MachineEmitter& setup,
     setup.emit_number(action.exponent);
     setup.emit_op(0x15, "F 10^x", "setup constant " + target_value, std::nullopt, true);
   } else if (action.kind == "unary") {
-    const NumericSetupPreload& source =
-        preloads.at(static_cast<std::size_t>(action.source_index));
+    const NumericSetupPreload& source = preloads.at(static_cast<std::size_t>(action.source_index));
     emit_setup_recall(setup, source.register_name,
                       "setup constant " + target_value + " base " +
                           normalize_setup_constant_text(source.value));
-    setup.emit_op(action.opcode, action.mnemonic, "setup constant " + target_value,
-                  std::nullopt, true);
+    setup.emit_op(action.opcode, action.mnemonic, "setup constant " + target_value, std::nullopt,
+                  true);
   } else if (action.kind == "unary-sequence") {
-    const NumericSetupPreload& source =
-        preloads.at(static_cast<std::size_t>(action.source_index));
+    const NumericSetupPreload& source = preloads.at(static_cast<std::size_t>(action.source_index));
     emit_setup_recall(setup, source.register_name,
                       "setup constant " + target_value + " base " +
                           normalize_setup_constant_text(source.value));
     for (const SetupSequenceOp& op : action.ops) {
-      const std::string comment = op.comment.empty() ? "setup constant " + target_value
-                                                     : "setup constant " + target_value + " " +
-                                                           op.comment;
+      const std::string comment = op.comment.empty()
+                                      ? "setup constant " + target_value
+                                      : "setup constant " + target_value + " " + op.comment;
       setup.emit_op(op.opcode, op.mnemonic, comment, std::nullopt, true);
     }
   } else {
@@ -1052,8 +1047,7 @@ void emit_setup_numeric_preload_action(MachineEmitter& setup,
     emit_setup_recall(setup, left.register_name,
                       "setup constant " + target_value + " left " +
                           normalize_setup_constant_text(left.value));
-    setup.emit_op(0x0e, "В↑", "setup constant " + target_value + " stack", std::nullopt,
-                  true);
+    setup.emit_op(0x0e, "В↑", "setup constant " + target_value + " stack", std::nullopt, true);
     emit_setup_recall(setup, right.register_name,
                       "setup constant " + target_value + " right " +
                           normalize_setup_constant_text(right.value));
@@ -1061,8 +1055,8 @@ void emit_setup_numeric_preload_action(MachineEmitter& setup,
       setup.emit_op(0x24, "F x^y", "setup constant " + target_value, std::nullopt, true);
     } else if (const std::optional<std::pair<int, std::string>> opcode =
                    setup_binary_opcode(action.op)) {
-      setup.emit_op(opcode->first, opcode->second, "setup constant " + target_value,
-                    std::nullopt, true);
+      setup.emit_op(opcode->first, opcode->second, "setup constant " + target_value, std::nullopt,
+                    true);
     }
   }
   optimizations.push_back(OptimizationReport{
@@ -1074,6 +1068,28 @@ void emit_setup_numeric_preload_action(MachineEmitter& setup,
 }
 
 bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expression);
+
+bool setup_expression_contains_valid_random(const Expression& expression) {
+  if (expression.kind == "number" || expression.kind == "string" || expression.kind == "identifier")
+    return false;
+  if (expression.kind == "indexed")
+    return expression.index != nullptr && setup_expression_contains_valid_random(*expression.index);
+  if (expression.kind == "unary")
+    return expression.expr != nullptr && setup_expression_contains_valid_random(*expression.expr);
+  if (expression.kind == "binary") {
+    return (expression.left != nullptr &&
+            setup_expression_contains_valid_random(*expression.left)) ||
+           (expression.right != nullptr &&
+            setup_expression_contains_valid_random(*expression.right));
+  }
+  if (expression.kind == "call") {
+    const std::string callee = lower_ascii(expression.callee);
+    return (callee == "random" && expression.args.size() <= 2U) ||
+           std::any_of(expression.args.begin(), expression.args.end(),
+                       setup_expression_contains_valid_random);
+  }
+  return false;
+}
 
 bool lower_setup_random_call_to_x(MachineEmitter& setup, const Expression& expression) {
   if (expression.args.empty()) {
@@ -1126,6 +1142,15 @@ bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expres
     }
     if (callee == "random")
       return lower_setup_random_call_to_x(setup, expression);
+    if (callee == "int" && expression.args.size() == 1U &&
+        setup_expression_contains_valid_random(expression.args.front())) {
+      if (!lower_setup_expression_to_x(setup, expression.args.front()))
+        return false;
+      setup.emit_op(0x0e, "В↑", "random int keep scaled draw", std::nullopt, true);
+      setup.emit_op(0x35, "К {x}", "random int fractional part", std::nullopt, true);
+      setup.emit_op(0x11, "-", "random int floor", std::nullopt, true);
+      return true;
+    }
     if (const std::optional<std::pair<int, std::string>> opcode =
             setup_binary_call_opcode(callee)) {
       if (expression.args.size() != 2U ||
@@ -1757,12 +1782,12 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       const std::optional<IndexedSetupPreloadGroup> group =
           indexed_setup_preload_group_at(preloads, consumed, index);
       if (group.has_value()) {
-      if (emit_indexed_setup_preload_group(setup, optimizations, preload, *group)) {
-        for (std::size_t consumed_index = index; consumed_index < group->end; ++consumed_index)
-          consumed.insert(consumed_index);
-        setup_r0_dirty = true;
-        continue;
-      }
+        if (emit_indexed_setup_preload_group(setup, optimizations, preload, *group)) {
+          for (std::size_t consumed_index = index; consumed_index < group->end; ++consumed_index)
+            consumed.insert(consumed_index);
+          setup_r0_dirty = true;
+          continue;
+        }
       }
     }
     if (preload.setup_expression) {
@@ -1806,8 +1831,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
           emit_setup_recall(setup, source.register_name,
                             "setup constant " + normalize_setup_constant_text(preload.value) +
                                 " base " + normalize_setup_constant_text(source.value));
-          setup.emit_op(0x0b, "/-/", "setup constant " +
-                                      normalize_setup_constant_text(preload.value),
+          setup.emit_op(0x0b, "/-/",
+                        "setup constant " + normalize_setup_constant_text(preload.value),
                         std::nullopt, true);
           emit_setup_store(setup, preload.register_name, setup_store_comment(preload));
           consumed.insert(index);

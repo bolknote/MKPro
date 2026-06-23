@@ -200,6 +200,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
     const std::string& arg = args[index];
     if (arg == "--analysis") {
       options.analysis = true;
+    } else if (arg == "--disable-candidate-search") {
+      options.disable_candidate_search = true;
     } else if (arg == "--collect-coalesce-shares") {
       options.collect_coalesce_shares = true;
       options.analysis = true;
@@ -233,6 +235,26 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.return_stack_script = true;
     } else if (arg == "--dead-source-residual-temp-reuse") {
       options.dead_source_residual_temp_reuse = true;
+    } else if (arg == "--domain-error-guards") {
+      options.domain_error_guards = true;
+    } else if (arg == "--unroll-counted-loops") {
+      options.unroll_counted_loops = true;
+    } else if (arg == "--setup-only-counted-loop-init") {
+      options.setup_only_counted_loop_init = true;
+    } else if (arg == "--show-read-guarded-transfer") {
+      options.show_read_guarded_transfer = true;
+    } else if (arg == "--stack-resident-temps") {
+      options.stack_resident_temps = true;
+    } else if (arg == "--order-procs-by-call-count") {
+      options.order_procs_by_call_count = true;
+    } else if (arg == "--proc-layout-strategy") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --proc-layout-strategy\n";
+        return 64;
+      }
+      options.proc_layout_strategy = args[++index];
+    } else if (arg == "--aggressive-indirect-call") {
+      options.aggressive_indirect_call = true;
     } else if (arg == "--share-random-cell") {
       options.share_random_cell = true;
     } else if (arg == "--hoist-shared-helpers") {

@@ -365,8 +365,8 @@ void expression_lowering_helpers_match_typescript_contract() {
     require(harness.lower(call_expr("digit_at", std::move(args))), "digit_at() should lower");
     require(harness.context.emitter.items.back().opcode == 0x34,
             "digit_at() should end with integer-part opcode");
-    require(harness.context.emitter.items.back().comment == "digit_at()",
-            "digit_at() should preserve comment");
+    require(harness.context.emitter.items.back().comment == "int()",
+            "digit_at() should preserve TS macro-expanded integer-part comment");
   }
 
   {
@@ -375,18 +375,16 @@ void expression_lowering_helpers_match_typescript_contract() {
     args.push_back(identifier_expr("left"));
     args.push_back(identifier_expr("right"));
     require(harness.lower(call_expr("min", std::move(args))), "min() should lower");
-    require(harness.context.emitter.items.size() == 8,
-            "min() should lower through negated max sequence");
-    require(harness.context.emitter.items.at(1).comment == "min left negate",
-            "min() should negate left argument");
-    require(harness.context.emitter.items.at(2).comment == "min left",
-            "min() should store left scratch");
-    require(harness.context.emitter.items.at(4).comment == "min right negate",
-            "min() should negate right argument");
-    require(harness.context.emitter.items.at(6).comment == "min negated max",
+    require(harness.context.emitter.items.size() == 6,
+            "min() should lower through TS macro-expanded negated max sequence");
+    require(harness.context.emitter.items.at(1).comment == "unary minus",
+            "min() should negate left argument through the generic unary path");
+    require(harness.context.emitter.items.at(3).comment == "unary minus",
+            "min() should negate right argument through the generic unary path");
+    require(harness.context.emitter.items.at(4).comment == "max()",
             "min() should combine through max before final sign");
-    require(harness.context.emitter.items.back().comment == "min()",
-            "min() should preserve final comment");
+    require(harness.context.emitter.items.back().comment == "unary minus",
+            "min() should preserve the TS macro-expanded final unary comment");
   }
 
   {

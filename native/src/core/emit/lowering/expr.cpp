@@ -86,8 +86,7 @@ bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& c
     return false;
   }
 
-  if ((expression.left->kind == "identifier" &&
-       current_x_holds_name(api, expression.left->name) &&
+  if ((expression.left->kind == "identifier" && current_x_holds_name(api, expression.left->name) &&
        is_simple_stack_load(*expression.right))) {
     if (!api.lower_expression_to_x(*expression.right))
       return false;
@@ -120,8 +119,7 @@ bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& c
 }
 
 bool lower_commutative_numeric_right_before_identifier(ExpressionEmitApi& api,
-                                                       const Expression& expression,
-                                                       int opcode) {
+                                                       const Expression& expression, int opcode) {
   if (expression.op != "*" || expression.left == nullptr || expression.right == nullptr) {
     return false;
   }
@@ -201,7 +199,7 @@ bool lower_commutative_call_with_destructive_selector_last(
   return true;
 }
 
-std::optional<std::size_t> packed_grid_macro_arity(const std::string& name) {
+std::optional<std::size_t> packed_grid_macro_arity_impl(const std::string& name) {
   static const std::map<std::string, std::size_t> arities = {
       {"grid_norm", 1},        {"grid_wrap", 1},    {"bit_mask", 1},   {"bit_has", 2},
       {"bit_set", 2},          {"bit_clear", 2},    {"bit_toggle", 2}, {"diag_left_index", 2},
@@ -231,8 +229,8 @@ Expression digit_set_expression(Expression value, Expression index, Expression d
       multiply_expression(std::move(digit), std::move(place)));
 }
 
-std::optional<Expression> packed_grid_expression_macro(const std::string& name,
-                                                       const std::vector<Expression>& args) {
+std::optional<Expression> packed_grid_expression_macro_impl(const std::string& name,
+                                                            const std::vector<Expression>& args) {
   if (name == "grid_norm" || name == "grid_wrap")
     return grid_norm_expression(args.at(0));
   if (name == "bit_mask")
@@ -268,6 +266,8 @@ std::optional<Expression> packed_grid_expression_macro(const std::string& name,
   }
   if (name == "cell_toggle")
     return call_expression("bit_xor", {args.at(0), cell_mask_expression(args.at(1), args.at(2))});
+  if (name == "digit_at")
+    return packed_digit_expression(args.at(0), args.at(1));
   if (name == "digit_add") {
     return add_expression(args.at(0),
                           multiply_expression(args.at(2), digit_place_expression(args.at(1))));
@@ -289,6 +289,15 @@ std::optional<Expression> packed_grid_expression_macro(const std::string& name,
 }
 
 } // namespace
+
+std::optional<std::size_t> packed_grid_macro_arity(const std::string& name) {
+  return packed_grid_macro_arity_impl(name);
+}
+
+std::optional<Expression> packed_grid_expression_macro(const std::string& name,
+                                                       const std::vector<Expression>& args) {
+  return packed_grid_expression_macro_impl(name, args);
+}
 
 std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, LoweringContext& context,
                                                 const Expression& expression) {
@@ -340,8 +349,8 @@ std::optional<bool> lower_basic_expression_to_x(ExpressionEmitApi& api, Lowering
 
   if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr) {
     if (expression.expr->kind == "number") {
-      std::string value = trim_ascii(expression.expr->raw.empty() ? expression.expr->text
-                                                                  : expression.expr->raw);
+      std::string value =
+          trim_ascii(expression.expr->raw.empty() ? expression.expr->text : expression.expr->raw);
       value = value.starts_with("-") ? value.substr(1) : "-" + value;
       api.emit_number_or_preload(value, std::nullopt, std::nullopt);
       return true;
@@ -543,7 +552,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     return true;
   }
 
-  if (const std::optional<std::size_t> arity = packed_grid_macro_arity(callee);
+  if (const std::optional<std::size_t> arity = packed_grid_macro_arity_impl(callee);
       arity.has_value() && expression.args.size() != *arity) {
     context.diagnostics.push_back(Diagnostic{
         .severity = DiagnosticSeverity::Error,
@@ -555,7 +564,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
   }
 
   if (const std::optional<Expression> macro =
-          packed_grid_expression_macro(callee, expression.args)) {
+          packed_grid_expression_macro_impl(callee, expression.args)) {
     if (!api.lower_expression_to_x(*macro))
       return false;
     context.optimizations.push_back(OptimizationReport{
@@ -579,12 +588,12 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       return false;
     if (!api.lower_expression_to_x(expression.args.at(1)))
       return false;
-    api.emitter.emit_op(0x15, "F 10^x", "digit_at place");
-    api.emitter.emit_op(0x13, "/", "digit_at scaled value");
-    api.emitter.emit_op(0x35, "К {x}", "digit_at fractional tail");
-    api.emitter.emit_number("10");
-    api.emitter.emit_op(0x12, "*", "digit_at digit scale");
-    api.emitter.emit_op(0x34, "К [x]", "digit_at()");
+    api.emitter.emit_op(0x15, "F 10^x", "pow10()");
+    api.emitter.emit_op(0x13, "/", "expr /");
+    api.emitter.emit_op(0x35, "К {x}", "frac()");
+    api.emit_number_or_preload("10", std::nullopt, std::nullopt);
+    api.emitter.emit_op(0x12, "*", "expr *");
+    api.emitter.emit_op(0x34, "К [x]", "int()");
     api.emitter.current_x_variable.reset();
     api.emitter.current_x_aliases.clear();
     context.optimizations.push_back(OptimizationReport{
@@ -661,21 +670,8 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       });
       return false;
     }
-    const std::string scratch = "__min_scratch";
-    if (!api.ensure_hidden_register(scratch))
+    if (!api.lower_expression_to_x(min_expression(expression.args.at(0), expression.args.at(1))))
       return false;
-    if (!api.lower_expression_to_x(expression.args.at(0)))
-      return false;
-    api.emitter.emit_op(0x0b, "/-/", "min left negate");
-    api.emit_store(scratch, "min left");
-    if (!api.lower_expression_to_x(expression.args.at(1)))
-      return false;
-    api.emitter.emit_op(0x0b, "/-/", "min right negate");
-    api.emit_recall(scratch);
-    api.emitter.emit_op(0x36, "К max", "min negated max");
-    api.emitter.emit_op(0x0b, "/-/", "min()");
-    api.emitter.current_x_variable.reset();
-    api.emitter.current_x_aliases.clear();
     context.optimizations.push_back(OptimizationReport{
         .name = "min-via-max-lowering",
         .detail = "Lowered " + expression.callee + "() through min-via-max().",
@@ -801,21 +797,21 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       });
       return false;
     }
-	    if (lower_commutative_call_with_destructive_selector_last(api, context, expression,
-	                                                              binary_it->second))
-	      return true;
-	    if (callee == "pow") {
-	      if (!api.lower_expression_to_x(expression.args.at(1)))
-	        return false;
-	      if (!api.lower_expression_to_x(expression.args.at(0)))
-	        return false;
-	      api.emitter.emit_op(binary_it->second.first, binary_it->second.second, callee + "()");
-	      api.emitter.current_x_variable.reset();
-	      api.emitter.current_x_aliases.clear();
-	      return true;
-	    }
-	    if (!api.lower_expression_to_x(expression.args.at(0)))
-	      return false;
+    if (lower_commutative_call_with_destructive_selector_last(api, context, expression,
+                                                              binary_it->second))
+      return true;
+    if (callee == "pow") {
+      if (!api.lower_expression_to_x(expression.args.at(1)))
+        return false;
+      if (!api.lower_expression_to_x(expression.args.at(0)))
+        return false;
+      api.emitter.emit_op(binary_it->second.first, binary_it->second.second, callee + "()");
+      api.emitter.current_x_variable.reset();
+      api.emitter.current_x_aliases.clear();
+      return true;
+    }
+    if (!api.lower_expression_to_x(expression.args.at(0)))
+      return false;
     if (!api.lower_expression_to_x(expression.args.at(1)))
       return false;
     api.emitter.emit_op(binary_it->second.first, binary_it->second.second, callee + "()");
