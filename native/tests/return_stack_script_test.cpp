@@ -1851,6 +1851,17 @@ void return_stack_script_matches_mk61_strategy_contract() {
     require(dirty.enabled && dirty.layout_proved &&
                 dirty.dirty_targets == std::vector<int>({78}),
             "dirty-overflow return-stack script should leave the shifted dirty target executable");
+
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout({27, 31, 35, 39, 43}, 6,
+                                                          result.items,
+                                                          {.size_rescue = true});
+    require(allocation.allocated && allocation.dispatch.layout_proved &&
+                allocation.padding_cells == 0 &&
+                core::machine_cell_count(allocation.items) ==
+                    core::machine_cell_count(result.items),
+            "dirty-dispatch allocator should return the existing proven layout when no padding is "
+            "needed");
   }
 
   {

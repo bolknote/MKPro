@@ -3239,6 +3239,7 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
       plan_dirty_return_stack_dispatch(stack, return_count, layout_items, options);
   if (existing.enabled && existing.layout_proved) {
     allocation.dispatch = std::move(existing);
+    allocation.items = layout_items;
     allocation.allocated = true;
     allocation.size_rescue_only = true;
     allocation.control_flow_rewrite_enabled = false;
