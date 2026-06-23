@@ -2219,6 +2219,13 @@ void return_stack_script_matches_mk61_strategy_contract() {
     require(optimization_detail_contains(result, "return-stack-dirty-dispatch",
                                          "dirty target cell 78"),
             "dirty-overflow no-padding metadata should expose the proved dirty target cell");
+    require(optimization_detail_contains(result, "return-stack-dirty-dispatch",
+                                         "dirty return address 77"),
+            "dirty-overflow no-padding metadata should expose the dirty stored return address");
+    require(optimization_detail_contains(result, "return-stack-dirty-dispatch",
+                                         "covering 1 dirty return"),
+            "dirty-overflow no-padding metadata should expose how many dirty returns were "
+            "covered");
   }
 
   {
