@@ -33395,6 +33395,11 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                                      post_layout_overlay.optimizations.begin(),
                                      post_layout_overlay.optimizations.end());
   } else {
+    if (options.return_stack_script && options.analysis) {
+      result.diagnostics.push_back(diagnostic(
+          DiagnosticSeverity::Note, "return-stack-script-not-applied",
+          "return-stack script is skipped for exact decimal-series lowering"));
+    }
     setup_preloads = build_preload_reports(context, *ast.v2, post_layout_items);
   }
 
