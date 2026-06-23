@@ -33404,6 +33404,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         bool dirty_dispatch_proved = false;
         bool dirty_allocator_available = false;
         int dirty_allocator_padding = 0;
+        int dirty_allocator_rounds = 0;
         const std::vector<std::vector<int>> dirty_dispatch_stacks = {
             {19, 27, 35, 43, 51},
             {27, 35, 43, 51, 59},
@@ -33411,19 +33412,25 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
             {43, 51, 59, 67, 75},
         };
         std::string dirty_rejection;
-        for (const std::vector<int>& stack : dirty_dispatch_stacks) {
-          const core::DirtyReturnStackDispatchAllocationPlan dirty_allocation =
-              core::allocate_dirty_return_stack_dispatch_layout(
-                  stack, 6, post_layout_items,
-                  core::DirtyReturnStackDispatchOptions{.size_rescue = true});
-          if (dirty_allocation.allocated && dirty_allocation.dispatch.layout_proved) {
-            dirty_dispatch_proved = true;
-            dirty_allocator_available = dirty_allocation.padding_cells > 0;
-            dirty_allocator_padding = dirty_allocation.padding_cells;
-            break;
+        if (needs_size_rescue) {
+          for (const std::vector<int>& stack : dirty_dispatch_stacks) {
+            const core::DirtyReturnStackDispatchAllocationPlan dirty_allocation =
+                core::allocate_dirty_return_stack_dispatch_layout(
+                    stack, 6, post_layout_items,
+                    core::DirtyReturnStackDispatchOptions{.size_rescue = true});
+            if (dirty_allocation.allocated && dirty_allocation.dispatch.layout_proved) {
+              dirty_dispatch_proved = true;
+              dirty_allocator_available = dirty_allocation.padding_cells > 0;
+              dirty_allocator_padding = dirty_allocation.padding_cells;
+              dirty_allocator_rounds = dirty_allocation.fixed_point_rounds;
+              break;
+            }
+            if (dirty_rejection.empty() && !dirty_allocation.rejection_reason.empty())
+              dirty_rejection = dirty_allocation.rejection_reason;
           }
-          if (dirty_rejection.empty() && !dirty_allocation.rejection_reason.empty())
-            dirty_rejection = dirty_allocation.rejection_reason;
+        } else {
+          dirty_rejection =
+              "dirty return-stack dispatch allocator is disabled outside size-rescue mode";
         }
         if (dirty_allocator_available) {
           result.diagnostics.push_back(diagnostic(
@@ -33431,9 +33438,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               "dirty return-stack dispatch could be made safe by appending " +
                   std::to_string(dirty_allocator_padding) +
                   " executable padding cell" +
-                  (dirty_allocator_padding == 1 ? "" : "s") +
-                  " in size-rescue-only mode; automatic dirty dispatch insertion is still "
-                  "disabled"));
+                  (dirty_allocator_padding == 1 ? "" : "s") + " after " +
+                  std::to_string(dirty_allocator_rounds) + " fixed-point round" +
+                  (dirty_allocator_rounds == 1 ? "" : "s") +
+                  "; automatic dirty dispatch control-flow rewrite is still disabled"));
         } else if (!dirty_dispatch_proved) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-not-applied",
