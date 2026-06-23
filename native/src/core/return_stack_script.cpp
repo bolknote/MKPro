@@ -1205,6 +1205,19 @@ bool valid_terminal_tail_fragment_suffix_start(const IrLabelBlock& block,
   return true;
 }
 
+bool valid_terminal_tail_fragment_body(const IrLabelBlock& block) {
+  if (block.body.size() < 2U)
+    return false;
+  if (!terminal_jump_target_from_ir_body(block.body).has_value() &&
+      !terminal_stop_from_ir_body(block.body))
+    return false;
+  for (std::size_t index = 0; index + 1U < block.body.size(); ++index) {
+    if (ir_op_always_transfers_control(block.body.at(index)))
+      return false;
+  }
+  return true;
+}
+
 bool ir_tail_fragment_suffix_equal(const IrLabelBlock& left, std::size_t left_start,
                                    const IrLabelBlock& right, std::size_t right_start) {
   const std::size_t left_size = left.body.size() - left_start;
@@ -1240,10 +1253,13 @@ std::optional<std::size_t> common_terminal_tail_fragment_suffix_start(
       if (other_index == block_index)
         continue;
       const IrLabelBlock& other = blocks.at(other_index);
-      if (other.body.size() <= suffix_length)
+      if (other.body.size() < suffix_length)
         continue;
       const std::size_t other_start = other.body.size() - suffix_length;
-      if (!valid_terminal_tail_fragment_suffix_start(other, other_start))
+      const bool other_valid =
+          other_start == 0U ? valid_terminal_tail_fragment_body(other)
+                            : valid_terminal_tail_fragment_suffix_start(other, other_start);
+      if (!other_valid)
         continue;
       if (ir_tail_fragment_suffix_equal(block, suffix_start, other, other_start)) {
         shared = true;

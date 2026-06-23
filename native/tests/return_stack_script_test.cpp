@@ -1448,6 +1448,32 @@ void return_stack_script_matches_mk61_strategy_contract() {
   {
     std::vector<IrOp> ops;
     ops.push_back(ir_label("entry"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_plain(6));
+    ops.push_back(ir_plain(7));
+    append(ops, ir_jump_body("t1"));
+    ops.push_back(ir_label("alternate"));
+    ops.push_back(ir_plain(8));
+    ops.push_back(ir_plain(7));
+    append(ops, ir_jump_body("t1"));
+    ops.push_back(ir_label("existing_tail"));
+    ops.push_back(ir_plain(6));
+    ops.push_back(ir_plain(7));
+    append(ops, ir_jump_body("t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.extracted_tail_fragments == 2,
+            "IR tail layout scanner should use whole existing tail blocks to select longer "
+            "common suffixes");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
     append(ops, ir_jump_body("body"));
     ops.push_back(ir_label("body"));
     ops.push_back(ir_plain(9));
