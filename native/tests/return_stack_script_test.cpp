@@ -797,9 +797,15 @@ void return_stack_script_matches_mk61_strategy_contract() {
                 !search.pipeline_candidate_better &&
                 search.pipeline_candidate_final_cells == search.pipeline_current_final_cells &&
                 search.rejection_reason.find("full post-layout pipeline") !=
-                    std::string::npos,
+                    std::string::npos &&
+                search.rejection_reason.find("candidate " +
+                                             std::to_string(search.pipeline_candidate_final_cells) +
+                                             " cells vs current " +
+                                             std::to_string(search.pipeline_current_final_cells) +
+                                             " cells") != std::string::npos,
             "pipeline-aware IR scanner should explain materialized ties with the full-pipeline "
-            "rejection, not the local net-savings heuristic");
+            "rejection and concrete candidate/current sizes, not the local net-savings "
+            "heuristic");
   }
 
   {
