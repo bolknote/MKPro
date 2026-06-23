@@ -295,9 +295,14 @@ IrOp jump_from_call(const IrOp& op, std::string_view replacement, std::string fa
   out.opcode = 0x51;
   out.meta = op.meta;
   out.meta.mnemonic = "БП";
-  out.meta.comment =
-      replace_comment_prefix(op.meta.comment, "proc call", replacement, std::move(fallback));
+  out.meta.comment = replace_comment_prefix(op.meta.comment, "proc call", replacement, fallback);
+  if (out.meta.comment == op.meta.comment) {
+    out.meta.comment =
+        replace_comment_prefix(op.meta.comment, "call function", replacement, std::move(fallback));
+  }
   out.target_meta = op.target_meta;
+  out.target_meta.comment =
+      replace_comment_prefix(out.target_meta.comment, "call function", "proc call", "proc call");
   return out;
 }
 

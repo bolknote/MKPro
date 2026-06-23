@@ -97,11 +97,15 @@ PassResult tail_branch_inversion(const std::vector<IrOp>& ops, const PassContext
     inverted_op.target = jump.target;
     inverted_op.opcode = inverted->opcode;
     inverted_op.meta.mnemonic = opcode_by_code(inverted->opcode).name;
-    inverted_op.meta.comment =
-        op.meta.comment.has_value() && op.meta.comment->starts_with("false branch")
-            ? std::optional<std::string>{std::string("direct tail branch") +
-                                         op.meta.comment->substr(std::string("false branch").size())}
-            : std::optional<std::string>{"direct tail branch"};
+    if (op.meta.comment == "case mismatch") {
+      inverted_op.meta.comment = op.meta.comment;
+    } else {
+      inverted_op.meta.comment =
+          op.meta.comment.has_value() && op.meta.comment->starts_with("false branch")
+              ? std::optional<std::string>{std::string("direct tail branch") +
+                                           op.meta.comment->substr(std::string("false branch").size())}
+              : std::optional<std::string>{"direct tail branch"};
+    }
     inverted_op.target_meta = jump.target_meta;
     result.push_back(std::move(inverted_op));
     index = label_index;

@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -278,17 +279,56 @@ std::optional<Expression> parse_expression_safe(const std::string& text, int lin
   }
 }
 
+std::optional<std::string> assignment_target_name(const V2Statement& statement) {
+  if (!statement.target.has_value())
+    return std::nullopt;
+  const std::optional<Expression> target = parse_expression_safe(*statement.target, statement.line);
+  if (!target.has_value() || target->kind != "identifier")
+    return std::nullopt;
+  return target->name;
+}
+
+std::optional<Expression> effective_assignment_expression(const V2Statement& statement) {
+  if (!statement.expr.has_value())
+    return std::nullopt;
+  const std::optional<Expression> expr = parse_expression_safe(*statement.expr, statement.line);
+  if (!expr.has_value())
+    return std::nullopt;
+  if (statement.kind == "v2_assign")
+    return expr;
+  if (statement.kind != "v2_update" || !statement.op.has_value())
+    return std::nullopt;
+  const std::optional<std::string> target_name = assignment_target_name(statement);
+  if (!target_name.has_value())
+    return std::nullopt;
+  std::string op;
+  if (*statement.op == "+=")
+    op = "+";
+  else if (*statement.op == "-=")
+    op = "-";
+  else
+    return std::nullopt;
+  Expression target;
+  target.kind = "identifier";
+  target.name = *target_name;
+  Expression result;
+  result.kind = "binary";
+  result.op = std::move(op);
+  result.left = std::make_shared<Expression>(std::move(target));
+  result.right = std::make_shared<Expression>(*expr);
+  return result;
+}
+
 State transfer(const State& state, const RuleCfgNode& node) {
   if (node.barrier)
     return {};
   V2Statement* assign = node.assign;
-  if (assign != nullptr && assign->target.has_value() && assign->expr.has_value()) {
-    const std::optional<Expression> target = parse_expression_safe(*assign->target, assign->line);
-    const std::optional<Expression> expr = parse_expression_safe(*assign->expr, assign->line);
+  if (assign != nullptr) {
+    const std::optional<std::string> target_name = assignment_target_name(*assign);
+    const std::optional<Expression> expr = effective_assignment_expression(*assign);
     const std::optional<LinForm> form =
         expr.has_value() && expression_is_call_free(*expr) ? affine_form(*expr, state) : std::nullopt;
-    return target.has_value() && target->kind == "identifier" ? apply_def(state, target->name, form)
-                                                              : state;
+    return target_name.has_value() ? apply_def(state, *target_name, form) : state;
   }
   State next = state;
   for (const std::string& def : node.defs)
@@ -397,11 +437,11 @@ int propagate_values_interprocedurally(V2Program& program,
   int rewrites = 0;
   for (const RuleCfgNode& node : cfg.nodes) {
     V2Statement* assign = node.assign;
-    if (assign == nullptr || !assign->target.has_value() || !assign->expr.has_value())
+    if (assign == nullptr)
       continue;
-    const std::optional<Expression> target = parse_expression_safe(*assign->target, assign->line);
-    const std::optional<Expression> expr = parse_expression_safe(*assign->expr, assign->line);
-    if (!target.has_value() || target->kind != "identifier" || !expr.has_value())
+    const std::optional<std::string> target_name = assignment_target_name(*assign);
+    const std::optional<Expression> expr = effective_assignment_expression(*assign);
+    if (!target_name.has_value() || !expr.has_value())
       continue;
     if (!expression_is_call_free(*expr) || (expr->kind != "binary" && expr->kind != "unary"))
       continue;
@@ -420,7 +460,7 @@ int propagate_values_interprocedurally(V2Program& program,
 
     std::optional<std::string> replacement;
     for (const std::string& candidate : fields) {
-      if (candidate == target->name)
+      if (candidate == *target_name)
         continue;
       if (forms_equal(value_of(*in_state, candidate), *target_form) && form_valid(*target_form)) {
         replacement = candidate;
@@ -429,7 +469,9 @@ int propagate_values_interprocedurally(V2Program& program,
     }
     if (!replacement.has_value() || expression_cost(*expr) <= 1)
       continue;
+    assign->kind = "v2_assign";
     assign->expr = *replacement;
+    assign->op.reset();
     ++rewrites;
   }
 

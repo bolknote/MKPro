@@ -1305,6 +1305,7 @@ bool lower_fixed_display_mask_statement(DisplayEmitApi& api, LoweringContext& co
 
 bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                                     const std::vector<DisplayItem>& items,
+                                                    const std::string& display_name,
                                                     int source_line) {
   const std::optional<FormattedCoordReportTemplate> template_plan =
       plan_formatted_coord_report_template(context, items);
@@ -1321,7 +1322,7 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
     api.emitter.emit_op(0x15, "F 10^x", "display formatted video anchor", source_line);
     api.emitter.emit_op(0x10, "+", "display formatted video body", source_line);
     api.emitter.emit_op(0x60 + mask_it->second, "П->X " + mask_register_text,
-                        "display formatted mask", source_line);
+                        "display " + display_name + " formatted mask", source_line);
     api.emitter.emit_op(0x39, "К ⊕", "display formatted mask merge", source_line);
     api.emitter.emit_op(0x35, "К {x}", "display formatted video fraction", source_line);
     api.emitter.emit_op(0x0b, "/-/", "display formatted sign", source_line);
@@ -1329,7 +1330,7 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
     api.emitter.emit_op(0x00 + template_plan->video_anchor_exp,
                         std::to_string(template_plan->video_anchor_exp),
                         "display formatted exponent", source_line);
-    api.emitter.emit_op(0x50, "С/П", "show formatted coord report", source_line);
+    api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
     context.optimizations.push_back(OptimizationReport{
         .name = "formatted-coord-report-packed-body",
         .detail = "Reused packed --CC-- N body already in X for formatted coord report.",
@@ -1349,10 +1350,10 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
 
   if (api.emitter.current_x_variable != template_plan->bearing->name) {
     api.emit_recall(template_plan->bearing->name);
-    api.emitter.items.back().comment = "display formatted bearing";
+    api.emitter.items.back().comment = "display " + display_name + " bearing";
   }
   api.emit_recall(template_plan->cell->name);
-  api.emitter.items.back().comment = "display formatted cell";
+  api.emitter.items.back().comment = "display " + display_name + " cell";
   if (context.scaled_coord_variables.contains(template_plan->cell->name)) {
     api.emitter.emit_number("10");
     api.emitter.emit_op(0x12, "*", "display formatted scaled cell restore", source_line);
@@ -1365,7 +1366,7 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
   api.emitter.emit_op(0x15, "F 10^x", "display formatted video anchor", source_line);
   api.emitter.emit_op(0x10, "+", "display formatted video body", source_line);
   api.emitter.emit_op(0x60 + mask_it->second, "П->X " + mask_register_text,
-                      "display formatted mask", source_line);
+                      "display " + display_name + " formatted mask", source_line);
   api.emitter.emit_op(0x39, "К ⊕", "display formatted mask merge", source_line);
   api.emitter.emit_op(0x35, "К {x}", "display formatted video fraction", source_line);
   api.emitter.emit_op(0x0b, "/-/", "display formatted sign", source_line);
@@ -1373,12 +1374,12 @@ bool lower_formatted_coord_report_display_statement(DisplayEmitApi& api, Lowerin
   api.emitter.emit_op(0x00 + template_plan->video_anchor_exp,
                       std::to_string(template_plan->video_anchor_exp), "display formatted exponent",
                       source_line);
-  api.emitter.emit_op(0x50, "С/П", "show formatted coord report", source_line);
+  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
   api.emitter.current_x_variable.reset();
   api.emitter.current_x_aliases.clear();
   context.optimizations.push_back(OptimizationReport{
       .name = "formatted-coord-report-lowering",
-      .detail = "Lowered formatted coord report as --CC-- N calculator video output.",
+      .detail = "Lowered screen " + display_name + " as --CC-- N calculator video output.",
   });
   return true;
 }

@@ -333,7 +333,11 @@ private:
       const int node = add(RuleCfgNode{.barrier = true});
       return Fragment{.entry = node, .exits = {node}};
     }
-    const int node = add(RuleCfgNode{.defs = defs, .uses = sorted_vector(uses)});
+    const int node = add(RuleCfgNode{
+        .defs = defs,
+        .uses = sorted_vector(uses),
+        .assign = target.has_value() && target->kind == "identifier" ? &statement : nullptr,
+    });
     return Fragment{.entry = node, .exits = {node}};
   }
 
