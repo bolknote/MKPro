@@ -3481,6 +3481,27 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       if (!dirty_overflow_script_plan_proved(current_layout, candidate, *plan))
         break;
     }
+    if (plan->dirty_jump.has_value() && candidate_dirty_allocator_dirty_returns == 0) {
+      const std::set<int> removed = removed_address_indexes_for_script_plan(*plan);
+      const int adjusted_dirty_target = adjusted_address_after_removing_indexes(
+          current_layout, plan->dirty_jump->target_address, removed);
+      const DirtyReturnStackDispatchPlan dirty = plan_dirty_return_stack_dispatch(
+          adjusted_return_stack_from_calls(current_layout, *plan),
+          static_cast<int>(plan->calls.size()) + 1, candidate,
+          DirtyReturnStackDispatchOptions{.size_rescue = true});
+      const bool dirty_targets_match =
+          dirty.enabled && dirty.layout_proved && !dirty.dirty_targets.empty() &&
+          std::all_of(dirty.dirty_targets.begin(), dirty.dirty_targets.end(),
+                      [&](const int target) { return target == adjusted_dirty_target; });
+      if (dirty_targets_match) {
+        candidate_dirty_allocator_dirty_returns =
+            static_cast<int>(dirty.dirty_return_addresses.size());
+        for (const int return_address : dirty.dirty_return_addresses)
+          candidate_dirty_allocator_return_addresses.insert(return_address);
+        for (const int target : dirty.dirty_targets)
+          candidate_dirty_allocator_targets.insert(target);
+      }
+    }
     if (machine_cell_count(candidate) >= machine_cell_count(current))
       break;
     if (!return_stack_candidate_beats_address_overlay(current, candidate))
@@ -3504,14 +3525,19 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   }
 
   std::vector<passes::AppliedOptimization> optimizations;
-  if (dirty_allocator_padding > 0) {
-    std::string detail =
-        "Inserted " + std::to_string(dirty_allocator_padding) +
-        " executable dirty-dispatch cell" +
-        (dirty_allocator_padding == 1 ? "" : "s") + " across " +
-        std::to_string(dirty_allocator_rounds) + " fixed-point repair round" +
-        (dirty_allocator_rounds == 1 ? "" : "s") +
-        " before rewriting dirty overflow continuation jumps";
+  if (dirty_allocator_dirty_returns > 0) {
+    std::string detail;
+    if (dirty_allocator_padding > 0) {
+      detail = "Inserted " + std::to_string(dirty_allocator_padding) +
+               " executable dirty-dispatch cell" +
+               (dirty_allocator_padding == 1 ? "" : "s") + " across " +
+               std::to_string(dirty_allocator_rounds) + " fixed-point repair round" +
+               (dirty_allocator_rounds == 1 ? "" : "s");
+    } else {
+      detail = "Proved existing executable dirty-dispatch cell";
+      detail += dirty_allocator_targets.size() == 1U ? "" : "s";
+    }
+    detail += " before rewriting dirty overflow continuation jumps";
     if (dirty_allocator_dirty_returns > 0) {
       detail += " covering " + std::to_string(dirty_allocator_dirty_returns) +
                 " dirty return" +
@@ -3541,7 +3567,8 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
     }
     detail += ".";
     optimizations.push_back(passes::AppliedOptimization{
-        .name = "return-stack-dirty-dispatch-allocator",
+        .name = dirty_allocator_padding > 0 ? "return-stack-dirty-dispatch-allocator"
+                                            : "return-stack-dirty-dispatch",
         .detail = std::move(detail),
     });
   }

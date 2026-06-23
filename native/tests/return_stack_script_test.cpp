@@ -2210,6 +2210,15 @@ void return_stack_script_matches_mk61_strategy_contract() {
                     core::machine_cell_count(result.items),
             "dirty-dispatch allocator should return the existing proven layout when no padding is "
             "needed");
+    require(has_optimization(result, "return-stack-dirty-dispatch"),
+            "dirty-overflow no-padding proof should report dirty-dispatch metadata");
+    require(optimization_detail_contains(result, "return-stack-dirty-dispatch",
+                                         "Proved existing executable dirty-dispatch cell"),
+            "dirty-overflow no-padding metadata should distinguish existing-cell proof from "
+            "padding repair");
+    require(optimization_detail_contains(result, "return-stack-dirty-dispatch",
+                                         "dirty target cell 78"),
+            "dirty-overflow no-padding metadata should expose the proved dirty target cell");
   }
 
   {
