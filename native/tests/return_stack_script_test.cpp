@@ -1691,6 +1691,28 @@ void return_stack_script_matches_mk61_strategy_contract() {
   {
     std::vector<IrOp> ops;
     ops.push_back(ir_label("entry"));
+    ops.push_back(ir_call("helper"));
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("helper"));
+    ops.push_back(ir_return());
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized,
+            "embedded tail-chain scanner should follow CFG call continuation edges before a "
+            "tail chain");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "call-continuation embedded tail chains should remain provable post-layout");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
     ops.push_back(ir_loop("skip"));
     append(ops, ir_jump_body("t2"));
     ops.push_back(ir_label("skip"));
