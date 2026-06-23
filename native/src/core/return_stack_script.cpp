@@ -1053,7 +1053,7 @@ std::optional<std::size_t> terminal_tail_fragment_suffix_start(
   if (!terminal_tail_fragment_candidate(block))
     return std::nullopt;
 
-  const std::size_t suffix_start = 1U;
+  const std::size_t suffix_start = block.body.size() - 2U;
   if (ir_op_always_transfers_control(block.body.at(suffix_start - 1U)))
     return std::nullopt;
 

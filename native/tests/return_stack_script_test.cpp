@@ -1085,12 +1085,23 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "IR tail layout scanner should materialize the extracted suffix as a hidden tail");
     require(std::next(fragment_it) != search.materialized_items.end() &&
                 std::next(fragment_it)->kind == MachineItemKind::Op &&
-                std::next(fragment_it)->opcode == 8,
-            "IR tail layout scanner should keep the whole terminal suffix, not only the last op");
-    require(std::next(fragment_it, 2) != search.materialized_items.end() &&
-                std::next(fragment_it, 2)->kind == MachineItemKind::Op &&
-                std::next(fragment_it, 2)->opcode == 7,
-            "IR tail layout scanner should preserve suffix operation order");
+                std::next(fragment_it)->opcode == 7,
+            "IR tail layout scanner should extract the shortest useful terminal suffix");
+    const auto entry_it =
+        std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
+                     [](const MachineItem& item) {
+                       return item.kind == MachineItemKind::Label &&
+                              item.name == "__return_stack_entry_0";
+                     });
+    require(entry_it != search.materialized_items.end(),
+            "IR tail layout scanner should materialize the generated charging entry label");
+    require(std::next(entry_it) != search.materialized_items.end() &&
+                std::next(entry_it)->kind == MachineItemKind::Op &&
+                std::next(entry_it)->opcode == 9 &&
+                std::next(entry_it, 2) != search.materialized_items.end() &&
+                std::next(entry_it, 2)->kind == MachineItemKind::Op &&
+                std::next(entry_it, 2)->opcode == 8,
+            "IR tail layout scanner should keep prefix work before the extracted suffix");
   }
 
 
