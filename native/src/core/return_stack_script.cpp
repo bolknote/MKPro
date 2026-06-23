@@ -773,9 +773,29 @@ std::optional<std::string> single_call_block_target(const IrLabelBlock& block) {
   return ir_label_target(op);
 }
 
+bool existing_call_chain_has_safe_cfg_entries(
+    const IrCfg& cfg, const std::set<std::string>& moved_labels,
+    const std::string& first_call_label, const std::string& entry_label,
+    std::string& rejection_reason) {
+  for (const std::string& label : moved_labels) {
+    if (label == first_call_label || label == entry_label)
+      continue;
+    const std::set<std::string> predecessors =
+        cfg.predecessors.contains(label) ? cfg.predecessors.at(label) : std::set<std::string>{};
+    for (const std::string& predecessor : predecessors) {
+      if (!moved_labels.contains(predecessor)) {
+        rejection_reason = "return-stack existing ПП chain has external CFG entry into " + label;
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 std::optional<IrTailChainCandidate> existing_call_chain_opportunity(
     const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  const IrCfg cfg = build_ir_cfg(blocks);
   for (std::size_t first_call_index = 0; first_call_index + 1U < blocks.size(); ++first_call_index) {
     const std::optional<std::string> first_target =
         single_call_block_target(blocks.at(first_call_index));
@@ -851,6 +871,12 @@ std::optional<IrTailChainCandidate> existing_call_chain_opportunity(
             .entry_block_index = first_call_index,
             .wrap_original_entry_label = false,
         };
+        if (!existing_call_chain_has_safe_cfg_entries(
+                cfg, moved_labels, blocks.at(first_call_index).label, blocks.at(entry_index).label,
+                rejection_reason)) {
+          valid = false;
+          break;
+        }
         return candidate;
       }
       call_index = next_it->second;
