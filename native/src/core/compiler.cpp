@@ -4093,8 +4093,11 @@ void eliminate_identity_assignments(V2Program& program,
   });
 }
 
-std::optional<std::string> zero_equality_identifier(const V2Predicate& predicate, int line) {
-  if (predicate.kind != "v2_compare" || predicate.op != "==")
+std::optional<std::string> zero_equality_identifier(const V2Predicate& predicate, bool negated,
+                                                    int line) {
+  const bool is_zero_equality = (!negated && predicate.op == "==") ||
+                                (negated && predicate.op == "!=");
+  if (predicate.kind != "v2_compare" || !is_zero_equality)
     return std::nullopt;
   try {
     const Expression left = parse_expression(predicate.left, line);
@@ -4209,7 +4212,7 @@ void hoist_one_shot_loop_initializers(V2Program& program,
           !branch.then_body.empty() && !statements_contain_exact_machine_code(branch.then_body) &&
           !statements_contain_exact_machine_code(branch.else_body)) {
         const std::optional<std::string> guard =
-            zero_equality_identifier(*branch.predicate, branch.line);
+            zero_equality_identifier(*branch.predicate, branch.negated, branch.line);
         const V2Statement& first = branch.then_body.front();
         const std::optional<std::string> first_target = scalar_assignment_target_name(first);
         if (guard.has_value() && first.kind == "v2_assign" && first_target == guard &&
@@ -14156,6 +14159,25 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
 
   auto display_api = display_emit_api(context);
 
+  if (lower_text_display_statement(context, *statement.items, statement.line))
+    return true;
+
+  if (core::emit::lower_dynamic_line_report_display_statement(display_api, context,
+                                                              *statement.items, statement.line))
+    return true;
+
+  if (core::emit::lower_formatted_coord_report_display_statement(
+          display_api, context, *statement.items, display_name, statement.line))
+    return true;
+
+  if (core::emit::lower_floor_packed_row_display_statement(display_api, context, *statement.items,
+                                                           statement.line))
+    return true;
+
+  if (core::emit::lower_decimal_point_display_statement(display_api, context, *statement.items,
+                                                        statement.line))
+    return true;
+
   if (context.hoist_shared_helpers) {
     if (const std::optional<std::string> literal =
             unlowerable_decimal_display_literal(*statement.items)) {
@@ -14167,25 +14189,6 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
       return false;
     }
   }
-
-  if (lower_text_display_statement(context, *statement.items, statement.line))
-    return true;
-
-  if (core::emit::lower_dynamic_line_report_display_statement(display_api, context,
-                                                              *statement.items, statement.line))
-    return true;
-
-  if (core::emit::lower_floor_packed_row_display_statement(display_api, context, *statement.items,
-                                                           statement.line))
-    return true;
-
-  if (core::emit::lower_decimal_point_display_statement(display_api, context, *statement.items,
-                                                        statement.line))
-    return true;
-
-  if (core::emit::lower_formatted_coord_report_display_statement(
-          display_api, context, *statement.items, display_name, statement.line))
-    return true;
 
   const std::optional<std::string> strategy = select_display_strategy(context, statement);
   if (strategy == "packed-display-helper" && lower_shared_packed_display_call(context, statement))
@@ -24913,10 +24916,12 @@ bool lower_decrement_test_pair(LoweringContext& context, const V2Statement& upda
       !update.expr.has_value() || *update.op != "-=" || trim_ascii(*update.expr) != "1") {
     return false;
   }
-  if (branch.kind != "v2_if" || !branch.predicate.has_value() || branch.negated) {
+  if (branch.kind != "v2_if" || !branch.predicate.has_value()) {
     return false;
   }
   const V2Predicate& predicate = *branch.predicate;
+  const std::string effective_op =
+      branch.negated ? invert_comparison_op(predicate.op) : predicate.op;
   if (predicate.kind != "v2_compare" || trim_ascii(predicate.left) != *update.target ||
       trim_ascii(predicate.right) != "0") {
     return false;
@@ -24933,7 +24938,7 @@ bool lower_decrement_test_pair(LoweringContext& context, const V2Statement& upda
     context.emitter.emit_op(0x11, "-", "decrement/test " + *update.target, update.line);
   };
 
-  if ((predicate.op == "<=" || predicate.op == "==")) {
+  if ((effective_op == "<=" || effective_op == "==")) {
     const auto field_it = context.state_fields.find(*update.target);
     if (field_it == context.state_fields.end() || field_it->second == nullptr ||
         !field_it->second->min.has_value() || *field_it->second->min < 1) {
@@ -24983,7 +24988,7 @@ bool lower_decrement_test_pair(LoweringContext& context, const V2Statement& upda
     return true;
   }
 
-  if (predicate.op != "<" || !branch.else_body.empty() ||
+  if (effective_op != "<" || !branch.else_body.empty() ||
       !statements_always_stop(context, branch.then_body)) {
     return false;
   }

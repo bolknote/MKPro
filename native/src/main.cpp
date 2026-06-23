@@ -19,6 +19,7 @@ void print_usage(std::ostream& out) {
       << "                               [--analysis] [--strict]\n"
       << "                               [--share-random-cell] [--hoist-shared-helpers]\n"
       << "                               [--hoist-procs]\n"
+      << "                               [--inline-floor-packed-row-expressions]\n"
       << "  mkpro-native explain <file.mkpro> [--budget N] [--analysis] [--strict]\n";
 }
 
@@ -253,6 +254,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.show_read_guarded_transfer = true;
     } else if (arg == "--stack-resident-temps") {
       options.stack_resident_temps = true;
+    } else if (arg == "--inline-floor-packed-row-expressions") {
+      options.inline_floor_packed_row_expressions = true;
     } else if (arg == "--order-procs-by-call-count") {
       options.order_procs_by_call_count = true;
     } else if (arg == "--proc-layout-strategy") {

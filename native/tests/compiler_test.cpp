@@ -222,6 +222,38 @@ program OneShotInit {
   require(one_shot.registers.find("entered") == one_shot.registers.end(),
           "one-shot guard should not allocate a register after hoisting");
 
+  const CompileResult unless_one_shot = compile_source(R"mkpro(
+program UnlessOneShotInit {
+  state {
+    entered: flag = 0
+    value: counter 0..9 = 0
+  }
+
+  loop {
+    unless entered {
+      entered = 1
+      value++
+      show(value)
+    }
+    else {
+      key = read()
+      value += key
+      show(value)
+    }
+  }
+}
+)mkpro");
+  require(unless_one_shot.implemented,
+          "native compiler should hoist unless-form one-shot loop initializers");
+  require(unless_one_shot.diagnostics.empty(),
+          "unless one-shot init compile should not report diagnostics");
+  require(has_optimization(unless_one_shot, "one-shot-loop-init-hoist"),
+          "unless one-shot init probe should report one-shot-loop-init-hoist");
+  require(has_optimization(unless_one_shot, "dead-state-elimination"),
+          "unless one-shot init hoist should expose the guard as dead state");
+  require(unless_one_shot.registers.find("entered") == unless_one_shot.registers.end(),
+          "unless one-shot guard should not allocate a register after hoisting");
+
   const CompileResult guarded_call = compile_source(R"mkpro(
 program GuardedCall {
   state {
@@ -4376,6 +4408,45 @@ program DecrementZeroDomainGuard {
                                step.comment == "decrement zero domain guard trap";
                       }),
           "non-FL zero decrement should use F 1/x");
+
+  const CompileResult decrement_zero_unless = compile_source(R"mkpro(
+program DecrementZeroUnlessDomainGuard {
+  state {
+    rows: packed[1..9] = 0
+    floor: counter 1..9 = 9
+  }
+
+  fn lost() {
+    halt("ЕГГОГ")
+  }
+
+  loop {
+    floor--
+    unless floor {
+      lost()
+    }
+    else {
+      halt(rows[floor])
+    }
+  }
+}
+)mkpro");
+  require(decrement_zero_unless.implemented,
+          "native compiler should lower unless-form decrement zero domain guards");
+  require(decrement_zero_unless.diagnostics.empty(),
+          "unless decrement zero domain guard compile should not report diagnostics");
+  require(std::any_of(decrement_zero_unless.optimizations.begin(),
+                      decrement_zero_unless.optimizations.end(),
+                      [](const OptimizationReport& item) {
+                        return item.name == "decrement-zero-domain-guard";
+                      }),
+          "unless zero decrement should report the TS optimization name");
+  require(std::any_of(decrement_zero_unless.steps.begin(), decrement_zero_unless.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x23 &&
+                               step.comment == "decrement zero domain guard trap";
+                      }),
+          "unless zero decrement should use F 1/x");
 
   const CompileResult assign_domain_trap = compile_source(R"mkpro(
 program AssignDomainTrap {
