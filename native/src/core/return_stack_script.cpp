@@ -3367,13 +3367,20 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
 }
 
 std::vector<std::vector<int>> dirty_return_stack_dispatch_candidate_stacks() {
-  return {
-      {19, 27, 35, 43, 51},
-      {27, 35, 43, 51, 59},
-      {35, 43, 51, 59, 67},
-      {43, 51, 59, 67, 75},
-      {51, 59, 67, 75, 83},
-  };
+  std::vector<std::vector<int>> stacks;
+  constexpr int first_family_start = 19;
+  constexpr int family_stride = 8;
+  constexpr int family_count = 5;
+  stacks.reserve(family_count);
+  for (int family = 0; family < family_count; ++family) {
+    std::vector<int> stack;
+    stack.reserve(kReturnStackDepth);
+    const int start = first_family_start + family * family_stride;
+    for (int index = 0; index < kReturnStackDepth; ++index)
+      stack.push_back(start + index * family_stride);
+    stacks.push_back(std::move(stack));
+  }
+  return stacks;
 }
 
 bool dirty_return_stack_dispatch_allocation_better(
