@@ -486,23 +486,61 @@ std::optional<std::vector<std::size_t>> proved_tail_order_from_ir(
   return execution_order;
 }
 
+std::map<std::string, ReturnStackExistingCallSite> existing_callsite_by_continuation(
+    const ReturnStackLayoutOpportunity& opportunity) {
+  std::map<std::string, ReturnStackExistingCallSite> result;
+  std::set<std::string> used_labels;
+  for (const ReturnStackExistingCallSite& site : opportunity.existing_call_sites) {
+    if (site.label.empty() || site.continuation_label.empty() || site.target_label.empty())
+      continue;
+    if (!used_labels.insert(site.label).second)
+      continue;
+    if (result.contains(site.continuation_label))
+      continue;
+    result[site.continuation_label] = site;
+  }
+  return result;
+}
+
+std::string charge_label_for_physical_tail(
+    const ReturnStackLayoutOpportunity& opportunity, const std::vector<std::size_t>& tail_order,
+    std::size_t physical_index,
+    const std::map<std::string, ReturnStackExistingCallSite>& existing_by_continuation) {
+  const std::string& tail_label = opportunity.tails.at(tail_order.at(physical_index)).label;
+  const auto existing_it = existing_by_continuation.find(tail_label);
+  if (existing_it != existing_by_continuation.end())
+    return existing_it->second.label;
+  return charge_label_name(physical_index);
+}
+
+std::string charge_target_for_physical_tail(
+    const ReturnStackLayoutOpportunity& opportunity, const std::vector<std::size_t>& tail_order,
+    std::size_t physical_index,
+    const std::map<std::string, ReturnStackExistingCallSite>& existing_by_continuation) {
+  if (physical_index + 1U >= tail_order.size())
+    return opportunity.entry_label;
+  return charge_label_for_physical_tail(opportunity, tail_order, physical_index + 1U,
+                                        existing_by_continuation);
+}
+
 std::vector<MachineItem> materialize_layout_items(
     const ReturnStackLayoutOpportunity& opportunity,
     const std::vector<std::size_t>& tail_order) {
+  const std::map<std::string, ReturnStackExistingCallSite> existing_by_continuation =
+      existing_callsite_by_continuation(opportunity);
   std::vector<MachineItem> items;
   for (std::size_t physical_index = 0; physical_index < tail_order.size();
        ++physical_index) {
     const ReturnStackTailBlock& tail =
         opportunity.tails.at(tail_order.at(physical_index));
-    MachineItem charge_label = MachineItem::label(charge_label_name(physical_index));
-    charge_label.hidden = true;
+    MachineItem charge_label = MachineItem::label(charge_label_for_physical_tail(
+        opportunity, tail_order, physical_index, existing_by_continuation));
+    charge_label.hidden = !existing_by_continuation.contains(tail.label);
     items.push_back(std::move(charge_label));
 
     items.push_back(MachineItem::op(0x53, "ПП"));
-    const std::string target = physical_index + 1U < tail_order.size()
-                                   ? charge_label_name(physical_index + 1U)
-                                   : opportunity.entry_label;
-    items.push_back(MachineItem::address(target));
+    items.push_back(MachineItem::address(charge_target_for_physical_tail(
+        opportunity, tail_order, physical_index, existing_by_continuation)));
 
     items.push_back(MachineItem::label(tail.label));
     append_ir_items(items, tail.body);
@@ -530,6 +568,7 @@ struct IrTailChainCandidate {
   std::string original_entry_label;
   std::string generated_entry_label;
   std::size_t entry_block_index = 0;
+  bool wrap_original_entry_label = true;
 };
 
 std::string unique_synthetic_entry_label(const std::set<std::string>& labels) {
@@ -725,6 +764,103 @@ int count_symbolic_existing_callsite_hints(const std::vector<IrLabelBlock>& bloc
   return hints;
 }
 
+std::optional<std::string> single_call_block_target(const IrLabelBlock& block) {
+  if (block.body.size() != 1U)
+    return std::nullopt;
+  const IrOp& op = block.body.front();
+  if (op.kind != IrKind::Call && op.opcode != 0x53)
+    return std::nullopt;
+  return ir_label_target(op);
+}
+
+std::optional<IrTailChainCandidate> existing_call_chain_opportunity(
+    const std::vector<IrLabelBlock>& blocks, std::string& rejection_reason) {
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  for (std::size_t first_call_index = 0; first_call_index + 1U < blocks.size(); ++first_call_index) {
+    const std::optional<std::string> first_target =
+        single_call_block_target(blocks.at(first_call_index));
+    if (!first_target.has_value())
+      continue;
+
+    std::vector<std::size_t> call_indices;
+    std::vector<ReturnStackTailBlock> tails;
+    std::vector<ReturnStackExistingCallSite> existing_sites;
+    std::set<std::string> moved_labels;
+    std::set<std::string> seen_calls;
+    std::size_t call_index = first_call_index;
+    bool valid = true;
+    while (true) {
+      if (call_index + 1U >= blocks.size()) {
+        valid = false;
+        break;
+      }
+      const IrLabelBlock& call_block = blocks.at(call_index);
+      const std::optional<std::string> target = single_call_block_target(call_block);
+      if (!target.has_value() || seen_calls.contains(call_block.label)) {
+        valid = false;
+        break;
+      }
+      seen_calls.insert(call_block.label);
+      call_indices.push_back(call_index);
+
+      const IrLabelBlock& continuation = blocks.at(call_index + 1U);
+      moved_labels.insert(call_block.label);
+      moved_labels.insert(continuation.label);
+      tails.push_back(ReturnStackTailBlock{
+          .label = continuation.label,
+          .body = continuation.body,
+      });
+      existing_sites.push_back(ReturnStackExistingCallSite{
+          .label = call_block.label,
+          .target_label = *target,
+          .continuation_label = continuation.label,
+          .source_address = -1,
+      });
+
+      const auto next_it = by_label.find(*target);
+      if (next_it == by_label.end()) {
+        valid = false;
+        break;
+      }
+      if (!single_call_block_target(blocks.at(next_it->second)).has_value()) {
+        const std::size_t entry_index = next_it->second;
+        if (tails.size() < 2U || tails.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
+          valid = false;
+          break;
+        }
+        if (!terminal_jump_target_from_ir_body(blocks.at(entry_index).body).has_value()) {
+          valid = false;
+          break;
+        }
+        moved_labels.insert(blocks.at(entry_index).label);
+        existing_sites.back().target_label = blocks.at(entry_index).label;
+        for (std::size_t index = 0; index + 1U < existing_sites.size(); ++index)
+          existing_sites.at(index).target_label = blocks.at(call_indices.at(index + 1U)).label;
+        IrTailChainCandidate candidate{
+            .opportunity = ReturnStackLayoutOpportunity{
+                .tails = tails,
+                .entry_body = blocks.at(entry_index).body,
+                .entry_label = blocks.at(entry_index).label,
+                .existing_call_sites = existing_sites,
+                .entry_at_address_zero = first_call_index == 0U,
+                .single_start_jump = first_call_index != 0U,
+            },
+            .moved_tail_labels = moved_labels,
+            .original_entry_label = blocks.at(first_call_index).label,
+            .generated_entry_label = blocks.at(entry_index).label,
+            .entry_block_index = first_call_index,
+            .wrap_original_entry_label = false,
+        };
+        return candidate;
+      }
+      call_index = next_it->second;
+    }
+    if (!valid && rejection_reason.empty())
+      rejection_reason = "return-stack existing ПП chain candidate was incomplete";
+  }
+  return std::nullopt;
+}
+
 std::map<std::string, std::set<std::string>> expected_tail_predecessors(
     const std::vector<IrLabelBlock>& blocks, const IrTailChainCandidate& candidate) {
   std::map<std::string, std::set<std::string>> expected;
@@ -857,17 +993,18 @@ std::vector<MachineItem> materialize_embedded_tail_chain_layout(
   std::vector<MachineItem> out;
   for (std::size_t index = 0; index < blocks.size(); ++index) {
     const IrLabelBlock& block = blocks.at(index);
-    if (candidate.moved_tail_labels.contains(block.label))
-      continue;
-    if (index != candidate.entry_block_index) {
-      append_ir_block_as_machine(out, block);
+    if (index == candidate.entry_block_index) {
+      if (candidate.wrap_original_entry_label) {
+        MachineItem wrapper = MachineItem::label(candidate.original_entry_label);
+        wrapper.hidden = block.hidden;
+        out.push_back(std::move(wrapper));
+      }
+      out.insert(out.end(), plan.items.begin(), plan.items.end());
       continue;
     }
-
-    MachineItem wrapper = MachineItem::label(candidate.original_entry_label);
-    wrapper.hidden = block.hidden;
-    out.push_back(std::move(wrapper));
-    out.insert(out.end(), plan.items.begin(), plan.items.end());
+    if (candidate.moved_tail_labels.contains(block.label))
+      continue;
+    append_ir_block_as_machine(out, block);
   }
   return out;
 }
@@ -878,12 +1015,13 @@ std::optional<int> valid_concrete_existing_call_site_count(
   if (opportunity.existing_call_sites.empty())
     return std::nullopt;
 
+  const std::map<std::string, ReturnStackExistingCallSite> existing_by_continuation =
+      existing_callsite_by_continuation(opportunity);
   std::set<std::pair<std::string, std::string>> required;
   for (std::size_t physical_index = 0; physical_index < tail_order.size();
        ++physical_index) {
-    const std::string expected_target =
-        physical_index + 1U < tail_order.size() ? charge_label_name(physical_index + 1U)
-                                                : opportunity.entry_label;
+    const std::string expected_target = charge_target_for_physical_tail(
+        opportunity, tail_order, physical_index, existing_by_continuation);
     const std::string expected_continuation =
         opportunity.tails.at(tail_order.at(physical_index)).label;
     required.insert({expected_target, expected_continuation});
@@ -891,17 +1029,24 @@ std::optional<int> valid_concrete_existing_call_site_count(
 
   std::set<std::pair<std::string, std::string>> used_edges;
   std::set<int> used_sources;
+  std::set<std::string> used_symbolic_sources;
   int valid = 0;
   int invalid = 0;
   for (const ReturnStackExistingCallSite& site : opportunity.existing_call_sites) {
     const std::pair<std::string, std::string> edge{site.target_label,
                                                    site.continuation_label};
-    if (site.source_address < 0 || used_sources.contains(site.source_address) ||
-        !required.contains(edge) || used_edges.contains(edge)) {
+    const bool repeated_source =
+        site.source_address >= 0 ? used_sources.contains(site.source_address)
+                                 : used_symbolic_sources.contains(site.label);
+    if (site.label.empty() || repeated_source || !required.contains(edge) ||
+        used_edges.contains(edge)) {
       ++invalid;
       continue;
     }
-    used_sources.insert(site.source_address);
+    if (site.source_address >= 0)
+      used_sources.insert(site.source_address);
+    else
+      used_symbolic_sources.insert(site.label);
     used_edges.insert(edge);
     ++valid;
   }
@@ -1278,9 +1423,12 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
     return search;
   }
   search.symbolic_existing_callsite_hints = count_symbolic_existing_callsite_hints(*blocks);
-  search.extracted_tail_fragments = extract_terminal_tail_fragments(*blocks);
-  const std::optional<IrTailChainCandidate> candidate =
-      embedded_tail_chain_opportunity(*blocks, rejection);
+  std::optional<IrTailChainCandidate> candidate =
+      existing_call_chain_opportunity(*blocks, rejection);
+  if (!candidate.has_value()) {
+    search.extracted_tail_fragments = extract_terminal_tail_fragments(*blocks);
+    candidate = embedded_tail_chain_opportunity(*blocks, rejection);
+  }
   if (!candidate.has_value()) {
     search.rejection_reason = rejection;
     return search;

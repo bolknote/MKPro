@@ -63,6 +63,15 @@ std::vector<IrOp> ir_jump_body(const std::string& target) {
   return {ir_jump(target)};
 }
 
+IrOp ir_call(const std::string& target) {
+  IrOp op;
+  op.kind = IrKind::Call;
+  op.opcode = 0x53;
+  op.target = target;
+  op.meta.mnemonic = "ПП";
+  return op;
+}
+
 IrOp ir_label(const std::string& name) {
   IrOp op;
   op.kind = IrKind::Label;
@@ -385,6 +394,32 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "IR tail layout scanner should feed analyze_return_stack_layout_opportunity");
     require(core::optimize_post_layout_return_stack_script(search.analysis.plan.items).applied == 3,
             "pre-layout tail-chain materialization should create a provable charge chain");
+  }
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("charge1"));
+    ops.push_back(ir_call("charge2"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("charge2"));
+    ops.push_back(ir_call("entry"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized,
+            "IR tail layout scanner should detect real existing ПП charge chains");
+    require(search.analysis.plan.existing_call_sites == 2 &&
+                search.analysis.plan.paid_call_sites == 0 &&
+                search.analysis.plan.profitable,
+            "existing ПП charge chains should remove injected charge cost");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "existing ПП charge-chain materialization should remain provable post-layout");
   }
 
   {
