@@ -1791,6 +1791,7 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
     IrTailChainSearchStats* stats = nullptr) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
   const IrCfg cfg = build_ir_cfg(blocks);
+  std::optional<IrTailChainCandidate> best_candidate;
 
   for (std::size_t entry_index = 0; entry_index < blocks.size(); ++entry_index) {
     const IrLabelBlock& entry = blocks.at(entry_index);
@@ -1930,9 +1931,14 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
         ++stats->external_entry_rejections;
       continue;
     }
-    return candidate;
+    if (!best_candidate.has_value() ||
+        candidate.opportunity.tails.size() > best_candidate->opportunity.tails.size()) {
+      best_candidate = std::move(candidate);
+    }
   }
 
+  if (best_candidate.has_value())
+    return best_candidate;
   if (rejection_reason.empty()) {
     rejection_reason = "return-stack IR tail layout found no movable entry block that jumps through a 2..5 tail chain ending in С/П";
   }

@@ -34089,7 +34089,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                   ", largest group=" +
                   std::to_string(tail_layout.symbolic_existing_callsite_largest_target_group) +
                   target_labels +
-                  "; not counted as free charge sites until retargeting is implemented"));
+                  "; counted as free charge sites only when a safe retargeting proof applies"));
         }
       }
 

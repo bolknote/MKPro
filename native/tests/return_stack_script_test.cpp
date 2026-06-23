@@ -745,6 +745,35 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("short_entry"));
+    append(ops, ir_jump_body("s2"));
+    ops.push_back(ir_label("s2"));
+    append(ops, direct_tail(2, "s1"));
+    ops.push_back(ir_label("s1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("long_entry"));
+    append(ops, ir_jump_body("l4"));
+    ops.push_back(ir_label("l4"));
+    append(ops, direct_tail(4, "l3"));
+    ops.push_back(ir_label("l3"));
+    append(ops, direct_tail(3, "l2"));
+    ops.push_back(ir_label("l2"));
+    append(ops, direct_tail(2, "l1"));
+    ops.push_back(ir_label("l1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized &&
+                search.analysis.plan.transitions == 4,
+            "embedded CFG tail-chain scanner should keep scanning and choose the longest valid "
+            "materialization candidate");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("entry"));
     append(ops, ir_jump_body("t2_alias"));
     ops.push_back(ir_label("t2_alias"));
