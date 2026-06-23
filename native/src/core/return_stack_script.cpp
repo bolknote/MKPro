@@ -1234,6 +1234,24 @@ std::string unique_same_target_entry_label(const std::set<std::string>& labels,
   return candidate;
 }
 
+std::vector<std::vector<std::size_t>> bounded_noop_call_subgroups(
+    const std::vector<std::size_t>& call_indices) {
+  std::vector<std::vector<std::size_t>> result;
+  if (call_indices.size() < 2U)
+    return result;
+  const std::size_t max_size =
+      std::min(call_indices.size(), static_cast<std::size_t>(kMaxScriptReturns));
+  for (std::size_t size = max_size; size >= 2U; --size) {
+    for (std::size_t start = 0; start + size <= call_indices.size(); ++start) {
+      result.emplace_back(call_indices.begin() + static_cast<std::ptrdiff_t>(start),
+                          call_indices.begin() + static_cast<std::ptrdiff_t>(start + size));
+    }
+    if (size == 2U)
+      break;
+  }
+  return result;
+}
+
 std::optional<IrCallContinuation> cfg_non_empty_block_from_label(
     const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
     const IrCfg& cfg, const std::string& start_label) {
@@ -1619,126 +1637,125 @@ std::optional<IrTailChainCandidate> same_target_noop_helper_call_group_opportuni
   }
 
   int synthetic_ordinal = 0;
-  for (const auto& [target_label, call_indices] : calls_by_target) {
-    if (call_indices.size() < 2U ||
-        call_indices.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
-      continue;
-    }
+  for (const auto& [target_label, all_call_indices] : calls_by_target) {
     const auto target_it = by_label.find(target_label);
     if (target_it == by_label.end() || !noop_return_block(blocks.at(target_it->second)))
       continue;
 
-    std::vector<ReturnStackTailBlock> tails;
-    std::vector<ReturnStackExistingCallSite> existing_sites;
-    std::map<std::string, std::size_t> site_by_continuation;
-    std::set<std::string> moved_labels;
-    bool valid = true;
-    for (const std::size_t call_index : call_indices) {
-      const IrLabelBlock& call_block = blocks.at(call_index);
-      const std::optional<IrCallContinuation> continuation_block =
-          cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_label);
-      if (!continuation_block.has_value()) {
-        valid = false;
-        break;
+    for (const std::vector<std::size_t>& call_indices :
+         bounded_noop_call_subgroups(all_call_indices)) {
+      std::vector<ReturnStackTailBlock> tails;
+      std::vector<ReturnStackExistingCallSite> existing_sites;
+      std::map<std::string, std::size_t> site_by_continuation;
+      std::set<std::string> moved_labels;
+      bool valid = true;
+      for (const std::size_t call_index : call_indices) {
+        const IrLabelBlock& call_block = blocks.at(call_index);
+        const std::optional<IrCallContinuation> continuation_block =
+            cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_label);
+        if (!continuation_block.has_value()) {
+          valid = false;
+          break;
+        }
+        const IrLabelBlock& continuation = blocks.at(continuation_block->block_index);
+        if (site_by_continuation.contains(continuation.label)) {
+          valid = false;
+          break;
+        }
+        site_by_continuation[continuation.label] = existing_sites.size();
+        moved_labels.insert(call_block.label);
+        moved_labels.insert(continuation_block->alias_labels.begin(),
+                            continuation_block->alias_labels.end());
+        moved_labels.insert(continuation.label);
+        tails.push_back(ReturnStackTailBlock{
+            .label = continuation.label,
+            .body = continuation.body,
+        });
+        existing_sites.push_back(ReturnStackExistingCallSite{
+            .label = call_block.label,
+            .target_label = target_label,
+            .continuation_label = continuation.label,
+            .source_address = -1,
+        });
       }
-      const IrLabelBlock& continuation = blocks.at(continuation_block->block_index);
-      if (site_by_continuation.contains(continuation.label)) {
-        valid = false;
-        break;
+      if (!valid)
+        continue;
+
+      for (const ReturnStackTailBlock& tail : tails) {
+        const std::optional<std::string> next = terminal_jump_target_from_ir_body(tail.body);
+        if (next.has_value() && !site_by_continuation.contains(*next)) {
+          valid = false;
+          break;
+        }
+        if (!next.has_value() && !terminal_stop_from_ir_body(tail.body)) {
+          valid = false;
+          break;
+        }
       }
-      site_by_continuation[continuation.label] = existing_sites.size();
-      moved_labels.insert(call_block.label);
-      moved_labels.insert(continuation_block->alias_labels.begin(),
-                          continuation_block->alias_labels.end());
-      moved_labels.insert(continuation.label);
-      tails.push_back(ReturnStackTailBlock{
-          .label = continuation.label,
-          .body = continuation.body,
-      });
-      existing_sites.push_back(ReturnStackExistingCallSite{
-          .label = call_block.label,
-          .target_label = target_label,
-          .continuation_label = continuation.label,
-          .source_address = -1,
-      });
-    }
-    if (!valid)
-      continue;
+      if (!valid)
+        continue;
 
-    for (const ReturnStackTailBlock& tail : tails) {
-      const std::optional<std::string> next = terminal_jump_target_from_ir_body(tail.body);
-      if (next.has_value() && !site_by_continuation.contains(*next)) {
-        valid = false;
-        break;
+      const std::string entry_label = unique_same_target_entry_label(labels, synthetic_ordinal++);
+      ReturnStackLayoutOpportunity opportunity{
+          .tails = tails,
+          .entry_body = {synthetic_ir_jump_to_label(tails.front().label)},
+          .entry_label = entry_label,
+          .existing_call_sites = existing_sites,
+      };
+
+      std::optional<std::vector<std::size_t>> tail_order;
+      for (const ReturnStackTailBlock& tail : tails) {
+        opportunity.entry_body = {synthetic_ir_jump_to_label(tail.label)};
+        tail_order = proved_tail_order_from_ir(opportunity);
+        if (tail_order.has_value())
+          break;
       }
-      if (!next.has_value() && !terminal_stop_from_ir_body(tail.body)) {
-        valid = false;
-        break;
+      if (!tail_order.has_value() || tail_order->size() != existing_sites.size())
+        continue;
+
+      for (std::size_t physical_index = 0; physical_index < tail_order->size();
+           ++physical_index) {
+        const std::string& continuation_label =
+            opportunity.tails.at(tail_order->at(physical_index)).label;
+        const auto site_it = site_by_continuation.find(continuation_label);
+        if (site_it == site_by_continuation.end()) {
+          valid = false;
+          break;
+        }
+        existing_sites.at(site_it->second).target_label =
+            physical_index + 1U >= tail_order->size()
+                ? entry_label
+                : existing_sites
+                      .at(site_by_continuation.at(
+                          opportunity.tails.at(tail_order->at(physical_index + 1U)).label))
+                      .label;
       }
-    }
-    if (!valid)
-      continue;
+      if (!valid)
+        continue;
 
-    const std::string entry_label = unique_same_target_entry_label(labels, synthetic_ordinal++);
-    ReturnStackLayoutOpportunity opportunity{
-        .tails = tails,
-        .entry_body = {synthetic_ir_jump_to_label(tails.front().label)},
-        .entry_label = entry_label,
-        .existing_call_sites = existing_sites,
-    };
+      opportunity.existing_call_sites = existing_sites;
+      const std::string& first_continuation = opportunity.tails.at(tail_order->front()).label;
+      const std::string& first_call_label =
+          existing_sites.at(site_by_continuation.at(first_continuation)).label;
+      const std::size_t entry_block_index = by_label.at(first_call_label);
+      IrTailChainCandidate candidate{
+          .opportunity = std::move(opportunity),
+          .moved_tail_labels = moved_labels,
+          .original_entry_label = first_call_label,
+          .generated_entry_label = entry_label,
+          .entry_block_index = entry_block_index,
+          .wrap_original_entry_label = false,
+      };
+      candidate.opportunity.entry_at_address_zero = entry_block_index == 0U;
+      candidate.opportunity.single_start_jump = entry_block_index != 0U;
 
-    std::optional<std::vector<std::size_t>> tail_order;
-    for (const ReturnStackTailBlock& tail : tails) {
-      opportunity.entry_body = {synthetic_ir_jump_to_label(tail.label)};
-      tail_order = proved_tail_order_from_ir(opportunity);
-      if (tail_order.has_value())
-        break;
-    }
-    if (!tail_order.has_value() || tail_order->size() != existing_sites.size())
-      continue;
-
-    for (std::size_t physical_index = 0; physical_index < tail_order->size();
-         ++physical_index) {
-      const std::string& continuation_label =
-          opportunity.tails.at(tail_order->at(physical_index)).label;
-      const auto site_it = site_by_continuation.find(continuation_label);
-      if (site_it == site_by_continuation.end()) {
-        valid = false;
-        break;
+      if (!existing_call_chain_has_safe_cfg_entries(cfg, moved_labels, first_call_label,
+                                                    entry_label, rejection_reason)) {
+        continue;
       }
-      existing_sites.at(site_it->second).target_label =
-          physical_index + 1U >= tail_order->size()
-              ? entry_label
-              : existing_sites
-                    .at(site_by_continuation.at(
-                        opportunity.tails.at(tail_order->at(physical_index + 1U)).label))
-                    .label;
+      if (return_stack_candidate_better(best_candidate, candidate))
+        best_candidate = std::move(candidate);
     }
-    if (!valid)
-      continue;
-
-    opportunity.existing_call_sites = existing_sites;
-    const std::string& first_continuation = opportunity.tails.at(tail_order->front()).label;
-    const std::string& first_call_label =
-        existing_sites.at(site_by_continuation.at(first_continuation)).label;
-    const std::size_t entry_block_index = by_label.at(first_call_label);
-    IrTailChainCandidate candidate{
-        .opportunity = std::move(opportunity),
-        .moved_tail_labels = moved_labels,
-        .original_entry_label = first_call_label,
-        .generated_entry_label = entry_label,
-        .entry_block_index = entry_block_index,
-        .wrap_original_entry_label = false,
-    };
-    candidate.opportunity.entry_at_address_zero = entry_block_index == 0U;
-    candidate.opportunity.single_start_jump = entry_block_index != 0U;
-
-    if (!existing_call_chain_has_safe_cfg_entries(cfg, moved_labels, first_call_label,
-                                                  entry_label, rejection_reason)) {
-      continue;
-    }
-    if (return_stack_candidate_better(best_candidate, candidate))
-      best_candidate = std::move(candidate);
   }
 
   return best_candidate;
