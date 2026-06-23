@@ -1599,10 +1599,20 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
   const IrCfg cfg = build_ir_cfg(blocks);
   std::optional<IrTailChainCandidate> best_candidate;
   std::map<std::string, std::vector<std::size_t>> calls_by_target;
+  std::map<std::size_t, std::string> target_by_call;
   for (std::size_t index = 0; index < blocks.size(); ++index) {
     const std::optional<std::string> target = single_call_block_target(blocks.at(index));
-    if (target.has_value())
-      calls_by_target[*target].push_back(index);
+    if (!target.has_value())
+      continue;
+    const std::optional<IrCallContinuation> entry_block =
+        cfg_non_empty_block_from_label(blocks, by_label, cfg, *target);
+    if (!entry_block.has_value())
+      continue;
+    const IrLabelBlock& entry = blocks.at(entry_block->block_index);
+    if (!terminal_jump_target_from_ir_body(entry.body).has_value())
+      continue;
+    calls_by_target[entry.label].push_back(index);
+    target_by_call[index] = *target;
   }
 
   for (const auto& [target_label, call_indices] : calls_by_target) {
@@ -1611,13 +1621,10 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
       continue;
     }
 
-    const std::optional<IrCallContinuation> entry_block =
-        cfg_non_empty_block_from_label(blocks, by_label, cfg, target_label);
-    if (!entry_block.has_value())
+    const auto entry_it = by_label.find(target_label);
+    if (entry_it == by_label.end())
       continue;
-    const IrLabelBlock& entry = blocks.at(entry_block->block_index);
-    if (!terminal_jump_target_from_ir_body(entry.body).has_value())
-      continue;
+    const IrLabelBlock& entry = blocks.at(entry_it->second);
 
     std::vector<ReturnStackTailBlock> tails;
     std::vector<ReturnStackExistingCallSite> existing_sites;
@@ -1625,9 +1632,21 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
     std::set<std::string> moved_labels;
     bool valid = true;
     for (const std::size_t call_index : call_indices) {
+      const auto target_it = target_by_call.find(call_index);
+      if (target_it == target_by_call.end()) {
+        valid = false;
+        break;
+      }
+      const std::optional<IrCallContinuation> target_block =
+          cfg_non_empty_block_from_label(blocks, by_label, cfg, target_it->second);
+      if (!target_block.has_value() ||
+          blocks.at(target_block->block_index).label != entry.label) {
+        valid = false;
+        break;
+      }
       const IrLabelBlock& call_block = blocks.at(call_index);
       const std::optional<IrCallContinuation> continuation_block =
-          cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_label);
+          cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_it->second);
       if (!continuation_block.has_value()) {
         valid = false;
         break;
@@ -1641,6 +1660,7 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
 
       site_by_continuation[continuation.label] = existing_sites.size();
       moved_labels.insert(call_block.label);
+      moved_labels.insert(target_block->alias_labels.begin(), target_block->alias_labels.end());
       moved_labels.insert(continuation_block->alias_labels.begin(),
                           continuation_block->alias_labels.end());
       moved_labels.insert(continuation.label);
@@ -1650,7 +1670,7 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
       });
       existing_sites.push_back(ReturnStackExistingCallSite{
           .label = call_block.label,
-          .target_label = target_label,
+          .target_label = target_it->second,
           .continuation_label = continuation.label,
           .source_address = -1,
       });
@@ -1658,7 +1678,6 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
     if (!valid)
       continue;
 
-    moved_labels.insert(entry_block->alias_labels.begin(), entry_block->alias_labels.end());
     moved_labels.insert(entry.label);
     ReturnStackLayoutOpportunity opportunity{
         .tails = tails,
