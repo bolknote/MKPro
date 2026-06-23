@@ -783,6 +783,78 @@ std::string unique_synthetic_entry_label(const std::set<std::string>& labels) {
   return candidate;
 }
 
+std::string unique_internal_basic_block_label(const std::set<std::string>& labels,
+                                              int ordinal) {
+  std::string candidate = "__return_stack_basic_block_" + std::to_string(ordinal);
+  int suffix = ordinal;
+  while (labels.contains(candidate)) {
+    ++suffix;
+    candidate = "__return_stack_basic_block_" + std::to_string(suffix);
+  }
+  return candidate;
+}
+
+bool ir_op_splits_internal_basic_block(const IrOp& op) {
+  switch (op.kind) {
+  case IrKind::Jump:
+  case IrKind::CondJump:
+  case IrKind::Call:
+  case IrKind::Loop:
+  case IrKind::IndirectJump:
+  case IrKind::Return:
+  case IrKind::Stop:
+    return true;
+  default:
+    break;
+  }
+  return op.opcode == 0x50 || op.opcode == 0x51 || op.opcode == 0x52 || op.opcode == 0x53;
+}
+
+void split_internal_basic_blocks(std::vector<IrLabelBlock>& blocks,
+                                 std::set<std::string>& labels) {
+  std::vector<IrLabelBlock> rewritten;
+  rewritten.reserve(blocks.size());
+  int synthetic_ordinal = 0;
+
+  for (IrLabelBlock& block : blocks) {
+    if (block.body.empty()) {
+      rewritten.push_back(std::move(block));
+      continue;
+    }
+
+    std::string current_label = block.label;
+    bool current_hidden = block.hidden;
+    std::vector<IrOp> current_body;
+    for (std::size_t index = 0; index < block.body.size(); ++index) {
+      current_body.push_back(std::move(block.body.at(index)));
+      if (index + 1U >= block.body.size() ||
+          !ir_op_splits_internal_basic_block(current_body.back())) {
+        continue;
+      }
+
+      rewritten.push_back(IrLabelBlock{
+          .label = std::move(current_label),
+          .body = std::move(current_body),
+          .hidden = current_hidden,
+      });
+      current_label = unique_internal_basic_block_label(labels, synthetic_ordinal++);
+      labels.insert(current_label);
+      current_hidden = true;
+      current_body.clear();
+    }
+
+    if (!current_body.empty()) {
+      rewritten.push_back(IrLabelBlock{
+          .label = std::move(current_label),
+          .body = std::move(current_body),
+          .hidden = current_hidden,
+      });
+    }
+  }
+
+  blocks = std::move(rewritten);
+}
+
 std::optional<std::vector<IrLabelBlock>> split_label_blocks(const std::vector<IrOp>& ops,
                                                             std::string& rejection_reason) {
   std::set<std::string> declared_labels;
@@ -811,8 +883,9 @@ std::optional<std::vector<IrLabelBlock>> split_label_blocks(const std::vector<Ir
       labels.insert(synthetic_entry);
       blocks.push_back(IrLabelBlock{.label = synthetic_entry, .hidden = true});
     }
-    blocks.back().body.push_back(op);
-  }
+      blocks.back().body.push_back(op);
+    }
+  split_internal_basic_blocks(blocks, labels);
   if (blocks.size() < 2U) {
     rejection_reason = "return-stack IR tail layout requires an entry block and at least one tail block";
     return std::nullopt;
