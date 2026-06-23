@@ -944,20 +944,10 @@ std::optional<std::string> single_call_block_target(const IrLabelBlock& block) {
   return ir_label_target(op);
 }
 
-std::optional<IrCallContinuation> cfg_call_continuation_block(
+std::optional<IrCallContinuation> cfg_non_empty_block_from_label(
     const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
-    const IrCfg& cfg, std::size_t call_index, const std::string& call_target) {
-  if (call_index + 1U >= blocks.size())
-    return std::nullopt;
-
-  const IrLabelBlock& call_block = blocks.at(call_index);
-  std::string cursor = blocks.at(call_index + 1U).label;
-  const auto successor_it = cfg.successors.find(call_block.label);
-  if (successor_it == cfg.successors.end() || !successor_it->second.contains(cursor) ||
-      cursor == call_target) {
-    return std::nullopt;
-  }
-
+    const IrCfg& cfg, const std::string& start_label) {
+  std::string cursor = start_label;
   std::set<std::string> seen;
   IrCallContinuation continuation;
   while (true) {
@@ -972,13 +962,28 @@ std::optional<IrCallContinuation> cfg_call_continuation_block(
     }
 
     continuation.alias_labels.insert(block.label);
-    const auto empty_successor_it = cfg.successors.find(block.label);
-    if (empty_successor_it == cfg.successors.end() ||
-        empty_successor_it->second.size() != 1U) {
+    const auto successor_it = cfg.successors.find(block.label);
+    if (successor_it == cfg.successors.end() || successor_it->second.size() != 1U)
       return std::nullopt;
-    }
-    cursor = *empty_successor_it->second.begin();
+    cursor = *successor_it->second.begin();
   }
+}
+
+std::optional<IrCallContinuation> cfg_call_continuation_block(
+    const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
+    const IrCfg& cfg, std::size_t call_index, const std::string& call_target) {
+  if (call_index + 1U >= blocks.size())
+    return std::nullopt;
+
+  const IrLabelBlock& call_block = blocks.at(call_index);
+  std::string cursor = blocks.at(call_index + 1U).label;
+  const auto successor_it = cfg.successors.find(call_block.label);
+  if (successor_it == cfg.successors.end() || !successor_it->second.contains(cursor) ||
+      cursor == call_target) {
+    return std::nullopt;
+  }
+
+  return cfg_non_empty_block_from_label(blocks, by_label, cfg, cursor);
 }
 
 bool existing_call_chain_has_safe_cfg_entries(
@@ -1119,23 +1124,55 @@ std::optional<IrTailChainCandidate> existing_call_chain_opportunity(
 std::map<std::string, std::set<std::string>> expected_tail_predecessors(
     const std::vector<IrLabelBlock>& blocks, const IrTailChainCandidate& candidate) {
   std::map<std::string, std::set<std::string>> expected;
-  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  (void)blocks;
+  std::map<std::string, ReturnStackTailBlock> tail_by_label;
+  for (const ReturnStackTailBlock& tail : candidate.opportunity.tails)
+    tail_by_label[tail.label] = tail;
   std::string previous = candidate.original_entry_label;
   std::optional<std::string> cursor =
       terminal_jump_target_from_ir_body(candidate.opportunity.entry_body);
   while (cursor.has_value()) {
     expected[*cursor].insert(previous);
-    const auto block_index = by_label.find(*cursor);
-    if (block_index == by_label.end())
+    const auto tail_it = tail_by_label.find(*cursor);
+    if (tail_it == tail_by_label.end())
       break;
     const std::optional<std::string> next =
-        terminal_jump_target_from_ir_body(blocks.at(block_index->second).body);
+        terminal_jump_target_from_ir_body(tail_it->second.body);
     if (!next.has_value())
       break;
     previous = *cursor;
     cursor = next;
   }
   return expected;
+}
+
+std::set<std::string> collapsed_tail_predecessors(
+    const std::vector<IrLabelBlock>& blocks, const IrTailChainCandidate& candidate,
+    const IrCfg& cfg, const std::string& label) {
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  std::set<std::string> result;
+  std::set<std::string> seen_aliases;
+
+  auto collect = [&](auto& self, const std::string& current) -> void {
+    const std::set<std::string> predecessors =
+        cfg.predecessors.contains(current) ? cfg.predecessors.at(current)
+                                           : std::set<std::string>{};
+    for (const std::string& predecessor : predecessors) {
+      const auto predecessor_it = by_label.find(predecessor);
+      const bool collapsible_alias =
+          candidate.moved_tail_labels.contains(predecessor) &&
+          predecessor_it != by_label.end() &&
+          blocks.at(predecessor_it->second).body.empty();
+      if (collapsible_alias && seen_aliases.insert(predecessor).second) {
+        self(self, predecessor);
+        continue;
+      }
+      result.insert(predecessor);
+    }
+  };
+
+  collect(collect, label);
+  return result;
 }
 
 bool tail_chain_has_only_internal_tail_entries(
@@ -1153,8 +1190,7 @@ bool tail_chain_has_only_internal_tail_entries(
     }
 
     const std::set<std::string> actual_predecessors =
-        cfg.predecessors.contains(tail.label) ? cfg.predecessors.at(tail.label)
-                                             : std::set<std::string>{};
+        collapsed_tail_predecessors(blocks, candidate, cfg, tail.label);
     const std::set<std::string> expected_predecessors =
         expected.contains(tail.label) ? expected.at(tail.label) : std::set<std::string>{};
     if (actual_predecessors != expected_predecessors || expected_predecessors.size() != 1U) {
@@ -1178,21 +1214,25 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
       continue;
 
     std::set<std::string> seen_tail_labels;
-    std::vector<ReturnStackTailBlock> tails;
+    std::vector<std::size_t> tail_indices;
+    std::set<std::string> moved_labels;
     bool valid_chain = true;
     while (cursor.has_value()) {
-      const auto block_it = by_label.find(*cursor);
-      if (block_it == by_label.end() || block_it->second == entry_index ||
-          seen_tail_labels.contains(*cursor)) {
+      const std::optional<IrCallContinuation> resolved =
+          cfg_non_empty_block_from_label(blocks, by_label, cfg, *cursor);
+      if (!resolved.has_value() || resolved->block_index == entry_index) {
         valid_chain = false;
         break;
       }
-      const IrLabelBlock& tail = blocks.at(block_it->second);
+      const IrLabelBlock& tail = blocks.at(resolved->block_index);
+      if (seen_tail_labels.contains(tail.label)) {
+        valid_chain = false;
+        break;
+      }
       seen_tail_labels.insert(tail.label);
-      tails.push_back(ReturnStackTailBlock{
-          .label = tail.label,
-          .body = tail.body,
-      });
+      moved_labels.insert(tail.label);
+      moved_labels.insert(resolved->alias_labels.begin(), resolved->alias_labels.end());
+      tail_indices.push_back(resolved->block_index);
 
       const std::optional<std::string> next = terminal_jump_target_from_ir_body(tail.body);
       if (next.has_value()) {
@@ -1204,20 +1244,36 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
       break;
     }
 
-    if (!valid_chain || tails.size() < 2U ||
-        tails.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
+    if (!valid_chain || tail_indices.size() < 2U ||
+        tail_indices.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
       continue;
+    }
+
+    std::vector<IrOp> entry_body = entry.body;
+    entry_body.back().target = blocks.at(tail_indices.front()).label;
+
+    std::vector<ReturnStackTailBlock> tails;
+    tails.reserve(tail_indices.size());
+    for (std::size_t index = 0; index < tail_indices.size(); ++index) {
+      const IrLabelBlock& tail = blocks.at(tail_indices.at(index));
+      std::vector<IrOp> body = tail.body;
+      if (index + 1U < tail_indices.size())
+        body.back().target = blocks.at(tail_indices.at(index + 1U)).label;
+      tails.push_back(ReturnStackTailBlock{
+          .label = tail.label,
+          .body = std::move(body),
+      });
     }
 
     IrTailChainCandidate candidate{
         .opportunity = ReturnStackLayoutOpportunity{
             .tails = tails,
-            .entry_body = entry.body,
+            .entry_body = std::move(entry_body),
             .entry_label = "__return_stack_entry_" + std::to_string(entry_index),
             .entry_at_address_zero = entry_index == 0U,
             .single_start_jump = entry_index != 0U,
         },
-        .moved_tail_labels = seen_tail_labels,
+        .moved_tail_labels = moved_labels,
         .original_entry_label = entry.label,
         .generated_entry_label = "__return_stack_entry_" + std::to_string(entry_index),
         .entry_block_index = entry_index,
