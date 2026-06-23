@@ -34899,10 +34899,20 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                              ? " after layout-aware full-pipeline comparison."
                              : "."),
           });
-        } else if (options.analysis && !tail_layout.rejection_reason.empty()) {
+        } else if (options.analysis) {
+          std::string rejection = tail_layout.rejection_reason;
+          if (rejection.empty()) {
+            rejection = "return-stack startup layout materialized, but the full post-layout "
+                        "pipeline was not smaller";
+            if (tail_layout.pipeline_compared) {
+              rejection += " (candidate " +
+                           std::to_string(tail_layout.pipeline_candidate_final_cells) +
+                           " cells vs current " +
+                           std::to_string(tail_layout.pipeline_current_final_cells) + " cells)";
+            }
+          }
           result.diagnostics.push_back(diagnostic(
-              DiagnosticSeverity::Note, "return-stack-layout-not-applied",
-              tail_layout.rejection_reason));
+              DiagnosticSeverity::Note, "return-stack-layout-not-applied", rejection));
         }
       } else if (options.analysis && !tail_layout.rejection_reason.empty()) {
         result.diagnostics.push_back(diagnostic(
