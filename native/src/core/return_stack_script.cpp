@@ -3372,6 +3372,7 @@ std::vector<std::vector<int>> dirty_return_stack_dispatch_candidate_stacks() {
       {27, 35, 43, 51, 59},
       {35, 43, 51, 59, 67},
       {43, 51, 59, 67, 75},
+      {51, 59, 67, 75, 83},
   };
 }
 

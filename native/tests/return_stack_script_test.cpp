@@ -1993,6 +1993,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
         {27, 35, 43, 51, 59, 77, 78},
         {35, 43, 51, 59, 67, 55, 56},
         {43, 51, 59, 67, 75, 33, 34},
+        {51, 59, 67, 75, 83, 11, 12},
     };
     for (const std::vector<int>& row : matrix) {
       std::vector<MachineItem> layout = repeated_stop_layout(row.at(6) + 2);
@@ -2010,6 +2011,23 @@ void return_stack_script_matches_mk61_strategy_contract() {
                   plan.cell_proofs.front().required_opcode == 0x08,
               "dirty dispatch proof should expose the required opcode");
     }
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(14);
+    layout.at(12) = digit(8);
+    const std::vector<core::DirtyReturnStackDispatchAllocationPlan> allocations =
+        core::allocate_dirty_return_stack_dispatch_layouts(layout, {.size_rescue = true});
+
+    const auto dirty_12 =
+        std::find_if(allocations.begin(), allocations.end(),
+                     [](const core::DirtyReturnStackDispatchAllocationPlan& allocation) {
+                       return allocation.allocated && allocation.dispatch.layout_proved &&
+                              allocation.padding_cells == 0 &&
+                              allocation.dispatch.dirty_targets == std::vector<int>({12});
+                     });
+    require(dirty_12 != allocations.end(),
+            "dirty dispatch allocator search should include the low-digit-1 target 12 family");
   }
 
   {
