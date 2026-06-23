@@ -2087,6 +2087,13 @@ void return_stack_script_matches_mk61_strategy_contract() {
                      });
     require(repeated_dirty != allocations.end(),
             "dirty dispatch allocator search should honor requested multi-dirty target counts");
+    require(!allocations.empty() && allocations.front().allocated &&
+                allocations.front().dispatch.layout_proved &&
+                allocations.front().padding_cells == 0 &&
+                allocations.front().dispatch.dirty_targets ==
+                    std::vector<int>({78, 78, 78}),
+            "dirty dispatch allocator search should rank already-proved layouts before earlier "
+            "candidate stacks that need padding or fail");
   }
 
   {

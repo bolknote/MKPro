@@ -3371,6 +3371,24 @@ std::vector<std::vector<int>> dirty_return_stack_dispatch_candidate_stacks() {
   };
 }
 
+bool dirty_return_stack_dispatch_allocation_better(
+    const DirtyReturnStackDispatchAllocationPlan& left,
+    const DirtyReturnStackDispatchAllocationPlan& right) {
+  const bool left_proved = left.allocated && left.dispatch.layout_proved;
+  const bool right_proved = right.allocated && right.dispatch.layout_proved;
+  if (left_proved != right_proved)
+    return left_proved;
+  if (left.padding_cells != right.padding_cells)
+    return left.padding_cells < right.padding_cells;
+  if (left.fixed_point_rounds != right.fixed_point_rounds)
+    return left.fixed_point_rounds < right.fixed_point_rounds;
+  if (left.dispatch.dirty_targets.size() != right.dispatch.dirty_targets.size())
+    return left.dispatch.dirty_targets.size() > right.dispatch.dirty_targets.size();
+  if (machine_cell_count(left.items) != machine_cell_count(right.items))
+    return machine_cell_count(left.items) < machine_cell_count(right.items);
+  return false;
+}
+
 std::vector<DirtyReturnStackDispatchAllocationPlan>
 allocate_dirty_return_stack_dispatch_layouts(const std::vector<MachineItem>& layout,
                                              const DirtyReturnStackDispatchOptions& options) {
@@ -3383,6 +3401,8 @@ allocate_dirty_return_stack_dispatch_layouts(const std::vector<MachineItem>& lay
     allocations.push_back(
         allocate_dirty_return_stack_dispatch_layout(stack, return_count, layout, options));
   }
+  std::stable_sort(allocations.begin(), allocations.end(),
+                   dirty_return_stack_dispatch_allocation_better);
   return allocations;
 }
 
