@@ -86,6 +86,7 @@ struct ReturnStackIrTailLayoutSearch {
   int cfg_tail_unresolved_chain_candidates = 0;
   int cfg_tail_repeated_chain_candidates = 0;
   int cfg_tail_nonterminal_chain_candidates = 0;
+  std::vector<std::string> cfg_tail_nonterminal_break_labels;
   int cfg_tail_external_entry_rejections = 0;
   int symbolic_existing_callsite_hints = 0;
   ReturnStackLayoutOpportunityAnalysis analysis;

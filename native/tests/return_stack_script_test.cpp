@@ -700,7 +700,8 @@ void return_stack_script_matches_mk61_strategy_contract() {
         core::analyze_return_stack_ir_tail_layout(ops);
     require(!search.has_opportunity && search.cfg_tail_entry_candidates == 1 &&
                 search.cfg_tail_broken_chain_candidates == 1 &&
-                search.cfg_tail_nonterminal_chain_candidates == 1,
+                search.cfg_tail_nonterminal_chain_candidates == 1 &&
+                search.cfg_tail_nonterminal_break_labels == std::vector<std::string>({"body"}),
             "IR tail layout scanner should expose nonterminal blocks as broken CFG chains");
   }
 

@@ -748,6 +748,7 @@ struct IrTailChainSearchStats {
   int unresolved_chain_candidates = 0;
   int repeated_chain_candidates = 0;
   int nonterminal_chain_candidates = 0;
+  std::vector<std::string> nonterminal_break_labels;
   int external_entry_rejections = 0;
 };
 
@@ -1313,6 +1314,7 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
     std::set<std::string> moved_labels;
     bool valid_chain = true;
     IrTailChainBrokenReason broken_reason = IrTailChainBrokenReason::None;
+    std::string broken_label;
     while (cursor.has_value()) {
       const std::optional<IrCallContinuation> resolved =
           cfg_non_empty_block_from_label(blocks, by_label, cfg, *cursor);
@@ -1340,6 +1342,7 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
       if (!terminal_stop_from_ir_body(tail.body)) {
         valid_chain = false;
         broken_reason = IrTailChainBrokenReason::NonTerminal;
+        broken_label = tail.label;
       }
       break;
     }
@@ -1356,6 +1359,12 @@ std::optional<IrTailChainCandidate> embedded_tail_chain_opportunity(
           break;
         case IrTailChainBrokenReason::NonTerminal:
           ++stats->nonterminal_chain_candidates;
+          if (!broken_label.empty() && stats->nonterminal_break_labels.size() < 5U &&
+              std::find(stats->nonterminal_break_labels.begin(),
+                        stats->nonterminal_break_labels.end(),
+                        broken_label) == stats->nonterminal_break_labels.end()) {
+            stats->nonterminal_break_labels.push_back(broken_label);
+          }
           break;
         case IrTailChainBrokenReason::None:
           break;
@@ -1934,6 +1943,7 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout(
       search.cfg_tail_unresolved_chain_candidates = stats.unresolved_chain_candidates;
       search.cfg_tail_repeated_chain_candidates = stats.repeated_chain_candidates;
       search.cfg_tail_nonterminal_chain_candidates = stats.nonterminal_chain_candidates;
+      search.cfg_tail_nonterminal_break_labels = stats.nonterminal_break_labels;
       search.cfg_tail_external_entry_rejections = stats.external_entry_rejections;
     }
   }

@@ -34023,6 +34023,16 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                   (tail_layout.extracted_tail_fragments == 1 ? "" : "s") +
                   " before profitability/layout proof"));
           if (!tail_layout.materialized) {
+            std::string nonterminal_labels;
+            if (!tail_layout.cfg_tail_nonterminal_break_labels.empty()) {
+              nonterminal_labels = "; first nonterminal break labels=";
+              for (std::size_t index = 0;
+                   index < tail_layout.cfg_tail_nonterminal_break_labels.size(); ++index) {
+                if (index > 0)
+                  nonterminal_labels += ",";
+                nonterminal_labels += tail_layout.cfg_tail_nonterminal_break_labels.at(index);
+              }
+            }
             result.diagnostics.push_back(diagnostic(
                 DiagnosticSeverity::Note, "return-stack-tail-fragment-chain-stats",
                 "CFG tail-fragment chain scan considered " +
@@ -34046,7 +34056,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                     std::to_string(tail_layout.cfg_tail_nonterminal_chain_candidates) + "])" +
                     ", rejected " +
                     std::to_string(tail_layout.cfg_tail_external_entry_rejections) +
-                    " by external CFG entries"));
+                    " by external CFG entries" + nonterminal_labels));
           }
         }
         if (tail_layout.extracted_existing_callsite_fragments > 0) {
