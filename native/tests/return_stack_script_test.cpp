@@ -1466,9 +1466,10 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(search.extracted_tail_fragments == 2,
-            "IR tail layout scanner should use whole existing tail blocks to select longer "
-            "common suffixes");
+    require(search.reused_existing_tail_fragments == 1 &&
+                search.extracted_tail_fragments == 1,
+            "IR tail layout scanner should reuse whole existing tail blocks instead of "
+            "duplicating longer common suffixes");
   }
 
   {

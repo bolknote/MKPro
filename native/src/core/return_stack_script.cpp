@@ -804,6 +804,7 @@ struct IrResolvedTailBlock {
 
 struct ExtractedIrFragments {
   int tail_fragments = 0;
+  int reused_existing_tail_fragments = 0;
   int existing_callsite_fragments = 0;
 
   int total() const {
@@ -1189,6 +1190,23 @@ std::optional<std::string> existing_tail_fragment_label_for_body(
   return std::nullopt;
 }
 
+bool valid_terminal_tail_fragment_body(const IrLabelBlock& block);
+
+std::optional<std::string> existing_whole_tail_label_for_body(
+    const std::vector<IrLabelBlock>& blocks, std::size_t source_index,
+    const std::vector<IrOp>& body) {
+  for (std::size_t index = 0; index < blocks.size(); ++index) {
+    if (index == source_index)
+      continue;
+    const IrLabelBlock& block = blocks.at(index);
+    if (!valid_terminal_tail_fragment_body(block))
+      continue;
+    if (ir_tail_fragment_body_equal(block.body, body))
+      return block.label;
+  }
+  return std::nullopt;
+}
+
 bool valid_terminal_tail_fragment_suffix_start(const IrLabelBlock& block,
                                                std::size_t suffix_start) {
   if (!terminal_tail_fragment_candidate(block) || suffix_start == 0U ||
@@ -1322,14 +1340,21 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
     if (existing_fragment.has_value()) {
       fragment_label = *existing_fragment;
     } else {
-      fragment_label = unique_tail_fragment_label(labels, extracted.total());
-      labels.insert(fragment_label);
-      appended_fragments.push_back(IrLabelBlock{
-          .label = fragment_label,
-          .body = suffix,
-          .hidden = true,
-      });
-      ++extracted.tail_fragments;
+      const std::optional<std::string> existing_whole_tail =
+          existing_whole_tail_label_for_body(blocks, index, suffix);
+      if (existing_whole_tail.has_value()) {
+        fragment_label = *existing_whole_tail;
+        ++extracted.reused_existing_tail_fragments;
+      } else {
+        fragment_label = unique_tail_fragment_label(labels, extracted.total());
+        labels.insert(fragment_label);
+        appended_fragments.push_back(IrLabelBlock{
+            .label = fragment_label,
+            .body = suffix,
+            .hidden = true,
+        });
+        ++extracted.tail_fragments;
+      }
     }
 
     block.body.erase(block.body.begin() + static_cast<std::ptrdiff_t>(*suffix_start),
@@ -2870,6 +2895,8 @@ IrTailChainCandidateCollection collect_return_stack_ir_tail_candidates(
   std::vector<IrLabelBlock> extracted_blocks = *blocks;
   const ExtractedIrFragments extracted = extract_terminal_tail_fragments(extracted_blocks);
   collection.search.extracted_tail_fragments = extracted.tail_fragments;
+  collection.search.reused_existing_tail_fragments =
+      extracted.reused_existing_tail_fragments;
   collection.search.extracted_existing_callsite_fragments =
       extracted.existing_callsite_fragments;
   if (extracted.total() > 0) {
