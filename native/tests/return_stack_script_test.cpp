@@ -1119,6 +1119,39 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("first_raw"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_raw_call("shared_helper"));
+    ops.push_back(ir_label("after_first"));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("second_semantic"));
+    ops.push_back(ir_plain(2));
+    ops.push_back(ir_call("shared_helper"));
+    ops.push_back(ir_label("after_second"));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("shared_helper"));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.symbolic_existing_callsite_hints == 2 &&
+                search.symbolic_existing_callsite_target_groups == 1 &&
+                search.symbolic_existing_callsite_largest_target_group == 2 &&
+                search.symbolic_existing_callsite_target_labels ==
+                    std::vector<std::string>({"shared_helper"}) &&
+                search.symbolic_existing_callsite_target_group_details ==
+                    std::vector<std::string>({"shared_helper=2"}) &&
+                search.symbolic_existing_callsite_source_labels ==
+                    std::vector<std::string>({"first_raw", "second_semantic"}) &&
+                search.symbolic_existing_callsite_source_target_details ==
+                    std::vector<std::string>({"first_raw->shared_helper",
+                                              "second_semantic->shared_helper"}),
+            "IR scanner should group mixed raw and semantic terminal ПП hints by shared target "
+            "label");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("first"));
     ops.push_back(ir_plain(1));
     ops.push_back(ir_call("helper_a"));
