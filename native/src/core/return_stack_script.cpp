@@ -602,10 +602,18 @@ int best_cell_count_with_address_overlay(const std::vector<MachineItem>& items) 
   return machine_cell_count(overlay.items);
 }
 
-bool return_stack_candidate_beats_address_overlay(const std::vector<MachineItem>& current,
-                                                  const std::vector<MachineItem>& candidate) {
-  const int current_best = best_cell_count_with_address_overlay(current);
-  const int candidate_best = best_cell_count_with_address_overlay(candidate);
+int best_cell_count_after_downstream_post_layout_pipeline(
+    const std::vector<MachineItem>& items) {
+  const PostLayoutIndirectFlowResult overlay = optimize_post_layout_address_code_overlay(items);
+  const PostLayoutIndirectFlowResult flow =
+      optimize_post_layout_indirect_flow(overlay.items, CompileOptions{});
+  return machine_cell_count(flow.items);
+}
+
+bool return_stack_candidate_beats_downstream_post_layout_pipeline(
+    const std::vector<MachineItem>& current, const std::vector<MachineItem>& candidate) {
+  const int current_best = best_cell_count_after_downstream_post_layout_pipeline(current);
+  const int candidate_best = best_cell_count_after_downstream_post_layout_pipeline(candidate);
   return candidate_best < current_best;
 }
 
@@ -3424,11 +3432,9 @@ std::string explain_return_stack_script_rejection(const std::vector<MachineItem>
   }
 
   const std::vector<MachineItem> candidate = apply_script_plan(items, *plan);
-  if (machine_cell_count(candidate) >= machine_cell_count(items))
-    return "return-stack script proof exists, but rewriting it would not reduce cell count";
-  if (!return_stack_candidate_beats_address_overlay(items, candidate)) {
-    return "return-stack script proof exists, but address-code-overlay is at least as small as "
-           "the return-stack rewrite";
+  if (!return_stack_candidate_beats_downstream_post_layout_pipeline(items, candidate)) {
+    return "return-stack script proof exists, but the downstream address-code-overlay/indirect-flow "
+           "pipeline is at least as small as the return-stack rewrite";
   }
   return {};
 }
@@ -3795,9 +3801,7 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
       for (const int target : candidate_dirty_proof->dirty_targets)
         candidate_dirty_dispatch_targets.insert(target);
     }
-    if (machine_cell_count(candidate) >= machine_cell_count(current))
-      break;
-    if (!return_stack_candidate_beats_address_overlay(current, candidate))
+    if (!return_stack_candidate_beats_downstream_post_layout_pipeline(current, candidate))
       break;
     dirty_dispatch_padding += candidate_dirty_dispatch_padding;
     dirty_dispatch_append_padding += candidate_dirty_dispatch_append_padding;
