@@ -1869,6 +1869,25 @@ void remove_state_fields_named(V2Program& program, const std::set<std::string>& 
   removed += static_cast<int>(before - program.state.size());
 }
 
+void materialize_rule_param_state_fields(V2Program& program) {
+  std::set<std::string> declared;
+  for (const V2StateField& field : program.state)
+    declared.insert(field.name);
+
+  for (const V2Rule& rule : program.rules) {
+    for (const std::string& param : rule.params) {
+      if (!declared.insert(param).second)
+        continue;
+      V2StateField field;
+      field.name = param;
+      field.type = "packed";
+      field.implicit = true;
+      field.line = rule.line;
+      program.state.push_back(std::move(field));
+    }
+  }
+}
+
 void elide_x_param_value_state_fields(V2Program& program,
                                       std::vector<OptimizationReport>& optimizations) {
   std::set<std::string> params;
@@ -6598,6 +6617,11 @@ bool is_coord_list_line_count_expression(const LoweringContext& context,
          is_coord_list_state_name(context, expression.args.front().name);
 }
 
+bool call_needs_binary_temp_for_register_collection(const LoweringContext& context,
+                                                    const Expression& expression) {
+  return expression.kind == "call" && context.rules.contains(expression.callee);
+}
+
 void add_coord_list_line_count_assignment_scratch(RegisterCollection& collection) {
   add_register_variable(collection, std::string(kCoordListPointer));
   add_register_variable(collection, std::string(kCoordListCounter));
@@ -6655,7 +6679,9 @@ void collect_locals_from_expression_excluding(LoweringContext& context,
   }
   if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
       expression.right != nullptr && expression.left->kind == "call" &&
-      expression.right->kind == "call" && !can_reuse_x_param_value_call_temp(context, expression)) {
+      expression.right->kind == "call" && !can_reuse_x_param_value_call_temp(context, expression) &&
+      (call_needs_binary_temp_for_register_collection(context, *expression.left) ||
+       call_needs_binary_temp_for_register_collection(context, *expression.right))) {
     add_register_variable(collection, "__mkpro_call_1");
   }
   if (expression.kind == "identifier") {
@@ -20867,6 +20893,36 @@ bool equality_true_fallthrough_leaves_zero(LoweringContext&, const V2Predicate& 
   }
 }
 
+bool statement_can_enter_packed_line_family_score_zero_entry(LoweringContext& context,
+                                                             const V2Statement* statement) {
+  if (statement == nullptr || statement->kind != "v2_invoke" || !statement->name.has_value() ||
+      !statement->args.empty()) {
+    return false;
+  }
+  const auto rule_it = context.rules.find(*statement->name);
+  return rule_it != context.rules.end() &&
+         packed_line_family_score_rule(context, *rule_it->second).has_value();
+}
+
+bool equality_true_fallthrough_can_feed_zero_accumulator(
+    LoweringContext& context, const V2Predicate& predicate, bool negated,
+    const std::vector<V2Statement>& then_body, int line) {
+  const std::optional<NormalizedZeroComparison> normalized =
+      normalize_zero_comparison(context, predicate, negated, line);
+  if (!normalized.has_value() || normalized->op != "==" ||
+      !guarded_can_test_against_zero_directly(normalized->op)) {
+    return false;
+  }
+  if (normalized->expression.kind == "call") {
+    const std::string callee = lower_ascii(normalized->expression.callee);
+    if (callee == "coord_list_has" || callee == "__mkpro_negative_zero_ge")
+      return false;
+  }
+  return expression_pure_for_substitution(normalized->expression) &&
+         statement_can_enter_packed_line_family_score_zero_entry(
+             context, then_body.empty() ? nullptr : &then_body.front());
+}
+
 bool inequality_false_branch_leaves_zero(LoweringContext& context, const V2Predicate& predicate,
                                          bool negated, int line) {
   const std::optional<NormalizedZeroComparison> normalized =
@@ -22669,7 +22725,11 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
       has_else && inequality_false_branch_leaves_zero(context, *selected.predicate,
                                                       selected.negated, selected.line);
   const bool true_fallthrough_known_zero = equality_true_fallthrough_leaves_zero(
-      context, *selected.predicate, selected.negated, selected.line);
+                                               context, *selected.predicate, selected.negated,
+                                               selected.line) ||
+                                           equality_true_fallthrough_can_feed_zero_accumulator(
+                                               context, *selected.predicate, selected.negated,
+                                               selected.then_body, selected.line);
   const std::string false_label = context.emitter.fresh_label(has_else ? "if_else" : "if_end");
   const std::string end_label = has_else ? context.emitter.fresh_label("if_end") : false_label;
   if (!lower_condition_false_branch(context, *selected.predicate, selected.negated, false_label,
@@ -35786,6 +35846,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     return result;
   }
   lower_small_case_matches(*ast.v2);
+  materialize_rule_param_state_fields(*ast.v2);
 
   LoweringContext context;
   context.program = &*ast.v2;
