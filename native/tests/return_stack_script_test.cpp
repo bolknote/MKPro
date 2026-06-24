@@ -2655,6 +2655,37 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(10) = MachineItem::op(0x51, "БП");
+    layout.at(11) = MachineItem::address(5);
+    layout.at(78) = stop();
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
+            {.size_rescue = true, .max_padding_cells = 2});
+    require(allocation.allocated && allocation.padding_cells == 1 &&
+                allocation.fixed_point_rounds == 1 && allocation.dispatch.layout_proved,
+            "dirty dispatch allocator should repair insertion layouts when numeric targets stay "
+            "left of the insertion address");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(10) = MachineItem::op(0x51, "БП");
+    layout.at(11) = MachineItem::address(78);
+    layout.at(78) = stop();
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
+            {.size_rescue = true, .max_padding_cells = 2});
+    require(!allocation.allocated &&
+                allocation.rejection_reason.find("at or beyond the insertion address") !=
+                    std::string::npos,
+            "dirty dispatch allocator should reject insertion layouts when numeric targets would "
+            "shift");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
     layout.at(78) = stop();
     const core::DirtyReturnStackDispatchAllocationPlan allocation =
         core::allocate_dirty_return_stack_dispatch_layout(

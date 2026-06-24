@@ -2676,9 +2676,13 @@ MachineItem dirty_dispatch_safe_padding_cell() {
   return pad;
 }
 
-bool layout_has_numeric_address_targets(const std::vector<MachineItem>& items) {
-  return std::any_of(items.begin(), items.end(), [](const MachineItem& item) {
-    return item.kind == MachineItemKind::Address && std::holds_alternative<int>(item.target);
+bool layout_has_numeric_address_target_shifted_by_insertion(
+    const std::vector<MachineItem>& items, int insertion_address) {
+  return std::any_of(items.begin(), items.end(), [insertion_address](const MachineItem& item) {
+    if (item.kind != MachineItemKind::Address)
+      return false;
+    const int* target = std::get_if<int>(&item.target);
+    return target != nullptr && *target >= insertion_address;
   });
 }
 
@@ -3447,10 +3451,11 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
       continue;
     }
 
-    if (layout_has_numeric_address_targets(candidate)) {
+    if (layout_has_numeric_address_target_shifted_by_insertion(candidate, target)) {
       allocation.dispatch = std::move(current);
       allocation.rejection_reason =
-          "dirty return-stack dispatch allocator cannot shift layouts with numeric address operands";
+          "dirty return-stack dispatch allocator cannot shift layouts with numeric address "
+          "operands at or beyond the insertion address";
       return allocation;
     }
     const MachineLayout candidate_layout = machine_layout(candidate);
