@@ -9,6 +9,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -2683,28 +2684,31 @@ bool remap_proven_indirect_target_comment_after_insertion(MachineItem& item,
     return true;
 
   constexpr const char* kMarker = "indirect-target=";
+  constexpr std::size_t kMarkerSize = std::string_view(kMarker).size();
   std::string& comment = *item.comment;
-  const std::size_t marker = comment.find(kMarker);
-  if (marker == std::string::npos)
-    return true;
-
-  const std::size_t value_begin = marker + std::string(kMarker).size();
-  std::size_t cursor = value_begin;
-  int value = 0;
-  bool saw_digit = false;
-  while (cursor < comment.size() && comment.at(cursor) >= '0' && comment.at(cursor) <= '9') {
-    saw_digit = true;
-    value = value * 10 + (comment.at(cursor) - '0');
-    ++cursor;
+  std::size_t marker = comment.find(kMarker);
+  while (marker != std::string::npos) {
+    const std::size_t value_begin = marker + kMarkerSize;
+    std::size_t cursor = value_begin;
+    int value = 0;
+    bool saw_digit = false;
+    while (cursor < comment.size() && comment.at(cursor) >= '0' && comment.at(cursor) <= '9') {
+      saw_digit = true;
+      value = value * 10 + (comment.at(cursor) - '0');
+      ++cursor;
+    }
+    if (saw_digit && value >= insertion_address) {
+      if (value >= 104) {
+        rejection_reason = "dirty return-stack dispatch allocator cannot shift proven indirect "
+                           "target comments outside official 00..A4 cells";
+        return false;
+      }
+      const std::string replacement = std::to_string(value + 1);
+      comment.replace(value_begin, cursor - value_begin, replacement);
+      cursor = value_begin + replacement.size();
+    }
+    marker = comment.find(kMarker, cursor);
   }
-  if (!saw_digit || value < insertion_address)
-    return true;
-  if (value >= 104) {
-    rejection_reason = "dirty return-stack dispatch allocator cannot shift proven indirect "
-                       "target comments outside official 00..A4 cells";
-    return false;
-  }
-  comment.replace(value_begin, cursor - value_begin, std::to_string(value + 1));
   return true;
 }
 
