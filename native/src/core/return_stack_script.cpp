@@ -1222,8 +1222,17 @@ bool ir_op_target_is_semantic_for_tail_fragment(const IrOp& op) {
 bool ir_op_kind_equal_for_tail_fragment(const IrOp& left, const IrOp& right) {
   if (left.kind == right.kind)
     return true;
+  if (left.opcode == 0x50 && right.opcode == 0x50)
+    return left.kind == IrKind::Stop || right.kind == IrKind::Stop;
   return left.opcode == 0x52 && right.opcode == 0x52 &&
          (left.kind == IrKind::Return || right.kind == IrKind::Return);
+}
+
+bool ir_op_semantic_equal_for_tail_fragment(const IrOp& left, const IrOp& right) {
+  if (left.semantic == right.semantic)
+    return true;
+  return left.opcode == 0x50 && right.opcode == 0x50 &&
+         (left.kind == IrKind::Stop || right.kind == IrKind::Stop);
 }
 
 bool ir_op_equal_for_tail_fragment(
@@ -1238,7 +1247,8 @@ bool ir_op_equal_for_tail_fragment(
          (!target_semantic ||
           (ir_target_equal_for_tail_fragment(left.target, right.target, blocks, by_label, cfg) &&
            ir_target_meta_equal(left.target_meta, right.target_meta))) &&
-         left.semantic == right.semantic && ir_meta_equal(left.meta, right.meta);
+         ir_op_semantic_equal_for_tail_fragment(left, right) &&
+         ir_meta_equal(left.meta, right.meta);
 }
 
 bool ir_tail_fragment_body_equal(
