@@ -1227,6 +1227,8 @@ bool ir_op_kind_equal_for_tail_fragment(const IrOp& left, const IrOp& right) {
     return left.kind == IrKind::Stop || right.kind == IrKind::Stop;
   if (left.opcode == 0x51 && right.opcode == 0x51)
     return left.kind == IrKind::Jump || right.kind == IrKind::Jump;
+  if (left.opcode == 0x53 && right.opcode == 0x53)
+    return left.kind == IrKind::Call || right.kind == IrKind::Call;
   return left.opcode == 0x52 && right.opcode == 0x52 &&
          (left.kind == IrKind::Return || right.kind == IrKind::Return);
 }
