@@ -2080,7 +2080,8 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
-    require(search.extracted_tail_fragments == 1 && search.rewritten_tail_fragments >= 2,
+    require(search.extracted_tail_fragments == 1 && search.rewritten_tail_fragments >= 2 &&
+                search.reused_generated_tail_fragments >= 1,
             "IR tail layout scanner should reuse generated common suffix fragments across CFG "
             "alias targets");
   }

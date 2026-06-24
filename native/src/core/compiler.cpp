@@ -34926,6 +34926,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               " into " + std::to_string(tail_layout.extracted_tail_fragments) +
               " extracted fragment" +
               (tail_layout.extracted_tail_fragments == 1 ? "" : "s");
+          if (tail_layout.reused_generated_tail_fragments > 0) {
+            detail += ", reused " +
+                      std::to_string(tail_layout.reused_generated_tail_fragments) +
+                      " generated fragment" +
+                      (tail_layout.reused_generated_tail_fragments == 1 ? "" : "s");
+          }
           if (tail_layout.reused_existing_tail_fragments > 0) {
             detail += " and reused " +
                       std::to_string(tail_layout.reused_existing_tail_fragments) +

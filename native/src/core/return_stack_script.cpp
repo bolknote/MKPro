@@ -812,6 +812,7 @@ struct IrResolvedTailBlock {
 struct ExtractedIrFragments {
   int tail_fragments = 0;
   int tail_fragment_rewrites = 0;
+  int reused_generated_tail_fragments = 0;
   int reused_existing_tail_fragments = 0;
   int existing_callsite_fragments = 0;
 
@@ -1399,6 +1400,7 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
         existing_tail_fragment_label_for_body(appended_fragments, suffix, blocks, by_label, cfg);
     if (existing_fragment.has_value()) {
       fragment_label = *existing_fragment;
+      ++extracted.reused_generated_tail_fragments;
     } else {
       const std::optional<std::string> existing_whole_tail =
           existing_whole_tail_label_for_body(blocks, index, suffix, by_label, cfg);
@@ -3093,6 +3095,8 @@ IrTailChainCandidateCollection collect_return_stack_ir_tail_candidates(
   const ExtractedIrFragments extracted = extract_terminal_tail_fragments(extracted_blocks);
   collection.search.extracted_tail_fragments = extracted.tail_fragments;
   collection.search.rewritten_tail_fragments = extracted.tail_fragment_rewrites;
+  collection.search.reused_generated_tail_fragments =
+      extracted.reused_generated_tail_fragments;
   collection.search.reused_existing_tail_fragments =
       extracted.reused_existing_tail_fragments;
   collection.search.extracted_existing_callsite_fragments =
