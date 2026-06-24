@@ -27,6 +27,7 @@ struct MachineItem {
   std::optional<std::string> comment;
   std::optional<int> source_line;
   bool raw = false;
+  std::vector<CellRole> roles;
   IrTarget target = 0;
   std::optional<int> formal_opcode;
 

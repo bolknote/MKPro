@@ -2524,4 +2524,32 @@ If proofs are insufficient, those transformations are not activated.
 - Some capability entries remain `candidate`/`planned` while not yet stable enough for global enabling.
 - Optimization priority is always bounded by semantic safety and layout validity, then by cell budget.
 
+### Deferred better-than-TS candidates
+
+- Post-layout indirect-flow can reduce small `cells(...)`/bit-mask programs even when they already fit in
+  the official 105-cell window. This is intentionally deferred during the C++ parity port: the native
+  translator must keep the same default rescue threshold as the TypeScript compiler unless an explicit
+  aggressive candidate is selected.
+- The native text-display lowering can technically compile the `BEEr NN` shape in some hoisted helper
+  variants where the TypeScript test-only lowering variant currently rejects it after its leading
+  hoist jump shifts the main body away from address 00. Keep the C++ variant aligned with TypeScript
+  oracle output until that TS strategy is changed deliberately.
+- Reference-size post-layout indirect-flow rescue can shrink some explicit test-only lowering variants
+  such as `Dungeon` primary, but the current TypeScript golden fingerprints keep those variants at the
+  ordinary 105-cell rescue threshold unless an aggressive post-layout variant is selected.
+- For spatial/bit-mask-heavy programs such as `fox-hunt-100`, the native translator can keep some
+  membership and `line_count` paths in a shorter direct/shared-hybrid form even when the explicit
+  `sharedBitMaskHelperCalls` strategy is selected. This produced a smaller test-only variant during
+  the C++ parity port, but it is deferred until after byte-for-byte parity with the TypeScript
+  shared-helper layout is complete.
+- Hoisted-helper variants can sometimes keep the coord-list counter proof alive through a formatted
+  report and replace a final `JP 00` loop-back with one-cell indirect `K JP R`. TypeScript keeps the
+  explicit direct branch in those test-only variants, so the native port suppresses this shortcut
+  while `hoistSharedHelpers` parity is being enforced.
+- Runtime indirect-call flow can shrink explicit helper-call variants such as `rambo-iii` primary by
+  borrowing a dead stable register for repeated helper calls. TypeScript keeps that test-only primary
+  variant in direct-call form, while still using the shortcut for hoisted-helper variants such as
+  `minesweeper-9x7`. The native port therefore suppresses the shortcut only for non-hoisted
+  test-only variants unless the runtime-indirect-call strategy is explicitly selected.
+
 This reference should be used as a working map while reading generated listings in explain/json mode: every named optimization corresponds to a concrete rewrite class that can be correlated with local sequences in emitted IR or final machine text.

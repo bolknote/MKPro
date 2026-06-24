@@ -104,7 +104,7 @@ std::optional<std::string> executable_setup_value(const std::string& value) {
   std::replace(trimmed.begin(), trimmed.end(), ',', '.');
   static const std::regex numeric_literal(R"(^-?\d+(?:[.]\d+)?(?:[eE]-?\d{1,2})?$)");
   if (std::regex_match(trimmed, numeric_literal))
-    return trimmed;
+    return compact_keyboard_decimal(trimmed).value_or(trimmed);
 
   static const std::regex formal_address_literal(R"(^[A-Fa-f][0-9A-Fa-f]$)");
   if (std::regex_match(trimmed, formal_address_literal)) {

@@ -134,6 +134,33 @@ program Demo {
   require(loop.body.at(3).otherwise != nullptr, "match otherwise should parse");
   require(rich_program.v2->rules.at(0).params == std::vector<std::string>{"delta"},
           "function params should parse");
+
+  const ProgramAst spatial_program = parse_program(R"mkpro(
+program Queries {
+  cave: board(row_scan)
+  dungeon: board(corridor_plan)
+  state {
+    pos: coord(cave) = 11
+    room: coord(dungeon) = 8
+    map: packed = 1234
+    tile: counter 0..9 = 0
+    wall: counter 0..9 = 0
+  }
+  loop {
+    tile = cell_at(cave, pos)
+    wall = cell_at(room)
+  }
+}
+)mkpro");
+  const V2Statement& spatial_loop = spatial_program.v2->body.at(0);
+  require(spatial_loop.body.at(0).expr.has_value(), "cell_at assignment should keep expression");
+  require(spatial_loop.body.at(0).expr->find("digit_at(map, (pos) - 10 * int((pos) / 10))") !=
+              std::string::npos,
+          "cell_at(domain, pos) should rewrite through the TS decimal-ones index");
+  require(spatial_loop.body.at(1).expr.has_value(), "cell_at(pos) assignment should keep expr");
+  require(*spatial_loop.body.at(1).expr == "digit_at(map, room)",
+          "cell_at(pos) should infer the coordinate domain and corridor index");
+
   require_throws_contains(R"mkpro(
 program BadStack {
   state {

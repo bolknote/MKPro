@@ -85,6 +85,7 @@ IrMeta meta_from_op(const MachineItem& item) {
     meta.source_line = item.source_line;
   if (item.raw)
     meta.raw = true;
+  meta.roles = item.roles;
   return meta;
 }
 
@@ -138,6 +139,7 @@ MachineItem machine_op_from_meta(int opcode, const IrMeta& meta) {
     item.source_line = meta.source_line;
   if (meta.raw)
     item.raw = true;
+  item.roles = meta.roles;
   return item;
 }
 
@@ -693,7 +695,7 @@ bool machine_items_equal(const MachineItem& a, const MachineItem& b) {
   }
   if (a.kind == MachineItemKind::Op) {
     return a.opcode == b.opcode && a.mnemonic == b.mnemonic && a.comment == b.comment &&
-           a.source_line == b.source_line && a.raw == b.raw;
+           a.source_line == b.source_line && a.raw == b.raw && a.roles == b.roles;
   }
   return targets_equal(a.target, b.target) && a.comment == b.comment &&
          a.source_line == b.source_line && a.formal_opcode == b.formal_opcode;

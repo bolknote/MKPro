@@ -53,7 +53,7 @@ bool lower_dynamic_line_report_display_statement(DisplayEmitApi& api, LoweringCo
                                                  int source_line);
 bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                               const std::vector<DisplayItem>& items,
-                                              int source_line);
+                                              const std::string& display_name, int source_line);
 bool lower_mantissa_exponent_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                                const std::vector<DisplayItem>& items,
                                                const std::string& display_name, int source_line);

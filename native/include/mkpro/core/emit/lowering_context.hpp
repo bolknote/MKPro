@@ -166,7 +166,8 @@ struct LoweringContext {
   std::vector<LineCountHelperRequest> line_count_helpers;
   std::map<std::string, std::string> segmented_hit_helpers;
   std::vector<std::string> segmented_hit_helper_order;
-  std::optional<std::string> bit_mask_helper;
+  std::map<std::string, std::string> bit_mask_helper_labels;
+  std::vector<std::string> bit_mask_helper_order;
   std::optional<std::string> bit_mask_helper_scratch;
   int bit_mask_helper_calls = 0;
   int bit_mask_condition_helper_calls = 0;
@@ -208,11 +209,13 @@ struct LoweringContext {
   std::optional<std::string> negative_zero_degree_register;
   std::vector<FractionalConstantSelectorPlan> fractional_constant_selectors;
   std::map<std::string, Expression> constants;
+  std::map<std::string, std::string> raw_constants;
   std::vector<Diagnostic> diagnostics;
   std::vector<OptimizationReport> optimizations;
   std::optional<OptimizationReport> pending_coord_list_line_count_formatted_report_fusion;
   int constant_indexed_state_resolutions = 0;
   std::optional<std::string> current_rule_name;
+  std::optional<std::string> current_loop_label;
   bool uses_formatted_coord_report = false;
   bool tiny_game_shape = false;
   bool human_game_shape = false;
@@ -249,8 +252,12 @@ struct LoweringContext {
   bool emitting_near_any_helper = false;
   bool share_random_cell = false;
   bool hoist_shared_helpers = false;
+  bool hoist_procs = false;
   bool aggressive_terminal_direct = false;
+  bool aggressive_post_layout_indirect_flow = false;
   bool preloaded_indirect_flow = false;
+  bool disable_candidate_search = false;
+  bool free_residual_dispatch_scratch = false;
   bool invert_branch_order = false;
   bool preserve_dispatch_case_order = false;
   bool order_procs_by_call_count = false;

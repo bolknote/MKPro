@@ -3,7 +3,9 @@
 #include "test_support.hpp"
 
 #include <filesystem>
+#include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -44,7 +46,13 @@ void supported_examples_match_native_oracles() {
       "wumpus",
   };
 
-  for (const std::string& name : supported_examples) {
+  const bool progress = std::getenv("MKPRO_NATIVE_EXAMPLE_PROGRESS") != nullptr;
+  for (std::size_t index = 0; index < supported_examples.size(); ++index) {
+    const std::string& name = supported_examples.at(index);
+    if (progress) {
+      std::cerr << "[example-parity] " << (index + 1U) << "/" << supported_examples.size()
+                << " " << name << std::endl;
+    }
     const std::string source = read_text(root / "examples" / (name + ".mkpro"));
     const std::string oracle_hex =
         rstrip_newlines(read_text(root / "native" / "oracles" / "examples" / name / "hex.txt"));

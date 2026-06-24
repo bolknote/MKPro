@@ -59,6 +59,19 @@ IrMeta clone_meta(IrMeta meta, const std::string& comment) {
   return meta;
 }
 
+bool has_role(const std::vector<CellRole>& roles, std::string_view role) {
+  return std::find(roles.begin(), roles.end(), role) != roles.end();
+}
+
+void restore_statement_proc_call_comment(IrMeta& meta) {
+  constexpr std::string_view kCallFunctionPrefix = "call function";
+  if (!has_role(meta.roles, "statement-proc-call") || !meta.comment.has_value() ||
+      !meta.comment->starts_with(kCallFunctionPrefix)) {
+    return;
+  }
+  meta.comment = "proc call" + meta.comment->substr(kCallFunctionPrefix.size());
+}
+
 std::set<std::string> used_registers(const std::vector<IrOp>& ops) {
   std::set<std::string> used;
   for (const IrOp& op : ops) {
@@ -296,6 +309,8 @@ IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
     result.opcode = indirect_cond_base(op.condition) + offset;
     result.meta.mnemonic = "К " + indirect_cond_name(op.condition) + " " + register_name;
   }
+  if (result.kind == IrKind::IndirectCall)
+    restore_statement_proc_call_comment(result.meta);
   result.meta = clone_meta(result.meta, suffix);
   return result;
 }
@@ -445,8 +460,10 @@ bool contains_formal_alias(const std::string& value) {
 } // namespace
 
 PassResult runtime_indirect_call_flow(const std::vector<IrOp>& ops, const PassContext& context) {
-  if (!context.options.runtime_indirect_call_flow)
+  if (context.options.disable_candidate_search && !context.options.runtime_indirect_call_flow &&
+      !context.options.hoist_shared_helpers && !context.options.hoist_procs)
     return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
+
   const std::vector<RuntimeCallPlan> plans = runtime_indirect_call_plans(
       ops, context.options.aggressive_indirect_call_threshold,
       reserved_preloaded_registers(context.options.preloaded_constant_registers));

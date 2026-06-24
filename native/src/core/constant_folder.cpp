@@ -1043,7 +1043,8 @@ std::optional<Expression> fold_pure_constant_call(const std::string& callee,
 
 class ConstantFolder {
  public:
-  explicit ConstantFolder(bool grd_angle_mode) : grd_angle_mode_(grd_angle_mode) {}
+  ConstantFolder(bool grd_angle_mode, const std::map<std::string, Expression>& constants)
+      : grd_angle_mode_(grd_angle_mode), constants_(constants) {}
 
   ConstantFoldResult fold_program(V2Program& program) {
     for (V2StateField& field : program.state) {
@@ -1061,6 +1062,7 @@ class ConstantFolder {
 
  private:
   bool grd_angle_mode_ = false;
+  const std::map<std::string, Expression>& constants_;
   ConstantFoldResult result_;
 
   Expression folded(Expression expression) {
@@ -1069,9 +1071,12 @@ class ConstantFolder {
   }
 
   Expression fold_expression(Expression expression) {
-    if (expression.kind == "number" || expression.kind == "string" ||
-        expression.kind == "identifier") {
+    if (expression.kind == "number" || expression.kind == "string") {
       return expression;
+    }
+    if (expression.kind == "identifier") {
+      const auto constant = constants_.find(expression.name);
+      return constant == constants_.end() ? expression : constant->second;
     }
     if (expression.kind == "indexed" && expression.index != nullptr) {
       Expression index = fold_expression(*expression.index);
@@ -1268,8 +1273,8 @@ class ConstantFolder {
 
 ConstantFoldResult fold_program_constants(V2Program& program,
                                           const std::map<std::string, Expression>& constants) {
-  (void)constants;
-  return ConstantFolder(program.angle_mode.has_value() && program.angle_mode->mode == "grd")
+  return ConstantFolder(program.angle_mode.has_value() && program.angle_mode->mode == "grd",
+                        constants)
       .fold_program(program);
 }
 

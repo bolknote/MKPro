@@ -6,6 +6,7 @@
 #include "mkpro/core/state_banks.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <exception>
@@ -17,6 +18,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace mkpro::core::emit::lowering {
@@ -44,6 +46,19 @@ std::string lower_ascii(std::string value) {
   std::transform(value.begin(), value.end(), value.begin(),
                  [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   return value;
+}
+
+int setup_number_entry_cost(const std::string& value);
+std::string js_number_string(double value);
+
+std::string trim_ascii(std::string value) {
+  const auto first =
+      std::find_if_not(value.begin(), value.end(), [](unsigned char ch) { return std::isspace(ch) != 0; });
+  const auto last =
+      std::find_if_not(value.rbegin(), value.rend(), [](unsigned char ch) { return std::isspace(ch) != 0; }).base();
+  if (first >= last)
+    return {};
+  return std::string(first, last);
 }
 
 std::optional<std::string> executable_setup_value(std::string_view value) {
@@ -77,7 +92,17 @@ std::optional<double> executable_setup_number(std::string_view value) {
 }
 
 std::string normalize_setup_constant_text(std::string_view value) {
-  return executable_setup_value(value).value_or(std::string(value));
+  std::string trimmed = trim_ascii(std::string(value));
+  if (trimmed.empty())
+    return trimmed;
+  try {
+    std::size_t consumed = 0;
+    const double parsed = std::stod(trimmed, &consumed);
+    if (consumed == trimmed.size() && std::isfinite(parsed))
+      return js_number_string(parsed);
+  } catch (const std::exception&) {
+  }
+  return trimmed;
 }
 
 std::optional<int> parse_integer_text(std::string_view text) {
@@ -491,7 +516,7 @@ void emit_setup_integer_offset(MachineEmitter& setup, int offset) {
   if (offset == 0)
     return;
   setup.emit_number(std::to_string(offset));
-  setup.emit_op(0x10, "+", "random coord offset", std::nullopt, true);
+  setup.emit_op(0x10, "+", "expr +", std::nullopt, true);
 }
 
 void emit_setup_store(MachineEmitter& setup, const std::string& register_name,
@@ -629,19 +654,34 @@ int setup_number_entry_cost(const std::string& value) {
 }
 
 std::string js_number_string(double value) {
+  if (value == 0.0)
+    return "0";
   if (std::isfinite(value) && std::floor(value) == value) {
     const long long integer = static_cast<long long>(value);
     if (static_cast<double>(integer) == value)
       return std::to_string(integer);
   }
-  std::ostringstream out;
+
   const double abs_value = std::fabs(value);
-  if (abs_value >= 1e-6 && abs_value < 1e21) {
-    out << std::fixed << std::setprecision(15) << value;
+  const bool use_exponent = abs_value >= 1e21 || abs_value < 1e-6;
+  char buffer[128]{};
+  const auto [end, error] =
+      use_exponent ? std::to_chars(buffer, buffer + sizeof(buffer), value)
+                   : std::to_chars(buffer, buffer + sizeof(buffer), value,
+                                   std::chars_format::fixed);
+  std::string text;
+  if (error == std::errc{}) {
+    text.assign(buffer, end);
   } else {
-    out << std::scientific << std::setprecision(15) << value;
+    std::ostringstream out;
+    if (use_exponent)
+      out << std::scientific;
+    else
+      out << std::fixed;
+    out << std::setprecision(17) << value;
+    text = out.str();
   }
-  std::string text = out.str();
+  text = lower_ascii(text);
   const std::size_t exponent = text.find('e');
   std::string suffix;
   if (exponent != std::string::npos) {
@@ -1089,9 +1129,35 @@ std::optional<const PreloadReport*> setup_expression_negated_preload(
   return std::nullopt;
 }
 
+std::optional<const PreloadReport*> setup_expression_number_preload(
+    const std::vector<PreloadReport>& preloads, const std::string& raw) {
+  const std::optional<double> target = executable_setup_number(raw);
+  if (!target.has_value() || !std::isfinite(*target))
+    return std::nullopt;
+  const std::string wanted = normalize_setup_constant_text(raw);
+  for (const PreloadReport& preload : preloads) {
+    if (preload.setup_expression)
+      continue;
+    const std::optional<std::string> executable = executable_setup_value(preload.value);
+    const std::string value = normalize_setup_constant_text(executable.value_or(preload.value));
+    if (value == wanted)
+      return &preload;
+  }
+  return std::nullopt;
+}
+
 bool emit_setup_number_or_negated_preload(MachineEmitter& setup,
                                           const std::vector<PreloadReport>& preloads,
                                           const std::string& raw) {
+  if (setup_number_entry_cost(raw) >= 2) {
+    const std::optional<const PreloadReport*> source =
+        setup_expression_number_preload(preloads, raw);
+    if (source.has_value()) {
+      emit_setup_recall(setup, (*source)->register_name,
+                        "preload const " + normalize_setup_constant_text(raw));
+      return true;
+    }
+  }
   if (setup_number_entry_cost(raw) >= 2) {
     const std::optional<const PreloadReport*> source =
         setup_expression_negated_preload(preloads, raw);
@@ -1140,7 +1206,7 @@ bool lower_setup_random_call_to_x(MachineEmitter& setup, const Expression& expre
     setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
     if (!lower_setup_expression_to_x(setup, expression.args.front(), preloads))
       return false;
-    setup.emit_op(0x12, "×", "random range", std::nullopt, true);
+    setup.emit_op(0x12, "×", "expr *", std::nullopt, true);
     return true;
   }
   if (expression.args.size() == 2U) {
@@ -1158,6 +1224,15 @@ bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expres
     const std::string raw = expression.raw.empty() ? expression.text : expression.raw;
     emit_setup_number_or_negated_preload(setup, preloads, raw);
     return true;
+  }
+  if (expression.kind == "identifier") {
+    for (const PreloadReport& preload : preloads) {
+      if (preload.setup_target_name.has_value() && *preload.setup_target_name == expression.name) {
+        emit_setup_recall(setup, preload.register_name, "recall " + expression.name);
+        return true;
+      }
+    }
+    return false;
   }
   if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr) {
     if (!lower_setup_expression_to_x(setup, *expression.expr, preloads))

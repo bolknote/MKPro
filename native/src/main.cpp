@@ -208,6 +208,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.analysis = true;
     } else if (arg == "--x-param-value-functions") {
       options.x_param_value_functions = true;
+    } else if (arg == "--x-param-y-stack-stored-entry") {
+      options.x_param_y_stack_stored_entry = true;
     } else if (arg == "--canonicalize-repeated-unary-update-args") {
       options.canonicalize_repeated_unary_update_args = true;
     } else if (arg == "--coalesce-copies") {
@@ -244,6 +246,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.aggressive_post_layout_indirect_flow = true;
     } else if (arg == "--dead-source-residual-temp-reuse") {
       options.dead_source_residual_temp_reuse = true;
+    } else if (arg == "--free-residual-dispatch-scratch") {
+      options.free_residual_dispatch_scratch = true;
     } else if (arg == "--domain-error-guards") {
       options.domain_error_guards = true;
     } else if (arg == "--unroll-counted-loops") {
@@ -278,6 +282,34 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
         return 64;
       }
       options.suppress_constant_preloads.insert(args[++index]);
+    } else if (arg == "--fractional-selector") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --fractional-selector\n";
+        return 64;
+      }
+      const std::string value = args[++index];
+      const std::size_t colon = value.find(':');
+      if (colon == std::string::npos || colon == 0 || colon + 1 >= value.size()) {
+        std::cerr << "invalid --fractional-selector value: " << value << "\n";
+        return 64;
+      }
+      int target = 0;
+      try {
+        target = std::stoi(value.substr(colon + 1));
+      } catch (const std::exception&) {
+        std::cerr << "invalid --fractional-selector target: " << value << "\n";
+        return 64;
+      }
+      options.fractional_constant_selectors.push_back(mkpro::FractionalConstantSelectorPlan{
+          .value = value.substr(0, colon),
+          .target = target,
+      });
+    } else if (arg == "--force-fractional-selector-preload") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --force-fractional-selector-preload\n";
+        return 64;
+      }
+      options.force_fractional_constant_selector_preloads.push_back(args[++index]);
     } else if (arg == "--force-register-share") {
       if (index + 1 >= args.size()) {
         std::cerr << "missing value for --force-register-share\n";

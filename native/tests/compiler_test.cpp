@@ -7125,7 +7125,7 @@ program PackedRowDisplay {
   require(packed_row_display_statement.listing.find("display packed row preserve") !=
               std::string::npos,
           "floor packed-row display should preserve the packed row body");
-  require(packed_row_display_statement.listing.find("show packed row") != std::string::npos,
+  require(packed_row_display_statement.listing.find("show __inline_show_") != std::string::npos,
           "floor packed-row display should emit a calculator stop");
 
   const std::string packed_row_expression_source = R"mkpro(
@@ -7157,7 +7157,7 @@ program PackedRowExpressionDisplay {
   require(packed_row_expression_display_statement.listing.find("display packed row preserve") !=
               std::string::npos,
           "default floor packed-row expression display should preserve the materialized row");
-  require(packed_row_expression_display_statement.listing.find("show packed row") !=
+  require(packed_row_expression_display_statement.listing.find("show __inline_show_") !=
               std::string::npos,
           "default floor packed-row expression display should emit a calculator stop");
 
@@ -7181,7 +7181,7 @@ program PackedRowExpressionDisplay {
   require(inline_packed_row_expression_display_statement.listing.find(
               "display packed row expression rotate") != std::string::npos,
           "inline floor packed-row expression display should preserve the computed row");
-  require(inline_packed_row_expression_display_statement.listing.find("show packed row") !=
+  require(inline_packed_row_expression_display_statement.listing.find("show __inline_show_") !=
               std::string::npos,
           "inline floor packed-row expression display should emit a calculator stop");
 
@@ -7627,8 +7627,8 @@ program ConstValues {
           "const LIMIT should not allocate a register");
   require(const_statement.registers.find("DOUBLE") == const_statement.registers.end(),
           "const DOUBLE should not allocate a register");
-  require(const_statement.listing.find("const DOUBLE") != std::string::npos,
-          "const use should appear as an inlined value");
+  require(has_optimization(const_statement, "const-inline"),
+          "const use should report the TS const-inline optimization");
   require(const_statement.listing.find("false branch for >=") != std::string::npos,
           "const value should lower inside generic conditions");
 
