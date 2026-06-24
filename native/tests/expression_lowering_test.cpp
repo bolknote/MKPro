@@ -81,6 +81,7 @@ bool contains_identifier(const Expression& expression, const std::string& name) 
 struct ExpressionHarness {
   LoweringContext context;
   std::function<bool(const Expression&)> lower;
+  bool allow_constant_fold = true;
   core::emit::ExpressionEmitApi api;
 
   ExpressionHarness()
@@ -95,6 +96,14 @@ struct ExpressionHarness {
                 },
             .lower_expression_to_x =
                 [&](const Expression& expression) { return lower(expression); },
+            .lower_expression_to_x_no_constant_fold =
+                [&](const Expression& expression) {
+                  const bool previous = allow_constant_fold;
+                  allow_constant_fold = false;
+                  const bool result = lower(expression);
+                  allow_constant_fold = previous;
+                  return result;
+                },
             .emit_store =
                 [&](const std::string& name, std::string comment) {
                   context.emitter.emit_op(0x40, "X->П " + name, std::move(comment));
@@ -135,7 +144,8 @@ struct ExpressionHarness {
       if (result.has_value())
         return *result;
       if (expression.kind == "binary")
-        return core::emit::lower_binary_expression_to_x(api, context, expression);
+        return core::emit::lower_binary_expression_to_x(api, context, expression,
+                                                       allow_constant_fold);
       if (expression.kind == "indexed") {
         context.emitter.emit_op(0x60, "П->X " + expression.base,
                                 "indexed recall " + expression.base);
@@ -268,11 +278,11 @@ void expression_lowering_helpers_match_typescript_contract() {
             "identifier times numeric literal should lower");
     require(harness.context.emitter.items.size() == 4,
             "identifier times numeric literal should emit literal, recall, and multiply");
-    require(harness.context.emitter.items.at(0).opcode == 0x01 &&
-                harness.context.emitter.items.at(1).opcode == 0x00,
-            "identifier times numeric literal should emit the numeric operand first");
-    require(harness.context.emitter.items.at(2).comment == "recall reels",
-            "identifier times numeric literal should recall the identifier after the literal");
+    require(harness.context.emitter.items.at(0).comment == "recall reels",
+            "identifier times numeric literal should recall the identifier first");
+    require(harness.context.emitter.items.at(1).opcode == 0x01 &&
+                harness.context.emitter.items.at(2).opcode == 0x00,
+            "identifier times numeric literal should emit the numeric operand after the identifier");
     require(harness.context.emitter.items.at(3).opcode == 0x12,
             "identifier times numeric literal should emit multiply");
   }

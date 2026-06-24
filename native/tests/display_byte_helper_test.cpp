@@ -26,10 +26,20 @@ int count_optimization(const CompileResult& result, const std::string& name) {
                     [&](const OptimizationReport& item) { return item.name == name; }));
 }
 
-int count_steps_with_comment(const CompileResult& result, const std::string& comment) {
+int count_display_byte_helper_call_operands(const CompileResult& result) {
   return static_cast<int>(
-      std::count_if(result.steps.begin(), result.steps.end(), [&](const ResolvedStep& step) {
-        return step.comment.has_value() && *step.comment == comment;
+      std::count_if(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+        return step.comment.has_value() && step.comment->starts_with("show __inline_show_") &&
+               step.mnemonic != "С/П";
+      }));
+}
+
+int count_display_byte_helper_returns(const CompileResult& result) {
+  return static_cast<int>(
+      std::count_if(result.steps.begin(), result.steps.end(), [](const ResolvedStep& step) {
+        return step.comment.has_value() &&
+               step.comment->starts_with("display __inline_show_") &&
+               step.comment->ends_with(" return");
       }));
 }
 
@@ -68,9 +78,9 @@ program RepeatedLiteralSeparatedScoreboard {
               has_optimization(result, "display-byte-mask-lowering") ||
               has_optimization(result, "display-byte-variable-mask-lowering"),
           "shared helper body should use an existing display-byte builder strategy");
-  require(count_steps_with_comment(result, "show display-byte helper") == 2,
+  require(count_display_byte_helper_call_operands(result) == 2,
           "each repeated literal-separated display site should branch to the helper");
-  require(count_steps_with_comment(result, "display byte return") == 1,
+  require(count_display_byte_helper_returns(result) == 1,
           "shared display-byte helper should have one return continuation");
 }
 

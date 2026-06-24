@@ -118,24 +118,6 @@ bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& c
   return false;
 }
 
-bool lower_commutative_numeric_right_before_identifier(ExpressionEmitApi& api,
-                                                       const Expression& expression, int opcode) {
-  if (expression.op != "*" || expression.left == nullptr || expression.right == nullptr) {
-    return false;
-  }
-  if (expression.left->kind != "identifier" || expression.right->kind != "number")
-    return false;
-
-  if (!api.lower_expression_to_x(*expression.right))
-    return false;
-  if (!api.lower_expression_to_x(*expression.left))
-    return false;
-  api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
-  api.emitter.current_x_variable.reset();
-  api.emitter.current_x_aliases.clear();
-  return true;
-}
-
 bool compile_current_x_derivation(
     ExpressionEmitApi& api, const Expression& expression,
     const std::map<std::string, std::pair<int, std::string>>& unary_opcodes) {
@@ -514,11 +496,6 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
   if ((expression.op == "+" || expression.op == "*") &&
       lower_commutative_with_current_x(api, context, expression,
                                        expression.op == "+" ? 0x10 : 0x12)) {
-    return true;
-  }
-
-  if (expression.op == "*" &&
-      lower_commutative_numeric_right_before_identifier(api, expression, 0x12)) {
     return true;
   }
 

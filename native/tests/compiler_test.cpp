@@ -3,8 +3,11 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <sstream>
 #include <string>
@@ -42,6 +45,36 @@ bool has_optimization_detail(const CompileResult& result, const std::string& nam
                      });
 }
 
+std::string compile_probe_label(int line, const std::string& source) {
+  const std::string marker = "program ";
+  const std::size_t program = source.find(marker);
+  if (program == std::string::npos)
+    return "line " + std::to_string(line);
+  std::size_t start = program + marker.size();
+  while (start < source.size() &&
+         (source[start] == ' ' || source[start] == '\t' || source[start] == '\n' ||
+          source[start] == '\r')) {
+    ++start;
+  }
+  std::size_t end = start;
+  while (end < source.size() &&
+         (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '_' ||
+          source[end] == '-')) {
+    ++end;
+  }
+  if (end == start)
+    return "line " + std::to_string(line);
+  return source.substr(start, end - start);
+}
+
+CompileResult compile_probe(int line, std::string source, const CompileOptions& options = {}) {
+  if (std::getenv("MKPRO_NATIVE_TEST_PROGRESS") != nullptr) {
+    std::cerr << "[compiler-test] line " << line << " " << compile_probe_label(line, source)
+              << '\n';
+  }
+  return compile_source(std::move(source), options);
+}
+
 std::size_t optimization_count(const CompileResult& result, const std::string& name) {
   return static_cast<std::size_t>(
       std::count_if(result.optimizations.begin(), result.optimizations.end(),
@@ -65,6 +98,8 @@ std::vector<int> step_opcodes(const CompileResult& result) {
 }
 
 } // namespace
+
+#define compile_source(...) compile_probe(__LINE__, __VA_ARGS__)
 
 void compiler_lowers_initial_v2_subset() {
   const std::filesystem::path root = std::filesystem::current_path();
