@@ -2114,6 +2114,40 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "fragments");
   }
 
+
+  {
+    IrOp left_digit = ir_plain(6);
+    left_digit.name = "left-name";
+    left_digit.procedure_boundary = "left-boundary";
+    left_digit.procedure_name = "left-proc";
+    left_digit.hidden = true;
+    IrOp right_digit = ir_plain(6);
+    right_digit.name = "right-name";
+    right_digit.procedure_boundary = "right-boundary";
+    right_digit.procedure_name = "right-proc";
+
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(left_digit);
+    ops.push_back(ir_plain(7));
+    append(ops, ir_jump_body("t1"));
+    ops.push_back(ir_label("alternate"));
+    ops.push_back(ir_plain(8));
+    ops.push_back(right_digit);
+    ops.push_back(ir_plain(7));
+    append(ops, ir_jump_body("t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.extracted_tail_fragments == 1 && search.rewritten_tail_fragments >= 2,
+            "IR tail layout scanner should ignore non-label procedure metadata when reusing "
+            "common suffix fragments");
+  }
+
   {
     std::vector<IrOp> ops;
     ops.push_back(ir_label("charge1"));

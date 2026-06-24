@@ -1210,11 +1210,9 @@ bool ir_target_equal_for_tail_fragment(
 bool ir_op_equal_for_tail_fragment(
     const IrOp& left, const IrOp& right, const std::vector<IrLabelBlock>* blocks = nullptr,
     const std::map<std::string, std::size_t>* by_label = nullptr, const IrCfg* cfg = nullptr) {
-  return left.kind == right.kind && left.name == right.name &&
-         left.procedure_boundary == right.procedure_boundary &&
-         left.procedure_name == right.procedure_name && left.hidden == right.hidden &&
-         left.register_name == right.register_name && left.condition == right.condition &&
-         left.counter == right.counter && left.opcode == right.opcode &&
+  return left.kind == right.kind && left.register_name == right.register_name &&
+         left.condition == right.condition && left.counter == right.counter &&
+         left.opcode == right.opcode &&
          ir_target_equal_for_tail_fragment(left.target, right.target, blocks, by_label, cfg) &&
          left.semantic == right.semantic && ir_meta_equal(left.meta, right.meta) &&
          ir_target_meta_equal(left.target_meta, right.target_meta);
