@@ -44,6 +44,7 @@ struct ReturnStackStartupLayoutPlan {
   int transition_savings = 0;
   int charge_cost = 0;
   int address_overlay_savings = 0;
+  int post_layout_pipeline_savings = 0;
   int address_shift_risk_count = 0;
   int address_shift_cell_count = 0;
   int net_savings = 0;

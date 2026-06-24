@@ -2949,6 +2949,9 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
   const int materialized_cells = machine_cell_count(plan.items);
   plan.address_overlay_savings =
       std::max(0, materialized_cells - best_cell_count_with_address_overlay(plan.items));
+  plan.post_layout_pipeline_savings = std::max(
+      0, materialized_cells -
+             measure_return_stack_post_layout_pipeline(plan.items, CompileOptions{}).final_cells);
   plan.address_shift_risk_count = plan.paid_call_sites;
   plan.address_shift_cell_count = plan.paid_call_sites * 2;
   if (plan.address_shift_risk_count > 0) {
@@ -2958,6 +2961,9 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
   }
   if (plan.address_overlay_savings > 0) {
     plan.proofs.push_back("generated layout still exposes address-code-overlay savings");
+  }
+  if (plan.post_layout_pipeline_savings > plan.transition_savings) {
+    plan.proofs.push_back("generated layout still exposes downstream post-layout pipeline savings");
   }
 
   const MachineLayout layout = machine_layout(plan.items);
@@ -3033,9 +3039,9 @@ ReturnStackLayoutOpportunityAnalysis analyze_return_stack_layout_opportunity(
   if (plan.unique_entry_after_charge)
     plan.proofs.push_back("charging chain has a unique final entry target");
 
-  plan.net_savings = plan.transition_savings + plan.address_overlay_savings - plan.charge_cost;
-  plan.allowed_by_size_rescue =
-      options.size_rescue && plan.net_savings == 0 && plan.address_overlay_savings > 0;
+  plan.net_savings = plan.post_layout_pipeline_savings - plan.charge_cost;
+  plan.allowed_by_size_rescue = options.size_rescue && plan.net_savings == 0 &&
+                                plan.post_layout_pipeline_savings > plan.transition_savings;
   plan.profitable =
       (plan.net_savings >= options.min_net_savings && plan.net_savings > 0) ||
       plan.allowed_by_size_rescue;

@@ -545,6 +545,11 @@ void return_stack_script_matches_mk61_strategy_contract() {
                 .entry_body = ir_jump_body("t2"),
             },
             {.min_net_savings = 0, .size_rescue = true});
+    require(analysis.plan.post_layout_pipeline_savings >= analysis.plan.transition_savings,
+            "startup profitability should measure the full return-stack/overlay/flow pipeline");
+    require(analysis.plan.net_savings ==
+                analysis.plan.post_layout_pipeline_savings - analysis.plan.charge_cost,
+            "startup profitability should derive net savings from the full post-layout pipeline");
     require(!analysis.plan.allowed_by_size_rescue || analysis.plan.net_savings == 0,
             "size-rescue admission should only apply to zero-net opportunities");
   }
