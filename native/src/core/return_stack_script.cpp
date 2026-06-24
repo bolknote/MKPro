@@ -1309,10 +1309,9 @@ bool ir_tail_fragment_suffix_equal(
 }
 
 std::optional<std::size_t> common_terminal_tail_fragment_suffix_start(
-    const std::vector<IrLabelBlock>& blocks, std::size_t block_index) {
+    const std::vector<IrLabelBlock>& blocks, std::size_t block_index,
+    const std::map<std::string, std::size_t>& by_label, const IrCfg& cfg) {
   const IrLabelBlock& block = blocks.at(block_index);
-  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
-  const IrCfg cfg = build_ir_cfg(blocks);
   const std::optional<std::size_t> fallback = terminal_tail_fragment_suffix_start(block);
   if (!fallback.has_value())
     return std::nullopt;
@@ -1389,7 +1388,7 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
     }
 
     const std::optional<std::size_t> suffix_start =
-        common_terminal_tail_fragment_suffix_start(blocks, index);
+        common_terminal_tail_fragment_suffix_start(blocks, index, by_label, cfg);
     if (!suffix_start.has_value()) {
       rewritten.push_back(std::move(block));
       continue;

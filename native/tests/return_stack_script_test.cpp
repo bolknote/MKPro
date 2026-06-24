@@ -2060,6 +2060,31 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "tail suffixes");
   }
 
+
+  {
+    std::vector<IrOp> ops;
+    ops.push_back(ir_label("entry"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_plain(6));
+    ops.push_back(ir_plain(7));
+    append(ops, ir_jump_body("t1_alias"));
+    ops.push_back(ir_label("alternate"));
+    ops.push_back(ir_plain(8));
+    ops.push_back(ir_plain(6));
+    ops.push_back(ir_plain(7));
+    append(ops, ir_jump_body("t1"));
+    ops.push_back(ir_label("t1_alias"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.extracted_tail_fragments == 1 && search.rewritten_tail_fragments >= 2,
+            "IR tail layout scanner should reuse generated common suffix fragments across CFG "
+            "alias targets");
+  }
+
   {
     std::vector<IrOp> ops;
     ops.push_back(ir_label("charge1"));
