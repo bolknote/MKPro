@@ -1171,32 +1171,74 @@ bool ir_target_meta_equal(const IrTargetMeta& left, const IrTargetMeta& right) {
   return left.formal_opcode == right.formal_opcode;
 }
 
-bool ir_op_equal_for_tail_fragment(const IrOp& left, const IrOp& right) {
+std::string canonical_tail_fragment_target_label(
+    const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
+    const IrCfg& cfg, const std::string& label) {
+  std::string cursor = label;
+  std::set<std::string> seen;
+  while (true) {
+    const auto block_it = by_label.find(cursor);
+    if (block_it == by_label.end() || !seen.insert(cursor).second)
+      return label;
+
+    const IrLabelBlock& block = blocks.at(block_it->second);
+    if (!block.body.empty())
+      return block.label;
+
+    const auto successor_it = cfg.successors.find(block.label);
+    if (successor_it == cfg.successors.end() || successor_it->second.size() != 1U)
+      return label;
+    cursor = *successor_it->second.begin();
+  }
+}
+
+bool ir_target_equal_for_tail_fragment(
+    const IrTarget& left, const IrTarget& right, const std::vector<IrLabelBlock>* blocks = nullptr,
+    const std::map<std::string, std::size_t>* by_label = nullptr, const IrCfg* cfg = nullptr) {
+  if (left == right)
+    return true;
+  if (blocks == nullptr || by_label == nullptr || cfg == nullptr)
+    return false;
+
+  const std::string* left_label = std::get_if<std::string>(&left);
+  const std::string* right_label = std::get_if<std::string>(&right);
+  return left_label != nullptr && right_label != nullptr &&
+         canonical_tail_fragment_target_label(*blocks, *by_label, *cfg, *left_label) ==
+             canonical_tail_fragment_target_label(*blocks, *by_label, *cfg, *right_label);
+}
+
+bool ir_op_equal_for_tail_fragment(
+    const IrOp& left, const IrOp& right, const std::vector<IrLabelBlock>* blocks = nullptr,
+    const std::map<std::string, std::size_t>* by_label = nullptr, const IrCfg* cfg = nullptr) {
   return left.kind == right.kind && left.name == right.name &&
          left.procedure_boundary == right.procedure_boundary &&
          left.procedure_name == right.procedure_name && left.hidden == right.hidden &&
          left.register_name == right.register_name && left.condition == right.condition &&
          left.counter == right.counter && left.opcode == right.opcode &&
-         left.target == right.target && left.semantic == right.semantic &&
-         ir_meta_equal(left.meta, right.meta) &&
+         ir_target_equal_for_tail_fragment(left.target, right.target, blocks, by_label, cfg) &&
+         left.semantic == right.semantic && ir_meta_equal(left.meta, right.meta) &&
          ir_target_meta_equal(left.target_meta, right.target_meta);
 }
 
-bool ir_tail_fragment_body_equal(const std::vector<IrOp>& left,
-                                 const std::vector<IrOp>& right) {
+bool ir_tail_fragment_body_equal(
+    const std::vector<IrOp>& left, const std::vector<IrOp>& right,
+    const std::vector<IrLabelBlock>* blocks = nullptr,
+    const std::map<std::string, std::size_t>* by_label = nullptr, const IrCfg* cfg = nullptr) {
   if (left.size() != right.size())
     return false;
   for (std::size_t index = 0; index < left.size(); ++index) {
-    if (!ir_op_equal_for_tail_fragment(left.at(index), right.at(index)))
+    if (!ir_op_equal_for_tail_fragment(left.at(index), right.at(index), blocks, by_label, cfg))
       return false;
   }
   return true;
 }
 
 std::optional<std::string> existing_tail_fragment_label_for_body(
-    const std::vector<IrLabelBlock>& fragments, const std::vector<IrOp>& body) {
+    const std::vector<IrLabelBlock>& fragments, const std::vector<IrOp>& body,
+    const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
+    const IrCfg& cfg) {
   for (const IrLabelBlock& fragment : fragments) {
-    if (ir_tail_fragment_body_equal(fragment.body, body))
+    if (ir_tail_fragment_body_equal(fragment.body, body, &blocks, &by_label, &cfg))
       return fragment.label;
   }
   return std::nullopt;
@@ -1206,14 +1248,15 @@ bool valid_terminal_tail_fragment_body(const IrLabelBlock& block);
 
 std::optional<std::string> existing_whole_tail_label_for_body(
     const std::vector<IrLabelBlock>& blocks, std::size_t source_index,
-    const std::vector<IrOp>& body) {
+    const std::vector<IrOp>& body, const std::map<std::string, std::size_t>& by_label,
+    const IrCfg& cfg) {
   for (std::size_t index = 0; index < blocks.size(); ++index) {
     if (index == source_index)
       continue;
     const IrLabelBlock& block = blocks.at(index);
     if (!valid_terminal_tail_fragment_body(block))
       continue;
-    if (ir_tail_fragment_body_equal(block.body, body))
+    if (ir_tail_fragment_body_equal(block.body, body, &blocks, &by_label, &cfg))
       return block.label;
   }
   return std::nullopt;
@@ -1248,14 +1291,17 @@ bool valid_terminal_tail_fragment_body(const IrLabelBlock& block) {
   return true;
 }
 
-bool ir_tail_fragment_suffix_equal(const IrLabelBlock& left, std::size_t left_start,
-                                   const IrLabelBlock& right, std::size_t right_start) {
+bool ir_tail_fragment_suffix_equal(
+    const IrLabelBlock& left, std::size_t left_start, const IrLabelBlock& right,
+    std::size_t right_start, const std::vector<IrLabelBlock>& blocks,
+    const std::map<std::string, std::size_t>& by_label, const IrCfg& cfg) {
   const std::size_t left_size = left.body.size() - left_start;
   if (right.body.size() - right_start != left_size)
     return false;
   for (std::size_t offset = 0; offset < left_size; ++offset) {
     if (!ir_op_equal_for_tail_fragment(left.body.at(left_start + offset),
-                                       right.body.at(right_start + offset))) {
+                                       right.body.at(right_start + offset), &blocks, &by_label,
+                                       &cfg)) {
       return false;
     }
   }
@@ -1265,6 +1311,8 @@ bool ir_tail_fragment_suffix_equal(const IrLabelBlock& left, std::size_t left_st
 std::optional<std::size_t> common_terminal_tail_fragment_suffix_start(
     const std::vector<IrLabelBlock>& blocks, std::size_t block_index) {
   const IrLabelBlock& block = blocks.at(block_index);
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  const IrCfg cfg = build_ir_cfg(blocks);
   const std::optional<std::size_t> fallback = terminal_tail_fragment_suffix_start(block);
   if (!fallback.has_value())
     return std::nullopt;
@@ -1291,7 +1339,8 @@ std::optional<std::size_t> common_terminal_tail_fragment_suffix_start(
                             : valid_terminal_tail_fragment_suffix_start(other, other_start);
       if (!other_valid)
         continue;
-      if (ir_tail_fragment_suffix_equal(block, suffix_start, other, other_start)) {
+      if (ir_tail_fragment_suffix_equal(block, suffix_start, other, other_start, blocks, by_label,
+                                        cfg)) {
         shared = true;
         break;
       }
@@ -1311,6 +1360,8 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
     labels.insert(block.label);
 
   const std::size_t original_count = blocks.size();
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  const IrCfg cfg = build_ir_cfg(blocks);
   std::vector<IrLabelBlock> rewritten;
   rewritten.reserve(original_count * 2U);
   std::vector<IrLabelBlock> appended_fragments;
@@ -1348,12 +1399,12 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
                              block.body.end());
     std::string fragment_label;
     const std::optional<std::string> existing_fragment =
-        existing_tail_fragment_label_for_body(appended_fragments, suffix);
+        existing_tail_fragment_label_for_body(appended_fragments, suffix, blocks, by_label, cfg);
     if (existing_fragment.has_value()) {
       fragment_label = *existing_fragment;
     } else {
       const std::optional<std::string> existing_whole_tail =
-          existing_whole_tail_label_for_body(blocks, index, suffix);
+          existing_whole_tail_label_for_body(blocks, index, suffix, by_label, cfg);
       if (existing_whole_tail.has_value()) {
         fragment_label = *existing_whole_tail;
         ++extracted.reused_existing_tail_fragments;
