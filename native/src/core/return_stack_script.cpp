@@ -3207,14 +3207,16 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
           std::to_string(current_pipeline.final_cells) + " cells)";
     }
     const bool eligible = candidate_search.pipeline_candidate_better;
-    auto candidate_wins_tie = [&](const std::optional<IrTailChainCandidate>& current) {
-      return return_stack_candidate_better(current, candidate.candidate);
+    auto candidate_wins_analyzed_tie = [&](const std::optional<ReturnStackIrTailLayoutSearch>& current_search,
+                                           const std::optional<IrTailChainCandidate>& current) {
+      return analyzed_return_stack_ir_candidate_better(current_search, current, candidate_search,
+                                                       candidate.candidate);
     };
 
     if (!best_fallback_search.has_value() ||
         candidate_pipeline.final_cells < best_fallback_final_cells ||
         (candidate_pipeline.final_cells == best_fallback_final_cells &&
-         candidate_wins_tie(best_fallback_candidate))) {
+         candidate_wins_analyzed_tie(best_fallback_search, best_fallback_candidate))) {
       best_fallback_search = candidate_search;
       best_fallback_candidate = candidate.candidate;
       best_fallback_final_cells = candidate_pipeline.final_cells;
@@ -3223,7 +3225,8 @@ ReturnStackIrTailLayoutSearch analyze_return_stack_ir_tail_layout_with_pipeline(
     if (!eligible)
       continue;
     if (!best_search.has_value() || candidate_pipeline.final_cells < best_final_cells ||
-        (candidate_pipeline.final_cells == best_final_cells && candidate_wins_tie(best_candidate))) {
+        (candidate_pipeline.final_cells == best_final_cells &&
+         candidate_wins_analyzed_tie(best_search, best_candidate))) {
       best_search = std::move(candidate_search);
       best_candidate = candidate.candidate;
       best_final_cells = candidate_pipeline.final_cells;
