@@ -159,7 +159,13 @@ std::string variant_fingerprint(const std::string& source, const CompileOptions&
     variant.configure(options);
     const CompileResult result = compile_source(source, options);
     if (!result.diagnostics.empty()) {
-      lines << variant.name << ": throws " << result.diagnostics.front().message << '\n';
+      lines << variant.name << ": throws ";
+      for (std::size_t index = 0; index < result.diagnostics.size(); ++index) {
+        if (index > 0)
+          lines << '\n';
+        lines << result.diagnostics.at(index).message;
+      }
+      lines << '\n';
       continue;
     }
     require(result.implemented, std::string(variant.name) + " lowering variant should compile");

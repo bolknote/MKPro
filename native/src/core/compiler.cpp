@@ -6102,7 +6102,7 @@ void assign_register(LoweringContext& context, const std::string& name) {
   if (!index.has_value()) {
     context.diagnostics.push_back(
         diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                   "Native register allocation exhausted at '" + name + "'"));
+                   "Out of MK-61 registers while allocating '" + name + "'."));
     return;
   }
   const std::string reg = register_from_text(core::register_name_for_index(*index));
@@ -9335,10 +9335,13 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   for (const V2Rule& rule : program.rules) {
     if (match_x_param_stack_stop_risk_rule(rule).has_value())
       continue;
+    const std::optional<XParamReturnDecay> x_param_return = match_x_param_return_decay(rule);
     const auto x_param_it = context.x_param_procs.find(rule.name);
     const std::optional<XParamValueFunctionMatch> x_param_value =
         context.x_param_value_functions ? match_x_param_value_function(rule) : std::nullopt;
     for (const std::string& param : rule.params) {
+      if (x_param_return.has_value() && x_param_return->param == param)
+        continue;
       if (x_param_it != context.x_param_procs.end() && x_param_it->second.param == param)
         continue;
       if (x_param_value.has_value() && x_param_value->param == param)
@@ -9353,11 +9356,14 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
         collect_locals_from_x_param_first_statement(context, collection, x_param_it->second);
         start = 1;
       }
+      std::set<std::string> rule_excluded = stack_only_excluded;
+      if (x_param_return.has_value())
+        rule_excluded.insert(x_param_return->param);
       for (std::size_t index = start; index < rule.body.size(); ++index) {
         collect_locals_from_statement(context, collection, rule.body.at(index),
                                       index + 1U < rule.body.size() ? &rule.body.at(index + 1U)
                                                                     : nullptr,
-                                      stack_only_excluded);
+                                      rule_excluded);
       }
     }
   }
@@ -32460,6 +32466,8 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
 
   for (const V2StateField& state_field : program.state) {
     const V2StateField* field = &state_field;
+    if (field->name.rfind("__packed_counter_", 0) == 0)
+      continue;
     if (field->type == "coord_list" && field->initial.has_value() && field->domain.has_value() &&
         context.boards.contains(*field->domain) && field->count.has_value()) {
       const std::string initial_text = trim_ascii(*field->initial);
@@ -32589,6 +32597,27 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     const auto register_it = context.registers.find(field->name);
     if (register_it != context.registers.end())
       add_preload(register_it->second, *value, setup_target_name, setup_expression, field->line);
+  }
+
+  for (const V2StateField& field : program.state) {
+    if (field.name.rfind("__packed_counter_", 0) != 0 || !field.initial.has_value())
+      continue;
+    const std::string initial_text = trim_ascii(*field.initial);
+    std::optional<std::string> value = initial_text;
+    std::optional<std::string> setup_target_name;
+    bool setup_expression = false;
+    try {
+      const Expression initial = parse_expression(initial_text, field.line);
+      setup_expression = !is_setup_literal_expression(initial);
+      if (setup_expression)
+        setup_target_name = field.name;
+    } catch (const std::exception&) {
+      setup_expression = true;
+      setup_target_name = field.name;
+    }
+    const auto register_it = context.registers.find(field.name);
+    if (register_it != context.registers.end())
+      add_preload(register_it->second, *value, setup_target_name, setup_expression, field.line);
   }
 
   for (const PreloadReport& preload : deferred_indexed_initializer_preloads)
@@ -36242,7 +36271,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       warn_undeclared_allocations(*ast.v2, options.strict, loop_prompt_names, context.diagnostics);
       warn_show_halt_style_rule(*ast.v2, result.warnings);
       context.transient_show_targets = transient_show_targets(*ast.v2);
-      if (!has_errors(context.diagnostics)) {
+      const bool can_attempt_lowering = !has_errors(context.diagnostics);
+      if (can_attempt_lowering) {
         trace_stage("metadata-registers-preloads");
         trace_stage("metadata-index-program");
         index_program_metadata(context, *ast.v2);
@@ -36272,7 +36302,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         trace_stage("metadata-near-any");
         collect_near_any_helper_stats(context, *ast.v2);
       }
-      if (!has_errors(context.diagnostics)) {
+      if (can_attempt_lowering) {
         trace_stage("lower-main-functions-helpers");
         const bool lowered_main = lower_statement_block(context, ast.v2->body);
         if (lowered_main) {
