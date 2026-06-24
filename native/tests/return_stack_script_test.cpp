@@ -2646,6 +2646,20 @@ void return_stack_script_matches_mk61_strategy_contract() {
     const core::DirtyReturnStackDispatchAllocationPlan allocation =
         core::allocate_dirty_return_stack_dispatch_layout(
             {27, 35, 43, 51, 59}, 6, layout,
+            {.size_rescue = true, .max_padding_cells = -1});
+    require(!allocation.allocated && allocation.padding_cells == 0 &&
+                allocation.rejection_reason.find("non-negative padding budget") !=
+                    std::string::npos,
+            "dirty dispatch allocator should reject negative padding budgets before running "
+            "fixed-point repair search");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(78) = stop();
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
             {.size_rescue = true, .max_padding_cells = 2, .max_fixed_point_rounds = 0});
     require(!allocation.allocated && allocation.fixed_point_rounds == 0 &&
                 allocation.rejection_reason.find("at least one fixed-point round") !=

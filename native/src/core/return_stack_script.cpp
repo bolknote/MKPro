@@ -3365,6 +3365,12 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
     allocation.rejection_reason = "dirty return-stack dispatch allocator has no dirty targets";
     return allocation;
   }
+  if (options.max_padding_cells < 0) {
+    allocation.dispatch = std::move(existing);
+    allocation.rejection_reason =
+        "dirty return-stack dispatch allocator requires a non-negative padding budget";
+    return allocation;
+  }
 
   const int max_target = *std::max_element(target_plan.dirty_targets.begin(),
                                            target_plan.dirty_targets.end());
