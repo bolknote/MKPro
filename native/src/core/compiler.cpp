@@ -34890,14 +34890,24 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                                                        .candidate_better;
         if (layout_aware_profitable) {
           post_layout_items = tail_layout.materialized_items;
+          std::string detail = std::string("Materialized ") + std::to_string(plan.transitions) +
+                               " IR tail block" + (plan.transitions == 1 ? "" : "s") +
+                               " as a proven ПП return-stack charge chain before post-layout rewrite";
+          if (tail_layout.pipeline_compared) {
+            detail += " after layout-aware full-pipeline comparison (candidate " +
+                      std::to_string(tail_layout.pipeline_candidate_final_cells) +
+                      " cells vs current " +
+                      std::to_string(tail_layout.pipeline_current_final_cells) +
+                      " cells after measuring " +
+                      std::to_string(tail_layout.pipeline_candidates_measured) +
+                      " materialized candidate" +
+                      (tail_layout.pipeline_candidates_measured == 1 ? "" : "s") + ").";
+          } else {
+            detail += ".";
+          }
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
               .name = "return-stack-startup-layout",
-              .detail = std::string("Materialized ") + std::to_string(plan.transitions) +
-                        " IR tail block" + (plan.transitions == 1 ? "" : "s") +
-                        " as a proven ПП return-stack charge chain before post-layout rewrite" +
-                        (layout_aware_profitable && !plan.profitable
-                             ? " after layout-aware full-pipeline comparison."
-                             : "."),
+              .detail = std::move(detail),
           });
         } else if (options.analysis) {
           std::string rejection = tail_layout.rejection_reason;
