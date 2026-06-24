@@ -1219,12 +1219,20 @@ bool ir_op_target_is_semantic_for_tail_fragment(const IrOp& op) {
   return op.kind == IrKind::OrphanAddress || ir_op_can_reference_label(op);
 }
 
+bool ir_op_kind_equal_for_tail_fragment(const IrOp& left, const IrOp& right) {
+  if (left.kind == right.kind)
+    return true;
+  return left.opcode == 0x52 && right.opcode == 0x52 &&
+         (left.kind == IrKind::Return || right.kind == IrKind::Return);
+}
+
 bool ir_op_equal_for_tail_fragment(
     const IrOp& left, const IrOp& right, const std::vector<IrLabelBlock>* blocks = nullptr,
     const std::map<std::string, std::size_t>* by_label = nullptr, const IrCfg* cfg = nullptr) {
   const bool target_semantic = ir_op_target_is_semantic_for_tail_fragment(left) ||
                                ir_op_target_is_semantic_for_tail_fragment(right);
-  return left.kind == right.kind && left.register_name == right.register_name &&
+  return ir_op_kind_equal_for_tail_fragment(left, right) &&
+         left.register_name == right.register_name &&
          left.condition == right.condition && left.counter == right.counter &&
          left.opcode == right.opcode &&
          (!target_semantic ||
