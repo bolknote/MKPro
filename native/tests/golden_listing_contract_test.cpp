@@ -4,8 +4,10 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -227,8 +229,15 @@ void golden_listing_contract_matches_typescript_contract() {
     return options;
   }();
 
+  const bool progress = std::getenv("MKPRO_NATIVE_EXAMPLE_PROGRESS") != nullptr;
+  std::size_t progress_index = 0;
   for (const std::filesystem::path& source_path : example_files) {
     const std::string name = source_path.stem().string();
+    if (progress) {
+      ++progress_index;
+      std::cerr << "[golden-listing] " << progress_index << "/" << example_files.size() << " "
+                << name << std::endl;
+    }
     const std::filesystem::path oracle_example_root = oracle_root / name;
 
     const std::string source = read_text(source_path);
