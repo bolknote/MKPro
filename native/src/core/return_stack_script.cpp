@@ -1112,11 +1112,18 @@ IrOp synthetic_ir_jump_to_label(const std::string& target) {
   return op;
 }
 
+bool terminal_return_from_ir_body(const std::vector<IrOp>& body) {
+  if (body.empty())
+    return false;
+  const IrOp& terminal = body.back();
+  return terminal.kind == IrKind::Return || terminal.opcode == 0x52;
+}
+
 bool terminal_tail_fragment_candidate(const IrLabelBlock& block) {
   if (block.body.size() < 3U)
     return false;
   return terminal_jump_target_from_ir_body(block.body).has_value() ||
-         terminal_stop_from_ir_body(block.body);
+         terminal_stop_from_ir_body(block.body) || terminal_return_from_ir_body(block.body);
 }
 
 std::optional<std::size_t> terminal_tail_fragment_suffix_start(
@@ -1288,7 +1295,7 @@ bool valid_terminal_tail_fragment_body(const IrLabelBlock& block) {
   if (block.body.size() < 2U)
     return false;
   if (!terminal_jump_target_from_ir_body(block.body).has_value() &&
-      !terminal_stop_from_ir_body(block.body))
+      !terminal_stop_from_ir_body(block.body) && !terminal_return_from_ir_body(block.body))
     return false;
   for (std::size_t index = 0; index + 1U < block.body.size(); ++index) {
     if (ir_op_splits_internal_basic_block(block.body.at(index)))

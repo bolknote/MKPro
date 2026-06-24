@@ -2390,6 +2390,48 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("returning_a"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_plain(7));
+    ops.push_back(ir_plain(0x52));
+    ops.push_back(ir_label("returning_b"));
+    ops.push_back(ir_plain(6));
+    ops.push_back(ir_plain(7));
+    ops.push_back(ir_plain(0x52));
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t2"));
+    ops.push_back(ir_label("t2"));
+    append(ops, direct_tail(2, "t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.extracted_tail_fragments == 1 && search.rewritten_tail_fragments == 2 &&
+                search.has_opportunity && search.materialized,
+            "IR tail layout scanner should extract shared terminal raw В/О suffixes without "
+            "turning them into startup-chain stops");
+    const auto fragment_it =
+        std::find_if(search.materialized_items.begin(), search.materialized_items.end(),
+                     [](const MachineItem& item) {
+                       return item.kind == MachineItemKind::Label &&
+                              item.name == "__return_stack_tail_fragment_0";
+                     });
+    require(fragment_it != search.materialized_items.end() &&
+                std::next(fragment_it) != search.materialized_items.end() &&
+                std::next(fragment_it)->kind == MachineItemKind::Op &&
+                std::next(fragment_it)->opcode == 7 &&
+                std::next(fragment_it, 2) != search.materialized_items.end() &&
+                std::next(fragment_it, 2)->kind == MachineItemKind::Op &&
+                std::next(fragment_it, 2)->opcode == 0x52,
+            "terminal raw В/О suffix extraction should materialize the shared return fragment");
+    require(core::optimize_post_layout_return_stack_script(search.materialized_items).applied == 2,
+            "raw В/О suffix extraction should coexist with a separate provable startup chain");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("entry"));
     ops.push_back(ir_plain(9));
     ops.push_back(ir_plain(8));
