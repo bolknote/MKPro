@@ -36341,12 +36341,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               core::allocate_dirty_return_stack_dispatch_layouts(
                   post_layout_items, core::DirtyReturnStackDispatchOptions{.size_rescue = true});
           auto overlay_flow_cell_count = [&](const std::vector<MachineItem>& items) {
-            const core::PostLayoutIndirectFlowResult overlay_probe =
-                core::optimize_post_layout_address_code_overlay(items);
-            const core::PostLayoutIndirectFlowResult flow_probe =
-                core::optimize_post_layout_indirect_flow(overlay_probe.items, pass_options,
-                                                         indirect_flow_rescue_above);
-            return core::machine_cell_count(flow_probe.items);
+            return core::measure_return_stack_downstream_post_layout_pipeline(
+                       items, pass_options, indirect_flow_rescue_above)
+                .final_cells;
           };
           std::optional<int> current_flow_cells;
           int best_candidate_flow_cells = 0;

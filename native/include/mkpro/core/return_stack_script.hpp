@@ -222,6 +222,9 @@ allocate_dirty_return_stack_dispatch_layouts(const std::vector<MachineItem>& lay
 
 PostLayoutIndirectFlowResult
 optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items);
+ReturnStackPostLayoutPipelineReport measure_return_stack_downstream_post_layout_pipeline(
+    const std::vector<MachineItem>& items, const CompileOptions& options,
+    int indirect_flow_rescue_above = 105);
 ReturnStackPostLayoutPipelineReport measure_return_stack_post_layout_pipeline(
     const std::vector<MachineItem>& items, const CompileOptions& options,
     int indirect_flow_rescue_above = 105);

@@ -2881,6 +2881,11 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "overlay tie fixture should prove two address/code overlays");
     require(core::machine_cell_count(overlay.items) == core::machine_cell_count(program) - 2,
             "overlay tie fixture should save the same two cells without consuming return stack");
+    const core::ReturnStackPostLayoutPipelineReport downstream =
+        core::measure_return_stack_downstream_post_layout_pipeline(program, CompileOptions{});
+    require(downstream.return_stack_script_applied == 0 && downstream.address_overlay_applied == 2,
+            "downstream return-stack pipeline helper should run address-overlay without recursively "
+            "running return-stack-script");
   }
 
   {

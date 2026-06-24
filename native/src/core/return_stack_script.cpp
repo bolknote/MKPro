@@ -604,10 +604,7 @@ int best_cell_count_with_address_overlay(const std::vector<MachineItem>& items) 
 
 int best_cell_count_after_downstream_post_layout_pipeline(
     const std::vector<MachineItem>& items) {
-  const PostLayoutIndirectFlowResult overlay = optimize_post_layout_address_code_overlay(items);
-  const PostLayoutIndirectFlowResult flow =
-      optimize_post_layout_indirect_flow(overlay.items, CompileOptions{});
-  return machine_cell_count(flow.items);
+  return measure_return_stack_downstream_post_layout_pipeline(items, CompileOptions{}).final_cells;
 }
 
 bool return_stack_candidate_beats_downstream_post_layout_pipeline(
@@ -3895,6 +3892,24 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   };
 }
 
+ReturnStackPostLayoutPipelineReport measure_return_stack_downstream_post_layout_pipeline(
+    const std::vector<MachineItem>& items, const CompileOptions& options,
+    int indirect_flow_rescue_above) {
+  ReturnStackPostLayoutPipelineReport report{
+      .input_cells = machine_cell_count(items),
+  };
+
+  const PostLayoutIndirectFlowResult overlay =
+      optimize_post_layout_address_code_overlay(items);
+  report.address_overlay_applied = overlay.applied;
+
+  const PostLayoutIndirectFlowResult flow =
+      optimize_post_layout_indirect_flow(overlay.items, options, indirect_flow_rescue_above);
+  report.indirect_flow_applied = flow.applied;
+  report.final_cells = machine_cell_count(flow.items);
+  return report;
+}
+
 ReturnStackPostLayoutPipelineReport measure_return_stack_post_layout_pipeline(
     const std::vector<MachineItem>& items, const CompileOptions& options,
     int indirect_flow_rescue_above) {
@@ -3906,14 +3921,12 @@ ReturnStackPostLayoutPipelineReport measure_return_stack_post_layout_pipeline(
       optimize_post_layout_return_stack_script(items);
   report.return_stack_script_applied = script.applied;
 
-  const PostLayoutIndirectFlowResult overlay =
-      optimize_post_layout_address_code_overlay(script.items);
-  report.address_overlay_applied = overlay.applied;
-
-  const PostLayoutIndirectFlowResult flow =
-      optimize_post_layout_indirect_flow(overlay.items, options, indirect_flow_rescue_above);
-  report.indirect_flow_applied = flow.applied;
-  report.final_cells = machine_cell_count(flow.items);
+  const ReturnStackPostLayoutPipelineReport downstream =
+      measure_return_stack_downstream_post_layout_pipeline(script.items, options,
+                                                          indirect_flow_rescue_above);
+  report.address_overlay_applied = downstream.address_overlay_applied;
+  report.indirect_flow_applied = downstream.indirect_flow_applied;
+  report.final_cells = downstream.final_cells;
   return report;
 }
 
