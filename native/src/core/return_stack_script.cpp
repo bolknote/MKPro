@@ -1515,18 +1515,18 @@ std::string unique_same_target_entry_label(const std::set<std::string>& labels,
   return candidate;
 }
 
-std::vector<std::vector<std::size_t>> bounded_noop_call_subgroups(
+std::vector<std::vector<std::size_t>> bounded_call_subgroups(
     const std::vector<std::size_t>& call_indices) {
   std::vector<std::vector<std::size_t>> result;
   if (call_indices.size() < 2U)
     return result;
 
-  constexpr std::size_t kMaxNoopSubgroups = 256U;
+  constexpr std::size_t kMaxCallSubgroups = 256U;
   const std::size_t max_size =
       std::min(call_indices.size(), static_cast<std::size_t>(kMaxScriptReturns));
   std::set<std::vector<std::size_t>> seen;
   auto add_group = [&](std::vector<std::size_t> group) {
-    if (result.size() >= kMaxNoopSubgroups)
+    if (result.size() >= kMaxCallSubgroups)
       return;
     if (seen.insert(group).second)
       result.push_back(std::move(group));
@@ -1541,7 +1541,7 @@ std::vector<std::vector<std::size_t>> bounded_noop_call_subgroups(
 
     std::vector<std::size_t> current;
     auto choose = [&](auto& self, std::size_t offset) -> void {
-      if (result.size() >= kMaxNoopSubgroups)
+      if (result.size() >= kMaxCallSubgroups)
         return;
       if (current.size() == size) {
         add_group(current);
@@ -1552,7 +1552,7 @@ std::vector<std::vector<std::size_t>> bounded_noop_call_subgroups(
         current.push_back(call_indices.at(index));
         self(self, index + 1U);
         current.pop_back();
-        if (result.size() >= kMaxNoopSubgroups)
+        if (result.size() >= kMaxCallSubgroups)
           return;
       }
     };
@@ -1896,10 +1896,15 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
     target_by_call[index] = *target;
   }
 
-  for (const auto& [target_label, call_indices] : calls_by_target) {
-    if (call_indices.size() < 2U ||
-        call_indices.size() > static_cast<std::size_t>(kMaxScriptReturns)) {
+  for (const auto& [target_label, all_call_indices] : calls_by_target) {
+    if (all_call_indices.size() < 2U)
       continue;
+
+    std::vector<std::vector<std::size_t>> subgroups;
+    if (all_call_indices.size() <= static_cast<std::size_t>(kMaxScriptReturns)) {
+      subgroups.push_back(all_call_indices);
+    } else {
+      subgroups = bounded_call_subgroups(all_call_indices);
     }
 
     const auto entry_it = by_label.find(target_label);
@@ -1907,112 +1912,114 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
       continue;
     const IrLabelBlock& entry = blocks.at(entry_it->second);
 
-    std::vector<ReturnStackTailBlock> tails;
-    std::vector<ReturnStackExistingCallSite> existing_sites;
-    std::map<std::string, std::size_t> site_by_continuation;
-    std::set<std::string> moved_labels;
-    bool valid = true;
-    for (const std::size_t call_index : call_indices) {
-      const auto target_it = target_by_call.find(call_index);
-      if (target_it == target_by_call.end()) {
-        valid = false;
-        break;
-      }
-      const std::optional<IrCallContinuation> target_block =
-          cfg_non_empty_block_from_label(blocks, by_label, cfg, target_it->second);
-      if (!target_block.has_value() ||
-          blocks.at(target_block->block_index).label != entry.label) {
-        valid = false;
-        break;
-      }
-      const IrLabelBlock& call_block = blocks.at(call_index);
-      const std::optional<IrCallContinuation> continuation_block =
-          cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_it->second);
-      if (!continuation_block.has_value()) {
-        valid = false;
-        break;
-      }
+    for (const std::vector<std::size_t>& call_indices : subgroups) {
+      std::vector<ReturnStackTailBlock> tails;
+      std::vector<ReturnStackExistingCallSite> existing_sites;
+      std::map<std::string, std::size_t> site_by_continuation;
+      std::set<std::string> moved_labels;
+      bool valid = true;
+      for (const std::size_t call_index : call_indices) {
+        const auto target_it = target_by_call.find(call_index);
+        if (target_it == target_by_call.end()) {
+          valid = false;
+          break;
+        }
+        const std::optional<IrCallContinuation> target_block =
+            cfg_non_empty_block_from_label(blocks, by_label, cfg, target_it->second);
+        if (!target_block.has_value() ||
+            blocks.at(target_block->block_index).label != entry.label) {
+          valid = false;
+          break;
+        }
+        const IrLabelBlock& call_block = blocks.at(call_index);
+        const std::optional<IrCallContinuation> continuation_block =
+            cfg_call_continuation_block(blocks, by_label, cfg, call_index, target_it->second);
+        if (!continuation_block.has_value()) {
+          valid = false;
+          break;
+        }
 
-      const IrLabelBlock& continuation = blocks.at(continuation_block->block_index);
-      if (site_by_continuation.contains(continuation.label)) {
-        valid = false;
-        break;
-      }
+        const IrLabelBlock& continuation = blocks.at(continuation_block->block_index);
+        if (site_by_continuation.contains(continuation.label)) {
+          valid = false;
+          break;
+        }
 
-      site_by_continuation[continuation.label] = existing_sites.size();
-      moved_labels.insert(call_block.label);
-      moved_labels.insert(target_block->alias_labels.begin(), target_block->alias_labels.end());
-      moved_labels.insert(continuation_block->alias_labels.begin(),
-                          continuation_block->alias_labels.end());
-      moved_labels.insert(continuation.label);
-      tails.push_back(ReturnStackTailBlock{
-          .label = continuation.label,
-          .body = continuation.body,
-      });
-      existing_sites.push_back(ReturnStackExistingCallSite{
-          .label = call_block.label,
-          .target_label = target_it->second,
-          .continuation_label = continuation.label,
-          .source_address = -1,
-      });
+        site_by_continuation[continuation.label] = existing_sites.size();
+        moved_labels.insert(call_block.label);
+        moved_labels.insert(target_block->alias_labels.begin(), target_block->alias_labels.end());
+        moved_labels.insert(continuation_block->alias_labels.begin(),
+                            continuation_block->alias_labels.end());
+        moved_labels.insert(continuation.label);
+        tails.push_back(ReturnStackTailBlock{
+            .label = continuation.label,
+            .body = continuation.body,
+        });
+        existing_sites.push_back(ReturnStackExistingCallSite{
+            .label = call_block.label,
+            .target_label = target_it->second,
+            .continuation_label = continuation.label,
+            .source_address = -1,
+        });
+      }
+      if (!valid)
+        continue;
+
+      moved_labels.insert(entry.label);
+      ReturnStackLayoutOpportunity opportunity{
+          .tails = tails,
+          .entry_body = entry.body,
+          .entry_label = entry.label,
+          .existing_call_sites = existing_sites,
+      };
+      const std::optional<std::vector<std::size_t>> tail_order =
+          proved_tail_order_from_ir(opportunity);
+      if (!tail_order.has_value() || tail_order->size() != existing_sites.size())
+        continue;
+
+      for (std::size_t physical_index = 0; physical_index < tail_order->size();
+           ++physical_index) {
+        const std::string& continuation_label =
+            opportunity.tails.at(tail_order->at(physical_index)).label;
+        const auto site_it = site_by_continuation.find(continuation_label);
+        if (site_it == site_by_continuation.end()) {
+          valid = false;
+          break;
+        }
+        existing_sites.at(site_it->second).target_label =
+            physical_index + 1U >= tail_order->size()
+                ? entry.label
+                : existing_sites
+                      .at(site_by_continuation.at(
+                          opportunity.tails.at(tail_order->at(physical_index + 1U)).label))
+                      .label;
+      }
+      if (!valid)
+        continue;
+
+      opportunity.existing_call_sites = existing_sites;
+      const std::string& first_continuation = opportunity.tails.at(tail_order->front()).label;
+      const std::string& first_call_label =
+          existing_sites.at(site_by_continuation.at(first_continuation)).label;
+      const std::size_t entry_block_index = by_label.at(first_call_label);
+      IrTailChainCandidate candidate{
+          .opportunity = std::move(opportunity),
+          .moved_tail_labels = moved_labels,
+          .original_entry_label = first_call_label,
+          .generated_entry_label = entry.label,
+          .entry_block_index = entry_block_index,
+          .wrap_original_entry_label = false,
+      };
+      candidate.opportunity.entry_at_address_zero = entry_block_index == 0U;
+      candidate.opportunity.single_start_jump = entry_block_index != 0U;
+
+      if (!existing_call_chain_has_safe_cfg_entries(cfg, moved_labels, first_call_label,
+                                                    entry.label, rejection_reason)) {
+        continue;
+      }
+      if (return_stack_candidate_better(best_candidate, candidate))
+        best_candidate = std::move(candidate);
     }
-    if (!valid)
-      continue;
-
-    moved_labels.insert(entry.label);
-    ReturnStackLayoutOpportunity opportunity{
-        .tails = tails,
-        .entry_body = entry.body,
-        .entry_label = entry.label,
-        .existing_call_sites = existing_sites,
-    };
-    const std::optional<std::vector<std::size_t>> tail_order =
-        proved_tail_order_from_ir(opportunity);
-    if (!tail_order.has_value() || tail_order->size() != existing_sites.size())
-      continue;
-
-    for (std::size_t physical_index = 0; physical_index < tail_order->size();
-         ++physical_index) {
-      const std::string& continuation_label =
-          opportunity.tails.at(tail_order->at(physical_index)).label;
-      const auto site_it = site_by_continuation.find(continuation_label);
-      if (site_it == site_by_continuation.end()) {
-        valid = false;
-        break;
-      }
-      existing_sites.at(site_it->second).target_label =
-          physical_index + 1U >= tail_order->size()
-              ? entry.label
-              : existing_sites
-                    .at(site_by_continuation.at(
-                        opportunity.tails.at(tail_order->at(physical_index + 1U)).label))
-                    .label;
-    }
-    if (!valid)
-      continue;
-
-    opportunity.existing_call_sites = existing_sites;
-    const std::string& first_continuation = opportunity.tails.at(tail_order->front()).label;
-    const std::string& first_call_label =
-        existing_sites.at(site_by_continuation.at(first_continuation)).label;
-    const std::size_t entry_block_index = by_label.at(first_call_label);
-    IrTailChainCandidate candidate{
-        .opportunity = std::move(opportunity),
-        .moved_tail_labels = moved_labels,
-        .original_entry_label = first_call_label,
-        .generated_entry_label = entry.label,
-        .entry_block_index = entry_block_index,
-        .wrap_original_entry_label = false,
-    };
-    candidate.opportunity.entry_at_address_zero = entry_block_index == 0U;
-    candidate.opportunity.single_start_jump = entry_block_index != 0U;
-
-    if (!existing_call_chain_has_safe_cfg_entries(cfg, moved_labels, first_call_label,
-                                                  entry.label, rejection_reason)) {
-      continue;
-    }
-    if (return_stack_candidate_better(best_candidate, candidate))
-      best_candidate = std::move(candidate);
   }
 
   return best_candidate;
@@ -2048,7 +2055,7 @@ std::optional<IrTailChainCandidate> same_target_noop_helper_call_group_opportuni
         chain_derived_noop_call_subgroups(blocks, by_label, cfg, all_call_indices,
                                           target_by_call);
     std::set<std::vector<std::size_t>> seen_subgroups(subgroups.begin(), subgroups.end());
-    for (std::vector<std::size_t> subgroup : bounded_noop_call_subgroups(all_call_indices)) {
+    for (std::vector<std::size_t> subgroup : bounded_call_subgroups(all_call_indices)) {
       if (seen_subgroups.insert(subgroup).second)
         subgroups.push_back(std::move(subgroup));
     }

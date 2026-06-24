@@ -1266,6 +1266,41 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "same-target ПП retargeting should keep scanning and choose the larger free call group");
   }
 
+
+  {
+    std::vector<IrOp> ops;
+    for (int index = 1; index <= 5; ++index) {
+      ops.push_back(ir_label("charge" + std::to_string(index)));
+      ops.push_back(ir_call("entry"));
+      ops.push_back(ir_label("t" + std::to_string(index)));
+      if (index == 1) {
+        ops.push_back(ir_plain(1));
+        ops.push_back(ir_stop());
+      } else {
+        append(ops, direct_tail(index, "t" + std::to_string(index - 1)));
+      }
+    }
+    ops.push_back(ir_label("noise_charge"));
+    ops.push_back(ir_call("entry"));
+    ops.push_back(ir_label("noise_tail"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_stop());
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t5"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized &&
+                search.analysis.plan.existing_call_sites == 5 &&
+                search.analysis.plan.paid_call_sites == 0 &&
+                search.analysis.plan.transitions == 5,
+            "same-target ПП retargeting should search bounded subgroups when the full call group "
+            "exceeds return-stack depth");
+    require(core::scan_return_stack_script_opportunity(search.materialized_items).possible,
+            "bounded same-target ПП subgroup retargeting should remain visible to post-layout "
+            "return-stack script scanning");
+  }
+
   {
     std::vector<IrOp> ops;
     ops.push_back(ir_label("charge1"));
