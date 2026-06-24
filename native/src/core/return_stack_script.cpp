@@ -3513,6 +3513,8 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
 
   std::vector<MachineItem> candidate = layout_items;
   int total_padding = 0;
+  int total_append_padding = 0;
+  int total_insert_padding = 0;
   const int max_rounds = options.max_fixed_point_rounds;
   if (max_rounds <= 0) {
     allocation.dispatch = std::move(existing);
@@ -3527,6 +3529,8 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
       allocation.dispatch = std::move(current);
       allocation.items = std::move(candidate);
       allocation.padding_cells = total_padding;
+      allocation.append_padding_cells = total_append_padding;
+      allocation.insert_padding_cells = total_insert_padding;
       allocation.fixed_point_rounds = round;
       allocation.allocated = true;
       allocation.size_rescue_only = true;
@@ -3574,6 +3578,7 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
       for (int index = 0; index < padding; ++index)
         candidate.push_back(dirty_dispatch_safe_padding_cell());
       total_padding += padding;
+      total_append_padding += padding;
       continue;
     }
 
@@ -3603,12 +3608,15 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
     }
     candidate.insert(candidate.begin() + *insertion_index, dirty_dispatch_safe_padding_cell());
     total_padding += 1;
+    total_insert_padding += 1;
   }
 
   allocation.dispatch = plan_dirty_return_stack_dispatch(stack, return_count, candidate, options);
   if (allocation.dispatch.enabled && allocation.dispatch.layout_proved) {
     allocation.items = std::move(candidate);
     allocation.padding_cells = total_padding;
+    allocation.append_padding_cells = total_append_padding;
+    allocation.insert_padding_cells = total_insert_padding;
     allocation.fixed_point_rounds = max_rounds;
     allocation.allocated = true;
     allocation.size_rescue_only = true;
@@ -3649,6 +3657,8 @@ bool dirty_return_stack_dispatch_allocation_better(
     return left_proved;
   if (left.padding_cells != right.padding_cells)
     return left.padding_cells < right.padding_cells;
+  if (left.insert_padding_cells != right.insert_padding_cells)
+    return left.insert_padding_cells < right.insert_padding_cells;
   if (left.fixed_point_rounds != right.fixed_point_rounds)
     return left.fixed_point_rounds < right.fixed_point_rounds;
   if (left.dispatch.dirty_targets.size() != right.dispatch.dirty_targets.size())
@@ -3687,6 +3697,8 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
   int applied = 0;
   int scripts = 0;
   int dirty_dispatch_padding = 0;
+  int dirty_dispatch_append_padding = 0;
+  int dirty_dispatch_insert_padding = 0;
   int dirty_dispatch_rounds = 0;
   int dirty_dispatch_dirty_returns = 0;
   std::set<int> dirty_dispatch_return_addresses;
@@ -3699,6 +3711,8 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
     const MachineLayout current_layout = machine_layout(current);
     std::vector<MachineItem> candidate = apply_script_plan(current, *plan);
     int candidate_dirty_dispatch_padding = 0;
+    int candidate_dirty_dispatch_append_padding = 0;
+    int candidate_dirty_dispatch_insert_padding = 0;
     int candidate_dirty_dispatch_rounds = 0;
     int candidate_dirty_dispatch_dirty_returns = 0;
     std::set<int> candidate_dirty_dispatch_return_addresses;
@@ -3712,6 +3726,8 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
         break;
       candidate = allocation->items;
       candidate_dirty_dispatch_padding = allocation->padding_cells;
+      candidate_dirty_dispatch_append_padding = allocation->append_padding_cells;
+      candidate_dirty_dispatch_insert_padding = allocation->insert_padding_cells;
       candidate_dirty_dispatch_rounds = allocation->fixed_point_rounds;
       candidate_dirty_dispatch_dirty_returns =
           static_cast<int>(allocation->dispatch.dirty_return_addresses.size());
@@ -3737,6 +3753,8 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
     if (!return_stack_candidate_beats_address_overlay(current, candidate))
       break;
     dirty_dispatch_padding += candidate_dirty_dispatch_padding;
+    dirty_dispatch_append_padding += candidate_dirty_dispatch_append_padding;
+    dirty_dispatch_insert_padding += candidate_dirty_dispatch_insert_padding;
     dirty_dispatch_rounds += candidate_dirty_dispatch_rounds;
     dirty_dispatch_dirty_returns += candidate_dirty_dispatch_dirty_returns;
     dirty_dispatch_return_addresses.insert(candidate_dirty_dispatch_return_addresses.begin(),
@@ -3760,7 +3778,9 @@ optimize_post_layout_return_stack_script(const std::vector<MachineItem>& items) 
     if (dirty_dispatch_padding > 0) {
       detail = "Inserted " + std::to_string(dirty_dispatch_padding) +
                " executable dirty-dispatch cell" +
-               (dirty_dispatch_padding == 1 ? "" : "s") + " across " +
+               (dirty_dispatch_padding == 1 ? "" : "s") + " (" +
+               std::to_string(dirty_dispatch_append_padding) + " appended, " +
+               std::to_string(dirty_dispatch_insert_padding) + " inserted) across " +
                std::to_string(dirty_dispatch_rounds) + " fixed-point repair round" +
                (dirty_dispatch_rounds == 1 ? "" : "s");
     } else {

@@ -2592,7 +2592,8 @@ void return_stack_script_matches_mk61_strategy_contract() {
                                                           result.items,
                                                           {.size_rescue = true});
     require(allocation.allocated && allocation.dispatch.layout_proved &&
-                allocation.padding_cells == 0 &&
+                allocation.padding_cells == 0 && allocation.append_padding_cells == 0 &&
+                allocation.insert_padding_cells == 0 &&
                 core::machine_cell_count(allocation.items) ==
                     core::machine_cell_count(result.items),
             "dirty-dispatch allocator should return the existing proven layout when no padding is "
@@ -2633,6 +2634,9 @@ void return_stack_script_matches_mk61_strategy_contract() {
     require(optimization_detail_contains(result, "return-stack-dirty-dispatch-allocator",
                                          "Inserted 1 executable dirty-dispatch cell"),
             "dirty-overflow repair metadata should expose the inserted safe cell count");
+    require(optimization_detail_contains(result, "return-stack-dirty-dispatch-allocator",
+                                         "0 appended, 1 inserted"),
+            "dirty-overflow repair metadata should expose the dirty-dispatch repair shape");
     require(optimization_detail_contains(result, "return-stack-dirty-dispatch-allocator",
                                          "across 1 fixed-point repair round"),
             "dirty-overflow repair metadata should expose the fixed-point repair round count");
@@ -2892,6 +2896,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
             {27, 35, 43, 51, 59}, 6, layout,
             {.size_rescue = true, .max_padding_cells = 4});
     require(allocation.allocated && allocation.padding_cells == 3 &&
+                allocation.append_padding_cells == 3 && allocation.insert_padding_cells == 0 &&
                 allocation.fixed_point_rounds == 1 && allocation.size_rescue_only &&
                 !allocation.control_flow_rewrite_enabled && allocation.dispatch.layout_proved,
             "dirty dispatch allocator should append safe executable cells up to a dirty target");
@@ -2917,6 +2922,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
             {27, 35, 43, 51, 59}, 6, layout,
             {.size_rescue = true, .max_padding_cells = 2});
     require(allocation.allocated && allocation.padding_cells == 1 &&
+                allocation.append_padding_cells == 0 && allocation.insert_padding_cells == 1 &&
                 allocation.fixed_point_rounds == 1 && allocation.dispatch.layout_proved,
             "dirty dispatch allocator should repair unsafe existing target cells by insertion");
     require(core::machine_cell_count(allocation.items) == 81 &&

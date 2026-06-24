@@ -157,6 +157,8 @@ struct DirtyReturnStackDispatchAllocationPlan {
   DirtyReturnStackDispatchPlan dispatch;
   std::vector<MachineItem> items;
   int padding_cells = 0;
+  int append_padding_cells = 0;
+  int insert_padding_cells = 0;
   int fixed_point_rounds = 0;
   bool allocated = false;
   bool size_rescue_only = true;
