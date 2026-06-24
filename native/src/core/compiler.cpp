@@ -34918,36 +34918,25 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         result.diagnostics.push_back(diagnostic(
             DiagnosticSeverity::Note, "return-stack-layout-not-applied",
             tail_layout.rejection_reason));
-        if (tail_layout.rewritten_tail_fragments > 0 ||
-            tail_layout.extracted_existing_callsite_fragments > 0) {
-          std::string detail;
-          if (tail_layout.rewritten_tail_fragments > 0) {
-            detail = "rewrote " + std::to_string(tail_layout.rewritten_tail_fragments) +
-                     " terminal IR tail suffix" +
-                     (tail_layout.rewritten_tail_fragments == 1 ? "" : "es") +
-                     " into " + std::to_string(tail_layout.extracted_tail_fragments) +
-                     " extracted fragment" +
-                     (tail_layout.extracted_tail_fragments == 1 ? "" : "s");
-            if (tail_layout.reused_generated_tail_fragments > 0) {
-              detail += ", reused " +
-                        std::to_string(tail_layout.reused_generated_tail_fragments) +
-                        " generated fragment" +
-                        (tail_layout.reused_generated_tail_fragments == 1 ? "" : "s");
-            }
-            if (tail_layout.reused_existing_tail_fragments > 0) {
-              detail += " and reused " +
-                        std::to_string(tail_layout.reused_existing_tail_fragments) +
-                        " existing whole-tail fragment" +
-                        (tail_layout.reused_existing_tail_fragments == 1 ? "" : "s");
-            }
+        if (tail_layout.rewritten_tail_fragments > 0) {
+          std::string detail =
+              "rewrote " + std::to_string(tail_layout.rewritten_tail_fragments) +
+              " terminal IR tail suffix" +
+              (tail_layout.rewritten_tail_fragments == 1 ? "" : "es") +
+              " into " + std::to_string(tail_layout.extracted_tail_fragments) +
+              " extracted fragment" +
+              (tail_layout.extracted_tail_fragments == 1 ? "" : "s");
+          if (tail_layout.reused_generated_tail_fragments > 0) {
+            detail += ", reused " +
+                      std::to_string(tail_layout.reused_generated_tail_fragments) +
+                      " generated fragment" +
+                      (tail_layout.reused_generated_tail_fragments == 1 ? "" : "s");
           }
-          if (tail_layout.extracted_existing_callsite_fragments > 0) {
-            if (!detail.empty())
-              detail += "; ";
-            detail += "extracted " +
-                      std::to_string(tail_layout.extracted_existing_callsite_fragments) +
-                      " terminal ПП callsite fragment" +
-                      (tail_layout.extracted_existing_callsite_fragments == 1 ? "" : "s");
+          if (tail_layout.reused_existing_tail_fragments > 0) {
+            detail += " and reused " +
+                      std::to_string(tail_layout.reused_existing_tail_fragments) +
+                      " existing whole-tail fragment" +
+                      (tail_layout.reused_existing_tail_fragments == 1 ? "" : "s");
           }
           detail += " before profitability/layout proof";
           result.diagnostics.push_back(diagnostic(
