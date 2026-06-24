@@ -3,8 +3,10 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <string>
@@ -119,13 +121,26 @@ void example_sizes_match_typescript_baselines() {
   require(example_file_names(pending_root) == expected_pending,
           "native pending-optimizer examples list should exactly match TS baseline keys");
 
+  const bool progress = std::getenv("MKPRO_NATIVE_EXAMPLE_PROGRESS") != nullptr;
+  std::size_t progress_index = 0;
+  const std::size_t progress_total = EXAMPLE_BASELINE.size() + PENDING_BASELINE.size();
   for (const auto& [name, expected] : EXAMPLE_BASELINE) {
+    if (progress) {
+      ++progress_index;
+      std::cerr << "[example-size] " << progress_index << "/" << progress_total << " " << name
+                << std::endl;
+    }
     const std::filesystem::path path = examples_root / (name + ".mkpro");
     const std::size_t actual = example_steps(path, /*analysis_budgeted=*/false);
     require(actual == expected, "top-level example " + name + " step count should match TS baseline");
   }
 
   for (const auto& [name, expected] : PENDING_BASELINE) {
+    if (progress) {
+      ++progress_index;
+      std::cerr << "[example-size] " << progress_index << "/" << progress_total << " " << name
+                << std::endl;
+    }
     const std::filesystem::path path = pending_root / (name + ".mkpro");
     const std::size_t actual = example_steps(path, /*analysis_budgeted=*/true);
     require(actual == expected,

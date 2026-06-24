@@ -883,6 +883,19 @@ IrMeta append_comment(IrMeta meta, const std::string& comment) {
   return meta;
 }
 
+bool has_role(const std::vector<CellRole>& roles, std::string_view role) {
+  return std::find(roles.begin(), roles.end(), role) != roles.end();
+}
+
+void restore_statement_proc_call_comment(IrMeta& meta) {
+  constexpr std::string_view kCallFunctionPrefix = "call function";
+  if (!has_role(meta.roles, "statement-proc-call") || !meta.comment.has_value() ||
+      !meta.comment->starts_with(kCallFunctionPrefix)) {
+    return;
+  }
+  meta.comment = "proc call" + meta.comment->substr(kCallFunctionPrefix.size());
+}
+
 IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
                       const std::string& selector_value, int target, bool super_dark) {
   const int offset = register_index(register_name);
@@ -907,6 +920,8 @@ IrOp indirect_flow_op(const IrOp& op, const std::string& register_name,
     result.opcode = indirect_cond_base(op.condition) + offset;
     result.meta.mnemonic = "К " + indirect_cond_name(op.condition) + " " + register_name;
   }
+  if (result.kind == IrKind::IndirectCall)
+    restore_statement_proc_call_comment(result.meta);
   result.meta = append_comment(result.meta, suffix);
   return result;
 }

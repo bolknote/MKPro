@@ -106,6 +106,8 @@ using core::emit::unary_expression;
 using core::emit::zero_digit_tail_display_program;
 using core::emit::ZeroDigitTailDisplayProgram;
 
+bool is_zero_expression(const LoweringContext& context, const Expression& expression);
+
 Diagnostic diagnostic(DiagnosticSeverity severity, std::string code, std::string message) {
   return Diagnostic{
       .severity = severity,
@@ -6119,47 +6121,112 @@ void add_register_variable(RegisterCollection& collection, std::string name) {
     collection.variables.insert(std::move(name));
 }
 
-bool dispatch_scratch_needed_for_match_selector(const V2Statement& statement) {
+std::optional<double> numeric_match_value_for_register_collection(LoweringContext& context,
+                                                                  const std::string& value,
+                                                                  int line) {
+  try {
+    return numeric_value_of_expression(context, parse_expression(value, line));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+int residual_dispatch_scratch_number_cost(double value) {
+  if (std::fabs(value) <= 1e-12)
+    return 0;
+  return guarded_estimate_number_cost(js_number_string(value)) + 1;
+}
+
+bool numeric_residual_dispatch_is_cheaper_for_scratch(const Expression& selector,
+                                                      const std::vector<double>& values) {
+  const bool source_register = selector.kind == "identifier";
+  int ordinary = guarded_estimate_expression_cost(selector) + (source_register ? 0 : 1);
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    const double value = values.at(index);
+    ordinary += (index > 0 ? 1 : 0) + residual_dispatch_scratch_number_cost(value) + 2;
+  }
+
+  int residual = guarded_estimate_expression_cost(selector);
+  double compared_value = 0.0;
+  bool has_compared_value = false;
+  for (const double value : values) {
+    if (!has_compared_value) {
+      residual += residual_dispatch_scratch_number_cost(value);
+      has_compared_value = true;
+    } else {
+      residual += residual_dispatch_scratch_number_cost(compared_value - value);
+    }
+    residual += 2;
+    compared_value = value;
+  }
+  return residual <= ordinary;
+}
+
+bool match_uses_numeric_residual_chain_for_scratch(LoweringContext& context,
+                                                   const V2Statement& statement,
+                                                   const Expression& selector) {
+  std::vector<double> values;
+  for (const V2MatchCase& match_case : statement.cases) {
+    for (const std::string& value_text : match_case.values) {
+      const std::optional<double> value =
+          numeric_match_value_for_register_collection(context, value_text, match_case.line);
+      if (!value.has_value())
+        return false;
+      values.push_back(*value);
+    }
+  }
+  if (values.size() < 2U)
+    return false;
+  return numeric_residual_dispatch_is_cheaper_for_scratch(selector, values);
+}
+
+bool dispatch_scratch_needed_for_match_selector(LoweringContext& context,
+                                                const V2Statement& statement, int& next_id) {
   if (statement.kind != "v2_match" || !statement.expr.has_value())
     return false;
   try {
     const Expression selector = parse_expression(*statement.expr, statement.line);
-    return selector.kind != "identifier";
+    if (selector.kind == "identifier")
+      return false;
+    ++next_id;
+    return !context.free_residual_dispatch_scratch ||
+           !match_uses_numeric_residual_chain_for_scratch(context, statement, selector);
   } catch (const std::exception&) {
     return false;
   }
 }
 
-void collect_dispatch_scratch_registers_from_statement(RegisterCollection& collection,
+void collect_dispatch_scratch_registers_from_statement(LoweringContext& context,
+                                                       RegisterCollection& collection,
                                                        const V2Statement& statement,
                                                        int& next_id) {
-  if (dispatch_scratch_needed_for_match_selector(statement)) {
-    add_register_variable(collection, "__dispatch_" + std::to_string(next_id));
-    ++next_id;
-  }
+  const int scratch_id = next_id;
+  if (dispatch_scratch_needed_for_match_selector(context, statement, next_id))
+    add_register_variable(collection, "__dispatch_" + std::to_string(scratch_id));
   for (const V2Statement& child : statement.body)
-    collect_dispatch_scratch_registers_from_statement(collection, child, next_id);
+    collect_dispatch_scratch_registers_from_statement(context, collection, child, next_id);
   for (const V2Statement& child : statement.then_body)
-    collect_dispatch_scratch_registers_from_statement(collection, child, next_id);
+    collect_dispatch_scratch_registers_from_statement(context, collection, child, next_id);
   for (const V2Statement& child : statement.else_body)
-    collect_dispatch_scratch_registers_from_statement(collection, child, next_id);
+    collect_dispatch_scratch_registers_from_statement(context, collection, child, next_id);
   for (const V2MatchCase& match_case : statement.cases) {
     if (match_case.action != nullptr)
-      collect_dispatch_scratch_registers_from_statement(collection, *match_case.action, next_id);
+      collect_dispatch_scratch_registers_from_statement(context, collection, *match_case.action,
+                                                        next_id);
   }
   if (statement.otherwise != nullptr)
-    collect_dispatch_scratch_registers_from_statement(collection, *statement.otherwise, next_id);
+    collect_dispatch_scratch_registers_from_statement(context, collection, *statement.otherwise,
+                                                      next_id);
 }
 
 void collect_dispatch_scratch_registers(LoweringContext& context, RegisterCollection& collection,
                                         const V2Program& program) {
-  (void)context;
   int next_id = 0;
   for (const V2Statement& statement : program.body)
-    collect_dispatch_scratch_registers_from_statement(collection, statement, next_id);
+    collect_dispatch_scratch_registers_from_statement(context, collection, statement, next_id);
   for (const V2Rule& rule : program.rules) {
     for (const V2Statement& statement : rule.body)
-      collect_dispatch_scratch_registers_from_statement(collection, statement, next_id);
+      collect_dispatch_scratch_registers_from_statement(context, collection, statement, next_id);
   }
 }
 
@@ -6437,10 +6504,14 @@ bool is_dungeon_shape(const V2Program& program) {
          has_extend;
 }
 
+bool dungeon_shape_specific_enabled(const LoweringContext& context) {
+  return context.dungeon_shape && !context.disable_candidate_search;
+}
+
 bool uses_shape_specific_lowering(const LoweringContext& context) {
   return context.tiny_game_shape || context.human_game_shape || context.lunar_shape ||
          context.clock_shape || context.cave_sketch_shape || context.ninety_nine_bottles_shape ||
-         context.dungeon_shape;
+         dungeon_shape_specific_enabled(context);
 }
 
 constexpr std::string_view kCoordListPointer = core::emit::k_coord_list_pointer;
@@ -6464,6 +6535,8 @@ bool is_segmented_bitplane_board(const V2Board* board) {
 std::string bit_mask_scratch_name(int source_line) {
   return "__bit_mask_" + std::to_string(source_line);
 }
+
+constexpr std::string_view kSharedBitMaskScratch = "__bit_mask_shared";
 
 std::string spatial_hit_scratch_name(const std::string& mask) {
   return "__spatial_hit_" + mask;
@@ -6881,7 +6954,8 @@ void collect_locals_from_statement(LoweringContext& context, RegisterCollection&
 void collect_locals_from_x_param_first_statement(LoweringContext& context,
                                                  RegisterCollection& collection,
                                                  const XParamProcLowering& lowering) {
-  const std::set<std::string> excluded = {lowering.param};
+  std::set<std::string> excluded = context.stack_only_state_fields;
+  excluded.insert(lowering.param);
   const V2Statement& statement = lowering.first;
   if (statement.target.has_value()) {
     try {
@@ -7693,22 +7767,13 @@ void index_program_metadata(LoweringContext& context, const V2Program& program) 
 
 void index_constants(LoweringContext& context, const V2Program& program) {
   core::index_v2_constants(program, context.constants, context.diagnostics);
+  context.raw_constants.clear();
+  for (const V2Const& constant : program.consts)
+    context.raw_constants[constant.name] = constant.expr;
 }
 
 bool expression_is_identifier_named(const Expression& expression, const std::string& name) {
   return expression.kind == "identifier" && expression.name == name;
-}
-
-bool expression_is_packed_score_call_for_analysis(const Expression& expression) {
-  return expression.kind == "call" && lower_ascii(expression.callee) == "packed_score" &&
-         expression.args.size() == 2;
-}
-
-bool expression_is_packed_score_pair_for_analysis(const Expression& expression) {
-  return expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
-         expression.right != nullptr &&
-         expression_is_packed_score_call_for_analysis(*expression.left) &&
-         expression_is_packed_score_call_for_analysis(*expression.right);
 }
 
 std::optional<std::string> scalar_statement_target_name(const V2Statement& statement) {
@@ -7823,20 +7888,6 @@ bool statement_reads_identifier_for_stack_analysis(const V2Program& program,
         return true;
     }
   }
-  if (statement.kind == "v2_invoke" && statement.name.has_value() &&
-      !seen_rules.contains(*statement.name)) {
-    const auto rule_it =
-        std::find_if(program.rules.begin(), program.rules.end(),
-                     [&](const V2Rule& rule) { return rule.name == *statement.name; });
-    if (rule_it != program.rules.end()) {
-      seen_rules.insert(*statement.name);
-      const bool reads =
-          statements_read_identifier_for_stack_analysis(program, rule_it->body, name, seen_rules);
-      seen_rules.erase(*statement.name);
-      if (reads)
-        return true;
-    }
-  }
   for (const std::vector<V2Statement>* block :
        {&statement.body, &statement.then_body, &statement.else_body}) {
     if (statements_read_identifier_for_stack_analysis(program, *block, name, seen_rules))
@@ -7942,31 +7993,111 @@ indexed_packed_pow10_delta_stack_index_name_for_analysis(const V2Statement& stat
   return pow10_index_name_from_stack_term_for_analysis(*expression.right);
 }
 
-bool statement_writes_identifier_for_y_stack_analysis(const V2Statement& statement,
-                                                      const std::string& name) {
-  if (statement_writes_identifier_for_stack_analysis(statement, name))
-    return true;
+std::optional<bool> statement_first_y_stack_access(const V2Program& program,
+                                                   const V2Statement& statement,
+                                                   const std::string& name,
+                                                   std::set<std::string>& seen_rules);
+
+std::optional<bool> statements_first_y_stack_access(const V2Program& program,
+                                                    const std::vector<V2Statement>& statements,
+                                                    const std::string& name,
+                                                    std::set<std::string>& seen_rules) {
+  for (const V2Statement& statement : statements) {
+    const std::optional<bool> access =
+        statement_first_y_stack_access(program, statement, name, seen_rules);
+    if (access.has_value())
+      return access;
+  }
+  return std::nullopt;
+}
+
+std::optional<bool> statement_first_y_stack_access(const V2Program& program,
+                                                   const V2Statement& statement,
+                                                   const std::string& name,
+                                                   std::set<std::string>& seen_rules) {
   if (statement.kind == "v2_assign" || statement.kind == "v2_update" ||
       statement.kind == "v2_read") {
-    if (!statement.target.has_value())
-      return false;
-    const Expression target = parse_expression(*statement.target, statement.line);
-    return target.kind == "identifier" && target.name == name;
+    if (statement.target.has_value()) {
+      const Expression target = parse_expression(*statement.target, statement.line);
+      if (target.kind == "identifier" && target.name == name)
+        return false;
+      if (expression_contains_identifier(target, name))
+        return true;
+    }
+  } else if (statement.target.has_value() &&
+             expression_contains_identifier(parse_expression(*statement.target, statement.line),
+                                            name)) {
+    return true;
   }
-  return false;
+
+  if (statement.expr.has_value() &&
+      expression_contains_identifier(parse_expression(*statement.expr, statement.line), name))
+    return true;
+  if (statement.predicate.has_value() &&
+      predicate_reads_identifier_for_stack_analysis(*statement.predicate, name, statement.line))
+    return true;
+  for (const std::string& arg : statement.args) {
+    if (expression_contains_identifier(parse_expression(arg, statement.line), name))
+      return true;
+  }
+  if (statement.items.has_value()) {
+    for (const DisplayItem& item : *statement.items) {
+      if (item.expr.has_value() && expression_contains_identifier(*item.expr, name))
+        return true;
+      if (item.name == name)
+        return true;
+    }
+  }
+
+  if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+      !seen_rules.contains(*statement.name)) {
+    const auto rule_it =
+        std::find_if(program.rules.begin(), program.rules.end(),
+                     [&](const V2Rule& rule) { return rule.name == *statement.name; });
+    if (rule_it != program.rules.end()) {
+      seen_rules.insert(*statement.name);
+      const std::optional<bool> access =
+          statements_first_y_stack_access(program, rule_it->body, name, seen_rules);
+      seen_rules.erase(*statement.name);
+      if (access.has_value())
+        return access;
+    }
+  }
+
+  for (const std::vector<V2Statement>* block :
+       {&statement.body, &statement.then_body, &statement.else_body}) {
+    const std::optional<bool> access =
+        statements_first_y_stack_access(program, *block, name, seen_rules);
+    if (access.has_value())
+      return access;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr) {
+      const std::optional<bool> access =
+          statement_first_y_stack_access(program, *match_case.action, name, seen_rules);
+      if (access.has_value())
+        return access;
+    }
+  }
+  if (statement.otherwise != nullptr)
+    return statement_first_y_stack_access(program, *statement.otherwise, name, seen_rules);
+  return std::nullopt;
+}
+
+bool statement_writes_identifier_for_y_stack_analysis(const V2Program& program,
+                                                      const V2Statement& statement,
+                                                      const std::string& name) {
+  std::set<std::string> seen_rules;
+  const std::optional<bool> access =
+      statement_first_y_stack_access(program, statement, name, seen_rules);
+  return access.has_value() && !*access;
 }
 
 bool statements_read_identifier_before_write_for_y_stack(const V2Program& program,
                                                          const std::vector<V2Statement>& statements,
                                                          const std::string& name) {
   std::set<std::string> seen_rules;
-  for (const V2Statement& statement : statements) {
-    if (statement_writes_identifier_for_y_stack_analysis(statement, name))
-      return false;
-    if (statement_reads_identifier_for_stack_analysis(program, statement, name, seen_rules))
-      return true;
-  }
-  return false;
+  return statements_first_y_stack_access(program, statements, name, seen_rules).value_or(false);
 }
 
 bool x_param_y_stack_producer_for_analysis(const std::map<std::string, const V2Rule*>& rules,
@@ -8111,7 +8242,7 @@ std::map<std::string, XParamYStackProcLowering> collect_x_param_y_stack_proc_low
     if (count_identifier_reads_in_statements(rule.body, *y_name) != 1)
       continue;
     if (std::any_of(rule.body.begin(), rule.body.end(), [&](const V2Statement& statement) {
-          return statement_writes_identifier_for_y_stack_analysis(statement, *y_name);
+          return statement_writes_identifier_for_y_stack_analysis(program, statement, *y_name);
         }))
       continue;
     if (!all_x_param_calls_have_y_stack_producer(program, rule.name, *y_name))
@@ -8122,54 +8253,8 @@ std::map<std::string, XParamYStackProcLowering> collect_x_param_y_stack_proc_low
   return result;
 }
 
-std::optional<std::string>
-packed_line_family_score_target_for_stack_analysis(const LoweringContext& context,
-                                                   const V2Rule& rule) {
-  if (rule.body.size() != 5)
-    return std::nullopt;
-  const V2Statement& first_assign = rule.body.at(0);
-  const V2Statement& add_call = rule.body.at(1);
-  const V2Statement& add_score = rule.body.at(2);
-  const V2Statement& sub_call = rule.body.at(3);
-  const V2Statement& sub_score = rule.body.at(4);
-  if (first_assign.kind != "v2_assign" || !first_assign.target.has_value() ||
-      !first_assign.expr.has_value() || add_call.kind != "v2_invoke" ||
-      sub_call.kind != "v2_invoke" || !add_call.name.has_value() || !sub_call.name.has_value() ||
-      *add_call.name != *sub_call.name || add_call.args.size() != 1 || sub_call.args.size() != 1)
-    return std::nullopt;
-  const auto normalizer_it = context.x_param_procs.find(*add_call.name);
-  if (normalizer_it == context.x_param_procs.end() ||
-      !normalizer_it->second.first.target.has_value())
-    return std::nullopt;
-  const std::optional<std::string> score = scalar_statement_target_name(first_assign);
-  if (!score.has_value())
-    return std::nullopt;
-  const Expression first_expression = parse_expression(*first_assign.expr, first_assign.line);
-  if (!expression_is_packed_score_pair_for_analysis(first_expression))
-    return std::nullopt;
-  const auto accumulator_uses_score = [&](const V2Statement& statement) {
-    if (!statement.target.has_value() || *statement.target != *score || !statement.expr.has_value())
-      return false;
-    if (statement.kind == "v2_update" && statement.op == "+=") {
-      const Expression expression = parse_expression(*statement.expr, statement.line);
-      return expression_is_packed_score_call_for_analysis(expression);
-    }
-    if (statement.kind != "v2_assign")
-      return false;
-    const Expression expression = parse_expression(*statement.expr, statement.line);
-    if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
-        expression.right == nullptr)
-      return false;
-    const Expression target = identifier_expression(*score);
-    return (expression_to_json(*expression.left) == expression_to_json(target) &&
-            expression_is_packed_score_call_for_analysis(*expression.right)) ||
-           (expression_to_json(*expression.right) == expression_to_json(target) &&
-            expression_is_packed_score_call_for_analysis(*expression.left));
-  };
-  if (!accumulator_uses_score(add_score) || !accumulator_uses_score(sub_score))
-    return std::nullopt;
-  return score;
-}
+bool stack_analysis_bit_or_update(const Expression& expression, const std::string& collection,
+                                  const std::string& temp);
 
 int stack_only_call_return_consumer_run(const V2Program& program,
                                         const std::vector<V2Statement>& statements,
@@ -8185,6 +8270,12 @@ int stack_only_call_return_consumer_run(const V2Program& program,
   const std::optional<std::string> return_x = proc_return_x_variable_for_analysis(*proc_it);
   if (return_x != name)
     return 0;
+  if (index + 1U < statements.size()) {
+    const V2Statement& next = statements.at(index + 1U);
+    if (next.kind == "v2_assign" && next.target.has_value() && next.expr.has_value() &&
+        stack_analysis_bit_or_update(parse_expression(*next.expr, next.line), *next.target, name))
+      return 2;
+  }
   if (index + 2U >= statements.size())
     return 0;
   const V2Statement& assign = statements.at(index + 1U);
@@ -8245,31 +8336,471 @@ bool all_proc_return_consumers_are_stack_only(const V2Program& program,
   return ok && calls > 0;
 }
 
-std::set<std::string> collect_stack_only_state_fields(LoweringContext& context,
-                                                      const V2Program& program) {
-  std::set<std::string> candidates;
-  for (const V2Rule& rule : program.rules) {
-    const std::optional<std::string> score =
-        packed_line_family_score_target_for_stack_analysis(context, rule);
-    if (!score.has_value())
-      continue;
-    if (all_proc_return_consumers_are_stack_only(program, rule.name, *score))
-      candidates.insert(*score);
+bool stack_analysis_bit_or_update(const Expression& expression, const std::string& collection,
+                                  const std::string& temp) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_or" ||
+      expression.args.size() != 2U)
+    return false;
+  const auto identifier_name = [](const Expression& candidate) -> std::optional<std::string> {
+    if (candidate.kind != "identifier")
+      return std::nullopt;
+    return candidate.name;
+  };
+  const std::optional<std::string> left = identifier_name(expression.args.at(0));
+  const std::optional<std::string> right = identifier_name(expression.args.at(1));
+  return (left == collection && right == temp) || (left == temp && right == collection);
+}
+
+std::optional<std::string> stack_analysis_bit_and_membership_for_temp(
+    const LoweringContext& context, const std::string& expression_text, const std::string& zero_text,
+    const std::string& temp, int line) {
+  const Expression zero = parse_expression(zero_text, line);
+  if (!is_zero_expression(context, zero))
+    return std::nullopt;
+  const Expression expression = parse_expression(expression_text, line);
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_and" ||
+      expression.args.size() != 2U)
+    return std::nullopt;
+  const Expression& left = expression.args.at(0);
+  const Expression& right = expression.args.at(1);
+  if (left.kind == "identifier" && right.kind == "identifier" && right.name == temp)
+    return left.name;
+  if (left.kind == "identifier" && left.name == temp && right.kind == "identifier")
+    return right.name;
+  return std::nullopt;
+}
+
+bool stack_analysis_bit_or_test_and_set_branch(const LoweringContext& context,
+                                               const V2Program& program,
+                                               const V2Statement& assign,
+                                               const V2Statement& branch) {
+  if (assign.kind != "v2_assign" || !assign.target.has_value() || !assign.expr.has_value() ||
+      branch.kind != "v2_if" || !branch.predicate.has_value())
+    return false;
+  const Expression assigned = parse_expression(*assign.expr, assign.line);
+  if (!expression_pure_for_substitution(assigned))
+    return false;
+  const V2Predicate& predicate = *branch.predicate;
+  if (predicate.kind != "v2_compare" || predicate.op != "!=" || branch.else_body.empty())
+    return false;
+  std::optional<std::string> collection = stack_analysis_bit_and_membership_for_temp(
+      context, predicate.left, predicate.right, *assign.target, branch.line);
+  if (!collection.has_value()) {
+    collection = stack_analysis_bit_and_membership_for_temp(context, predicate.right,
+                                                            predicate.left, *assign.target,
+                                                            branch.line);
+  }
+  if (!collection.has_value() || *collection == *assign.target)
+    return false;
+  const V2Statement& update = branch.else_body.front();
+  if (update.kind != "v2_assign" || !update.target.has_value() || *update.target != *collection ||
+      !update.expr.has_value())
+    return false;
+  if (!stack_analysis_bit_or_update(parse_expression(*update.expr, update.line), *collection,
+                                    *assign.target))
+    return false;
+  std::vector<V2Statement> else_tail(branch.else_body.begin() + 1, branch.else_body.end());
+  return !statements_read_identifier_before_write_for_y_stack(program, branch.then_body,
+                                                              *assign.target) &&
+         !statements_read_identifier_before_write_for_y_stack(program, else_tail, *assign.target);
+}
+
+std::optional<Expression> stack_analysis_packed_score_accumulator(
+    const V2Statement& statement, const std::string& target_name, const std::string& index_name) {
+  if (!statement.target.has_value() || *statement.target != target_name ||
+      !statement.expr.has_value())
+    return std::nullopt;
+
+  if (statement.kind == "v2_update" && statement.op == "+=") {
+    const Expression expression = parse_expression(*statement.expr, statement.line);
+    if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score" &&
+        expression.args.size() == 2U && expression.args.at(1).kind == "identifier" &&
+        expression.args.at(1).name == index_name) {
+      return expression.args.at(0);
+    }
+    return std::nullopt;
   }
 
+  if (statement.kind != "v2_assign")
+    return std::nullopt;
+  const Expression expression = parse_expression(*statement.expr, statement.line);
+  if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
+      expression.right == nullptr)
+    return std::nullopt;
+  const Expression target = identifier_expression(target_name);
+  const auto packed_score_line = [&](const Expression& candidate) -> std::optional<Expression> {
+    if (candidate.kind == "call" && lower_ascii(candidate.callee) == "packed_score" &&
+        candidate.args.size() == 2U && candidate.args.at(1).kind == "identifier" &&
+        candidate.args.at(1).name == index_name) {
+      return candidate.args.at(0);
+    }
+    return std::nullopt;
+  };
+  if (expression_equals(*expression.left, target))
+    return packed_score_line(*expression.right);
+  if (expression_equals(*expression.right, target))
+    return packed_score_line(*expression.left);
+  return std::nullopt;
+}
+
+std::optional<Expression> stack_analysis_packed_score_accumulator_by_index(
+    const V2Statement& statement, const std::string& index_name) {
+  if (!statement.target.has_value() || !statement.expr.has_value())
+    return std::nullopt;
+  if (statement.kind == "v2_update" && statement.op == "+=") {
+    const Expression expression = parse_expression(*statement.expr, statement.line);
+    if (expression.kind == "call" && lower_ascii(expression.callee) == "packed_score" &&
+        expression.args.size() == 2U && expression.args.at(1).kind == "identifier" &&
+        expression.args.at(1).name == index_name) {
+      return expression.args.at(0);
+    }
+    return std::nullopt;
+  }
+  if (statement.kind != "v2_assign")
+    return std::nullopt;
+  const Expression expression = parse_expression(*statement.expr, statement.line);
+  if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
+      expression.right == nullptr)
+    return std::nullopt;
+  const Expression target = identifier_expression(*statement.target);
+  const auto packed_score_line = [&](const Expression& candidate) -> std::optional<Expression> {
+    if (candidate.kind == "call" && lower_ascii(candidate.callee) == "packed_score" &&
+        candidate.args.size() == 2U && candidate.args.at(1).kind == "identifier" &&
+        candidate.args.at(1).name == index_name) {
+      return candidate.args.at(0);
+    }
+    return std::nullopt;
+  };
+  if (expression_equals(*expression.left, target))
+    return packed_score_line(*expression.right);
+  if (expression_equals(*expression.right, target))
+    return packed_score_line(*expression.left);
+  return std::nullopt;
+}
+
+bool expression_preserves_previous_x_as_y_for_stack_analysis(const Expression& expression) {
+  if (analysis_simple_stack_load(expression))
+    return true;
+  if (expression.kind == "unary")
+    return expression.op == "-" && expression.expr != nullptr &&
+           expression_preserves_previous_x_as_y_for_stack_analysis(*expression.expr);
+  if (expression.kind == "binary") {
+    return (expression.op == "+" || expression.op == "-" || expression.op == "*" ||
+            expression.op == "/") &&
+           expression.left != nullptr && expression.right != nullptr &&
+           expression_preserves_previous_x_as_y_for_stack_analysis(*expression.left) &&
+           expression_preserves_previous_x_as_y_for_stack_analysis(*expression.right);
+  }
+  if (expression.kind == "call") {
+    return expression.args.size() == 1U && x_transform_unary_opcode(expression.callee).has_value() &&
+           expression_preserves_previous_x_as_y_for_stack_analysis(expression.args.front());
+  }
+  return false;
+}
+
+bool x_param_expression_preserves_caller_y_for_stack_analysis(const Expression& expression,
+                                                             const std::string& param) {
+  if (expression.kind == "identifier")
+    return expression.name == param;
+  if (expression.kind == "unary")
+    return expression.op == "-" && expression.expr != nullptr &&
+           x_param_expression_preserves_caller_y_for_stack_analysis(*expression.expr, param);
+  if (expression.kind == "binary") {
+    if (expression.left == nullptr || expression.right == nullptr)
+      return false;
+    const bool left_uses = expression_contains_identifier(*expression.left, param);
+    const bool right_uses = expression_contains_identifier(*expression.right, param);
+    if (left_uses == right_uses)
+      return false;
+    if (left_uses) {
+      return x_param_expression_preserves_caller_y_for_stack_analysis(*expression.left, param) &&
+             analysis_simple_stack_load(*expression.right);
+    }
+    return (expression.op == "+" || expression.op == "*") &&
+           x_param_expression_preserves_caller_y_for_stack_analysis(*expression.right, param) &&
+           analysis_simple_stack_load(*expression.left);
+  }
+  if (expression.kind == "call") {
+    return expression.args.size() == 1U && x_transform_unary_opcode(expression.callee).has_value() &&
+           x_param_expression_preserves_caller_y_for_stack_analysis(expression.args.front(), param);
+  }
+  return false;
+}
+
+bool x_param_lowering_preserves_caller_y_for_stack_analysis(const XParamProcLowering& lowering) {
+  if (lowering.kind == "copy" || lowering.kind == "add")
+    return true;
+  if (lowering.kind != "expr" || !lowering.first.expr.has_value())
+    return false;
+  return x_param_expression_preserves_caller_y_for_stack_analysis(
+      parse_expression(*lowering.first.expr, lowering.first.line), lowering.param);
+}
+
+bool stack_only_return_assignment(const V2Statement& statement, const std::string& name,
+                                  const XParamProcLowering* lowering) {
+  return lowering != nullptr && lowering->kind == "expr" && statement.kind == "v2_assign" &&
+         statement.target.has_value() && *statement.target == name && statement.expr.has_value() &&
+         !expression_contains_identifier(parse_expression(*statement.expr, statement.line), name);
+}
+
+std::set<std::string> stack_only_return_procs_for_target(
+    const V2Program& program, const std::string& name,
+    const std::map<std::string, XParamProcLowering>& x_param_procs) {
   std::set<std::string> result;
-  for (const std::string& name : candidates) {
+  for (const V2Rule& rule : program.rules) {
+    const auto lowering_it = x_param_procs.find(rule.name);
+    if (lowering_it == x_param_procs.end() || lowering_it->second.kind != "expr" ||
+        rule.body.size() != 1U)
+      continue;
+    if (stack_only_return_assignment(rule.body.front(), name, &lowering_it->second))
+      result.insert(rule.name);
+  }
+  return result;
+}
+
+bool stack_only_covered_run_writes_target(const std::vector<V2Statement>& statements,
+                                          std::size_t index, int count,
+                                          const std::string& name,
+                                          const std::set<std::string>& return_only_procs) {
+  for (int offset = 0; offset < count; ++offset) {
+    const std::size_t current = index + static_cast<std::size_t>(offset);
+    if (current >= statements.size())
+      break;
+    const V2Statement& statement = statements.at(current);
+    if (statement.kind == "v2_assign" && statement.target == name)
+      return true;
+    if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+        return_only_procs.contains(*statement.name))
+      return true;
+  }
+  return false;
+}
+
+int stack_only_x_param_packed_score_accumulator_run(
+    const V2Program& program, const std::vector<V2Statement>& statements, std::size_t index,
+    const std::string& name, const std::map<std::string, XParamProcLowering>& x_param_procs) {
+  if (index + 1U < statements.size()) {
+    const V2Statement& call = statements.at(index);
+    const V2Statement& accumulator = statements.at(index + 1U);
+    if (call.kind == "v2_invoke" && call.name.has_value() && call.args.size() == 1U) {
+      const auto lowering_it = x_param_procs.find(*call.name);
+      if (lowering_it != x_param_procs.end()) {
+        const auto proc_it =
+            std::find_if(program.rules.begin(), program.rules.end(),
+                         [&](const V2Rule& rule) { return rule.name == *call.name; });
+        if (proc_it != program.rules.end()) {
+          const std::optional<std::string> return_x = proc_return_x_variable_for_analysis(*proc_it);
+          if (return_x.has_value()) {
+            const Expression argument = parse_expression(call.args.front(), call.line);
+            const std::optional<Expression> line =
+                stack_analysis_packed_score_accumulator(accumulator, name, *return_x);
+            if (expression_preserves_previous_x_as_y_for_stack_analysis(argument) &&
+                x_param_lowering_preserves_caller_y_for_stack_analysis(lowering_it->second) &&
+                line.has_value() && !expression_contains_identifier(*line, name))
+              return 2;
+          }
+        }
+      }
+    }
+  }
+
+  if (index + 2U >= statements.size())
+    return 0;
+  const V2Statement& statement = statements.at(index);
+  const V2Statement& call = statements.at(index + 1U);
+  const V2Statement& accumulator = statements.at(index + 2U);
+  if (statement.kind != "v2_assign" || !statement.target.has_value() ||
+      !statement.expr.has_value() || call.kind != "v2_invoke" || !call.name.has_value())
+    return 0;
+  const auto lowering_it = x_param_procs.find(*call.name);
+  if (lowering_it == x_param_procs.end())
+    return 0;
+  const auto proc_it =
+      std::find_if(program.rules.begin(), program.rules.end(),
+                   [&](const V2Rule& rule) { return rule.name == *call.name; });
+  if (proc_it == program.rules.end())
+    return 0;
+  const std::optional<std::string> return_x = proc_return_x_variable_for_analysis(*proc_it);
+  if (!return_x.has_value())
+    return 0;
+  const std::optional<Expression> line =
+      stack_analysis_packed_score_accumulator(accumulator, name, *return_x);
+  const Expression expression = parse_expression(*statement.expr, statement.line);
+  if (*statement.target != lowering_it->second.param ||
+      !expression_pure_for_substitution(expression) ||
+      !expression_preserves_previous_x_as_y_for_stack_analysis(expression) ||
+      !x_param_lowering_preserves_caller_y_for_stack_analysis(lowering_it->second) ||
+      !line.has_value() || expression_contains_identifier(*line, name))
+    return 0;
+  return 3;
+}
+
+bool following_x_param_packed_score_accumulator_run(
+    const V2Program& program, const std::vector<V2Statement>& statements, std::size_t start,
+    const std::string& name, const std::map<std::string, XParamProcLowering>& x_param_procs) {
+  for (std::size_t index = start; index < statements.size(); ++index) {
+    if (stack_only_x_param_packed_score_accumulator_run(program, statements, index, name,
+                                                        x_param_procs) > 0)
+      return true;
+  }
+  return false;
+}
+
+int stack_only_covered_run(
+    const LoweringContext& context, const V2Program& program,
+    const std::vector<V2Statement>& statements, std::size_t index, const std::string& name,
+    const std::map<std::string, XParamProcLowering>& x_param_procs,
+    const std::map<std::string, XParamYStackProcLowering>& y_stack_procs,
+    const std::set<std::string>& return_only_procs) {
+  const V2Statement& statement = statements.at(index);
+  const V2Statement* next = index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
+  const V2Statement* third = index + 2U < statements.size() ? &statements.at(index + 2U) : nullptr;
+  const V2Statement* fourth =
+      index + 3U < statements.size() ? &statements.at(index + 3U) : nullptr;
+
+  if (statement.kind == "v2_assign" && statement.target == name && statement.expr.has_value()) {
+    if (next != nullptr && stack_analysis_bit_or_test_and_set_branch(context, program, statement,
+                                                                     *next))
+      return 2;
+    if (next != nullptr && next->kind == "v2_assign" && next->target.has_value() &&
+        next->expr.has_value() &&
+        stack_analysis_bit_or_update(parse_expression(*next->expr, next->line), *next->target,
+                                     name))
+      return 2;
+    if (next != nullptr && next->kind == "v2_invoke" && next->name.has_value()) {
+      const auto y_stack_it = y_stack_procs.find(*next->name);
+      const Expression expression = parse_expression(*statement.expr, statement.line);
+      if (y_stack_it != y_stack_procs.end() && y_stack_it->second.y_name == name &&
+          expression_pure_for_substitution(expression) &&
+          !expression_contains_identifier(expression, name)) {
+        return 2;
+      }
+    }
+    if (next != nullptr && next->kind == "v2_assign" && third != nullptr &&
+        third->kind == "v2_invoke" && third->name.has_value()) {
+      const auto y_stack_it = y_stack_procs.find(*third->name);
+      const Expression expression = parse_expression(*statement.expr, statement.line);
+      if (y_stack_it != y_stack_procs.end() && y_stack_it->second.y_name == name &&
+          next->target == y_stack_it->second.x_param &&
+          expression_pure_for_substitution(expression) &&
+          !expression_contains_identifier(expression, name)) {
+        return 3;
+      }
+    }
+  }
+
+  if (indexed_packed_pow10_delta_stack_index_name_for_analysis(statement) == name)
+    return 1;
+
+  if (statement.kind == "v2_invoke" && statement.name.has_value()) {
+    const int consumed = stack_only_call_return_consumer_run(program, statements, index, name,
+                                                            *statement.name);
+    if (consumed > 0)
+      return consumed;
+  }
+
+  const int accumulator = stack_only_x_param_packed_score_accumulator_run(
+      program, statements, index, name, x_param_procs);
+  if (accumulator > 0)
+    return accumulator;
+
+  if (statement.kind == "v2_assign" && statement.target.has_value() && next != nullptr &&
+      next->kind == "v2_invoke" && next->name.has_value() &&
+      return_only_procs.contains(*next->name)) {
+    const auto return_lowering_it = x_param_procs.find(*next->name);
+    if (return_lowering_it == x_param_procs.end() ||
+        *statement.target != return_lowering_it->second.param)
+      return 0;
+    if (third != nullptr && third->kind == "v2_assign" && fourth != nullptr &&
+        fourth->kind == "v2_invoke" && fourth->name.has_value()) {
+      const auto y_stack_it = y_stack_procs.find(*fourth->name);
+      if (y_stack_it != y_stack_procs.end() && y_stack_it->second.y_name == name &&
+          third->target == y_stack_it->second.x_param)
+        return 4;
+    }
+    if (third != nullptr && third->kind == "v2_assign") {
+      const std::optional<Expression> score_line =
+          stack_analysis_packed_score_accumulator_by_index(*third, name);
+      if (score_line.has_value() && !expression_contains_identifier(*score_line, name))
+        return 3;
+    }
+    return 2;
+  }
+
+  if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+      return_only_procs.contains(*statement.name) && next != nullptr &&
+      (next->kind == "v2_assign" || next->kind == "v2_update") && statement.args.size() == 1U) {
+    const auto return_lowering_it = x_param_procs.find(*statement.name);
+    if (return_lowering_it != x_param_procs.end()) {
+      const Expression return_argument = parse_expression(statement.args.front(), statement.line);
+      const std::optional<Expression> score_line =
+          stack_analysis_packed_score_accumulator_by_index(*next, name);
+      if (expression_pure_for_substitution(return_argument) &&
+          expression_preserves_previous_x_as_y_for_stack_analysis(return_argument) &&
+          !expression_contains_identifier(return_argument, name) &&
+          x_param_lowering_preserves_caller_y_for_stack_analysis(return_lowering_it->second) &&
+          score_line.has_value() && !expression_contains_identifier(*score_line, name))
+        return 2;
+    }
+  }
+
+  if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+      return_only_procs.contains(*statement.name) && next != nullptr &&
+      next->kind == "v2_invoke" && next->name.has_value() && statement.args.size() == 1U &&
+      next->args.size() == 1U) {
+    const auto return_lowering_it = x_param_procs.find(*statement.name);
+    const auto y_stack_it = y_stack_procs.find(*next->name);
+    if (return_lowering_it != x_param_procs.end() && y_stack_it != y_stack_procs.end() &&
+        y_stack_it->second.y_name == name) {
+      const Expression return_argument = parse_expression(statement.args.front(), statement.line);
+      const Expression next_argument = parse_expression(next->args.front(), next->line);
+      if (expression_pure_for_substitution(return_argument) &&
+          expression_preserves_previous_x_as_y_for_stack_analysis(return_argument) &&
+          !expression_contains_identifier(return_argument, name) &&
+          x_param_lowering_preserves_caller_y_for_stack_analysis(return_lowering_it->second) &&
+          analysis_simple_stack_load(next_argument))
+        return 2;
+    }
+  }
+
+  if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+      return_only_procs.contains(*statement.name))
+    return 1;
+
+  return 0;
+}
+
+std::set<std::string> collect_stack_only_state_fields(LoweringContext& context,
+                                                      const V2Program& program) {
+  std::set<std::string> result;
+  for (const V2StateField& field : program.state) {
+    const std::string& name = field.name;
+    const std::set<std::string> return_only_procs =
+        stack_only_return_procs_for_target(program, name, context.x_param_procs);
+    bool covered = false;
+    bool covered_write = false;
     const auto safe_in_block = [&](const auto& self, const std::vector<V2Statement>& statements,
                                    const std::optional<std::string>& current_rule) -> bool {
       for (std::size_t index = 0; index < statements.size(); ++index) {
         const V2Statement& statement = statements.at(index);
-        if (statement.kind == "v2_invoke" && statement.name.has_value()) {
-          const int consumed = stack_only_call_return_consumer_run(program, statements, index, name,
-                                                                   *statement.name);
-          if (consumed > 0) {
-            index += static_cast<std::size_t>(consumed - 1);
-            continue;
-          }
+        const int covered_run = stack_only_covered_run(context, program, statements, index, name,
+                                                       context.x_param_procs,
+                                                       context.x_param_y_stack_procs,
+                                                       return_only_procs);
+        if (covered_run > 0) {
+          covered = true;
+          if (stack_only_covered_run_writes_target(statements, index, covered_run, name,
+                                                   return_only_procs))
+            covered_write = true;
+          index += static_cast<std::size_t>(covered_run - 1);
+          continue;
+        }
+
+        if (statement.kind == "v2_invoke" && statement.name.has_value() &&
+            return_only_procs.contains(*statement.name)) {
+          covered = true;
+          covered_write = true;
+          continue;
         }
         if (statement.kind == "v2_if") {
           if (statement.predicate.has_value() && predicate_reads_identifier_for_stack_analysis(
@@ -8290,9 +8821,59 @@ std::set<std::string> collect_stack_only_state_fields(LoweringContext& context,
             return false;
           continue;
         }
+        if (statement.kind == "v2_match") {
+          if (statement.expr.has_value() &&
+              expression_contains_identifier(parse_expression(*statement.expr, statement.line),
+                                             name))
+            return false;
+          for (const V2MatchCase& match_case : statement.cases) {
+            for (const std::string& value : match_case.values) {
+              if (!value.empty() &&
+                  expression_contains_identifier(parse_expression(value, match_case.line), name))
+                return false;
+            }
+            if (match_case.action != nullptr &&
+                !self(self, std::vector<V2Statement>{*match_case.action}, current_rule))
+              return false;
+          }
+          if (statement.otherwise != nullptr &&
+              !self(self, std::vector<V2Statement>{*statement.otherwise}, current_rule))
+            return false;
+          continue;
+        }
         if (current_rule.has_value() && statement.kind == "v2_invoke" &&
             statement.name == *current_rule)
           continue;
+        if (current_rule.has_value()) {
+          const auto lowering_it = context.x_param_procs.find(*current_rule);
+          const XParamProcLowering* lowering =
+              lowering_it == context.x_param_procs.end() ? nullptr : &lowering_it->second;
+          if (stack_only_return_assignment(statement, name, lowering)) {
+            covered = true;
+            covered_write = true;
+            continue;
+          }
+        }
+        if (current_rule.has_value() && statement.kind == "v2_assign" &&
+            statement.target == name && statement.expr.has_value()) {
+          const Expression expression = parse_expression(*statement.expr, statement.line);
+          if (expression_pure_for_substitution(expression) &&
+              !expression_contains_identifier(expression, name) &&
+              all_proc_return_consumers_are_stack_only(program, *current_rule, name) &&
+              following_x_param_packed_score_accumulator_run(program, statements, index + 1U,
+                                                             name, context.x_param_procs)) {
+            covered = true;
+            covered_write = true;
+            continue;
+          }
+          if (index + 1U == statements.size() && expression_pure_for_substitution(expression) &&
+              !expression_contains_identifier(expression, name) &&
+              all_proc_return_consumers_are_stack_only(program, *current_rule, name)) {
+            covered = true;
+            covered_write = true;
+            continue;
+          }
+        }
         if (statement_reads_or_writes_identifier_for_stack_analysis(program, statement, name))
           return false;
       }
@@ -8304,16 +8885,12 @@ std::set<std::string> collect_stack_only_state_fields(LoweringContext& context,
     }
     bool safe = true;
     for (const V2Rule& rule : program.rules) {
-      const std::optional<std::string> score =
-          packed_line_family_score_target_for_stack_analysis(context, rule);
-      if (score == name)
-        continue;
       if (!safe_in_block(safe_in_block, rule.body, rule.name)) {
         safe = false;
         break;
       }
     }
-    if (safe)
+    if (safe && covered && covered_write)
       result.insert(name);
   }
   return result;
@@ -8322,11 +8899,18 @@ std::set<std::string> collect_stack_only_state_fields(LoweringContext& context,
 std::map<std::string, int> collect_rule_call_counts(const V2Program& program);
 std::set<std::string> compiler_inline_statement_rule_names(const LoweringContext& context,
                                                            const V2Program& program);
+bool inline_rule_consumes_param_from_x(const LoweringContext& context, const V2Program& program,
+                                       const V2Rule& rule, const std::string& param);
+bool program_contains_named_bit_mask_or_spatial_primitives(const V2Program& program);
+bool program_desugars_to_named_bit_primitive(const LoweringContext& context,
+                                             const V2Program& program);
+bool program_requires_shared_bit_mask_scratch(const LoweringContext& context,
+                                              const V2Program& program);
 
 void collect_registers(LoweringContext& context, const V2Program& program) {
   context.tiny_game_shape = is_tiny_game_shape(program);
   context.human_game_shape = is_human_game_shape(program);
-  context.lunar_shape = is_lunar_shape(program);
+  context.lunar_shape = is_lunar_shape(program) && context.aggressive_post_layout_indirect_flow;
   // Clock now goes through the generic lowering plus optimizer pipeline.  The
   // legacy branch emitted indirect-flow-shaped opcodes before the normal
   // lowering-variant fingerprint path, so primary variants diverged from TS.
@@ -8371,7 +8955,9 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
     bind_register(context, "__loop_indirect", 7);
     bind_register(context, "__safe_branch", 8);
     bind_register(context, "__const_10", 0xb);
+    bind_register(context, "__const_666", 0xc);
     bind_register(context, "__const_crash_666", 0xc);
+    bind_register(context, "__const_777", 0xd);
     bind_register(context, "__const_safe_777", 0xd);
     bind_register(context, "__const_9_8", 0xe);
   }
@@ -8515,10 +9101,12 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   if (!context.segmented_cells.empty())
     add_register_variable(collection, std::string(kSegmentedBitplaneSelector));
   suppress_packed_score_inline_rules(context, program);
+  const std::set<std::string> stack_only_excluded = context.stack_only_state_fields;
   for (std::size_t index = 0; index < program.body.size(); ++index) {
     collect_locals_from_statement(context, collection, program.body.at(index),
                                   index + 1U < program.body.size() ? &program.body.at(index + 1U)
-                                                                   : nullptr);
+                                                                   : nullptr,
+                                  stack_only_excluded);
   }
   for (const V2Rule& rule : program.rules) {
     if (match_x_param_stack_stop_risk_rule(rule).has_value())
@@ -8544,11 +9132,17 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
       for (std::size_t index = start; index < rule.body.size(); ++index) {
         collect_locals_from_statement(context, collection, rule.body.at(index),
                                       index + 1U < rule.body.size() ? &rule.body.at(index + 1U)
-                                                                    : nullptr);
+                                                                    : nullptr,
+                                      stack_only_excluded);
       }
     }
   }
   collect_dispatch_scratch_registers(context, collection, program);
+  if (context.shared_bit_mask_helper_calls &&
+      (program_requires_shared_bit_mask_scratch(context, program) ||
+       program_desugars_to_named_bit_primitive(context, program))) {
+    add_register_variable(collection, std::string(kSharedBitMaskScratch));
+  }
   collect_spatial_count_scratch_registers(collection);
   if (context.packed_line_family_mutating_selector_update_check_tail)
     apply_packed_line_family_mutating_selector_hints(context, program, collection, hints);
@@ -8751,6 +9345,9 @@ void emit_two_digit_text_display(LoweringContext& context, const std::string& so
 
 bool lower_text_display_statement(LoweringContext& context, const std::vector<DisplayItem>& items,
                                   int line) {
+  if (context.hoist_shared_helpers || context.hoist_procs)
+    return false;
+
   const std::optional<TextPrefixDisplay> normalized = collapse_text_prefix_display(items);
   if (!normalized.has_value())
     return false;
@@ -11102,6 +11699,119 @@ bool statements_contain_call_named(const std::vector<V2Statement>& statements,
   return false;
 }
 
+bool expression_requires_shared_bit_mask_scratch(const LoweringContext& context,
+                                                 const Expression& expression) {
+  if (expression.kind == "call") {
+    const std::string callee = lower_ascii(expression.callee);
+    if (callee == "bit_mask" || callee == "bit_has" || callee == "bit_set" ||
+        callee == "bit_clear" || callee == "neighbor_count") {
+      return true;
+    }
+    if (callee == "line_count") {
+      if (!expression.args.empty() && expression.args.front().kind == "identifier" &&
+          is_coord_list_state_name(context, expression.args.front().name)) {
+        return false;
+      }
+      return true;
+    }
+  }
+  if (expression.index != nullptr &&
+      expression_requires_shared_bit_mask_scratch(context, *expression.index))
+    return true;
+  if (expression.expr != nullptr &&
+      expression_requires_shared_bit_mask_scratch(context, *expression.expr))
+    return true;
+  if (expression.left != nullptr &&
+      expression_requires_shared_bit_mask_scratch(context, *expression.left))
+    return true;
+  if (expression.right != nullptr &&
+      expression_requires_shared_bit_mask_scratch(context, *expression.right))
+    return true;
+  return std::any_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+    return expression_requires_shared_bit_mask_scratch(context, arg);
+  });
+}
+
+bool text_requires_shared_bit_mask_scratch(const LoweringContext& context,
+                                           const std::optional<std::string>& text,
+                                           int source_line) {
+  if (!text.has_value() || trim_ascii(*text).empty())
+    return false;
+  try {
+    return expression_requires_shared_bit_mask_scratch(context, parse_expression(*text, source_line));
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool predicate_requires_shared_bit_mask_scratch(const LoweringContext& context,
+                                                const std::optional<V2Predicate>& predicate,
+                                                int source_line) {
+  if (!predicate.has_value())
+    return false;
+  return text_requires_shared_bit_mask_scratch(context, predicate->left, source_line) ||
+         text_requires_shared_bit_mask_scratch(context, predicate->right, source_line) ||
+         text_requires_shared_bit_mask_scratch(context, predicate->collection, source_line) ||
+         text_requires_shared_bit_mask_scratch(context, predicate->item, source_line);
+}
+
+bool display_items_require_shared_bit_mask_scratch(const LoweringContext& context,
+                                                   const std::vector<DisplayItem>& items) {
+  return std::any_of(items.begin(), items.end(), [&](const DisplayItem& item) {
+    return item.expr.has_value() &&
+           expression_requires_shared_bit_mask_scratch(context, *item.expr);
+  });
+}
+
+bool statements_require_shared_bit_mask_scratch(const LoweringContext& context,
+                                                const std::vector<V2Statement>& statements) {
+  for (const V2Statement& statement : statements) {
+    if (text_requires_shared_bit_mask_scratch(context, statement.target, statement.line) ||
+        text_requires_shared_bit_mask_scratch(context, statement.expr, statement.line) ||
+        predicate_requires_shared_bit_mask_scratch(context, statement.predicate, statement.line)) {
+      return true;
+    }
+    if (statement.items.has_value() &&
+        display_items_require_shared_bit_mask_scratch(context, *statement.items))
+      return true;
+    for (const V2RawInput& input : statement.inputs) {
+      if (text_requires_shared_bit_mask_scratch(context, input.expr, input.line))
+        return true;
+    }
+    for (const std::string& arg : statement.args) {
+      if (text_requires_shared_bit_mask_scratch(context, arg, statement.line))
+        return true;
+    }
+    for (const V2MatchCase& match_case : statement.cases) {
+      for (const std::string& value : match_case.values) {
+        if (text_requires_shared_bit_mask_scratch(context, value, match_case.line))
+          return true;
+      }
+      if (match_case.action != nullptr &&
+          statements_require_shared_bit_mask_scratch(context, {*match_case.action}))
+        return true;
+    }
+    if (statement.otherwise != nullptr &&
+        statements_require_shared_bit_mask_scratch(context, {*statement.otherwise}))
+      return true;
+    if (statements_require_shared_bit_mask_scratch(context, statement.body) ||
+        statements_require_shared_bit_mask_scratch(context, statement.then_body) ||
+        statements_require_shared_bit_mask_scratch(context, statement.else_body)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool program_requires_shared_bit_mask_scratch(const LoweringContext& context,
+                                              const V2Program& program) {
+  if (statements_require_shared_bit_mask_scratch(context, program.body))
+    return true;
+  return std::any_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
+    return statements_require_shared_bit_mask_scratch(context, rule.body);
+  });
+}
+
 bool expression_text_is_cells_state(const LoweringContext& context, const std::string& text,
                                     int source_line) {
   try {
@@ -12134,11 +12844,21 @@ bool lower_segmented_bitplane_line_count_scan_to_x(LoweringContext& context,
   return true;
 }
 
+std::string bit_mask_helper_scratch(LoweringContext& context);
+
+std::string bit_mask_helper_label_for_scratch(LoweringContext& context,
+                                              const std::string& scratch) {
+  const auto existing = context.bit_mask_helper_labels.find(scratch);
+  if (existing != context.bit_mask_helper_labels.end())
+    return existing->second;
+  const std::string label = context.emitter.fresh_label("__bit_mask_helper");
+  context.bit_mask_helper_labels[scratch] = label;
+  context.bit_mask_helper_order.push_back(scratch);
+  return label;
+}
+
 std::string bit_mask_helper_label(LoweringContext& context) {
-  if (context.bit_mask_helper.has_value())
-    return *context.bit_mask_helper;
-  context.bit_mask_helper = context.emitter.fresh_label("__bit_mask_helper");
-  return *context.bit_mask_helper;
+  return bit_mask_helper_label_for_scratch(context, bit_mask_helper_scratch(context));
 }
 
 std::string packed_score_helper_label(LoweringContext& context) {
@@ -12149,6 +12869,8 @@ std::string packed_score_helper_label(LoweringContext& context) {
 }
 
 std::optional<std::string> choose_existing_bit_mask_helper_scratch(const LoweringContext& context) {
+  if (context.register_index_by_name.contains(std::string(kSharedBitMaskScratch)))
+    return std::string(kSharedBitMaskScratch);
   for (const auto& [name, unused_index] : context.register_index_by_name) {
     (void)unused_index;
     if (name.starts_with("__spatial_hit_"))
@@ -12176,6 +12898,32 @@ std::string bit_mask_helper_scratch(LoweringContext& context) {
 
 bool ensure_bit_mask_helper_registers(LoweringContext& context) {
   return ensure_hidden_register(context, bit_mask_helper_scratch(context));
+}
+
+bool ensure_bit_mask_helper_registers_for_scratch(LoweringContext& context,
+                                                  const std::string& scratch) {
+  return ensure_hidden_register(context, scratch);
+}
+
+bool emit_bit_mask_helper_call_from_current_x_with_scratch(LoweringContext& context,
+                                                           const std::string& scratch,
+                                                           int source_line) {
+  if (!ensure_bit_mask_helper_registers_for_scratch(context, scratch))
+    return false;
+  const std::string label = bit_mask_helper_label_for_scratch(context, scratch);
+  context.emitter.emit_jump(0x53, "ПП", label, "bit_mask helper", source_line);
+  ++context.bit_mask_helper_calls;
+  std::string detail = "Shared bit_mask() through " + label;
+  if (source_line > 0)
+    detail += " at line " + std::to_string(source_line);
+  detail += ".";
+  context.optimizations.push_back(OptimizationReport{
+      .name = "bit-mask-helper-call",
+      .detail = std::move(detail),
+  });
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_aliases.clear();
+  return true;
 }
 
 bool emit_bit_mask_helper_call_from_current_x(LoweringContext& context, int source_line) {
@@ -12213,7 +12961,10 @@ bool emit_inline_bit_mask_from_current_x_with_quotient_scratch(LoweringContext& 
   emit_number_or_preload(context, "0.5");
   context.emitter.emit_op(0x10, "+", "bit mask round bias", source_line);
   context.emitter.emit_op(0x34, "К [x]", "bit mask round", source_line);
+  const std::size_t quotient_recall_size = context.emitter.items.size();
   emit_recall(context, scratch);
+  if (context.emitter.items.size() > quotient_recall_size && !context.emitter.items.empty())
+    context.emitter.items.back().comment = "bit mask quotient";
   context.emitter.emit_op(0x34, "К [x]", "bit mask digit index", source_line);
   emit_number_or_preload(context, "1", "preload stack const 1", source_line);
   context.emitter.emit_op(0x10, "+", "bit mask decade index", source_line);
@@ -12262,7 +13013,7 @@ bool lower_membership_clear_operands_to_stack(LoweringContext& context,
   if (context.register_index_by_name.contains(scratch)) {
     if (!lower_expression_to_x(context, item))
       return false;
-    if (!emit_bit_mask_helper_call_from_current_x(context, source_line))
+    if (!emit_bit_mask_helper_call_from_current_x_with_scratch(context, scratch, source_line))
       return false;
     emit_recall(context, collection);
     return true;
@@ -12300,6 +13051,10 @@ SpatialHitHelperRequest& ensure_spatial_hit_helper(LoweringContext& context,
   auto existing = context.spatial_hit_helpers.find(mask);
   if (existing != context.spatial_hit_helpers.end())
     return existing->second;
+  if (context.shared_bit_mask_helper_calls &&
+      context.register_index_by_name.contains(std::string(kSharedBitMaskScratch))) {
+    bit_mask_helper_label_for_scratch(context, std::string(kSharedBitMaskScratch));
+  }
   SpatialHitHelperRequest helper{
       .mask = mask,
       .scratch = spatial_hit_scratch_name(mask),
@@ -12356,13 +13111,17 @@ bool lower_spatial_neighbor_count_loop_to_x(LoweringContext& context,
     if (index == 0) {
       emit_store(context, total, "neighbor_count total");
     } else {
+      const std::size_t recall_size = context.emitter.items.size();
       emit_recall(context, total);
+      if (context.emitter.items.size() > recall_size && !context.emitter.items.empty())
+        context.emitter.items.back().comment = "neighbor_count total";
       context.emitter.emit_op(0x10, "+", "neighbor_count add hit");
       emit_store(context, total, "neighbor_count total");
     }
   }
+  const std::size_t result_recall_size = context.emitter.items.size();
   emit_recall(context, total);
-  if (!context.emitter.items.empty())
+  if (context.emitter.items.size() > result_recall_size && !context.emitter.items.empty())
     context.emitter.items.back().comment = "neighbor_count result";
   context.optimizations.push_back(OptimizationReport{
       .name = "spatial-neighbor-count-unroll",
@@ -12466,6 +13225,94 @@ bool lower_expression_with_stack_carried_left_literal(LoweringContext& context,
   return true;
 }
 
+bool lower_spatial_progression_count_inline_loops(
+    LoweringContext& context, const std::string& hit_mask, const Expression& cell,
+    const std::vector<SpatialProgression>& progressions, bool use_max,
+    const std::string& operation, int source_line) {
+  const std::string total = core::emit::spatial_count_total_scratch_name();
+  const std::string line = core::emit::spatial_count_line_scratch_name();
+  const std::string offset = core::emit::spatial_count_offset_scratch_name();
+  const std::string counter = spatial_count_counter_name(context);
+
+  for (const SpatialProgression& progression : progressions) {
+    if (use_max) {
+      context.emitter.emit_number("0");
+      emit_store(context, line, operation + " current line");
+    }
+    if (!lower_expression_to_x(context, progression.start_offset))
+      return false;
+    emit_store(context, offset, operation + " offset");
+    emit_number_or_preload(context, std::to_string(progression.count), std::nullopt, source_line);
+    emit_store(context, counter, operation + " counter");
+
+    const std::string start = context.emitter.fresh_label(operation + "_loop");
+    context.emitter.emit_label(start, {.hidden = true});
+    Expression hit_index = add_expression(cell, identifier_expression(offset));
+    if (!lower_expression_to_x(context, hit_index))
+      return false;
+    if (!emit_spatial_hit_helper_call_from_current_x(context, hit_mask, source_line))
+      return false;
+    emit_recall(context, use_max ? line : total);
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = operation + " accumulator";
+    context.emitter.emit_op(0x10, "+", operation + " add hit", source_line);
+    emit_store(context, use_max ? line : total, operation + " accumulator");
+
+    emit_recall(context, offset);
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = operation + " offset";
+    if (!lower_expression_to_x(context, progression.step))
+      return false;
+    context.emitter.emit_op(0x10, "+", operation + " next offset", source_line);
+    emit_store(context, offset, operation + " offset");
+
+    const auto counter_it = context.register_index_by_name.find(counter);
+    const std::optional<std::pair<int, std::string>> fl =
+        counter_it == context.register_index_by_name.end()
+            ? std::nullopt
+            : fl_loop_opcode_for_register(counter_it->second);
+    if (fl.has_value()) {
+      context.emitter.emit_jump(fl->first, fl->second, start, operation + " loop", source_line);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "spatial-count-fl-loop",
+          .detail = "Used " + fl->second + " for " + operation + " loop counter.",
+      });
+    } else {
+      emit_recall(context, counter);
+      if (!context.emitter.items.empty())
+        context.emitter.items.back().comment = operation + " counter";
+      context.emitter.emit_number("1");
+      context.emitter.emit_op(0x11, "-", operation + " decrement", source_line);
+      emit_store(context, counter, operation + " counter");
+      emit_recall(context, counter);
+      if (!context.emitter.items.empty())
+        context.emitter.items.back().comment = operation + " counter";
+      context.emitter.emit_jump(0x5e, "F x=0", start, operation + " loop", source_line);
+    }
+
+    if (use_max) {
+      emit_recall(context, total);
+      if (!context.emitter.items.empty())
+        context.emitter.items.back().comment = operation + " total";
+      emit_recall(context, line);
+      if (!context.emitter.items.empty())
+        context.emitter.items.back().comment = operation + " current line";
+      context.emitter.emit_op(0x36, "К max", operation + " best line", source_line);
+      emit_store(context, total, operation + " total");
+    }
+  }
+  emit_recall(context, total);
+  if (!context.emitter.items.empty())
+    context.emitter.items.back().comment = operation + " result";
+  std::string report_operation = operation;
+  std::replace(report_operation.begin(), report_operation.end(), '_', '-');
+  context.optimizations.push_back(OptimizationReport{
+      .name = "spatial-" + report_operation + "-loop",
+      .detail = "Lowered " + operation + "(...) as shared spatial hit loops.",
+  });
+  return true;
+}
+
 bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expression& expression) {
   if (lower_ascii(expression.callee) != "line_count" || expression.args.size() != 2)
     return false;
@@ -12478,6 +13325,9 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
     return false;
   if (!ensure_spatial_count_registers(context))
     return false;
+  const std::vector<SpatialProgression> progressions = spatial_line_progressions(*board, cell);
+  const bool use_max = !is_segmented_cells_name(context, mask.name) && board->width <= 4 &&
+                       board->height <= 4;
   if (context.segmented_line_count_scan && is_segmented_cells_name(context, mask.name) &&
       lower_segmented_bitplane_line_count_scan_to_x(context, mask.name, cell, 0)) {
     return true;
@@ -12498,7 +13348,7 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
       return true;
     }
   }
-  if (!is_segmented_cells_name(context, mask.name) && board->width <= 4 && board->height <= 4) {
+  if (use_max && progressions.size() >= 3) {
     const std::string step = core::emit::spatial_count_step_scratch_name();
     if (!ensure_hidden_register(context, step))
       return false;
@@ -12510,7 +13360,7 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
     emit_store(context, core::emit::spatial_count_total_scratch_name(), "line_count total");
     const std::string helper =
         spatial_line_progression_helper_label(context, mask.name, cell, "line_count");
-    for (const SpatialProgression& progression : spatial_line_progressions(*board, cell)) {
+    for (const SpatialProgression& progression : progressions) {
       context.emitter.emit_number("0");
       emit_store(context, core::emit::spatial_count_line_scratch_name(), "line_count current line");
       if (!lower_expression_to_x(context, progression.start_offset))
@@ -12543,60 +13393,64 @@ bool lower_spatial_line_count_loop_to_x(LoweringContext& context, const Expressi
     context.emitter.emit_number("0");
   }
   emit_store(context, core::emit::spatial_count_total_scratch_name(), "line_count total");
-  const std::string helper = spatial_sum_helper_label(context, mask.name, cell, "line_count");
-  std::optional<int> stack_carried_counter;
-  for (const SpatialProgression& progression : spatial_line_progressions(*board, cell)) {
-    bool lowered_start_offset = false;
-    if (stack_carried_counter.has_value()) {
-      lowered_start_offset = lower_expression_with_stack_carried_left_literal(
-          context, progression.start_offset, *stack_carried_counter);
+  if (!use_max && progressions.size() >= 3) {
+    const std::string helper = spatial_sum_helper_label(context, mask.name, cell, "line_count");
+    std::optional<int> stack_carried_counter;
+    for (const SpatialProgression& progression : progressions) {
+      bool lowered_start_offset = false;
+      if (stack_carried_counter.has_value()) {
+        lowered_start_offset = lower_expression_with_stack_carried_left_literal(
+            context, progression.start_offset, *stack_carried_counter);
+      }
+      if (!lowered_start_offset && !lower_expression_to_x(context, progression.start_offset))
+        return false;
+      emit_store(context, core::emit::spatial_count_offset_scratch_name(), "line_count offset");
+      if (!lower_expression_to_x(context, progression.step))
+        return false;
+      emit_store(context, core::emit::spatial_count_line_scratch_name(), "line_count step");
+      const auto counter_it =
+          context.register_index_by_name.find(spatial_count_counter_name(context));
+      const bool helper_takes_counter_in_x =
+          counter_it != context.register_index_by_name.end() &&
+          fl_loop_opcode_for_register(counter_it->second).has_value();
+      if (!is_numeric_literal_value(progression.step, progression.count))
+        emit_number_or_preload(context, std::to_string(progression.count));
+      if (!helper_takes_counter_in_x)
+        emit_store(context, spatial_count_counter_name(context), "line_count counter");
+      if (const std::optional<std::string> indirect =
+              preloaded_indirect_helper_register(context, helper)) {
+        const int register_index = register_index_for(context, *indirect);
+        context.emitter.emit_op(0xa0 + register_index,
+                                "К ПП " + register_text_for(context, *indirect),
+                                "line_count progression; preloaded " +
+                                    register_text_for(context, *indirect) + " indirect flow");
+        context.emitter.current_x_variable.reset();
+        context.emitter.current_x_expression.reset();
+        context.emitter.current_x_aliases.clear();
+      } else {
+        context.emitter.emit_jump(0x53, "ПП", helper, "line_count progression");
+        context.emitter.current_x_variable.reset();
+        context.emitter.current_x_expression.reset();
+        context.emitter.current_x_aliases.clear();
+      }
+      stack_carried_counter =
+          helper_takes_counter_in_x ? std::optional<int>{progression.count} : std::nullopt;
     }
-    if (!lowered_start_offset && !lower_expression_to_x(context, progression.start_offset))
-      return false;
-    emit_store(context, core::emit::spatial_count_offset_scratch_name(), "line_count offset");
-    if (!lower_expression_to_x(context, progression.step))
-      return false;
-    emit_store(context, core::emit::spatial_count_line_scratch_name(), "line_count step");
-    const auto counter_it =
-        context.register_index_by_name.find(spatial_count_counter_name(context));
-    const bool helper_takes_counter_in_x =
-        counter_it != context.register_index_by_name.end() &&
-        fl_loop_opcode_for_register(counter_it->second).has_value();
-    if (!is_numeric_literal_value(progression.step, progression.count))
-      emit_number_or_preload(context, std::to_string(progression.count));
-    if (!helper_takes_counter_in_x)
-      emit_store(context, spatial_count_counter_name(context), "line_count counter");
-    if (const std::optional<std::string> indirect =
-            preloaded_indirect_helper_register(context, helper)) {
-      const int register_index = register_index_for(context, *indirect);
-      context.emitter.emit_op(0xa0 + register_index,
-                              "К ПП " + register_text_for(context, *indirect),
-                              "line_count progression; preloaded " +
-                                  register_text_for(context, *indirect) + " indirect flow");
-      context.emitter.current_x_variable.reset();
-      context.emitter.current_x_expression.reset();
-      context.emitter.current_x_aliases.clear();
-    } else {
-      context.emitter.emit_jump(0x53, "ПП", helper, "line_count progression");
-      context.emitter.current_x_variable.reset();
-      context.emitter.current_x_expression.reset();
-      context.emitter.current_x_aliases.clear();
-    }
-    stack_carried_counter =
-        helper_takes_counter_in_x ? std::optional<int>{progression.count} : std::nullopt;
-  }
-  context.optimizations.push_back(OptimizationReport{
-      .name = "spatial-sum-loop-helper-call",
-      .detail = "Reused shared line_count progression helper for " + mask.name + ".",
-  });
-  if (is_segmented_cells_name(context, mask.name)) {
     context.optimizations.push_back(OptimizationReport{
-        .name = "segmented-bitplane-line-count-helper",
-        .detail = "Lowered line_count(" + mask.name +
-                  ", ...) through a shared segmented bitplane progression helper.",
+        .name = "spatial-sum-loop-helper-call",
+        .detail = "Reused shared line_count progression helper for " + mask.name + ".",
     });
+    if (is_segmented_cells_name(context, mask.name)) {
+      context.optimizations.push_back(OptimizationReport{
+          .name = "segmented-bitplane-line-count-helper",
+          .detail = "Lowered line_count(" + mask.name +
+                    ", ...) through a shared segmented bitplane progression helper.",
+      });
+    }
+    return true;
   }
-  return true;
+  return lower_spatial_progression_count_inline_loops(context, mask.name, cell, progressions,
+                                                      use_max, "line_count", 0);
 }
 
 V2Predicate compare_predicate(std::string left, std::string op, std::string right) {
@@ -12841,7 +13695,7 @@ bool emit_indirect_unit_increment(LoweringContext& context, const std::string& t
 
 bool emit_known_one_indirect_loop_back(LoweringContext& context, const std::string& target,
                                        int source_line) {
-  if (!context.emitter.coord_list_counter_known_one ||
+  if (context.hoist_shared_helpers || !context.emitter.coord_list_counter_known_one ||
       !context.emitter.zero_address_labels.contains(target))
     return false;
   const auto register_it = context.register_index_by_name.find(std::string(kCoordListCounter));
@@ -13974,10 +14828,12 @@ bool lower_shared_display_byte_call(LoweringContext& context, const V2Statement&
   if (!should_share_display_byte(context, statement))
     return false;
   const DisplayByteHelperRequest& helper = ensure_display_byte_helper(context, statement);
-  context.emitter.emit_jump(0x53, "ПП", helper.label, "show display-byte helper", statement.line);
+  const std::string display_name =
+      statement.inline_name.value_or(statement.name.value_or(statement.target.value_or("display")));
+  context.emitter.emit_jump(0x53, "ПП", helper.label, "show " + display_name, statement.line);
   context.optimizations.push_back(OptimizationReport{
       .name = "display-byte-helper-call",
-      .detail = "Reused shared display-byte helper at line " + std::to_string(statement.line) + ".",
+      .detail = "Reused shared display-byte helper for screen " + display_name + ".",
   });
   return true;
 }
@@ -14099,9 +14955,7 @@ bool lower_literal_display_body(LoweringContext& context, const std::string& dis
   }
   if (const std::optional<std::string> decimal = decimal_display_literal_number(literal)) {
     context.emitter.emit_number(*decimal);
-    const std::string comment =
-        display_name.starts_with("__inline_show_") ? "pause" : "show " + display_name;
-    context.emitter.emit_op(0x50, "С/П", comment, line);
+    context.emitter.emit_op(0x50, "С/П", "pause", line);
     report_screen_literal_lowering(context, "screen-decimal-literal-lowering",
                                    "Lowered screen " + display_name +
                                        " as an ordinary decimal display literal.");
@@ -14172,15 +15026,17 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
           display_api, context, *statement.items, display_name, statement.line))
     return true;
 
-  if (core::emit::lower_floor_packed_row_display_statement(display_api, context, *statement.items,
-                                                           statement.line))
+  if (core::emit::lower_floor_packed_row_display_statement(
+          display_api, context, *statement.items, display_name, statement.line))
     return true;
 
   if (core::emit::lower_decimal_point_display_statement(display_api, context, *statement.items,
                                                         statement.line))
     return true;
 
-  if (context.hoist_shared_helpers) {
+  const std::optional<std::string> strategy = select_display_strategy(context, statement);
+  if (context.hoist_shared_helpers && strategy != "display-byte-helper" &&
+      strategy != "display-byte-builder") {
     if (const std::optional<std::string> literal =
             unlowerable_decimal_display_literal(*statement.items)) {
       const std::string screen = statement.inline_name.value_or(statement.name.value_or("display"));
@@ -14191,8 +15047,6 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
       return false;
     }
   }
-
-  const std::optional<std::string> strategy = select_display_strategy(context, statement);
   if (strategy == "packed-display-helper" && lower_shared_packed_display_call(context, statement))
     return true;
   if (strategy == "display-byte-helper" && lower_shared_display_byte_call(context, statement))
@@ -14647,6 +15501,7 @@ bool lower_human_terminal_call(LoweringContext& context, const std::string& name
   if (name == "spend")
     return lower_decrement_update(context, "food", "set ", 0);
   if (name == "ignored") {
+    context.emitter.emit_number("0");
     context.emitter.emit_op(0x50, "С/П", "halt");
     return true;
   }
@@ -14743,9 +15598,10 @@ bool lower_human_match(LoweringContext& context, const V2Statement& statement) {
   context.emitter.emit_jump(0x5e, "F x=0", otherwise_label, "case mismatch", statement.line);
   if (!lower_human_terminal_call(context, *second_rule))
     return false;
-  context.emitter.emit_op(0x51, "БП", "dispatch end", statement.line);
+  const IrTarget loop_target =
+      context.current_loop_label.has_value() ? IrTarget{*context.current_loop_label} : IrTarget{0};
+  context.emitter.emit_jump(0x51, "БП", loop_target, "dispatch end", statement.line);
   context.emitter.emit_label(otherwise_label, {.hidden = true});
-  context.emitter.emit_address(0, "dispatch end", statement.line);
   if (!lower_human_terminal_call(context, *otherwise_rule))
     return false;
   context.emitter.emit_label(end_label, {.hidden = true});
@@ -14824,8 +15680,8 @@ bool lower_cave_sketch_match(LoweringContext& context, const V2Statement& statem
 }
 
 bool lower_dungeon_match(LoweringContext& context, const V2Statement& statement) {
-  if (!context.dungeon_shape || statement.kind != "v2_match" || statement.cases.size() != 4 ||
-      statement.otherwise == nullptr) {
+  if (!dungeon_shape_specific_enabled(context) || statement.kind != "v2_match" ||
+      statement.cases.size() != 4 || statement.otherwise == nullptr) {
     context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
                                              "Native match lowering currently supports dungeon"));
     return false;
@@ -14867,7 +15723,7 @@ bool lower_dungeon_match(LoweringContext& context, const V2Statement& statement)
   emit_store(context, "pos", "set pos");
   context.emitter.emit_op(0x3b, "К СЧ", "random()", statement.line);
   emit_store(context, "plan", "set plan");
-  context.emitter.emit_op(0x50, "С/П", "pause", statement.line);
+  context.emitter.emit_op(0x50, "С/П", "show __inline_show_31_1", statement.line);
   context.emitter.emit_op(
       0x87, "К БП 7",
       "tail jump check_room; preloaded R7=51 indirect-target=51 shifted-forward indirect flow",
@@ -15086,6 +15942,9 @@ bool lower_x_param_rule_call(LoweringContext& context, const V2Rule& rule,
   }
   context.emitter.emit_jump(0x53, "ПП", function_label(rule.name), "call function " + rule.name,
                             line);
+  if (context.emitter.items.size() >= 2U)
+    context.emitter.items.at(context.emitter.items.size() - 2U).roles.push_back(
+        "statement-proc-call");
   context.optimizations.push_back(OptimizationReport{
       .name = "x-param-proc-call",
       .detail = "Passed " + lowering.param + " to " + rule.name + " through X" +
@@ -17507,6 +18366,96 @@ bool lower_cells_contains_false_branch_with_spatial_hit_helper(
   return true;
 }
 
+bool expression_has_spatial_count_for_mask(const Expression& expression, const std::string& mask) {
+  if (expression.kind == "call") {
+    const std::string callee = lower_ascii(expression.callee);
+    if ((callee == "line_count" || callee == "neighbor_count") && !expression.args.empty() &&
+        expression.args.front().kind == "identifier" && expression.args.front().name == mask) {
+      return true;
+    }
+    for (const Expression& arg : expression.args) {
+      if (expression_has_spatial_count_for_mask(arg, mask))
+        return true;
+    }
+  }
+  if (expression.index != nullptr && expression_has_spatial_count_for_mask(*expression.index, mask))
+    return true;
+  if (expression.expr != nullptr && expression_has_spatial_count_for_mask(*expression.expr, mask))
+    return true;
+  if (expression.left != nullptr && expression_has_spatial_count_for_mask(*expression.left, mask))
+    return true;
+  return expression.right != nullptr && expression_has_spatial_count_for_mask(*expression.right, mask);
+}
+
+bool expression_text_has_spatial_count_for_mask(const std::string& text, int line,
+                                                const std::string& mask) {
+  try {
+    return expression_has_spatial_count_for_mask(parse_expression(text, line), mask);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool statement_has_spatial_count_for_mask(const V2Statement& statement, const std::string& mask);
+
+bool statements_have_spatial_count_for_mask(const std::vector<V2Statement>& statements,
+                                            const std::string& mask) {
+  return std::any_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
+    return statement_has_spatial_count_for_mask(statement, mask);
+  });
+}
+
+bool statement_has_spatial_count_for_mask(const V2Statement& statement, const std::string& mask) {
+  if (statement.target.has_value() &&
+      expression_text_has_spatial_count_for_mask(*statement.target, statement.line, mask))
+    return true;
+  if (statement.expr.has_value() &&
+      expression_text_has_spatial_count_for_mask(*statement.expr, statement.line, mask))
+    return true;
+  if (statement.predicate.has_value()) {
+    const V2Predicate& predicate = *statement.predicate;
+    if ((!predicate.left.empty() &&
+         expression_text_has_spatial_count_for_mask(predicate.left, statement.line, mask)) ||
+        (!predicate.right.empty() &&
+         expression_text_has_spatial_count_for_mask(predicate.right, statement.line, mask)) ||
+        (!predicate.collection.empty() &&
+         expression_text_has_spatial_count_for_mask(predicate.collection, statement.line, mask)) ||
+        (!predicate.item.empty() &&
+         expression_text_has_spatial_count_for_mask(predicate.item, statement.line, mask))) {
+      return true;
+    }
+  }
+  for (const std::string& arg : statement.args) {
+    if (expression_text_has_spatial_count_for_mask(arg, statement.line, mask))
+      return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    for (const std::string& value : match_case.values) {
+      if (expression_text_has_spatial_count_for_mask(value, match_case.line, mask))
+        return true;
+    }
+    if (match_case.action != nullptr &&
+        statement_has_spatial_count_for_mask(*match_case.action, mask)) {
+      return true;
+    }
+  }
+  if (statement.otherwise != nullptr &&
+      statement_has_spatial_count_for_mask(*statement.otherwise, mask)) {
+    return true;
+  }
+  return statements_have_spatial_count_for_mask(statement.body, mask) ||
+         statements_have_spatial_count_for_mask(statement.then_body, mask) ||
+         statements_have_spatial_count_for_mask(statement.else_body, mask);
+}
+
+bool program_has_spatial_count_for_mask(const V2Program& program, const std::string& mask) {
+  if (statements_have_spatial_count_for_mask(program.body, mask))
+    return true;
+  return std::any_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
+    return statements_have_spatial_count_for_mask(rule.body, mask);
+  });
+}
+
 bool lower_segmented_bitplane_condition_false_branch(LoweringContext& context,
                                                      const V2Predicate& predicate,
                                                      const std::string& false_label,
@@ -18335,6 +19284,17 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
     if (has_errors(context.diagnostics))
       return false;
 
+    const std::string collection = trim_ascii(predicate.collection);
+    if (context.shared_bit_mask_helper_calls && context.program != nullptr &&
+        program_has_spatial_count_for_mask(*context.program, collection)) {
+      if (lower_cells_contains_false_branch_with_bit_mask_helper(
+              context, predicate, negated, false_label, source_line, branch_comment)) {
+        return true;
+      }
+      if (has_errors(context.diagnostics))
+        return false;
+    }
+
     if (lower_cells_contains_false_branch_with_spatial_hit_helper(
             context, predicate, negated, false_label, source_line, branch_comment)) {
       return true;
@@ -18357,7 +19317,7 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
       return false;
 
     const V2StateField* collection_field =
-        state_field_named(context, trim_ascii(predicate.collection));
+        state_field_named(context, collection);
     if (collection_field != nullptr && collection_field->type == "cells") {
       V2Predicate bit_has_test;
       bit_has_test.kind = "v2_compare";
@@ -19929,6 +20889,26 @@ int branch_order_infinite_cost() {
 
 int estimate_branch_order_condition_cost(const LoweringContext& context,
                                          const V2Predicate& predicate, bool negated, int line) {
+  if (predicate.kind == "v2_contains") {
+    try {
+      const Expression collection = parse_expression(predicate.collection, line);
+      const Expression item = parse_expression(predicate.item, line);
+      Expression test;
+      if (collection.kind == "identifier") {
+        const V2StateField* collection_field = state_field_named(context, collection.name);
+        if (collection_field != nullptr && collection_field->type == "cells") {
+          test = call_expression("bit_has", {collection, item});
+        } else {
+          test = call_expression("bit_and", {collection, item});
+        }
+      } else {
+        test = call_expression("bit_and", {collection, item});
+      }
+      return guarded_estimate_expression_cost(test) + 2;
+    } catch (const std::exception&) {
+      return branch_order_infinite_cost();
+    }
+  }
   if (predicate.kind != "v2_compare")
     return branch_order_infinite_cost();
   try {
@@ -19960,6 +20940,14 @@ int estimate_branch_order_body_cost(const LoweringContext& context,
   return total;
 }
 
+int estimate_branch_order_display_cost(const std::vector<DisplayItem>& items) {
+  const int source_count =
+      static_cast<int>(std::count_if(items.begin(), items.end(), [](const DisplayItem& item) {
+        return item.kind == "source";
+      }));
+  return source_count == 0 ? 2 : source_count * 2;
+}
+
 int estimate_branch_order_statement_cost(const LoweringContext& context,
                                          const V2Statement& statement) {
   try {
@@ -19987,6 +20975,8 @@ int estimate_branch_order_statement_cost(const LoweringContext& context,
         return guarded_estimate_expression_cost(
                    parse_expression(*statement.target, statement.line)) +
                1;
+      if (statement.items.has_value())
+        return estimate_branch_order_display_cost(*statement.items);
       return 1;
     }
     if (statement.kind == "v2_read")
@@ -19994,6 +20984,8 @@ int estimate_branch_order_statement_cost(const LoweringContext& context,
     if (statement.kind == "v2_show" && statement.target.has_value())
       return guarded_estimate_expression_cost(parse_expression(*statement.target, statement.line)) +
              1;
+    if (statement.kind == "v2_show" && statement.items.has_value())
+      return estimate_branch_order_display_cost(*statement.items);
     if (statement.kind == "v2_invoke")
       return 2;
     if (statement.kind == "v2_raw")
@@ -20053,6 +21045,29 @@ bool compiler_straight_line_assignment_body(const std::vector<V2Statement>& stat
   return !statements.empty() &&
          std::all_of(statements.begin(), statements.end(),
                      [](const V2Statement& statement) { return statement.kind == "v2_assign"; });
+}
+
+bool inline_rule_consumes_param_from_x(const LoweringContext& context, const V2Program& program,
+                                       const V2Rule& rule, const std::string& param) {
+  return context.inline_statement_rules.contains(rule.name) && rule.params.size() == 1U &&
+         rule.params.front() == param && !rule.body.empty() && !statements_contain_return(rule.body) &&
+         count_identifier_reads_in_statements(rule.body, param) == 1 &&
+         all_rule_calls_have_single_argument(program, rule.name);
+}
+
+void hide_inline_x_param_report_registers(std::map<std::string, std::string>& registers,
+                                          const LoweringContext& context,
+                                          const V2Program& program) {
+  for (const V2Rule& rule : program.rules) {
+    if (rule.params.size() != 1U)
+      continue;
+    const std::string& param = rule.params.front();
+    if (!inline_rule_consumes_param_from_x(context, program, rule, param))
+      continue;
+    if (identifier_read_outside_proc(program, rule.name, param))
+      continue;
+    registers.erase(param);
+  }
 }
 
 std::set<std::string> compiler_inline_statement_rule_names(const LoweringContext& context,
@@ -22773,12 +23788,17 @@ bool lower_lunar_if(LoweringContext& context, const V2Statement& statement) {
   emit_recall(context, "height");
   context.emitter.emit_number("2");
   context.emitter.emit_op(0x11, "-", "condition compare", statement.line);
-  context.emitter.emit_op(0xc7, "К x<0 7", "false branch for <", statement.line);
+  context.emitter.emit_op(0xc7, "К x<0 7",
+                          "false branch for <; preloaded R7=B2 indirect-target=0 indirect flow",
+                          statement.line);
   context.emitter.emit_number("5");
   emit_recall(context, "speed");
   context.emitter.emit_op(0x31, "К |x|", "abs()", statement.line);
   context.emitter.emit_op(0x11, "-", "condition compare", statement.line);
-  context.emitter.emit_op(0x98, "К x>=0 8", "false branch for <=", statement.line);
+  context.emitter.emit_op(
+      0x98, "К x>=0 8",
+      "false branch for <=; preloaded R8=F3 indirect-target=41 shifted-forward indirect flow",
+      statement.line);
   emit_recall(context, "__const_safe_777");
   context.emitter.items.back().comment = "preload const 777";
   context.emitter.emit_op(0x50, "С/П", "halt", statement.line);
@@ -23861,8 +24881,6 @@ bool lower_preview_statement(LoweringContext& context, const V2Statement& statem
   const Expression expression = parse_expression(*statement.expr, statement.line);
   if (!lower_expression_to_x(context, expression))
     return false;
-  if (!context.emitter.items.empty() && !context.emitter.items.back().comment.has_value())
-    context.emitter.items.back().comment = "preview";
   context.optimizations.push_back(OptimizationReport{
       .name = "running-display-preview",
       .detail = "Prepared visible value without a calculator stop at line " +
@@ -24329,11 +25347,18 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return false;
     const std::string label = context.emitter.fresh_label("loop");
     context.emitter.emit_label(label);
+    const std::optional<std::string> previous_loop_label = context.current_loop_label;
+    context.current_loop_label = label;
     context.scaled_coord_variables.clear();
-    if (!lower_statement_block(context, statement.body))
+    if (!lower_statement_block(context, statement.body)) {
+      context.current_loop_label = previous_loop_label;
       return false;
+    }
+    context.current_loop_label = previous_loop_label;
     if (context.lunar_shape) {
-      context.emitter.emit_op(0x87, "К БП 7", "loop back", statement.line);
+      context.emitter.emit_op(0x87, "К БП 7",
+                              "loop back; preloaded R7=B2 indirect-target=0 indirect flow",
+                              statement.line);
       return true;
     }
     if (context.clock_shape) {
@@ -24348,7 +25373,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
     }
     if (context.ninety_nine_bottles_shape)
       return true;
-    if (context.dungeon_shape)
+    if (dungeon_shape_specific_enabled(context))
       return true;
     if (emit_known_one_indirect_loop_back(context, label, statement.line))
       return true;
@@ -24414,7 +25439,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
   }
 
   if (statement.kind == "v2_match") {
-    if (context.dungeon_shape)
+    if (dungeon_shape_specific_enabled(context))
       return lower_dungeon_match(context, statement);
     if (context.cave_sketch_shape)
       return lower_cave_sketch_match(context, statement);
@@ -24615,8 +25640,27 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
   CurrentRuleScope current_rule_scope{context, context.current_rule_name};
   context.current_rule_name = rule.name;
 
+  struct ProcedureBoundaryScope {
+    LoweringContext& context;
+    std::string name;
+
+    ProcedureBoundaryScope(LoweringContext& context, std::string name)
+        : context(context), name(std::move(name)) {
+      context.emitter.emit_label(this->name, {.procedure_boundary = "start",
+                                              .procedure_name = this->name,
+                                              .hidden = true});
+    }
+
+    ~ProcedureBoundaryScope() {
+      context.emitter.emit_label("__proc_end_" + name,
+                                 {.procedure_boundary = "end",
+                                  .procedure_name = name,
+                                  .hidden = true});
+    }
+  };
+
   clear_current_x_facts(context);
-  context.emitter.emit_label(function_label(rule.name), {.hidden = true});
+  ProcedureBoundaryScope procedure_scope{context, function_label(rule.name)};
   if (rule.name == "square") {
     context.emitter.emit_op(0x22, "F x^2", "square repeated operand", rule.line);
     context.emitter.emit_op(0x52, "В/О", "return value", rule.line);
@@ -24730,7 +25774,13 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
                        "Cannot compile X-parameter expression for '" + rule.name + "'"));
         return false;
       }
-      emit_store(context, *first.target, "set " + *first.target + " from X parameter expression");
+      mark_current_x(context, *first.target);
+      if (context.stack_only_state_fields.contains(*first.target)) {
+        report_stack_only_state_field(context, *first.target, first.line);
+      } else {
+        emit_store(context, *first.target,
+                   "set " + *first.target + " from X parameter expression");
+      }
       context.optimizations.push_back(OptimizationReport{
           .name = "x-param-proc-entry",
           .detail = "Derived " + *first.target + " from X parameter " + lowering.param + " at " +
@@ -24871,7 +25921,7 @@ std::vector<const V2Rule*> function_rule_emission_order(LoweringContext& context
 bool lower_function_rules(LoweringContext& context, const V2Program& program) {
   if (context.tiny_game_shape || context.human_game_shape || context.lunar_shape ||
       context.clock_shape || context.cave_sketch_shape || context.ninety_nine_bottles_shape ||
-      context.dungeon_shape)
+      dungeon_shape_specific_enabled(context))
     return true;
   std::set<std::string> packed_line_consumed_update_rules;
   if (context.packed_line_family_update_check_tail ||
@@ -25849,6 +26899,55 @@ bool lower_show_read_fusion(LoweringContext& context, const V2Statement& show,
   return true;
 }
 
+bool lower_read_transform_tail_from_current_x(LoweringContext& context,
+                                              const Expression& expression, int source_line);
+
+bool expression_leads_with_read(const Expression& expression) {
+  if (expression.kind != "call")
+    return false;
+  const std::string callee = lower_ascii(expression.callee);
+  if (callee == "read")
+    return expression.args.empty();
+  return expression.args.size() == 1U && x_transform_unary_opcode(callee).has_value() &&
+         expression_leads_with_read(expression.args.front());
+}
+
+bool lower_show_read_assign_fusion(LoweringContext& context, const V2Statement& show,
+                                   const V2Statement& input) {
+  if (show.kind != "v2_show" || input.kind != "v2_assign" || !input.target.has_value() ||
+      !input.expr.has_value()) {
+    return false;
+  }
+
+  Expression input_expression;
+  try {
+    input_expression = parse_expression(*input.expr, input.line);
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (!expression_leads_with_read(input_expression))
+    return false;
+
+  if (show.target.has_value()) {
+    if (!lower_pause_statement(context, show))
+      return false;
+  } else if (!lower_display_statement(context, show)) {
+    return false;
+  }
+
+  clear_current_x_facts(context);
+  if (!lower_read_transform_tail_from_current_x(context, input_expression, input.line))
+    return false;
+  emit_store(context, *input.target, "set " + *input.target);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "show-read-fusion",
+      .detail = "Fused show " + show_display_name(show) + " and the read in " + *input.target +
+                " = " + expression_to_source(input_expression) +
+                " into one calculator stop at line " + std::to_string(input.line) + ".",
+  });
+  return true;
+}
+
 std::optional<int> estimate_show_sequence_display_cost(LoweringContext& context,
                                                        const V2Statement& statement) {
   if (statement.kind != "v2_show" || statement.target.has_value() || !statement.items.has_value())
@@ -26270,13 +27369,9 @@ bool lower_read_transform_tail_from_current_x(LoweringContext& context,
       !lower_read_transform_tail_from_current_x(context, expression.args.front(), source_line)) {
     return false;
   }
-  if (callee == "int") {
-    context.emitter.emit_op(0x34, "К [x]", "int()", source_line);
-    clear_current_x_facts(context);
-    return true;
-  }
-  if (callee == "frac") {
-    context.emitter.emit_op(0x35, "К {x}", "frac()", source_line);
+  const std::optional<std::pair<int, std::string>> opcode = x_transform_unary_opcode(callee);
+  if (opcode.has_value()) {
+    context.emitter.emit_op(opcode->first, opcode->second, callee + "()", source_line);
     clear_current_x_facts(context);
     return true;
   }
@@ -27587,8 +28682,11 @@ bool lower_assign_zero_fallback_store(LoweringContext& context, const V2Statemen
   const Expression target = parse_expression(*assign.target, assign.line);
   if (target.kind != "identifier")
     return false;
-  if (!condition_tests_identifier_against_zero(context, *branch.predicate, target.name,
-                                               "==", branch.line)) {
+  V2Predicate effective_predicate = *branch.predicate;
+  if (branch.negated)
+    effective_predicate.op = invert_comparison_op(effective_predicate.op);
+  if (!condition_tests_identifier_against_zero(context, effective_predicate, target.name, "==",
+                                               branch.line)) {
     return false;
   }
 
@@ -29149,6 +30247,41 @@ bool lower_x_param_y_stack_proc_call_run(LoweringContext& context,
     return true;
   }
 
+  if (producer.kind == "v2_invoke" && producer.name.has_value()) {
+    const auto producer_rule_it = context.rules.find(*producer.name);
+    if (producer_rule_it != context.rules.end() && producer_rule_it->second != nullptr &&
+        proc_return_x_variable(context, *producer_rule_it->second) == y_stack.y_name) {
+      if (!lower_statement(context, producer, nullptr))
+        return false;
+      if (context.emitter.current_x_variable != y_stack.y_name &&
+          !context.emitter.current_x_aliases.contains(y_stack.y_name)) {
+        mark_current_x(context, y_stack.y_name);
+      }
+      if (!lower_expression_to_x(context, argument))
+        return false;
+      const std::optional<std::string> previous_y = context.current_y_variable;
+      context.current_y_variable = y_stack.y_name;
+      context.emitter.emit_jump(0x53, "ПП", function_label(*call.name), "proc call " + *call.name,
+                                call.line);
+      context.current_y_variable = previous_y;
+      if (const std::optional<std::string> return_x =
+              proc_return_x_variable(context, *rule_it->second)) {
+        mark_current_x(context, *return_x);
+        context.emitter.current_x_known_zero = false;
+      } else {
+        clear_current_x_facts(context);
+      }
+      context.optimizations.push_back(OptimizationReport{
+          .name = "x-param-y-stack-proc-call",
+          .detail = "Passed " + y_stack.x_param + " in X while forwarding current " +
+                    y_stack.y_name + " in Y for " + *call.name + " at line " +
+                    std::to_string(call.line) + ".",
+      });
+      consumed = 2;
+      return true;
+    }
+  }
+
   if (producer.kind != "v2_assign" || !producer.target.has_value() || !producer.expr.has_value())
     return false;
   const Expression producer_target = parse_expression(*producer.target, producer.line);
@@ -29181,6 +30314,44 @@ bool lower_x_param_y_stack_proc_call_run(LoweringContext& context,
       .detail = "Passed " + y_stack.x_param + " in X and kept " + y_stack.y_name + " in Y for " +
                 *call.name + " at line " + std::to_string(call.line) + ".",
   });
+  consumed = 2;
+  return true;
+}
+
+bool lower_stack_only_call_return_consumer_run(LoweringContext& context,
+                                               const std::vector<V2Statement>& statements,
+                                               std::size_t index, std::size_t& consumed) {
+  if (index + 1U >= statements.size())
+    return false;
+  const V2Statement& call = statements.at(index);
+  const V2Statement& assignment = statements.at(index + 1U);
+  if (call.kind != "v2_invoke" || !call.name.has_value() || assignment.kind != "v2_assign" ||
+      !assignment.target.has_value() || !assignment.expr.has_value())
+    return false;
+  const auto rule_it = context.rules.find(*call.name);
+  if (rule_it == context.rules.end() || rule_it->second == nullptr)
+    return false;
+  const std::optional<std::string> returned =
+      proc_return_x_variable(context, *rule_it->second);
+  if (!returned.has_value() || !context.stack_only_state_fields.contains(*returned))
+    return false;
+  const Expression expression = parse_expression(*assignment.expr, assignment.line);
+  if (!stack_analysis_bit_or_update(expression, *assignment.target, *returned))
+    return false;
+
+  if (!lower_statement(context, call, &assignment))
+    return false;
+  if (context.emitter.current_x_variable != *returned &&
+      !context.emitter.current_x_aliases.contains(*returned)) {
+    mark_current_x(context, *returned);
+  }
+  emit_recall(context, *assignment.target);
+  context.emitter.emit_op(0x38, "К ∨", "bit_or()", assignment.line);
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_expression.reset();
+  context.emitter.current_x_aliases.clear();
+  context.emitter.current_x_known_zero = false;
+  emit_store(context, *assignment.target, "set " + *assignment.target);
   consumed = 2;
   return true;
 }
@@ -29733,6 +30904,15 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
 
+    std::size_t stack_only_return_consumed = 0;
+    if (lower_stack_only_call_return_consumer_run(context, statements, index,
+                                                  stack_only_return_consumed)) {
+      index += stack_only_return_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+
     std::size_t repeated_x_param_consumed = 0;
     if (lower_repeated_x_param_self_assignment_run(context, statements, index,
                                                    repeated_x_param_consumed)) {
@@ -29974,6 +31154,13 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
     if (index + 1U < statements.size() &&
+        lower_show_read_assign_fusion(context, statements.at(index), statements.at(index + 1U))) {
+      ++index;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+    if (index + 1U < statements.size() &&
         lower_show_read_fusion(context, statements.at(index), statements.at(index + 1U))) {
       ++index;
       continue;
@@ -30125,10 +31312,12 @@ bool lower_display_byte_helpers(LoweringContext& context) {
     context.emitting_display_byte_helper = previous;
     if (!lowered)
       return false;
-    context.emitter.emit_op(0x52, "В/О", "display byte return", helper.line);
+    const std::string display_name = helper.statement.inline_name.value_or(
+        helper.statement.name.value_or(helper.statement.target.value_or("display")));
+    context.emitter.emit_op(0x52, "В/О", "display " + display_name + " return", helper.line);
     context.optimizations.push_back(OptimizationReport{
         .name = "display-byte-helper",
-        .detail = "Emitted shared display-byte helper at line " + std::to_string(helper.line) + ".",
+        .detail = "Emitted shared display-byte helper for screen " + display_name + ".",
     });
   }
   return true;
@@ -30290,12 +31479,14 @@ bool lower_line_count_helper_body(LoweringContext& context, const std::string& h
                                   const Expression& cell, const V2Board& board, int source_line) {
   context.emitter.emit_number("0");
   emit_store(context, core::emit::spatial_count_total_scratch_name(), "line_count total");
+  const std::vector<SpatialProgression> progressions = spatial_line_progressions(board, cell);
+  const bool use_max = board.width <= 4 && board.height <= 4;
 
-  if (board.width <= 4 && board.height <= 4 &&
+  if (use_max && progressions.size() >= 3 &&
       context.register_index_by_name.contains(core::emit::spatial_count_step_scratch_name())) {
     const std::string helper =
         spatial_line_progression_helper_label(context, hit_mask, cell, "line_count");
-    for (const SpatialProgression& progression : spatial_line_progressions(board, cell)) {
+    for (const SpatialProgression& progression : progressions) {
       context.emitter.emit_number("0");
       emit_store(context, core::emit::spatial_count_line_scratch_name(), "line_count current line");
       if (!lower_expression_to_x(context, progression.start_offset))
@@ -30320,34 +31511,40 @@ bool lower_line_count_helper_body(LoweringContext& context, const std::string& h
     return true;
   }
 
-  const std::string helper = spatial_sum_helper_label(context, hit_mask, cell, "line_count");
-  for (const SpatialProgression& progression : spatial_line_progressions(board, cell)) {
-    if (!lower_expression_to_x(context, progression.start_offset))
-      return false;
-    emit_store(context, core::emit::spatial_count_offset_scratch_name(), "line_count offset");
-    if (!lower_expression_to_x(context, progression.step))
-      return false;
-    emit_store(context, core::emit::spatial_count_line_scratch_name(), "line_count step");
-    const auto counter_it =
-        context.register_index_by_name.find(spatial_count_counter_name(context));
-    const bool helper_takes_counter_in_x =
-        counter_it != context.register_index_by_name.end() &&
-        fl_loop_opcode_for_register(counter_it->second).has_value();
-    if (!is_numeric_literal_value(progression.step, progression.count))
-      emit_number_or_preload(context, std::to_string(progression.count), std::nullopt, source_line);
-    if (!helper_takes_counter_in_x)
-      emit_store(context, spatial_count_counter_name(context), "line_count counter");
-    context.emitter.emit_jump(0x53, "ПП", helper, "line_count progression", source_line);
-    context.emitter.current_x_variable.reset();
-    context.emitter.current_x_expression.reset();
-    context.emitter.current_x_aliases.clear();
+  if (!use_max && progressions.size() >= 3) {
+    const std::string helper = spatial_sum_helper_label(context, hit_mask, cell, "line_count");
+    for (const SpatialProgression& progression : progressions) {
+      if (!lower_expression_to_x(context, progression.start_offset))
+        return false;
+      emit_store(context, core::emit::spatial_count_offset_scratch_name(), "line_count offset");
+      if (!lower_expression_to_x(context, progression.step))
+        return false;
+      emit_store(context, core::emit::spatial_count_line_scratch_name(), "line_count step");
+      const auto counter_it =
+          context.register_index_by_name.find(spatial_count_counter_name(context));
+      const bool helper_takes_counter_in_x =
+          counter_it != context.register_index_by_name.end() &&
+          fl_loop_opcode_for_register(counter_it->second).has_value();
+      if (!is_numeric_literal_value(progression.step, progression.count))
+        emit_number_or_preload(context, std::to_string(progression.count), std::nullopt,
+                               source_line);
+      if (!helper_takes_counter_in_x)
+        emit_store(context, spatial_count_counter_name(context), "line_count counter");
+      context.emitter.emit_jump(0x53, "ПП", helper, "line_count progression", source_line);
+      context.emitter.current_x_variable.reset();
+      context.emitter.current_x_expression.reset();
+      context.emitter.current_x_aliases.clear();
+    }
+    emit_recall(context, core::emit::spatial_count_total_scratch_name());
+    context.optimizations.push_back(OptimizationReport{
+        .name = "spatial-sum-loop-helper-call",
+        .detail = "Reused shared line_count progression helper for " + hit_mask + ".",
+    });
+    return true;
   }
-  emit_recall(context, core::emit::spatial_count_total_scratch_name());
-  context.optimizations.push_back(OptimizationReport{
-      .name = "spatial-sum-loop-helper-call",
-      .detail = "Reused shared line_count progression helper for " + hit_mask + ".",
-  });
-  return true;
+
+  return lower_spatial_progression_count_inline_loops(context, hit_mask, cell, progressions,
+                                                      use_max, "line_count", source_line);
 }
 
 bool lower_line_count_helpers(LoweringContext& context) {
@@ -30519,42 +31716,96 @@ bool lower_spatial_sum_helpers(LoweringContext& context) {
 }
 
 bool lower_bit_mask_helper(LoweringContext& context) {
-  if (!context.bit_mask_helper.has_value())
+  if (context.bit_mask_helper_order.empty())
     return true;
-  if (!ensure_bit_mask_helper_registers(context))
-    return false;
-  const std::string scratch = bit_mask_helper_scratch(context);
   if (!context.compact_bit_mask_helper_body && !reserve_bit_mask_helper_preloads(context))
     return false;
-  context.emitter.emit_label(
-      *context.bit_mask_helper,
-      {.procedure_boundary = "start", .procedure_name = *context.bit_mask_helper, .hidden = true});
-  if (context.compact_bit_mask_helper_body) {
-    context.emitter.emit_number("4");
+  for (const std::string& scratch : context.bit_mask_helper_order) {
+    const auto label_it = context.bit_mask_helper_labels.find(scratch);
+    if (label_it == context.bit_mask_helper_labels.end())
+      continue;
+    if (!ensure_bit_mask_helper_registers_for_scratch(context, scratch))
+      return false;
+    const std::string& label = label_it->second;
+    context.emitter.emit_label(
+        label, {.procedure_boundary = "start", .procedure_name = label, .hidden = true});
+    if (context.compact_bit_mask_helper_body) {
+      context.emitter.emit_number("4");
+      context.emitter.emit_op(0x13, "/", "bit mask quotient");
+      emit_store(context, scratch, "bit mask quotient");
+      context.emitter.emit_op(0x35, "К {x}", "bit mask remainder fraction");
+      context.emitter.emit_number("4");
+      context.emitter.emit_op(0x12, "*", "bit mask remainder scale");
+      context.emitter.emit_number("2");
+      context.emitter.emit_op(0x24, "F x^y", "bit mask power");
+      context.emitter.emit_number("0.5");
+      context.emitter.emit_op(0x10, "+", "bit mask round bias");
+      context.emitter.emit_op(0x34, "К [x]", "bit mask round");
+      emit_recall(context, scratch);
+      context.emitter.items.back().comment = "bit mask quotient";
+      context.emitter.emit_op(0x34, "К [x]", "bit mask digit index");
+      context.emitter.emit_number("1");
+      context.emitter.emit_op(0x10, "+", "bit mask decade index");
+      context.emitter.emit_op(0x15, "F 10^x", "bit mask decade");
+      context.emitter.emit_op(0x13, "/", "bit mask fractional place");
+      context.emitter.emit_number("8");
+      context.emitter.emit_op(0x10, "+", "bit mask anchor");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "compact-bit-mask-helper-body",
+          .detail = "Used number-entry stack lift in the shared bit_mask helper instead of "
+                    "explicit В↑ separators.",
+      });
+      context.emitter.emit_op(0x52, "В/О", "bit_mask return");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "bit-mask-helper",
+          .detail = "Emitted shared bit_mask helper using " + scratch + " with quotient reuse.",
+      });
+      context.optimizations.push_back(OptimizationReport{
+          .name = "shared-bit-mask-helper-layout",
+          .detail = "Selected shared bit_mask helper calls after full layout",
+      });
+      continue;
+    }
+
+    context.emitter.emit_op(0x0e, "В↑", "bit_mask helper argument lift");
+    emit_number_or_preload(context, "4", "preload stack const 4");
     context.emitter.emit_op(0x13, "/", "bit mask quotient");
     emit_store(context, scratch, "bit mask quotient");
     context.emitter.emit_op(0x35, "К {x}", "bit mask remainder fraction");
     context.emitter.emit_number("4");
     context.emitter.emit_op(0x12, "*", "bit mask remainder scale");
-    context.emitter.emit_number("2");
+    context.emitter.emit_op(0x0e, "В↑", "bit mask power base lift");
+    emit_number_or_preload(context, "2", "preload stack const 2");
     context.emitter.emit_op(0x24, "F x^y", "bit mask power");
-    context.emitter.emit_number("0.5");
+    context.emitter.emit_op(0x0e, "В↑", "bit mask round bias lift");
+    emit_number_or_preload(context, "0.5");
     context.emitter.emit_op(0x10, "+", "bit mask round bias");
     context.emitter.emit_op(0x34, "К [x]", "bit mask round");
     emit_recall(context, scratch);
-    context.emitter.items.back().comment = "bit mask quotient";
     context.emitter.emit_op(0x34, "К [x]", "bit mask digit index");
-    context.emitter.emit_number("1");
-    context.emitter.emit_op(0x10, "+", "bit mask decade index");
-    context.emitter.emit_op(0x15, "F 10^x", "bit mask decade");
+    if (has_preloaded_number(context, "1") && !has_preloaded_number(context, "10")) {
+      emit_number_or_preload(context, "1", "preload stack const 1");
+      context.emitter.emit_op(0x10, "+", "bit mask decade index");
+      context.emitter.emit_op(0x15, "F 10^x", "bit mask decade");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "bit-mask-decade-index-preload",
+          .detail = "Placed fractional-nibble bit masks with a preloaded stack 1 for int(q) + 1 "
+                    "before 10^x.",
+      });
+    } else {
+      context.emitter.emit_op(0x15, "F 10^x", "bit mask decade");
+      emit_number_or_preload(context, "10");
+      context.emitter.emit_op(0x12, "*", "bit mask next decade");
+      context.optimizations.push_back(OptimizationReport{
+          .name = "bit-mask-decade-scale",
+          .detail = "Placed fractional-nibble bit masks with 10^int(q) * 10 instead of "
+                    "entering int(q) + 1.",
+      });
+    }
     context.emitter.emit_op(0x13, "/", "bit mask fractional place");
-    context.emitter.emit_number("8");
+    context.emitter.emit_op(0x0e, "В↑", "bit mask anchor lift");
+    emit_number_or_preload(context, "8", "preload stack const 8");
     context.emitter.emit_op(0x10, "+", "bit mask anchor");
-    context.optimizations.push_back(OptimizationReport{
-        .name = "compact-bit-mask-helper-body",
-        .detail = "Used number-entry stack lift in the shared bit_mask helper instead of "
-                  "explicit В↑ separators.",
-    });
     context.emitter.emit_op(0x52, "В/О", "bit_mask return");
     context.optimizations.push_back(OptimizationReport{
         .name = "bit-mask-helper",
@@ -30564,57 +31815,7 @@ bool lower_bit_mask_helper(LoweringContext& context) {
         .name = "shared-bit-mask-helper-layout",
         .detail = "Selected shared bit_mask helper calls after full layout",
     });
-    return true;
   }
-
-  context.emitter.emit_op(0x0e, "В↑", "bit_mask helper argument lift");
-  emit_number_or_preload(context, "4", "preload stack const 4");
-  context.emitter.emit_op(0x13, "/", "bit mask quotient");
-  emit_store(context, scratch, "bit mask quotient");
-  context.emitter.emit_op(0x35, "К {x}", "bit mask remainder fraction");
-  context.emitter.emit_number("4");
-  context.emitter.emit_op(0x12, "*", "bit mask remainder scale");
-  context.emitter.emit_op(0x0e, "В↑", "bit mask power base lift");
-  emit_number_or_preload(context, "2", "preload stack const 2");
-  context.emitter.emit_op(0x24, "F x^y", "bit mask power");
-  context.emitter.emit_op(0x0e, "В↑", "bit mask round bias lift");
-  emit_number_or_preload(context, "0.5");
-  context.emitter.emit_op(0x10, "+", "bit mask round bias");
-  context.emitter.emit_op(0x34, "К [x]", "bit mask round");
-  emit_recall(context, scratch);
-  context.emitter.emit_op(0x34, "К [x]", "bit mask digit index");
-  if (has_preloaded_number(context, "1") && !has_preloaded_number(context, "10")) {
-    emit_number_or_preload(context, "1", "preload stack const 1");
-    context.emitter.emit_op(0x10, "+", "bit mask decade index");
-    context.emitter.emit_op(0x15, "F 10^x", "bit mask decade");
-    context.optimizations.push_back(OptimizationReport{
-        .name = "bit-mask-decade-index-preload",
-        .detail = "Placed fractional-nibble bit masks with a preloaded stack 1 for int(q) + 1 "
-                  "before 10^x.",
-    });
-  } else {
-    context.emitter.emit_op(0x15, "F 10^x", "bit mask decade");
-    emit_number_or_preload(context, "10");
-    context.emitter.emit_op(0x12, "*", "bit mask next decade");
-    context.optimizations.push_back(OptimizationReport{
-        .name = "bit-mask-decade-scale",
-        .detail = "Placed fractional-nibble bit masks with 10^int(q) * 10 instead of "
-                  "entering int(q) + 1.",
-    });
-  }
-  context.emitter.emit_op(0x13, "/", "bit mask fractional place");
-  context.emitter.emit_op(0x0e, "В↑", "bit mask anchor lift");
-  emit_number_or_preload(context, "8", "preload stack const 8");
-  context.emitter.emit_op(0x10, "+", "bit mask anchor");
-  context.emitter.emit_op(0x52, "В/О", "bit_mask return");
-  context.optimizations.push_back(OptimizationReport{
-      .name = "bit-mask-helper",
-      .detail = "Emitted shared bit_mask helper using " + scratch + " with quotient reuse.",
-  });
-  context.optimizations.push_back(OptimizationReport{
-      .name = "shared-bit-mask-helper-layout",
-      .detail = "Selected shared bit_mask helper calls after full layout",
-  });
   return true;
 }
 
@@ -30953,11 +32154,32 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
            (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr &&
             expression.expr->kind == "number");
   };
+  auto setup_literal_expression_text = [&](const Expression& expression) -> std::optional<std::string> {
+    if (expression.kind == "number")
+      return expression.raw;
+    if (expression.kind == "unary" && expression.op == "-" && expression.expr != nullptr &&
+        expression.expr->kind == "number") {
+      return "-" + expression.expr->raw;
+    }
+    return std::nullopt;
+  };
 
   auto setup_preload_value_for_initial = [&](const std::string& initial_text,
                                              int line) -> std::optional<SetupPreloadValue> {
     try {
       Expression initial = parse_expression(initial_text, line);
+      if (initial.kind == "identifier") {
+        const auto raw_constant_it = context.raw_constants.find(initial.name);
+        if (raw_constant_it != context.raw_constants.end()) {
+          const Expression raw_constant = parse_expression(raw_constant_it->second, line);
+          if (const std::optional<std::string> literal =
+                  setup_literal_expression_text(raw_constant)) {
+            return SetupPreloadValue{.value = *literal};
+          }
+        }
+      }
+      if (const std::optional<std::string> literal = setup_literal_expression_text(initial))
+        return SetupPreloadValue{.value = *literal};
       initial = inline_setup_constants(inline_setup_constants, initial);
       if (const std::optional<std::string> bitwise_literal =
               mk61_bitwise_display_literal_for_expression(initial)) {
@@ -34525,6 +35747,8 @@ preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items);
 void append_missing_preloaded_indirect_flow_comments(std::vector<MachineItem>& items,
                                                      const std::vector<PreloadReport>& preloads);
 
+constexpr int kPostLayoutOfficialProgramLimit = 105;
+
 int reference_indirect_flow_rescue_above(const ProgramAst& ast, const CompileOptions& options);
 
 CompileResult compile_source_once(std::string source, const CompileOptions& options) {
@@ -34590,8 +35814,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.single_bit_mask_op_copy_reuse = options.single_bit_mask_op_copy_reuse;
   context.share_random_cell = options.share_random_cell;
   context.hoist_shared_helpers = options.hoist_shared_helpers;
+  context.hoist_procs = options.hoist_procs;
   context.aggressive_terminal_direct = options.aggressive_terminal_direct;
+  context.aggressive_post_layout_indirect_flow = options.aggressive_post_layout_indirect_flow;
   context.preloaded_indirect_flow = options.preloaded_indirect_flow;
+  context.disable_candidate_search = options.disable_candidate_search;
+  context.free_residual_dispatch_scratch = options.free_residual_dispatch_scratch;
   context.invert_branch_order = options.invert_branch_order;
   context.preserve_dispatch_case_order = options.preserve_dispatch_case_order;
   context.order_procs_by_call_count = options.order_procs_by_call_count;
@@ -34614,6 +35842,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           .detail = "Lowered decimal recurrence to " + std::to_string(decimal_series->digits) +
                     "-digit MK-61 program.",
       });
+      hoist_machine_item_blocks(context.emitter.items, context.emitter.items.size(),
+                                context.emitter.items.size(), options.hoist_shared_helpers,
+                                options.hoist_procs);
     } else {
       pack_counter_stripes(*ast.v2, context.optimizations, false, std::nullopt);
       if (options.pack_counter_stripes) {
@@ -34788,8 +36019,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               lower_random_cell_helpers(context) && lower_expression_helpers(context) &&
               lower_near_any_helpers(context) && lower_line_count_helpers(context) &&
               lower_spatial_line_progression_helpers(context) &&
-              lower_spatial_sum_helpers(context) && lower_spatial_hit_helpers(context) &&
-              lower_bit_mask_helper(context) && lower_packed_score_helper(context)) {
+              lower_spatial_sum_helpers(context) && lower_bit_mask_helper(context) &&
+              lower_spatial_hit_helpers(context) && lower_packed_score_helper(context)) {
             emitted_tail = lower_segmented_bitplane_helpers(context);
           }
           if (emitted_tail) {
@@ -34838,6 +36069,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       exact_decimal_series ? core::passes::RunPassesResult{.items = context.emitter.items}
                            : core::passes::run_ir_passes(context.emitter.items, pass_options);
   result.registers = context.registers;
+  if (ast.v2.has_value())
+    hide_inline_x_param_report_registers(result.registers, context, *ast.v2);
   result.optimizations = context.optimizations;
   for (const core::passes::AppliedOptimization& optimization : optimized.optimizations) {
     result.optimizations.push_back(OptimizationReport{
@@ -34861,7 +36094,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
 
   if (!exact_decimal_series) {
     const int indirect_flow_rescue_above =
-        (pass_options.aggressive_post_layout_indirect_flow || pass_options.preloaded_indirect_flow)
+        pass_options.aggressive_post_layout_indirect_flow
             ? 0
             : reference_indirect_flow_rescue_above(ast, options);
     if (options.return_stack_script) {
@@ -35704,7 +36937,6 @@ std::optional<int> resolve_reference_span(const std::string& reference_name) {
 }
 
 int reference_indirect_flow_rescue_above(const ProgramAst& ast, const CompileOptions& options) {
-  constexpr int kPostLayoutOfficialProgramLimit = 105;
   if (!ast.reference.has_value())
     return kPostLayoutOfficialProgramLimit;
   const std::optional<int> span = resolve_reference_span(*ast.reference);
@@ -35930,21 +37162,39 @@ std::optional<std::string> indirect_register_from_opcode(int opcode) {
   return core::register_name_for_index(offset);
 }
 
+std::optional<std::string> store_register_from_opcode(int opcode) {
+  const int offset = opcode & 0x0f;
+  if (offset > 14)
+    return std::nullopt;
+  if (opcode - offset != 0x40)
+    return std::nullopt;
+  return core::register_name_for_index(offset);
+}
+
 std::vector<PreloadReport>
 preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items) {
   static const std::regex preload_pattern(R"(preloaded R([0-9a-e])=[^\s;]+ indirect-target=(\d+))",
                                           std::regex_constants::icase);
 
   std::vector<PreloadReport> preloads;
+  std::set<std::string> program_initialized_selectors;
   for (const MachineItem& item : items) {
     if (item.kind != MachineItemKind::Op || !item.comment.has_value())
       continue;
+    if (const std::optional<std::string> stored = store_register_from_opcode(item.opcode)) {
+      if (item.comment->starts_with("runtime indirect call selector"))
+        program_initialized_selectors.insert(*stored);
+      else
+        program_initialized_selectors.erase(*stored);
+    }
     std::smatch match;
     const std::string& comment = *item.comment;
     if (!std::regex_search(comment, match, preload_pattern))
       continue;
 
     const std::string register_name = register_from_text(match[1].str());
+    if (program_initialized_selectors.contains(register_name))
+      continue;
     const std::optional<std::string> opcode_register = indirect_register_from_opcode(item.opcode);
     if (!opcode_register.has_value() || *opcode_register != register_name)
       continue;
@@ -36002,7 +37252,12 @@ void append_missing_preloaded_indirect_flow_comments(std::vector<MachineItem>& i
       ++address;
       continue;
     }
-    const std::string existing = item.comment.value_or("");
+    std::string existing = item.comment.value_or("");
+    if (item.opcode == 0xe7 && existing.starts_with("direct tail branch for !=")) {
+      existing = "false branch for ==" +
+                 existing.substr(std::string("direct tail branch for !=").size());
+      item.comment = existing;
+    }
     if (existing.find("reuse stop tail at") != std::string::npos ||
         existing.find("reused stop tail at") != std::string::npos) {
       ++address;

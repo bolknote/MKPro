@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <map>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -888,6 +889,264 @@ std::vector<StateAst> lower_v2_states(const V2Program& program) {
   return {std::move(state)};
 }
 
+struct V2SpatialRewriteContext {
+  const V2Program* program = nullptr;
+  std::map<std::string, std::string> state_domains;
+  std::map<std::string, std::pair<int, int>> state_ranges;
+  std::map<std::string, std::string> world_encodings;
+};
+
+std::string lower_ascii_text(std::string value) {
+  std::ranges::transform(value, value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+std::string decimal_ones_expression_text(const std::string& expr) {
+  return "(" + expr + ") - 10 * int((" + expr + ") / 10)";
+}
+
+bool is_single_decimal_digit_expression(const std::string& expr,
+                                        const V2SpatialRewriteContext& context) {
+  const auto range = context.state_ranges.find(trim(expr));
+  return range != context.state_ranges.end() && range->second.first >= 0 &&
+         range->second.second <= 9;
+}
+
+std::optional<std::string> single_decimal_player_cells_field(
+    const V2Program& program, const std::string& domain,
+    const V2SpatialRewriteContext& context) {
+  const auto world = context.world_encodings.find(domain);
+  if (world == context.world_encodings.end() || world->second != "decimal_player")
+    return std::nullopt;
+  std::vector<std::string> names;
+  for (const V2StateField& field : program.state) {
+    if (field.type == "cells" && field.domain.has_value() && *field.domain == domain)
+      names.push_back(field.name);
+  }
+  return names.size() == 1U ? std::optional<std::string>(names.front()) : std::nullopt;
+}
+
+std::string cell_map_name_for_domain(const std::string& domain,
+                                     const V2SpatialRewriteContext& context) {
+  const V2Program& program = *context.program;
+  std::optional<std::string> explicit_map;
+  std::optional<std::string> domain_specific;
+  const std::string lower_domain = lower_ascii_text(domain);
+  for (const V2StateField& field : program.state) {
+    if (field.type != "packed")
+      continue;
+    const std::string lower_name = lower_ascii_text(field.name);
+    if (!explicit_map.has_value() && (lower_name == "plan" || lower_name == "map"))
+      explicit_map = field.name;
+    if (!domain_specific.has_value() &&
+        (lower_name == lower_domain + "_plan" || lower_name == lower_domain + "_map")) {
+      domain_specific = field.name;
+    }
+  }
+  if (domain_specific.has_value())
+    return *domain_specific;
+  if (explicit_map.has_value())
+    return *explicit_map;
+  if (const std::optional<std::string> cells =
+          single_decimal_player_cells_field(program, domain, context)) {
+    return *cells;
+  }
+  return "__cell_map_" + domain;
+}
+
+std::pair<std::optional<std::string>, std::optional<std::string>>
+cell_at_domain_and_position(const std::vector<std::string>& args,
+                            const V2SpatialRewriteContext& context) {
+  if (args.size() == 2U)
+    return {trim(args.at(0)), trim(args.at(1))};
+  if (args.size() != 1U)
+    return {std::nullopt, std::nullopt};
+  const std::string pos = trim(args.front());
+  const auto domain = context.state_domains.find(pos);
+  if (domain == context.state_domains.end())
+    return {std::nullopt, std::nullopt};
+  return {domain->second, pos};
+}
+
+std::string cell_at_index_expression_text(const std::string& pos, const std::string& domain,
+                                          const V2SpatialRewriteContext& context) {
+  const auto world = context.world_encodings.find(domain);
+  const std::string encoding = world == context.world_encodings.end() ? "" : world->second;
+  if (encoding == "row_scan" || encoding == "floor_plan" || encoding == "decimal_player" ||
+      encoding == "pier_to_ship") {
+    if (is_single_decimal_digit_expression(pos, context))
+      return pos;
+    return decimal_ones_expression_text(pos);
+  }
+  return pos;
+}
+
+std::optional<std::string> cell_at_expression_text(const std::vector<std::string>& args,
+                                                   const V2SpatialRewriteContext& context) {
+  auto [domain, pos] = cell_at_domain_and_position(args, context);
+  if (!domain.has_value() || !pos.has_value())
+    return std::nullopt;
+  return "digit_at(" + cell_map_name_for_domain(*domain, context) + ", " +
+         cell_at_index_expression_text(*pos, *domain, context) + ")";
+}
+
+std::optional<std::pair<std::size_t, std::size_t>>
+call_span_at(const std::string& text, std::size_t name_pos, const std::string& name) {
+  if (name_pos > 0 &&
+      is_identifier_continue(static_cast<unsigned char>(text.at(name_pos - 1)))) {
+    return std::nullopt;
+  }
+  std::size_t index = name_pos + name.size();
+  if (index < text.size() && is_identifier_continue(static_cast<unsigned char>(text.at(index))))
+    return std::nullopt;
+  while (index < text.size() && std::isspace(static_cast<unsigned char>(text.at(index))) != 0)
+    ++index;
+  if (index >= text.size() || text.at(index) != '(')
+    return std::nullopt;
+
+  const std::size_t open = index;
+  int depth = 0;
+  bool quote = false;
+  bool escaped = false;
+  for (; index < text.size(); ++index) {
+    const char ch = text.at(index);
+    if (quote) {
+      if (escaped)
+        escaped = false;
+      else if (ch == '\\')
+        escaped = true;
+      else if (ch == '"')
+        quote = false;
+      continue;
+    }
+    if (ch == '"') {
+      quote = true;
+      continue;
+    }
+    if (ch == '(') {
+      ++depth;
+      continue;
+    }
+    if (ch != ')')
+      continue;
+    --depth;
+    if (depth == 0)
+      return std::pair{open, index};
+    if (depth < 0)
+      return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+std::string rewrite_cell_at_calls(const std::string& text, const V2SpatialRewriteContext& context) {
+  static const std::string name = "cell_at";
+  std::string result;
+  std::size_t search = 0;
+  std::size_t copied = 0;
+  while (true) {
+    const std::size_t pos = text.find(name, search);
+    if (pos == std::string::npos)
+      break;
+    const std::optional<std::pair<std::size_t, std::size_t>> span =
+        call_span_at(text, pos, name);
+    if (!span.has_value()) {
+      search = pos + name.size();
+      continue;
+    }
+    const std::string raw_args = text.substr(span->first + 1, span->second - span->first - 1);
+    const std::optional<std::string> replacement =
+        cell_at_expression_text(split_args(raw_args), context);
+    if (!replacement.has_value()) {
+      search = span->second + 1;
+      continue;
+    }
+    result.append(text.substr(copied, pos - copied));
+    result.append(*replacement);
+    copied = span->second + 1;
+    search = copied;
+  }
+  if (copied == 0)
+    return text;
+  result.append(text.substr(copied));
+  return result;
+}
+
+void rewrite_optional_expression_text(std::optional<std::string>& text,
+                                      const V2SpatialRewriteContext& context) {
+  if (text.has_value())
+    *text = rewrite_cell_at_calls(*text, context);
+}
+
+void rewrite_display_items(std::vector<DisplayItem>& items,
+                           const V2SpatialRewriteContext& context) {
+  for (DisplayItem& item : items) {
+    if (!item.expr.has_value())
+      continue;
+    item.name = rewrite_cell_at_calls(item.name, context);
+    item.expr = parse_expression(item.name, item.line);
+  }
+}
+
+void rewrite_statement_spatial_expressions(V2Statement& statement,
+                                           const V2SpatialRewriteContext& context) {
+  rewrite_optional_expression_text(statement.expr, context);
+  if (statement.predicate.has_value()) {
+    statement.predicate->left = rewrite_cell_at_calls(statement.predicate->left, context);
+    statement.predicate->right = rewrite_cell_at_calls(statement.predicate->right, context);
+    statement.predicate->item = rewrite_cell_at_calls(statement.predicate->item, context);
+  }
+  if (statement.items.has_value())
+    rewrite_display_items(*statement.items, context);
+  for (std::string& arg : statement.args)
+    arg = rewrite_cell_at_calls(arg, context);
+  for (V2RawInput& input : statement.inputs)
+    input.expr = rewrite_cell_at_calls(input.expr, context);
+  for (V2Statement& child : statement.body)
+    rewrite_statement_spatial_expressions(child, context);
+  for (V2Statement& child : statement.then_body)
+    rewrite_statement_spatial_expressions(child, context);
+  for (V2Statement& child : statement.else_body)
+    rewrite_statement_spatial_expressions(child, context);
+  for (V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      rewrite_statement_spatial_expressions(*match_case.action, context);
+  }
+  if (statement.otherwise != nullptr)
+    rewrite_statement_spatial_expressions(*statement.otherwise, context);
+}
+
+V2SpatialRewriteContext build_spatial_rewrite_context(const V2Program& program) {
+  V2SpatialRewriteContext context;
+  context.program = &program;
+  for (const V2StateField& field : program.state) {
+    if (field.domain.has_value())
+      context.state_domains[field.name] = *field.domain;
+    if (field.min.has_value() && field.max.has_value())
+      context.state_ranges[field.name] = {*field.min, *field.max};
+  }
+  for (const V2World& world : program.worlds) {
+    if (world.position.has_value() && world.position->encoding.has_value())
+      context.world_encodings[world.name] = *world.position->encoding;
+  }
+  return context;
+}
+
+void rewrite_v2_spatial_expressions(V2Program& program) {
+  const V2SpatialRewriteContext context = build_spatial_rewrite_context(program);
+  for (V2Const& constant : program.consts)
+    constant.expr = rewrite_cell_at_calls(constant.expr, context);
+  for (V2StateField& field : program.state)
+    rewrite_optional_expression_text(field.initial, context);
+  for (V2Statement& statement : program.body)
+    rewrite_statement_spatial_expressions(statement, context);
+  for (V2Rule& rule : program.rules) {
+    for (V2Statement& statement : rule.body)
+      rewrite_statement_spatial_expressions(statement, context);
+  }
+}
+
 class Parser {
 public:
   Parser(std::string source, ParseOptions options)
@@ -942,6 +1201,7 @@ private:
         ++index_;
         append_implicit_read_state_fields(program);
         collect_inline_screens(program);
+        rewrite_v2_spatial_expressions(program);
         return program;
       }
       if (starts_with(line.text, "requires ")) {

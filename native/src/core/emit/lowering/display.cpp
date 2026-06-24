@@ -1051,7 +1051,7 @@ bool lower_dynamic_line_report_display_statement(DisplayEmitApi& api, LoweringCo
 
 bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                               const std::vector<DisplayItem>& items,
-                                              int source_line) {
+                                              const std::string& display_name, int source_line) {
   if (items.size() != 3U)
     return false;
   const DisplayItem& floor = items.at(0);
@@ -1093,7 +1093,7 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
     if (!api.emitter.items.empty() && !api.emitter.items.back().comment.has_value())
       api.emitter.items.back().comment = "display packed row expression";
     api.emit_recall(floor.name);
-    api.emitter.items.back().comment = "display packed row floor";
+    api.emitter.items.back().comment = "display " + display_name + " floor";
     api.emitter.emit_op(0x14, "<->", "display packed row expression merge", source_line);
     api.emitter.emit_op(0x0e, "В↑", "display packed row expression copy", source_line);
     api.emitter.emit_op(0x25, "F reverse", "display packed row expression rotate", source_line);
@@ -1107,14 +1107,14 @@ bool lower_floor_packed_row_display_statement(DisplayEmitApi& api, LoweringConte
     }
   } else {
     api.emit_recall(floor.name);
-    api.emitter.items.back().comment = "display packed row floor";
+    api.emitter.items.back().comment = "display " + display_name + " floor";
     api.emit_recall(row.name);
-    api.emitter.items.back().comment = "display packed row";
+    api.emitter.items.back().comment = "display " + display_name + " packed row";
     api.emitter.emit_op(0x14, "<->", "display packed row floor merge", source_line);
   }
   api.emitter.emit_op(0x25, "F reverse", "display packed row preserve", source_line);
   api.emitter.emit_op(0x0c, "ВП", "display packed row restore", source_line);
-  api.emitter.emit_op(0x50, "С/П", "show packed row", source_line);
+  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
   context.optimizations.push_back(OptimizationReport{
       .name =
           row.expr.has_value() ? "floor-packed-row-expression-display" : "floor-packed-row-display",
