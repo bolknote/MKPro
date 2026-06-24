@@ -2361,6 +2361,12 @@ void return_stack_script_matches_mk61_strategy_contract() {
     require(!has_optimization(result, "return-stack-dirty-dispatch"),
             "dirty-overflow repair should not report proof-only dirty-dispatch metadata");
     require(optimization_detail_contains(result, "return-stack-dirty-dispatch-allocator",
+                                         "Inserted 1 executable dirty-dispatch cell"),
+            "dirty-overflow repair metadata should expose the inserted safe cell count");
+    require(optimization_detail_contains(result, "return-stack-dirty-dispatch-allocator",
+                                         "across 1 fixed-point repair round"),
+            "dirty-overflow repair metadata should expose the fixed-point repair round count");
+    require(optimization_detail_contains(result, "return-stack-dirty-dispatch-allocator",
                                          "dirty target cell 78"),
             "dirty-overflow repair metadata should expose the proved dirty target cell");
     require(optimization_detail_contains(result, "return-stack-dirty-dispatch-allocator",
