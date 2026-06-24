@@ -1616,7 +1616,7 @@ std::optional<std::string> cfg_noop_return_target_label(
   return blocks.at(resolved->block_index).label;
 }
 
-std::vector<std::vector<std::size_t>> chain_derived_noop_call_subgroups(
+std::vector<std::vector<std::size_t>> chain_derived_call_subgroups(
     const std::vector<IrLabelBlock>& blocks, const std::map<std::string, std::size_t>& by_label,
     const IrCfg& cfg, const std::vector<std::size_t>& call_indices,
     const std::map<std::size_t, std::string>& target_by_call) {
@@ -1900,11 +1900,17 @@ std::optional<IrTailChainCandidate> same_target_call_group_opportunity(
     if (all_call_indices.size() < 2U)
       continue;
 
-    std::vector<std::vector<std::size_t>> subgroups;
+    std::vector<std::vector<std::size_t>> subgroups =
+        chain_derived_call_subgroups(blocks, by_label, cfg, all_call_indices, target_by_call);
+    std::set<std::vector<std::size_t>> seen_subgroups(subgroups.begin(), subgroups.end());
     if (all_call_indices.size() <= static_cast<std::size_t>(kMaxScriptReturns)) {
-      subgroups.push_back(all_call_indices);
+      if (seen_subgroups.insert(all_call_indices).second)
+        subgroups.push_back(all_call_indices);
     } else {
-      subgroups = bounded_call_subgroups(all_call_indices);
+      for (std::vector<std::size_t> subgroup : bounded_call_subgroups(all_call_indices)) {
+        if (seen_subgroups.insert(subgroup).second)
+          subgroups.push_back(std::move(subgroup));
+      }
     }
 
     const auto entry_it = by_label.find(target_label);
@@ -2052,7 +2058,7 @@ std::optional<IrTailChainCandidate> same_target_noop_helper_call_group_opportuni
   for (const auto& [target_label, all_call_indices] : calls_by_target) {
     (void)target_label;
     std::vector<std::vector<std::size_t>> subgroups =
-        chain_derived_noop_call_subgroups(blocks, by_label, cfg, all_call_indices,
+        chain_derived_call_subgroups(blocks, by_label, cfg, all_call_indices,
                                           target_by_call);
     std::set<std::vector<std::size_t>> seen_subgroups(subgroups.begin(), subgroups.end());
     for (std::vector<std::size_t> subgroup : bounded_call_subgroups(all_call_indices)) {

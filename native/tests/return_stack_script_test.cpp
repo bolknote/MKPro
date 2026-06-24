@@ -1301,6 +1301,45 @@ void return_stack_script_matches_mk61_strategy_contract() {
             "return-stack script scanning");
   }
 
+
+  {
+    std::vector<IrOp> ops;
+    for (int index = 1; index <= 12; ++index) {
+      ops.push_back(ir_label("noise_prefix_charge" + std::to_string(index)));
+      ops.push_back(ir_call("entry"));
+      ops.push_back(ir_label("noise_prefix_tail" + std::to_string(index)));
+      ops.push_back(ir_plain(index % 10));
+      ops.push_back(ir_stop());
+    }
+    for (int index = 5; index >= 1; --index) {
+      ops.push_back(ir_label("chain_charge" + std::to_string(index)));
+      ops.push_back(ir_call("entry"));
+      ops.push_back(ir_label("t" + std::to_string(index)));
+      if (index == 1) {
+        ops.push_back(ir_plain(1));
+        ops.push_back(ir_stop());
+      } else {
+        append(ops, direct_tail(index, "t" + std::to_string(index - 1)));
+      }
+      ops.push_back(ir_label("noise_between_charge" + std::to_string(index)));
+      ops.push_back(ir_call("entry"));
+      ops.push_back(ir_label("noise_between_tail" + std::to_string(index)));
+      ops.push_back(ir_plain((index + 3) % 10));
+      ops.push_back(ir_stop());
+    }
+    ops.push_back(ir_label("entry"));
+    append(ops, ir_jump_body("t5"));
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.has_opportunity && search.materialized &&
+                search.analysis.plan.existing_call_sites == 5 &&
+                search.analysis.plan.paid_call_sites == 0 &&
+                search.analysis.plan.transitions == 5,
+            "same-target ПП retargeting should recover chain-derived subgroups before bounded "
+            "combination search is exhausted by noise");
+  }
+
   {
     std::vector<IrOp> ops;
     ops.push_back(ir_label("charge1"));
