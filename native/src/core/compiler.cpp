@@ -1871,6 +1871,25 @@ void remove_state_fields_named(V2Program& program, const std::set<std::string>& 
   removed += static_cast<int>(before - program.state.size());
 }
 
+void materialize_rule_param_state_fields(V2Program& program) {
+  std::set<std::string> declared;
+  for (const V2StateField& field : program.state)
+    declared.insert(field.name);
+
+  for (const V2Rule& rule : program.rules) {
+    for (const std::string& param : rule.params) {
+      if (!declared.insert(param).second)
+        continue;
+      V2StateField field;
+      field.name = param;
+      field.type = "packed";
+      field.implicit = true;
+      field.line = rule.line;
+      program.state.push_back(std::move(field));
+    }
+  }
+}
+
 void elide_x_param_value_state_fields(V2Program& program,
                                       std::vector<OptimizationReport>& optimizations) {
   std::set<std::string> params;
@@ -6600,6 +6619,11 @@ bool is_coord_list_line_count_expression(const LoweringContext& context,
          is_coord_list_state_name(context, expression.args.front().name);
 }
 
+bool call_needs_binary_temp_for_register_collection(const LoweringContext& context,
+                                                    const Expression& expression) {
+  return expression.kind == "call" && context.rules.contains(expression.callee);
+}
+
 void add_coord_list_line_count_assignment_scratch(RegisterCollection& collection) {
   add_register_variable(collection, std::string(kCoordListPointer));
   add_register_variable(collection, std::string(kCoordListCounter));
@@ -6657,7 +6681,9 @@ void collect_locals_from_expression_excluding(LoweringContext& context,
   }
   if (expression.kind == "binary" && expression.op == "+" && expression.left != nullptr &&
       expression.right != nullptr && expression.left->kind == "call" &&
-      expression.right->kind == "call" && !can_reuse_x_param_value_call_temp(context, expression)) {
+      expression.right->kind == "call" && !can_reuse_x_param_value_call_temp(context, expression) &&
+      (call_needs_binary_temp_for_register_collection(context, *expression.left) ||
+       call_needs_binary_temp_for_register_collection(context, *expression.right))) {
     add_register_variable(collection, "__mkpro_call_1");
   }
   if (expression.kind == "identifier") {
@@ -6951,6 +6977,106 @@ void collect_locals_from_statement(LoweringContext& context, RegisterCollection&
     collect_locals_from_statement(context, collection, *statement.otherwise, nullptr, excluded);
 }
 
+struct AllocationMaskMembershipCondition {
+  std::string collection;
+  Expression mask;
+};
+
+std::optional<AllocationMaskMembershipCondition>
+match_allocation_mask_membership_condition(LoweringContext& context, const V2Predicate& predicate,
+                                           int line) {
+  if (predicate.kind != "v2_compare" || predicate.op != "!=")
+    return std::nullopt;
+
+  const Expression left = parse_expression(predicate.left, line);
+  const Expression right = parse_expression(predicate.right, line);
+  const auto match_bit_and = [](const Expression& expression)
+      -> std::optional<std::pair<std::string, Expression>> {
+    if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_and" ||
+        expression.args.size() != 2U)
+      return std::nullopt;
+    const Expression& first = expression.args.at(0);
+    const Expression& second = expression.args.at(1);
+    if (first.kind == "identifier")
+      return std::pair<std::string, Expression>{first.name, second};
+    if (second.kind == "identifier")
+      return std::pair<std::string, Expression>{second.name, first};
+    return std::nullopt;
+  };
+
+  if (is_zero_expression(context, right)) {
+    if (const auto membership = match_bit_and(left))
+      return AllocationMaskMembershipCondition{.collection = membership->first,
+                                               .mask = membership->second};
+  }
+  if (is_zero_expression(context, left)) {
+    if (const auto membership = match_bit_and(right))
+      return AllocationMaskMembershipCondition{.collection = membership->first,
+                                               .mask = membership->second};
+  }
+  return std::nullopt;
+}
+
+bool assignment_sets_membership_mask(const V2Statement& statement,
+                                     const AllocationMaskMembershipCondition& membership) {
+  if (statement.kind != "v2_assign" || !statement.expr.has_value())
+    return false;
+  const std::optional<std::string> target = scalar_assignment_target_name(statement);
+  if (!target.has_value() || *target != membership.collection)
+    return false;
+  const Expression expression = parse_expression(*statement.expr, statement.line);
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "bit_or" ||
+      expression.args.size() != 2U)
+    return false;
+  const auto matches = [&](const Expression& left, const Expression& right) {
+    return left.kind == "identifier" && left.name == membership.collection &&
+           expression_equals(right, membership.mask);
+  };
+  return matches(expression.args.at(0), expression.args.at(1)) ||
+         matches(expression.args.at(1), expression.args.at(0));
+}
+
+void collect_bit_mask_membership_set_scratch_from_statement(LoweringContext& context,
+                                                            RegisterCollection& collection,
+                                                            const V2Statement& statement) {
+  if (statement.kind == "v2_if" && statement.predicate.has_value() && !statement.negated) {
+    if (const std::optional<AllocationMaskMembershipCondition> membership =
+            match_allocation_mask_membership_condition(context, *statement.predicate,
+                                                       statement.line)) {
+      if (!statement.else_body.empty() &&
+          assignment_sets_membership_mask(statement.else_body.front(), *membership)) {
+        add_register_variable(collection, bit_mask_scratch_name(statement.line));
+      }
+    }
+  }
+
+  for (const V2Statement& child : statement.body)
+    collect_bit_mask_membership_set_scratch_from_statement(context, collection, child);
+  for (const V2Statement& child : statement.then_body)
+    collect_bit_mask_membership_set_scratch_from_statement(context, collection, child);
+  for (const V2Statement& child : statement.else_body)
+    collect_bit_mask_membership_set_scratch_from_statement(context, collection, child);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_bit_mask_membership_set_scratch_from_statement(context, collection,
+                                                             *match_case.action);
+  }
+  if (statement.otherwise != nullptr)
+    collect_bit_mask_membership_set_scratch_from_statement(context, collection,
+                                                           *statement.otherwise);
+}
+
+void collect_bit_mask_membership_set_scratch_registers(LoweringContext& context,
+                                                       RegisterCollection& collection,
+                                                       const V2Program& program) {
+  for (const V2Statement& statement : program.body)
+    collect_bit_mask_membership_set_scratch_from_statement(context, collection, statement);
+  for (const V2Rule& rule : program.rules) {
+    for (const V2Statement& statement : rule.body)
+      collect_bit_mask_membership_set_scratch_from_statement(context, collection, statement);
+  }
+}
+
 void collect_locals_from_x_param_first_statement(LoweringContext& context,
                                                  RegisterCollection& collection,
                                                  const XParamProcLowering& lowering) {
@@ -7023,6 +7149,106 @@ void apply_state_bank_selector_hints(const RegisterCollection& collection, Regis
       return;
     set_register_hint_if_absent(hints, collection.state_bank_selectors[index],
                                 RegisterHintMode::Prefer, preference[index]);
+  }
+}
+
+bool expression_uses_packed_grid_helper(const Expression& expression) {
+  if (expression.kind == "call" && packed_grid_macro_arity(lower_ascii(expression.callee)))
+    return true;
+  if (expression.index != nullptr && expression_uses_packed_grid_helper(*expression.index))
+    return true;
+  if (expression.expr != nullptr && expression_uses_packed_grid_helper(*expression.expr))
+    return true;
+  if (expression.left != nullptr && expression_uses_packed_grid_helper(*expression.left))
+    return true;
+  if (expression.right != nullptr && expression_uses_packed_grid_helper(*expression.right))
+    return true;
+  return std::any_of(expression.args.begin(), expression.args.end(),
+                     [](const Expression& arg) { return expression_uses_packed_grid_helper(arg); });
+}
+
+bool expression_text_uses_packed_grid_helper(const std::string& text, int line) {
+  try {
+    return expression_uses_packed_grid_helper(parse_expression(text, line));
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool statement_uses_packed_grid_helper(const V2Statement& statement) {
+  const auto visit_text = [&](const std::optional<std::string>& text) {
+    return text.has_value() && expression_text_uses_packed_grid_helper(*text, statement.line);
+  };
+  if (visit_text(statement.target) || visit_text(statement.expr))
+    return true;
+  for (const std::string& arg : statement.args) {
+    if (expression_text_uses_packed_grid_helper(arg, statement.line))
+      return true;
+  }
+  if (statement.predicate.has_value()) {
+    const V2Predicate& predicate = *statement.predicate;
+    if (predicate.kind == "v2_compare") {
+      if (expression_text_uses_packed_grid_helper(predicate.left, statement.line) ||
+          expression_text_uses_packed_grid_helper(predicate.right, statement.line)) {
+        return true;
+      }
+    } else if (predicate.kind == "v2_contains") {
+      if (expression_text_uses_packed_grid_helper(predicate.collection, statement.line) ||
+          expression_text_uses_packed_grid_helper(predicate.item, statement.line)) {
+        return true;
+      }
+    }
+  }
+  if (statement.items.has_value()) {
+    for (const DisplayItem& item : *statement.items) {
+      if (item.expr.has_value() && expression_uses_packed_grid_helper(*item.expr))
+        return true;
+      if (item.kind == "source" && !item.name.empty() &&
+          expression_text_uses_packed_grid_helper(item.name, item.line)) {
+        return true;
+      }
+    }
+  }
+  const auto any_statement = [](const std::vector<V2Statement>& statements) {
+    return std::any_of(statements.begin(), statements.end(), statement_uses_packed_grid_helper);
+  };
+  if (any_statement(statement.body) || any_statement(statement.then_body) ||
+      any_statement(statement.else_body)) {
+    return true;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    for (const std::string& value : match_case.values) {
+      if (expression_text_uses_packed_grid_helper(value, match_case.line))
+        return true;
+    }
+    if (match_case.action != nullptr && statement_uses_packed_grid_helper(*match_case.action))
+      return true;
+  }
+  return statement.otherwise != nullptr && statement_uses_packed_grid_helper(*statement.otherwise);
+}
+
+bool program_uses_packed_grid_helpers(const V2Program& program) {
+  const auto any_statement = [](const std::vector<V2Statement>& statements) {
+    return std::any_of(statements.begin(), statements.end(), statement_uses_packed_grid_helper);
+  };
+  if (any_statement(program.body))
+    return true;
+  return std::any_of(program.rules.begin(), program.rules.end(), [](const V2Rule& rule) {
+    return std::any_of(rule.body.begin(), rule.body.end(), statement_uses_packed_grid_helper);
+  });
+}
+
+void apply_packed_grid_register_hints(const V2Program& program,
+                                      const RegisterCollection& collection,
+                                      RegisterHints& hints) {
+  if (!program_uses_packed_grid_helpers(program))
+    return;
+  const std::vector<std::pair<std::string, int>> preferences = {
+      {"x", 0x1}, {"y", 0x2}, {"occupied", 0x9}, {"mask", 0x9}, {"lines", 0x4},
+  };
+  for (const auto& [name, index] : preferences) {
+    if (collection.variables.contains(name) && !hints.contains(name))
+      hints[name] = RegisterHint{.mode = RegisterHintMode::Prefer, .index = index};
   }
 }
 
@@ -9138,6 +9364,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
     }
   }
   collect_dispatch_scratch_registers(context, collection, program);
+  collect_bit_mask_membership_set_scratch_registers(context, collection, program);
   if (context.shared_bit_mask_helper_calls &&
       (program_requires_shared_bit_mask_scratch(context, program) ||
        program_desugars_to_named_bit_primitive(context, program))) {
@@ -9150,6 +9377,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
   apply_state_bank_selector_hints(collection, hints);
   apply_coord_list_item_register_hints(collection, hints);
   apply_segmented_bitplane_register_hints(context, collection, hints);
+  apply_packed_grid_register_hints(program, collection, hints);
   apply_unit_update_hints(context, program, collection, hints);
   apply_coord_list_register_hints(collection, hints);
   apply_packed_counter_register_hints(collection, hints);
@@ -11225,18 +11453,17 @@ void collect_preload_number_literals(const Expression& expression, ValueSet& val
     collect_preload_number_literals(*expression.right, values, occurrences);
   if (expression.kind == "call") {
     const std::string callee = lower_ascii(expression.callee);
+    if (const std::optional<std::size_t> arity = packed_grid_macro_arity(callee);
+        arity.has_value() && *arity == expression.args.size()) {
+      if (const std::optional<Expression> macro =
+              packed_grid_expression_macro(callee, expression.args)) {
+        collect_preload_number_literals(*macro, values, occurrences);
+        return;
+      }
+    }
     if (callee == "cell_mask" && expression.args.size() == 2U) {
       collect_preload_number_literals(
           cell_mask_expression(expression.args.at(0), expression.args.at(1)), values, occurrences);
-      return;
-    }
-    if (callee == "digit_at" && expression.args.size() == 2U) {
-      collect_preload_number_literals(
-          int_expression(multiply_expression(
-              frac_expression(divide_expression(expression.args.at(0),
-                                                pow10_expression(expression.args.at(1)))),
-              number_expression("10"))),
-          values, occurrences);
       return;
     }
   }
@@ -16289,16 +16516,12 @@ bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule&
     return false;
 
   const std::string tail = context.emitter.fresh_label("packed_line_family_score_tail");
-  if (!lower_expression_to_x(context, match->diagonal_add.line_value))
-    return false;
   if (!lower_expression_to_x(context, match->partial))
     return false;
   context.emitter.emit_jump(0x53, "ПП", tail, "packed-line shared diagonal score",
                             match->diagonal_add.line);
   mark_current_x(context, match->score);
 
-  if (!lower_expression_to_x(context, match->diagonal_sub.line_value))
-    return false;
   if (!lower_expression_to_x(context, match->partial))
     return false;
   context.emitter.emit_op(0x0b, "/-/", "packed-line negative diagonal index",
@@ -20869,6 +21092,36 @@ bool equality_true_fallthrough_leaves_zero(LoweringContext&, const V2Predicate& 
   }
 }
 
+bool statement_can_enter_packed_line_family_score_zero_entry(LoweringContext& context,
+                                                             const V2Statement* statement) {
+  if (statement == nullptr || statement->kind != "v2_invoke" || !statement->name.has_value() ||
+      !statement->args.empty()) {
+    return false;
+  }
+  const auto rule_it = context.rules.find(*statement->name);
+  return rule_it != context.rules.end() &&
+         packed_line_family_score_rule(context, *rule_it->second).has_value();
+}
+
+bool equality_true_fallthrough_can_feed_zero_accumulator(
+    LoweringContext& context, const V2Predicate& predicate, bool negated,
+    const std::vector<V2Statement>& then_body, int line) {
+  const std::optional<NormalizedZeroComparison> normalized =
+      normalize_zero_comparison(context, predicate, negated, line);
+  if (!normalized.has_value() || normalized->op != "==" ||
+      !guarded_can_test_against_zero_directly(normalized->op)) {
+    return false;
+  }
+  if (normalized->expression.kind == "call") {
+    const std::string callee = lower_ascii(normalized->expression.callee);
+    if (callee == "coord_list_has" || callee == "__mkpro_negative_zero_ge")
+      return false;
+  }
+  return expression_pure_for_substitution(normalized->expression) &&
+         statement_can_enter_packed_line_family_score_zero_entry(
+             context, then_body.empty() ? nullptr : &then_body.front());
+}
+
 bool inequality_false_branch_leaves_zero(LoweringContext& context, const V2Predicate& predicate,
                                          bool negated, int line) {
   const std::optional<NormalizedZeroComparison> normalized =
@@ -22671,7 +22924,11 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
       has_else && inequality_false_branch_leaves_zero(context, *selected.predicate,
                                                       selected.negated, selected.line);
   const bool true_fallthrough_known_zero = equality_true_fallthrough_leaves_zero(
-      context, *selected.predicate, selected.negated, selected.line);
+                                               context, *selected.predicate, selected.negated,
+                                               selected.line) ||
+                                           equality_true_fallthrough_can_feed_zero_accumulator(
+                                               context, *selected.predicate, selected.negated,
+                                               selected.then_body, selected.line);
   const std::string false_label = context.emitter.fresh_label(has_else ? "if_else" : "if_end");
   const std::string end_label = has_else ? context.emitter.fresh_label("if_end") : false_label;
   if (!lower_condition_false_branch(context, *selected.predicate, selected.negated, false_label,
@@ -32419,6 +32676,15 @@ fractional_selector_setup_preloads(const std::vector<PreloadReport>& setup_prelo
     return {};
 
   std::set<std::string> registers;
+  std::set<std::string> selector_values;
+  for (const FractionalConstantSelectorPlan& selector : context.fractional_constant_selectors) {
+    const std::string value = normalize_number_key(selector.value);
+    selector_values.insert(value);
+    if (const std::optional<std::string> preload_value =
+            fractional_selector_preload_value(value, selector.target)) {
+      selector_values.insert(normalize_number_key(*preload_value));
+    }
+  }
   for (const auto& [value, name] : ordered_preloaded_numbers(context)) {
     if (!fractional_constant_selector_for_value(context, value).has_value())
       continue;
@@ -32429,8 +32695,10 @@ fractional_selector_setup_preloads(const std::vector<PreloadReport>& setup_prelo
 
   std::vector<PreloadReport> result;
   for (const PreloadReport& preload : setup_preloads) {
-    if (registers.contains(preload.register_name))
+    if (registers.contains(preload.register_name) ||
+        selector_values.contains(normalize_number_key(preload.value))) {
       result.push_back(preload);
+    }
   }
   return result;
 }
@@ -35788,6 +36056,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     return result;
   }
   lower_small_case_matches(*ast.v2);
+  materialize_rule_param_state_fields(*ast.v2);
 
   LoweringContext context;
   context.program = &*ast.v2;

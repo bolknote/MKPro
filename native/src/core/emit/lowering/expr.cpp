@@ -118,24 +118,6 @@ bool lower_commutative_with_current_x(ExpressionEmitApi& api, LoweringContext& c
   return false;
 }
 
-bool lower_commutative_numeric_right_before_identifier(ExpressionEmitApi& api,
-                                                       const Expression& expression, int opcode) {
-  if (expression.op != "*" || expression.left == nullptr || expression.right == nullptr) {
-    return false;
-  }
-  if (expression.left->kind != "identifier" || expression.right->kind != "number")
-    return false;
-
-  if (!api.lower_expression_to_x(*expression.right))
-    return false;
-  if (!api.lower_expression_to_x(*expression.left))
-    return false;
-  api.emitter.emit_op(opcode, expression.op, "expr " + expression.op);
-  api.emitter.current_x_variable.reset();
-  api.emitter.current_x_aliases.clear();
-  return true;
-}
-
 bool compile_current_x_derivation(
     ExpressionEmitApi& api, const Expression& expression,
     const std::map<std::string, std::pair<int, std::string>>& unary_opcodes) {
@@ -159,6 +141,107 @@ bool compile_current_x_derivation(
     return false;
   api.emitter.emit_op(opcode_it->second.first, opcode_it->second.second, "current-X " + fn);
   return true;
+}
+
+int expression_precedence(const Expression& expression);
+
+int binary_precedence(const std::string& op) {
+  return op == "*" || op == "/" ? 2 : 1;
+}
+
+std::string expression_to_intent_text(const Expression& expression);
+
+std::string wrap_expression_text(const Expression& expression, int parent_precedence) {
+  const std::string text = expression_to_intent_text(expression);
+  return expression_precedence(expression) < parent_precedence ? "(" + text + ")" : text;
+}
+
+int expression_precedence(const Expression& expression) {
+  if (expression.kind == "unary")
+    return 3;
+  if (expression.kind == "binary")
+    return binary_precedence(expression.op);
+  return 4;
+}
+
+std::string expression_to_intent_text(const Expression& expression) {
+  if (expression.kind == "number")
+    return expression.raw;
+  if (expression.kind == "string") {
+    std::string text = "\"";
+    for (const char ch : expression.text) {
+      if (ch == '\\' || ch == '"')
+        text.push_back('\\');
+      text.push_back(ch);
+    }
+    text.push_back('"');
+    return text;
+  }
+  if (expression.kind == "identifier")
+    return expression.name;
+  if (expression.kind == "indexed") {
+    const std::string member = expression.field.has_value() ? "." + *expression.field : "";
+    return expression.base + "[" +
+           (expression.index == nullptr ? "" : expression_to_intent_text(*expression.index)) +
+           "]" + member;
+  }
+  if (expression.kind == "unary")
+    return "-" + (expression.expr == nullptr ? "" : wrap_expression_text(*expression.expr, 3));
+  if (expression.kind == "binary") {
+    const int precedence = binary_precedence(expression.op);
+    const int right_precedence =
+        precedence + (expression.op == "-" || expression.op == "/" ? 1 : 0);
+    return (expression.left == nullptr ? "" : wrap_expression_text(*expression.left, precedence)) +
+           " " + expression.op + " " +
+           (expression.right == nullptr ? "" : wrap_expression_text(*expression.right,
+                                                                     right_precedence));
+  }
+  if (expression.kind == "call") {
+    std::string text = expression.callee + "(";
+    for (std::size_t index = 0; index < expression.args.size(); ++index) {
+      if (index > 0)
+        text += ", ";
+      text += expression_to_intent_text(expression.args.at(index));
+    }
+    text += ")";
+    return text;
+  }
+  return "";
+}
+
+bool lower_commutative_call_with_current_x(
+    ExpressionEmitApi& api, LoweringContext& context, const Expression& expression,
+    const std::pair<int, std::string>& opcode,
+    const std::map<std::string, std::pair<int, std::string>>& unary_opcodes) {
+  const Expression& left = expression.args.at(0);
+  const Expression& right = expression.args.at(1);
+  if (is_simple_stack_load(right) && compile_current_x_derivation(api, left, unary_opcodes)) {
+    if (!api.lower_expression_to_x(right))
+      return false;
+    api.emitter.emit_op(opcode.first, opcode.second, lower_ascii(expression.callee) + "()");
+    api.emitter.current_x_variable.reset();
+    api.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "stack-current-x-scheduling",
+        .detail = "Reused " + expression_to_intent_text(left) +
+                  " already derivable from X for " + expression.callee + "().",
+    });
+    return true;
+  }
+  if (is_simple_stack_load(left) && compile_current_x_derivation(api, right, unary_opcodes)) {
+    if (!api.lower_expression_to_x(left))
+      return false;
+    api.emitter.emit_op(opcode.first, opcode.second, lower_ascii(expression.callee) + "()");
+    api.emitter.current_x_variable.reset();
+    api.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "stack-current-x-scheduling",
+        .detail = "Reused " + expression_to_intent_text(right) +
+                  " already derivable from X for " + expression.callee + "().",
+    });
+    return true;
+  }
+  return false;
 }
 
 std::optional<std::string> direct_integer_indexed_source(const Expression& expression) {
@@ -413,11 +496,6 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
   if ((expression.op == "+" || expression.op == "*") &&
       lower_commutative_with_current_x(api, context, expression,
                                        expression.op == "+" ? 0x10 : 0x12)) {
-    return true;
-  }
-
-  if (expression.op == "*" &&
-      lower_commutative_numeric_right_before_identifier(api, expression, 0x12)) {
     return true;
   }
 
@@ -799,6 +877,9 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
     }
     if (lower_commutative_call_with_destructive_selector_last(api, context, expression,
                                                               binary_it->second))
+      return true;
+    if (lower_commutative_call_with_current_x(api, context, expression, binary_it->second,
+                                             unary_opcodes))
       return true;
     if (callee == "pow") {
       if (!api.lower_expression_to_x(expression.args.at(1)))

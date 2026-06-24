@@ -1800,7 +1800,6 @@ std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& ite
                                              const std::vector<PreloadReport>& existing_preloads) {
   const bool trace = trace_post_layout_enabled();
   CompileOptions round_options = options_with_reserved_preloads(options, existing_preloads);
-  round_options.preloaded_indirect_flow = true;
 
   std::set<std::string> reserved;
   for (const auto& [register_name, value] : round_options.preloaded_constant_registers) {

@@ -42,7 +42,8 @@ void supported_examples_match_native_oracles() {
       "giants-country",    "human",          "jack-pot",
       "labyrinth777",      "lunar",          "minesweeper-9x7",
       "minesweeper-9x9",   "raja-yoga",      "river-battle",
-      "sea-battle",        "teleport",       "tiny-game",
+      "rambo-iii",         "sea-battle",     "teleport",
+      "tic-tac-toe",       "tiny-game",      "treasure-hunter-2",
       "wumpus",
   };
 
