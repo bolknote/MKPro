@@ -3374,7 +3374,13 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
 
   std::vector<MachineItem> candidate = layout_items;
   int total_padding = 0;
-  const int max_rounds = std::max(1, options.max_fixed_point_rounds);
+  const int max_rounds = options.max_fixed_point_rounds;
+  if (max_rounds <= 0) {
+    allocation.dispatch = std::move(existing);
+    allocation.rejection_reason =
+        "dirty return-stack dispatch allocator requires at least one fixed-point round";
+    return allocation;
+  }
   for (int round = 0; round < max_rounds; ++round) {
     DirtyReturnStackDispatchPlan current =
         plan_dirty_return_stack_dispatch(stack, return_count, candidate, options);

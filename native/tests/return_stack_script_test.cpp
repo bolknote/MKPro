@@ -2604,6 +2604,20 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(78) = stop();
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
+            {.size_rescue = true, .max_padding_cells = 2, .max_fixed_point_rounds = 0});
+    require(!allocation.allocated && allocation.fixed_point_rounds == 0 &&
+                allocation.rejection_reason.find("at least one fixed-point round") !=
+                    std::string::npos,
+            "dirty dispatch allocator should honor a zero fixed-point round budget instead of "
+            "silently running one repair round");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
     layout.at(78) = digit(8);
     const core::DirtyReturnStackDispatchPlan plan =
         core::plan_dirty_return_stack_dispatch({27, 35, 43, 51, 59}, 8, layout,
