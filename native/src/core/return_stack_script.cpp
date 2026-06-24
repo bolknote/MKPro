@@ -1208,15 +1208,22 @@ bool ir_target_equal_for_tail_fragment(
              canonical_tail_fragment_target_label(*blocks, *by_label, *cfg, *right_label);
 }
 
+bool ir_op_target_is_semantic_for_tail_fragment(const IrOp& op) {
+  return op.kind == IrKind::OrphanAddress || ir_op_can_reference_label(op);
+}
+
 bool ir_op_equal_for_tail_fragment(
     const IrOp& left, const IrOp& right, const std::vector<IrLabelBlock>* blocks = nullptr,
     const std::map<std::string, std::size_t>* by_label = nullptr, const IrCfg* cfg = nullptr) {
+  const bool target_semantic = ir_op_target_is_semantic_for_tail_fragment(left) ||
+                               ir_op_target_is_semantic_for_tail_fragment(right);
   return left.kind == right.kind && left.register_name == right.register_name &&
          left.condition == right.condition && left.counter == right.counter &&
          left.opcode == right.opcode &&
-         ir_target_equal_for_tail_fragment(left.target, right.target, blocks, by_label, cfg) &&
-         left.semantic == right.semantic && ir_meta_equal(left.meta, right.meta) &&
-         ir_target_meta_equal(left.target_meta, right.target_meta);
+         (!target_semantic ||
+          (ir_target_equal_for_tail_fragment(left.target, right.target, blocks, by_label, cfg) &&
+           ir_target_meta_equal(left.target_meta, right.target_meta))) &&
+         left.semantic == right.semantic && ir_meta_equal(left.meta, right.meta);
 }
 
 bool ir_tail_fragment_body_equal(
