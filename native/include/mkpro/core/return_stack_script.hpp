@@ -171,6 +171,7 @@ struct DirtyReturnStackDispatchOptions {
   int max_padding_cells = 12;
   int max_fixed_point_rounds = 4;
   bool allow_append_padding = true;
+  bool allow_insert_padding = true;
 };
 
 std::vector<int> mk61_return_stack_after_call(std::vector<int> stack,

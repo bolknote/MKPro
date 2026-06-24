@@ -2824,6 +2824,22 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(78) = stop();
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
+            {.size_rescue = true,
+             .max_padding_cells = 2,
+             .allow_append_padding = true,
+             .allow_insert_padding = false});
+    require(!allocation.allocated &&
+                allocation.rejection_reason.find("insert-padding search is disabled") !=
+                    std::string::npos,
+            "dirty dispatch allocator should honor disabled insert-padding search");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
     layout.at(78) = MachineItem::op(0x51, "БП");
     const core::DirtyReturnStackDispatchPlan plan =
         core::plan_dirty_return_stack_dispatch({27, 35, 43, 51, 59}, 6, layout,

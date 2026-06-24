@@ -3577,6 +3577,13 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
       continue;
     }
 
+    if (!options.allow_insert_padding) {
+      allocation.dispatch = std::move(current);
+      allocation.rejection_reason =
+          "dirty return-stack dispatch allocator insert-padding search is disabled";
+      return allocation;
+    }
+
     std::string absolute_target_remap_rejection;
     if (!remap_shifted_absolute_targets_after_insertion(candidate, target,
                                                         absolute_target_remap_rejection)) {
