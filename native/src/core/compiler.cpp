@@ -35098,6 +35098,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         bool dirty_allocator_applied = false;
         core::DirtyReturnStackDispatchAllocationPlan best_dirty_allocation;
         int dirty_allocator_padding = 0;
+        int dirty_allocator_append_padding = 0;
+        int dirty_allocator_insert_padding = 0;
         int dirty_allocator_rounds = 0;
         std::string dirty_rejection;
         if (return_stack_needs_size_rescue) {
@@ -35126,8 +35128,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                 const bool better_candidate = !dirty_allocator_applied ||
                                               candidate_flow_cells < best_candidate_flow_cells ||
                                               (candidate_flow_cells == best_candidate_flow_cells &&
-                                               dirty_allocation.padding_cells <
-                                                   best_dirty_allocation.padding_cells);
+                                               (dirty_allocation.padding_cells <
+                                                    best_dirty_allocation.padding_cells ||
+                                                (dirty_allocation.padding_cells ==
+                                                     best_dirty_allocation.padding_cells &&
+                                                 dirty_allocation.insert_padding_cells <
+                                                     best_dirty_allocation.insert_padding_cells)));
                 if (candidate_flow_cells < *current_flow_cells && better_candidate) {
                   dirty_allocator_applied = true;
                   best_candidate_flow_cells = candidate_flow_cells;
@@ -35135,8 +35141,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                 }
                 if (!dirty_allocator_applied &&
                     (dirty_allocator_padding == 0 ||
-                     dirty_allocation.padding_cells < dirty_allocator_padding)) {
+                     dirty_allocation.padding_cells < dirty_allocator_padding ||
+                     (dirty_allocation.padding_cells == dirty_allocator_padding &&
+                      dirty_allocation.insert_padding_cells < dirty_allocator_insert_padding))) {
                   dirty_allocator_padding = dirty_allocation.padding_cells;
+                  dirty_allocator_append_padding = dirty_allocation.append_padding_cells;
+                  dirty_allocator_insert_padding = dirty_allocation.insert_padding_cells;
                   dirty_allocator_rounds = dirty_allocation.fixed_point_rounds;
                 }
               }
@@ -35146,6 +35156,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           }
           if (dirty_allocator_applied) {
             dirty_allocator_padding = best_dirty_allocation.padding_cells;
+            dirty_allocator_append_padding = best_dirty_allocation.append_padding_cells;
+            dirty_allocator_insert_padding = best_dirty_allocation.insert_padding_cells;
             dirty_allocator_rounds = best_dirty_allocation.fixed_point_rounds;
           }
         } else {
@@ -35157,7 +35169,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           const std::string dirty_allocator_detail =
               "Applied dirty return-stack dispatch layout allocation with " +
               std::to_string(dirty_allocator_padding) + " executable cell" +
-              (dirty_allocator_padding == 1 ? "" : "s") + " after " +
+              (dirty_allocator_padding == 1 ? "" : "s") + " (" +
+              std::to_string(dirty_allocator_append_padding) + " appended, " +
+              std::to_string(dirty_allocator_insert_padding) + " inserted) after " +
               std::to_string(dirty_allocator_rounds) + " fixed-point round" +
               (dirty_allocator_rounds == 1 ? "" : "s") +
               " because the post-allocation indirect-flow pipeline is smaller.";
@@ -35174,7 +35188,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           const std::string dirty_allocator_detail =
               "Proved dirty return-stack dispatch layout allocation with " +
               std::to_string(dirty_allocator_padding) + " executable cell" +
-              (dirty_allocator_padding == 1 ? "" : "s") + " after " +
+              (dirty_allocator_padding == 1 ? "" : "s") + " (" +
+              std::to_string(dirty_allocator_append_padding) + " appended, " +
+              std::to_string(dirty_allocator_insert_padding) + " inserted) after " +
               std::to_string(dirty_allocator_rounds) + " fixed-point round" +
               (dirty_allocator_rounds == 1 ? "" : "s") +
               ", but did not apply it because the full post-allocation pipeline was not smaller.";
