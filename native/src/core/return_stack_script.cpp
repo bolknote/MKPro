@@ -3295,6 +3295,9 @@ DirtyReturnStackDispatchPlan plan_dirty_return_stack_dispatch(
   if (!options.size_rescue) {
     plan.rejection_reason = "dirty return-stack dispatch is disabled outside explicit "
                             "size-rescue mode";
+  } else if (options.min_dirty_targets <= 0) {
+    plan.rejection_reason =
+        "dirty return-stack dispatch requires at least one requested dirty target";
   } else if (static_cast<int>(plan.dirty_targets.size()) < options.min_dirty_targets) {
     plan.rejection_reason = "dirty return-stack dispatch did not expose enough dirty targets";
   } else {

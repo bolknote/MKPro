@@ -394,6 +394,17 @@ void return_stack_script_matches_mk61_strategy_contract() {
   }
 
   {
+    const core::DirtyReturnStackDispatchPlan plan =
+        core::plan_dirty_return_stack_dispatch(
+            {27, 35, 43, 51, 59}, 6,
+            {.size_rescue = true, .min_dirty_targets = 0});
+    require(!plan.enabled &&
+                plan.rejection_reason.find("at least one requested dirty target") !=
+                    std::string::npos,
+            "dirty overflow dispatch should reject a non-positive dirty-target request");
+  }
+
+  {
     std::vector<core::ReturnStackTailBlock> tails;
     tails.push_back(core::ReturnStackTailBlock{
         .label = "t1",
