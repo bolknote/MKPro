@@ -1436,6 +1436,28 @@ std::vector<std::string> symbolic_existing_callsite_hint_source_labels(
   return sources;
 }
 
+std::vector<std::string> symbolic_existing_callsite_hint_source_target_details(
+    const std::vector<IrLabelBlock>& blocks) {
+  const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
+  const IrCfg cfg = build_ir_cfg(blocks);
+  std::vector<std::string> details;
+  for (std::size_t index = 0; index + 1U < blocks.size(); ++index) {
+    const IrLabelBlock& block = blocks.at(index);
+    if (block.body.empty())
+      continue;
+    const IrOp& tail = block.body.back();
+    const std::optional<std::string> target = direct_symbolic_call_target(tail);
+    if (!target.has_value())
+      continue;
+    if (details.size() < 5U) {
+      details.push_back(block.label + "->" +
+                        cfg_canonical_symbolic_callsite_target_label(blocks, by_label, cfg,
+                                                                      *target));
+    }
+  }
+  return details;
+}
+
 std::map<std::string, int> symbolic_existing_callsite_hint_counts_by_target(
     const std::vector<IrLabelBlock>& blocks) {
   const std::map<std::string, std::size_t> by_label = block_index_by_label(blocks);
@@ -2924,6 +2946,8 @@ IrTailChainCandidateCollection collect_return_stack_ir_tail_candidates(
       symbolic_existing_callsite_hint_targets(*blocks);
   collection.search.symbolic_existing_callsite_source_labels =
       symbolic_existing_callsite_hint_source_labels(*blocks);
+  collection.search.symbolic_existing_callsite_source_target_details =
+      symbolic_existing_callsite_hint_source_target_details(*blocks);
   const std::map<std::string, int> symbolic_hint_groups =
       symbolic_existing_callsite_hint_counts_by_target(*blocks);
   collection.search.symbolic_existing_callsite_target_groups =

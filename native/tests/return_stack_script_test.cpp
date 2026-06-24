@@ -1095,9 +1095,12 @@ void return_stack_script_matches_mk61_strategy_contract() {
                 search.symbolic_existing_callsite_target_group_details ==
                     std::vector<std::string>({"shared_helper=2"}) &&
                 search.symbolic_existing_callsite_source_labels ==
-                    std::vector<std::string>({"first", "second"}),
+                    std::vector<std::string>({"first", "second"}) &&
+                search.symbolic_existing_callsite_source_target_details ==
+                    std::vector<std::string>({"first->shared_helper",
+                                              "second->shared_helper"}),
             "IR scanner should group symbolic terminal ПП hints by shared target label and "
-            "expose their source labels");
+            "expose their source labels/details");
   }
 
   {

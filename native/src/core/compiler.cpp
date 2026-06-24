@@ -35026,6 +35026,18 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                   tail_layout.symbolic_existing_callsite_target_group_details.at(index);
             }
           }
+          std::string source_target_details;
+          if (!tail_layout.symbolic_existing_callsite_source_target_details.empty()) {
+            source_target_details = "; source target details=";
+            for (std::size_t index = 0;
+                 index < tail_layout.symbolic_existing_callsite_source_target_details.size();
+                 ++index) {
+              if (index > 0)
+                source_target_details += ",";
+              source_target_details +=
+                  tail_layout.symbolic_existing_callsite_source_target_details.at(index);
+            }
+          }
           std::string source_labels;
           if (!tail_layout.symbolic_existing_callsite_source_labels.empty()) {
             source_labels = "; source labels=";
@@ -35046,6 +35058,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                   ", largest group=" +
                   std::to_string(tail_layout.symbolic_existing_callsite_largest_target_group) +
                   target_labels + target_group_details + source_labels +
+                  source_target_details +
                   "; counted as free charge sites only when a safe retargeting proof applies"));
         }
       }
