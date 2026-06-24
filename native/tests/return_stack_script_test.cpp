@@ -2894,12 +2894,30 @@ void return_stack_script_matches_mk61_strategy_contract() {
     const core::DirtyReturnStackDispatchAllocationPlan allocation =
         core::allocate_dirty_return_stack_dispatch_layout(
             {27, 35, 43, 51, 59}, 6, layout,
-            {.size_rescue = true, .max_padding_cells = 4, .max_insert_padding_cells = 0});
+            {.size_rescue = true,
+             .max_padding_cells = 4,
+             .max_append_padding_cells = 3,
+             .max_insert_padding_cells = 0});
     require(allocation.allocated && allocation.padding_cells == 3 &&
                 allocation.append_padding_cells == 3 && allocation.insert_padding_cells == 0 &&
                 allocation.fixed_point_rounds == 1 && allocation.size_rescue_only &&
                 !allocation.control_flow_rewrite_enabled && allocation.dispatch.layout_proved,
             "dirty dispatch allocator should append safe executable cells up to a dirty target");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(76);
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
+            {.size_rescue = true,
+             .max_padding_cells = 4,
+             .max_append_padding_cells = 2});
+    require(!allocation.allocated && allocation.padding_cells == 0 &&
+                allocation.append_padding_cells == 0 &&
+                allocation.rejection_reason.find("above append limit 2") !=
+                    std::string::npos,
+            "dirty dispatch allocator should honor a separate append padding budget");
   }
 
   {
@@ -2934,7 +2952,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
     const core::DirtyReturnStackDispatchAllocationPlan allocation =
         core::allocate_dirty_return_stack_dispatch_layout(
             {27, 35, 43, 51, 59}, 6, layout,
-            {.size_rescue = true, .max_padding_cells = 2});
+            {.size_rescue = true, .max_padding_cells = 2, .max_append_padding_cells = 0});
     require(allocation.allocated && allocation.padding_cells == 1 &&
                 allocation.append_padding_cells == 0 && allocation.insert_padding_cells == 1 &&
                 allocation.fixed_point_rounds == 1 && allocation.dispatch.layout_proved,

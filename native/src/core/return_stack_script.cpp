@@ -3575,6 +3575,16 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
             "dirty return-stack dispatch allocator append-padding search is disabled";
         return allocation;
       }
+      if (options.max_append_padding_cells >= 0 &&
+          total_append_padding + padding > options.max_append_padding_cells) {
+        allocation.dispatch = std::move(current);
+        allocation.rejection_reason =
+            "dirty return-stack dispatch allocator would need " +
+            std::to_string(total_append_padding + padding) +
+            " append padding cells, above append limit " +
+            std::to_string(options.max_append_padding_cells);
+        return allocation;
+      }
       for (int index = 0; index < padding; ++index)
         candidate.push_back(dirty_dispatch_safe_padding_cell());
       total_padding += padding;

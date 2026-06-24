@@ -171,6 +171,7 @@ struct DirtyReturnStackDispatchOptions {
   int min_dirty_targets = 1;
   bool expect_fallthrough = true;
   int max_padding_cells = 12;
+  int max_append_padding_cells = -1;
   int max_insert_padding_cells = -1;
   int max_fixed_point_rounds = 4;
   bool allow_append_padding = true;
