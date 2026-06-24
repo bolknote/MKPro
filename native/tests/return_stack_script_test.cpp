@@ -791,6 +791,9 @@ void return_stack_script_matches_mk61_strategy_contract() {
                 search.pipeline_candidate_final_cells < search.pipeline_current_final_cells,
             "pipeline-aware IR scanner should expose the full-pipeline win used by the compiler "
             "after measuring all materialized candidates");
+    require(search.rejection_reason.empty(),
+            "pipeline-aware IR scanner should clear local heuristic rejections after a full-"
+            "pipeline win");
   }
 
   {
