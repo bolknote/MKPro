@@ -2561,6 +2561,20 @@ void return_stack_script_matches_mk61_strategy_contract() {
   }
 
   {
+    std::vector<MachineItem> layout = repeated_stop_layout(14);
+    layout.at(12) = digit(8);
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {51, 59, 67, 75, 83}, 6, layout,
+            {.size_rescue = true, .max_padding_cells = -1});
+    require(allocation.allocated && allocation.dispatch.layout_proved &&
+                allocation.padding_cells == 0 && allocation.dispatch.dirty_targets ==
+                    std::vector<int>({12}),
+            "dirty dispatch allocator should accept already-proved layouts even when the "
+            "padding repair budget is negative because no padding search is needed");
+  }
+
+  {
     std::vector<MachineItem> layout = repeated_stop_layout(102);
     layout.at(100) = digit(8);
     layout.at(78) = stop();
