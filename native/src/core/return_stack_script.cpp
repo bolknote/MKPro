@@ -2676,14 +2676,23 @@ MachineItem dirty_dispatch_safe_padding_cell() {
   return pad;
 }
 
-bool layout_has_numeric_address_target_shifted_by_insertion(
-    const std::vector<MachineItem>& items, int insertion_address) {
-  return std::any_of(items.begin(), items.end(), [insertion_address](const MachineItem& item) {
+bool remap_numeric_address_targets_after_insertion(std::vector<MachineItem>& items,
+                                                    int insertion_address,
+                                                    std::string& rejection_reason) {
+  for (MachineItem& item : items) {
     if (item.kind != MachineItemKind::Address)
+      continue;
+    int* target = std::get_if<int>(&item.target);
+    if (target == nullptr || *target < insertion_address)
+      continue;
+    if (*target >= 104) {
+      rejection_reason = "dirty return-stack dispatch allocator cannot shift numeric address "
+                         "operands outside official 00..A4 cells";
       return false;
-    const int* target = std::get_if<int>(&item.target);
-    return target != nullptr && *target >= insertion_address;
-  });
+    }
+    *target += 1;
+  }
+  return true;
 }
 
 std::optional<int> insertion_index_preserving_labels_at_address(
@@ -3451,11 +3460,11 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
       continue;
     }
 
-    if (layout_has_numeric_address_target_shifted_by_insertion(candidate, target)) {
+    std::string numeric_remap_rejection;
+    if (!remap_numeric_address_targets_after_insertion(candidate, target,
+                                                       numeric_remap_rejection)) {
       allocation.dispatch = std::move(current);
-      allocation.rejection_reason =
-          "dirty return-stack dispatch allocator cannot shift layouts with numeric address "
-          "operands at or beyond the insertion address";
+      allocation.rejection_reason = numeric_remap_rejection;
       return allocation;
     }
     const MachineLayout candidate_layout = machine_layout(candidate);

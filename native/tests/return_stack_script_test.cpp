@@ -2677,11 +2677,26 @@ void return_stack_script_matches_mk61_strategy_contract() {
         core::allocate_dirty_return_stack_dispatch_layout(
             {27, 35, 43, 51, 59}, 6, layout,
             {.size_rescue = true, .max_padding_cells = 2});
+    const int* remapped_target = std::get_if<int>(&allocation.items.at(11).target);
+    require(allocation.allocated && allocation.padding_cells == 1 &&
+                allocation.fixed_point_rounds == 1 && allocation.dispatch.layout_proved &&
+                remapped_target != nullptr && *remapped_target == 79,
+            "dirty dispatch allocator should remap numeric targets shifted by repair insertion");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(105);
+    layout.at(10) = MachineItem::op(0x51, "БП");
+    layout.at(11) = MachineItem::address(104);
+    layout.at(78) = stop();
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
+            {.size_rescue = true, .max_padding_cells = 2});
     require(!allocation.allocated &&
-                allocation.rejection_reason.find("at or beyond the insertion address") !=
+                allocation.rejection_reason.find("outside official 00..A4 cells") !=
                     std::string::npos,
-            "dirty dispatch allocator should reject insertion layouts when numeric targets would "
-            "shift");
+            "dirty dispatch allocator should reject numeric target remaps beyond A4");
   }
 
   {
