@@ -2390,6 +2390,26 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<IrOp> ops;
+    ops.push_back(ir_label("jumping_raw"));
+    ops.push_back(ir_plain(9));
+    ops.push_back(ir_plain(7));
+    ops.push_back(ir_raw_jump("t1"));
+    ops.push_back(ir_label("jumping_semantic"));
+    ops.push_back(ir_plain(6));
+    ops.push_back(ir_plain(7));
+    ops.push_back(ir_jump("t1"));
+    ops.push_back(ir_label("t1"));
+    ops.push_back(ir_plain(1));
+    ops.push_back(ir_stop());
+
+    const core::ReturnStackIrTailLayoutSearch search =
+        core::analyze_return_stack_ir_tail_layout(ops);
+    require(search.extracted_tail_fragments == 1 && search.rewritten_tail_fragments == 2,
+            "IR tail layout scanner should deduplicate raw and semantic terminal БП suffixes");
+  }
+
+  {
+    std::vector<IrOp> ops;
     ops.push_back(ir_label("returning_a"));
     ops.push_back(ir_plain(9));
     ops.push_back(ir_plain(7));
