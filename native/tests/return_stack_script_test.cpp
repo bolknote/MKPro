@@ -2894,7 +2894,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
     const core::DirtyReturnStackDispatchAllocationPlan allocation =
         core::allocate_dirty_return_stack_dispatch_layout(
             {27, 35, 43, 51, 59}, 6, layout,
-            {.size_rescue = true, .max_padding_cells = 4});
+            {.size_rescue = true, .max_padding_cells = 4, .max_insert_padding_cells = 0});
     require(allocation.allocated && allocation.padding_cells == 3 &&
                 allocation.append_padding_cells == 3 && allocation.insert_padding_cells == 0 &&
                 allocation.fixed_point_rounds == 1 && allocation.size_rescue_only &&
@@ -2912,6 +2912,20 @@ void return_stack_script_matches_mk61_strategy_contract() {
                 allocation.rejection_reason.find("append-padding search is disabled") !=
                     std::string::npos,
             "dirty dispatch allocator should honor disabled append-padding search");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(78) = stop();
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
+            {.size_rescue = true, .max_padding_cells = 2, .max_insert_padding_cells = 0});
+    require(!allocation.allocated && allocation.padding_cells == 0 &&
+                allocation.insert_padding_cells == 0 &&
+                allocation.rejection_reason.find("above insert limit 0") !=
+                    std::string::npos,
+            "dirty dispatch allocator should honor a separate insertion padding budget");
   }
 
   {
