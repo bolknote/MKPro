@@ -81,7 +81,6 @@ struct ReturnStackIrTailLayoutSearch {
   int reused_generated_tail_fragments = 0;
   int reused_existing_tail_fragments = 0;
   int extracted_existing_callsite_fragments = 0;
-  int reused_generated_callsite_fragments = 0;
   int cfg_tail_entry_candidates = 0;
   int cfg_tail_valid_chain_candidates = 0;
   int cfg_tail_short_chain_candidates = 0;

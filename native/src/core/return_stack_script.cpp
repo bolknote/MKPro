@@ -815,7 +815,6 @@ struct ExtractedIrFragments {
   int reused_generated_tail_fragments = 0;
   int reused_existing_tail_fragments = 0;
   int existing_callsite_fragments = 0;
-  int reused_generated_callsite_fragments = 0;
 
   int total() const {
     return tail_fragments + existing_callsite_fragments;
@@ -1227,8 +1226,6 @@ bool ir_op_kind_equal_for_tail_fragment(const IrOp& left, const IrOp& right) {
     return left.kind == IrKind::Stop || right.kind == IrKind::Stop;
   if (left.opcode == 0x51 && right.opcode == 0x51)
     return left.kind == IrKind::Jump || right.kind == IrKind::Jump;
-  if (left.opcode == 0x53 && right.opcode == 0x53)
-    return left.kind == IrKind::Call || right.kind == IrKind::Call;
   return left.opcode == 0x52 && right.opcode == 0x52 &&
          (left.kind == IrKind::Return || right.kind == IrKind::Return);
 }
@@ -1400,40 +1397,25 @@ ExtractedIrFragments extract_terminal_tail_fragments(std::vector<IrLabelBlock>& 
   std::vector<IrLabelBlock> rewritten;
   rewritten.reserve(original_count * 2U);
   std::vector<IrLabelBlock> appended_fragments;
-  std::vector<IrLabelBlock> appended_callsite_fragments;
   ExtractedIrFragments extracted;
   for (std::size_t index = 0; index < original_count; ++index) {
     IrLabelBlock block = blocks.at(index);
     if (terminal_call_fragment_candidate(block)) {
+      const std::string fragment_label = unique_callsite_fragment_label(
+          labels, extracted.existing_callsite_fragments);
+      labels.insert(fragment_label);
+
       std::vector<IrOp> suffix;
-      suffix.push_back(block.body.back());
-
-      std::string fragment_label;
-      std::optional<IrLabelBlock> generated_fragment;
-      const std::optional<std::string> existing_fragment =
-          existing_tail_fragment_label_for_body(appended_callsite_fragments, suffix, blocks,
-                                                by_label, cfg);
-      if (existing_fragment.has_value()) {
-        fragment_label = *existing_fragment;
-        ++extracted.reused_generated_callsite_fragments;
-      } else {
-        fragment_label = unique_callsite_fragment_label(
-            labels, static_cast<int>(appended_callsite_fragments.size()));
-        labels.insert(fragment_label);
-        generated_fragment = IrLabelBlock{
-            .label = fragment_label,
-            .body = suffix,
-            .hidden = true,
-        };
-        appended_callsite_fragments.push_back(*generated_fragment);
-      }
-
+      suffix.push_back(std::move(block.body.back()));
       block.body.pop_back();
       block.body.push_back(synthetic_ir_jump_to_label(fragment_label));
 
       rewritten.push_back(std::move(block));
-      if (generated_fragment.has_value())
-        rewritten.push_back(std::move(*generated_fragment));
+      rewritten.push_back(IrLabelBlock{
+          .label = fragment_label,
+          .body = std::move(suffix),
+          .hidden = true,
+      });
       ++extracted.existing_callsite_fragments;
       continue;
     }
@@ -3153,8 +3135,6 @@ IrTailChainCandidateCollection collect_return_stack_ir_tail_candidates(
       extracted.reused_existing_tail_fragments;
   collection.search.extracted_existing_callsite_fragments =
       extracted.existing_callsite_fragments;
-  collection.search.reused_generated_callsite_fragments =
-      extracted.reused_generated_callsite_fragments;
   if (extracted.rewrites() > 0) {
     std::string extracted_rejection;
     consider_candidate(existing_call_chain_opportunity(extracted_blocks, extracted_rejection),

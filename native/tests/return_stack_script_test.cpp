@@ -1102,7 +1102,6 @@ void return_stack_script_matches_mk61_strategy_contract() {
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
     require(search.extracted_existing_callsite_fragments == 2 &&
-                search.reused_generated_callsite_fragments == 1 &&
                 search.symbolic_existing_callsite_hints == 2 &&
                 search.symbolic_existing_callsite_target_groups == 1 &&
                 search.symbolic_existing_callsite_largest_target_group == 2 &&
@@ -1137,7 +1136,6 @@ void return_stack_script_matches_mk61_strategy_contract() {
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
     require(search.extracted_existing_callsite_fragments == 2 &&
-                search.reused_generated_callsite_fragments == 1 &&
                 search.symbolic_existing_callsite_hints == 2 &&
                 search.symbolic_existing_callsite_target_groups == 1 &&
                 search.symbolic_existing_callsite_largest_target_group == 2 &&
@@ -1151,7 +1149,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
                     std::vector<std::string>({"first_raw->shared_helper",
                                               "second_semantic->shared_helper"}),
             "IR scanner should group mixed raw and semantic terminal ПП hints by shared target "
-            "label while reusing the generated callsite fragment");
+            "label and expose their source labels/details");
   }
 
   {
@@ -1174,7 +1172,6 @@ void return_stack_script_matches_mk61_strategy_contract() {
     const core::ReturnStackIrTailLayoutSearch search =
         core::analyze_return_stack_ir_tail_layout(ops);
     require(search.extracted_existing_callsite_fragments == 2 &&
-                search.reused_generated_callsite_fragments == 1 &&
                 search.symbolic_existing_callsite_hints == 2 &&
                 search.symbolic_existing_callsite_target_groups == 1 &&
                 search.symbolic_existing_callsite_largest_target_group == 2 &&
@@ -1188,7 +1185,7 @@ void return_stack_script_matches_mk61_strategy_contract() {
                     std::vector<std::string>({"first_raw->shared_helper",
                                               "second_semantic->shared_helper"}),
             "IR scanner should group mixed raw and semantic terminal ПП hints by CFG-resolved "
-            "target aliases while reusing the generated callsite fragment");
+            "target aliases and expose their source/count/canonical-target details");
   }
 
   {

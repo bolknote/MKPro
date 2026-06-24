@@ -36249,12 +36249,6 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               std::to_string(tail_layout.extracted_existing_callsite_fragments) +
               " terminal Call/ПП IR fragment" +
               (tail_layout.extracted_existing_callsite_fragments == 1 ? "" : "s");
-          if (tail_layout.reused_generated_callsite_fragments > 0) {
-            detail += ", reused " +
-                      std::to_string(tail_layout.reused_generated_callsite_fragments) +
-                      " generated callsite fragment" +
-                      (tail_layout.reused_generated_callsite_fragments == 1 ? "" : "s");
-          }
           detail += " before existing-callsite proof";
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-existing-callsite-fragments", detail));
