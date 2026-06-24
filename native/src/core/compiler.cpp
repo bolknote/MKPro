@@ -36097,6 +36097,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         pass_options.aggressive_post_layout_indirect_flow
             ? 0
             : reference_indirect_flow_rescue_above(ast, options);
+    bool return_stack_post_layout_changed = false;
     if (options.return_stack_script) {
       const std::size_t return_stack_budget =
           options.budget.has_value() && *options.budget > 0
@@ -36123,6 +36124,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                                                        .candidate_better;
         if (layout_aware_profitable) {
           post_layout_items = tail_layout.materialized_items;
+          return_stack_post_layout_changed = true;
           std::string detail = std::string("Materialized ") + std::to_string(plan.transitions) +
                                " IR tail block" + (plan.transitions == 1 ? "" : "s") +
                                " as a proven ПП return-stack charge chain before post-layout rewrite";
@@ -36319,6 +36321,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       post_layout_optimizations.insert(post_layout_optimizations.end(),
                                        return_stack_script.optimizations.begin(),
                                        return_stack_script.optimizations.end());
+      if (return_stack_script.applied > 0)
+        return_stack_post_layout_changed = true;
       if (return_stack_script.applied == 0) {
         const std::string rejection =
             core::explain_return_stack_script_rejection(post_layout_items);
@@ -36397,6 +36401,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         }
         if (dirty_allocator_applied) {
           post_layout_items = best_dirty_allocation.items;
+          return_stack_post_layout_changed = true;
           const std::string dirty_allocator_detail =
               "Applied dirty return-stack dispatch layout allocation with " +
               std::to_string(dirty_allocator_padding) + " executable cell" +
@@ -36439,12 +36444,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       }
     }
 
-    const core::PostLayoutIndirectFlowResult post_layout_overlay =
-        core::optimize_post_layout_address_code_overlay(post_layout_items);
-    post_layout_items = post_layout_overlay.items;
-    post_layout_optimizations.insert(post_layout_optimizations.end(),
-                                     post_layout_overlay.optimizations.begin(),
-                                     post_layout_overlay.optimizations.end());
+    if (return_stack_post_layout_changed) {
+      const core::PostLayoutIndirectFlowResult post_layout_overlay =
+          core::optimize_post_layout_address_code_overlay(post_layout_items);
+      post_layout_items = post_layout_overlay.items;
+      post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                       post_layout_overlay.optimizations.begin(),
+                                       post_layout_overlay.optimizations.end());
+    }
 
     const core::PostLayoutIndirectFlowResult post_layout_flow =
         core::optimize_post_layout_indirect_flow(post_layout_items, pass_options,
