@@ -36340,6 +36340,14 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           const std::vector<core::DirtyReturnStackDispatchAllocationPlan> dirty_allocations =
               core::allocate_dirty_return_stack_dispatch_layouts(
                   post_layout_items, core::DirtyReturnStackDispatchOptions{.size_rescue = true});
+          auto overlay_flow_cell_count = [&](const std::vector<MachineItem>& items) {
+            const core::PostLayoutIndirectFlowResult overlay_probe =
+                core::optimize_post_layout_address_code_overlay(items);
+            const core::PostLayoutIndirectFlowResult flow_probe =
+                core::optimize_post_layout_indirect_flow(overlay_probe.items, pass_options,
+                                                         indirect_flow_rescue_above);
+            return core::machine_cell_count(flow_probe.items);
+          };
           std::optional<int> current_flow_cells;
           int best_candidate_flow_cells = 0;
           for (const core::DirtyReturnStackDispatchAllocationPlan& dirty_allocation :
@@ -36348,17 +36356,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               dirty_dispatch_proved = true;
               if (dirty_allocation.padding_cells > 0) {
                 dirty_allocator_available = true;
-                if (!current_flow_cells.has_value()) {
-                  const core::PostLayoutIndirectFlowResult current_flow_probe =
-                      core::optimize_post_layout_indirect_flow(post_layout_items, pass_options,
-                                                               indirect_flow_rescue_above);
-                  current_flow_cells = core::machine_cell_count(current_flow_probe.items);
-                }
-                const core::PostLayoutIndirectFlowResult candidate_flow_probe =
-                    core::optimize_post_layout_indirect_flow(dirty_allocation.items, pass_options,
-                                                             indirect_flow_rescue_above);
-                const int candidate_flow_cells =
-                    core::machine_cell_count(candidate_flow_probe.items);
+                if (!current_flow_cells.has_value())
+                  current_flow_cells = overlay_flow_cell_count(post_layout_items);
+                const int candidate_flow_cells = overlay_flow_cell_count(dirty_allocation.items);
                 const bool better_candidate = !dirty_allocator_applied ||
                                               candidate_flow_cells < best_candidate_flow_cells ||
                                               (candidate_flow_cells == best_candidate_flow_cells &&
@@ -36408,7 +36408,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               std::to_string(dirty_allocator_insert_padding) + " inserted) after " +
               std::to_string(dirty_allocator_rounds) + " fixed-point round" +
               (dirty_allocator_rounds == 1 ? "" : "s") +
-              " because the post-allocation indirect-flow pipeline is smaller.";
+              " because the post-allocation overlay/indirect-flow pipeline is smaller.";
           post_layout_optimizations.push_back(core::passes::AppliedOptimization{
               .name = "return-stack-dirty-dispatch-allocator",
               .detail = dirty_allocator_detail,
@@ -36427,7 +36427,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               std::to_string(dirty_allocator_insert_padding) + " inserted) after " +
               std::to_string(dirty_allocator_rounds) + " fixed-point round" +
               (dirty_allocator_rounds == 1 ? "" : "s") +
-              ", but did not apply it because the full post-allocation pipeline was not smaller.";
+              ", but did not apply it because the post-allocation overlay/indirect-flow pipeline was not smaller.";
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-allocator-not-applied",
               dirty_allocator_detail));
@@ -36441,6 +36441,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         }
       }
     }
+
+    const core::PostLayoutIndirectFlowResult post_layout_overlay =
+        core::optimize_post_layout_address_code_overlay(post_layout_items);
+    post_layout_items = post_layout_overlay.items;
+    post_layout_optimizations.insert(post_layout_optimizations.end(),
+                                     post_layout_overlay.optimizations.begin(),
+                                     post_layout_overlay.optimizations.end());
 
     const core::PostLayoutIndirectFlowResult post_layout_flow =
         core::optimize_post_layout_indirect_flow(post_layout_items, pass_options,
@@ -36475,12 +36482,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                                      post_layout_stop_tail.optimizations.begin(),
                                      post_layout_stop_tail.optimizations.end());
 
-    const core::PostLayoutIndirectFlowResult post_layout_overlay =
+    const core::PostLayoutIndirectFlowResult post_layout_final_overlay =
         core::optimize_post_layout_address_code_overlay(post_layout_items);
-    post_layout_items = post_layout_overlay.items;
+    post_layout_items = post_layout_final_overlay.items;
     post_layout_optimizations.insert(post_layout_optimizations.end(),
-                                     post_layout_overlay.optimizations.begin(),
-                                     post_layout_overlay.optimizations.end());
+                                     post_layout_final_overlay.optimizations.begin(),
+                                     post_layout_final_overlay.optimizations.end());
+
   } else {
     if (options.return_stack_script && options.analysis) {
       result.diagnostics.push_back(diagnostic(
