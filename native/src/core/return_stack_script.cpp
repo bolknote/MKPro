@@ -2676,16 +2676,45 @@ MachineItem dirty_dispatch_safe_padding_cell() {
   return pad;
 }
 
+bool remap_proven_indirect_target_comment_after_insertion(MachineItem& item,
+                                                           int insertion_address,
+                                                           std::string& rejection_reason) {
+  if (!item.comment.has_value())
+    return true;
+
+  constexpr const char* kMarker = "indirect-target=";
+  std::string& comment = *item.comment;
+  const std::size_t marker = comment.find(kMarker);
+  if (marker == std::string::npos)
+    return true;
+
+  const std::size_t value_begin = marker + std::string(kMarker).size();
+  std::size_t cursor = value_begin;
+  int value = 0;
+  bool saw_digit = false;
+  while (cursor < comment.size() && comment.at(cursor) >= '0' && comment.at(cursor) <= '9') {
+    saw_digit = true;
+    value = value * 10 + (comment.at(cursor) - '0');
+    ++cursor;
+  }
+  if (!saw_digit || value < insertion_address)
+    return true;
+  if (value >= 104) {
+    rejection_reason = "dirty return-stack dispatch allocator cannot shift proven indirect "
+                       "target comments outside official 00..A4 cells";
+    return false;
+  }
+  comment.replace(value_begin, cursor - value_begin, std::to_string(value + 1));
+  return true;
+}
+
 bool remap_shifted_absolute_targets_after_insertion(std::vector<MachineItem>& items,
                                                      int insertion_address,
                                                      std::string& rejection_reason) {
   for (MachineItem& item : items) {
-    const std::optional<int> proven_indirect_target = proven_indirect_target_from_comment(item);
-    if (proven_indirect_target.has_value() && *proven_indirect_target >= insertion_address) {
-      rejection_reason = "dirty return-stack dispatch allocator cannot shift proven indirect "
-                         "target comments";
+    if (!remap_proven_indirect_target_comment_after_insertion(item, insertion_address,
+                                                              rejection_reason))
       return false;
-    }
 
     if (item.kind != MachineItemKind::Address)
       continue;
