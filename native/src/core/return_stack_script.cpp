@@ -1164,7 +1164,7 @@ std::string unique_callsite_fragment_label(const std::set<std::string>& labels, 
 }
 
 bool ir_meta_equal(const IrMeta& left, const IrMeta& right) {
-  return left.mnemonic == right.mnemonic && left.raw == right.raw;
+  return left.raw == right.raw;
 }
 
 bool ir_target_meta_equal(const IrTargetMeta& left, const IrTargetMeta& right) {
