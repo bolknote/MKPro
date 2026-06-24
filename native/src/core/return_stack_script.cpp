@@ -2676,10 +2676,17 @@ MachineItem dirty_dispatch_safe_padding_cell() {
   return pad;
 }
 
-bool remap_numeric_address_targets_after_insertion(std::vector<MachineItem>& items,
-                                                    int insertion_address,
-                                                    std::string& rejection_reason) {
+bool remap_shifted_absolute_targets_after_insertion(std::vector<MachineItem>& items,
+                                                     int insertion_address,
+                                                     std::string& rejection_reason) {
   for (MachineItem& item : items) {
+    const std::optional<int> proven_indirect_target = proven_indirect_target_from_comment(item);
+    if (proven_indirect_target.has_value() && *proven_indirect_target >= insertion_address) {
+      rejection_reason = "dirty return-stack dispatch allocator cannot shift proven indirect "
+                         "target comments";
+      return false;
+    }
+
     if (item.kind != MachineItemKind::Address)
       continue;
     int* target = std::get_if<int>(&item.target);
@@ -3460,11 +3467,11 @@ DirtyReturnStackDispatchAllocationPlan allocate_dirty_return_stack_dispatch_layo
       continue;
     }
 
-    std::string numeric_remap_rejection;
-    if (!remap_numeric_address_targets_after_insertion(candidate, target,
-                                                       numeric_remap_rejection)) {
+    std::string absolute_target_remap_rejection;
+    if (!remap_shifted_absolute_targets_after_insertion(candidate, target,
+                                                        absolute_target_remap_rejection)) {
       allocation.dispatch = std::move(current);
-      allocation.rejection_reason = numeric_remap_rejection;
+      allocation.rejection_reason = absolute_target_remap_rejection;
       return allocation;
     }
     const MachineLayout candidate_layout = machine_layout(candidate);

@@ -2701,6 +2701,22 @@ void return_stack_script_matches_mk61_strategy_contract() {
 
   {
     std::vector<MachineItem> layout = repeated_stop_layout(80);
+    layout.at(10) = MachineItem::op(0xa0, "КП");
+    layout.at(10).comment = "indirect-target=78";
+    layout.at(78) = stop();
+    const core::DirtyReturnStackDispatchAllocationPlan allocation =
+        core::allocate_dirty_return_stack_dispatch_layout(
+            {27, 35, 43, 51, 59}, 6, layout,
+            {.size_rescue = true, .max_padding_cells = 2});
+    require(!allocation.allocated &&
+                allocation.rejection_reason.find("proven indirect target comments") !=
+                    std::string::npos,
+            "dirty dispatch allocator should reject repair insertion that would stale a proven "
+            "indirect target comment");
+  }
+
+  {
+    std::vector<MachineItem> layout = repeated_stop_layout(80);
     layout.at(78) = stop();
     const core::DirtyReturnStackDispatchAllocationPlan allocation =
         core::allocate_dirty_return_stack_dispatch_layout(
