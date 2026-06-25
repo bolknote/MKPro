@@ -8959,15 +8959,6 @@ int stack_only_covered_run(
         stack_analysis_bit_or_update(parse_expression(*next->expr, next->line), *next->target,
                                      name))
       return 2;
-    if (next != nullptr && next->kind == "v2_invoke" && next->name.has_value()) {
-      const auto y_stack_it = y_stack_procs.find(*next->name);
-      const Expression expression = parse_expression(*statement.expr, statement.line);
-      if (y_stack_it != y_stack_procs.end() && y_stack_it->second.y_name == name &&
-          expression_pure_for_substitution(expression) &&
-          !expression_contains_identifier(expression, name)) {
-        return 2;
-      }
-    }
     if (next != nullptr && next->kind == "v2_assign" && third != nullptr &&
         third->kind == "v2_invoke" && third->name.has_value()) {
       const auto y_stack_it = y_stack_procs.find(*third->name);

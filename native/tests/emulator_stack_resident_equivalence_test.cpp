@@ -4,8 +4,12 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <map>
 #include <set>
 #include <string>
@@ -64,6 +68,23 @@ std::vector<int> step_opcodes(const std::vector<ResolvedStep>& steps) {
 bool has_optimization(const CompileResult& result, const std::string& name) {
   return std::any_of(result.optimizations.begin(), result.optimizations.end(),
                      [&](const OptimizationReport& entry) { return entry.name == name; });
+}
+
+bool has_error_diagnostic(const CompileResult& result) {
+  return std::any_of(result.diagnostics.begin(), result.diagnostics.end(),
+                     [](const Diagnostic& diagnostic) {
+                       return diagnostic.severity == DiagnosticSeverity::Error;
+                     });
+}
+
+std::string read_file(const std::filesystem::path& path) {
+  std::ifstream input(path);
+  if (!input) {
+    throw std::runtime_error("cannot read fixture: " + path.string());
+  }
+  std::ostringstream buffer;
+  buffer << input.rdbuf();
+  return buffer.str();
 }
 
 struct Observation {
@@ -235,6 +256,100 @@ program RepeatedUnaryArgEq {
     require(after.stopped == before.stopped, "repeated unary canonicalization stop state should match");
     require(after.registers.at(optimized_c) == before.registers.at(baseline_c),
             "repeated unary canonicalization registers should match");
+  }
+
+  const std::string impure_arg_source = R"mkpro(
+program ImpureArgGuard {
+  state {
+    c: packed = 100
+    seed: packed = 7
+  }
+  loop {
+    c -= sqr(random(seed))
+    c -= sqr(random(seed))
+    halt(c)
+  }
+}
+)mkpro";
+
+  {
+    const CompileResult canonicalized = compile_variant(impure_arg_source, false, true);
+    require(!has_error_diagnostic(canonicalized),
+            "impure-arg canonicalization should have no errors");
+    require(!has_optimization(canonicalized, "repeated-unary-update-arg-temp"),
+            "impure arg must not trigger repeated-unary-update-arg-temp");
+    const bool has_scratch = std::any_of(canonicalized.registers.begin(),
+                                         canonicalized.registers.end(), [](const auto& entry) {
+                                           return entry.first.rfind("__mkpro_unary_arg_", 0) == 0;
+                                         });
+    require(!has_scratch, "impure-arg canonicalization should not allocate unary arg scratch");
+  }
+
+  const std::string multi_group_source = R"mkpro(
+program MultiGroupUnaryEq {
+  state {
+    a: packed = 3
+    b: packed = 5
+    c: packed = 200
+    d: packed = 50
+  }
+  loop {
+    c -= sqr(a + 1)
+    d -= abs(a - b)
+    c -= sqr(b + 1)
+    d -= abs(b - a)
+    c = c + d
+    halt(c)
+  }
+}
+)mkpro";
+
+  {
+    const CompileResult baseline = compile_variant(multi_group_source, false, false);
+    const CompileResult canonicalized = compile_variant(multi_group_source, false, true);
+    require(!has_error_diagnostic(canonicalized),
+            "multi-group canonicalized stack-resident should compile");
+    require(has_optimization(canonicalized, "repeated-unary-update-arg-temp"),
+            "multi-group canonicalization should report repeated-unary-update-arg-temp");
+
+    std::size_t scratch_count = 0;
+    for (const auto& [name, _value] : canonicalized.registers) {
+      if (name.rfind("__mkpro_unary_arg_", 0) == 0)
+        ++scratch_count;
+    }
+    require(scratch_count == 1, "multi-group canonicalization should use one unary arg scratch");
+
+    const std::vector<int> baseline_codes = step_opcodes(baseline.steps);
+    const std::vector<int> canonicalized_codes = step_opcodes(canonicalized.steps);
+    const std::string baseline_c = baseline.registers.at("c");
+    const std::string canonicalized_c = canonicalized.registers.at("c");
+    const Observation before = observe(baseline_codes, {"В/О", "С/П"}, baseline.preloads, {baseline_c});
+    const Observation after =
+        observe(canonicalized_codes, {"В/О", "С/П"}, canonicalized.preloads, {canonicalized_c});
+    require(after.stopped == before.stopped, "multi-group canonicalization stop state should match");
+    require(after.display == before.display,
+            "multi-group canonicalization display should match baseline");
+    require(after.registers.at(canonicalized_c) == before.registers.at(baseline_c),
+            "multi-group canonicalization register value should match");
+  }
+
+  const std::filesystem::path root = std::filesystem::current_path();
+  const std::array<const char*, 4> pending_programs = {
+      "examples/tic-tac-toe.mkpro",
+      "examples/cave-treasure.mkpro",
+      "examples/giants-country.mkpro",
+      "examples/pending-optimizer/tic-tac-toe-4x4.mkpro",
+  };
+  for (const char* file : pending_programs) {
+    CompileOptions options;
+    options.stack_resident_temps = true;
+    options.analysis = true;
+    options.budget = 999999;
+    const CompileResult result = compile_source(read_file(root / file), options);
+    require(result.implemented, "stack-resident example should implement " + std::string(file));
+    require(!has_error_diagnostic(result), "stack-resident example should not emit errors: " +
+                                             std::string(file));
+    require(!result.steps.empty(), "stack-resident example should emit steps: " + std::string(file));
   }
 }
 
