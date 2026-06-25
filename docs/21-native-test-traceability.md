@@ -19,6 +19,17 @@ closed merely because nearby native coverage exists.
 The native runner supports:
 
 ```sh
+# Preferred parity gate (optimized)
+cmake --preset release && cmake --build --preset release && ctest --preset release
+# or:
+npm run native:test
+
+# Fast local cycle for sanitizer/debug triage
+cmake --preset debug && cmake --build --preset debug && ctest --preset debug
+# or:
+npm run native:test:debug
+
+# Targeted single test (works on any preset)
 build/debug/native/mkpro_tests --list
 build/debug/native/mkpro_tests --exact opcode_catalog_matches_typescript_contract
 ctest --preset debug -R mkpro.opcode_catalog_matches_typescript_contract --output-on-failure
