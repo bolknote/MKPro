@@ -117,6 +117,7 @@ Diagnostic diagnostic(DiagnosticSeverity severity, std::string code, std::string
 constexpr int kMk61ReturnStackLimit = 5;
 constexpr int kDisplayHelperMinSavings = 4;
 constexpr std::string_view kRepeatedUnaryUpdateArgPrefix = "__mkpro_unary_arg_";
+constexpr std::string_view kFunctionTailArgPrefix = "__mkpro_tail_arg_";
 constexpr std::string_view kNegativeZeroDegreeRegister = "__negative_zero_degree";
 constexpr std::string_view kNegativeZeroDegreeSelectorGe = "__mkpro_negative_zero_ge";
 constexpr std::string_view kNegativeZeroDegreePreloadValue = "1|-00";
@@ -126,6 +127,13 @@ using FunctionEdgeMap = std::map<std::string, std::map<std::string, int>>;
 bool has_errors(const std::vector<Diagnostic>& diagnostics) {
   return std::any_of(diagnostics.begin(), diagnostics.end(), [](const Diagnostic& item) {
     return item.severity == DiagnosticSeverity::Error;
+  });
+}
+
+bool has_register_allocation_failure(const std::vector<Diagnostic>& diagnostics) {
+  return std::any_of(diagnostics.begin(), diagnostics.end(), [](const Diagnostic& item) {
+    return item.severity == DiagnosticSeverity::Error &&
+           item.message.find("Out of MK-61 registers while allocating") != std::string::npos;
   });
 }
 
@@ -140,6 +148,10 @@ std::optional<Expression> cell_set_mask_expression_for_collection(const Lowering
 std::optional<Expression> cell_mask_expression_for_collection(const LoweringContext& context,
                                                               const std::string& collection,
                                                               const Expression& cell);
+
+std::string function_tail_arg_scratch_name(const std::string& function_name, std::size_t index) {
+  return std::string(kFunctionTailArgPrefix) + function_name + "_" + std::to_string(index);
+}
 
 bool statement_contains_return(const V2Statement& statement) {
   if (statement.kind == "v2_return")
@@ -6138,6 +6150,62 @@ void add_register_variable(RegisterCollection& collection, std::string name) {
     collection.variables.insert(std::move(name));
 }
 
+void collect_function_tail_call_scratch_from_statements(
+    const std::map<std::string, const V2Rule*>& function_rules, RegisterCollection& collection,
+    const std::vector<V2Statement>& statements);
+
+void collect_function_tail_call_scratch_from_statement(
+    const std::map<std::string, const V2Rule*>& function_rules, RegisterCollection& collection,
+    const V2Statement& statement) {
+  if (statement.kind == "v2_return" && statement.expr.has_value()) {
+    const Expression expression = parse_expression(*statement.expr, statement.line);
+    if (expression.kind == "call") {
+      const auto target_it = function_rules.find(expression.callee);
+      if (target_it != function_rules.end() &&
+          !match_x_param_return_decay(*target_it->second).has_value() &&
+          !match_x_param_stack_stop_risk_rule(*target_it->second).has_value()) {
+        for (std::size_t index = 0; index < expression.args.size(); ++index)
+          add_register_variable(collection,
+                                function_tail_arg_scratch_name(target_it->second->name, index));
+      }
+    }
+  }
+
+  collect_function_tail_call_scratch_from_statements(function_rules, collection, statement.body);
+  collect_function_tail_call_scratch_from_statements(function_rules, collection,
+                                                    statement.then_body);
+  collect_function_tail_call_scratch_from_statements(function_rules, collection,
+                                                    statement.else_body);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_function_tail_call_scratch_from_statement(function_rules, collection,
+                                                       *match_case.action);
+  }
+  if (statement.otherwise != nullptr)
+    collect_function_tail_call_scratch_from_statement(function_rules, collection,
+                                                     *statement.otherwise);
+}
+
+void collect_function_tail_call_scratch_from_statements(
+    const std::map<std::string, const V2Rule*>& function_rules, RegisterCollection& collection,
+    const std::vector<V2Statement>& statements) {
+  for (const V2Statement& statement : statements)
+    collect_function_tail_call_scratch_from_statement(function_rules, collection, statement);
+}
+
+void collect_function_tail_call_scratch_registers(RegisterCollection& collection,
+                                                  const V2Program& program) {
+  std::map<std::string, const V2Rule*> function_rules;
+  for (const V2Rule& rule : program.rules) {
+    if (statements_contain_return(rule.body))
+      function_rules[rule.name] = &rule;
+  }
+  if (function_rules.empty())
+    return;
+  for (const V2Rule& rule : program.rules)
+    collect_function_tail_call_scratch_from_statements(function_rules, collection, rule.body);
+}
+
 std::optional<double> numeric_match_value_for_register_collection(LoweringContext& context,
                                                                   const std::string& value,
                                                                   int line) {
@@ -9367,6 +9435,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
       }
     }
   }
+  collect_function_tail_call_scratch_registers(collection, program);
   collect_dispatch_scratch_registers(context, collection, program);
   collect_bit_mask_membership_set_scratch_registers(context, collection, program);
   if (context.shared_bit_mask_helper_calls &&
@@ -9403,8 +9472,10 @@ void index_rules(LoweringContext& context, const V2Program& program) {
 int register_index_for(LoweringContext& context, const std::string& name) {
   const auto it = context.register_index_by_name.find(name);
   if (it == context.register_index_by_name.end()) {
-    context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                                             "No native register allocated for '" + name + "'"));
+    if (!has_register_allocation_failure(context.diagnostics)) {
+      context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                               "No native register allocated for '" + name + "'"));
+    }
     return 0;
   }
   return it->second;
@@ -9673,8 +9744,8 @@ bool try_emit_constant_synthesis(LoweringContext& context, const std::string& ke
       const std::optional<long long> source = safe_integer_number(value);
       if (!source.has_value())
         continue;
-      const long long squared = *source * *source;
-      if (squared != *target)
+      const __int128 squared = static_cast<__int128>(*source) * static_cast<__int128>(*source);
+      if (squared != static_cast<__int128>(*target))
         continue;
       accept(SynthesisPlan{
           .cost = 2,
@@ -11247,6 +11318,47 @@ bool lower_random_world_call_to_x(LoweringContext& context, const V2World& world
   return lower_random_span_call_to_x(context, *span, *base, "world", source_line);
 }
 
+std::string random_span_expression_text(int span, int base) {
+  std::string text = "int(random(" + std::to_string(span) + "))";
+  if (base > 0)
+    text += " + " + std::to_string(base);
+  else if (base < 0)
+    text += " - " + std::to_string(-base);
+  return text;
+}
+
+std::optional<std::string> domain_random_expression_text(const LoweringContext& context,
+                                                         const Expression& expression) {
+  if (expression.kind != "call" || lower_ascii(expression.callee) != "random" ||
+      expression.args.size() != 1U || expression.args.front().kind != "identifier") {
+    return std::nullopt;
+  }
+  const std::string& domain = expression.args.front().name;
+  if (const auto board_it = context.boards.find(domain);
+      board_it != context.boards.end() && board_it->second != nullptr) {
+    const std::optional<int> span = board_random_span(*board_it->second);
+    const std::optional<int> base = board_random_base(*board_it->second);
+    if (span.has_value() && base.has_value())
+      return random_span_expression_text(*span, *base);
+  }
+  if (const auto world_it = context.worlds.find(domain);
+      world_it != context.worlds.end() && world_it->second != nullptr) {
+    const std::optional<int> span = world_random_span(*world_it->second);
+    const std::optional<int> base = world_random_base(*world_it->second);
+    if (span.has_value() && base.has_value())
+      return random_span_expression_text(*span, *base);
+  }
+  return std::nullopt;
+}
+
+std::string expression_comment_text(const LoweringContext& context, const Expression& expression) {
+  if (const std::optional<std::string> domain_random =
+          domain_random_expression_text(context, expression)) {
+    return *domain_random;
+  }
+  return expression_to_source(expression);
+}
+
 bool emit_segmented_line_count_tens_digit(LoweringContext& context, const Expression& expression,
                                           int source_line, const std::string& comment) {
   if (!lower_expression_to_x(context, expression))
@@ -12492,7 +12604,7 @@ void reserve_preloaded_number_at(LoweringContext& context, const std::string& re
 }
 
 bool reserve_bit_mask_helper_preloads(LoweringContext& context) {
-  for (const std::string& value : {"4", "2", "0.5", "1", "8"}) {
+  for (const std::string& value : {"4", "0.5", "1", "8"}) {
     (void)reserve_preloaded_number(context, value);
   }
   return true;
@@ -13189,7 +13301,7 @@ bool emit_inline_bit_mask_from_current_x_with_quotient_scratch(LoweringContext& 
   context.emitter.emit_op(0x12, "*", "bit mask remainder scale", source_line);
   emit_number_or_preload(context, "2", "preload stack const 2", source_line);
   context.emitter.emit_op(0x24, "F x^y", "bit mask power", source_line);
-  emit_number_or_preload(context, "0.5");
+  emit_number_or_preload(context, "0.5", std::nullopt, source_line);
   context.emitter.emit_op(0x10, "+", "bit mask round bias", source_line);
   context.emitter.emit_op(0x34, "К [x]", "bit mask round", source_line);
   const std::size_t quotient_recall_size = context.emitter.items.size();
@@ -15261,8 +15373,10 @@ bool lower_display_statement(LoweringContext& context, const V2Statement& statem
           display_api, context, *statement.items, display_name, statement.line))
     return true;
 
-  if (core::emit::lower_decimal_point_display_statement(display_api, context, *statement.items,
-                                                        statement.line))
+  const std::string decimal_point_display_name =
+      statement.inline_name.value_or(statement.name.value_or("decimal-point display"));
+  if (core::emit::lower_decimal_point_display_statement(
+          display_api, context, *statement.items, decimal_point_display_name, statement.line))
     return true;
 
   const std::optional<std::string> strategy = select_display_strategy(context, statement);
@@ -15324,6 +15438,15 @@ void report_terminal_literal_stop(LoweringContext& context, const std::string& l
 bool lower_literal_terminal_stop(LoweringContext& context, const std::string& literal, int line) {
   if (literal.empty()) {
     context.emitter.emit_op(0x50, "С/П", "show __halt_literal_" + std::to_string(line), line);
+    report_terminal_literal_stop(context, literal, line);
+    return true;
+  }
+
+  if (normalize_number_key(literal) == "0") {
+    context.emitter.emit_number("0");
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "halt";
+    context.emitter.emit_op(0x50, "С/П", "halt", line);
     report_terminal_literal_stop(context, literal, line);
     return true;
   }
@@ -15715,6 +15838,8 @@ bool lower_tiny_terminal_call(LoweringContext& context, const std::string& name)
   }
   if (name == "ignored") {
     context.emitter.emit_number("0");
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "halt";
     context.emitter.emit_op(0x50, "С/П", "halt");
     return true;
   }
@@ -15733,6 +15858,8 @@ bool lower_human_terminal_call(LoweringContext& context, const std::string& name
     return lower_decrement_update(context, "food", "set ", 0);
   if (name == "ignored") {
     context.emitter.emit_number("0");
+    if (!context.emitter.items.empty())
+      context.emitter.items.back().comment = "halt";
     context.emitter.emit_op(0x50, "С/П", "halt");
     return true;
   }
@@ -16066,6 +16193,8 @@ bool lower_rule_arguments(LoweringContext& context, const V2Rule& rule,
                                              "Too many native arguments for '" + rule.name + "'"));
     return false;
   }
+  const bool terminal_rule =
+      statements_always_stop(context, rule.body) && !statements_contain_return(rule.body);
   for (std::size_t index = 0; index < args.size(); ++index) {
     std::vector<const Expression*> nested_calls;
     collect_expression_calls(args.at(index), nested_calls);
@@ -16079,7 +16208,8 @@ bool lower_rule_arguments(LoweringContext& context, const V2Rule& rule,
     if (!lower_expression_to_x(context, args.at(index)))
       return false;
     emit_store(context, rule.params.at(index),
-               "arg " + rule.params.at(index) + " for " + rule.name);
+               terminal_rule ? "set " + rule.params.at(index)
+                             : "arg " + rule.params.at(index) + " for " + rule.name);
   }
   return true;
 }
@@ -16535,7 +16665,7 @@ bool lower_packed_line_family_score_rule(LoweringContext& context, const V2Rule&
     return false;
   context.emitter.emit_op(0x10, "+", "packed-line diagonal index", match->diagonal_add.line);
   context.emitter.emit_jump(0x53, "ПП", function_label(match->normalizer),
-                            "call function " + match->normalizer, match->diagonal_add.line);
+                            "proc call " + match->normalizer, match->diagonal_add.line);
   mark_current_x(context, match->normalizer_return);
   context.emitter.emit_jump(0x53, "ПП", helper, "packed-line score accumulator helper",
                             match->diagonal_add.line);
@@ -17586,7 +17716,7 @@ bool lower_packed_line_family_mutating_update_rule(LoweringContext& context, con
       return false;
     if (step.normalizer.has_value()) {
       context.emitter.emit_jump(0x53, "ПП", function_label(*step.normalizer),
-                                "call function " + *step.normalizer, step.source_line);
+                                "proc call " + *step.normalizer, step.source_line);
       mark_current_x(context, match->update.y_name);
     }
     if (index + 1U == match->steps.size()) {
@@ -17618,7 +17748,7 @@ bool lower_packed_line_family_update_rule(LoweringContext& context, const V2Rule
       return false;
     if (step.normalizer.has_value()) {
       context.emitter.emit_jump(0x53, "ПП", function_label(*step.normalizer),
-                                "call function " + *step.normalizer, step.source_line);
+                                "proc call " + *step.normalizer, step.source_line);
       mark_current_x(context, match->update.y_name);
     } else {
       mark_current_x(context, match->update.y_name);
@@ -18341,14 +18471,15 @@ bool lower_expression_to_x(LoweringContext& context, const Expression& expressio
   if (const RandomCellHelperRequest* helper = shared_random_cell_helper(context, expression);
       helper != nullptr) {
     context.emitter.emit_jump(0x53, "ПП", helper->label,
-                              "random cell " + expression_to_source(expression));
+                              "random cell " + expression_comment_text(context, expression));
     context.emitter.current_x_variable.reset();
     context.emitter.current_x_aliases.clear();
     context.emitter.current_x_expression.reset();
     context.emitter.current_x_known_zero = false;
     context.optimizations.push_back(OptimizationReport{
         .name = "random-cell-helper-call",
-        .detail = "Reused shared random cell helper for " + expression_to_source(expression) + ".",
+        .detail = "Reused shared random cell helper for " +
+                  expression_comment_text(context, expression) + ".",
     });
     return true;
   }
@@ -18418,11 +18549,13 @@ bool lower_coord_list_contains_false_branch(LoweringContext& context, const V2Pr
                                             bool negated, const std::string& false_label,
                                             int source_line,
                                             std::optional<std::string> branch_comment) {
+  const bool entered_with_allocation_failure =
+      has_register_allocation_failure(context.diagnostics);
   const std::optional<std::vector<std::string>> items =
       coord_list_items_for(context, trim_ascii(predicate.collection));
   if (!items.has_value())
     return false;
-  if (has_errors(context.diagnostics))
+  if (!entered_with_allocation_failure && has_errors(context.diagnostics))
     return false;
 
   const std::string list_name = trim_ascii(predicate.collection);
@@ -18463,6 +18596,12 @@ bool lower_coord_list_contains_false_branch(LoweringContext& context, const V2Pr
       });
       return true;
     }
+    if (entered_with_allocation_failure) {
+      context.diagnostics.push_back(
+          diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                     "Function coord_list_has expects one argument."));
+      return false;
+    }
   }
 
   if (negated) {
@@ -18499,7 +18638,9 @@ bool lower_cells_contains_false_branch_with_bit_mask_helper(
     return false;
   }
 
-  const Expression item = parse_expression(predicate.item, source_line);
+  Expression item = parse_expression(predicate.item, source_line);
+  const V2Board* board = board_for_cells_mask(context, identifier_expression(collection));
+  item = spatial_bit_index_expression_for_board(board, std::move(item));
   if (!lower_expression_to_x(context, item))
     return false;
   if (!emit_bit_mask_helper_call_from_current_x(context, source_line))
@@ -18574,7 +18715,9 @@ bool lower_cells_contains_false_branch_with_spatial_hit_helper(
   if (!context.register_index_by_name.contains(scratch))
     return false;
 
-  const Expression item = parse_expression(predicate.item, source_line);
+  Expression item = parse_expression(predicate.item, source_line);
+  const V2Board* board = board_for_cells_mask(context, identifier_expression(collection));
+  item = spatial_bit_index_expression_for_board(board, std::move(item));
   if (!lower_expression_to_x(context, item))
     return false;
   if (!emit_spatial_hit_helper_call_from_current_x(context, collection, source_line))
@@ -19503,12 +19646,14 @@ bool lower_negative_zero_threshold_flow_false_branch(LoweringContext& context,
 bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& predicate,
                                   bool negated, const std::string& false_label, int source_line,
                                   std::optional<std::string> branch_comment) {
+  const bool entered_with_errors = has_errors(context.diagnostics);
+
   if (predicate.kind == "v2_contains") {
     if (lower_coord_list_contains_false_branch(context, predicate, negated, false_label,
                                                source_line, branch_comment)) {
       return true;
     }
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
 
     const std::string collection = trim_ascii(predicate.collection);
@@ -19518,7 +19663,7 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
               context, predicate, negated, false_label, source_line, branch_comment)) {
         return true;
       }
-      if (has_errors(context.diagnostics))
+      if (!entered_with_errors && has_errors(context.diagnostics))
         return false;
     }
 
@@ -19526,21 +19671,21 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
             context, predicate, negated, false_label, source_line, branch_comment)) {
       return true;
     }
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
 
     if (lower_cells_contains_false_branch_with_mask_expression(
             context, predicate, negated, false_label, source_line, branch_comment)) {
       return true;
     }
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
 
     if (lower_cells_contains_false_branch_with_bit_mask_helper(
             context, predicate, negated, false_label, source_line, branch_comment)) {
       return true;
     }
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
 
     const V2StateField* collection_field =
@@ -19580,7 +19725,7 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
   if (lower_negative_zero_threshold_flow_false_branch(context, effective_predicate, false_label,
                                                       source_line))
     return true;
-  if (has_errors(context.diagnostics))
+  if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
 
   const auto [selected_predicate, normalized] =
@@ -19597,13 +19742,13 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
   if (lower_near_any_helper_condition_false_branch(context, selected_predicate, false_label,
                                                    source_line))
     return true;
-  if (has_errors(context.diagnostics))
+  if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
 
   if (lower_small_set_condition_false_branch(context, selected_predicate, negated, false_label,
                                              source_line))
     return true;
-  if (has_errors(context.diagnostics))
+  if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
 
   if (lower_remainder_zero_false_branch(context, selected_predicate, false_label, source_line,
@@ -19613,7 +19758,7 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
   if (lower_segmented_bitplane_condition_false_branch(context, selected_predicate, false_label,
                                                       source_line, branch_comment))
     return true;
-  if (has_errors(context.diagnostics))
+  if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
 
   if (lower_direct_zero_false_branch(context, selected_predicate, false_label, source_line,
@@ -19622,7 +19767,7 @@ bool lower_condition_false_branch(LoweringContext& context, const V2Predicate& p
   if (lower_equality_with_current_x(context, selected_predicate, false_label, source_line,
                                     branch_comment))
     return true;
-  if (has_errors(context.diagnostics))
+  if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
 
   if (lower_negated_zero_false_branch(context, selected_predicate, false_label, source_line,
@@ -22888,20 +23033,22 @@ bool lower_statement_block_with_excluded_values(
 }
 
 bool lower_if_statement(LoweringContext& context, const V2Statement& statement) {
+  const bool entered_with_errors = has_errors(context.diagnostics);
+
   if (statement.kind != "v2_if" || !statement.predicate.has_value())
     return false;
 
   if (lower_domain_error_guard(context, statement))
     return true;
-  if (has_errors(context.diagnostics))
+  if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
   if (lower_negative_zero_terminal_select(context, statement))
     return true;
-  if (has_errors(context.diagnostics))
+  if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
   if (lower_arithmetic_if_branch_removal(context, statement))
     return true;
-  if (has_errors(context.diagnostics))
+  if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
   if (lower_nested_guard_shared_failure(context, statement))
     return true;
@@ -22911,7 +23058,7 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     return true;
   if (lower_local_terminal_else_tail(context, statement))
     return true;
-  if (has_errors(context.diagnostics))
+  if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
 
   const V2Statement selected = branch_order_statement(context, statement);
@@ -23277,8 +23424,12 @@ bool lower_cells_contains_clear_if(LoweringContext& context, const V2Statement& 
       context.register_index_by_name.contains(spatial_hit_scratch_name(collection));
   if (!lower_membership_clear_operands_to_stack(context, collection, item, statement.line))
     return false;
-  context.emitter.emit_op(0x37, "К ∧", "bit membership test", statement.line);
-  context.emitter.emit_op(0x35, "К {x}", "bit membership fraction", statement.line);
+  context.emitter.emit_op(0x37, "К ∧",
+                          uses_shared_membership_helper ? "bit membership test" : "bit_and()",
+                          statement.line);
+  context.emitter.emit_op(0x35, "К {x}",
+                          uses_shared_membership_helper ? "bit membership fraction" : "frac()",
+                          statement.line);
   if (!uses_shared_membership_helper)
     context.emitter.emit_op(0x32, "К ЗН", "sign()", statement.line);
   context.emitter.emit_jump(0x57, "F x≠0", false_label, "false branch for !=", statement.line);
@@ -24259,7 +24410,9 @@ bool lower_single_bit_mask_op_assignment(LoweringContext& context, const V2State
   const std::string scratch = bit_mask_scratch_name(statement.line);
   if (!context.registers.contains(scratch))
     return false;
-  const Expression item = parse_expression(*statement.expr, statement.line);
+  Expression item = parse_expression(*statement.expr, statement.line);
+  const V2Board* board = board_for_cells_mask(context, identifier_expression(target_expression.name));
+  item = spatial_bit_index_expression_for_board(board, std::move(item));
   if (!lower_expression_to_x(context, item))
     return false;
   if (!emit_inline_bit_mask_from_current_x_with_quotient_scratch(context, scratch,
@@ -24321,6 +24474,8 @@ bool lower_x_param_value_scratch_assignment(LoweringContext& context, const V2St
 }
 
 bool lower_update_statement(LoweringContext& context, const V2Statement& statement) {
+  const bool entered_with_errors = has_errors(context.diagnostics);
+
   if (!statement.target.has_value() || !statement.expr.has_value() || !statement.op.has_value())
     return false;
   if (context.constants.contains(*statement.target)) {
@@ -24333,13 +24488,15 @@ bool lower_update_statement(LoweringContext& context, const V2Statement& stateme
   if (target_expression.kind == "identifier" &&
       is_coord_list_state_name(context, target_expression.name) && statement.op == "-=") {
     const Expression item = parse_expression(*statement.expr, statement.line);
-    if (lower_coord_list_remove_update(context, target_expression.name, item, statement.line))
-      return true;
-    if (has_errors(context.diagnostics))
-      return false;
+    if (!entered_with_errors) {
+      if (lower_coord_list_remove_update(context, target_expression.name, item, statement.line))
+        return true;
+      if (has_errors(context.diagnostics))
+        return false;
+    }
     context.diagnostics.push_back(
         diagnostic(DiagnosticSeverity::Error, "native-unsupported",
-                   "Cannot lower removable coord_list '" + target_expression.name + "'"));
+                   "Cannot lower removable coord_list '" + target_expression.name + "'."));
     return false;
   }
   if (target_expression.kind == "identifier" &&
@@ -25593,6 +25750,8 @@ void report_intent_read_lowering(LoweringContext& context, int line) {
 
 bool lower_statement(LoweringContext& context, const V2Statement& statement,
                      const V2Statement* next_statement) {
+  const bool entered_with_errors = has_errors(context.diagnostics);
+
   if (statement.kind == "v2_block") {
     return lower_statement_block(context, statement.body);
   }
@@ -25604,7 +25763,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
   if (statement.kind == "v2_loop") {
     if (lower_loop_carried_prompt_statement(context, statement))
       return true;
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
     const std::string label = context.emitter.fresh_label("loop");
     context.emitter.emit_label(label);
@@ -25676,6 +25835,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
     }
     if (next_statement != nullptr && next_statement->kind == "v2_match") {
       context.emitter.emit_op(0x50, "С/П", "read " + *statement.target, statement.line);
+      context.emitter.machine_entry_open = true;
       mark_current_x(context, *statement.target);
       if (!context.ephemeral_input_targets.contains(*statement.target)) {
         emit_store(context, *statement.target, "read " + *statement.target);
@@ -25688,6 +25848,7 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
       return true;
     }
     context.emitter.emit_op(0x50, "С/П", "read " + *statement.target, statement.line);
+    context.emitter.machine_entry_open = true;
     mark_current_x(context, *statement.target);
     const bool consumed_by_next =
         next_statement != nullptr &&
@@ -25729,27 +25890,27 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
   if (statement.kind == "v2_if") {
     if (lower_segmented_cells_contains_clear_if(context, statement))
       return true;
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
     if (lower_cells_contains_clear_if(context, statement))
       return true;
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
     if (lower_cells_contains_set_reuse_if(context, statement))
       return true;
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
     if (lower_mask_membership_set_reuse_if(context, statement))
       return true;
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
     if (lower_membership_clear_delta_branch(context, statement))
       return true;
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
     if (lower_residual_equality_else_if(context, statement))
       return true;
-    if (has_errors(context.diagnostics))
+    if (!entered_with_errors && has_errors(context.diagnostics))
       return false;
     return lower_if_statement(context, statement);
   }
@@ -25851,8 +26012,8 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
         return lower_literal_terminal_stop(context, expression.text, statement.line);
       if (!lower_expression_to_x(context, expression))
         return false;
-      if (expression.kind == "number" && normalize_number_key(expression.raw) == "0" &&
-          !context.emitter.items.empty() && !context.emitter.items.back().comment.has_value()) {
+      if (is_zero_expression(context, expression) && !context.emitter.items.empty() &&
+          !context.emitter.items.back().comment.has_value()) {
         context.emitter.items.back().comment = "halt";
       }
     }
@@ -25866,23 +26027,73 @@ bool lower_statement(LoweringContext& context, const V2Statement& statement,
   return false;
 }
 
+void report_function_tail_call(LoweringContext& context, const std::string& source,
+                               const std::string& target, int line) {
+  const bool recursive = source == target;
+  context.optimizations.push_back(OptimizationReport{
+      .name = recursive ? "function-tail-recursion" : "function-tail-call",
+      .detail = recursive
+                    ? "Compiled tail-recursive call in " + source +
+                          " as a direct jump at line " + std::to_string(line) + "."
+                    : "Compiled tail call from " + source + " to " + target +
+                          " as a direct jump at line " + std::to_string(line) + ".",
+  });
+}
+
+std::optional<bool> lower_tail_function_return(LoweringContext& context,
+                                               const V2Statement& statement,
+                                               const Expression& expression) {
+  if (!context.current_rule_name.has_value() || expression.kind != "call")
+    return std::nullopt;
+
+  const auto target_it = context.rules.find(expression.callee);
+  if (target_it == context.rules.end())
+    return std::nullopt;
+  const V2Rule& target = *target_it->second;
+  if (!statements_contain_return(target.body))
+    return std::nullopt;
+
+  if (expression.args.size() != target.params.size()) {
+    context.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "native-unsupported",
+        "Function " + target.name + " expects " + std::to_string(target.params.size()) +
+            " argument(s), got " + std::to_string(expression.args.size()) + "."));
+    return false;
+  }
+
+  const std::optional<XParamReturnDecay> x_param_decay = match_x_param_return_decay(target);
+  if (x_param_decay.has_value() && expression.args.size() == 1U) {
+    if (!lower_expression_to_x(context, expression.args.front()))
+      return false;
+    context.emitter.emit_jump(0x51, "БП", function_label(target.name),
+                              "tail call function " + target.name, statement.line);
+    report_function_tail_call(context, *context.current_rule_name, target.name, statement.line);
+    return true;
+  }
+
+  for (std::size_t index = 0; index < expression.args.size(); ++index) {
+    if (!lower_expression_to_x(context, expression.args.at(index)))
+      return false;
+    emit_store(context, function_tail_arg_scratch_name(target.name, index),
+               "tail arg " + target.params.at(index) + " for " + target.name);
+  }
+  for (std::size_t index = 0; index < target.params.size(); ++index) {
+    const std::string& param = target.params.at(index);
+    emit_recall(context, function_tail_arg_scratch_name(target.name, index));
+    emit_store(context, param, "tail param " + param + " for " + target.name);
+  }
+  context.emitter.emit_jump(0x51, "БП", function_label(target.name),
+                            "tail call function " + target.name, statement.line);
+  report_function_tail_call(context, *context.current_rule_name, target.name, statement.line);
+  return true;
+}
+
 bool lower_return_statement(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_return" || !statement.expr.has_value())
     return false;
   const Expression expression = parse_expression(*statement.expr, statement.line);
-  if (expression.kind == "call" && context.current_rule_name.has_value() &&
-      context.rules.contains(expression.callee)) {
-    const bool recursive = *context.current_rule_name == expression.callee;
-    context.optimizations.push_back(OptimizationReport{
-        .name = recursive ? "function-tail-recursion" : "function-tail-call",
-        .detail = recursive
-                      ? "Compiled tail-recursive call in " + *context.current_rule_name +
-                            " as a direct jump at line " + std::to_string(statement.line) + "."
-                      : "Compiled tail call from " + *context.current_rule_name + " to " +
-                            expression.callee + " as a direct jump at line " +
-                            std::to_string(statement.line) + ".",
-    });
-  }
+  if (const std::optional<bool> tail = lower_tail_function_return(context, statement, expression))
+    return *tail;
   if (!lower_expression_to_x(context, expression))
     return false;
   context.emitter.emit_op(0x52, "В/О", "return value", statement.line);
@@ -28869,7 +29080,7 @@ std::size_t lower_bit_or_test_and_set_negative_arg_prefix(LoweringContext& conte
   context.emitter.emit_op(0x32, "К ЗН",
                           "bit_or test-and-set " + lowering_it->second.param + " = -1", call.line);
   mark_current_x(context, lowering_it->second.param);
-  context.emitter.emit_jump(0x53, "ПП", function_label(*call.name), "call function " + *call.name,
+  context.emitter.emit_jump(0x53, "ПП", function_label(*call.name), "proc call " + *call.name,
                             call.line);
   clear_current_x_facts(context);
   context.optimizations.push_back(OptimizationReport{
@@ -31148,6 +31359,14 @@ bool lower_fused_coord_list_scan(LoweringContext& context,
 }
 
 bool lower_statement_block(LoweringContext& context, const std::vector<V2Statement>& statements) {
+  if (has_errors(context.diagnostics)) {
+    for (std::size_t index = 0; index < statements.size(); ++index) {
+      const V2Statement* next = index + 1U < statements.size() ? &statements.at(index + 1U) : nullptr;
+      (void)lower_statement(context, statements.at(index), next);
+    }
+    return false;
+  }
+
   for (std::size_t index = 0; index < statements.size(); ++index) {
     std::size_t coord_list_consumed = 0;
     if (lower_fused_coord_list_scan(context, statements, index, coord_list_consumed)) {
@@ -31640,11 +31859,11 @@ bool lower_random_cell_helpers(LoweringContext& context) {
     if (!lowered)
       return false;
     context.emitter.emit_op(0x52, "В/О", "random coordinate helper return", helper.line);
-    context.optimizations.push_back(OptimizationReport{
-        .name = "random-cell-helper",
-        .detail =
-            "Emitted shared random cell helper for " + expression_to_source(helper.expr) + ".",
-    });
+        context.optimizations.push_back(OptimizationReport{
+            .name = "random-cell-helper",
+            .detail = "Emitted shared random cell helper for " +
+                      expression_comment_text(context, helper.expr) + ".",
+        });
   }
   return true;
 }
@@ -32314,8 +32533,8 @@ mk61_bitwise_display_literal_for_expression(const Expression& expression) {
 }
 
 std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
-                                                 const V2Program& program,
-                                                 const std::vector<MachineItem>& items) {
+                                                  const V2Program& program,
+                                                  const std::vector<MachineItem>& items) {
   std::vector<PreloadReport> preloads;
   std::vector<PreloadReport> deferred_indexed_initializer_preloads;
   auto add_preload = [&](const std::string& register_name, const std::string& value,
@@ -32579,16 +32798,18 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
       continue;
 
     if (field->bank.has_value()) {
-      if (!field->initial_stack.has_value() && !setup_expression)
+      const bool bank_needs_generated_setup =
+          field->initial_stack.has_value() || setup_expression ||
+          value->starts_with("random(");
+      if (!bank_needs_generated_setup)
         continue;
       for (int index = field->bank->min; index <= field->bank->max; ++index) {
         const std::string element = state_bank_element_name(*field, index);
         const auto register_it = context.registers.find(element);
         if (register_it != context.registers.end())
           add_preload(register_it->second, *value,
-                      (field->initial_stack.has_value() || setup_expression)
-                          ? std::optional<std::string>{element}
-                          : std::nullopt,
+                      bank_needs_generated_setup ? std::optional<std::string>{element}
+                                                 : std::nullopt,
                       setup_expression, field->line);
       }
       continue;
@@ -32677,6 +32898,59 @@ std::vector<PreloadReport> build_preload_reports(const LoweringContext& context,
     add_preload(register_it->second, std::to_string(address_it->second));
   }
   return preloads;
+}
+
+bool random_unique_coord_list_setup_context_available(const LoweringContext& context,
+                                                      const V2StateField& field) {
+  if (!field.count.has_value())
+    return true;
+  const auto pointer_it = context.registers.find(std::string(core::emit::k_coord_list_pointer));
+  const auto counter_it = context.registers.find(std::string(core::emit::k_coord_list_counter));
+  const auto current_it = context.registers.find(std::string(core::emit::k_coord_list_current));
+  const auto previous_it = context.registers.find(std::string(core::emit::k_coord_list_dx));
+  if (pointer_it == context.registers.end() || counter_it == context.registers.end() ||
+      current_it == context.registers.end() || previous_it == context.registers.end())
+    return false;
+
+  const int pointer_index = register_index(pointer_it->second);
+  const int counter_index = register_index(counter_it->second);
+  const int current_index = register_index(current_it->second);
+  const int previous_index = register_index(previous_it->second);
+  if (!core::emit::lowering::is_preincrement_indirect_register(pointer_index))
+    return false;
+  if (!fl_loop_opcode_for_register(counter_index).has_value() ||
+      !fl_loop_opcode_for_register(previous_index).has_value())
+    return false;
+
+  std::vector<int> item_indices;
+  item_indices.reserve(static_cast<std::size_t>(*field.count));
+  for (int index = 0; index < *field.count; ++index) {
+    const auto item_it =
+        context.registers.find(core::emit::coord_list_item_name(field.name, index));
+    if (item_it == context.registers.end())
+      return false;
+    item_indices.push_back(register_index(item_it->second));
+  }
+  if (item_indices.empty() || item_indices.front() <= 0)
+    return false;
+  for (std::size_t index = 1; index < item_indices.size(); ++index) {
+    if (item_indices.at(index) != item_indices.front() + static_cast<int>(index))
+      return false;
+  }
+  const std::set<int> scratch_indices = {pointer_index, counter_index, previous_index,
+                                         current_index};
+  return std::none_of(item_indices.begin(), item_indices.end(), [&](const int item_index) {
+    return scratch_indices.contains(item_index);
+  });
+}
+
+bool needs_random_unique_coord_list_setup_diagnostic(const LoweringContext& context,
+                                                     const V2Program& program) {
+  return std::any_of(program.state.begin(), program.state.end(), [&](const V2StateField& field) {
+    return field.type == "coord_list" && field.initial.has_value() &&
+           trim_ascii(*field.initial) == "random_unique()" &&
+           !random_unique_coord_list_setup_context_available(context, field);
+  });
 }
 
 std::map<std::string, std::string>
@@ -33108,6 +33382,28 @@ void canonicalize_constant_if_chains(V2Program& program,
   });
 }
 
+int expression_binary_precedence(const std::string& op) {
+  return op == "*" || op == "/" ? 2 : 1;
+}
+
+int expression_precedence(const Expression& expression) {
+  if (expression.kind == "number" || expression.kind == "string" ||
+      expression.kind == "identifier" || expression.kind == "call" ||
+      expression.kind == "indexed") {
+    return 4;
+  }
+  if (expression.kind == "unary")
+    return 3;
+  if (expression.kind == "binary")
+    return expression_binary_precedence(expression.op);
+  return 0;
+}
+
+std::string wrap_expression_source(const Expression& expression, int parent_precedence) {
+  const std::string text = expression_to_source(expression);
+  return expression_precedence(expression) < parent_precedence ? "(" + text + ")" : text;
+}
+
 std::string expression_to_source(const Expression& expression) {
   if (expression.kind == "number")
     return expression.raw.empty() ? expression.text : expression.raw;
@@ -33130,10 +33426,13 @@ std::string expression_to_source(const Expression& expression) {
     return text;
   }
   if (expression.kind == "unary" && expression.expr != nullptr)
-    return "(" + expression.op + expression_to_source(*expression.expr) + ")";
+    return expression.op + wrap_expression_source(*expression.expr, 3);
   if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
-    return "(" + expression_to_source(*expression.left) + " " + expression.op + " " +
-           expression_to_source(*expression.right) + ")";
+    const int precedence = expression_binary_precedence(expression.op);
+    const int right_precedence =
+        precedence + (expression.op == "-" || expression.op == "/" ? 1 : 0);
+    return wrap_expression_source(*expression.left, precedence) + " " + expression.op + " " +
+           wrap_expression_source(*expression.right, right_precedence);
   }
   if (expression.kind == "call") {
     std::string text = expression.callee + "(";
@@ -33181,6 +33480,403 @@ FunctionCallLiftState make_function_call_lift_state(const V2Program& program,
 std::string fresh_lifted_function_call_temp(FunctionCallLiftState& state) {
   ++state.counter;
   return "__mkpro_call_" + std::to_string(state.counter);
+}
+
+struct RoutableUnaryCall {
+  std::vector<int> path;
+  int depth = 0;
+  Expression argument;
+};
+
+struct UnaryArgGroupEntry {
+  std::size_t index = 0;
+  std::vector<int> call_path;
+  int depth = 0;
+  Expression call_arg;
+};
+
+struct UnaryArgRouting {
+  std::vector<int> call_path;
+  Expression call_arg;
+};
+constexpr int kPathIndex = -1;
+constexpr int kPathExpr = -2;
+constexpr int kPathLeft = -3;
+constexpr int kPathRight = -4;
+
+void collect_routable_calls(const Expression& expression, std::vector<RoutableUnaryCall>& calls,
+                           int depth, std::vector<int>& path) {
+  if (expression.kind == "call" && expression.args.size() == 1 &&
+      x_transform_unary_opcode(expression.callee).has_value() &&
+      expression_pure_for_substitution(expression.args.front())) {
+    calls.push_back(RoutableUnaryCall{
+        .path = path,
+        .depth = depth,
+        .argument = expression.args.front(),
+    });
+  }
+
+  if (expression.index != nullptr) {
+    path.push_back(kPathIndex);
+    collect_routable_calls(*expression.index, calls, depth + 1, path);
+    path.pop_back();
+  }
+  if (expression.expr != nullptr) {
+    path.push_back(kPathExpr);
+    collect_routable_calls(*expression.expr, calls, depth + 1, path);
+    path.pop_back();
+  }
+  if (expression.left != nullptr) {
+    path.push_back(kPathLeft);
+    collect_routable_calls(*expression.left, calls, depth + 1, path);
+    path.pop_back();
+  }
+  if (expression.right != nullptr) {
+    path.push_back(kPathRight);
+    collect_routable_calls(*expression.right, calls, depth + 1, path);
+    path.pop_back();
+  }
+  for (std::size_t index = 0; index < expression.args.size(); ++index) {
+    path.push_back(static_cast<int>(index));
+    collect_routable_calls(expression.args.at(index), calls, depth + 1, path);
+    path.pop_back();
+  }
+}
+
+std::string serialize_unary_arg_shape(const Expression& expression,
+                                     const std::vector<int>& target_call_path,
+                                     std::size_t depth);
+
+std::string unary_arg_shape_key(const V2Statement& statement, const Expression& target,
+                               const std::string& target_text, const Expression& expression,
+                               const std::vector<int>& call_path) {
+  const std::string target_shape =
+      statement.kind == "v2_update" ? serialize_unary_arg_shape(target, call_path, 0U)
+                                    : "@" + target_text;
+  return statement.kind + "|" + target_shape + "|" +
+         serialize_unary_arg_shape(expression, call_path, 0U);
+}
+
+std::string serialize_unary_arg_shape(const Expression& expression,
+                                     const std::vector<int>& target_call_path,
+                                     std::size_t depth) {
+  if (depth == target_call_path.size())
+    return "#ARG";
+  if (expression.kind == "number")
+    return "#" + (expression.raw.empty() ? expression.text : expression.raw);
+  if (expression.kind == "string")
+    return "s" + expression_to_source(expression);
+  if (expression.kind == "identifier")
+    return "@" + expression.name;
+  if (expression.kind == "indexed" && expression.index != nullptr) {
+    const std::string field = expression.field.has_value() ? "." + *expression.field : std::string{};
+    const std::string index = core::numeric_index_value(*expression.index).has_value()
+                                 ? "[#IDX]"
+                                 : "[" + serialize_unary_arg_shape(*expression.index, target_call_path,
+                                                                  depth + 1) + "]";
+    return expression.base + index + field;
+  }
+  if (expression.kind == "unary" && expression.expr != nullptr) {
+    return "u(" + serialize_unary_arg_shape(*expression.expr, target_call_path, depth + 1) + ")";
+  }
+  if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
+    return "(" + serialize_unary_arg_shape(*expression.left, target_call_path, depth + 1) +
+           expression.op + serialize_unary_arg_shape(*expression.right, target_call_path, depth + 1) +
+           ")";
+  }
+  if (expression.kind == "call") {
+    const bool is_target_call = depth == target_call_path.size();
+    if (is_target_call)
+      return lower_ascii(expression.callee) + "(#ARG)";
+    std::string text = lower_ascii(expression.callee) + "(";
+    for (std::size_t index = 0; index < expression.args.size(); ++index) {
+      if (index != 0U)
+        text += ",";
+      text += serialize_unary_arg_shape(expression.args.at(index), target_call_path, depth + 1);
+    }
+    text += ")";
+    return text;
+  }
+  return "";
+}
+
+bool should_canonicalize_unary_arg_group(const std::vector<UnaryArgGroupEntry>& entries) {
+  if (entries.size() < 2)
+    return false;
+  std::set<std::string> arg_signatures;
+  bool all_low_cost = true;
+  for (const UnaryArgGroupEntry& entry : entries) {
+    const std::string signature = expression_to_source(entry.call_arg);
+    arg_signatures.insert(signature);
+    all_low_cost = all_low_cost && core::estimate_expression_cost(entry.call_arg) <= 1;
+  }
+  if (arg_signatures.size() < 2U)
+    return !all_low_cost;
+  return true;
+}
+
+std::size_t distinct_index_count(const std::vector<UnaryArgGroupEntry>& entries) {
+  std::set<std::size_t> indices;
+  for (const UnaryArgGroupEntry& entry : entries)
+    indices.insert(entry.index);
+  return indices.size();
+}
+
+int max_entry_depth(const std::vector<UnaryArgGroupEntry>& entries) {
+  return std::accumulate(
+      entries.begin(), entries.end(), 0,
+      [](int max_depth, const UnaryArgGroupEntry& entry) { return std::max(max_depth, entry.depth); });
+}
+
+Expression replace_call_arg_with_scratch(const Expression& expression,
+                                       const std::vector<int>& target_path,
+                                       const Expression& replacement,
+                                       std::size_t depth, bool& replaced) {
+  if (depth == target_path.size()) {
+    replaced = true;
+    return replacement;
+  }
+  const int step = target_path.at(depth);
+  if (expression.kind == "indexed" && expression.index != nullptr) {
+    if (step == kPathIndex) {
+      Expression result = expression;
+      result.index = std::make_shared<Expression>(
+          replace_call_arg_with_scratch(*expression.index, target_path, replacement, depth + 1, replaced));
+      return result;
+    }
+    return expression;
+  }
+  if (expression.kind == "unary" && expression.expr != nullptr && step == kPathExpr) {
+    Expression result = expression;
+    result.expr = std::make_shared<Expression>(
+        replace_call_arg_with_scratch(*expression.expr, target_path, replacement, depth + 1, replaced));
+    return result;
+  }
+  if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
+    Expression result = expression;
+    if (step == kPathLeft) {
+      result.left = std::make_shared<Expression>(
+          replace_call_arg_with_scratch(*expression.left, target_path, replacement, depth + 1, replaced));
+      return result;
+    }
+    if (step == kPathRight) {
+      result.right = std::make_shared<Expression>(
+          replace_call_arg_with_scratch(*expression.right, target_path, replacement, depth + 1, replaced));
+      return result;
+    }
+    return expression;
+  }
+  if (expression.kind == "call") {
+    Expression result = expression;
+    if (step >= 0 && step < static_cast<int>(expression.args.size())) {
+      std::vector<Expression> rewritten_args;
+      rewritten_args.reserve(expression.args.size());
+      for (std::size_t index = 0; index < expression.args.size(); ++index) {
+        if (static_cast<int>(index) == step) {
+          rewritten_args.push_back(
+              replace_call_arg_with_scratch(expression.args.at(index), target_path, replacement,
+                                           depth + 1, replaced));
+        } else {
+          rewritten_args.push_back(expression.args.at(index));
+        }
+      }
+      result.args = std::move(rewritten_args);
+      return result;
+    }
+    return expression;
+  }
+  return expression;
+}
+
+std::vector<V2Statement> rewrite_repeated_unary_update_statements(
+    const std::vector<V2Statement>& statements);
+V2Statement rewrite_repeated_unary_update_statement(const V2Statement& statement);
+
+std::vector<V2Statement> rewrite_repeated_unary_update_statements(
+    V2Program& program, const std::vector<V2Statement>& statements, int& rewritten,
+    const std::map<std::size_t, UnaryArgRouting>& routings, std::string& scratch_name) {
+  std::vector<V2Statement> result;
+  result.reserve(statements.size() + routings.size());
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    const auto routing_it = routings.find(index);
+    if (routing_it == routings.end()) {
+      result.push_back(statement);
+      continue;
+    }
+    if (!statement.expr.has_value()) {
+      result.push_back(statement);
+      continue;
+    }
+    try {
+      const Expression expression = parse_expression(*statement.expr, statement.line);
+      const Expression routed_expression = identifier_expression(scratch_name);
+      bool replaced = false;
+      const Expression rewritten_expression = replace_call_arg_with_scratch(
+          expression, routing_it->second.call_path, routed_expression, 0U, replaced);
+      if (!replaced) {
+        result.push_back(statement);
+        continue;
+      }
+      if (scratch_name.empty())
+        scratch_name = ensure_repeated_unary_update_scratch(program, statement.line);
+      V2Statement assignment;
+      assignment.kind = "v2_assign";
+      assignment.target = scratch_name;
+      assignment.expr = expression_to_source(routing_it->second.call_arg);
+      assignment.line = statement.line;
+      result.push_back(std::move(assignment));
+      V2Statement rewritten_statement = statement;
+      rewritten_statement.expr = expression_to_source(rewritten_expression);
+      result.push_back(std::move(rewritten_statement));
+      ++rewritten;
+    } catch (const std::exception&) {
+      result.push_back(statement);
+    }
+  }
+  return result;
+}
+
+V2Statement rewrite_repeated_unary_update_statement(const V2Statement& statement) {
+  V2Statement rewritten = statement;
+  if (statement.kind == "v2_if") {
+    rewritten.then_body = rewrite_repeated_unary_update_statements(statement.then_body);
+    rewritten.else_body = rewrite_repeated_unary_update_statements(statement.else_body);
+    return rewritten;
+  }
+  if (statement.kind == "v2_match") {
+    for (V2MatchCase& match_case : rewritten.cases) {
+      if (match_case.action != nullptr)
+        match_case.action = std::make_shared<V2Statement>(
+            rewrite_repeated_unary_update_statement(*match_case.action));
+    }
+    if (rewritten.otherwise != nullptr)
+      rewritten.otherwise = std::make_shared<V2Statement>(
+          rewrite_repeated_unary_update_statement(*rewritten.otherwise));
+    return rewritten;
+  }
+  if (statement.kind == "v2_while" || statement.kind == "v2_loop" ||
+      statement.kind == "v2_block") {
+    rewritten.body = rewrite_repeated_unary_update_statements(statement.body);
+    return rewritten;
+  }
+  rewritten.body = rewrite_repeated_unary_update_statements(statement.body);
+  rewritten.then_body = rewrite_repeated_unary_update_statements(statement.then_body);
+  rewritten.else_body = rewrite_repeated_unary_update_statements(statement.else_body);
+  return rewritten;
+}
+
+std::vector<V2Statement> rewrite_repeated_unary_update_statements(
+    const std::vector<V2Statement>& statements) {
+  std::vector<V2Statement> rewritten;
+  rewritten.reserve(statements.size());
+  for (const V2Statement& statement : statements) {
+    rewritten.push_back(rewrite_repeated_unary_update_statement(statement));
+  }
+  return rewritten;
+}
+
+std::map<std::size_t, UnaryArgRouting> select_unary_arg_routings(
+    const std::vector<V2Statement>& statements) {
+  std::map<std::string, std::vector<UnaryArgGroupEntry>> groups;
+  for (std::size_t index = 0; index < statements.size(); ++index) {
+    const V2Statement& statement = statements.at(index);
+    if (statement.kind != "v2_assign" && statement.kind != "v2_update")
+      continue;
+    if (!statement.target.has_value() || !statement.expr.has_value())
+      continue;
+    try {
+      const Expression expression = parse_expression(*statement.expr, statement.line);
+      const Expression target = parse_expression(*statement.target, statement.line);
+      std::vector<RoutableUnaryCall> calls;
+      std::vector<int> path;
+      collect_routable_calls(expression, calls, 0, path);
+      for (const RoutableUnaryCall& call : calls) {
+        const std::string key = unary_arg_shape_key(statement, target, *statement.target, expression,
+                                                    call.path);
+        groups[key].push_back(UnaryArgGroupEntry{
+            .index = index,
+            .call_path = call.path,
+            .depth = call.depth,
+            .call_arg = call.argument,
+        });
+      }
+    } catch (const std::exception&) {
+    }
+  }
+
+  std::vector<std::pair<std::string, std::vector<UnaryArgGroupEntry>>> ranked;
+  ranked.reserve(groups.size());
+  for (auto& entry : groups)
+    ranked.push_back({entry.first, std::move(entry.second)});
+  std::sort(ranked.begin(), ranked.end(), [](const auto& left, const auto& right) {
+    const std::size_t left_indices = distinct_index_count(left.second);
+    const std::size_t right_indices = distinct_index_count(right.second);
+    if (left_indices != right_indices)
+      return left_indices > right_indices;
+    const int left_depth = max_entry_depth(left.second);
+    const int right_depth = max_entry_depth(right.second);
+    if (left_depth != right_depth)
+      return left_depth > right_depth;
+    return left.first < right.first;
+  });
+
+  std::map<std::size_t, UnaryArgRouting> routings;
+  for (const auto& entry : ranked) {
+    std::map<std::size_t, UnaryArgGroupEntry> selected;
+    for (const UnaryArgGroupEntry& group_entry : entry.second) {
+      if (routings.contains(group_entry.index))
+        continue;
+      if (!selected.contains(group_entry.index))
+        selected[group_entry.index] = group_entry;
+    }
+    std::vector<UnaryArgGroupEntry> selected_entries;
+    selected_entries.reserve(selected.size());
+    for (const auto& [_, selected_entry] : selected)
+      selected_entries.push_back(selected_entry);
+    if (selected_entries.size() < 2U)
+      continue;
+    if (!should_canonicalize_unary_arg_group(selected_entries))
+      continue;
+    for (const UnaryArgGroupEntry& routed : selected_entries) {
+      routings[routed.index] = UnaryArgRouting{
+          .call_path = routed.call_path,
+          .call_arg = routed.call_arg,
+      };
+    }
+  }
+  return routings;
+}
+
+std::vector<V2Statement>
+canonicalize_repeated_unary_update_statements(V2Program& program, std::vector<V2Statement> statements,
+                                            int& rewritten, std::string& scratch_name) {
+  std::vector<V2Statement> lowered;
+  lowered.reserve(statements.size());
+  for (const V2Statement& statement : statements)
+    lowered.push_back(rewrite_repeated_unary_update_statement(statement));
+  const std::map<std::size_t, UnaryArgRouting> routings = select_unary_arg_routings(lowered);
+  if (routings.empty())
+    return lowered;
+  return rewrite_repeated_unary_update_statements(program, lowered, rewritten, routings, scratch_name);
+}
+
+void canonicalize_repeated_unary_update_args(V2Program& program,
+                                           std::vector<OptimizationReport>& optimizations) {
+  int rewritten = 0;
+  std::string scratch_name;
+  program.body = canonicalize_repeated_unary_update_statements(program, std::move(program.body), rewritten,
+                                                              scratch_name);
+  for (V2Rule& rule : program.rules)
+    rule.body = canonicalize_repeated_unary_update_statements(program, std::move(rule.body), rewritten,
+                                                              scratch_name);
+  if (rewritten == 0)
+    return;
+  optimizations.push_back(OptimizationReport{
+      .name = "repeated-unary-update-arg-temp",
+      .detail = "Canonicalized " + std::to_string(rewritten) + " repeated unary-call argument" +
+                (rewritten == 1 ? "" : "s") + " through " + scratch_name + ".",
+  });
 }
 
 bool prelude_assigns_target(const std::vector<V2Statement>& prelude, const std::string& target) {
@@ -36125,6 +36821,10 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
     reserve_preloaded_number_at(context, register_name, value);
   for (const std::string& value : options.suppress_constant_preloads)
     context.suppress_constant_preloads.insert(normalize_number_key(value));
+  if (options.strict) {
+    const std::set<std::string> no_ignored_targets;
+    warn_undeclared_allocations(*ast.v2, true, no_ignored_targets, context.diagnostics);
+  }
   bool exact_decimal_series = false;
   try {
     trace_stage("ast-passes");
@@ -36255,6 +36955,9 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                     " rules through the generic intent pipeline.",
       });
       eliminate_unreachable_v2_procs(*ast.v2, context.optimizations);
+      if (options.canonicalize_repeated_unary_update_args) {
+        canonicalize_repeated_unary_update_args(*ast.v2, context.optimizations);
+      }
       if (options.x_param_value_functions) {
         elide_x_param_value_state_fields(*ast.v2, context.optimizations);
         materialize_x_param_value_function_scratch(*ast.v2, context.optimizations);
@@ -36268,7 +36971,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         (void)unused_initial;
         loop_prompt_names.insert(name);
       }
-      warn_undeclared_allocations(*ast.v2, options.strict, loop_prompt_names, context.diagnostics);
+      if (!options.strict)
+        warn_undeclared_allocations(*ast.v2, false, loop_prompt_names, context.diagnostics);
       warn_show_halt_style_rule(*ast.v2, result.warnings);
       context.transient_show_targets = transient_show_targets(*ast.v2);
       const bool can_attempt_lowering = !has_errors(context.diagnostics);
@@ -36377,6 +37081,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   }
   result.diagnostics.insert(result.diagnostics.end(), context.diagnostics.begin(),
                             context.diagnostics.end());
+  if (ast.v2.has_value() && has_register_allocation_failure(result.diagnostics) &&
+      needs_random_unique_coord_list_setup_diagnostic(context, *ast.v2)) {
+    result.diagnostics.push_back(diagnostic(
+        DiagnosticSeverity::Error, "native-unsupported",
+        "random_unique() coord_list setup needs contiguous list registers plus coord-list "
+        "scratch registers."));
+  }
   if (has_errors(result.diagnostics)) {
     result.implemented = false;
     return result;
