@@ -95,16 +95,19 @@ std::optional<DecimalDisplayField> measure_decimal_display_field(const LoweringC
 
 bool lower_packed_decimal_display_fields(DisplayEmitApi& api,
                                          const std::vector<DecimalDisplayField>& fields,
-                                         int source_line) {
+                                         const std::string& display_name, int source_line) {
   if (fields.empty())
     return false;
-  if (!api.lower_display_item_to_x(*fields.front().item, "display source"))
+  const std::string source_comment =
+      display_name == "decimal-point display" ? "decimal-point display fraction"
+                                              : "display " + display_name + " source";
+  if (!api.lower_display_item_to_x(*fields.front().item, source_comment))
     return false;
   for (std::size_t index = 1; index < fields.size(); ++index) {
     const DecimalDisplayField& field = fields.at(index);
     api.emit_display_scale(std::to_string(decimal_power10(field.width)), source_line);
     api.emitter.emit_op(0x12, "*", "packed display field shift", source_line);
-    if (!api.lower_display_item_to_x(*field.item, "display source"))
+    if (!api.lower_display_item_to_x(*field.item, source_comment))
       return false;
     api.emitter.emit_op(0x10, "+", "packed display field append", source_line);
   }
@@ -955,7 +958,8 @@ bool emit_first_splice_display_literal_program(DisplayEmitApi& api, LoweringCont
 }
 
 bool lower_decimal_point_display_statement(DisplayEmitApi& api, LoweringContext& context,
-                                           const std::vector<DisplayItem>& items, int source_line) {
+                                           const std::vector<DisplayItem>& items,
+                                           const std::string& display_name, int source_line) {
   int dot_index = -1;
   for (std::size_t index = 0; index < items.size(); ++index) {
     const DisplayItem& item = items.at(index);
@@ -992,25 +996,29 @@ bool lower_decimal_point_display_statement(DisplayEmitApi& api, LoweringContext&
     return false;
 
   if (integer_fields.size() == 1U) {
-    if (!lower_packed_decimal_display_fields(api, fractional_fields, source_line))
+    if (!lower_packed_decimal_display_fields(api, fractional_fields, display_name, source_line))
       return false;
     api.emit_display_scale(std::to_string(decimal_power10(fractional_width)), source_line);
-    api.emitter.emit_op(0x13, "/", "decimal-point display fraction", source_line);
+    api.emitter.emit_op(0x13, "/", "display " + display_name + " decimal point", source_line);
     api.emit_recall(integer_fields.front().item->name);
-    api.emitter.items.back().comment = "decimal-point display integer";
-    api.emitter.emit_op(0x10, "+", "decimal-point display append", source_line);
+    api.emitter.items.back().comment = "display " + display_name + " integer part";
+    const std::string append_comment = display_name == "decimal-point display"
+                                           ? "decimal-point display append"
+                                           : "display " + display_name + " integer append";
+    api.emitter.emit_op(0x10, "+", append_comment,
+                        source_line);
   } else {
     std::vector<DecimalDisplayField> fields = integer_fields;
     fields.insert(fields.end(), fractional_fields.begin(), fractional_fields.end());
-    if (!lower_packed_decimal_display_fields(api, fields, source_line))
+    if (!lower_packed_decimal_display_fields(api, fields, display_name, source_line))
       return false;
     api.emit_display_scale(std::to_string(decimal_power10(fractional_width)), source_line);
-    api.emitter.emit_op(0x13, "/", "decimal-point display", source_line);
+    api.emitter.emit_op(0x13, "/", "display " + display_name + " decimal point", source_line);
   }
-  api.emitter.emit_op(0x50, "С/П", "show decimal-point display", source_line);
+  api.emitter.emit_op(0x50, "С/П", "show " + display_name, source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "decimal-point-display",
-      .detail = "Displayed decimal-point show(...) as a fixed-point number with " +
+      .detail = "Displayed screen " + display_name + " as a fixed-point number with " +
                 std::to_string(fractional_width) + " fractional digit(s).",
   });
   return true;

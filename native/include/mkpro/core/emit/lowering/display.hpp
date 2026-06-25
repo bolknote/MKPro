@@ -47,7 +47,8 @@ bool emit_first_splice_display_literal_program(DisplayEmitApi& api, LoweringCont
                                                const FirstSpliceDisplayLiteralProgram& program,
                                                const std::string& scratch, int source_line);
 bool lower_decimal_point_display_statement(DisplayEmitApi& api, LoweringContext& context,
-                                           const std::vector<DisplayItem>& items, int source_line);
+                                           const std::vector<DisplayItem>& items,
+                                           const std::string& display_name, int source_line);
 bool lower_dynamic_line_report_display_statement(DisplayEmitApi& api, LoweringContext& context,
                                                  const std::vector<DisplayItem>& items,
                                                  int source_line);

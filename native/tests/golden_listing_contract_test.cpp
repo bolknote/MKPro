@@ -188,6 +188,13 @@ std::string variant_fingerprint(const std::string& source, const CompileOptions&
   return value;
 }
 
+std::string example_oracle_id(const std::filesystem::path& source_path,
+                              const std::filesystem::path& pending_root) {
+  if (source_path.parent_path() == pending_root)
+    return "pending-optimizer/" + source_path.stem().string();
+  return source_path.stem().string();
+}
+
 std::string first_different_line(const std::string& actual, const std::string& expected) {
   std::istringstream actual_lines(actual);
   std::istringstream expected_lines(expected);
@@ -236,9 +243,13 @@ void golden_listing_contract_matches_typescript_contract() {
   }();
 
   const bool progress = std::getenv("MKPRO_NATIVE_EXAMPLE_PROGRESS") != nullptr;
+  const char* filter_env = std::getenv("MKPRO_NATIVE_EXAMPLE_FILTER");
+  const std::string filter = filter_env != nullptr ? filter_env : "";
   std::size_t progress_index = 0;
   for (const std::filesystem::path& source_path : example_files) {
-    const std::string name = source_path.stem().string();
+    const std::string name = example_oracle_id(source_path, pending_root);
+    if (!filter.empty() && name.find(filter) == std::string::npos)
+      continue;
     if (progress) {
       ++progress_index;
       std::cerr << "[golden-listing] " << progress_index << "/" << example_files.size() << " "
@@ -252,14 +263,20 @@ void golden_listing_contract_matches_typescript_contract() {
     require(result.implemented, "golden listing should compile example: " + name);
     require(result.diagnostics.empty(), "golden listing example should not report diagnostics: " + name);
 
-    require(result.listing == trim_newlines(read_text(oracle_example_root / "listing.txt")),
-            "example listing should match the TS oracle for " + name);
-    require(result.hex == trim_newlines(read_text(oracle_example_root / "hex.txt")),
-            "example hex should match the TS oracle for " + name);
+    const std::string expected_listing = trim_newlines(read_text(oracle_example_root / "listing.txt"));
+    require(result.listing == expected_listing,
+            "example listing should match the TS oracle for " + name +
+                first_different_line(result.listing, expected_listing));
+    const std::string expected_hex = trim_newlines(read_text(oracle_example_root / "hex.txt"));
+    require(result.hex == expected_hex,
+            "example hex should match the TS oracle for " + name +
+                first_different_line(result.hex, expected_hex));
     const std::string setup_program =
         result.setup_program.has_value() ? format_program_tokens(result.setup_program->steps) : "";
-    require(setup_program == trim_newlines(read_text(oracle_example_root / "setup.txt")),
-            "example setup listing should match the TS oracle for " + name);
+    const std::string expected_setup = trim_newlines(read_text(oracle_example_root / "setup.txt"));
+    require(setup_program == expected_setup,
+            "example setup listing should match the TS oracle for " + name +
+                first_different_line(setup_program, expected_setup));
     const std::string actual_variants = variant_fingerprint(source, base_options);
     const std::string expected_variants =
         trim_newlines(read_text(oracle_example_root / "variants.txt"));

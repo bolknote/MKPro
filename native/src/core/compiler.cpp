@@ -33633,8 +33633,12 @@ Expression replace_call_arg_with_scratch(const Expression& expression,
                                        const Expression& replacement,
                                        std::size_t depth, bool& replaced) {
   if (depth == target_path.size()) {
+    if (expression.kind != "call") return expression;
     replaced = true;
-    return replacement;
+    if (expression.args.empty()) return expression;
+    Expression replaced_call = expression;
+    replaced_call.args = {replacement};
+    return replaced_call;
   }
   const int step = target_path.at(depth);
   if (expression.kind == "indexed" && expression.index != nullptr) {
@@ -33688,18 +33692,24 @@ Expression replace_call_arg_with_scratch(const Expression& expression,
   return expression;
 }
 
-std::vector<V2Statement> rewrite_repeated_unary_update_statements(
+V2Statement canonicalize_repeated_unary_update_statement(V2Program& program,
+                                                        const V2Statement& statement,
+                                                        int& rewritten, std::string& scratch_name);
+std::vector<V2Statement> canonicalize_repeated_unary_update_statements(
+    V2Program& program, const std::vector<V2Statement>& statements, int& rewritten,
+    std::string& scratch_name);
+std::map<std::size_t, UnaryArgRouting> select_unary_arg_routings(
     const std::vector<V2Statement>& statements);
-V2Statement rewrite_repeated_unary_update_statement(const V2Statement& statement);
 
 std::vector<V2Statement> rewrite_repeated_unary_update_statements(
     V2Program& program, const std::vector<V2Statement>& statements, int& rewritten,
     const std::map<std::size_t, UnaryArgRouting>& routings, std::string& scratch_name) {
+  const bool debug = std::getenv("TRACE_REPEAT_UNARY") != nullptr;
   std::vector<V2Statement> result;
   result.reserve(statements.size() + routings.size());
   for (std::size_t index = 0; index < statements.size(); ++index) {
     const V2Statement& statement = statements.at(index);
-    const auto routing_it = routings.find(index);
+      const auto routing_it = routings.find(index);
     if (routing_it == routings.end()) {
       result.push_back(statement);
       continue;
@@ -33710,6 +33720,8 @@ std::vector<V2Statement> rewrite_repeated_unary_update_statements(
     }
     try {
       const Expression expression = parse_expression(*statement.expr, statement.line);
+      if (scratch_name.empty())
+        scratch_name = ensure_repeated_unary_update_scratch(program, statement.line);
       const Expression routed_expression = identifier_expression(scratch_name);
       bool replaced = false;
       const Expression rewritten_expression = replace_call_arg_with_scratch(
@@ -33718,12 +33730,16 @@ std::vector<V2Statement> rewrite_repeated_unary_update_statements(
         result.push_back(statement);
         continue;
       }
-      if (scratch_name.empty())
-        scratch_name = ensure_repeated_unary_update_scratch(program, statement.line);
+      const std::string routed_arg = expression_to_source(routing_it->second.call_arg);
+      if (debug)
+        std::cerr << "[repeat-unary] rewrite index=" << index << " line=" << statement.line
+                  << " kind=" << statement.kind << " path='"
+                  << expression_to_source(expression) << "' routed_arg='" << routed_arg
+                  << "'\n";
       V2Statement assignment;
       assignment.kind = "v2_assign";
       assignment.target = scratch_name;
-      assignment.expr = expression_to_source(routing_it->second.call_arg);
+      assignment.expr = routed_arg;
       assignment.line = statement.line;
       result.push_back(std::move(assignment));
       V2Statement rewritten_statement = statement;
@@ -33737,43 +33753,74 @@ std::vector<V2Statement> rewrite_repeated_unary_update_statements(
   return result;
 }
 
-V2Statement rewrite_repeated_unary_update_statement(const V2Statement& statement) {
-  V2Statement rewritten = statement;
+V2Statement canonicalize_repeated_unary_update_statement(V2Program& program,
+                                                        const V2Statement& statement,
+                                                        int& rewritten_count,
+                                                        std::string& scratch_name) {
+  V2Statement rebuilt = statement;
   if (statement.kind == "v2_if") {
-    rewritten.then_body = rewrite_repeated_unary_update_statements(statement.then_body);
-    rewritten.else_body = rewrite_repeated_unary_update_statements(statement.else_body);
-    return rewritten;
+    rebuilt.then_body =
+        canonicalize_repeated_unary_update_statements(program, statement.then_body, rewritten_count,
+                                                     scratch_name);
+    rebuilt.else_body =
+        canonicalize_repeated_unary_update_statements(program, statement.else_body, rewritten_count,
+                                                     scratch_name);
+    return rebuilt;
   }
   if (statement.kind == "v2_match") {
-    for (V2MatchCase& match_case : rewritten.cases) {
+    for (V2MatchCase& match_case : rebuilt.cases) {
       if (match_case.action != nullptr)
         match_case.action = std::make_shared<V2Statement>(
-            rewrite_repeated_unary_update_statement(*match_case.action));
+            canonicalize_repeated_unary_update_statement(program, *match_case.action,
+                                                        rewritten_count,
+                                                        scratch_name));
     }
-    if (rewritten.otherwise != nullptr)
-      rewritten.otherwise = std::make_shared<V2Statement>(
-          rewrite_repeated_unary_update_statement(*rewritten.otherwise));
-    return rewritten;
+    if (rebuilt.otherwise != nullptr)
+      rebuilt.otherwise = std::make_shared<V2Statement>(
+          canonicalize_repeated_unary_update_statement(program, *rebuilt.otherwise,
+                                                      rewritten_count,
+                                                     scratch_name));
+    return rebuilt;
   }
   if (statement.kind == "v2_while" || statement.kind == "v2_loop" ||
       statement.kind == "v2_block") {
-    rewritten.body = rewrite_repeated_unary_update_statements(statement.body);
-    return rewritten;
+    rebuilt.body = canonicalize_repeated_unary_update_statements(program, statement.body,
+                                                               rewritten_count,
+                                                                  scratch_name);
+    return rebuilt;
   }
-  rewritten.body = rewrite_repeated_unary_update_statements(statement.body);
-  rewritten.then_body = rewrite_repeated_unary_update_statements(statement.then_body);
-  rewritten.else_body = rewrite_repeated_unary_update_statements(statement.else_body);
-  return rewritten;
+  rebuilt.body = canonicalize_repeated_unary_update_statements(program, statement.body,
+                                                             rewritten_count, scratch_name);
+  rebuilt.then_body = canonicalize_repeated_unary_update_statements(program, statement.then_body,
+                                                                   rewritten_count, scratch_name);
+  rebuilt.else_body = canonicalize_repeated_unary_update_statements(program, statement.else_body,
+                                                                   rewritten_count, scratch_name);
+  return rebuilt;
 }
 
-std::vector<V2Statement> rewrite_repeated_unary_update_statements(
-    const std::vector<V2Statement>& statements) {
-  std::vector<V2Statement> rewritten;
-  rewritten.reserve(statements.size());
+std::vector<V2Statement> canonicalize_repeated_unary_update_statements(
+    V2Program& program, const std::vector<V2Statement>& statements, int& rewritten,
+    std::string& scratch_name) {
+  const bool debug = std::getenv("TRACE_REPEAT_UNARY") != nullptr;
+  std::vector<V2Statement> lowered;
+  lowered.reserve(statements.size());
   for (const V2Statement& statement : statements) {
-    rewritten.push_back(rewrite_repeated_unary_update_statement(statement));
+    lowered.push_back(
+        canonicalize_repeated_unary_update_statement(program, statement, rewritten, scratch_name));
   }
-  return rewritten;
+  if (debug) {
+    for (const V2Statement& statement : lowered) {
+      if ((statement.kind == "v2_assign" || statement.kind == "v2_update") &&
+          (!statement.expr.has_value() || statement.expr->empty())) {
+        std::cerr << "[repeat-unary] lowered has empty expr before select at line " << statement.line
+                  << " kind=" << statement.kind << '\n';
+      }
+    }
+  }
+  const std::map<std::size_t, UnaryArgRouting> routings = select_unary_arg_routings(lowered);
+  if (routings.empty())
+    return lowered;
+  return rewrite_repeated_unary_update_statements(program, lowered, rewritten, routings, scratch_name);
 }
 
 std::map<std::size_t, UnaryArgRouting> select_unary_arg_routings(
@@ -33846,19 +33893,6 @@ std::map<std::size_t, UnaryArgRouting> select_unary_arg_routings(
     }
   }
   return routings;
-}
-
-std::vector<V2Statement>
-canonicalize_repeated_unary_update_statements(V2Program& program, std::vector<V2Statement> statements,
-                                            int& rewritten, std::string& scratch_name) {
-  std::vector<V2Statement> lowered;
-  lowered.reserve(statements.size());
-  for (const V2Statement& statement : statements)
-    lowered.push_back(rewrite_repeated_unary_update_statement(statement));
-  const std::map<std::size_t, UnaryArgRouting> routings = select_unary_arg_routings(lowered);
-  if (routings.empty())
-    return lowered;
-  return rewrite_repeated_unary_update_statements(program, lowered, rewritten, routings, scratch_name);
 }
 
 void canonicalize_repeated_unary_update_args(V2Program& program,

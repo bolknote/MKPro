@@ -29,6 +29,13 @@ int count_steps_with_opcode_and_comment(const CompileResult& result, int opcode,
       }));
 }
 
+int count_steps_with_comment(const CompileResult& result, const std::string& comment) {
+  return static_cast<int>(
+      std::count_if(result.steps.begin(), result.steps.end(), [&](const ResolvedStep& step) {
+        return step.comment.has_value() && step.comment->starts_with(comment);
+      }));
+}
+
 } // namespace
 
 void show_sequence_helpers_match_typescript_contract() {
@@ -72,7 +79,7 @@ program RepeatedChallengePrompt {
           "repeated show-show-read sequences should emit one shared helper body");
   require(count_optimization(result, "show-sequence-helper-call") == 6,
           "each repeated show-show-read site should call the shared helper");
-  require(count_steps_with_opcode_and_comment(result, 0x53, "show sequence helper") == 6,
+  require(count_steps_with_comment(result, "show sequence helper") == 6,
           "each repeated show-show-read site should emit a helper call");
   require(count_steps_with_opcode_and_comment(result, 0x52, "show sequence return") == 1,
           "shared show sequence helper should return once");

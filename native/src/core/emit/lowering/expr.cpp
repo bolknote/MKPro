@@ -1,6 +1,7 @@
 #include "mkpro/core/emit/lowering/expr.hpp"
 
 #include "mkpro/core/emit/lowering_helpers.hpp"
+#include "mkpro/core/rules.hpp"
 #include "mkpro/core/state_banks.hpp"
 #include "mkpro/core/v2_const.hpp"
 
@@ -478,6 +479,13 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
   if (expression.left == nullptr || expression.right == nullptr)
     return false;
 
+  const std::map<std::string, int> arithmetic_opcodes = {
+      {"+", 0x10},
+      {"-", 0x11},
+      {"*", 0x12},
+      {"/", 0x13},
+  };
+
   if (expression.op == "+" && expression.left->kind == "call" && expression.right->kind == "call" &&
       (api.call_needs_binary_temp(*expression.left) ||
        api.call_needs_binary_temp(*expression.right))) {
@@ -522,6 +530,25 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
     return true;
   }
 
+  const auto duplicated_opcode_it = arithmetic_opcodes.find(expression.op);
+  if (duplicated_opcode_it != arithmetic_opcodes.end() &&
+      expression_equals(*expression.left, *expression.right) &&
+      is_pure_expression(*expression.left) && estimate_expression_cost(*expression.left) > 1) {
+    if (!api.lower_expression_to_x(*expression.left))
+      return false;
+    api.emitter.emit_op(0x0e, "В↑", "duplicate repeated operand through stack");
+    api.emitter.emit_op(duplicated_opcode_it->second, expression.op, "expr " + expression.op);
+    api.emitter.current_x_variable.reset();
+    api.emitter.current_x_aliases.clear();
+    context.optimizations.push_back(OptimizationReport{
+        .name = "stack-current-x-scheduling",
+        .detail = "Duplicated " + expression_to_intent_text(*expression.left) +
+                  " through the stack (В↑) for " + expression.op +
+                  " instead of recomputing it.",
+    });
+    return true;
+  }
+
   if (const std::optional<RemainderByConstantMatch> remainder =
           match_remainder_by_constant(expression)) {
     if (!api.lower_expression_to_x(remainder->value))
@@ -542,12 +569,6 @@ bool lower_binary_expression_to_x(ExpressionEmitApi& api, LoweringContext& conte
     return true;
   }
 
-  const std::map<std::string, int> arithmetic_opcodes = {
-      {"+", 0x10},
-      {"-", 0x11},
-      {"*", 0x12},
-      {"/", 0x13},
-  };
   const auto opcode_it = arithmetic_opcodes.find(expression.op);
   if (opcode_it != arithmetic_opcodes.end()) {
     if (!api.lower_expression_to_x(*expression.left))
@@ -579,6 +600,7 @@ std::optional<bool> lower_calculator_builtin_call_to_x(ExpressionEmitApi& api,
       return false;
     }
     api.emitter.emit_op(0x50, "С/П", "read()");
+    api.emitter.machine_entry_open = true;
     return true;
   }
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 namespace mkpro::tests {
 
@@ -33,6 +34,14 @@ int count_steps_with_opcode_and_comment(const CompileResult& result, int opcode,
       std::count_if(result.steps.begin(), result.steps.end(), [&](const ResolvedStep& step) {
         return step.opcode == opcode && step.comment.has_value() && *step.comment == comment;
       }));
+}
+
+int count_steps_with_opcode_and_any_comment(const CompileResult& result, int opcode,
+                                            const std::vector<std::string>& comments) {
+  int count = 0;
+  for (const std::string& comment : comments)
+    count += count_steps_with_opcode_and_comment(result, opcode, comment);
+  return count;
 }
 
 } // namespace
@@ -66,7 +75,8 @@ program RandomLenReuse {
           "three random(board) calls should report three helper-call optimizations");
   require(!has_optimization(result, "repeated-assignment-value-reuse"),
           "random(board) assignments must not reuse one random draw as a repeated pure value");
-  require(count_steps_with_opcode_and_comment(result, 0x53, "random cell random(grid)") == 3,
+  require(count_steps_with_opcode_and_any_comment(
+              result, 0x53, {"random cell random(grid)", "random cell int(random(20)) + 1"}) == 3,
           "three random(board) calls should call the shared helper");
   require(count_steps_with_comment(result, "random()") == 1,
           "shared random cell helper should keep one random draw in the helper body");

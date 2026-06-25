@@ -503,15 +503,6 @@ parse_random_unique_segmented_bitplane_value(std::string_view value) {
   };
 }
 
-void emit_random_int_setup(MachineEmitter& setup, const std::string& max) {
-  setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
-  setup.emit_number(max);
-  setup.emit_op(0x12, "*", "expr *", std::nullopt, true);
-  setup.emit_op(0x0e, "В↑", "random int keep scaled draw", std::nullopt, true);
-  setup.emit_op(0x35, "К {x}", "random int fractional part", std::nullopt, true);
-  setup.emit_op(0x11, "-", "random int floor", std::nullopt, true);
-}
-
 void emit_setup_integer_offset(MachineEmitter& setup, int offset) {
   if (offset == 0)
     return;
@@ -656,7 +647,9 @@ int setup_number_entry_cost(const std::string& value) {
 std::string js_number_string(double value) {
   if (value == 0.0)
     return "0";
-  if (std::isfinite(value) && std::floor(value) == value) {
+  if (std::isfinite(value) && std::floor(value) == value &&
+      value >= static_cast<double>(std::numeric_limits<long long>::min()) &&
+      value <= static_cast<double>(std::numeric_limits<long long>::max())) {
     const long long integer = static_cast<long long>(value);
     if (static_cast<double>(integer) == value)
       return std::to_string(integer);
@@ -1249,7 +1242,8 @@ bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expres
                                  const std::vector<PreloadReport>& preloads) {
   if (expression.kind == "number") {
     const std::string raw = expression.raw.empty() ? expression.text : expression.raw;
-    emit_setup_number_or_negated_preload(setup, preloads, raw);
+    emit_setup_number_or_preload_or_pow10(setup, preloads, raw,
+                                          "constant " + normalize_setup_constant_text(raw));
     return true;
   }
   if (expression.kind == "identifier") {
@@ -1317,6 +1311,32 @@ bool lower_setup_expression_to_x(MachineEmitter& setup, const Expression& expres
   return false;
 }
 
+std::optional<std::string> random_domain_value(std::string_view value);
+
+std::string add_setup_offset_expression(std::string expression, int offset) {
+  if (offset == 0)
+    return expression;
+  if (offset > 0)
+    return expression + " + " + std::to_string(offset);
+  return expression + " - " + std::to_string(-offset);
+}
+
+std::string random_board_coordinate_expression(const V2Board& board) {
+  if (board.height == 1)
+    return add_setup_offset_expression("int(random(" + std::to_string(board.width) + "))",
+                                       board.x_min);
+  if (board.width == 1)
+    return add_setup_offset_expression("int(random(" + std::to_string(board.height) + "))",
+                                       board.y_min);
+  const std::string x =
+      add_setup_offset_expression("int(random(" + std::to_string(board.width) + "))",
+                                  board.x_min);
+  const std::string y =
+      add_setup_offset_expression("int(random(" + std::to_string(board.height) + "))",
+                                  board.y_min);
+  return x + " + 10 * (" + y + ")";
+}
+
 struct IndexedSetupPreloadGroup {
   std::size_t end = 0;
   int min_register = 0;
@@ -1330,7 +1350,8 @@ indexed_setup_preload_group_at(const std::vector<PreloadReport>& preloads,
   if (index >= preloads.size() || consumed.contains(index))
     return std::nullopt;
   const PreloadReport& first = preloads.at(index);
-  if (!first.setup_expression || !first.setup_target_name.has_value())
+  if (!first.setup_target_name.has_value() || first.value == "stack.X" ||
+      first.value == "stack.Y" || has_executable_setup_number_value(first.value))
     return std::nullopt;
 
   IndexedSetupPreloadGroup group;
@@ -1342,7 +1363,8 @@ indexed_setup_preload_group_at(const std::vector<PreloadReport>& preloads,
   std::size_t cursor = index + 1U;
   while (cursor < preloads.size() && !consumed.contains(cursor)) {
     const PreloadReport& candidate = preloads.at(cursor);
-    if (!candidate.setup_expression || !candidate.setup_target_name.has_value() ||
+    if (!candidate.setup_target_name.has_value() || candidate.value == "stack.X" ||
+        candidate.value == "stack.Y" || has_executable_setup_number_value(candidate.value) ||
         candidate.value != first.value) {
       break;
     }
@@ -1361,6 +1383,7 @@ indexed_setup_preload_group_at(const std::vector<PreloadReport>& preloads,
 
 bool emit_indexed_setup_preload_group(MachineEmitter& setup,
                                       std::vector<OptimizationReport>& optimizations,
+                                      const std::map<std::string, const V2Board*>& boards,
                                       const std::vector<PreloadReport>& preloads,
                                       const PreloadReport& first,
                                       const IndexedSetupPreloadGroup& group) {
@@ -1370,7 +1393,13 @@ bool emit_indexed_setup_preload_group(MachineEmitter& setup,
   setup.emit_number(std::to_string(group.max_register + 1));
   emit_setup_store(setup, "0", "setup indexed pointer " + first_name + ".." + last_name);
   setup.emit_label(label, {.hidden = true});
-  const Expression expression = parse_expression(first.value, first.setup_source_line.value_or(0));
+  std::string expression_text = first.value;
+  if (const std::optional<std::string> random_domain = random_domain_value(first.value)) {
+    const auto board_it = boards.find(*random_domain);
+    if (board_it != boards.end() && board_it->second != nullptr)
+      expression_text = random_board_coordinate_expression(*board_it->second);
+  }
+  const Expression expression = parse_expression(expression_text, first.setup_source_line.value_or(0));
   if (!lower_setup_expression_to_x(setup, expression, preloads))
     return false;
   setup.emit_op(0xb0, "К X->П 0", "setup indexed " + first_name + ".." + last_name,
@@ -1389,7 +1418,9 @@ bool emit_indexed_setup_preload_group(MachineEmitter& setup,
 }
 
 bool emit_restore_setup_pointer_r0(MachineEmitter& setup,
-                                   const std::vector<PreloadReport>& preloads) {
+                                   const std::vector<PreloadReport>& preloads,
+                                   const std::optional<std::string>& current_value = std::nullopt,
+                                   bool force_restore = true) {
   const auto preload =
       std::find_if(preloads.begin(), preloads.end(), [](const PreloadReport& item) {
         return item.register_name == "0" && !item.setup_expression &&
@@ -1397,6 +1428,11 @@ bool emit_restore_setup_pointer_r0(MachineEmitter& setup,
       });
   if (preload == preloads.end())
     return false;
+  const std::string value = executable_setup_value(preload->value).value_or(preload->value);
+  if (!force_restore && current_value.has_value() &&
+      normalize_setup_constant_text(value) == normalize_setup_constant_text(*current_value)) {
+    return true;
+  }
   setup.emit_number(preload->value);
   emit_setup_store(setup, "0", "restore setup R0");
   return true;
@@ -1480,25 +1516,50 @@ bool emit_segmented_bitplane_indirect_select_setup(MachineEmitter& setup,
 }
 
 void emit_random_board_coordinate_setup(MachineEmitter& setup, const V2Board& board,
+                                        const std::vector<PreloadReport>& preloads,
                                         const std::string& register_name,
                                         const std::string& target_name) {
   if (board.height == 1) {
-    emit_random_int_setup(setup, std::to_string(board.width));
+    setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
+    emit_setup_number_or_preload_or_pow10(setup, preloads, std::to_string(board.width),
+                                          "constant " + std::to_string(board.width));
+    setup.emit_op(0x12, "*", "expr *", std::nullopt, true);
+    setup.emit_op(0x0e, "В↑", "random int keep scaled draw", std::nullopt, true);
+    setup.emit_op(0x35, "К {x}", "random int fractional part", std::nullopt, true);
+    setup.emit_op(0x11, "-", "random int floor", std::nullopt, true);
     emit_setup_integer_offset(setup, board.x_min);
     emit_setup_store(setup, register_name, "setup " + target_name);
     return;
   }
   if (board.width == 1) {
-    emit_random_int_setup(setup, std::to_string(board.height));
+    setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
+    emit_setup_number_or_preload_or_pow10(setup, preloads, std::to_string(board.height),
+                                          "constant " + std::to_string(board.height));
+    setup.emit_op(0x12, "*", "expr *", std::nullopt, true);
+    setup.emit_op(0x0e, "В↑", "random int keep scaled draw", std::nullopt, true);
+    setup.emit_op(0x35, "К {x}", "random int fractional part", std::nullopt, true);
+    setup.emit_op(0x11, "-", "random int floor", std::nullopt, true);
     emit_setup_integer_offset(setup, board.y_min);
     emit_setup_store(setup, register_name, "setup " + target_name);
     return;
   }
 
-  emit_random_int_setup(setup, std::to_string(board.width));
+  setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
+  emit_setup_number_or_preload_or_pow10(setup, preloads, std::to_string(board.width),
+                                        "constant " + std::to_string(board.width));
+  setup.emit_op(0x12, "*", "expr *", std::nullopt, true);
+  setup.emit_op(0x0e, "В↑", "random int keep scaled draw", std::nullopt, true);
+  setup.emit_op(0x35, "К {x}", "random int fractional part", std::nullopt, true);
+  setup.emit_op(0x11, "-", "random int floor", std::nullopt, true);
   emit_setup_integer_offset(setup, board.x_min);
   emit_setup_store(setup, register_name, "random coord x");
-  emit_random_int_setup(setup, std::to_string(board.height));
+  setup.emit_op(0x3b, "К СЧ", "random()", std::nullopt, true);
+  emit_setup_number_or_preload_or_pow10(setup, preloads, std::to_string(board.height),
+                                        "constant " + std::to_string(board.height));
+  setup.emit_op(0x12, "*", "expr *", std::nullopt, true);
+  setup.emit_op(0x0e, "В↑", "random int keep scaled draw", std::nullopt, true);
+  setup.emit_op(0x35, "К {x}", "random int fractional part", std::nullopt, true);
+  setup.emit_op(0x11, "-", "random int floor", std::nullopt, true);
   emit_setup_integer_offset(setup, board.y_min);
   setup.emit_number("10");
   setup.emit_op(0x12, "*", "random coord y decade", std::nullopt, true);
@@ -1849,6 +1910,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   std::vector<OptimizationReport> optimizations;
   std::set<std::size_t> consumed;
   bool setup_r0_dirty = false;
+  std::optional<std::string> setup_r0_current_value;
   bool initialized_random_coord_list = false;
   bool initialized_segmented_bitplanes = false;
   const bool r0_needs_non_numeric_restore =
@@ -1882,6 +1944,10 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   };
   std::vector<std::size_t> preload_order;
   preload_order.reserve(preloads.size());
+  const std::set<std::size_t> empty_consumed;
+  auto is_indexed_setup_group_start = [&](const std::size_t index) {
+    return indexed_setup_preload_group_at(preloads, empty_consumed, index).has_value();
+  };
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (executable_setup_preload(preloads.at(index)) &&
         !is_formatted_coord_report_mask_preload(preloads.at(index))) {
@@ -1905,7 +1971,15 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (!executable_setup_preload(preloads.at(index)) &&
         !deferred_direct_setup_preload(preloads.at(index)) &&
-        preloads.at(index).value != "stack.Y" && preloads.at(index).value != "stack.X")
+        preloads.at(index).value != "stack.Y" && preloads.at(index).value != "stack.X" &&
+        is_indexed_setup_group_start(index))
+      preload_order.push_back(index);
+  }
+  for (std::size_t index = 0; index < preloads.size(); ++index) {
+    if (!executable_setup_preload(preloads.at(index)) &&
+        !deferred_direct_setup_preload(preloads.at(index)) &&
+        preloads.at(index).value != "stack.Y" && preloads.at(index).value != "stack.X" &&
+        !is_indexed_setup_group_start(index))
       preload_order.push_back(index);
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
@@ -1962,29 +2036,36 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     if (consumed.contains(index))
       continue;
     const PreloadReport& preload = preloads.at(index);
-    if (executable_setup_preload(preload) && has_executable_setup_number_value(preload.value)) {
-      numeric_segment.push_back(index);
-      continue;
-    }
-    flush_numeric_segment();
     if (uses_r0_setup_pointer && preload.register_name == "0" && !preload.setup_expression &&
         has_executable_setup_number_value(preload.value)) {
       consumed.insert(index);
       continue;
     }
+    if (executable_setup_preload(preload) && has_executable_setup_number_value(preload.value)) {
+      numeric_segment.push_back(index);
+      continue;
+    }
+    flush_numeric_segment();
     const bool from_stack_x = preload.value == "stack.X";
     const bool from_stack_y = preload.value == "stack.Y";
     if (!r0_needs_non_numeric_restore) {
       const std::optional<IndexedSetupPreloadGroup> group =
           indexed_setup_preload_group_at(preloads, consumed, index);
       if (group.has_value()) {
-        if (emit_indexed_setup_preload_group(setup, optimizations, preloads, preload, *group)) {
+        if (emit_indexed_setup_preload_group(setup, optimizations, boards, preloads, preload,
+                                             *group)) {
           for (std::size_t consumed_index = index; consumed_index < group->end; ++consumed_index)
             consumed.insert(consumed_index);
           setup_r0_dirty = true;
+          setup_r0_current_value = std::to_string(group->min_register - 1);
           continue;
         }
       }
+    }
+    if (setup_r0_dirty && uses_r0_setup_pointer) {
+      if (emit_restore_setup_pointer_r0(setup, preloads, setup_r0_current_value,
+                                        !options.disable_candidate_search))
+        setup_r0_dirty = false;
     }
     if (preload.setup_expression) {
       consumed.insert(index);
@@ -2077,7 +2158,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       consumed.insert(index);
       const auto board_it = boards.find(unique->domain);
       if (board_it != boards.end()) {
-        emit_random_board_coordinate_setup(setup, *board_it->second, preload.register_name,
+        emit_random_board_coordinate_setup(setup, *board_it->second, preloads, preload.register_name,
                                            setup_target_name(preload));
         initialized_random_coord_list = true;
       }
@@ -2150,7 +2231,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       const auto board_it = boards.find(*random_domain);
       if (board_it != boards.end()) {
         consumed.insert(index);
-        emit_random_board_coordinate_setup(setup, *board_it->second, preload.register_name,
+        emit_random_board_coordinate_setup(setup, *board_it->second, preloads, preload.register_name,
                                            setup_target_name(preload));
         continue;
       }
@@ -2219,7 +2300,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   }
   flush_numeric_segment();
   if (setup_r0_dirty)
-    emit_restore_setup_pointer_r0(setup, preloads);
+    emit_restore_setup_pointer_r0(setup, preloads, setup_r0_current_value,
+                                  !options.disable_candidate_search);
   if (initialized_random_coord_list && !initialized_segmented_bitplanes)
     setup.emit_number("7");
   setup.emit_op(0x50, "С/П", "setup complete", std::nullopt, true);

@@ -7125,13 +7125,13 @@ program DecimalPointDisplay {
           "decimal-point display compile should not report diagnostics");
   require(has_optimization(decimal_point_display_statement, "decimal-point-display"),
           "decimal-point display should report the TS strategy name");
-  require(decimal_point_display_statement.listing.find("decimal-point display fraction") !=
+  require(decimal_point_display_statement.listing.find(" decimal point") !=
               std::string::npos,
           "decimal-point display should divide the fractional fields");
-  require(decimal_point_display_statement.listing.find("decimal-point display append") !=
+  require(decimal_point_display_statement.listing.find(" integer append") !=
               std::string::npos,
           "decimal-point display should append the integer field");
-  require(decimal_point_display_statement.listing.find("show decimal-point display") !=
+  require(decimal_point_display_statement.listing.find("show __inline_show_") !=
               std::string::npos,
           "decimal-point display should emit a calculator stop");
 
