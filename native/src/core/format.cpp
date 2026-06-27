@@ -53,7 +53,7 @@ std::string upper_ascii(std::string value) {
 }
 
 bool regex_matches(std::string_view value, const std::regex& pattern) {
-  return std::regex_match(value.begin(), value.end(), pattern);
+  return std::regex_match(value.data(), value.data() + value.size(), pattern);
 }
 
 bool is_scientific_decimal(std::string_view value) {

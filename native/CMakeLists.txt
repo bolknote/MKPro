@@ -393,6 +393,9 @@ function(mkpro_configure_target target_name)
     if(MKPRO_STATIC AND NOT APPLE)
       target_link_options(${target_name} PRIVATE -static -static-libgcc -static-libstdc++)
     endif()
+  elseif(MSVC)
+    # compiler.cpp emits more sections than the default COFF object limit allows.
+    target_compile_options(${target_name} PRIVATE /bigobj)
   endif()
 endfunction()
 

@@ -478,7 +478,7 @@ parse_random_unique_coord_list_value(std::string_view value) {
   static const std::regex pattern(
       R"(^random_unique\(([A-Za-z_][A-Za-z0-9_]*),([A-Za-z_][A-Za-z0-9_]*),(\d+),(\d+)(,scaled)?\)$)");
   std::cmatch match;
-  if (!std::regex_match(value.begin(), value.end(), match, pattern))
+  if (!std::regex_match(value.data(), value.data() + value.size(), match, pattern))
     return std::nullopt;
   return RandomUniqueCoordListValue{
       .domain = match[1].str(),
@@ -494,7 +494,7 @@ parse_random_unique_segmented_bitplane_value(std::string_view value) {
   static const std::regex pattern(
       R"(^__seg_bitplane_random_unique\(([A-Za-z_][A-Za-z0-9_]*),([A-Za-z_][A-Za-z0-9_]*),(\d+)\)$)");
   std::cmatch match;
-  if (!std::regex_match(value.begin(), value.end(), match, pattern))
+  if (!std::regex_match(value.data(), value.data() + value.size(), match, pattern))
     return std::nullopt;
   return RandomUniqueSegmentedBitplaneValue{
       .collection = match[1].str(),
@@ -1881,7 +1881,7 @@ bool emit_random_unique_segmented_bitplane_setup(
 std::optional<std::string> random_domain_value(std::string_view value) {
   static const std::regex random_domain_regex(R"(^random\(([A-Za-z_][A-Za-z0-9_]*)\)$)");
   std::cmatch match;
-  if (!std::regex_match(value.begin(), value.end(), match, random_domain_regex))
+  if (!std::regex_match(value.data(), value.data() + value.size(), match, random_domain_regex))
     return std::nullopt;
   return match[1].str();
 }

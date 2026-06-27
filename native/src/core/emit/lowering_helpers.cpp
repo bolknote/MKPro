@@ -151,7 +151,7 @@ std::optional<CoordListItemInfo> coord_list_item_info(std::string_view name) {
     return std::nullopt;
   static const std::regex pattern(R"(^__coord_list_(.+)_(\d+)$)");
   std::cmatch match;
-  if (!std::regex_match(name.begin(), name.end(), match, pattern))
+  if (!std::regex_match(name.data(), name.data() + name.size(), match, pattern))
     return std::nullopt;
   return CoordListItemInfo{
       .list_name = match[1].str(),
