@@ -36367,13 +36367,29 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
             ? 0
             : reference_indirect_flow_rescue_above(ast, options);
     bool return_stack_post_layout_changed = false;
-    if (options.return_stack_script) {
+    if (!options.disable_return_stack_script) {
       const std::size_t return_stack_budget =
           options.budget.has_value() && *options.budget > 0
               ? static_cast<std::size_t>(*options.budget)
               : static_cast<std::size_t>(105);
       const bool return_stack_needs_size_rescue =
           core::machine_cell_count(post_layout_items) > static_cast<int>(return_stack_budget);
+      const core::ReturnStackScriptOpportunityScan return_stack_script_scan =
+          core::scan_return_stack_script_opportunity(post_layout_items);
+      const core::ReturnStackIrTailLayoutSearch return_stack_tail_layout_scan =
+          core::analyze_return_stack_ir_tail_layout(
+              raise_machine_to_ir(post_layout_items),
+              core::ReturnStackStartupLayoutOptions{
+                  .size_rescue = return_stack_needs_size_rescue,
+              });
+      const bool profitable_tail_layout_signal =
+          return_stack_tail_layout_scan.materialized &&
+          (return_stack_tail_layout_scan.analysis.plan.profitable ||
+           return_stack_needs_size_rescue);
+      const bool run_return_stack_pipeline =
+          options.return_stack_script || return_stack_script_scan.possible ||
+          profitable_tail_layout_signal || return_stack_needs_size_rescue;
+      if (run_return_stack_pipeline) {
       const core::ReturnStackIrTailLayoutSearch tail_layout =
           core::analyze_return_stack_ir_tail_layout_with_pipeline(
               raise_machine_to_ir(post_layout_items), post_layout_items, pass_options,
@@ -36413,7 +36429,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
               .name = "return-stack-startup-layout",
               .detail = std::move(detail),
           });
-        } else if (options.analysis) {
+        } else if (options.return_stack_script && options.analysis) {
           std::string rejection = tail_layout.rejection_reason;
           if (rejection.empty()) {
             rejection = "return-stack startup layout materialized, but the full post-layout "
@@ -36428,7 +36444,8 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-layout-not-applied", rejection));
         }
-      } else if (options.analysis && !tail_layout.rejection_reason.empty()) {
+      } else if (options.return_stack_script && options.analysis &&
+                 !tail_layout.rejection_reason.empty()) {
         result.diagnostics.push_back(diagnostic(
             DiagnosticSeverity::Note, "return-stack-layout-not-applied",
             tail_layout.rejection_reason));
@@ -36595,7 +36612,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       if (return_stack_script.applied == 0) {
         const std::string rejection =
             core::explain_return_stack_script_rejection(post_layout_items);
-        if (options.analysis && !rejection.empty()) {
+        if (options.return_stack_script && options.analysis && !rejection.empty()) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-script-not-applied", rejection));
         }
@@ -36689,7 +36706,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                 DiagnosticSeverity::Note, "return-stack-dirty-dispatch-allocator",
                 dirty_allocator_detail));
           }
-        } else if (options.analysis && dirty_allocator_available) {
+        } else if (options.return_stack_script && options.analysis && dirty_allocator_available) {
           const std::string dirty_allocator_detail =
               "Proved dirty return-stack dispatch layout allocation with " +
               std::to_string(dirty_allocator_padding) + " executable cell" +
@@ -36702,7 +36719,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-allocator-not-applied",
               dirty_allocator_detail));
-        } else if (options.analysis && !dirty_dispatch_proved) {
+        } else if (options.return_stack_script && options.analysis && !dirty_dispatch_proved) {
           result.diagnostics.push_back(diagnostic(
               DiagnosticSeverity::Note, "return-stack-dirty-dispatch-not-applied",
               dirty_rejection.empty()
@@ -36710,6 +36727,12 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                     "return target cells"
                   : dirty_rejection));
         }
+      }
+      } else if (options.return_stack_script && options.analysis) {
+        result.diagnostics.push_back(diagnostic(
+            DiagnosticSeverity::Note, "return-stack-script-not-applied",
+            "return-stack pipeline found no proven charge-chain, tail-layout, or size-rescue "
+            "opportunity in this layout"));
       }
     }
 
@@ -37028,6 +37051,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";dual_use_constant_indirect_flow=" << options.dual_use_constant_indirect_flow
       << ";aggressive_post_layout_indirect_flow=" << options.aggressive_post_layout_indirect_flow
       << ";return_stack_script=" << options.return_stack_script
+      << ";disable_return_stack_script=" << options.disable_return_stack_script
       << ";preloaded_indirect_flow=" << options.preloaded_indirect_flow
       << ";runtime_indirect_call_flow=" << options.runtime_indirect_call_flow
       << ";general_constant_preloads=" << options.general_constant_preloads
@@ -37829,10 +37853,11 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   };
 
   CompileResult best = cached_compile_source_once(options);
-  if (options.return_stack_script &&
+  if (!options.disable_return_stack_script &&
       (!best.implemented || has_return_stack_optimization(best))) {
     CompileOptions fallback_options = options;
     fallback_options.return_stack_script = false;
+    fallback_options.disable_return_stack_script = true;
     try {
       CompileResult fallback = compile_source(source, fallback_options);
       if (candidate_beats_best(fallback, best)) {
@@ -37842,8 +37867,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
                                            : "primary lowering failed";
         fallback.optimizations.push_back(OptimizationReport{
             .name = "return-stack-safe-fallback",
-            .detail = "Kept the successful baseline candidate because return-stack rewriting is "
-                      "opportunistic (" +
+            .detail = "Kept the successful no-return-stack baseline candidate because "
+                      "return-stack rewriting is opportunistic (" +
                       comparison + ").",
         });
         best = std::move(fallback);
@@ -37899,28 +37924,6 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     add_configured_candidate(std::move(candidate_options), std::move(name), std::move(detail),
                              gate);
   };
-  const core::ReturnStackScriptOpportunityScan return_stack_script_scan =
-      core::scan_return_stack_script_opportunity(best.items);
-  const core::ReturnStackIrTailLayoutSearch return_stack_tail_layout_scan =
-      core::analyze_return_stack_ir_tail_layout(
-          raise_machine_to_ir(best.items),
-          core::ReturnStackStartupLayoutOptions{.size_rescue = needs_size_rescue});
-  bool dirty_dispatch_allocator_signal = false;
-  if (needs_size_rescue) {
-    const std::vector<core::DirtyReturnStackDispatchAllocationPlan> allocations =
-        core::allocate_dirty_return_stack_dispatch_layouts(
-            best.items, core::DirtyReturnStackDispatchOptions{.size_rescue = true});
-    dirty_dispatch_allocator_signal =
-        !allocations.empty() && allocations.front().allocated &&
-        allocations.front().dispatch.layout_proved;
-  }
-  if (return_stack_script_scan.possible || return_stack_tail_layout_scan.has_opportunity ||
-      dirty_dispatch_allocator_signal) {
-    add_candidate(
-        [](CompileOptions& candidate_options) { candidate_options.return_stack_script = true; },
-        "return-stack-script",
-        "Tried proven ПП return-stack charge-chain rewriting after cheap pre-scan");
-  }
   auto add_fractional_selector_candidates_for_base =
       [&](const CompileOptions& base_options, std::set<std::string>& tried, std::string name,
           const std::function<std::string(const FractionalConstantSelectorPlan&)>& detail,

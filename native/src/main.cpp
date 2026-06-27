@@ -16,7 +16,8 @@ void print_usage(std::ostream& out) {
   out << "Usage:\n"
       << "  mkpro-native compile <file.mkpro> [--out listing|hex|json|keys|all]\n"
       << "                               [--delivery manual|loader|hex] [--budget N]\n"
-      << "                               [--analysis] [--strict] [--return-stack-script]\n"
+      << "                               [--analysis] [--strict]\n"
+      << "                               [--return-stack-script|--no-return-stack-script]\n"
       << "                               [--share-random-cell] [--hoist-shared-helpers]\n"
       << "                               [--hoist-procs]\n"
       << "                               [--inline-floor-packed-row-expressions]\n"
@@ -246,6 +247,9 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       options.aggressive_post_layout_indirect_flow = true;
     } else if (arg == "--return-stack-script") {
       options.return_stack_script = true;
+      options.disable_return_stack_script = false;
+    } else if (arg == "--no-return-stack-script") {
+      options.disable_return_stack_script = true;
     } else if (arg == "--dead-source-residual-temp-reuse") {
       options.dead_source_residual_temp_reuse = true;
     } else if (arg == "--free-residual-dispatch-scratch") {

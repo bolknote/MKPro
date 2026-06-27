@@ -108,6 +108,7 @@ struct CompileOptions {
   bool dual_use_constant_indirect_flow = false;
   bool aggressive_post_layout_indirect_flow = false;
   bool return_stack_script = false;
+  bool disable_return_stack_script = false;
   bool preloaded_indirect_flow = false;
   bool runtime_indirect_call_flow = false;
   bool general_constant_preloads = false;
