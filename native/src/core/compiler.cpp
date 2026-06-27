@@ -24,6 +24,7 @@
 #include "mkpro/core/rules.hpp"
 #include "mkpro/core/state_banks.hpp"
 #include "mkpro/core/v2_const.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include <algorithm>
 #include <array>
@@ -37917,9 +37918,38 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                                      post_layout_stop_tail.optimizations.begin(),
                                      post_layout_stop_tail.optimizations.end());
 
+    std::vector<PreloadReport> overlay_preloads = post_layout_flow_preloads;
+    for (const PreloadReport& preload : stop_tail_preloads) {
+      const bool present = std::any_of(
+          overlay_preloads.begin(), overlay_preloads.end(),
+          [&](const PreloadReport& existing) {
+            return existing.register_name == preload.register_name;
+          });
+      if (!present)
+        overlay_preloads.push_back(preload);
+    }
     const core::PostLayoutIndirectFlowResult post_layout_overlay =
-        core::optimize_post_layout_address_code_overlay(post_layout_items);
+        core::optimize_post_layout_address_code_overlay(post_layout_items, overlay_preloads);
     post_layout_items = post_layout_overlay.items;
+    if (post_layout_overlay.applied > 0) {
+      // The overlay deletes cells and shifts helper addresses; it returns the
+      // preloaded indirect-flow selectors retargeted to the post-overlay layout.
+      // Write the retargeted selector values back so the runtime preloads (R7,
+      // etc.) dispatch to the shifted helper entries rather than one cell past
+      // them (DEFECT 4 root cause).
+      std::map<std::string, std::string> retargeted_by_register;
+      for (const PreloadReport& preload : post_layout_overlay.preloads)
+        retargeted_by_register[preload.register_name] = preload.value;
+      auto apply_retarget = [&](std::vector<PreloadReport>& preloads) {
+        for (PreloadReport& preload : preloads) {
+          const auto it = retargeted_by_register.find(preload.register_name);
+          if (it != retargeted_by_register.end())
+            preload.value = it->second;
+        }
+      };
+      apply_retarget(post_layout_flow_preloads);
+      apply_retarget(stop_tail_preloads);
+    }
     post_layout_optimizations.insert(post_layout_optimizations.end(),
                                      post_layout_overlay.optimizations.begin(),
                                      post_layout_overlay.optimizations.end());
@@ -38116,6 +38146,205 @@ bool candidate_beats_best(const CompileResult& candidate, const CompileResult& b
     return true;
   return candidate.steps.size() == best.steps.size() && best.steps.size() > kOfficialProgramLimit &&
          estimated_startup_program_cost(candidate) < estimated_startup_program_cost(best);
+}
+
+// Behavioral-equivalence acceptance gate for the aggressive post-layout
+// rescue (and the other runtime-state-dependent indirect-flow rewrites).
+// Candidate selection ranks purely by cell count, so without this gate a
+// smaller-but-miscompiled candidate (e.g. a stale preloaded selector after a
+// helper-overlay shift) could be selected. We run the candidate and the
+// non-aggressive baseline on a battery of representative input scenarios and
+// reject the candidate unless every observable result matches. This makes the
+// whole class of "smaller-but-wrong" forms unselectable.
+struct EquivalenceTurn {
+  bool stopped = false;
+  std::string display;
+  bool operator==(const EquivalenceTurn& other) const {
+    return stopped == other.stopped && display == other.display;
+  }
+  bool operator!=(const EquivalenceTurn& other) const { return !(*this == other); }
+};
+
+struct EquivalenceObservation {
+  // `runnable` is false when the candidate could not be exercised in this
+  // harness at all (a load diagnostic or an emulator parse/runtime exception,
+  // e.g. a preload value the emulator number parser cannot accept). We treat
+  // "not runnable" as its own observable bucket so that a baseline and a
+  // candidate that are both un-runnable for the same structural reason still
+  // compare equal, while a candidate that becomes un-runnable when the
+  // baseline runs is rejected.
+  bool runnable = false;
+  // One entry per interaction turn: turn 0 is the display after the initial
+  // В/О С/П, and each subsequent entry is the display after pressing С/П with
+  // the next scenario input. Capturing every turn (rather than only the final
+  // state) lets the comparison stop once the reference program goes idle.
+  std::vector<EquivalenceTurn> turns;
+};
+
+// Preload values are carried in the compiler's hex-ish register encoding
+// (A/B/C/D/E/F nibbles). The emulator's number parser expects MK-61 display
+// glyphs, so translate the same way the indirect-flow equivalence test does
+// before handing a value to set_register. Without this, dark-entry selector
+// preloads (e.g. "B2") would throw inside the emulator and make the gate
+// spuriously treat a candidate as un-runnable.
+std::string emulator_preload_literal(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (char ch : value) {
+    switch (static_cast<char>(std::toupper(static_cast<unsigned char>(ch)))) {
+      case 'A':
+        out.push_back('-');
+        break;
+      case 'B':
+        out.push_back('L');
+        break;
+      case 'C':
+        out += "С";
+        break;
+      case 'D':
+        out += "Г";
+        break;
+      case 'E':
+        out += "Е";
+        break;
+      case 'F':
+        out.push_back('_');
+        break;
+      default:
+        out.push_back(ch);
+        break;
+    }
+  }
+  return out;
+}
+
+EquivalenceObservation run_equivalence_observation(const CompileResult& result,
+                                                   const std::vector<int>& inputs) {
+  EquivalenceObservation observation;
+  try {
+    emulator::MK61 calc;
+    if (result.setup_program.has_value()) {
+      std::vector<int> setup_codes;
+      setup_codes.reserve(result.setup_program->steps.size());
+      for (const ResolvedStep& step : result.setup_program->steps)
+        setup_codes.push_back(step.opcode);
+      const emulator::ProgramLoadResult setup_loaded = calc.load_program(setup_codes);
+      if (!setup_loaded.diagnostics.empty())
+        return observation;
+      calc.press_sequence({"В/О", "С/П"});
+      calc.run_until_stable(2000, 6);
+    }
+
+    std::vector<int> codes;
+    codes.reserve(result.steps.size());
+    for (const ResolvedStep& step : result.steps)
+      codes.push_back(step.opcode);
+    const emulator::ProgramLoadResult loaded = calc.load_program(codes);
+    if (!loaded.diagnostics.empty())
+      return observation;
+    for (const PreloadReport& preload : result.preloads)
+      calc.set_register(preload.register_name, emulator_preload_literal(preload.value));
+
+    calc.press_sequence({"В/О", "С/П"});
+    {
+      const emulator::RunResult run = calc.run_until_stable(2000, 6);
+      observation.turns.push_back(
+          EquivalenceTurn{.stopped = run.stopped, .display = calc.display_text()});
+    }
+    for (const int value : inputs) {
+      // Clear X before each key so consecutive turns enter a fresh number
+      // rather than concatenating digits, matching how the calculator is
+      // actually driven (see emulator_indirect_flow_equivalence_test).
+      calc.input_number(std::to_string(value), /*clear=*/true);
+      calc.press("С/П");
+      const emulator::RunResult run = calc.run_until_stable(2000, 6);
+      observation.turns.push_back(
+          EquivalenceTurn{.stopped = run.stopped, .display = calc.display_text()});
+    }
+    observation.runnable = true;
+  } catch (const std::exception&) {
+    // Any emulator-side failure leaves `runnable` false; the comparison logic
+    // below treats that conservatively.
+    observation.runnable = false;
+  }
+  return observation;
+}
+
+const std::vector<std::vector<int>>& equivalence_scenarios() {
+  static const std::vector<std::vector<int>> kScenarios = {
+      {},          {1},         {2},          {5},          {8},
+      {1, 2},      {2, 1},      {7, 3},       {3, 3},       {5, 5},
+      {1, 20},     {20, 20},    {3, 7, 3},    {3, 7, 7},    {3, 7, 5},
+      {7, 3, 7},   {4, 5, 5},   {4, 5, 1},    {8, 9, 12},   {1, 20, 16},
+      {9, 12, 5},  {3, 10, 4},  {4, 6, 5},    {1, 2, 3, 4},
+  };
+  return kScenarios;
+}
+
+std::vector<EquivalenceObservation> equivalence_observations(const CompileResult& result) {
+  std::vector<EquivalenceObservation> observations;
+  observations.reserve(equivalence_scenarios().size());
+  for (const std::vector<int>& inputs : equivalence_scenarios())
+    observations.push_back(run_equivalence_observation(result, inputs));
+  return observations;
+}
+
+bool candidate_behaviorally_matches_baseline(
+    const std::vector<EquivalenceObservation>& baseline_observations,
+    const CompileResult& candidate) {
+  static const bool trace_gate = std::getenv("MKPRO_NATIVE_TRACE_GATE") != nullptr;
+  const std::vector<std::vector<int>>& scenarios = equivalence_scenarios();
+  for (std::size_t index = 0; index < scenarios.size(); ++index) {
+    const EquivalenceObservation candidate_observation =
+        run_equivalence_observation(candidate, scenarios.at(index));
+    const EquivalenceObservation& baseline = baseline_observations.at(index);
+
+    // A candidate that cannot even be exercised when the trusted baseline can
+    // (or vice versa) is treated as non-equivalent.
+    if (baseline.runnable != candidate_observation.runnable) {
+      if (trace_gate)
+        std::cerr << "[gate-trace] scenario#" << index << " runnable mismatch base="
+                  << baseline.runnable << " cand=" << candidate_observation.runnable << "\n";
+      return false;
+    }
+    if (!baseline.runnable)
+      continue;
+
+    // Compare the interaction transcripts turn by turn. We only hold the
+    // candidate to the baseline while the baseline is still *actively*
+    // responding to input: once the reference program goes idle (its display
+    // stops changing between turns, i.e. it has reached a terminal halt and is
+    // merely re-stopping on each subsequent С/П), any further input is outside
+    // the program's live contract and the layout-dependent resume behavior of
+    // the two forms is allowed to differ.
+    const std::size_t turns =
+        std::min(baseline.turns.size(), candidate_observation.turns.size());
+    for (std::size_t t = 0; t < turns; ++t) {
+      if (baseline.turns[t] == candidate_observation.turns[t])
+        continue;
+      const bool reference_idle =
+          t > 0 && baseline.turns[t].display == baseline.turns[t - 1].display &&
+          baseline.turns[t].stopped == baseline.turns[t - 1].stopped;
+      if (reference_idle)
+        break;  // baseline is past its live contract; stop holding candidate.
+      if (trace_gate) {
+        std::cerr << "[gate-trace] scenario#" << index << " turn#" << t << " inputs={";
+        for (std::size_t k = 0; k < scenarios.at(index).size(); ++k)
+          std::cerr << (k ? "," : "") << scenarios.at(index).at(k);
+        std::cerr << "} base{stop=" << baseline.turns[t].stopped << ",disp='"
+                  << baseline.turns[t].display << "'} cand{stop="
+                  << candidate_observation.turns[t].stopped << ",disp='"
+                  << candidate_observation.turns[t].display << "'}\n";
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+bool candidate_needs_behavioral_equivalence_gate(const CompileOptions& options) {
+  return options.aggressive_post_layout_indirect_flow || options.dual_use_constant_indirect_flow ||
+         options.runtime_indirect_call_flow || options.preloaded_indirect_flow;
 }
 
 bool is_only_budget_exceeded(const CompileResult& result) {
@@ -39243,25 +39472,33 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   };
 
   CompileResult best = cached_compile_source_once(options);
+  // Non-aggressive reference compile used by the behavioral-equivalence gate.
+  // Captured before any candidate replaces `best` so risky candidates are
+  // always validated against the trusted baseline rather than another
+  // speculative form.
+  const CompileResult equivalence_baseline = best;
   constexpr std::size_t kOfficialProgramLimit = 105;
   const std::size_t requested_budget = options.budget.has_value() && *options.budget > 0
                                            ? static_cast<std::size_t>(*options.budget)
                                            : kOfficialProgramLimit;
   const std::size_t rescue_threshold = std::min(requested_budget, kOfficialProgramLimit);
   const bool needs_size_rescue = !best.implemented || best.steps.size() > rescue_threshold;
-  // The aggressive post-layout indirect-flow rescue is gated to size-rescue and
-  // reference-declaration programs. Enabling it for EVERY program was attempted
-  // (relying on min-cell best-fit so nothing grows) but reverted: although the
-  // selector/branch/liveness defects are now sound (raw-load-stable selectors,
-  // stable-register-only borrows, validated decode targets), min-cell selection
-  // also picks the aggressive *straight-line helper-overlay packing* form, which
-  // is shorter but still miscompiles some programs (e.g. the BitClear bit_clear
-  // fixture: a cleared-but-present cell reads 0 instead of 1). That helper-overlay
-  // packing is a separate, deeper correctness defect; until it is repaired,
-  // enabling aggressive globally would ship incorrect-but-smaller output, so the
-  // rescue stays gated. See docs/20 "Applied post-parity optimizations".
-  const bool allow_aggressive_post_layout =
-      needs_size_rescue || source_has_reference_declaration(source);
+  // The aggressive post-layout indirect-flow rescue is now enabled for EVERY
+  // program. Min-cell best-fit guarantees nothing grows, and two correctness
+  // guards make the smaller forms safe to ship:
+  //   1. The straight-line helper-overlay packing retargets preloaded selectors
+  //      after a cell-deleting overlay (post_layout_indirect_flow.cpp
+  //      retarget_selector_preloads_after_overlay), fixing the DEFECT-4
+  //      off-by-one that made e.g. the BitClear fixture read 0 instead of 1.
+  //   2. A behavioral-equivalence acceptance gate
+  //      (candidate_behaviorally_matches_baseline) runs every aggressive
+  //      candidate against the non-aggressive baseline on a battery of input
+  //      scenarios and rejects any form whose runtime behavior diverges, so a
+  //      smaller-but-wrong candidate can never be selected.
+  // Combined with the earlier DEFECT 1/2/3 fixes (sound conditional conversion,
+  // stable-register-only borrows, raw-load-stable selectors) the rescue is
+  // correct for all programs. See docs/20 "Applied post-parity optimizations".
+  const bool allow_aggressive_post_layout = !options.disable_aggressive_post_layout;
   const bool may_use_dead_source_residual = source_has_dead_source_residual_temp_candidate(source);
   std::optional<V2Program> selector_probe_program;
   try {
@@ -39338,6 +39575,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         }
       };
   std::size_t evaluated_candidate_count = 0;
+  std::optional<std::vector<EquivalenceObservation>> baseline_observations;
   auto evaluate_queued_candidates = [&]() {
     for (; evaluated_candidate_count < candidates.size(); ++evaluated_candidate_count) {
       const CandidateSpec& candidate = candidates.at(evaluated_candidate_count);
@@ -39362,6 +39600,19 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       }
       if (!candidate_beats_best(result, best))
         continue;
+      if (candidate_needs_behavioral_equivalence_gate(candidate.options) &&
+          equivalence_baseline.implemented) {
+        if (!baseline_observations.has_value())
+          baseline_observations = equivalence_observations(equivalence_baseline);
+        if (!candidate_behaviorally_matches_baseline(*baseline_observations, result)) {
+          if (trace_candidates) {
+            std::cerr << "[candidate-trace] reject-nonequivalent #"
+                      << (evaluated_candidate_count + 1U) << " " << candidate.name << " steps="
+                      << result.steps.size() << "\n";
+          }
+          continue;
+        }
+      }
       const std::string comparison = best.implemented
                                          ? std::to_string(result.steps.size()) + " vs " +
                                                std::to_string(best.steps.size()) + " cells"

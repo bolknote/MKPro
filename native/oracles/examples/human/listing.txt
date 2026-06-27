@@ -1,15 +1,20 @@
 Setup Block:
-  `R4=0; R2=5; Re=10`
+  `R4=0; R2=5; Re=10; R7=L2; R8=С4; R9=Г2`
 
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |   -  | 0                       |
    01 |  44  | X→П 4                   | setup R4
-   02 |   -  | 5                       |
-   03 |  42  | X→П 2                   | setup R2
-   04 |   -  | 10                      |
-   05 |  4E  | X→П e                   | setup Re
+   02 |  47  | X→П 7                   | setup R7
+   03 |   -  | 5                       |
+   04 |  42  | X→П 2                   | setup R2
+   05 |   -  | 10                      |
+   06 |  4E  | X→П e                   | setup Re
+   07 |   -  | 12                      |
+   08 |  48  | X→П 8                   | setup R8
+   09 |   -  | 20                      |
+   10 |  49  | X→П 9                   | setup R9
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -23,21 +28,17 @@ Setup Block:
    06 |  0E  | В↑                      | separate adjacent number entry
    07 |  02  | 2                       |
    08 |  11  | −                       | dispatch compare
-   09 |  5E  | F x=0                   | case mismatch
-   10 |  14  | 14                      | case mismatch
-   11 |  D4  | К П→X 4                 | increment score
-   12 |  51  | БП                      | dispatch end
-   13 |  00  | 00                      | dispatch end
-   14 |  06  | 6                       |
-   15 |  11  | −                       | dispatch residual compare
-   16 |  5E  | F x=0                   | case mismatch
-   17 |  23  | 23                      | case mismatch
-   18 |  62  | П→X 2                   | recall food
-   19 |  01  | 1                       |
-   20 |  11  | −                       | expr -
-   21 |  42  | X→П 2                   | set food
-   22 |  51  | БП                      | dispatch end
-   23 |  00  | 00                      | dispatch end; address/code overlay for 0
-   24 |  50  | С/П                     | halt
-   25 |  51  | БП                      | loop back
-   26 |  00  | 00                      | loop back
+   09 |  E8  | К x=0 8                 | case mismatch; preloaded R8=C4 indirect-target=12 shifted-forward indirect flow
+   10 |  D4  | К П→X 4                 | increment score
+   11 |  87  | К БП 7                  | dispatch end; preloaded R7=B2 indirect-target=0 indirect flow
+   12 |  06  | 6                       |
+   13 |  11  | −                       | dispatch residual compare
+   14 |  E9  | К x=0 9                 | case mismatch; preloaded R9=D2 indirect-target=20 shifted-forward indirect flow
+   15 |  62  | П→X 2                   | recall food
+   16 |  01  | 1                       |
+   17 |  11  | −                       | expr -
+   18 |  42  | X→П 2                   | set food
+   19 |  87  | К БП 7                  | dispatch end; preloaded R7=B2 indirect-target=0 indirect flow
+   20 |  00  | 0                       | halt
+   21 |  50  | С/П                     | halt
+   22 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow

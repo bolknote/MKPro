@@ -35,6 +35,14 @@ int count_cell_mask_expression_helper_calls(const CompileResult& result) {
       }));
 }
 
+// Pin the mid-level mask-CSE / direct-call structure this suite verifies by
+// suppressing the default-on aggressive post-layout indirect-flow repacking.
+CompileOptions pinned_options() {
+  CompileOptions options;
+  options.disable_aggressive_post_layout = true;
+  return options;
+}
+
 } // namespace
 
 void bit_mask_quotient_reuse_matches_typescript_contract() {
@@ -52,7 +60,8 @@ program AdjacentSetUpdates {
     halt(mine + seen)
   }
 }
-)mkpro");
+)mkpro",
+                                              pinned_options());
 
   require(result.implemented, "adjacent cells set update program should compile");
   for (const Diagnostic& diagnostic : result.diagnostics) {
@@ -102,7 +111,8 @@ program SharedBitMaskHelper {
     halt(score)
   }
 }
-)mkpro");
+)mkpro",
+                                              pinned_options());
 
   require(shared.implemented, "shared bit_mask helper program should compile");
   for (const Diagnostic& diagnostic : shared.diagnostics) {

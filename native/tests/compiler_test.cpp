@@ -68,11 +68,18 @@ std::string compile_probe_label(int line, const std::string& source) {
   return source.substr(start, end - start);
 }
 
-CompileResult compile_probe(int line, std::string source, const CompileOptions& options = {}) {
+CompileResult compile_probe(int line, std::string source, CompileOptions options = {}) {
   if (std::getenv("MKPRO_NATIVE_TEST_PROGRESS") != nullptr) {
     std::cerr << "[compiler-test] line " << line << " " << compile_probe_label(line, source)
               << '\n';
   }
+  // This suite freezes the canonical mid-level lowering structure for many tiny
+  // programs (byte oracles, comment/opcode shapes, optimization reports). The
+  // aggressive post-layout indirect-flow rescue is enabled by default for every
+  // program, so suppress it here to keep these contracts targeting the base
+  // lowering. Tests that exercise the aggressive form set their own explicit
+  // lowering-variant flags, which bypass candidate search and are unaffected.
+  options.disable_aggressive_post_layout = true;
   return compile_source(std::move(source), options);
 }
 

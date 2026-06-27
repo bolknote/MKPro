@@ -27,6 +27,14 @@ int count_packed_score_helper_jumps(const CompileResult& result) {
       }));
 }
 
+// Pin the shared-helper / direct-call (ПП) structure this suite verifies by
+// suppressing the default-on aggressive post-layout indirect-flow repacking.
+CompileOptions pinned_options() {
+  CompileOptions options;
+  options.disable_aggressive_post_layout = true;
+  return options;
+}
+
 } // namespace
 
 void packed_score_helpers_match_typescript_contract() {
@@ -43,7 +51,8 @@ program PackedScoreStackHelper {
     halt(value)
   }
 }
-)mkpro");
+)mkpro",
+                                              pinned_options());
 
   require(result.implemented, "native compiler should lower repeated packed_score calls");
   require(result.diagnostics.empty(),

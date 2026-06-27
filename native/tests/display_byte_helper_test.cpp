@@ -43,6 +43,14 @@ int count_display_byte_helper_returns(const CompileResult& result) {
       }));
 }
 
+// Pin the shared-helper / direct-call (ПП) structure this suite verifies by
+// suppressing the default-on aggressive post-layout indirect-flow repacking.
+CompileOptions pinned_options() {
+  CompileOptions options;
+  options.disable_aggressive_post_layout = true;
+  return options;
+}
+
 } // namespace
 
 void display_byte_helpers_match_typescript_contract() {
@@ -64,7 +72,8 @@ program RepeatedLiteralSeparatedScoreboard {
     }
   }
 }
-)mkpro");
+)mkpro",
+                                              pinned_options());
 
   require(result.implemented,
           "native compiler should lower repeated literal-separated display bodies");

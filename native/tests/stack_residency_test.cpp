@@ -63,6 +63,12 @@ CompileResult compile_stack_variant(const std::string& source, bool stack_reside
 CompileResult compile_with_candidates(const std::string& source) {
   CompileOptions options;
   options.budget = 999999;
+  // This block verifies that candidate search picks the smallest stack-resident
+  // dual-temp lowering relative to the non-aggressive baseline/enabled variants
+  // (both compiled with disable_candidate_search). The aggressive post-layout
+  // indirect-flow rescue is enabled by default and would shrink the selection
+  // further, so pin it off to keep the comparison apples-to-apples.
+  options.disable_aggressive_post_layout = true;
   return compile_source(source, options);
 }
 

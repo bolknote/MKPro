@@ -28,6 +28,14 @@ int count_steps_with_comment(const CompileResult& result, const std::string& com
       }));
 }
 
+// Pin the shared-helper / direct-call (ПП) structure this suite verifies by
+// suppressing the default-on aggressive post-layout indirect-flow repacking.
+CompileOptions pinned_options() {
+  CompileOptions options;
+  options.disable_aggressive_post_layout = true;
+  return options;
+}
+
 } // namespace
 
 void packed_display_helpers_match_typescript_contract() {
@@ -49,7 +57,8 @@ program RepeatedPackedDisplay {
     }
   }
 }
-)mkpro");
+)mkpro",
+                                              pinned_options());
 
   require(result.implemented, "native compiler should lower repeated packed display bodies");
   require(!has_error_diagnostic(result),

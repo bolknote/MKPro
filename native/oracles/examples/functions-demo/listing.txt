@@ -1,11 +1,16 @@
 Setup Block:
-  `R5=0`
+  `R5=0; R7=С3; R8=L2; R9=С5`
 
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |   -  | 0                       |
    01 |  45  | X→П 5                   | setup R5
+   02 |  48  | X→П 8                   | setup R8
+   03 |   -  | 11                      |
+   04 |  47  | X→П 7                   | setup R7
+   05 |   -  | 13                      |
+   06 |  49  | X→П 9                   | setup R9
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -18,20 +23,16 @@ Setup Block:
    05 |  42  | X→П 2                   | arg a for sum_of_squares
    06 |  63  | П→X 3                   | recall y
    07 |  43  | X→П 3                   | arg b for sum_of_squares
-   08 |  53  | ПП                      | call function sum_of_squares
-   09 |  15  | 15                      | call function sum_of_squares
-   10 |  50  | С/П                     | halt
-   11 |  51  | БП                      | loop back
-   12 |  00  | 00                      | loop back
-   13 |  22  | F x²                    | square repeated operand
-   14 |  52  | В/О                     | return value
-   15 |  62  | П→X 2                   | recall a
-   16 |  53  | ПП                      | call function square
-   17 |  13  | 13                      | call function square
-   18 |  40  | X→П 0                   | set __mkpro_call_1
-   19 |  63  | П→X 3                   | recall b
-   20 |  53  | ПП                      | call function square
-   21 |  13  | 13                      | call function square
-   22 |  60  | П→X 0                   | recall __mkpro_call_1
-   23 |  10  | +                       | expr +
-   24 |  52  | В/О                     | return value
+   08 |  A9  | К ПП 9                  | call function sum_of_squares; preloaded R9=C5 indirect-target=13 shifted-forward indirect flow
+   09 |  50  | С/П                     | halt
+   10 |  88  | К БП 8                  | loop back; preloaded R8=B2 indirect-target=0 indirect flow
+   11 |  22  | F x²                    | square repeated operand
+   12 |  52  | В/О                     | return value
+   13 |  62  | П→X 2                   | recall a
+   14 |  A7  | К ПП 7                  | call function square; preloaded R7=C3 indirect-target=11 indirect flow
+   15 |  40  | X→П 0                   | set __mkpro_call_1
+   16 |  63  | П→X 3                   | recall b
+   17 |  A7  | К ПП 7                  | call function square; preloaded R7=C3 indirect-target=11 indirect flow
+   18 |  60  | П→X 0                   | recall __mkpro_call_1
+   19 |  10  | +                       | expr +
+   20 |  52  | В/О                     | return value

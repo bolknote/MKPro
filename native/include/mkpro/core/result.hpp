@@ -159,6 +159,12 @@ struct CompileOptions {
   bool aggressive_indirect_call_threshold = false;
   bool dual_use_constant_indirect_flow = false;
   bool aggressive_post_layout_indirect_flow = false;
+  // Opt-out used by focused unit tests that pin a specific mid-level lowering
+  // (e.g. shared-helper / direct-ПП structure). The aggressive post-layout
+  // indirect-flow rescue is enabled by default for every program; setting this
+  // suppresses only that late repacking while leaving the rest of candidate
+  // search (helper sharing, etc.) intact.
+  bool disable_aggressive_post_layout = false;
   bool preloaded_indirect_flow = false;
   bool runtime_indirect_call_flow = false;
   bool general_constant_preloads = false;

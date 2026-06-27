@@ -2549,6 +2549,58 @@ the deferral policy is lifted.
 
 #### Applied post-parity optimizations
 
+- **(#1, DEFECT 4) Aggressive post-layout indirect-flow rescue enabled by default
+  for every program + behavioral-equivalence selection gate.** *Applied.*
+  `allow_aggressive_post_layout` in `native/src/core/compiler.cpp` is now `true`
+  for all programs (it only honors an explicit `disable_aggressive_post_layout`
+  opt-out used by focused unit tests). Two correctness guards make the smaller
+  forms safe to ship:
+
+  1. **Helper-overlay preload retargeting (the DEFECT-4 fix).**
+     `optimize_post_layout_address_code_overlay` in
+     `native/src/core/post_layout_indirect_flow.cpp` deletes/overlays a code cell
+     to pack a multi-entry helper, which shifts every following address by one.
+     Previously it rewrote the in-stream operands (`БП 6D`, `К ПП 7`, …) but
+     **not** the externally preloaded indirect-flow selectors, so a preloaded
+     loop-back/return selector (e.g. `R7 = 72`) kept pointing at the pre-shift
+     address and the program jumped one cell off. On the `BitClear` fixture this
+     read a cleared-but-present cell as `0` instead of `1`
+     (`{set 7, clear 3, query 7}`). The pass now returns an
+     `AddressCodeOverlayApplication` describing the removed/overlaid cell and
+     `retarget_selector_preloads_after_overlay` rewrites the affected preload
+     values (and their listing comments) to the post-shift target. `BitClear`
+     now answers `1`; `emulator_bitmask_facts` is green with the rescue on.
+  2. **Behavioral-equivalence acceptance gate.** Candidate selection ranks purely
+     by cell count, so a smaller-but-miscompiled candidate could otherwise win.
+     `candidate_behaviorally_matches_baseline` (in `compiler.cpp`) runs every
+     risky candidate (`aggressive_post_layout_indirect_flow`,
+     `dual_use_constant_indirect_flow`, `runtime_indirect_call_flow`,
+     `preloaded_indirect_flow`) and the trusted non-aggressive baseline on a
+     battery of input scenarios via the in-process `mkpro::emulator::MK61`, and
+     rejects any candidate whose runtime transcript diverges. The harness
+     records the display/stopped state **per interaction turn** and only holds a
+     candidate to the baseline while the baseline is still *actively* responding:
+     once the reference program goes idle (its display stops changing between
+     turns, i.e. it has reached a terminal halt and merely re-stops on each
+     further `С/П`), subsequent inputs are out of the program's live contract and
+     the layout-dependent resume behavior of the two forms is allowed to differ.
+     Preload values are translated from the compiler's hex-ish nibble encoding
+     (`A/B/C/D/E/F`) to MK-61 display glyphs before `set_register`, and any
+     emulator load/parse failure marks the observation un-runnable (compared as
+     its own bucket) so the gate never throws.
+
+  Measured, behaviorally-verified wins (`MKPRO_NATIVE_BLESS=1` re-blessed,
+  `git diff` step deltas ≤ 0): `basic` 8→7, `functions-demo` 25→21,
+  `human` 27→23, `tiny-game` 27→23. The `human` shrink is independently checked
+  by `emulator_indirect_flow_equivalence_matches_typescript_contract` (now
+  comparing the default aggressive compile against a `disable_candidate_search`
+  baseline). The gate also **caught a previously-shipped miscompile**: the
+  committed `fox-hunt-mk61` aggressive form (60 cells) returned
+  `--01-- 1,` where the trusted baseline returns `--01-- 2,` on the first input,
+  so the gate rejects it and the program settles on the correct 65-cell form
+  (60→65 is the only oracle that grew, and it replaces incorrect output). No
+  other example's oracle changed.
+
 - **(#5) Hoisted-helper coord-list one-cell indirect loop-back.** *Applied.*
   `emit_known_one_indirect_loop_back` in `native/src/core/compiler.cpp` previously
   refused to emit the one-cell indirect `К БП R` loop-back whenever
@@ -2603,71 +2655,42 @@ the deferral policy is lifted.
   symptom was in fact this raw-load degradation, not a liveness bug (register `e`
   is only used as a selector scratch in that program, never recalled as data).
 
-#### Blocked candidates (genuine correctness work required, not mere parity)
+#### Candidate status after the DEFECT-4 fix + behavioral gate
 
-These were assumed to be parity-only suppressions of correct-but-shorter forms.
-Empirical verification against the native emulator shows they are **not** safe to
-enable as-is; each needs a real compiler fix before it can be turned on.
+Candidate **#1** is now **Applied** (see "Applied post-parity optimizations"
+above): the helper-overlay packing was repaired and the behavioral-equivalence
+selection gate makes the whole class of "smaller-but-wrong" forms unselectable.
+The remaining candidates below are now *mechanically unblocked* (they ride the
+same now-correct, gated rescue) but, on the committed example corpus, either
+produce no further shrink or still require separate position-independence work:
 
-- **(#1) Enable aggressive post-layout indirect-flow by default for all
-  programs.** *Blocked — a separate helper-overlay miscompile remains, even after
-  the selector/branch/liveness defects are sound.* Flipping
-  `allow_aggressive_post_layout` to `true` for every program (in
-  `native/src/core/compiler.cpp`) lets min-cell best-fit pick the aggressive form
-  whenever it is shorter, so nothing can grow. The aggressive form is correct on
-  the dispatch/IO programs and the wins are real under the corrected engine:
-  `basic` 8→7, `functions-demo` 25→21, `human` 27→23, `tiny-game` 27→23, all
-  using only raw-load-stable B/C/D selectors (the `human` shrink is behaviorally
-  verified via `emulator_indirect_flow_equivalence`). The three named defects are
-  resolved: DEFECT 3 (raw-load-stable selectors, see Applied above); DEFECT 1
-  (conditional → indirect conversion) is sound because the engine only borrows
-  side-effect-free stable registers `7..E` and validates every rewrite to decode
-  to the proven target — excluding conditional conversions only *grows* committed
-  oracles, confirming they are load-bearing and correct; DEFECT 2 (live-register
-  borrow) does not manifest — the borrow set already excludes used registers and
-  reserved preloaded constants (e.g. `Rd=0.5` is **not** reused as the loop-back
-  selector; `R8=B2` is). **However**, global enable still ships a miscompile from a
-  *fourth*, separate defect: the aggressive **straight-line helper-overlay
-  packing** (multi-entry helpers with formal-address operand overlays such as
-  `БП 6D`, indirect calls `К ПП 7`). On the `BitClear` fixture in
-  `emulator_bitmask_facts` the smaller packed form returns the wrong answer for a
-  cleared-but-present cell: query `{set 7, clear 3, query 7}` yields `0` instead of
-  `1` (the selectors `72`/`B2` are raw-stable and the conditional `F x≠0 48` is
-  left direct, so this is the helper packing, not one of the three named defects).
-  Because candidate selection ranks by size, not behavior, min-cell happily picks
-  this shorter-but-wrong form. Gate before enabling globally: repair the
-  straight-line helper-overlay packing so the packed bit-mask helpers are
-  behaviorally equivalent (or add an emulator-equivalence acceptance guard to
-  candidate selection), then re-bless. The rescue therefore stays gated to
-  size-rescue / reference-declaration programs, where the DEFECT-3 fix already
-  makes the committed selectors raw-stable at zero size cost.
+- **(#3) Reference-size post-layout indirect-flow rescue (e.g. `Dungeon`
+  primary).** *Unblocked, no corpus shrink.* This rides the same post-layout
+  rescue fixed under #1, so it is now correct and behaviorally gated rather than
+  "likely-incorrect". With the rescue enabled by default the candidate is tried
+  and validated for every program, but on the current corpus no smaller
+  behaviorally-equivalent form is found/selected for `Dungeon` (stays 75) — the
+  gate reports no rejected aggressive candidate, i.e. the packed form is not
+  strictly smaller here. No oracle changes; nothing grows.
 
-- **(#2) `BEEr NN` text-display lowering in hoisted-helper variants.** *Blocked —
-  needs address relocation.* `lower_text_display_statement` is gated by
-  `if (context.hoist_shared_helpers || context.hoist_procs) return false;` for
-  parity, but it also has a real correctness guard
+- **(#4) `fox-hunt-100` post-layout forward-call selector packing.** *Unblocked,
+  no corpus shrink; historic target already beaten.* The mechanism is the
+  now-correct, gated rescue from #1. `fox-hunt-100` already compiles to **103**
+  cells under the corrected engine (well below the old 122-cell target the
+  variant aimed at), and no strictly-smaller behaviorally-equivalent form is
+  selected on top of that, so its oracle is unchanged.
+
+- **(#2) `BEEr NN` text-display lowering in hoisted-helper variants.** *Still
+  gated — needs position-independent relocation (separate from the #1 rescue).*
+  `lower_text_display_statement` keeps the real correctness guard
   `if (current_machine_address(context) != 0) return false;`. The two-digit text
-  helper emits absolute jump targets (`ПП 34`, `F x<0 45`). In a hoisted variant
-  the leading hoist jump shifts the body off address `00`, so removing only the
-  parity gate leaves the address guard rejecting the form (no change); removing
-  the address guard would emit wrong absolute targets (miscompile). Gate before
-  enabling: make the text-display helper position-independent / relocate its
-  absolute targets, then re-bless.
-
-- **(#3) Reference-size post-layout indirect-flow rescue for test-only variants
-  (e.g. `Dungeon` primary).** *Blocked — same helper-overlay packing as #1.* This
-  uses the same post-layout indirect-flow rescue whose straight-line
-  helper-overlay packing is shown to miscompile bit-mask programs under #1,
-  applied to spatial/`cells` programs. Recording its shorter variant fingerprint
-  as the oracle would encode unverified, likely-incorrect output (variant
-  fingerprints are not emulated). Gate: the #1 helper-overlay packing fix.
-
-- **(#4) `fox-hunt-100` `sharedBitMaskHelperCalls` 125→122.** *Blocked — same
-  post-layout forward-call selector packing as #1.* The 122-cell form relies on
-  the post-layout forward-call selector packing / helper-overlay family on a
-  bit-mask program. As with #3 the variant is not behaviorally tested, and the
-  underlying mechanism is the one proven to miscompile bit-mask programs under #1
-  (`BitClear`). Gate: the #1 helper-overlay packing fix, then verify the 122-cell
-  form behaviorally before re-blessing.
+  helper emits absolute jump targets (`ПП 34`, `F x<0 45`); in a hoisted variant
+  the leading hoist jump shifts the body off address `00`, so emitting the form
+  there would need the absolute targets relocated to remain correct. This is an
+  independent piece of work (not the helper-overlay packing fixed under #1) and
+  affects only hoisted-helper variants, which are not part of any committed
+  default oracle, so it produces no committed-example win today. It is left gated
+  and documented: make the text-display helper position-independent / relocate
+  its absolute targets, then re-bless before enabling.
 
 This reference should be used as a working map while reading generated listings in explain/json mode: every named optimization corresponds to a concrete rewrite class that can be correlated with local sequences in emitted IR or final machine text.

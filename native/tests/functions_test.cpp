@@ -12,6 +12,11 @@ namespace {
 CompileResult compile_budget_999(const std::string& source) {
   CompileOptions options;
   options.budget = 999;
+  // This suite pins the direct-call (ПП) function-lowering structure; suppress
+  // the default-on aggressive post-layout indirect-flow repacking so the
+  // assertions keep targeting the mid-level lowering rather than its later
+  // indirect-call packed form.
+  options.disable_aggressive_post_layout = true;
   return compile_source(source, options);
 }
 

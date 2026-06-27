@@ -126,6 +126,9 @@ void compiler_examples_match_typescript_contract() {
     CompileOptions tiny_options;
     tiny_options.analysis = true;
     tiny_options.budget = 999;
+    // This block asserts the mid-level dispatch candidate reporting; pin off the
+    // default-on aggressive post-layout rescue so the candidate shape is stable.
+    tiny_options.disable_aggressive_post_layout = true;
     const CompileResult result =
         compile_source(read_text(root / "examples" / "tiny-game.mkpro"), tiny_options);
     require(result.implemented, "compiler examples contract should compile tiny-game.mkpro");
@@ -160,6 +163,7 @@ void compiler_examples_match_typescript_contract() {
     CompileOptions lunar_options;
     lunar_options.analysis = true;
     lunar_options.budget = 999;
+    lunar_options.disable_aggressive_post_layout = true;
     const CompileResult result = compile_source(read_text(root / "examples" / "lunar.mkpro"), lunar_options);
     require(result.implemented, "compiler examples contract should compile lunar.mkpro");
     require(result.diagnostics.empty(), "lunar.mkpro compile should be warning-free");
@@ -192,7 +196,15 @@ void compiler_examples_match_typescript_contract() {
 
   {
     const std::string source = read_text(root / "examples" / "human.mkpro");
-    const CompileResult result = compile_source(source, baseline_options);
+    // This block asserts the rich mid-level optimizer/dispatch reporting for the
+    // base lowering (step count, dispatch candidates, capabilities). The default
+    // compile now applies the aggressive post-layout indirect-flow rescue
+    // (human shrinks 27 -> 23, covered by the golden_listing oracle and the
+    // indirect-flow equivalence test), so pin it off here to keep targeting the
+    // base lowering structure.
+    CompileOptions human_options = baseline_options;
+    human_options.disable_aggressive_post_layout = true;
+    const CompileResult result = compile_source(source, human_options);
     require(result.implemented, "compiler examples contract should compile human.mkpro");
     require(result.ir.v2, "human.mkpro should report V2 IR");
     require(result.ir.lowered, "human.mkpro should report lowered IR");

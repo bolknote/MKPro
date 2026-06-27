@@ -82,39 +82,44 @@
    16 | 63       | П→X 3                   | recall cell
    17 | 60       | П→X 0                   | coord_list fused current
    18 | 11       | −                       | coord_list fused hit compare
-   19 | 78       | К x≠0 8                 | coord_list fused hit; preloaded R8=41 indirect-target=41 shifted-forward indirect flow
-   20 | 60       | П→X 0                   | recall __coord_list_current
-   21 | 35       | К {x}                   | coord_list fused current x
-   22 | 63       | П→X 3                   | recall cell
-   23 | 35       | К {x}                   | coord_list fused cell x
-   24 | 11       | −                       | coord_list fused dx
-   25 | 77       | К x≠0 7                 | coord_list fused same column; preloaded R7=45 indirect-target=45 shifted-forward indirect flow
-   26 | 01 00    | 10                      |
-   28 | 12       | ×                       | coord_list fused dx digit
-   29 | 60       | П→X 0                   | recall __coord_list_current
-   30 | 34       | К [x]                   | coord_list fused current y
-   31 | 63       | П→X 3                   | recall cell
-   32 | 34       | К [x]                   | coord_list fused cell y
-   33 | 11       | −                       | coord_list fused dy
-   34 | 77       | К x≠0 7                 | coord_list fused same row; preloaded R7=45 indirect-target=45 shifted-forward indirect flow
-   35 | 31       | К |x|                   | coord_list fused |dy|
-   36 | 14       | ↔                       | coord_list fused dx
-   37 | 31       | К |x|                   | coord_list fused |dx|
-   38 | 11       | −                       | coord_list fused diagonal compare
-   39 | 77       | К x≠0 7                 | coord_list fused same diagonal; preloaded R7=45 indirect-target=45 shifted-forward indirect flow
-   40 | 89       | К БП 9                  | coord_list fused not visible; preloaded R9=46 indirect-target=46 shifted-forward indirect flow
-   41 | 02 00 0B | -20                     | negative number
-   44 | 50       | С/П                     | pause
-   45 | D4       | К П→X 4                 | coord_list fused total
-   46 | 58       | F L2                    | coord_list fused loop
-   47 | 14       | 14                      | coord_list fused loop
-   48 | 64       | П→X 4                   | coord_list fused formatted report body
-   49 | 07       | 7                       |
-   50 | 15       | F 10ˣ                   | display formatted video anchor
-   51 | 10       | +                       | display formatted video body
-   52 | 61       | П→X 1                   | display __inline_show_25_0 formatted mask
-   53 | 39       | К ⊕                     | display formatted mask merge
-   54 | 35       | К {x}                   | display formatted video fraction
-   55 | 0B 0C 07 | -0E7                    | display formatted sign
-   58 | 50       | С/П                     | show __inline_show_25_0
-   59 | 82       | К БП 2                  | loop back via known-one counter
+   19 | 57       | F x≠0                   | coord_list fused hit
+   20 | 46       | 46                      | coord_list fused hit
+   21 | 60       | П→X 0                   | recall __coord_list_current
+   22 | 35       | К {x}                   | coord_list fused current x
+   23 | 63       | П→X 3                   | recall cell
+   24 | 35       | К {x}                   | coord_list fused cell x
+   25 | 11       | −                       | coord_list fused dx
+   26 | 57       | F x≠0                   | coord_list fused same column
+   27 | 50       | 50                      | coord_list fused same column
+   28 | 01 00    | 10                      |
+   30 | 12       | ×                       | coord_list fused dx digit
+   31 | 60       | П→X 0                   | recall __coord_list_current
+   32 | 34       | К [x]                   | coord_list fused current y
+   33 | 63       | П→X 3                   | recall cell
+   34 | 34       | К [x]                   | coord_list fused cell y
+   35 | 11       | −                       | coord_list fused dy
+   36 | 57       | F x≠0                   | coord_list fused same row
+   37 | 50       | 50                      | coord_list fused same row
+   38 | 31       | К |x|                   | coord_list fused |dy|
+   39 | 14       | ↔                       | coord_list fused dx
+   40 | 31       | К |x|                   | coord_list fused |dx|
+   41 | 11       | −                       | coord_list fused diagonal compare
+   42 | 57       | F x≠0                   | coord_list fused same diagonal
+   43 | 50       | 50                      | coord_list fused same diagonal
+   44 | 51       | БП                      | coord_list fused not visible
+   45 | 51       | 51                      | coord_list fused not visible
+   46 | 02 00 0B | -20                     | negative number
+   49 | 50       | С/П                     | pause
+   50 | D4       | К П→X 4                 | coord_list fused total
+   51 | 58       | F L2                    | coord_list fused loop
+   52 | 14       | 14                      | coord_list fused loop
+   53 | 64       | П→X 4                   | coord_list fused formatted report body
+   54 | 07       | 7                       |
+   55 | 15       | F 10ˣ                   | display formatted video anchor
+   56 | 10       | +                       | display formatted video body
+   57 | 61       | П→X 1                   | display __inline_show_25_0 formatted mask
+   58 | 39       | К ⊕                     | display formatted mask merge
+   59 | 35       | К {x}                   | display formatted video fraction
+   60 | 0B 0C 07 | -0E7                    | display formatted sign
+   63 | 50       | С/П                     | show __inline_show_25_0
+   64 | 82       | К БП 2                  | loop back via known-one counter
