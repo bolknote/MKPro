@@ -1249,7 +1249,7 @@ losslessly; `raiseLayoutToIr` and `lowerIrToLayout` do the same for
 `LayoutIrCell[]`. The supported example set is property-tested through the
 machine IR path, while layout IR is tested independently as a data structure.
 
-The pass driver in `src/core/passes/` runs the registered passes to a fixed
+The pass driver in `native/src/core/passes/` runs the registered passes to a fixed
 point (with a bounded iteration cap) and aggregates their `applied` counts
 into the optimizer report. Passes that depend on fixed addresses or observable
 display state must prove those constraints from the IR before they can rewrite
@@ -2382,7 +2382,7 @@ The pipeline currently contains:
   at the loop head; observable behavior is preserved. This is what shrinks
   `human.mkpro` 35→28 and `tiny-game.mkpro` 30→26 without touching the source.
 
-A round-trip emulator regression suite (`tests/emulator/regression.test.ts`)
+A round-trip emulator regression suite (`native/tests/emulator_regression_test.cpp`)
 loads each of the 16 examples into the headless MK-61 emulator and runs a
 small set of scenarios (input cycles, terminal stops, expected PC). The suite
 runs at every phase of the IR pipeline as a regression gate, ensuring that

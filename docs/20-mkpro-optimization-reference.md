@@ -30,32 +30,17 @@ Use `mk-pro --out json` or `mk-pro explain` to inspect:
 - `report.proofs` — explicit proofs that some rewrites depended on.
 - `report.machineFeaturesUsed` — machine-feature tactics enabled by successful transformations.
 - `report.preloads` and `report.setupProgram` — auto-initialization strategy.
-- `npm run x2:report` — full example-suite X2 audit. It scores residual
-  restore/sync/lift/conditional surfaces, lists local X2-looking patterns after
-  optimization, and classifies blocked `recall->restore` leftovers by blocker:
-  `x2`, `stack`, `stack+x2`, `visible-x`, `x2-proof`, `no-proof`, `no-plan`, or
-  `other`. `visible-x` means the recall is still needed to load the visible X
-  value; `x2-proof` means visible X is proved but the hidden X2 sync is not.
-  The report separates actionable hidden-X2 proof gaps from non-actionable audit
-  leftovers: `Actionable X2 blockers` contains only `x2`, `x2-proof`, and
-  `stack+x2`; `Non-actionable audit` keeps `visible-x`, display-sensitive,
-  stack-only, no-proof/no-plan, and sample windows visible without treating them
-  as unfinished X2 work. The
-  snapshot counts only `x2`, `x2-proof`, and `stack+x2` as actionable blocked
-  local X2. The
-  report decodes direct address bytes before running its local CFG checks, so
+- X2-blocker taxonomy. Residual `recall->restore` leftovers are classified by
+  blocker: `x2`, `stack`, `stack+x2`, `visible-x`, `x2-proof`, `no-proof`,
+  `no-plan`, or `other`. `visible-x` means the recall is still needed to load the
+  visible X value; `x2-proof` means visible X is proved but the hidden X2 sync is
+  not. Actionable hidden-X2 proof gaps are `x2`, `x2-proof`, and `stack+x2`;
+  `visible-x`, display-sensitive, and stack-only rows are non-actionable audit
+  leftovers. Direct address bytes are decoded before the local CFG checks, so
   `БП`/`ПП`/`F x?0`/`F Lx` targets are classified through the same address-cell
-  model as the optimizer. `npm run x2:check` runs the same report in assert mode
-  and fails if a residual local X2 candidate pattern or actionable blocked local
-  X2 proof gap appears again; display-sensitive and stack-only rows remain
-  report-only. The report runs against the final listing shape emitted by the
-  compiler. The report runs examples in worker
-  threads (`X2_REPORT_WORKERS`, default capped at 4) and applies a per-file
-  worker timeout (`X2_REPORT_TIMEOUT_MS`, default 120000, `0` disables) so one
-  pathological compile is reported as a row error instead of hanging the audit.
-  `X2_REPORT_FILES` accepts a comma-separated list of example paths or basenames
-  to run a targeted audit for timeout-heavy programs without compiling the full
-  suite.
+  model as the optimizer. (The standalone TypeScript X2 audit tool that produced
+  this report has been removed; the same `report.optimizer` fields are emitted by
+  the native compiler.)
 - The shared X2/register/value data-flow graph follows both label targets and
   numeric direct targets. This matters after layout, where direct `БП`, `ПП`,
   and conditional address bytes are ordinary numeric MK-61 cells rather than
@@ -253,7 +238,7 @@ These transformations run on source constructs before machine lowering:
 - `setup-only-counted-loop-init` — speculative companion to `state-init-counted-loop`: keeps the countdown initializer in the generated setup program and still emits the compact `F Lx` loop. This mirrors hand-entered MK listings whose loop counter is loaded before the main program starts; considered only in size-rescue compiles and selected only when the whole program shrinks.
 - `initialized-counted-while-loop` — compiles `x = N; while x >= 1` / `> 0` loops with `x--` in the last body statement into compact `F Lx` loops when the pattern is safe (intervening statements do not touch `x`, loop body has non-terminating tail, and the loop register has an `F Lx` opcode).
 - All three counted-loop init strategies above (`state-init-counted-loop`, `setup-only-counted-loop-init`, `initialized-counted-while-loop`) share one loop recognizer (`recognizeCountedWhileLoop` over `unitDecrementCountedWhileTarget`) and one emit tail (`emitCountedWhileBody`): they accept the same equivalent condition spellings (`x >= 1`, `x > 0`, `1 <= x`, `0 < x`) and differ only in how the counter's starting value is supplied (inline store, setup preload, or state-field initializer normalized to an inline store). `counted-loop-unroll` is a separate family that targets ascending `while v < bound` / `<= bound` loops, not the unit-decrement countdown.
-- `domain-error-guard` — replaces a terminal-error guard (`if <expr> <op> 0 { halt("ЕГГОГ") }`, including a call to a proc whose body is just that trap) with a single self-trapping domain opcode that raises ЕГГОГ exactly on its mathematical domain (all proved on hardware in `tests/emulator/trap-opcodes.test.ts`): `F √` for `<` (traps iff X < 0), `F lg` for `<=` (iff X <= 0), and `F 1/x` for `==` (iff X == 0, division by zero — the exact equality trap regardless of sign). `>`/`>=` reduce to the swapped difference. The guard computes the comparison difference into X so the trap fires iff the condition holds; otherwise it falls through into the false branch. This collapses the compare + conditional branch + shared trap into one cell, and when every caller of a shared trap proc is converted the proc becomes dead and is dropped. Speculative (`domainErrorGuards`): adopted only when the whole program ends up smaller. Examples: rambo-iii 139→135, alaram 80→76, dungeon 85→83, wumpus 105→103.
+- `domain-error-guard` — replaces a terminal-error guard (`if <expr> <op> 0 { halt("ЕГГОГ") }`, including a call to a proc whose body is just that trap) with a single self-trapping domain opcode that raises ЕГГОГ exactly on its mathematical domain (all proved on hardware in `native/tests/emulator_mk61_test.cpp`): `F √` for `<` (traps iff X < 0), `F lg` for `<=` (iff X <= 0), and `F 1/x` for `==` (iff X == 0, division by zero — the exact equality trap regardless of sign). `>`/`>=` reduce to the swapped difference. The guard computes the comparison difference into X so the trap fires iff the condition holds; otherwise it falls through into the false branch. This collapses the compare + conditional branch + shared trap into one cell, and when every caller of a shared trap proc is converted the proc becomes dead and is dropped. Speculative (`domainErrorGuards`): adopted only when the whole program ends up smaller. Examples: rambo-iii 139→135, alaram 80→76, dungeon 85→83, wumpus 105→103.
   Range-proved inverse trigonometric guards use `F sin^-1` directly for one-cell `abs(X) > 1` traps: `X > 1` / integer `X >= 2` when the source range proves `X >= -1`, and `X < -1` / integer `X <= -2` when it proves `X <= 1`. The successful path overwrites X with an angle-mode-dependent result and is treated as clobbered, matching the existing domain-guard model. `F tg^-1` is not modeled as a finite-input trap because large arguments saturate toward the selected angle maximum instead of raising `ЕГГОГ`.
 - `indexed-assign-zero-domain-guard` — extends the adjacent store+trap fusion to dynamic indexed stores. After `cells[i] = expr`, `К X→П i` leaves the stored value in X, so an immediate `if cells[i] <op> 0 { halt("ЕГГОГ") }` can emit the self-trapping opcode directly without a redundant `К П→X i`. It now shares the same comparison→opcode table as the scalar guards (`planDomainErrorGuard`): `<`→`F √`, `<=`→`F lg`, and `==`→`F 1/x` (the equality trap the earlier bespoke indexed table could not express). All store-then-trap fusions (`domain-error-guard`, `assign-zero-domain-guard`, `indexed-assign-zero-domain-guard`, and the unit-decrement guards) emit their trap through one shared `emitDomainTrapOnX` tail.
 - `assign-zero-fallback-store` — defers the register store for `x = expr; unless x { x = fallback }` until after the zero fallback. The branch tests the just-computed X value, emits the fallback only on the zero path, and performs one shared `X→П`.
@@ -427,7 +412,7 @@ The long candidate names are kept because they make the selected compile path
 unambiguous in reports; the generalized model is the axis combination above.
 
 This axis model is realized by a declarative candidate composition engine in
-`compileMKPro` (`src/core/compiler.ts`):
+`native/src/core/compiler.cpp`:
 
 - Each speculative variant is a `CandidateSpec` — a `LoweringOptions` flag bundle
   plus a stable name/detail and a gate (`always`, `sizeRescue`, or `unaryArg`).
@@ -455,9 +440,9 @@ This axis model is realized by a declarative candidate composition engine in
 
 Because selection (`selectBest`) is minimum cell count, broadening the candidate
 set can only keep a program the same size or shrink it, never grow it. A
-no-regression guard (`npm run examples:check`,
-`scripts/assert-no-size-regression.mjs`) enforces `steps <= baseline` against the
-shared baselines in `tests/compiler/example-baselines.ts`.
+no-regression guard in the native test suite
+(`native/tests/example_sizes_test.cpp`) enforces `steps <= baseline` against the
+committed example oracles under `native/oracles/`.
 
 - `late-layout-if-variant` — re-runs lowering with an aggressive terminal-if lowering variant after full layout.
 - `late-layout-branch-order` — re-runs with swapped terminal-if branch order after full layout.
@@ -1251,7 +1236,7 @@ Display rewrites are separated into strategy selection + body lowering.
 
 ## 13) IR pass pipeline (fixed-point)
 
-The IR pipeline defined in `src/core/passes/index.ts` runs repeatedly:
+The IR pipeline defined in `native/src/core/passes/index.cpp` runs repeatedly:
 
 1. `redundant-prologue-elimination` — removes duplicate `display+HALT` prologues immediately before a jump target when an identical prologue is already at that jump target.
 2. `tail-call-lowering` — rewrites certain tail `call`s and trailing `return`s into direct `БП`/tail flow when the continuation is the same for all exits of that region. It can also replace a main-region `ПП proc; БП 00` shape with `БП proc` when the target has a normal `В/О` return, relying on the proved empty-return-stack path to resume at the loop head.
@@ -2538,10 +2523,8 @@ rewrites the committed oracle artifacts (`listing.txt`, `hex.txt`, `setup.txt`,
 `variants.txt`, plus the cheap space-joined `bytes.txt`) from the current native
 output instead of asserting equality. `keys.txt` has no native formatter and is
 left untouched (it is existence-checked, not content-checked). The mode is a
-no-op when the variable is unset. Do **not** use `scripts/export-native-oracles.mjs`
-to regenerate — that reproduces the longer TypeScript output. Workflow: build,
-run the suite once with `MKPRO_NATIVE_BLESS=1` to regenerate, then run normally
-to confirm green.
+no-op when the variable is unset. Workflow: build, run the suite once with
+`MKPRO_NATIVE_BLESS=1` to regenerate, then run normally to confirm green.
 
 Each candidate below records the affected program/fixture, the lowering variant,
 the measured before→after sizes, the mechanism, and its current status now that

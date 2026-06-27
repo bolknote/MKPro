@@ -1,29 +1,26 @@
 # Native Test Traceability
 
-This file tracks the current TypeScript-to-C++ test migration status.
-It is intentionally conservative: a TypeScript test file is not considered fully
-closed merely because nearby native coverage exists.
+The original TypeScript implementation and its `.test.ts` suites have been
+removed; the C++ native compiler is the sole implementation. This file is kept as
+a historical provenance map (which native test each former TypeScript test was
+ported from) and as the canonical list of native test coverage.
 
-> **Native oracle is now the source of truth.** TypeScript parity is no longer a
-> constraint. The committed oracle files under `native/oracles/examples/` are
-> re-anchored to native output. `golden_listing_contract_matches_typescript_contract`
+> **Native oracle is the source of truth.** The committed oracle files under
+> `native/oracles/examples/` are anchored to native output.
+> `golden_listing_contract_matches_typescript_contract`
 > (and the `hex` it writes, also consumed by `supported_examples_match_native_oracles`)
 > compares against the *committed native oracle*. To re-anchor after an intended
 > native output change, run the suite once with `MKPRO_NATIVE_BLESS=1`
 > (which rewrites `listing/hex/setup/variants/bytes` from native output) and then
-> run normally to confirm green. Do not regenerate via
-> `scripts/export-native-oracles.mjs` — that reproduces the longer TS output. The
-> test/function names still contain `typescript` for historical continuity, but
-> the contract they enforce is native-anchored. See
+> run normally to confirm green. Test/function names still contain `typescript`
+> for historical continuity, but the contract they enforce is native-anchored. See
 > `docs/20-mkpro-optimization-reference.md` ("Deferred better-than-TS candidates
 > (deferral policy lifted)") for the per-candidate status.
 
 ## Summary
 
-- TypeScript `.test.ts` files: 59.
-- Compiler/root TypeScript test files: 30.
-- Emulator TypeScript test files: 29.
-- Native CTest cases currently registered: 105.
+- Ported from 59 former TypeScript `.test.ts` files (30 compiler/root, 29
+  emulator); those TypeScript sources have since been removed.
 - Current compiler/example parity status: all `examples/*.mkpro` and
   `examples/pending-optimizer/tic-tac-toe-4x4.mkpro` are covered by native
   size, byte-oracle, and golden-listing checks.
@@ -49,13 +46,9 @@ The native runner supports:
 ```sh
 # Preferred parity gate (optimized)
 cmake --preset release && cmake --build --preset release && ctest --preset release
-# or:
-npm run native:test
 
 # Fast local cycle for sanitizer/debug triage
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug
-# or:
-npm run native:test:debug
 
 # Targeted single test (works on any preset)
 build/release/native/mkpro_tests --list
@@ -69,7 +62,7 @@ too slow to debug as one monolithic process.
 
 ## Compiler Test Mapping
 
-| TypeScript test file | Native counterpart | Status |
+| Former TypeScript test file | Native counterpart | Status |
 | --- | --- | --- |
 | `tests/compiler.test.ts` | `native/tests/examples_contract_test.cpp`, `native/tests/example_sizes_test.cpp`, `native/tests/example_parity_test.cpp`, `native/tests/golden_listing_contract_test.cpp` | File-level covered; public report/source-shape assertions partially audited; remaining per-assertion audit pending |
 | `tests/compiler/bit-mask-quotient-reuse.test.ts` | `native/tests/bit_mask_quotient_reuse_test.cpp` | File-level covered |
@@ -104,10 +97,10 @@ too slow to debug as one monolithic process.
 
 ## Emulator Test Mapping
 
-The TypeScript emulator suite has not yet been fully migrated to a native
-MK-61 emulator suite. All twenty-nine files are now covered by native emulator tests:
+All twenty-nine former TypeScript emulator test files are covered by native
+emulator tests (provenance map; the `.test.ts` sources no longer exist):
 
-| TypeScript emulator test file | Native counterpart | Status |
+| Former TypeScript emulator test file | Native counterpart | Status |
 | --- | --- | --- |
 | `tests/emulator/bitmask-facts.test.ts` | `native/tests/emulator_bitmask_facts_test.cpp` | File-level covered |
 | `tests/emulator/constants-dual-use-equivalence.test.ts` | `native/tests/emulator_constants_dual_use_test.cpp` | File-level covered |
@@ -139,44 +132,28 @@ MK-61 emulator suite. All twenty-nine files are now covered by native emulator t
 | `tests/emulator/x2-restore-context.test.ts` | `native/tests/emulator_x2_restore_context_test.cpp` | File-level covered |
 | `tests/emulator/z-stack-derived-tail.test.ts` | `native/tests/emulator_z_stack_derived_tail_test.cpp` | File-level covered |
 
-## Remaining Closure Work
+## Known native optimizer gaps
 
-1. Port the three stub optimizer passes. These are wired into the native
-   pipeline (`native/src/core/passes/index.cpp`) but currently return their
-   input unchanged, so they fire on no program (examples stay byte-for-byte
-   because the patterns do not occur in any example). The TypeScript
-   implementations must be ported before their `passes.test.ts` blocks can be
-   covered:
-   - `x2-literal-restore` (`src/core/passes/x2-literal-restore.ts`, 1257 lines;
-     ~140 it-cases) -> `native/src/core/passes/x2_literal_restore.cpp` (stub).
-   - `x2-hidden-temp-restore` (`src/core/passes/x2-hidden-temp-restore.ts`, 654
-     lines; ~45 it-cases) -> `native/src/core/passes/x2_hidden_temp_restore.cpp`
-     (stub).
-   - `x2-noop-restore` (`src/core/passes/x2-noop-restore.ts`, 115 lines; ~58
-     it-cases) -> `native/src/core/passes/x2_noop_restore.cpp` (stub).
-2. Port the missing X2 value-dataflow analysis features in
-   `native/src/core/passes/helpers.cpp`. `compute_x2_value_states` does not yet
-   track normalized decimal digit-run values entered via plain digit opcodes,
-   and recall removal does not yet apply the structural preload-shape /
-   VP-source matching proofs. This is the shared blocker behind the documented
-   deferred divergence sets in `last_x_reuse_test.cpp` (12 cases),
-   `store_recall_peephole_pass_test.cpp` (8), `flow_x_reuse_pass_test.cpp` (7,
-   one of which is a native over-aggressive counted-loop-counter divergence),
-   and `branch_target_x_reuse_pass_test.cpp` (4). It is also a dependency of the
-   three stub passes above and of the large `passes.test.ts` x2
-   value/shape/VP/closed/state dataflow group (~340 it-cases), most of whose
-   internal helper functions (`x2PlanVpSpliceAt`, `x2ShapeFactSafety`,
-   `parseX2ShapeFact`, etc.) are not yet exposed in the native headers.
-3. Port the remaining implemented-pass `passes.test.ts` blocks as parity
-   ratchets: `pre-shift-stack-lift` (70), `vp-splice` (95, unit-level),
-   `vp-x2-peephole` (49, native impl is partial: 104 vs 213 TS lines), plus the
-   smaller topics (`arithmetic-if`, `jump-thread`, `tail-call`,
-   `dead-code-after-halt`, `outline`, etc.).
-4. Continue compiler/root mappings at assertion level. `tests/compiler.test.ts`
-   now has native coverage for the main public-report metadata assertions, but
-   the remaining broad files still require assertion-by-assertion audit,
-   especially `tests/compiler/compiler.test.ts` and `tests/compiler/passes.test.ts`.
-2. Run the five heavy TSan cases individually:
+These are real limitations of the native compiler (not migration debt). They do
+not affect any committed example, because the relevant patterns do not occur in
+the example corpus, but they bound how aggressive a few passes can be.
+
+1. Three optimizer passes are stubs. They are wired into the native pipeline
+   (`native/src/core/passes/index.cpp`) but currently return their input
+   unchanged, so they fire on no program: `x2_literal_restore.cpp`,
+   `x2_hidden_temp_restore.cpp`, and `x2_noop_restore.cpp`.
+2. The X2 value-dataflow analysis in `native/src/core/passes/helpers.cpp` is
+   incomplete. `compute_x2_value_states` does not yet track normalized decimal
+   digit-run values entered via plain digit opcodes, and recall removal does not
+   yet apply the structural preload-shape / VP-source matching proofs. This is
+   the shared blocker behind the documented deferred divergence sets in
+   `last_x_reuse_test.cpp` (12 cases), `store_recall_peephole_pass_test.cpp` (8),
+   `flow_x_reuse_pass_test.cpp` (7, one of which is a native over-aggressive
+   counted-loop-counter divergence), and `branch_target_x_reuse_pass_test.cpp`
+   (4). It is also a dependency of the three stub passes above.
+3. `vp_x2_peephole` is a partial implementation relative to its intended scope.
+
+When triaging under TSan, the five heavy cases are best run individually:
    - `mkpro.compiler_lowers_initial_v2_subset`
    - `mkpro.example_sizes_match_typescript_baselines`
    - `mkpro.supported_examples_match_native_oracles`

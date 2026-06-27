@@ -7,6 +7,7 @@ include(CTest)
 option(MKPRO_WARNINGS_AS_ERRORS "Treat native compiler warnings as errors" ON)
 option(MKPRO_ENABLE_ASAN_UBSAN "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(MKPRO_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
+option(MKPRO_STATIC "Statically link the CLI (GNU/Clang on non-Apple platforms)" OFF)
 
 if(MKPRO_ENABLE_ASAN_UBSAN AND MKPRO_ENABLE_TSAN)
   message(FATAL_ERROR "ASan/UBSan and TSan cannot be enabled in the same build")
@@ -379,6 +380,12 @@ function(mkpro_configure_target target_name)
     if(MKPRO_ENABLE_TSAN)
       target_compile_options(${target_name} PRIVATE -fsanitize=thread -fno-omit-frame-pointer)
       target_link_options(${target_name} PRIVATE -fsanitize=thread)
+    endif()
+    # Apple does not support statically linking the system C library, so -static
+    # is only applied on other Unix-like platforms. macOS portability is handled
+    # via CMAKE_OSX_DEPLOYMENT_TARGET / CMAKE_OSX_ARCHITECTURES instead.
+    if(MKPRO_STATIC AND NOT APPLE)
+      target_link_options(${target_name} PRIVATE -static -static-libgcc -static-libstdc++)
     endif()
   endif()
 endfunction()

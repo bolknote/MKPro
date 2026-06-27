@@ -1,21 +1,12 @@
-# Dependencies
-node_modules/
-
 # Git worktrees
 .worktrees/
 
 # Build and coverage output
-dist/
-!dist/
-dist/*
-!dist/mk-pro-emulator-bridge.user.js
 build/
 build-native/
 coverage/
-*.tsbuildinfo
 
 # Test/runtime caches
-.vitest/
 .cache/
 .tmp/
 tmp/

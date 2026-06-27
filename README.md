@@ -1,30 +1,38 @@
 # MK-Pro
 
-`mk-pro` is an experimental TypeScript CLI translator from the MK-Pro language to
-Elektronika MK-61 program listings.
+`mk-pro` is a native C++ CLI translator from the MK-Pro language to Elektronika
+MK-61 program listings.
 
-This milestone focuses on the translator. The repo also contains emulator
-smoke/regression tests. The `mk61` machine model is the authoritative execution
+The repo also contains a standalone pure-JavaScript MK-61 emulator used for
+smoke/regression checks. The `mk61` machine model is the authoritative execution
 model for optimizer proofs, including documented, undocumented, and dark-entry
 machine behavior.
 
-## Run
+## Build
 
-Node 22.6 or later strips TypeScript at runtime, so no build step is required:
+Requires CMake ≥ 3.25 and a C++20 compiler (Clang, GCC, or MSVC).
 
 ```sh
-npm install
-npm run mk-pro -- compile examples/basic.mkpro --out listing
-npm run mk-pro -- compile examples/basic.mkpro --out hex
-npm run mk-pro -- compile examples/basic.mkpro --out json
-npm run mk-pro -- explain examples/tiny-game.mkpro
+cmake --preset release
+cmake --build --preset release
+```
+
+The CLI binary is produced at `build/release/native/mkpro-native`.
+
+## Run
+
+```sh
+build/release/native/mkpro-native compile examples/basic.mkpro --out listing
+build/release/native/mkpro-native compile examples/basic.mkpro --out hex
+build/release/native/mkpro-native compile examples/basic.mkpro --out json
+build/release/native/mkpro-native explain examples/tiny-game.mkpro
 ```
 
 The CLI shape is:
 
 ```sh
-mk-pro compile file.mkpro --out listing|hex|json|keys|all
-mk-pro explain file.mkpro
+mkpro-native compile file.mkpro --out listing|hex|json|keys|all
+mkpro-native explain file.mkpro
 ```
 
 Flags:
@@ -34,20 +42,9 @@ Flags:
 - `--out keys` prints a bare press/input stream, including generated setup when
   the program needs one.
 - `--budget N` (default `105`). Hard error if exceeded.
-
-## Browser Bridge
-
-To load MK-Pro source directly into Serge Anvarov's browser emulator:
-
-```sh
-npm run build:browser
-npm run serve:browser
-```
-
-Then paste the console loader from
-[docs/19-anvarov-browser-bridge.md](./docs/19-anvarov-browser-bridge.md) into
-the emulator page. The bridge compiles `#program` before the emulator's own
-write-to-memory handler runs, so the page only sees MK-61 hex opcodes.
+- `--analysis`, `--strict` and various optimizer toggles (e.g.
+  `--return-stack-script`/`--no-return-stack-script`) are also available; see
+  `mkpro-native` with no arguments for the full usage.
 
 ## MK-Pro Language
 
@@ -162,12 +159,14 @@ then follow the reading order in [docs/README.md](./docs/README.md).
 ## Development
 
 ```sh
-npm run typecheck
-npm test
+cmake --preset debug && cmake --build --preset debug && ctest --preset debug
+# or the release gate:
+cmake --preset release && cmake --build --preset release && ctest --preset release
 ```
 
-The test suite covers the parser, the opcode catalog, V2 lowering, example
-program reports, and the headless emulator loader smoke test.
+Sanitizer presets `asan-ubsan` and `tsan` are also available. The native test
+suite covers the parser, the opcode catalog, V2 lowering, IR passes, example
+program reports, and emulator-equivalence facts.
 
 ## Status
 
@@ -191,10 +190,11 @@ program reports, and the headless emulator loader smoke test.
 
 ## Layout
 
-- `src/cli.ts` — argv parsing and output dispatch
-- `src/core/parser.ts` — text → AST
-- `src/core/compiler.ts` — AST → `MachineItem[]` → resolved steps
-- `src/core/opcodes.ts` — full 256-entry catalog with risk/delivery metadata
-- `src/core/format.ts` — listing, hex (8-byte columns), JSON, explain
-- `tests/emulator/` — headless MK-61 microcode model used for smoke tests
-  and future end-to-end verification.
+- `native/src/main.cpp` — CLI argument parsing and output dispatch
+- `native/src/core/` — parser, compiler, IR passes, layout, and formatting
+  (listing, hex in 8-byte columns, JSON, explain)
+- `native/include/mkpro/` — public headers (opcode catalog, result types)
+- `native/tests/` — native test suite (run via `ctest`)
+- `tests/emulator/` — standalone pure-JavaScript MK-61 microcode model
+  (`mk61.cjs` + `rom.cjs`) used as the authoritative execution model and for
+  smoke tests.
