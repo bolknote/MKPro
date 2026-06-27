@@ -38932,8 +38932,12 @@ std::optional<int> read_reference_listing_span(const std::filesystem::path& path
 std::optional<std::filesystem::path> find_repo_root() {
   std::filesystem::path current = std::filesystem::current_path();
   for (int depth = 0; depth < 8; ++depth) {
-    if (std::filesystem::exists(current / "package.json") &&
-        std::filesystem::exists(current / "games")) {
+    // The repo root holds the original program listings under games/. Anchor on
+    // a stable marker that survives tooling changes (the native/ tree or the
+    // .git entry) rather than package.json, which no longer exists.
+    if (std::filesystem::exists(current / "games") &&
+        (std::filesystem::exists(current / "native") ||
+         std::filesystem::exists(current / ".git"))) {
       return current;
     }
     const std::filesystem::path parent = current.parent_path();
