@@ -41,21 +41,29 @@ jobs:
           if-no-files-found: error
 
   windows:
-    name: Windows (static x64)
+    name: Windows (static x64, MinGW)
     runs-on: windows-latest
+    # MSVC has no 128-bit integer type, which the exact decimal arithmetic in
+    # constant_folder.cpp relies on (__int128). MinGW-w64 GCC supports __int128
+    # and, with MKPRO_STATIC, links a self-contained .exe.
     steps:
       - uses: actions/checkout@v4
+      - name: Install MinGW-w64
+        run: choco install mingw -y --no-progress
       - name: Configure
         run: >
-          cmake -S . -B build
-          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=gcc
+          -DCMAKE_CXX_COMPILER=g++
+          -DMKPRO_STATIC=ON
           -DMKPRO_WARNINGS_AS_ERRORS=OFF
       - name: Build CLI
-        run: cmake --build build --config Release --target mkpro_cli -j
+        run: cmake --build build --target mkpro_cli -j
       - name: Smoke check
-        run: ./build/native/Release/mkpro-native.exe compile examples/basic.mkpro --out hex
+        run: ./build/native/mkpro-native.exe compile examples/basic.mkpro --out hex
       - name: Stage binary
-        run: copy build\native\Release\mkpro-native.exe mkpro-native-windows-x64.exe
+        run: copy build\native\mkpro-native.exe mkpro-native-windows-x64.exe
       - uses: actions/upload-artifact@v4
         with:
           name: mkpro-native-windows-x64

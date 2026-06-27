@@ -403,7 +403,7 @@ std::string normalize_exponent_text(std::string text) {
 std::string js_number_string(long double value) {
   if (value == 0.0L)
     return "0";
-  const long double abs_value = std::fabsl(value);
+  const long double abs_value = std::fabs(value);
   const bool use_exponent = abs_value >= 1.0e21L || abs_value < 1.0e-6L;
   std::array<char, 128> buffer{};
   const double number = static_cast<double>(value);
@@ -456,7 +456,7 @@ std::optional<long long> safe_integer_number(const std::string& value) {
     if (parsed != value.size() || !std::isfinite(static_cast<double>(number)))
       return std::nullopt;
     const long double rounded = std::round(number);
-    if (std::fabsl(number - rounded) > 1e-12L)
+    if (std::fabs(number - rounded) > 1e-12L)
       return std::nullopt;
     if (rounded < static_cast<long double>(std::numeric_limits<long long>::min()) ||
         rounded > static_cast<long double>(std::numeric_limits<long long>::max())) {
