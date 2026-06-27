@@ -71,6 +71,7 @@ void setup_formatting_matches_typescript_contract();
 void functions_match_typescript_contract();
 void indirect_addressing_matches_typescript_contract();
 void indirect_selector_integer_part_matches_typescript_contract();
+void int128_fallback_matches_builtin();
 void inline_floor_packed_row_matches_typescript_contract();
 void ir_round_trip_matches_typescript_contract();
 void last_x_reuse_matches_typescript_contract();
@@ -271,6 +272,7 @@ int main(int argc, char** argv) {
        mkpro::tests::indirect_addressing_matches_typescript_contract},
       {"indirect_selector_integer_part_matches_typescript_contract",
        mkpro::tests::indirect_selector_integer_part_matches_typescript_contract},
+      {"int128_fallback_matches_builtin", mkpro::tests::int128_fallback_matches_builtin},
       {"inline_floor_packed_row_matches_typescript_contract",
        mkpro::tests::inline_floor_packed_row_matches_typescript_contract},
       {"ir_round_trip_matches_typescript_contract",

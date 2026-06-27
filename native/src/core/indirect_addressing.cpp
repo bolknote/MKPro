@@ -1,5 +1,6 @@
 #include "mkpro/core/indirect_addressing.hpp"
 
+#include "mkpro/core/int128.hpp"
 #include "mkpro/core/opcodes.hpp"
 
 #include <algorithm>
@@ -74,7 +75,7 @@ int mutation_delta(IndirectSelectorMutation mutation) {
   return 0;
 }
 
-std::string int128_to_string(__int128 value) {
+std::string int128_to_string(Int128 value) {
   if (value == 0)
     return "0";
   const bool negative = value < 0;
@@ -122,7 +123,7 @@ std::optional<std::string> transform_decimal_selector_value(
   if (integer >= 0) {
     if (integer == 0 && delta < 0)
       return std::string("-99999999");
-    return int128_to_string(static_cast<__int128>(integer) + static_cast<__int128>(delta));
+    return int128_to_string(static_cast<Int128>(integer) + static_cast<Int128>(delta));
   }
 
   const int transformed = std::stoi(negative_integer_mantissa(integer));

@@ -1,5 +1,6 @@
 #include "mkpro/core/constant_folder.hpp"
 
+#include "mkpro/core/int128.hpp"
 #include "mkpro/core/parser.hpp"
 
 #include <algorithm>
@@ -24,11 +25,11 @@ namespace {
 constexpr int kMaxFoldedSignificantDigits = 8;
 constexpr int kMaxFoldedDecimalScale = 12;
 constexpr int kMaxLiteralExponent = 18;
-constexpr __int128 kMaxDecimalMagnitude =
-    (((static_cast<__int128>(1) << 120) - 1) / 10) * 10;
+const Int128 kMaxDecimalMagnitude =
+    (((static_cast<Int128>(1) << 120) - 1) / 10) * 10;
 
 struct DecimalValue {
-  __int128 num = 0;
+  Int128 num = 0;
   int scale = 0;
 };
 
@@ -160,11 +161,11 @@ Expression divide_expression(Expression left, Expression right) {
   return binary_expression(std::move(left), "/", std::move(right));
 }
 
-__int128 abs_int128(__int128 value) {
+Int128 abs_int128(Int128 value) {
   return value < 0 ? -value : value;
 }
 
-bool checked_mul(__int128 left, __int128 right, __int128& out) {
+bool checked_mul(Int128 left, Int128 right, Int128& out) {
   if (left == 0 || right == 0) {
     out = 0;
     return true;
@@ -175,12 +176,12 @@ bool checked_mul(__int128 left, __int128 right, __int128& out) {
   return true;
 }
 
-std::optional<__int128> pow10_int(int exponent) {
+std::optional<Int128> pow10_int(int exponent) {
   if (exponent < 0)
     return std::nullopt;
-  __int128 result = 1;
+  Int128 result = 1;
   for (int index = 0; index < exponent; ++index) {
-    __int128 next = 0;
+    Int128 next = 0;
     if (!checked_mul(result, 10, next))
       return std::nullopt;
     result = next;
@@ -188,11 +189,11 @@ std::optional<__int128> pow10_int(int exponent) {
   return result;
 }
 
-std::string int128_to_string(__int128 value) {
+std::string int128_to_string(Int128 value) {
   if (value == 0)
     return "0";
   const bool negative = value < 0;
-  __int128 remaining = negative ? -value : value;
+  Int128 remaining = negative ? -value : value;
   std::string digits;
   while (remaining > 0) {
     const int digit = static_cast<int>(remaining % 10);
@@ -266,9 +267,9 @@ std::optional<DecimalValue> parse_decimal_literal(const std::string& raw) {
     scale = 0;
   }
 
-  __int128 number = 0;
+  Int128 number = 0;
   for (const char ch : digits.empty() ? std::string{"0"} : digits) {
-    __int128 next = 0;
+    Int128 next = 0;
     if (!checked_mul(number, 10, next))
       return std::nullopt;
     next += static_cast<int>(ch - '0');
@@ -283,18 +284,18 @@ std::optional<DecimalValue> parse_decimal_literal(const std::string& raw) {
 
 std::optional<DecimalValue> add_decimal(DecimalValue left, DecimalValue right) {
   const int scale = std::max(left.scale, right.scale);
-  const std::optional<__int128> left_multiplier = pow10_int(scale - left.scale);
-  const std::optional<__int128> right_multiplier = pow10_int(scale - right.scale);
+  const std::optional<Int128> left_multiplier = pow10_int(scale - left.scale);
+  const std::optional<Int128> right_multiplier = pow10_int(scale - right.scale);
   if (!left_multiplier.has_value() || !right_multiplier.has_value())
     return std::nullopt;
 
-  __int128 left_num = 0;
-  __int128 right_num = 0;
+  Int128 left_num = 0;
+  Int128 right_num = 0;
   if (!checked_mul(left.num, *left_multiplier, left_num) ||
       !checked_mul(right.num, *right_multiplier, right_num)) {
     return std::nullopt;
   }
-  const __int128 result = left_num + right_num;
+  const Int128 result = left_num + right_num;
   if (abs_int128(result) > kMaxDecimalMagnitude)
     return std::nullopt;
   return normalize_decimal(DecimalValue{.num = result, .scale = scale});
@@ -305,17 +306,17 @@ std::optional<DecimalValue> subtract_decimal(DecimalValue left, DecimalValue rig
 }
 
 std::optional<DecimalValue> multiply_decimal(DecimalValue left, DecimalValue right) {
-  __int128 num = 0;
+  Int128 num = 0;
   if (!checked_mul(left.num, right.num, num))
     return std::nullopt;
   return normalize_decimal(DecimalValue{.num = num, .scale = left.scale + right.scale});
 }
 
-__int128 gcd_int128(__int128 left, __int128 right) {
+Int128 gcd_int128(Int128 left, Int128 right) {
   left = abs_int128(left);
   right = abs_int128(right);
   while (right != 0) {
-    const __int128 next = left % right;
+    const Int128 next = left % right;
     left = right;
     right = next;
   }
@@ -325,13 +326,13 @@ __int128 gcd_int128(__int128 left, __int128 right) {
 std::optional<DecimalValue> divide_decimal(DecimalValue left, DecimalValue right) {
   if (right.num == 0)
     return std::nullopt;
-  const std::optional<__int128> right_scale = pow10_int(right.scale);
-  const std::optional<__int128> left_scale = pow10_int(left.scale);
+  const std::optional<Int128> right_scale = pow10_int(right.scale);
+  const std::optional<Int128> left_scale = pow10_int(left.scale);
   if (!right_scale.has_value() || !left_scale.has_value())
     return std::nullopt;
 
-  __int128 numerator = 0;
-  __int128 denominator = 0;
+  Int128 numerator = 0;
+  Int128 denominator = 0;
   if (!checked_mul(left.num, *right_scale, numerator) ||
       !checked_mul(right.num, *left_scale, denominator)) {
     return std::nullopt;
@@ -341,7 +342,7 @@ std::optional<DecimalValue> divide_decimal(DecimalValue left, DecimalValue right
     denominator = -denominator;
   }
 
-  const __int128 divisor = gcd_int128(numerator, denominator);
+  const Int128 divisor = gcd_int128(numerator, denominator);
   numerator /= divisor;
   denominator /= divisor;
 
@@ -361,10 +362,10 @@ std::optional<DecimalValue> divide_decimal(DecimalValue left, DecimalValue right
   const int scale = std::max(twos, fives);
   if (scale > kMaxFoldedDecimalScale)
     return std::nullopt;
-  const std::optional<__int128> two_pad = pow10_int(0);
+  const std::optional<Int128> two_pad = pow10_int(0);
   (void)two_pad;
 
-  __int128 padded = numerator;
+  Int128 padded = numerator;
   for (int index = 0; index < scale - twos; ++index) {
     if (!checked_mul(padded, 2, padded))
       return std::nullopt;
@@ -437,7 +438,7 @@ std::vector<int> decimal_mantissa_digits(DecimalValue value) {
 }
 
 DecimalValue decimal_from_digits(const std::vector<int>& digits, int scale) {
-  __int128 num = 0;
+  Int128 num = 0;
   for (const int digit : digits)
     num = num * 10 + digit;
   return normalize_decimal(DecimalValue{.num = num, .scale = scale});
@@ -940,7 +941,7 @@ std::optional<DecimalValue> truncate_decimal(DecimalValue value) {
   value = normalize_decimal(value);
   if (value.scale == 0)
     return value;
-  const std::optional<__int128> divisor = pow10_int(value.scale);
+  const std::optional<Int128> divisor = pow10_int(value.scale);
   if (!divisor.has_value())
     return std::nullopt;
   return normalize_decimal(DecimalValue{.num = value.num / *divisor, .scale = 0});
@@ -959,7 +960,7 @@ std::optional<DecimalValue> pow10_decimal(DecimalValue exponent) {
   }
   const int power = static_cast<int>(exponent.num);
   if (power >= 0) {
-    std::optional<__int128> num = pow10_int(power);
+    std::optional<Int128> num = pow10_int(power);
     return num.has_value() ? std::optional<DecimalValue>{normalize_decimal(
                                   DecimalValue{.num = *num, .scale = 0})}
                            : std::nullopt;
@@ -987,12 +988,12 @@ std::optional<DecimalValue> pow_decimal_integer(DecimalValue base, DecimalValue 
 
 int compare_decimal(DecimalValue left, DecimalValue right) {
   const int scale = std::max(left.scale, right.scale);
-  const std::optional<__int128> left_multiplier = pow10_int(scale - left.scale);
-  const std::optional<__int128> right_multiplier = pow10_int(scale - right.scale);
+  const std::optional<Int128> left_multiplier = pow10_int(scale - left.scale);
+  const std::optional<Int128> right_multiplier = pow10_int(scale - right.scale);
   if (!left_multiplier.has_value() || !right_multiplier.has_value())
     return 0;
-  const __int128 lhs = left.num * *left_multiplier;
-  const __int128 rhs = right.num * *right_multiplier;
+  const Int128 lhs = left.num * *left_multiplier;
+  const Int128 rhs = right.num * *right_multiplier;
   if (lhs < rhs)
     return -1;
   if (lhs > rhs)

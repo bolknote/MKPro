@@ -7,6 +7,7 @@
 #include "mkpro/core/emit/lowering/proc_raw_setup.hpp"
 #include "mkpro/core/emit/lowering_context.hpp"
 #include "mkpro/core/emit/lowering_helpers.hpp"
+#include "mkpro/core/int128.hpp"
 #include "mkpro/core/emit/machine_emitter.hpp"
 #include "mkpro/core/emit/stack_residency_analysis.hpp"
 #include "mkpro/core/formal_address.hpp"
@@ -9764,8 +9765,8 @@ bool try_emit_constant_synthesis(LoweringContext& context, const std::string& ke
       const std::optional<long long> source = safe_integer_number(value);
       if (!source.has_value())
         continue;
-      const __int128 squared = static_cast<__int128>(*source) * static_cast<__int128>(*source);
-      if (squared != static_cast<__int128>(*target))
+      const Int128 squared = static_cast<Int128>(*source) * static_cast<Int128>(*source);
+      if (squared != static_cast<Int128>(*target))
         continue;
       accept(SynthesisPlan{
           .cost = 2,

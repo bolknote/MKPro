@@ -1,5 +1,6 @@
 #include "mkpro/core/interprocedural_value_propagation.hpp"
 
+#include "mkpro/core/int128.hpp"
 #include "mkpro/core/parser.hpp"
 #include "mkpro/core/rule_cfg.hpp"
 
@@ -55,9 +56,9 @@ long long gcd_ll(long long a, long long b) {
   return a == 0 ? 1 : a;
 }
 
-std::optional<long long> int128_to_long_long(__int128 value) {
-  if (value < static_cast<__int128>(std::numeric_limits<long long>::min()) ||
-      value > static_cast<__int128>(std::numeric_limits<long long>::max())) {
+std::optional<long long> int128_to_long_long(Int128 value) {
+  if (value < static_cast<Int128>(std::numeric_limits<long long>::min()) ||
+      value > static_cast<Int128>(std::numeric_limits<long long>::max())) {
     return std::nullopt;
   }
   return static_cast<long long>(value);
@@ -78,7 +79,7 @@ Rat rat(long long n, long long d = 1) {
   return Rat{.n = n / g, .d = d / g};
 }
 
-Rat rat_from_int128(__int128 n, __int128 d) {
+Rat rat_from_int128(Int128 n, Int128 d) {
   const std::optional<long long> numer = int128_to_long_long(n);
   const std::optional<long long> denom = int128_to_long_long(d);
   if (!numer.has_value() || !denom.has_value())
@@ -94,16 +95,16 @@ bool rat_valid(const Rat& value) {
 Rat rat_add(const Rat& left, const Rat& right) {
   if (!left.valid || !right.valid)
     return invalid_rat();
-  return rat_from_int128(static_cast<__int128>(left.n) * right.d +
-                             static_cast<__int128>(right.n) * left.d,
-                         static_cast<__int128>(left.d) * right.d);
+  return rat_from_int128(static_cast<Int128>(left.n) * right.d +
+                             static_cast<Int128>(right.n) * left.d,
+                         static_cast<Int128>(left.d) * right.d);
 }
 
 Rat rat_mul(const Rat& left, const Rat& right) {
   if (!left.valid || !right.valid)
     return invalid_rat();
-  return rat_from_int128(static_cast<__int128>(left.n) * right.n,
-                         static_cast<__int128>(left.d) * right.d);
+  return rat_from_int128(static_cast<Int128>(left.n) * right.n,
+                         static_cast<Int128>(left.d) * right.d);
 }
 
 bool rat_equal(const Rat& left, const Rat& right) {
@@ -197,10 +198,10 @@ std::optional<Rat> decimal_to_rat(const std::string& raw) {
   if (integer.empty() && fractional.empty())
     return std::nullopt;
 
-  __int128 numer = 0;
+  Int128 numer = 0;
   for (const char ch : integer)
     numer = numer * 10 + static_cast<int>(ch - '0');
-  __int128 denom = 1;
+  Int128 denom = 1;
   for (const char ch : fractional) {
     numer = numer * 10 + static_cast<int>(ch - '0');
     denom *= 10;

@@ -8,8 +8,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Only build the CLI binary (mkpro-native). Tests are intentionally not run in
-# CI: the full ctest suite is too slow for the hosted runners.
+# The per-platform jobs only build the CLI binary (mkpro-native); the full ctest
+# suite is too slow for hosted runners and is run locally. The one exception is
+# the fast int128-fallback job, which validates the software 128-bit integer
+# (the path MSVC actually compiles) against the builtin __int128.
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
@@ -41,34 +43,59 @@ jobs:
           if-no-files-found: error
 
   windows:
-    name: Windows (static x64, MinGW)
+    name: Windows (static x64, MSVC)
     runs-on: windows-latest
-    # MSVC has no 128-bit integer type, which the exact decimal arithmetic in
-    # constant_folder.cpp relies on (__int128). MinGW-w64 GCC supports __int128
-    # and, with MKPRO_STATIC, links a self-contained .exe.
+    # MSVC has no builtin 128-bit integer, so the exact decimal arithmetic uses
+    # the software mkpro::Int128 fallback (see native/include/mkpro/core/int128.hpp).
+    # CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded statically links the CRT for a
+    # self-contained .exe; the int128-fallback job validates the fallback math.
     steps:
       - uses: actions/checkout@v4
-      - name: Install MinGW-w64
-        run: choco install mingw -y --no-progress
       - name: Configure
         run: >
-          cmake -S . -B build -G Ninja
+          cmake -S . -B build -A x64
           -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_C_COMPILER=gcc
-          -DCMAKE_CXX_COMPILER=g++
-          -DMKPRO_STATIC=ON
+          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           -DMKPRO_WARNINGS_AS_ERRORS=OFF
       - name: Build CLI
-        run: cmake --build build --target mkpro_cli -j
+        run: cmake --build build --config Release --target mkpro_cli -j
       - name: Smoke check
-        run: ./build/native/mkpro-native.exe compile examples/basic.mkpro --out hex
+        run: ./build/native/Release/mkpro-native.exe compile examples/basic.mkpro --out hex
       - name: Stage binary
-        run: copy build\native\mkpro-native.exe mkpro-native-windows-x64.exe
+        run: copy build\native\Release\mkpro-native.exe mkpro-native-windows-x64.exe
       - uses: actions/upload-artifact@v4
         with:
           name: mkpro-native-windows-x64
           path: mkpro-native-windows-x64.exe
           if-no-files-found: error
+
+  int128-fallback:
+    name: int128 software fallback (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            config_args: ""
+          - os: windows-latest
+            config_args: "-A x64"
+    runs-on: ${{ matrix.os }}
+    # Forces MKPRO_FORCE_INT128_FALLBACK so the software 128-bit integer is the
+    # active type. On Linux the builtin __int128 is present, so the self-test runs
+    # a 300k-iteration differential check fallback-vs-builtin; on Windows/MSVC the
+    # same fallback is compiled and exercised against the fixed vectors.
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (force int128 fallback)
+        run: >
+          cmake -S . -B build ${{ matrix.config_args }}
+          -DCMAKE_BUILD_TYPE=Release
+          -DMKPRO_FORCE_INT128_FALLBACK=ON
+          -DMKPRO_WARNINGS_AS_ERRORS=OFF
+      - name: Build self-test
+        run: cmake --build build --config Release --target mkpro_int128_selftest -j
+      - name: Run self-test
+        run: ctest --test-dir build -R int128_selftest -C Release --output-on-failure
 
   macos:
     name: macOS (universal x86_64 + arm64)
@@ -98,7 +125,7 @@ jobs:
 
   release:
     name: Publish release
-    needs: [linux, windows, macos]
+    needs: [linux, windows, macos, int128-fallback]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

@@ -8,6 +8,7 @@ option(MKPRO_WARNINGS_AS_ERRORS "Treat native compiler warnings as errors" ON)
 option(MKPRO_ENABLE_ASAN_UBSAN "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(MKPRO_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(MKPRO_STATIC "Statically link the CLI (GNU/Clang on non-Apple platforms)" OFF)
+option(MKPRO_FORCE_INT128_FALLBACK "Use the software 128-bit integer even where a builtin __int128 exists" OFF)
 
 if(MKPRO_ENABLE_ASAN_UBSAN AND MKPRO_ENABLE_TSAN)
   message(FATAL_ERROR "ASan/UBSan and TSan cannot be enabled in the same build")
@@ -202,6 +203,7 @@ add_executable(mkpro_tests
   tests/state_banks_test.cpp
   tests/state_init_counted_loop_test.cpp
   tests/stack_residency_test.cpp
+  tests/int128_test.cpp
   tests/strict_allocation_test.cpp
   tests/style_lints_test.cpp
   tests/super_dark_layout_test.cpp
@@ -331,6 +333,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   state_banks_match_typescript_contract
   state_init_counted_loop_matches_typescript_contract
   stack_residency_matches_typescript_contract
+  int128_fallback_matches_builtin
   strict_allocation_matches_typescript_contract
   style_lints_matches_typescript_contract
   super_dark_layout_matches_typescript_contract
@@ -361,6 +364,9 @@ foreach(test_name IN LISTS MKPRO_NATIVE_TEST_NAMES)
 endforeach()
 
 function(mkpro_configure_target target_name)
+  if(MKPRO_FORCE_INT128_FALLBACK)
+    target_compile_definitions(${target_name} PRIVATE MKPRO_FORCE_INT128_FALLBACK)
+  endif()
   if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang|GNU")
     target_compile_options(${target_name} PRIVATE
       -Wall
@@ -390,6 +396,14 @@ function(mkpro_configure_target target_name)
   endif()
 endfunction()
 
+add_executable(mkpro_int128_selftest tests/int128_selftest_main.cpp)
+target_include_directories(mkpro_int128_selftest PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+add_test(NAME int128_selftest COMMAND mkpro_int128_selftest)
+
 mkpro_configure_target(mkpro_core)
 mkpro_configure_target(mkpro_cli)
 mkpro_configure_target(mkpro_tests)
+mkpro_configure_target(mkpro_int128_selftest)
