@@ -4,6 +4,20 @@ This file tracks the current TypeScript-to-C++ test migration status.
 It is intentionally conservative: a TypeScript test file is not considered fully
 closed merely because nearby native coverage exists.
 
+> **Native oracle is now the source of truth.** TypeScript parity is no longer a
+> constraint. The committed oracle files under `native/oracles/examples/` are
+> re-anchored to native output. `golden_listing_contract_matches_typescript_contract`
+> (and the `hex` it writes, also consumed by `supported_examples_match_native_oracles`)
+> compares against the *committed native oracle*. To re-anchor after an intended
+> native output change, run the suite once with `MKPRO_NATIVE_BLESS=1`
+> (which rewrites `listing/hex/setup/variants/bytes` from native output) and then
+> run normally to confirm green. Do not regenerate via
+> `scripts/export-native-oracles.mjs` — that reproduces the longer TS output. The
+> test/function names still contain `typescript` for historical continuity, but
+> the contract they enforce is native-anchored. See
+> `docs/20-mkpro-optimization-reference.md` ("Deferred better-than-TS candidates
+> (deferral policy lifted)") for the per-candidate status.
+
 ## Summary
 
 - TypeScript `.test.ts` files: 59.

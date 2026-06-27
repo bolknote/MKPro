@@ -119,7 +119,7 @@ void compiler_examples_match_typescript_contract() {
             "basic.mkpro should use the read field path in listing");
     const std::string expected_hex = trim_newlines(
         read_text(root / "native" / "oracles" / "examples" / "basic" / "hex.txt"));
-    require(result.hex == expected_hex, "basic.mkpro hex should match TS oracle");
+    require(result.hex == expected_hex, "basic.mkpro hex should match the committed native oracle");
   }
 
   {
@@ -186,7 +186,8 @@ void compiler_examples_match_typescript_contract() {
             "e-94-digits should use decimal series lowering");
     const std::string expected_hex =
         trim_newlines(read_text(root / "native" / "oracles" / "examples" / "e-94-digits" / "hex.txt"));
-    require(result.hex == expected_hex, "e-94-digits hex should match TS oracle");
+    require(result.hex == expected_hex,
+            "e-94-digits hex should match the committed native oracle");
   }
 
   {

@@ -2524,52 +2524,110 @@ If proofs are insufficient, those transformations are not activated.
 - Some capability entries remain `candidate`/`planned` while not yet stable enough for global enabling.
 - Optimization priority is always bounded by semantic safety and layout validity, then by cell budget.
 
-### Deferred better-than-TS candidates
+### Deferred better-than-TS candidates (deferral policy lifted)
 
-Any discovered way to produce shorter output than the TypeScript oracle during
-the parity port must be recorded in this section first. This includes real
-native strategies, accidental implementation side effects, example-specific
-debugging discoveries, explicit aggressive flags, and test-only lowering
-variants. Keep the default C++ output byte-for-byte aligned with TypeScript
-until the shorter form is accepted as an intentional post-parity optimization.
+**Policy update.** TypeScript parity is no longer a constraint. The native C++
+compiler is now the source of truth and is allowed (encouraged) to produce
+shorter programs than the TypeScript reference. The committed oracle files under
+`native/oracles/examples/` are re-anchored to native output, not TS output.
 
-Each entry must name the affected program or fixture, the lowering variant when
-known, the observed TS size and shorter native size when measured, the mechanism
-that made it shorter, why it is disabled for parity, and the gate needed before
-enabling it later. If the exact cell counts were not captured, mark the entry as
-qualitative/unmeasured and fill in the numbers before enabling it. An unrecorded
-shorter-by-default native result is treated as a parity bug, even if the
-generated program is semantically correct.
+**Re-anchor pipeline.** The native oracle contract tests support a bless/update
+mode gated by the `MKPRO_NATIVE_BLESS` environment variable. When
+`MKPRO_NATIVE_BLESS=1` is set, `golden_listing_contract_matches_typescript_contract`
+rewrites the committed oracle artifacts (`listing.txt`, `hex.txt`, `setup.txt`,
+`variants.txt`, plus the cheap space-joined `bytes.txt`) from the current native
+output instead of asserting equality. `keys.txt` has no native formatter and is
+left untouched (it is existence-checked, not content-checked). The mode is a
+no-op when the variable is unset. Do **not** use `scripts/export-native-oracles.mjs`
+to regenerate — that reproduces the longer TypeScript output. Workflow: build,
+run the suite once with `MKPRO_NATIVE_BLESS=1` to regenerate, then run normally
+to confirm green.
 
-- Post-layout indirect-flow can reduce small `cells(...)`/bit-mask programs even when they already fit in
-  the official 105-cell window. This is intentionally deferred during the C++ parity port: the native
-  translator must keep the same default rescue threshold as the TypeScript compiler unless an explicit
-  aggressive candidate is selected.
-- The native text-display lowering can technically compile the `BEEr NN` shape in some hoisted helper
-  variants where the TypeScript test-only lowering variant currently rejects it after its leading
-  hoist jump shifts the main body away from address 00. Keep the C++ variant aligned with TypeScript
-  oracle output until that TS strategy is changed deliberately.
-- Reference-size post-layout indirect-flow rescue can shrink some explicit test-only lowering variants
-  such as `Dungeon` primary, but the current TypeScript golden fingerprints keep those variants at the
-  ordinary 105-cell rescue threshold unless an aggressive post-layout variant is selected.
-- For spatial/bit-mask-heavy programs such as `fox-hunt-100`, the native translator can keep some
-  membership and `line_count` paths in a shorter direct/shared-hybrid form even when the explicit
-  `sharedBitMaskHelperCalls` strategy is selected. This produced a smaller test-only variant during
-  the C++ parity port, but it is deferred until after byte-for-byte parity with the TypeScript
-  shared-helper layout is complete. A concrete observed case is the
-  `fox-hunt-100` `sharedBitMaskHelperCalls` lowering variant: native post-layout
-  forward-call selector packing reached 122 cells, while the TypeScript oracle
-  fingerprint keeps the variant at 125 cells through return-suffix shared-helper
-  layout. Preserve the 125-cell oracle shape during the parity port and revisit
-  the 122-cell form only as a deliberate post-parity optimization.
-- Hoisted-helper variants can sometimes keep the coord-list counter proof alive through a formatted
-  report and replace a final `JP 00` loop-back with one-cell indirect `K JP R`. TypeScript keeps the
-  explicit direct branch in those test-only variants, so the native port suppresses this shortcut
-  while `hoistSharedHelpers` parity is being enforced.
-- Runtime indirect-call flow can shrink explicit helper-call variants such as `rambo-iii` primary by
-  borrowing a dead stable register for repeated helper calls. TypeScript keeps that test-only primary
-  variant in direct-call form, while still using the shortcut for hoisted-helper variants such as
-  `minesweeper-9x7`. The native port therefore suppresses the shortcut only for non-hoisted
-  test-only variants unless the runtime-indirect-call strategy is explicitly selected.
+Each candidate below records the affected program/fixture, the lowering variant,
+the measured before→after sizes, the mechanism, and its current status now that
+the deferral policy is lifted.
+
+#### Applied post-parity optimizations
+
+- **(#5) Hoisted-helper coord-list one-cell indirect loop-back.** *Applied.*
+  `emit_known_one_indirect_loop_back` in `native/src/core/compiler.cpp` previously
+  refused to emit the one-cell indirect `К БП R` loop-back whenever
+  `hoist_shared_helpers` was set, forcing the explicit two-cell `БП 00` direct
+  branch to match the TypeScript test-only variants. The parity gate was removed;
+  the rewrite is still guarded by its real correctness preconditions
+  (`coord_list_counter_known_one` is proven and the loop target actually lives at
+  address `00`, i.e. `zero_address_labels.contains(target)`), so a leading hoist
+  jump that shifts the body off `00` keeps the explicit branch. Measured: the
+  `fox-hunt-mk61` hoisted variants (`hoistSharedHelpers`,
+  `hoistSharedHelpers+hoistProcs`, `shareRandomCell+hoistSharedHelpers`,
+  `hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion`,
+  `guardedPrologueGadgets+hoistSharedHelpers+hoistProcs`,
+  `sharedBitMaskHelperCalls+hoistSharedHelpers`) drop **66 → 65 cells** (trailing
+  `… 07 50 51 00` → `… 07 50 82`). No default (candidate-search) output changed
+  and no other example's oracle changed; all emulator/behavioral tests stay green.
+
+- **(#6) Runtime indirect-call flow for non-hoisted test-only variants.**
+  *Parity gate lifted (currently inert on committed examples).* The
+  `runtime_indirect_call_flow` pass in
+  `native/src/core/passes/preloaded_indirect_flow.cpp` previously skipped
+  non-hoisted, non-explicit `disable_candidate_search` variants so their
+  fingerprints kept the TypeScript direct-call form. The pass already runs (and is
+  exercised behaviorally) in the default candidate-search pipeline; the parity
+  skip was removed. On the current example corpus this produces no fingerprint
+  change: native's `runtime_indirect_call_plans` finds no plans for the
+  non-hoisted primary variants (e.g. `rambo-iii` primary stays at 129 cells even
+  with `runtime_indirect_call_flow` forced on), so the documented `rambo-iii`
+  shrink is not reproduced by lifting the gate alone — it requires plan-generation
+  work, not just removing the suppression.
+
+#### Blocked candidates (genuine correctness work required, not mere parity)
+
+These were assumed to be parity-only suppressions of correct-but-shorter forms.
+Empirical verification against the native emulator shows they are **not** safe to
+enable as-is; each needs a real compiler fix before it can be turned on.
+
+- **(#1) Post-layout indirect-flow / dark-entry rescue for small `cells(...)`/
+  bit-mask programs that already fit.** *Blocked — confirmed miscompile.* Enabling
+  the aggressive post-layout rescue by default (`allow_aggressive_post_layout`)
+  lets best-fit selection pick the dark-entry form for fitting programs. It does
+  shrink some dispatch/IO programs win-only (e.g. `basic` 8→7, `functions-demo`
+  25→21, `human` 27→23, `tiny-game` 27→23; the `human` shrink is behaviorally
+  verified via `emulator_indirect_flow_equivalence`). **However**, for
+  register-pressured bit-mask membership programs the dark-entry pass borrows a
+  register that is actually live: e.g. the `BitMembership` fixture in
+  `emulator_bitmask_facts` has its bit-mask register `e` overwritten by a selector
+  preload `R e = F2`, corrupting the mask so `bit_has` returns `4` instead of `1`.
+  This is a register-allocation correctness bug in the dark-entry path (not a
+  parity choice). Enabling it broadly also restructures ~13 synthetic
+  structural-contract programs. Gate before enabling: fix the dark-entry
+  register-borrow so it never clobbers a live data register (or add an
+  emulator-equivalence acceptance guard in candidate selection), then re-bless.
+
+- **(#2) `BEEr NN` text-display lowering in hoisted-helper variants.** *Blocked —
+  needs address relocation.* `lower_text_display_statement` is gated by
+  `if (context.hoist_shared_helpers || context.hoist_procs) return false;` for
+  parity, but it also has a real correctness guard
+  `if (current_machine_address(context) != 0) return false;`. The two-digit text
+  helper emits absolute jump targets (`ПП 34`, `F x<0 45`). In a hoisted variant
+  the leading hoist jump shifts the body off address `00`, so removing only the
+  parity gate leaves the address guard rejecting the form (no change); removing
+  the address guard would emit wrong absolute targets (miscompile). Gate before
+  enabling: make the text-display helper position-independent / relocate its
+  absolute targets, then re-bless.
+
+- **(#3) Reference-size post-layout indirect-flow rescue for test-only variants
+  (e.g. `Dungeon` primary).** *Blocked — same dark-entry mechanism as #1.* This
+  uses the same post-layout indirect-flow rescue whose register-borrow bug is
+  documented under #1, applied to spatial/`cells` programs. Recording its shorter
+  variant fingerprint as the oracle would encode unverified, likely-incorrect
+  output (variant fingerprints are not emulated). Gate: the #1 register-borrow fix.
+
+- **(#4) `fox-hunt-100` `sharedBitMaskHelperCalls` 125→122.** *Blocked — same
+  post-layout forward-call selector packing as #1.* The 122-cell form relies on
+  the post-layout forward-call selector packing / dark-entry family on a bit-mask
+  program. As with #3 the variant is not behaviorally tested, and the underlying
+  mechanism is the one proven to miscompile bit-mask programs under #1. Gate: the
+  #1 register-borrow fix, then verify the 122-cell form behaviorally before
+  re-blessing.
 
 This reference should be used as a working map while reading generated listings in explain/json mode: every named optimization corresponds to a concrete rewrite class that can be correlated with local sequences in emitted IR or final machine text.

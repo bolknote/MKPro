@@ -14201,7 +14201,12 @@ bool emit_indirect_unit_increment(LoweringContext& context, const std::string& t
 
 bool emit_known_one_indirect_loop_back(LoweringContext& context, const std::string& target,
                                        int source_line) {
-  if (context.hoist_shared_helpers || !context.emitter.coord_list_counter_known_one ||
+  // Post-parity optimization (candidate #5): allow the one-cell indirect `К БП R`
+  // loop-back in hoisted-helper variants too. The correctness preconditions below
+  // (coord-list counter proven == 1 and the loop target actually living at address
+  // 00) still gate the rewrite, so a hoist jump that shifts the body off address 00
+  // makes zero_address_labels.contains(target) false and the explicit branch is kept.
+  if (!context.emitter.coord_list_counter_known_one ||
       !context.emitter.zero_address_labels.contains(target))
     return false;
   const auto register_it = context.register_index_by_name.find(std::string(kCoordListCounter));
