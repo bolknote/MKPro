@@ -2655,14 +2655,58 @@ the deferral policy is lifted.
   symptom was in fact this raw-load degradation, not a liveness bug (register `e`
   is only used as a selector scratch in that program, never recalled as data).
 
+- **(#2) Position-independent `BEEr NN` two-digit text-display helper.**
+  *Applied (correctness only; no size win on any selectable form).*
+  `emit_two_digit_text_display` in `native/src/core/compiler.cpp` emits a
+  self-contained digit-renderer subroutine whose two internal targets — the `ПП`
+  call to the renderer entry and the renderer's own `F x<0` sign branch — were
+  hard-coded as the absolute addresses `34` and `45`, correct only when the body
+  starts at address `00`. `lower_text_display_statement` therefore bailed in two
+  ways: a `current_machine_address(context) != 0` guard (would have emitted wrong
+  absolute targets off address `00`) **and** an outright
+  `hoist_shared_helpers || hoist_procs` early return (so hoisted-helper variants
+  fell through to the generic display path and *threw* `… display literal "BEEr "
+  that is not lowerable yet`). The fix relocates the two targets by the body's
+  actual base address: `base = current_machine_address(context)` (the count of
+  non-label cells already emitted, i.e. the prologue length), then emits
+  `ПП (base + 34)` / `F x<0 (base + 45)`. At `base == 0` this reproduces the
+  original `ПП 34` / `F x<0 45` **byte-for-byte**, so every selectable default is
+  unchanged; off `00` the targets follow the body. (Relocating via post-layout
+  *labels* instead was rejected: it let the `return_suffix_gadget` IR pass fire on
+  the now-label-bearing renderer tail and cascade into a different default form,
+  which is out of scope here.) Both the address-`0` guard and the hoist early
+  return are removed; the lowering is still narrowly fenced (literal prefix is
+  exactly `"BEEr "`, two-digit `0..99` source in `R0`, fixed scratch registers
+  free). Emulator-verified: the `primary`, `hoistSharedHelpers`,
+  `hoistSharedHelpers+hoistProcs`, and default (candidate-search, behavioral-gate
+  on) compiles of `99-bottles` are all byte-identical (52 cells) and produce an
+  identical `mkpro::emulator::MK61` display transcript to the committed 52-cell
+  reference across `bottles ∈ {0,1,7,13,42,80,99}`; the default compile reports
+  `screen-text-lowering` and is **accepted** by
+  `candidate_behaviorally_matches_baseline` (not rejected). Measured oracle
+  change: **only `99-bottles/variants.txt`** — the six hoisted variants
+  (`hoistSharedHelpers`, `hoistSharedHelpers+hoistProcs`,
+  `shareRandomCell+hoistSharedHelpers`,
+  `hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion`,
+  `guardedPrologueGadgets+hoistSharedHelpers+hoistProcs`,
+  `sharedBitMaskHelperCalls+hoistSharedHelpers`) move from `throws …` to
+  `steps=52 | …`, byte-identical to `primary`. For `99-bottles` the hoisted body
+  still lands at address `00` (it has no other helpers to hoist), so the relocated
+  targets equal the originals — there is **no cell-count win on any selectable
+  form**; the change purely makes the previously-failing hoisted variants compile
+  correctly (and makes the helper correct at any base for future programs that do
+  shift it). `hex`/`bytes`/`listing`/`setup` for `99-bottles` are unchanged
+  (delta 0) and no other example's oracle changed; full `ctest` stays green.
+
 #### Candidate status after the DEFECT-4 fix + behavioral gate
 
 Candidate **#1** is now **Applied** (see "Applied post-parity optimizations"
 above): the helper-overlay packing was repaired and the behavioral-equivalence
 selection gate makes the whole class of "smaller-but-wrong" forms unselectable.
 The remaining candidates below are now *mechanically unblocked* (they ride the
-same now-correct, gated rescue) but, on the committed example corpus, either
-produce no further shrink or still require separate position-independence work:
+same now-correct, gated rescue). On the committed example corpus #3 and #4
+produce no further shrink, and #2 has since been resolved on its own
+(position-independent relocation, now Applied above):
 
 - **(#3) Reference-size post-layout indirect-flow rescue (e.g. `Dungeon`
   primary).** *Unblocked, no corpus shrink.* This rides the same post-layout
@@ -2680,17 +2724,16 @@ produce no further shrink or still require separate position-independence work:
   variant aimed at), and no strictly-smaller behaviorally-equivalent form is
   selected on top of that, so its oracle is unchanged.
 
-- **(#2) `BEEr NN` text-display lowering in hoisted-helper variants.** *Still
-  gated — needs position-independent relocation (separate from the #1 rescue).*
-  `lower_text_display_statement` keeps the real correctness guard
-  `if (current_machine_address(context) != 0) return false;`. The two-digit text
-  helper emits absolute jump targets (`ПП 34`, `F x<0 45`); in a hoisted variant
-  the leading hoist jump shifts the body off address `00`, so emitting the form
-  there would need the absolute targets relocated to remain correct. This is an
-  independent piece of work (not the helper-overlay packing fixed under #1) and
-  affects only hoisted-helper variants, which are not part of any committed
-  default oracle, so it produces no committed-example win today. It is left gated
-  and documented: make the text-display helper position-independent / relocate
-  its absolute targets, then re-bless before enabling.
+- **(#2) `BEEr NN` text-display lowering in hoisted-helper variants.** *Resolved
+  — now Applied (see "Applied post-parity optimizations" above).* The two-digit
+  text helper is position-independent: `emit_two_digit_text_display` relocates its
+  internal `ПП`/`F x<0` targets by the body's actual base address
+  (`current_machine_address`), so the form is correct at any address. Both the
+  `current_machine_address(context) != 0` guard and the
+  `hoist_shared_helpers || hoist_procs` early return were removed; the only oracle
+  change is `99-bottles/variants.txt` (six hoisted variants move from `throws …`
+  to a 52-cell fingerprint byte-identical to `primary`). There is no cell-count
+  win on any selectable form — it purely makes the latent hoisted variants
+  correct.
 
 This reference should be used as a working map while reading generated listings in explain/json mode: every named optimization corresponds to a concrete rewrite class that can be correlated with local sequences in emitted IR or final machine text.

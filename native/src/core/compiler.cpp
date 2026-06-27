@@ -9602,6 +9602,15 @@ bool fixed_text_display_scratch_registers_available(const LoweringContext& conte
 }
 
 void emit_two_digit_text_display(LoweringContext& context, const std::string& source, int line) {
+  // The digit-renderer subroutine (ПП) and its sign branch (F x<0) target
+  // addresses *inside* this same body. Their hard offsets are 34 and 45 relative
+  // to the start of the body. Relocate them by the body's actual base address so
+  // the form stays correct at any address - e.g. in hoisted-helper variants where
+  // a leading hoist jump / hoisted helper bodies shift this body off address 00.
+  // (At base 0 this reproduces the original ПП 34 / F x<0 45 byte-for-byte.)
+  const int base = current_machine_address(context);
+  const int renderer_target = base + 34;
+  const int complement_target = base + 45;
   emit_recall(context, source);
   context.emitter.items.back().comment = "text display verse";
   context.emitter.items.back().source_line = line;
@@ -9623,7 +9632,7 @@ void emit_two_digit_text_display(LoweringContext& context, const std::string& so
   context.emitter.emit_op(0x02, "2", "text display tens offset", line);
   context.emitter.emit_op(0x47, "X->П 7", "text display digit offset", line);
   context.emitter.emit_op(0x62, "П->X 2", "text display ones digit", line);
-  context.emitter.emit_jump(0x53, "ПП", 34, "text digit renderer", line);
+  context.emitter.emit_jump(0x53, "ПП", renderer_target, "text digit renderer", line);
   context.emitter.emit_op(0x4a, "X->П a", "text display rendered ones", line);
   context.emitter.emit_op(0x01, "1", "text display ones prefix", line);
   context.emitter.emit_op(0x04, "4", "text display ones prefix", line);
@@ -9632,14 +9641,14 @@ void emit_two_digit_text_display(LoweringContext& context, const std::string& so
   context.emitter.emit_op(0x03, "3", "text display ones offset", line);
   context.emitter.emit_op(0x47, "X->П 7", "text display digit offset", line);
   context.emitter.emit_op(0x61, "П->X 1", "text display tens digit", line);
-  context.emitter.emit_jump(0x53, "ПП", 34, "text digit renderer", line);
+  context.emitter.emit_jump(0x53, "ПП", renderer_target, "text digit renderer", line);
   context.emitter.emit_op(0x6a, "П->X a", "text display rendered ones", line);
   context.emitter.emit_op(0x0e, "В↑", "show text", line);
   context.emitter.emit_op(0x50, "С/П", "show text", line);
   context.emitter.emit_op(0x06, "6", "text digit renderer", line);
   context.emitter.emit_op(0x11, "-", "text digit renderer", line);
   context.emitter.emit_op(0x0b, "/-/", "text digit renderer", line);
-  context.emitter.emit_jump(0x5c, "F x<0", 45, "text digit renderer", line);
+  context.emitter.emit_jump(0x5c, "F x<0", complement_target, "text digit renderer", line);
   context.emitter.emit_op(0x09, "9", "text digit complement", line);
   context.emitter.emit_op(0x10, "+", "text digit complement", line);
   context.emitter.emit_op(0xd7, "К П->X 7", "text display byte", line);
@@ -9658,9 +9667,6 @@ void emit_two_digit_text_display(LoweringContext& context, const std::string& so
 
 bool lower_text_display_statement(LoweringContext& context, const std::vector<DisplayItem>& items,
                                   int line) {
-  if (context.hoist_shared_helpers || context.hoist_procs)
-    return false;
-
   const std::optional<TextPrefixDisplay> normalized = collapse_text_prefix_display(items);
   if (!normalized.has_value())
     return false;
@@ -9674,8 +9680,10 @@ bool lower_text_display_statement(LoweringContext& context, const std::vector<Di
   const auto source_register = context.register_index_by_name.find(source.name);
   if (source_register == context.register_index_by_name.end() || source_register->second != 0)
     return false;
-  if (current_machine_address(context) != 0)
-    return false;
+  // The helper body is position-independent: emit_two_digit_text_display relocates
+  // its internal ПП / F x<0 targets by the body's actual base address, so the form
+  // is correct at any address, including hoisted-helper variants where a leading
+  // hoist jump (and any hoisted helper bodies) shift this body off address 00.
   if (!fixed_text_display_scratch_registers_available(context, source.name))
     return false;
 
