@@ -144,16 +144,7 @@ using TestFn = std::function<void()>;
 struct TestCase {
   std::string name;
   TestFn run;
-  bool slow = false;
 };
-
-bool env_flag_enabled(const char* name) {
-  const char* value = std::getenv(name);
-  if (value == nullptr)
-    return false;
-  const std::string text = value;
-  return !text.empty() && text != "0" && text != "false" && text != "FALSE";
-}
 
 } // namespace
 
@@ -172,7 +163,7 @@ int main(int argc, char** argv) {
        mkpro::tests::compiler_coord_list_lowering_matches_typescript_contract},
       {"compiler_display_lowering_matches_typescript_contract",
        mkpro::tests::compiler_display_lowering_matches_typescript_contract},
-      {"compiler_lowers_initial_v2_subset", mkpro::tests::compiler_lowers_initial_v2_subset, true},
+      {"compiler_lowers_initial_v2_subset", mkpro::tests::compiler_lowers_initial_v2_subset},
       {"counted_loop_unroll_matches_typescript_contract",
        mkpro::tests::counted_loop_unroll_matches_typescript_contract},
       {"constant_folding_matches_typescript_contract",
@@ -256,11 +247,11 @@ int main(int argc, char** argv) {
       {"emulator_z_stack_derived_tail_matches_typescript_contract",
        mkpro::tests::emulator_z_stack_derived_tail_matches_typescript_contract},
       {"example_sizes_match_typescript_baselines",
-       mkpro::tests::example_sizes_match_typescript_baselines, true},
+       mkpro::tests::example_sizes_match_typescript_baselines},
       {"compiler_examples_match_typescript_contract",
-       mkpro::tests::compiler_examples_match_typescript_contract, true},
+       mkpro::tests::compiler_examples_match_typescript_contract},
       {"supported_examples_match_native_oracles",
-       mkpro::tests::supported_examples_match_native_oracles, true},
+       mkpro::tests::supported_examples_match_native_oracles},
       {"expression_helpers_match_typescript_contract",
        mkpro::tests::expression_helpers_match_typescript_contract},
       {"expression_lowering_helpers_match_typescript_contract",
@@ -274,7 +265,7 @@ int main(int argc, char** argv) {
       {"format_primitives_match_typescript_contract",
        mkpro::tests::format_primitives_match_typescript_contract},
       {"golden_listing_contract_matches_typescript_contract",
-       mkpro::tests::golden_listing_contract_matches_typescript_contract, true},
+       mkpro::tests::golden_listing_contract_matches_typescript_contract},
       {"functions_match_typescript_contract", mkpro::tests::functions_match_typescript_contract},
       {"indirect_addressing_matches_typescript_contract",
        mkpro::tests::indirect_addressing_matches_typescript_contract},
@@ -345,7 +336,7 @@ int main(int argc, char** argv) {
       {"show_optimization_strategies_match_typescript_contract",
        mkpro::tests::show_optimization_strategies_match_typescript_contract},
       {"setup_formatting_matches_typescript_contract",
-       mkpro::tests::setup_formatting_matches_typescript_contract, true},
+       mkpro::tests::setup_formatting_matches_typescript_contract},
       {"show_read_guarded_transfer_matches_typescript_contract",
        mkpro::tests::show_read_guarded_transfer_matches_typescript_contract},
       {"show_sequence_helpers_match_typescript_contract",
@@ -438,24 +429,13 @@ int main(int argc, char** argv) {
     return 0;
   }
 
-  const bool run_slow_tests = !filter.empty() ||
-                              env_flag_enabled("MKPRO_NATIVE_RUN_SLOW_TESTS") ||
-                              env_flag_enabled("CI");
   int failed = 0;
   int selected = 0;
-  int skipped = 0;
   for (const auto& test : tests) {
     if (!exact.empty() && test.name != exact) {
       continue;
     }
     if (!filter.empty() && test.name.find(filter) == std::string::npos) {
-      continue;
-    }
-    if (test.slow && !run_slow_tests) {
-      ++skipped;
-      std::cout << "[SKIP] " << test.name
-                << " (set MKPRO_NATIVE_RUN_SLOW_TESTS=1 to run slow example contracts)"
-                << std::endl;
       continue;
     }
     ++selected;
@@ -486,9 +466,6 @@ int main(int argc, char** argv) {
     std::cerr << failed << " native test(s) failed" << std::endl;
     return 1;
   }
-  std::cout << selected << " native test(s) passed";
-  if (skipped > 0)
-    std::cout << ", " << skipped << " slow test(s) skipped";
-  std::cout << std::endl;
+  std::cout << selected << " native test(s) passed" << std::endl;
   return 0;
 }

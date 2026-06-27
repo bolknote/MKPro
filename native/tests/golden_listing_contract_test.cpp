@@ -164,20 +164,6 @@ std::vector<std::filesystem::path> collect_examples(const std::filesystem::path&
   return files;
 }
 
-bool env_flag_enabled(const char* name) {
-  const char* value = std::getenv(name);
-  if (value == nullptr)
-    return false;
-  const std::string text_value = value;
-  return !text_value.empty() && text_value != "0" && text_value != "false" &&
-         text_value != "FALSE";
-}
-
-bool verify_variant_fingerprints() {
-  return env_flag_enabled("MKPRO_NATIVE_VERIFY_VARIANT_FINGERPRINTS") ||
-         env_flag_enabled("CI");
-}
-
 std::string variant_fingerprint(const std::string& source, const CompileOptions& base_options) {
   std::ostringstream lines;
   for (const auto& variant : kLoweringVariants) {
@@ -269,7 +255,6 @@ void golden_listing_contract_matches_typescript_contract() {
     return options;
   }();
 
-  const bool verify_variants = verify_variant_fingerprints();
   const bool progress = std::getenv("MKPRO_NATIVE_EXAMPLE_PROGRESS") != nullptr;
   const bool bless = std::getenv("MKPRO_NATIVE_BLESS") != nullptr;
   const char* filter_env = std::getenv("MKPRO_NATIVE_EXAMPLE_FILTER");
@@ -331,14 +316,6 @@ void golden_listing_contract_matches_typescript_contract() {
     require(actual_variants == expected_variants,
             "example lowering variants should match the committed native oracle for " + name +
                 first_different_line(actual_variants, expected_variants));
-  if (verify_variants) {
-    const std::string actual_variants = variant_fingerprint(source, base_options);
-    const std::string expected_variants =
-        trim_newlines(read_text(oracle_example_root / "variants.txt"));
-    require(actual_variants == expected_variants,
-            "example lowering variants should match TS oracle for " + name +
-                first_different_line(actual_variants, expected_variants));
-  }
   }
 }
 
