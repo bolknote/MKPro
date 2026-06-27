@@ -135,7 +135,7 @@
    66 |  68  | П→X 8                   | recall room
    67 |  10  | +                       | expr +
    68 |  48  | X→П 8                   | set room
-   69 |  9C  | К x≥0 c                 | direct tail branch for <; preloaded Rc=E4 indirect-target=32 indirect flow
+   69 |  9C  | К x≥0 c                 | direct tail branch for <; preloaded Rc=32 indirect-target=32 indirect flow
    70 |  EB  | К x=0 b                 | false branch for ==; preloaded Rb=80 indirect-target=80 shifted-forward indirect flow
    71 |  01  | 1                       |
    72 |  60  | П→X 0                   | recall vault_uses

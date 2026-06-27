@@ -92,11 +92,11 @@
    19 |  5E  | F x=0                   | case mismatch
    20 |  41  | 41                      | case mismatch
    21 |  60  | П→X 0                   | recall blocked
-   22 |  78  | К x≠0 8                 | false branch for !=; preloaded R8=F1 indirect-target=39 shifted-forward indirect flow
+   22 |  78  | К x≠0 8                 | false branch for !=; preloaded R8=39 indirect-target=39 shifted-forward indirect flow
    23 |  62  | П→X 2                   | recall resources_2
    24 |  02  | 2                       |
    25 |  11  | −                       | condition compare
-   26 |  98  | К x≥0 8                 | false branch for >=; preloaded R8=F1 indirect-target=39 shifted-forward indirect flow
+   26 |  98  | К x≥0 8                 | false branch for >=; preloaded R8=39 indirect-target=39 shifted-forward indirect flow
    27 |  42  | X→П 2                   | set resources_2
    28 |  66  | П→X 6                   | recall walls
    29 |  60  | П→X 0                   | recall blocked

@@ -777,7 +777,13 @@ std::string official_label(int target) {
 }
 
 std::string selector_for_target(int target) {
-  if (target <= 47)
+  // See preloaded_indirect_flow.cpp selector_for_target: dark formal aliases for
+  // targets 28..47 ("E0".."F9") are not raw-load-stable (E-prefix throws as
+  // exponent notation, F-prefix loses its leading nibble), so committing them as
+  // a RAW selector preload mis-delivers the address. Only the B/C/D-prefixed
+  // aliases (targets 0..27) survive raw loading; otherwise use the raw-stable
+  // plain decimal address.
+  if (target <= 27)
     return formal_label_from_ordinal(target + 112);
   return official_label(target);
 }
@@ -867,6 +873,22 @@ std::string indirect_branch_mnemonic(int opcode, const std::string& register_nam
 
 bool is_direct_branch_op(const IrOp& op) {
   return op.kind == IrKind::Jump || op.kind == IrKind::Call || op.kind == IrKind::CondJump;
+}
+
+// DEFECT 1 (conditional-branch conversion): a direct conditional jump
+// (`F x≠0 NN`, IrKind::CondJump) is rewritten into an indirect conditional
+// (`К x≠0 R`). On the MK-61 the indirect conditional branches through the
+// int-part of the selector register; that is only equivalent to the direct form
+// when (a) the register has no indirect-addressing side effect and (b) the
+// decoded int-part equals the proven target. The aggressive rescue only ever
+// borrows the STABLE registers 7..E (IndirectSelectorMutation::Stable -> no
+// pre-inc/pre-dec side effect) and every rewrite is validated to decode to the
+// branch target, so the conversion is provably equivalent. The selector value
+// is additionally constrained to be raw-load-stable (see selector_for_target),
+// which guarantees the int-part actually delivered at runtime is the proven
+// target. Conversions through side-effecting registers 0..6 are never produced.
+bool is_convertible_post_layout_branch(const IrOp& op) {
+  return is_direct_branch_op(op);
 }
 
 bool is_indirect_branch_op(const IrOp& op) {
@@ -1497,7 +1519,7 @@ std::optional<RewriteStep> validate_rewrite_at(
     const std::vector<MachineItem>& items, const CompileOptions& options) {
   const IrOp& rewritten = pass.ops.at(static_cast<std::size_t>(index));
   const IrOp& original = numeric.at(static_cast<std::size_t>(index));
-  if (!is_indirect_branch_op(rewritten) || !is_direct_branch_op(original))
+  if (!is_indirect_branch_op(rewritten) || !is_convertible_post_layout_branch(original))
     return std::nullopt;
   const std::optional<std::string>& label = target_labels.at(static_cast<std::size_t>(index));
   if (!label.has_value())
@@ -1574,7 +1596,7 @@ std::optional<RewriteStep> validate_rewrite_group(
   for (const int index : indices) {
     const IrOp& rewritten = pass.ops.at(static_cast<std::size_t>(index));
     const IrOp& original = numeric.at(static_cast<std::size_t>(index));
-    if (!is_indirect_branch_op(rewritten) || !is_direct_branch_op(original) ||
+    if (!is_indirect_branch_op(rewritten) || !is_convertible_post_layout_branch(original) ||
         rewritten.register_name != register_name) {
       return std::nullopt;
     }
@@ -1654,7 +1676,7 @@ std::optional<RewriteStep> validate_forward_rewrite_group(
 
   std::optional<int> final_target;
   for (const int index : indices) {
-    if (!is_direct_branch_op(ir.at(static_cast<std::size_t>(index))))
+    if (!is_convertible_post_layout_branch(ir.at(static_cast<std::size_t>(index))))
       return std::nullopt;
     const std::optional<std::string>& label = target_labels.at(static_cast<std::size_t>(index));
     if (!label.has_value())
@@ -1742,7 +1764,7 @@ std::optional<RewriteStep> apply_forward_rewrite(
   std::vector<std::pair<std::string, std::vector<int>>> groups;
   for (std::size_t index = 0; index < ir.size(); ++index) {
     const IrOp& op = ir.at(index);
-    if (passes::has_rewrite_barrier(op) || !is_direct_branch_op(op))
+    if (passes::has_rewrite_barrier(op) || !is_convertible_post_layout_branch(op))
       continue;
     const std::optional<std::string>& label = target_labels.at(index);
     if (!label.has_value())

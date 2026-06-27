@@ -79,7 +79,7 @@
    18 | 79       | К x≠0 9                 | case mismatch; preloaded R9=C4 indirect-target=12 indirect flow
    19 | 04       | 4                       |
    20 | 11       | −                       | dispatch residual compare
-   21 | E7       | К x=0 7                 | case mismatch; reused preloaded R7=E2 indirect-target=30 direct flow
+   21 | E7       | К x=0 7                 | case mismatch; reused preloaded R7=30 indirect-target=30 direct flow
    22 | DD       | К П→X d                 | indexed recall rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
    23 | 60       | П→X 0                   | recall pos
    24 | 10       | +                       | expr +
@@ -111,7 +111,7 @@
    50 | 11       | −                       | expr -
    51 | BD       | К X→П d                 | indexed set rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
    52 | A9       | К ПП 9                  | proc call descend; preloaded R9=C4 indirect-target=12 indirect flow
-   53 | 87       | К БП 7                  | if end; preloaded R7=E2 indirect-target=30 indirect flow
+   53 | 87       | К БП 7                  | if end; preloaded R7=30 indirect-target=30 indirect flow
    54 | 6B       | П→X b                   | preload const 100
    55 | 1D       | F cos                   | cos()
    56 | 5E       | F x=0                   | false branch for ==
@@ -121,7 +121,7 @@
    60 | 52       | 52                      | shared terminal tail
    61 | 01       | 1                       |
    62 | 11       | −                       | dispatch residual compare
-   63 | E7       | К x=0 7                 | case mismatch; preloaded R7=E2 indirect-target=30 indirect flow
+   63 | E7       | К x=0 7                 | case mismatch; preloaded R7=30 indirect-target=30 indirect flow
    64 | 01       | 1                       |
    65 | 6D       | П→X d                   | recall floor
    66 | 10       | +                       | expr +
@@ -144,10 +144,10 @@
    86 | 6D       | П→X d                   | recall floor
    87 | 01       | 1                       |
    88 | 11       | −                       | condition compare
-   89 | E7       | К x=0 7                 | false branch for ==; preloaded R7=E2 indirect-target=30 indirect flow
+   89 | E7       | К x=0 7                 | false branch for ==; preloaded R7=30 indirect-target=30 indirect flow
    90 | 6A       | П→X a                   | recall treasure
    91 | 50       | С/П                     | halt
-   92 | 87       | К БП 7                  | if end; preloaded R7=E2 indirect-target=30 indirect flow
+   92 | 87       | К БП 7                  | if end; preloaded R7=30 indirect-target=30 indirect flow
    93 | 01 00    | 10                      |
    95 | 60       | П→X 0                   | recall pos
    96 | 12       | ×                       | expr *

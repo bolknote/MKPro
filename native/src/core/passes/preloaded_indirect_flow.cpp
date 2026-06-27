@@ -256,7 +256,15 @@ SelectorPlan selector_for_target(const std::vector<IrOp>& ops, const std::vector
         .super_dark = true,
     };
   }
-  if (target <= 47) {
+  // Dark formal aliases (formal_label_from_ordinal) for targets 0..47 decode to
+  // the same address as the plain decimal, but they are delivered as a register
+  // preload that the runtime/test harness loads RAW (as a number). Only the
+  // B/C/D-prefixed aliases (targets 0..27) survive that raw load: an E-prefixed
+  // alias ("E0".."E9") parses as exponent notation and throws, and an
+  // F-prefixed alias ("F0".."F9") has leading BCD nibble 15 that normalizes away
+  // (e.g. "F6" -> 6), so the delivered selector would jump to the wrong address.
+  // For targets 28..47 fall back to the raw-stable plain decimal address.
+  if (target <= 27) {
     return SelectorPlan{
         .selector_value = formal_label_from_ordinal(target + 112),
         .super_dark = false,

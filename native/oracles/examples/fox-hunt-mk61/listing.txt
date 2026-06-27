@@ -82,13 +82,13 @@
    16 | 63       | П→X 3                   | recall cell
    17 | 60       | П→X 0                   | coord_list fused current
    18 | 11       | −                       | coord_list fused hit compare
-   19 | 78       | К x≠0 8                 | coord_list fused hit; preloaded R8=F3 indirect-target=41 shifted-forward indirect flow
+   19 | 78       | К x≠0 8                 | coord_list fused hit; preloaded R8=41 indirect-target=41 shifted-forward indirect flow
    20 | 60       | П→X 0                   | recall __coord_list_current
    21 | 35       | К {x}                   | coord_list fused current x
    22 | 63       | П→X 3                   | recall cell
    23 | 35       | К {x}                   | coord_list fused cell x
    24 | 11       | −                       | coord_list fused dx
-   25 | 77       | К x≠0 7                 | coord_list fused same column; preloaded R7=F7 indirect-target=45 shifted-forward indirect flow
+   25 | 77       | К x≠0 7                 | coord_list fused same column; preloaded R7=45 indirect-target=45 shifted-forward indirect flow
    26 | 01 00    | 10                      |
    28 | 12       | ×                       | coord_list fused dx digit
    29 | 60       | П→X 0                   | recall __coord_list_current
@@ -96,13 +96,13 @@
    31 | 63       | П→X 3                   | recall cell
    32 | 34       | К [x]                   | coord_list fused cell y
    33 | 11       | −                       | coord_list fused dy
-   34 | 77       | К x≠0 7                 | coord_list fused same row; preloaded R7=F7 indirect-target=45 shifted-forward indirect flow
+   34 | 77       | К x≠0 7                 | coord_list fused same row; preloaded R7=45 indirect-target=45 shifted-forward indirect flow
    35 | 31       | К |x|                   | coord_list fused |dy|
    36 | 14       | ↔                       | coord_list fused dx
    37 | 31       | К |x|                   | coord_list fused |dx|
    38 | 11       | −                       | coord_list fused diagonal compare
-   39 | 77       | К x≠0 7                 | coord_list fused same diagonal; preloaded R7=F7 indirect-target=45 shifted-forward indirect flow
-   40 | 89       | К БП 9                  | coord_list fused not visible; preloaded R9=F8 indirect-target=46 shifted-forward indirect flow
+   39 | 77       | К x≠0 7                 | coord_list fused same diagonal; preloaded R7=45 indirect-target=45 shifted-forward indirect flow
+   40 | 89       | К БП 9                  | coord_list fused not visible; preloaded R9=46 indirect-target=46 shifted-forward indirect flow
    41 | 02 00 0B | -20                     | negative number
    44 | 50       | С/П                     | pause
    45 | D4       | К П→X 4                 | coord_list fused total

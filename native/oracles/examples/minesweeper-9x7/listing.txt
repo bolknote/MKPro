@@ -37,14 +37,14 @@
 ------+-------+-------------------------+----------------
    00 | 50    | С/П                     | read probe
    01 | 43    | X→П 3                   | read probe
-   02 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=F6 indirect-target=44 shifted-forward indirect flow
+   02 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=44 indirect-target=44 shifted-forward indirect flow
    03 | 57    | F x≠0                   | false branch for !=
    04 | 06    | 06                      | false branch for !=
    05 | 29    | К ÷                     | halt literal ЕГГ0Г
    06 | 63    | П→X 3                   | recall probe
    07 | 01 01 | 11                      |
    09 | 11    | −                       | expr -
-   10 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=F6 indirect-target=44 shifted-forward indirect flow
+   10 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=44 indirect-target=44 shifted-forward indirect flow
    11 | 4E    | X→П e                   | neighbor_count total
    12 | 63    | П→X 3                   | recall probe
    13 | 01 00 | 10                      |
@@ -69,7 +69,7 @@
    33 | 63    | П→X 3                   | recall probe
    34 | 01 01 | 11                      |
    36 | 10    | +                       | expr +
-   37 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=F6 indirect-target=44 shifted-forward indirect flow
+   37 | A7    | К ПП 7                  | spatial hit mines; preloaded R7=44 indirect-target=44 shifted-forward indirect flow
    38 | 6E    | П→X e                   | neighbor_count total
    39 | 10    | +                       | neighbor_count add hit
    40 | 4E    | X→П e                   | neighbor_count total

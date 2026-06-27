@@ -2580,28 +2580,67 @@ the deferral policy is lifted.
   shrink is not reproduced by lifting the gate alone — it requires plan-generation
   work, not just removing the suppression.
 
+- **(#1, DEFECT 3) Raw-load-stable dark selectors for post-layout indirect flow.**
+  *Applied.* `selector_for_target` in both
+  `native/src/core/passes/preloaded_indirect_flow.cpp` and
+  `native/src/core/post_layout_indirect_flow.cpp` emitted a dark formal alias
+  (`formal_label_from_ordinal`) for *every* indirect-flow target. Those aliases
+  decode to the right address inside the calculator, but they are delivered to the
+  runtime/test harness as a **raw register preload**, and only the B/C/D-prefixed
+  aliases (targets `0..27`) survive that raw load. An E-prefixed alias
+  (`"E0".."E9"`, targets `28..37`) parses as exponent notation and throws, and an
+  F-prefixed alias (`"F0".."F9"`, targets `38..47`) has leading BCD nibble 15 that
+  normalizes away (e.g. `"F6" → 6`), so the delivered selector jumped to the wrong
+  address. The fix keeps the dark alias only for targets `0..27` and falls back to
+  the raw-stable plain decimal address for `28..47`. This is a pure correctness
+  fix at **zero size cost**: it re-blesses 11 examples (selector-value changes in
+  setup/listing only — `alaram`, `cave-treasure`, `dangerous-loading`,
+  `fox-hunt-mk61`, `game-100-pig`, `giants-country`, `minesweeper-9x7`,
+  `minesweeper-9x9`, `teleport`, `tic-tac-toe`, `treasure-hunter-2`) with **every
+  `hex`/`bytes` step count unchanged (delta 0)**. After this fix the
+  `BitMembership` fixture in `emulator_bitmask_facts` is correct
+  (`bit_has → 1`), confirming the earlier `R e = F2` "live-register clobber"
+  symptom was in fact this raw-load degradation, not a liveness bug (register `e`
+  is only used as a selector scratch in that program, never recalled as data).
+
 #### Blocked candidates (genuine correctness work required, not mere parity)
 
 These were assumed to be parity-only suppressions of correct-but-shorter forms.
 Empirical verification against the native emulator shows they are **not** safe to
 enable as-is; each needs a real compiler fix before it can be turned on.
 
-- **(#1) Post-layout indirect-flow / dark-entry rescue for small `cells(...)`/
-  bit-mask programs that already fit.** *Blocked — confirmed miscompile.* Enabling
-  the aggressive post-layout rescue by default (`allow_aggressive_post_layout`)
-  lets best-fit selection pick the dark-entry form for fitting programs. It does
-  shrink some dispatch/IO programs win-only (e.g. `basic` 8→7, `functions-demo`
-  25→21, `human` 27→23, `tiny-game` 27→23; the `human` shrink is behaviorally
-  verified via `emulator_indirect_flow_equivalence`). **However**, for
-  register-pressured bit-mask membership programs the dark-entry pass borrows a
-  register that is actually live: e.g. the `BitMembership` fixture in
-  `emulator_bitmask_facts` has its bit-mask register `e` overwritten by a selector
-  preload `R e = F2`, corrupting the mask so `bit_has` returns `4` instead of `1`.
-  This is a register-allocation correctness bug in the dark-entry path (not a
-  parity choice). Enabling it broadly also restructures ~13 synthetic
-  structural-contract programs. Gate before enabling: fix the dark-entry
-  register-borrow so it never clobbers a live data register (or add an
-  emulator-equivalence acceptance guard in candidate selection), then re-bless.
+- **(#1) Enable aggressive post-layout indirect-flow by default for all
+  programs.** *Blocked — a separate helper-overlay miscompile remains, even after
+  the selector/branch/liveness defects are sound.* Flipping
+  `allow_aggressive_post_layout` to `true` for every program (in
+  `native/src/core/compiler.cpp`) lets min-cell best-fit pick the aggressive form
+  whenever it is shorter, so nothing can grow. The aggressive form is correct on
+  the dispatch/IO programs and the wins are real under the corrected engine:
+  `basic` 8→7, `functions-demo` 25→21, `human` 27→23, `tiny-game` 27→23, all
+  using only raw-load-stable B/C/D selectors (the `human` shrink is behaviorally
+  verified via `emulator_indirect_flow_equivalence`). The three named defects are
+  resolved: DEFECT 3 (raw-load-stable selectors, see Applied above); DEFECT 1
+  (conditional → indirect conversion) is sound because the engine only borrows
+  side-effect-free stable registers `7..E` and validates every rewrite to decode
+  to the proven target — excluding conditional conversions only *grows* committed
+  oracles, confirming they are load-bearing and correct; DEFECT 2 (live-register
+  borrow) does not manifest — the borrow set already excludes used registers and
+  reserved preloaded constants (e.g. `Rd=0.5` is **not** reused as the loop-back
+  selector; `R8=B2` is). **However**, global enable still ships a miscompile from a
+  *fourth*, separate defect: the aggressive **straight-line helper-overlay
+  packing** (multi-entry helpers with formal-address operand overlays such as
+  `БП 6D`, indirect calls `К ПП 7`). On the `BitClear` fixture in
+  `emulator_bitmask_facts` the smaller packed form returns the wrong answer for a
+  cleared-but-present cell: query `{set 7, clear 3, query 7}` yields `0` instead of
+  `1` (the selectors `72`/`B2` are raw-stable and the conditional `F x≠0 48` is
+  left direct, so this is the helper packing, not one of the three named defects).
+  Because candidate selection ranks by size, not behavior, min-cell happily picks
+  this shorter-but-wrong form. Gate before enabling globally: repair the
+  straight-line helper-overlay packing so the packed bit-mask helpers are
+  behaviorally equivalent (or add an emulator-equivalence acceptance guard to
+  candidate selection), then re-bless. The rescue therefore stays gated to
+  size-rescue / reference-declaration programs, where the DEFECT-3 fix already
+  makes the committed selectors raw-stable at zero size cost.
 
 - **(#2) `BEEr NN` text-display lowering in hoisted-helper variants.** *Blocked —
   needs address relocation.* `lower_text_display_statement` is gated by
@@ -2616,18 +2655,19 @@ enable as-is; each needs a real compiler fix before it can be turned on.
   absolute targets, then re-bless.
 
 - **(#3) Reference-size post-layout indirect-flow rescue for test-only variants
-  (e.g. `Dungeon` primary).** *Blocked — same dark-entry mechanism as #1.* This
-  uses the same post-layout indirect-flow rescue whose register-borrow bug is
-  documented under #1, applied to spatial/`cells` programs. Recording its shorter
-  variant fingerprint as the oracle would encode unverified, likely-incorrect
-  output (variant fingerprints are not emulated). Gate: the #1 register-borrow fix.
+  (e.g. `Dungeon` primary).** *Blocked — same helper-overlay packing as #1.* This
+  uses the same post-layout indirect-flow rescue whose straight-line
+  helper-overlay packing is shown to miscompile bit-mask programs under #1,
+  applied to spatial/`cells` programs. Recording its shorter variant fingerprint
+  as the oracle would encode unverified, likely-incorrect output (variant
+  fingerprints are not emulated). Gate: the #1 helper-overlay packing fix.
 
 - **(#4) `fox-hunt-100` `sharedBitMaskHelperCalls` 125→122.** *Blocked — same
   post-layout forward-call selector packing as #1.* The 122-cell form relies on
-  the post-layout forward-call selector packing / dark-entry family on a bit-mask
-  program. As with #3 the variant is not behaviorally tested, and the underlying
-  mechanism is the one proven to miscompile bit-mask programs under #1. Gate: the
-  #1 register-borrow fix, then verify the 122-cell form behaviorally before
-  re-blessing.
+  the post-layout forward-call selector packing / helper-overlay family on a
+  bit-mask program. As with #3 the variant is not behaviorally tested, and the
+  underlying mechanism is the one proven to miscompile bit-mask programs under #1
+  (`BitClear`). Gate: the #1 helper-overlay packing fix, then verify the 122-cell
+  form behaviorally before re-blessing.
 
 This reference should be used as a working map while reading generated listings in explain/json mode: every named optimization corresponds to a concrete rewrite class that can be correlated with local sequences in emitted IR or final machine text.

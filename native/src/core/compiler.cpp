@@ -39249,6 +39249,17 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
                                            : kOfficialProgramLimit;
   const std::size_t rescue_threshold = std::min(requested_budget, kOfficialProgramLimit);
   const bool needs_size_rescue = !best.implemented || best.steps.size() > rescue_threshold;
+  // The aggressive post-layout indirect-flow rescue is gated to size-rescue and
+  // reference-declaration programs. Enabling it for EVERY program was attempted
+  // (relying on min-cell best-fit so nothing grows) but reverted: although the
+  // selector/branch/liveness defects are now sound (raw-load-stable selectors,
+  // stable-register-only borrows, validated decode targets), min-cell selection
+  // also picks the aggressive *straight-line helper-overlay packing* form, which
+  // is shorter but still miscompiles some programs (e.g. the BitClear bit_clear
+  // fixture: a cleared-but-present cell reads 0 instead of 1). That helper-overlay
+  // packing is a separate, deeper correctness defect; until it is repaired,
+  // enabling aggressive globally would ship incorrect-but-smaller output, so the
+  // rescue stays gated. See docs/20 "Applied post-parity optimizations".
   const bool allow_aggressive_post_layout =
       needs_size_rescue || source_has_reference_declaration(source);
   const bool may_use_dead_source_residual = source_has_dead_source_residual_temp_candidate(source);

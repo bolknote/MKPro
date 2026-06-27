@@ -1,5 +1,5 @@
 Setup Block:
-  `R2=8; R4=3; R3=9; R1=3; R0=0; Rc=10; Rd=777; Re=-999; R7=75; R8=Г3; R9=Г5; Ra=Е2`
+  `R2=8; R4=3; R3=9; R1=3; R0=0; Rc=10; Rd=777; Re=-999; R7=75; R8=Г3; R9=Г5; Ra=30`
 
 # Setup Listing
  Step | Code | Command                 | Comment
@@ -53,10 +53,10 @@ Setup Block:
    19 |  01  | 1                       |
    20 |  11  | −                       | expr -
    21 |  42  | X→П 2                   | set boat
-   22 |  8A  | К БП a                  | empty-stack tail call resolve_turn; preloaded Ra=E2 indirect-target=30 shifted-forward indirect flow
+   22 |  8A  | К БП a                  | empty-stack tail call resolve_turn; preloaded Ra=30 indirect-target=30 shifted-forward indirect flow
    23 |  02  | 2                       |
    24 |  11  | −                       | dispatch residual compare
-   25 |  EA  | К x=0 b                 | case mismatch; preloaded Rb=E2 indirect-target=30 shifted-forward indirect flow
+   25 |  EA  | К x=0 b                 | case mismatch; preloaded Rb=30 indirect-target=30 shifted-forward indirect flow
    26 |  01  | 1                       |
    27 |  62  | П→X 2                   | recall boat
    28 |  10  | +                       | expr +
