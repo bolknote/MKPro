@@ -14,6 +14,7 @@ constexpr int kDotOpcode = 0x0a;
 constexpr int kSignChangeOpcode = 0x0b;
 constexpr int kVpOpcode = 0x0c;
 constexpr int kCxOpcode = 0x0d;
+constexpr int kFPiOpcode = 0x20;
 constexpr int kFracOpcode = 0x35;
 constexpr int kEmptyKnopOpcode = 0x54;
 constexpr int kEmptyK1Opcode = 0x55;
@@ -51,6 +52,8 @@ bool is_dead_restore_candidate(const std::vector<IrOp>& ops, int index) {
     return has_numeric_restore_context(ops, index);
   if (op.opcode == kVpOpcode)
     return has_numeric_restore_context(ops, index);
+  if (op.opcode == kFPiOpcode)
+    return has_numeric_restore_context(ops, index);
   return false;
 }
 
@@ -60,6 +63,14 @@ std::vector<int> removable_restore_run(const std::vector<IrOp>& ops, int start) 
 
   std::vector<int> removable = {start};
   int cursor = start + 1;
+  if (ops.at(static_cast<std::size_t>(start)).opcode == kFPiOpcode &&
+      cursor < static_cast<int>(ops.size())) {
+    const IrOp& next = ops.at(static_cast<std::size_t>(cursor));
+    if (is_free_standing_plain(next) && next.opcode == kSignChangeOpcode) {
+      removable.push_back(cursor);
+      ++cursor;
+    }
+  }
   while (cursor < static_cast<int>(ops.size()) && is_x2_empty_op(ops.at(static_cast<std::size_t>(cursor)))) {
     removable.push_back(cursor);
     ++cursor;

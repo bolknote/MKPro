@@ -102,6 +102,7 @@ add_executable(mkpro_tests
   tests/arithmetic_if_pass_test.cpp
   tests/bit_mask_quotient_reuse_test.cpp
   tests/board_width_macros_test.cpp
+  tests/branch_target_x_reuse_pass_test.cpp
   tests/cfg_test.cpp
   tests/compiler_coord_list_test.cpp
   tests/examples_contract_test.cpp
@@ -119,11 +120,13 @@ add_executable(mkpro_tests
   tests/display_lowering_test.cpp
   tests/duplicate_failure_tail_test.cpp
   tests/emitter_test.cpp
+  tests/exact_decimal_arithmetic_test.cpp
   tests/emulator_bitmask_facts_test.cpp
   tests/emulator_constants_dual_use_test.cpp
   tests/emulator_domain_error_guard_test.cpp
   tests/emulator_display_byte_test.cpp
   tests/emulator_fractional_r0_test.cpp
+  tests/emulator_hex_arithmetic_facts_test.cpp
   tests/emulator_function_equivalence_test.cpp
   tests/emulator_fl_counter_test.cpp
   tests/emulator_if_chain_dispatch_test.cpp
@@ -137,17 +140,21 @@ add_executable(mkpro_tests
   tests/emulator_number_entry_concat_test.cpp
   tests/emulator_packed_position_test.cpp
   tests/emulator_recall_side_effects_test.cpp
+  tests/emulator_regression_test.cpp
   tests/emulator_rom_test.cpp
   tests/emulator_stack_dup_test.cpp
   tests/emulator_stack_resident_equivalence_test.cpp
   tests/emulator_super_dark_test.cpp
   tests/emulator_vo_return_test.cpp
+  tests/emulator_vp_splice_equivalence_test.cpp
   tests/emulator_x2_dead_restore_test.cpp
   tests/emulator_x2_restore_context_test.cpp
   tests/emulator_z_stack_derived_tail_test.cpp
   tests/example_parity_test.cpp
   tests/expression_helper_test.cpp
   tests/expression_lowering_test.cpp
+  tests/flow_structure_passes_test.cpp
+  tests/flow_x_reuse_pass_test.cpp
   tests/formal_address_test.cpp
   tests/format_test.cpp
   tests/functions_test.cpp
@@ -156,6 +163,7 @@ add_executable(mkpro_tests
   tests/inline_floor_packed_row_test.cpp
   tests/ir_round_trip_test.cpp
   tests/golden_listing_contract_test.cpp
+  tests/last_x_reuse_test.cpp
   tests/liveness_analysis_test.cpp
   tests/lowering_helpers_test.cpp
   tests/machine_profile_test.cpp
@@ -182,6 +190,7 @@ add_executable(mkpro_tests
   tests/segmented_bitplane_test.cpp
   tests/setup_program_test.cpp
   tests/setup_only_counted_loop_test.cpp
+  tests/store_recall_peephole_pass_test.cpp
   tests/show_read_guarded_transfer_test.cpp
   tests/show_sequence_helper_test.cpp
   tests/show_optimization_contract_test.cpp
@@ -196,12 +205,31 @@ add_executable(mkpro_tests
   tests/test_main.cpp
   tests/v2_const_test.cpp
   tests/x2_register_dataflow_test.cpp
+  tests/x2_shape_data_model_test.cpp
+  tests/x2_display_cluster_test.cpp
+  tests/x2_structural_unary_test.cpp
+  tests/x2_structural_bitwise_test.cpp
+  tests/x2_structural_hex_binary_test.cpp
+  tests/x2_stable_expression_test.cpp
+  tests/x2_state_builders_test.cpp
+  tests/x2_vp_splice_test.cpp
+  tests/x2_vp_entry_test.cpp
+  tests/x2_transfer_plain_test.cpp
+  tests/x2_value_dataflow_test.cpp
+  tests/x2_join_test.cpp
+  tests/x2_noop_restore_test.cpp
+  tests/x2_hidden_temp_restore_test.cpp
+  tests/x2_literal_restore_test.cpp
+  tests/vp_x2_peephole_test.cpp
+  tests/vp_splice_pass_test.cpp
+  tests/pre_shift_stack_lift_pass_test.cpp
 )
 target_link_libraries(mkpro_tests PRIVATE mkpro_core)
 set(MKPRO_NATIVE_TEST_NAMES
   arithmetic_if_matches_typescript_contract
   bit_mask_quotient_reuse_matches_typescript_contract
   board_width_macros_matches_typescript_contract
+  branch_target_x_reuse_matches_typescript_contract
   cfg_matches_typescript_contract
   compiler_coord_list_lowering_matches_typescript_contract
   compiler_display_lowering_matches_typescript_contract
@@ -217,11 +245,13 @@ set(MKPRO_NATIVE_TEST_NAMES
   display_lowering_helpers_match_typescript_contract
   duplicate_failure_tail_matches_typescript_contract
   emitter_matches_initial_typescript_contract
+  exact_decimal_arithmetic_matches_typescript_contract
   emulator_bitmask_facts_match_typescript_contract
   emulator_constants_dual_use_matches_typescript_contract
   emulator_domain_error_guard_matches_typescript_contract
   emulator_display_byte_facts_match_typescript_contract
   emulator_fractional_r0_matches_typescript_contract
+  emulator_hex_arithmetic_facts_match_typescript_contract
   emulator_function_equivalence_matches_typescript_contract
   emulator_fl_counter_facts_match_typescript_contract
   emulator_if_chain_dispatch_matches_typescript_contract
@@ -235,10 +265,13 @@ set(MKPRO_NATIVE_TEST_NAMES
   emulator_number_entry_concat_matches_typescript_contract
   emulator_packed_position_facts_match_typescript_contract
   emulator_recall_side_effects_match_typescript_contract
+  emulator_regression_matches_typescript_contract
   emulator_rom_tables_match_typescript_contract
   emulator_stack_dup_equivalence_matches_typescript_contract
+  emulator_stack_resident_equivalence_matches_typescript_contract
   emulator_super_dark_matches_typescript_contract
   emulator_vo_return_matches_typescript_contract
+  emulator_vp_splice_equivalence_matches_typescript_contract
   emulator_x2_dead_restore_matches_typescript_contract
   emulator_x2_restore_context_matches_typescript_contract
   emulator_z_stack_derived_tail_matches_typescript_contract
@@ -247,6 +280,8 @@ set(MKPRO_NATIVE_TEST_NAMES
   supported_examples_match_native_oracles
   expression_helpers_match_typescript_contract
   expression_lowering_helpers_match_typescript_contract
+  flow_structure_passes_match_typescript_contract
+  flow_x_reuse_matches_typescript_contract
   formal_address_matches_typescript_contract
   format_primitives_match_typescript_contract
   golden_listing_contract_matches_typescript_contract
@@ -255,6 +290,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   indirect_selector_integer_part_matches_typescript_contract
   inline_floor_packed_row_matches_typescript_contract
   ir_round_trip_matches_typescript_contract
+  last_x_reuse_matches_typescript_contract
   liveness_analysis_matches_typescript_contract
   lowering_helpers_match_typescript_contract
   machine_profile_matches_typescript_contract
@@ -282,6 +318,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   segmented_bitplanes_match_typescript_contract
   setup_program_matches_typescript_contract
   setup_only_counted_loop_matches_typescript_contract
+  store_recall_peephole_matches_typescript_contract
   show_optimization_strategies_match_typescript_contract
   setup_formatting_matches_typescript_contract
   show_read_guarded_transfer_matches_typescript_contract
@@ -296,6 +333,24 @@ set(MKPRO_NATIVE_TEST_NAMES
   super_dark_layout_matches_typescript_contract
   v2_const_matches_typescript_contract
   x2_register_dataflow_matches_typescript_contract
+  x2_shape_data_model_matches_typescript_contract
+  x2_display_cluster_matches_typescript_contract
+  x2_structural_unary_matches_typescript_contract
+  x2_structural_bitwise_matches_typescript_contract
+  x2_structural_hex_binary_matches_typescript_contract
+  x2_stable_expression_matches_typescript_contract
+  x2_state_builders_matches_typescript_contract
+  x2_vp_splice_matches_typescript_contract
+  x2_vp_entry_matches_typescript_contract
+  x2_transfer_plain_matches_typescript_contract
+  x2_value_dataflow_matches_typescript_contract
+  x2_join_matches_typescript_contract
+  x2_noop_restore_matches_typescript_contract
+  x2_hidden_temp_restore_matches_typescript_contract
+  x2_literal_restore_matches_typescript_contract
+  vp_x2_peephole_matches_typescript_contract
+  vp_splice_matches_typescript_contract
+  pre_shift_stack_lift_matches_typescript_contract
 )
 foreach(test_name IN LISTS MKPRO_NATIVE_TEST_NAMES)
   add_test(NAME "mkpro.${test_name}" COMMAND mkpro_tests --exact "${test_name}")

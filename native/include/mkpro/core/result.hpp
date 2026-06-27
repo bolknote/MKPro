@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mkpro/core/ir.hpp"
+#include "mkpro/core/machine_profile.hpp"
 
 #include <filesystem>
 #include <map>
@@ -43,6 +44,57 @@ struct PreloadReport {
 
 struct OptimizationReport {
   std::string name;
+  std::string detail;
+};
+
+struct ReferenceReport {
+  std::string name;
+  int reference_steps = 0;
+  int reference_span = 0;
+  int reference_entries = 0;
+  std::vector<std::string> reference_gaps;
+  int compiled_steps = 0;
+  int delta = 0;
+  std::string parity;
+};
+
+struct OptimizerCapabilityReport {
+  std::string id;
+  std::string category;
+  std::string source;
+  std::string status;
+  std::string detail;
+  std::vector<std::string> required_features;
+};
+
+struct OptimizerReport {
+  bool automatic = false;
+  int active = 0;
+  int considered = 0;
+  int candidate = 0;
+  int planned = 0;
+  std::vector<OptimizerCapabilityReport> capabilities;
+};
+
+struct IrReport {
+  bool lowered = false;
+  bool v2 = false;
+  int intent_nodes = 0;
+  int effect_ops = 0;
+  int layout_cells = 0;
+};
+
+struct CandidateReport {
+  std::string site;
+  std::string variant;
+  int steps = 0;
+  bool selected = false;
+  std::string reason;
+};
+
+struct ProofReport {
+  std::string id;
+  std::string status;
   std::string detail;
 };
 
@@ -159,6 +211,14 @@ struct CompileResult {
   std::vector<PreloadReport> preloads;
   std::vector<ManualSetupInput> manual_setup_inputs;
   std::vector<OptimizationReport> optimizations;
+  std::optional<ReferenceReport> reference;
+  OptimizerReport optimizer;
+  IrReport ir;
+  std::vector<CandidateReport> candidates;
+  std::vector<MachineFeatureUseReport> machine_features_used;
+  std::vector<ProofReport> proofs;
+  std::vector<EmulatorFactReport> emulator_facts;
+  std::vector<CandidateReport> rejected_candidates;
   std::optional<SetupProgramReport> setup_program;
   std::vector<RegisterShare> coalesce_shares;
   std::string hex;

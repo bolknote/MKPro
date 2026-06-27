@@ -1,4 +1,5 @@
 #include "mkpro/compiler.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include "test_support.hpp"
 
@@ -547,6 +548,76 @@ program GuardedPrologueGadget {
       "guarded prologue pass should rewrite all matching call sites");
   require(guarded_prologue.listing.find("__guarded_prologue_0") != std::string::npos,
           "guarded prologue pass should emit a shared helper procedure");
+  // compiler.test.ts "extracts repeated guarded prologues into return-to-continuation gadgets" uses
+  // the default pipeline (no forced guarded_prologue_gadgets), where the post-layout gadget-layout
+  // optimization also fires; assert that contract on a default-options compile of the same program.
+  const CompileResult guarded_prologue_default = compile_source(R"mkpro(
+program GuardedPrologueGadget {
+  state {
+    action: packed = 0
+    energy: counter 0..9 = 9
+    pos: packed = 0
+  }
+
+  fn pay() {
+    energy--
+  }
+
+  fn drained() {
+    halt(-999)
+  }
+
+  loop {
+    action = read()
+    match action {
+      1 => left()
+      2 => right()
+      3 => up()
+      otherwise => halt(pos)
+    }
+  }
+
+  fn left() {
+    pay()
+    if energy > 0 {
+      pos += 1
+    }
+    else {
+      drained()
+    }
+    halt(pos)
+  }
+
+  fn right() {
+    pay()
+    if energy > 0 {
+      pos += 10
+    }
+    else {
+      drained()
+    }
+    halt(pos)
+  }
+
+  fn up() {
+    pay()
+    if energy > 0 {
+      pos += 100
+    }
+    else {
+      drained()
+    }
+    halt(pos)
+  }
+}
+)mkpro");
+  require(guarded_prologue_default.implemented, "default guarded-prologue program should compile");
+  require(has_optimization(guarded_prologue_default, "guarded-prologue-gadget"),
+          "default guarded prologue should extract a return-to-continuation gadget");
+  require(has_optimization(guarded_prologue_default, "guarded-prologue-gadget-layout"),
+          "default guarded prologue should report the gadget layout optimization");
+  require(guarded_prologue_default.steps.size() < 62,
+          "default guarded prologue extraction should stay under the TS step bound");
 
   const CompileResult recursive_invoked = compile_source(R"mkpro(
 program RecursiveProcedure {
@@ -3481,6 +3552,8 @@ program BoundaryNormalize {
           "boundary normalization should not report diagnostics");
   require(has_optimization(boundary_normalize, "comparison-boundary-normalization"),
           "boundary normalization should report the TS strategy name");
+  require(has_optimization(boundary_normalize, "zero-condition-test"),
+          "boundary normalization should enable a zero-condition-test");
 
   const CompileResult difference_zero_normalize = compile_source(R"mkpro(
 program DifferenceZeroNormalize {
@@ -3509,6 +3582,8 @@ program DifferenceZeroNormalize {
   require(has_optimization_detail(difference_zero_normalize, "comparison-boundary-normalization",
                                   "right - left >= 0"),
           "difference zero normalization should preserve the TS normalized predicate shape");
+  require(has_optimization(difference_zero_normalize, "zero-condition-test"),
+          "difference zero normalization should enable a zero-condition-test");
 
   const CompileResult condition_current_x_reuse = compile_source(R"mkpro(
 program ConditionCurrentXReuse {
@@ -7848,6 +7923,465 @@ program Unsupported {
   require(!unsupported.diagnostics.empty(), "unsupported lowering should report diagnostics");
   require(unsupported.diagnostics.at(0).code == "native-unsupported",
           "unsupported lowering diagnostic code mismatch");
+
+  // Faithful ports of the constant-synthesis lowering-variant cases from
+  // tests/compiler/compiler.test.ts that suppress a preload and force the
+  // synthesizer to rebuild it (signed opposite, binary sum of two preloads,
+  // doubled preload, halved preload).
+  CompileOptions suppress_sign_options;
+  suppress_sign_options.budget = 999;
+  suppress_sign_options.analysis = true;
+  suppress_sign_options.suppress_constant_preloads.insert("-100");
+  const CompileResult suppress_sign = compile_source(R"mkpro(
+program ConstantSignSynthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 100
+    if x == 12345 {
+      halt(x)
+    }
+    halt(-100)
+  }
+}
+)mkpro",
+                                                     suppress_sign_options);
+  require(suppress_sign.implemented,
+          "native compiler should compile suppressed signed constant synthesis");
+  require(std::any_of(suppress_sign.preloads.begin(), suppress_sign.preloads.end(),
+                      [](const PreloadReport& preload) { return preload.value == "100"; }),
+          "suppressed sign synthesis should keep 100 as a preload");
+  require(std::any_of(suppress_sign.steps.begin(), suppress_sign.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x0b && step.comment.has_value() &&
+                               *step.comment == "constant -100";
+                      }),
+          "suppressed sign synthesis should build -100 with /-/");
+  require(std::any_of(suppress_sign.optimizations.begin(), suppress_sign.optimizations.end(),
+                      [](const OptimizationReport& item) {
+                        return item.name == "constant-synthesis" &&
+                               item.detail.find("Built constant -100") != std::string::npos;
+                      }),
+          "suppressed sign synthesis should report constant-synthesis");
+
+  CompileOptions suppress_binary_options;
+  suppress_binary_options.budget = 999;
+  suppress_binary_options.analysis = true;
+  suppress_binary_options.suppress_constant_preloads.insert("110000");
+  const CompileResult suppress_binary = compile_source(R"mkpro(
+program ConstantBinarySynthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 100000
+    x = x + 10000
+    x = x + 110000
+    halt(x)
+  }
+}
+)mkpro",
+                                                       suppress_binary_options);
+  require(suppress_binary.implemented,
+          "native compiler should compile suppressed binary constant synthesis");
+  require(std::any_of(suppress_binary.preloads.begin(), suppress_binary.preloads.end(),
+                      [](const PreloadReport& preload) { return preload.value == "100000"; }),
+          "suppressed binary synthesis should keep 100000 as a preload");
+  require(std::any_of(suppress_binary.preloads.begin(), suppress_binary.preloads.end(),
+                      [](const PreloadReport& preload) { return preload.value == "10000"; }),
+          "suppressed binary synthesis should keep 10000 as a preload");
+  require(std::any_of(suppress_binary.steps.begin(), suppress_binary.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x10 && step.comment.has_value() &&
+                               *step.comment == "constant 110000";
+                      }),
+          "suppressed binary synthesis should add 110000");
+  require(std::any_of(suppress_binary.optimizations.begin(), suppress_binary.optimizations.end(),
+                      [](const OptimizationReport& item) {
+                        return item.name == "constant-synthesis" &&
+                               item.detail.find("Built constant 110000") != std::string::npos;
+                      }),
+          "suppressed binary synthesis should report constant-synthesis");
+
+  CompileOptions suppress_double_options;
+  suppress_double_options.budget = 999;
+  suppress_double_options.analysis = true;
+  suppress_double_options.suppress_constant_preloads.insert("19998");
+  const CompileResult suppress_double = compile_source(R"mkpro(
+program ConstantDoubleSynthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 9999
+    x = x + 19998
+    halt(x)
+  }
+}
+)mkpro",
+                                                       suppress_double_options);
+  require(suppress_double.implemented,
+          "native compiler should compile suppressed doubled constant synthesis");
+  require(std::any_of(suppress_double.preloads.begin(), suppress_double.preloads.end(),
+                      [](const PreloadReport& preload) { return preload.value == "9999"; }),
+          "suppressed double synthesis should keep 9999 as a preload");
+  require(std::any_of(suppress_double.steps.begin(), suppress_double.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x0e && step.comment.has_value() &&
+                               *step.comment == "constant 19998 stack";
+                      }),
+          "suppressed double synthesis should lift 19998 onto the stack");
+  require(std::any_of(suppress_double.steps.begin(), suppress_double.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x10 && step.comment.has_value() &&
+                               *step.comment == "constant 19998";
+                      }),
+          "suppressed double synthesis should add the doubled 19998");
+  require(std::any_of(suppress_double.optimizations.begin(), suppress_double.optimizations.end(),
+                      [](const OptimizationReport& item) {
+                        return item.name == "constant-synthesis" &&
+                               item.detail.find("doubled preloaded") != std::string::npos;
+                      }),
+          "suppressed double synthesis should report doubled-preloaded synthesis");
+
+  CompileOptions suppress_half_options;
+  suppress_half_options.budget = 999;
+  suppress_half_options.analysis = true;
+  suppress_half_options.suppress_constant_preloads.insert("5000");
+  const CompileResult suppress_half = compile_source(R"mkpro(
+program ConstantHalfSynthesis {
+  state {
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 10000
+    x = x + 5000
+    halt(x)
+  }
+}
+)mkpro",
+                                                     suppress_half_options);
+  require(suppress_half.implemented,
+          "native compiler should compile suppressed halved constant synthesis");
+  require(std::any_of(suppress_half.preloads.begin(), suppress_half.preloads.end(),
+                      [](const PreloadReport& preload) { return preload.value == "10000"; }),
+          "suppressed half synthesis should keep 10000 as a preload");
+  require(std::any_of(suppress_half.steps.begin(), suppress_half.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x02 && step.comment.has_value() &&
+                               *step.comment == "constant 5000 divisor";
+                      }),
+          "suppressed half synthesis should build the 5000 divisor");
+  require(std::any_of(suppress_half.steps.begin(), suppress_half.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x13 && step.comment.has_value() &&
+                               *step.comment == "constant 5000";
+                      }),
+          "suppressed half synthesis should divide to reach 5000");
+  require(std::any_of(suppress_half.optimizations.begin(), suppress_half.optimizations.end(),
+                      [](const OptimizationReport& item) {
+                        return item.name == "constant-synthesis" &&
+                               item.detail.find("halved preloaded") != std::string::npos;
+                      }),
+          "suppressed half synthesis should report halved-preloaded synthesis");
+
+  CompileOptions setup_synthesis_options;
+  setup_synthesis_options.budget = 999;
+  setup_synthesis_options.analysis = true;
+  const CompileResult setup_square = compile_source(R"mkpro(
+program SetupConstantSquareSynthesis {
+  state {
+    seed: packed = random()
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 123
+    x = x + 15129
+    if seed == -1 {
+      halt(seed)
+    }
+    halt(x)
+  }
+}
+)mkpro",
+                                                    setup_synthesis_options);
+  require(setup_square.setup_program.has_value(),
+          "setup square synthesis should generate a setup program");
+  require(std::any_of(setup_square.setup_program->steps.begin(),
+                      setup_square.setup_program->steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.hex == "22" && step.comment.has_value() &&
+                               *step.comment == "setup constant 15129";
+                      }),
+          "setup square synthesis should square 15129 in the setup program");
+  require(std::any_of(setup_square.optimizations.begin(), setup_square.optimizations.end(),
+                      [](const OptimizationReport& item) {
+                        return item.name == "setup-constant-synthesis" &&
+                               item.detail.find("Built setup constant 15129") != std::string::npos;
+                      }),
+          "setup square synthesis should report setup-constant-synthesis");
+
+  const CompileResult setup_pow10 = compile_source(R"mkpro(
+program SetupConstantPow10Synthesis {
+  state {
+    seed: packed = random()
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 10000
+    if seed == -1 {
+      halt(seed)
+    }
+    halt(x)
+  }
+}
+)mkpro",
+                                                   setup_synthesis_options);
+  require(setup_pow10.setup_program.has_value(),
+          "setup pow10 synthesis should generate a setup program");
+  require(std::any_of(setup_pow10.setup_program->steps.begin(),
+                      setup_pow10.setup_program->steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.hex == "15" && step.comment.has_value() &&
+                               *step.comment == "setup constant 10000";
+                      }),
+          "setup pow10 synthesis should apply F 10^x in the setup program");
+  require(std::any_of(setup_pow10.optimizations.begin(), setup_pow10.optimizations.end(),
+                      [](const OptimizationReport& item) {
+                        return item.name == "setup-constant-synthesis" &&
+                               item.detail.find("F 10^x") != std::string::npos;
+                      }),
+          "setup pow10 synthesis should report setup-constant-synthesis with F 10^x");
+
+  const CompileResult setup_double = compile_source(R"mkpro(
+program SetupConstantDoubleSynthesis {
+  state {
+    seed: packed = random()
+    x: packed = 0
+  }
+
+  loop {
+    x = read()
+    x = x + 9999
+    x = x + 19998
+    if seed == -1 {
+      halt(seed)
+    }
+    halt(x)
+  }
+}
+)mkpro",
+                                                    setup_synthesis_options);
+  require(setup_double.setup_program.has_value(),
+          "setup double synthesis should generate a setup program");
+  require(std::any_of(setup_double.setup_program->steps.begin(),
+                      setup_double.setup_program->steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.hex == "0E" && step.comment.has_value() &&
+                               *step.comment == "setup constant 19998 stack";
+                      }),
+          "setup double synthesis should lift 19998 onto the setup stack");
+  require(std::any_of(setup_double.setup_program->steps.begin(),
+                      setup_double.setup_program->steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.hex == "10" && step.comment.has_value() &&
+                               *step.comment == "setup constant 19998";
+                      }),
+          "setup double synthesis should add the doubled 19998 in setup");
+  require(std::any_of(setup_double.optimizations.begin(), setup_double.optimizations.end(),
+                      [](const OptimizationReport& item) {
+                        return item.name == "setup-constant-synthesis" &&
+                               item.detail.find("doubled setup") != std::string::npos;
+                      }),
+          "setup double synthesis should report doubled setup synthesis");
+
+  // NOTE (test-parity audit, compiler.test.ts "inlines tiny multi-use rules when that beats a
+  // subroutine" — Task 2(a), investigated to root cause and deferred byte-exactly):
+  // TS inlines the 2-use one-statement rule bump() { score++ } and reports "size-model-rule-inline".
+  // The native inline-vs-subroutine decision (compiler_inline_statement_rule_names) is a faithful
+  // 1:1 port of TS findInlineProcNamesBySize, and the underlying cost helpers
+  // (estimate_branch_order_*_cost / guarded_estimate_expression_cost / guarded_estimate_number_cost)
+  // match estimateBranchOrderStatementCost / estimateExpressionCost / estimateNumberCost exactly.
+  // The divergence is purely structural: TS scores the *pristine source* body `score++`
+  // (estimateExpressionCost(score + 1) = 3, bodyCost = 4 → inline 8 < subroutine 9), whereas native
+  // scores the body inside a candidate V2Program where the counter increment has already been
+  // expanded, so its bodyCost is 7 (inline 14 >= subroutine 12) and the subroutine is kept. Making
+  // native score the pristine pre-lowering AST like TS is a pipeline-ordering change to the size
+  // model that is shared by every byte-exact example (branch ordering + all inline decisions), so it
+  // risks perturbing the golden gate. It is therefore left as a precisely-documented deferral rather
+  // than a size-model change. This program is not in the byte-exact example set, so the difference is
+  // not codegen-visible there.
+
+  // NOTE (test-parity audit, tests/compiler.test.ts human-centered / dark-dispatch cases —
+  // Task 2(b), report-only divergence deferred): for human.mkpro the TS oracle additionally surfaces
+  // a "numeric-dispatch-residual-chain" optimization label and "dark-indirect-table" /
+  // "super-dark-dispatch" *report candidates* (considered-but-rejected, with layout-proof reasons).
+  // Native emits byte-identical code (the golden_listing gate is byte-exact) and reports
+  // super-dark-dispatch as an optimizer *capability*; it also emits "numeric-dispatch-residual-chain"
+  // for programs whose dispatch lowering takes the residual-chain path (asserted on the
+  // guarded-prologue program above, which reports it). For human.mkpro specifically native's dispatch
+  // lowering reaches the same bytes through a path that neither enumerates those rejected candidates
+  // nor attaches the residual-chain label. Surfacing them would be report-only (no byte change) but
+  // requires porting native's dispatch candidate-enumeration/report path for this program shape; the
+  // equivalent candidate-report assertions are already exercised on tiny-game (selected fallthrough +
+  // rejected indirect-register-flow) and dangerous-loading (dispatch-default-merge), so this is noted
+  // rather than asserted to avoid masking the byte-exact contract.
+
+  CompileOptions analysis_options;
+  analysis_options.analysis = true;
+
+  // compiler.test.ts "derives negative x-parameter arguments from bit_or test-and-set success values"
+  const CompileResult bit_or_negative_arg = compile_source(R"mkpro(
+program BitOrTestAndSetNegativeArg {
+  state {
+    occupied: packed = 0
+    mask: packed = 0
+    source: packed = 1
+    mark: packed = 0
+    other: packed = 0
+    warning: packed = 9
+  }
+  loop {
+    mask = source
+    if bit_and(occupied, mask) != 0 {
+      use_mark(1)
+      halt(warning)
+    }
+    else {
+      occupied = bit_or(occupied, mask)
+      use_mark(-1)
+      halt(mark)
+    }
+  }
+  fn use_mark(value) {
+    mark = value
+    other = source + mark
+    other = other + 1
+    mark = other - source
+  }
+}
+)mkpro",
+                                                          analysis_options);
+  require(bit_or_negative_arg.implemented, "bit_or test-and-set negative-arg program should compile");
+  require(has_optimization(bit_or_negative_arg, "bit-or-test-and-set-negative-arg"),
+          "bit_or test-and-set should derive a negative x-parameter argument");
+  require(std::any_of(bit_or_negative_arg.steps.begin(), bit_or_negative_arg.steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.comment.has_value() &&
+                               *step.comment == "bit_or test-and-set value = -1";
+                      }),
+          "bit_or negative-arg should emit the value = -1 success derivation");
+  require(std::none_of(bit_or_negative_arg.steps.begin(), bit_or_negative_arg.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment.has_value() && *step.comment == "preload const -1";
+                       }),
+          "bit_or negative-arg should not preload a literal -1");
+
+  // NOTE (test-parity audit, compiler.test.ts "inlines packed bit report temps before register
+  // allocation"): the behavioral contract (report temp never allocated; no set/recall report;
+  // indexed-packed-fractional-report-branch lowered) is already asserted by the
+  // `indexed_packed_report_temp` block earlier in this file. TS additionally reports an
+  // "indexed-packed-report-temp-inline" AST pre-pass label; native reaches the identical observable
+  // result through the fractional-report-branch lowering (its standalone pre-pass matcher declines
+  // this exact program on the mask/stack-load sub-condition), so that extra label is a report-only
+  // difference left unasserted to avoid a matcher change that could perturb byte-exact example
+  // codegen (e.g. tic-tac-toe-4x4).
+
+  // compiler.test.ts "uses two-digit indirect-memory aliases as indexed bank selectors"
+  CompileOptions alias_options;
+  alias_options.budget = 999;
+  alias_options.analysis = true;
+  alias_options.disable_interprocedural_opts = true;
+  const CompileResult indirect_alias = compile_source(R"mkpro(
+program IndirectMemoryAliasIndexedState {
+  state {
+    d0: packed = 0
+    d1: packed = 0
+    d2: packed = 0
+    d3: packed = 0
+    slots: packed[20..22] = [1, 2, 3]
+    physical: counter 17..19 = 17
+  }
+
+  loop {
+    slots[physical + 3] += 1
+    halt(slots[physical + 3] + d0 + d1 + d2 + d3)
+  }
+}
+)mkpro",
+                                                      alias_options);
+  require(indirect_alias.implemented, "indirect-memory-alias program should compile");
+  require(has_optimization(indirect_alias, "indirect-memory-alias-selector"),
+          "indirect-memory-alias should reuse a two-digit alias as the bank selector");
+  // NOTE (test-parity audit): TS also asserts an "indirect-memory-table" optimizer capability
+  // (status active) and an "indirect-memory" machineFeaturesUsed entry. Native genuinely uses the
+  // indirect-memory commands here (the indirect-memory-alias-selector optimization fires, the
+  // К П->X / К X->П indirect opcodes are emitted below, and the emulator run produces the correct
+  // value), but it does not surface those two report-catalog entries for this program. That is a
+  // report-only difference with no codegen effect, so it is noted rather than asserted.
+  require(indirect_alias.registers.find("__bank_selector_slots") == indirect_alias.registers.end(),
+          "indirect-memory-alias should not allocate a dedicated bank selector register");
+  require(std::none_of(indirect_alias.steps.begin(), indirect_alias.steps.end(),
+                       [](const ResolvedStep& step) {
+                         return step.comment.has_value() && *step.comment == "indexed selector slots";
+                       }),
+          "indirect-memory-alias should not emit a dedicated indexed selector step");
+  {
+    const std::string physical_register = indirect_alias.registers.at("physical");
+    require(std::any_of(indirect_alias.steps.begin(), indirect_alias.steps.end(),
+                        [&](const ResolvedStep& step) {
+                          return step.mnemonic == "\u041a \u041f->X " + physical_register &&
+                                 step.comment.has_value() &&
+                                 step.comment->rfind("indexed recall slots", 0) == 0;
+                        }),
+            "indirect-memory-alias should recall through the physical counter register");
+    require(std::any_of(indirect_alias.steps.begin(), indirect_alias.steps.end(),
+                        [&](const ResolvedStep& step) {
+                          return step.mnemonic == "\u041a X->\u041f " + physical_register &&
+                                 step.comment.has_value() &&
+                                 step.comment->rfind("indexed set slots", 0) == 0;
+                        }),
+            "indirect-memory-alias should store through the physical counter register");
+  }
+  {
+    emulator::MK61 calc;
+    for (const PreloadReport& preload : indirect_alias.preloads)
+      calc.set_register(preload.register_name, preload.value);
+    std::vector<int> codes;
+    codes.reserve(indirect_alias.steps.size());
+    for (const ResolvedStep& step : indirect_alias.steps)
+      codes.push_back(step.opcode);
+    const emulator::ProgramLoadResult loaded = calc.load_program(codes);
+    require(loaded.diagnostics.empty(), "indirect-memory-alias program should load on the emulator");
+    calc.press_sequence({"\u0412/\u041e", "\u0421/\u041f"});
+    const emulator::RunResult run = calc.run_until_stable(1200, 8);
+    require(run.stopped, "indirect-memory-alias emulator run should reach a stable stop");
+    require(calc.display_text() == "2,", "indirect-memory-alias emulator display should match TS");
+  }
+
+  // NOTE (test-parity audit, genuine native implementation gaps — documented deferrals):
+  //  * compiler.test.ts "uses one selector for multiple guarded updates when shorter"
+  //    (multi-guarded-update / branch-removal): native lowers BooleanMultiUpdate through a different
+  //    strategy (equality-zero-fallthrough + indirect-incdec-counter) and never emits the
+  //    "multi-guarded-update" optimization. Reaching parity requires implementing that selector-
+  //    sharing optimization natively; deferred to avoid perturbing the byte-exact example set.
+  //  * compiler.test.ts "accumulates packed_score with an X-parameter-produced index on the stack"
+  //    (x-param-packed-score-line-stack-accumulate): native does not implement this accumulator and
+  //    fails to lower PackedScoreXParamAccumulator (implemented == false), so the assertion cannot be
+  //    expressed faithfully without first porting the missing optimization; deferred.
 }
 
 } // namespace mkpro::tests
