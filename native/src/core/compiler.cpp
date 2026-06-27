@@ -33602,8 +33602,9 @@ std::string combine_listing(const CompileResult& result) {
       !result.setup_program.has_value() && result.manual_setup_inputs.empty()
           ? format_setup_block(result.preloads)
           : std::nullopt;
-  const std::optional<std::string> setup_preload_listing =
-      setup_block.has_value() ? format_setup_preload_listing_steps(result.preloads) : std::nullopt;
+  std::optional<std::string> setup_preload_listing;
+  if (setup_block.has_value())
+    setup_preload_listing = format_setup_preload_listing_steps(result.preloads);
 
   const bool has_setup_rows =
       !result.manual_setup_inputs.empty() || result.setup_program.has_value() ||
