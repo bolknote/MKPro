@@ -242,8 +242,16 @@ struct Int128 {
 }  // namespace int128_detail
 
 #if MKPRO_HAS_BUILTIN_INT128
+// __int128 is a compiler extension; silence -Wpedantic only at the alias.
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
 using Int128 = __int128;
 using UInt128 = unsigned __int128;
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 #else
 using Int128 = int128_detail::Int128;
 using UInt128 = int128_detail::UInt128;

@@ -15331,7 +15331,9 @@ std::string transfer_plain_debug(const std::string& opcodes_csv, bool use_produc
       IrOp op;
       op.kind = IrKind::Plain;
       op.opcode = opcode;
-      const std::optional<int> producer = use_producer ? std::optional<int>{step} : std::nullopt;
+      std::optional<int> producer;
+      if (use_producer)
+        producer = step;
       state = transfer_plain_x2_value_state(state, op, producer);
     }
     if (comma == std::string::npos)
@@ -15355,7 +15357,9 @@ X2ValueDataflowState transfer_plain_replay(const std::string& opcodes_csv, bool 
       IrOp op;
       op.kind = IrKind::Plain;
       op.opcode = opcode;
-      const std::optional<int> producer = use_producer ? std::optional<int>{step} : std::nullopt;
+      std::optional<int> producer;
+      if (use_producer)
+        producer = step;
       state = transfer_plain_x2_value_state(state, op, producer);
     }
     if (comma == std::string::npos)
@@ -15528,7 +15532,7 @@ std::string structural_unary_debug(int opcode, const X2ShapeFact& fact) {
   };
   // Keep the raw-display shift path referenced (it is exercised by the deferred
   // binary engine) so it compiles clean under -Werror.
-  static_cast<void>(shift_structural_hex_raw_display_shape);
+  static_cast<void>(&shift_structural_hex_raw_display_shape);
   return "v=" + join(plain_produces_concrete_structural_unary_decimal_values(opcode, &single)) +
          "|s=" + join(plain_produces_concrete_structural_unary_decimal_shape_facts(opcode, &single)) +
          "|dv=" + join(plain_produces_concrete_direct_structural_unary_decimal_values(opcode, &single)) +
@@ -15591,7 +15595,9 @@ std::string stable_expression_debug(int opcode, bool has_producer, int producer_
       &stable_expression_key_value_set));
   const IrOp op = stable_expression_plain_op(opcode);
   const ConcreteEvaluationOptions options = concrete_evaluation_options_for_stable_expression_opcode(opcode);
-  const std::optional<int> producer = has_producer ? std::optional<int>{producer_index} : std::nullopt;
+  std::optional<int> producer;
+  if (has_producer)
+    producer = producer_index;
   const std::set<X2ValueFact> values = plain_x_value_after_non_preserving_op(
       op, producer, &x, &y, &x_shape, &y_shape, &direct_y_shape, &direct_x_shape);
   const std::set<X2ShapeFact> shapes = plain_x_shape_after_non_preserving_op(

@@ -21,13 +21,13 @@ jobs:
     name: Linux (static x86_64)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
           -DMKPRO_STATIC=ON
-          -DMKPRO_WARNINGS_AS_ERRORS=OFF
+          -DMKPRO_WARNINGS_AS_ERRORS=ON
       - name: Build CLI
         run: cmake --build build --target mkpro_cli -j
       - name: Smoke check
@@ -36,7 +36,7 @@ jobs:
           ./build/native/mkpro-native compile examples/basic.mkpro --out hex
       - name: Stage binary
         run: cp build/native/mkpro-native mkpro-native-linux-x86_64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: mkpro-native-linux-x86_64
           path: mkpro-native-linux-x86_64
@@ -50,20 +50,20 @@ jobs:
     # CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded statically links the CRT for a
     # self-contained .exe; the int128-fallback job validates the fallback math.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: >
           cmake -S . -B build -A x64
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
-          -DMKPRO_WARNINGS_AS_ERRORS=OFF
+          -DMKPRO_WARNINGS_AS_ERRORS=ON
       - name: Build CLI
         run: cmake --build build --config Release --target mkpro_cli -j
       - name: Smoke check
         run: ./build/native/Release/mkpro-native.exe compile examples/basic.mkpro --out hex
       - name: Stage binary
         run: copy build\native\Release\mkpro-native.exe mkpro-native-windows-x64.exe
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: mkpro-native-windows-x64
           path: mkpro-native-windows-x64.exe
@@ -85,13 +85,13 @@ jobs:
     # a 300k-iteration differential check fallback-vs-builtin; on Windows/MSVC the
     # same fallback is compiled and exercised against the fixed vectors.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure (force int128 fallback)
         run: >
           cmake -S . -B build ${{ matrix.config_args }}
           -DCMAKE_BUILD_TYPE=Release
           -DMKPRO_FORCE_INT128_FALLBACK=ON
-          -DMKPRO_WARNINGS_AS_ERRORS=OFF
+          -DMKPRO_WARNINGS_AS_ERRORS=ON
       - name: Build self-test
         run: cmake --build build --config Release --target mkpro_int128_selftest -j
       - name: Run self-test
@@ -101,14 +101,14 @@ jobs:
     name: macOS (universal x86_64 + arm64)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
           "-DCMAKE_OSX_ARCHITECTURES=x86_64;arm64"
           -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
-          -DMKPRO_WARNINGS_AS_ERRORS=OFF
+          -DMKPRO_WARNINGS_AS_ERRORS=ON
       - name: Build CLI
         run: cmake --build build --target mkpro_cli -j
       - name: Smoke check
@@ -117,7 +117,7 @@ jobs:
           ./build/native/mkpro-native compile examples/basic.mkpro --out hex
       - name: Stage binary
         run: cp build/native/mkpro-native mkpro-native-macos-universal
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: mkpro-native-macos-universal
           path: mkpro-native-macos-universal
@@ -131,7 +131,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: dist
           merge-multiple: true

@@ -12561,7 +12561,7 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
       program_contains_named_bit_mask_or_spatial_primitives(program) ||
       program_desugars_to_named_bit_primitive(context, program);
   if (uses_named_bit_mask_or_spatial) {
-    for (const std::string& value : {"1", "2", "4", "8"}) {
+    for (const std::string value : {"1", "2", "4", "8"}) {
       values.insert(value);
       add_bonus(value, 1);
     }
@@ -12779,7 +12779,7 @@ void reserve_preloaded_number_at(LoweringContext& context, const std::string& re
 }
 
 bool reserve_bit_mask_helper_preloads(LoweringContext& context) {
-  for (const std::string& value : {"4", "0.5", "1", "8"}) {
+  for (const std::string value : {"4", "0.5", "1", "8"}) {
     (void)reserve_preloaded_number(context, value);
   }
   return true;
@@ -12801,7 +12801,7 @@ void plan_spatial_line_count_preloads(LoweringContext& context, const V2Program&
   // literal-frequency sorting: the 10x coordinate decode and long line offsets
   // are weighted ahead of the progression count so reclaim-coalesced-preloads
   // can spend a newly freed register on the next TS-ranked constant.
-  for (const std::string& value : {"10", "-99", "-81", "0.5", "11", "19"}) {
+  for (const std::string value : {"10", "-99", "-81", "0.5", "11", "19"}) {
     (void)reserve_preloaded_number(context, value);
   }
 
@@ -12939,7 +12939,7 @@ Expression spatial_count_expression(LoweringContext& context, const std::string&
 
   if (board->width <= 4 && board->height <= 4) {
     std::vector<Expression> line_totals;
-    for (const std::string& kind : {"row", "column", "diag-left", "diag-right"}) {
+    for (const std::string kind : {"row", "column", "diag-left", "diag-right"}) {
       std::vector<Expression> hits;
       for (const Expression& candidate : spatial_line_cells(*board, kind, cell)) {
         hits.push_back(
@@ -26637,11 +26637,11 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
     LoweringContext& context;
     std::string name;
 
-    ProcedureBoundaryScope(LoweringContext& context, std::string name)
-        : context(context), name(std::move(name)) {
-      context.emitter.emit_label(this->name, {.procedure_boundary = "start",
-                                              .procedure_name = this->name,
-                                              .hidden = true});
+    ProcedureBoundaryScope(LoweringContext& context_in, std::string name_in)
+        : context(context_in), name(std::move(name_in)) {
+      context.emitter.emit_label(name, {.procedure_boundary = "start",
+                                        .procedure_name = name,
+                                        .hidden = true});
     }
 
     ~ProcedureBoundaryScope() {

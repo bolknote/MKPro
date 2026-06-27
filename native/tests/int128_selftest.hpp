@@ -67,8 +67,15 @@ struct Rng {
 };
 
 #if defined(__SIZEOF_INT128__)
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+#endif
 using Wide = unsigned __int128;
 using Signed = __int128;
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
 inline std::uint64_t low_limb(Wide value) { return static_cast<std::uint64_t>(value); }
 inline std::uint64_t high_limb(Wide value) { return static_cast<std::uint64_t>(value >> 64); }

@@ -375,6 +375,9 @@ function(mkpro_configure_target target_name)
       -Wconversion
       -Wsign-conversion
       -Wshadow
+      # Designated initializers intentionally omit trailing members (which are
+      # value-initialized); GCC flags every such site, Clang does not.
+      -Wno-missing-field-initializers
     )
     if(MKPRO_WARNINGS_AS_ERRORS)
       target_compile_options(${target_name} PRIVATE -Werror)
@@ -394,8 +397,10 @@ function(mkpro_configure_target target_name)
       target_link_options(${target_name} PRIVATE -static -static-libgcc -static-libstdc++)
     endif()
   elseif(MSVC)
-    # compiler.cpp emits more sections than the default COFF object limit allows.
-    target_compile_options(${target_name} PRIVATE /bigobj)
+    # /bigobj: compiler.cpp emits more sections than the default COFF limit.
+    # /utf-8: source and execution charset are UTF-8 (the sources contain
+    # Cyrillic and arrow characters that code page 1252 cannot represent).
+    target_compile_options(${target_name} PRIVATE /bigobj /utf-8)
   endif()
 endfunction()
 
