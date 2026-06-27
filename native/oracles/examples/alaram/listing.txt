@@ -71,11 +71,11 @@
    67 |  04  | 4                       |
    68 |  09  | 9                       |
    69 |  47  | X→П 7                   | setup R7
-   70 |  03  | 3                       |
-   71 |  02  | 2                       |
+   70 |  01  | 1                       |
+   71 |  05  | 5                       |
    72 |  48  | X→П 8                   | setup R8
-   73 |  01  | 1                       |
-   74 |  05  | 5                       |
+   73 |  02  | 2                       |
+   74 |  04  | 4                       |
    75 |  49  | X→П 9                   | setup R9
    76 |  50  | С/П                     | setup complete
 
@@ -85,7 +85,7 @@
    00 |  6D  | П→X d                   | preload const 1320587
    01 |  3A  | К ИНВ                   | display literal video bytes
    02 |  50  | С/П                     | show __inline_show_40_0
-   03 |  E9  | К x=0 9                 | case mismatch; preloaded R9=C7 indirect-target=15 shifted-forward indirect flow
+   03 |  E8  | К x=0 8                 | case mismatch; preloaded R8=C7 indirect-target=15 shifted-forward indirect flow
    04 |  6A  | П→X a                   | preload const 10
    05 |  65  | П→X 5                   | recall level
    06 |  11  | −                       | expr -
@@ -99,31 +99,31 @@
    14 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
    15 |  02  | 2                       |
    16 |  11  | −                       | dispatch residual compare
-   17 |  5E  | F x=0                   | case mismatch
-   18 |  25  | 25                      | case mismatch
-   19 |  60  | П→X 0                   | recall altitude
-   20 |  6B  | П→X b                   | preload const 100
-   21 |  11  | −                       | expr -
-   22 |  40  | X→П 0                   | set altitude
-   23 |  17  | F lg                    | domain-error guard trap
-   24 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
-   25 |  02  | 2                       |
-   26 |  11  | −                       | dispatch residual compare
-   27 |  5E  | F x=0                   | case mismatch
-   28 |  34  | 34                      | case mismatch
-   29 |  61  | П→X 1                   | recall angle
-   30 |  6A  | П→X a                   | preload const 10
-   31 |  11  | −                       | expr -
-   32 |  41  | X→П 1                   | set angle
-   33 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
-   34 |  02  | 2                       |
-   35 |  11  | −                       | dispatch residual compare
-   36 |  5E  | F x=0                   | case mismatch
-   37 |  42  | 42                      | case mismatch
-   38 |  6A  | П→X a                   | preload const 10
-   39 |  61  | П→X 1                   | recall angle
-   40 |  10  | +                       | expr +
-   41 |  88  | К БП 8                  | shared terminal tail; preloaded R8=E4 indirect-target=32 indirect flow
+   17 |  E9  | К x=0 9                 | case mismatch; preloaded R9=D6 indirect-target=24 shifted-forward indirect flow
+   18 |  60  | П→X 0                   | recall altitude
+   19 |  6B  | П→X b                   | preload const 100
+   20 |  11  | −                       | expr -
+   21 |  40  | X→П 0                   | set altitude
+   22 |  17  | F lg                    | domain-error guard trap
+   23 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
+   24 |  02  | 2                       |
+   25 |  11  | −                       | dispatch residual compare
+   26 |  5E  | F x=0                   | case mismatch
+   27 |  33  | 33                      | case mismatch
+   28 |  61  | П→X 1                   | recall angle
+   29 |  6A  | П→X a                   | preload const 10
+   30 |  11  | −                       | expr -
+   31 |  41  | X→П 1                   | set angle
+   32 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
+   33 |  02  | 2                       |
+   34 |  11  | −                       | dispatch residual compare
+   35 |  5E  | F x=0                   | case mismatch
+   36 |  42  | 42                      | case mismatch
+   37 |  6A  | П→X a                   | preload const 10
+   38 |  61  | П→X 1                   | recall angle
+   39 |  10  | +                       | expr +
+   40 |  51  | БП                      | shared terminal tail
+   41 |  31  | 31                      | shared terminal tail
    42 |  02  | 2                       |
    43 |  11  | −                       | dispatch residual compare
    44 |  E7  | К x=0 7                 | case mismatch; reused preloaded R7=49 indirect-target=49 direct flow

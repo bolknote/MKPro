@@ -1,5 +1,5 @@
 Setup Block:
-  `R0=80000078; R2=8; Re=10`
+  `R0=80000078; R2=8; Re=10; R7=L2; R8=С7; R9=Г2`
 
 # Setup Listing
  Step | Code | Command                 | Comment
@@ -10,6 +10,12 @@ Setup Block:
    03 |  42  | X→П 2                   | setup R2
    04 |   -  | 10                      |
    05 |  4E  | X→П e                   | setup Re
+   06 |   -  | 0                       |
+   07 |  47  | X→П 7                   | setup R7
+   08 |   -  | 15                      |
+   09 |  48  | X→П 8                   | setup R8
+   10 |   -  | 20                      |
+   11 |  49  | X→П 9                   | setup R9
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -23,21 +29,17 @@ Setup Block:
    06 |  0E  | В↑                      | separate adjacent number entry
    07 |  04  | 4                       |
    08 |  11  | −                       | dispatch compare
-   09 |  5E  | F x=0                   | case mismatch
-   10 |  17  | 17                      | case mismatch
-   11 |  62  | П→X 2                   | recall charge
-   12 |  01  | 1                       |
-   13 |  11  | −                       | expr -
-   14 |  42  | X→П 2                   | set charge
-   15 |  51  | БП                      | dispatch end
-   16 |  00  | 00                      | dispatch end
-   17 |  02  | 2                       |
-   18 |  11  | −                       | dispatch residual compare
-   19 |  5E  | F x=0                   | case mismatch
-   20 |  23  | 23                      | case mismatch
-   21 |  06  | 6                       |
-   22 |  50  | С/П                     | halt
-   23 |  00  | 0                       | halt
-   24 |  50  | С/П                     | halt
-   25 |  51  | БП                      | loop back
-   26 |  00  | 00                      | loop back
+   09 |  E8  | К x=0 8                 | case mismatch; preloaded R8=C7 indirect-target=15 shifted-forward indirect flow
+   10 |  62  | П→X 2                   | recall charge
+   11 |  01  | 1                       |
+   12 |  11  | −                       | expr -
+   13 |  42  | X→П 2                   | set charge
+   14 |  87  | К БП 7                  | dispatch end; preloaded R7=B2 indirect-target=0 indirect flow
+   15 |  02  | 2                       |
+   16 |  11  | −                       | dispatch residual compare
+   17 |  E9  | К x=0 9                 | case mismatch; preloaded R9=D2 indirect-target=20 shifted-forward indirect flow
+   18 |  06  | 6                       |
+   19 |  50  | С/П                     | halt
+   20 |  00  | 0                       | halt
+   21 |  50  | С/П                     | halt
+   22 |  87  | К БП 7                  | loop back; preloaded R7=B2 indirect-target=0 indirect flow

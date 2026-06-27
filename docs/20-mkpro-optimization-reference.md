@@ -2524,52 +2524,216 @@ If proofs are insufficient, those transformations are not activated.
 - Some capability entries remain `candidate`/`planned` while not yet stable enough for global enabling.
 - Optimization priority is always bounded by semantic safety and layout validity, then by cell budget.
 
-### Deferred better-than-TS candidates
+### Deferred better-than-TS candidates (deferral policy lifted)
 
-Any discovered way to produce shorter output than the TypeScript oracle during
-the parity port must be recorded in this section first. This includes real
-native strategies, accidental implementation side effects, example-specific
-debugging discoveries, explicit aggressive flags, and test-only lowering
-variants. Keep the default C++ output byte-for-byte aligned with TypeScript
-until the shorter form is accepted as an intentional post-parity optimization.
+**Policy update.** TypeScript parity is no longer a constraint. The native C++
+compiler is now the source of truth and is allowed (encouraged) to produce
+shorter programs than the TypeScript reference. The committed oracle files under
+`native/oracles/examples/` are re-anchored to native output, not TS output.
 
-Each entry must name the affected program or fixture, the lowering variant when
-known, the observed TS size and shorter native size when measured, the mechanism
-that made it shorter, why it is disabled for parity, and the gate needed before
-enabling it later. If the exact cell counts were not captured, mark the entry as
-qualitative/unmeasured and fill in the numbers before enabling it. An unrecorded
-shorter-by-default native result is treated as a parity bug, even if the
-generated program is semantically correct.
+**Re-anchor pipeline.** The native oracle contract tests support a bless/update
+mode gated by the `MKPRO_NATIVE_BLESS` environment variable. When
+`MKPRO_NATIVE_BLESS=1` is set, `golden_listing_contract_matches_typescript_contract`
+rewrites the committed oracle artifacts (`listing.txt`, `hex.txt`, `setup.txt`,
+`variants.txt`, plus the cheap space-joined `bytes.txt`) from the current native
+output instead of asserting equality. `keys.txt` has no native formatter and is
+left untouched (it is existence-checked, not content-checked). The mode is a
+no-op when the variable is unset. Do **not** use `scripts/export-native-oracles.mjs`
+to regenerate — that reproduces the longer TypeScript output. Workflow: build,
+run the suite once with `MKPRO_NATIVE_BLESS=1` to regenerate, then run normally
+to confirm green.
 
-- Post-layout indirect-flow can reduce small `cells(...)`/bit-mask programs even when they already fit in
-  the official 105-cell window. This is intentionally deferred during the C++ parity port: the native
-  translator must keep the same default rescue threshold as the TypeScript compiler unless an explicit
-  aggressive candidate is selected.
-- The native text-display lowering can technically compile the `BEEr NN` shape in some hoisted helper
-  variants where the TypeScript test-only lowering variant currently rejects it after its leading
-  hoist jump shifts the main body away from address 00. Keep the C++ variant aligned with TypeScript
-  oracle output until that TS strategy is changed deliberately.
-- Reference-size post-layout indirect-flow rescue can shrink some explicit test-only lowering variants
-  such as `Dungeon` primary, but the current TypeScript golden fingerprints keep those variants at the
-  ordinary 105-cell rescue threshold unless an aggressive post-layout variant is selected.
-- For spatial/bit-mask-heavy programs such as `fox-hunt-100`, the native translator can keep some
-  membership and `line_count` paths in a shorter direct/shared-hybrid form even when the explicit
-  `sharedBitMaskHelperCalls` strategy is selected. This produced a smaller test-only variant during
-  the C++ parity port, but it is deferred until after byte-for-byte parity with the TypeScript
-  shared-helper layout is complete. A concrete observed case is the
-  `fox-hunt-100` `sharedBitMaskHelperCalls` lowering variant: native post-layout
-  forward-call selector packing reached 122 cells, while the TypeScript oracle
-  fingerprint keeps the variant at 125 cells through return-suffix shared-helper
-  layout. Preserve the 125-cell oracle shape during the parity port and revisit
-  the 122-cell form only as a deliberate post-parity optimization.
-- Hoisted-helper variants can sometimes keep the coord-list counter proof alive through a formatted
-  report and replace a final `JP 00` loop-back with one-cell indirect `K JP R`. TypeScript keeps the
-  explicit direct branch in those test-only variants, so the native port suppresses this shortcut
-  while `hoistSharedHelpers` parity is being enforced.
-- Runtime indirect-call flow can shrink explicit helper-call variants such as `rambo-iii` primary by
-  borrowing a dead stable register for repeated helper calls. TypeScript keeps that test-only primary
-  variant in direct-call form, while still using the shortcut for hoisted-helper variants such as
-  `minesweeper-9x7`. The native port therefore suppresses the shortcut only for non-hoisted
-  test-only variants unless the runtime-indirect-call strategy is explicitly selected.
+Each candidate below records the affected program/fixture, the lowering variant,
+the measured before→after sizes, the mechanism, and its current status now that
+the deferral policy is lifted.
+
+#### Applied post-parity optimizations
+
+- **(#1, DEFECT 4) Aggressive post-layout indirect-flow rescue enabled by default
+  for every program + behavioral-equivalence selection gate.** *Applied.*
+  `allow_aggressive_post_layout` in `native/src/core/compiler.cpp` is now `true`
+  for all programs (it only honors an explicit `disable_aggressive_post_layout`
+  opt-out used by focused unit tests). Two correctness guards make the smaller
+  forms safe to ship:
+
+  1. **Helper-overlay preload retargeting (the DEFECT-4 fix).**
+     `optimize_post_layout_address_code_overlay` in
+     `native/src/core/post_layout_indirect_flow.cpp` deletes/overlays a code cell
+     to pack a multi-entry helper, which shifts every following address by one.
+     Previously it rewrote the in-stream operands (`БП 6D`, `К ПП 7`, …) but
+     **not** the externally preloaded indirect-flow selectors, so a preloaded
+     loop-back/return selector (e.g. `R7 = 72`) kept pointing at the pre-shift
+     address and the program jumped one cell off. On the `BitClear` fixture this
+     read a cleared-but-present cell as `0` instead of `1`
+     (`{set 7, clear 3, query 7}`). The pass now returns an
+     `AddressCodeOverlayApplication` describing the removed/overlaid cell and
+     `retarget_selector_preloads_after_overlay` rewrites the affected preload
+     values (and their listing comments) to the post-shift target. `BitClear`
+     now answers `1`; `emulator_bitmask_facts` is green with the rescue on.
+  2. **Behavioral-equivalence acceptance gate.** Candidate selection ranks purely
+     by cell count, so a smaller-but-miscompiled candidate could otherwise win.
+     `candidate_behaviorally_matches_baseline` (in `compiler.cpp`) runs every
+     risky candidate (`aggressive_post_layout_indirect_flow`,
+     `dual_use_constant_indirect_flow`, `runtime_indirect_call_flow`,
+     `preloaded_indirect_flow`) and the trusted non-aggressive baseline on a
+     battery of input scenarios via the in-process `mkpro::emulator::MK61`, and
+     rejects any candidate whose runtime transcript diverges. The harness
+     records the display/stopped state **per interaction turn** and only holds a
+     candidate to the baseline while the baseline is still *actively* responding:
+     once the reference program goes idle (its display stops changing between
+     turns, i.e. it has reached a terminal halt and merely re-stops on each
+     further `С/П`), subsequent inputs are out of the program's live contract and
+     the layout-dependent resume behavior of the two forms is allowed to differ.
+     Preload values are translated from the compiler's hex-ish nibble encoding
+     (`A/B/C/D/E/F`) to MK-61 display glyphs before `set_register`, and any
+     emulator load/parse failure marks the observation un-runnable (compared as
+     its own bucket) so the gate never throws.
+
+  Measured, behaviorally-verified wins (`MKPRO_NATIVE_BLESS=1` re-blessed,
+  `git diff` step deltas ≤ 0): `basic` 8→7, `functions-demo` 25→21,
+  `human` 27→23, `tiny-game` 27→23. The `human` shrink is independently checked
+  by `emulator_indirect_flow_equivalence_matches_typescript_contract` (now
+  comparing the default aggressive compile against a `disable_candidate_search`
+  baseline). The gate also **caught a previously-shipped miscompile**: the
+  committed `fox-hunt-mk61` aggressive form (60 cells) returned
+  `--01-- 1,` where the trusted baseline returns `--01-- 2,` on the first input,
+  so the gate rejects it and the program settles on the correct 65-cell form
+  (60→65 is the only oracle that grew, and it replaces incorrect output). No
+  other example's oracle changed.
+
+- **(#5) Hoisted-helper coord-list one-cell indirect loop-back.** *Applied.*
+  `emit_known_one_indirect_loop_back` in `native/src/core/compiler.cpp` previously
+  refused to emit the one-cell indirect `К БП R` loop-back whenever
+  `hoist_shared_helpers` was set, forcing the explicit two-cell `БП 00` direct
+  branch to match the TypeScript test-only variants. The parity gate was removed;
+  the rewrite is still guarded by its real correctness preconditions
+  (`coord_list_counter_known_one` is proven and the loop target actually lives at
+  address `00`, i.e. `zero_address_labels.contains(target)`), so a leading hoist
+  jump that shifts the body off `00` keeps the explicit branch. Measured: the
+  `fox-hunt-mk61` hoisted variants (`hoistSharedHelpers`,
+  `hoistSharedHelpers+hoistProcs`, `shareRandomCell+hoistSharedHelpers`,
+  `hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion`,
+  `guardedPrologueGadgets+hoistSharedHelpers+hoistProcs`,
+  `sharedBitMaskHelperCalls+hoistSharedHelpers`) drop **66 → 65 cells** (trailing
+  `… 07 50 51 00` → `… 07 50 82`). No default (candidate-search) output changed
+  and no other example's oracle changed; all emulator/behavioral tests stay green.
+
+- **(#6) Runtime indirect-call flow for non-hoisted test-only variants.**
+  *Parity gate lifted (currently inert on committed examples).* The
+  `runtime_indirect_call_flow` pass in
+  `native/src/core/passes/preloaded_indirect_flow.cpp` previously skipped
+  non-hoisted, non-explicit `disable_candidate_search` variants so their
+  fingerprints kept the TypeScript direct-call form. The pass already runs (and is
+  exercised behaviorally) in the default candidate-search pipeline; the parity
+  skip was removed. On the current example corpus this produces no fingerprint
+  change: native's `runtime_indirect_call_plans` finds no plans for the
+  non-hoisted primary variants (e.g. `rambo-iii` primary stays at 129 cells even
+  with `runtime_indirect_call_flow` forced on), so the documented `rambo-iii`
+  shrink is not reproduced by lifting the gate alone — it requires plan-generation
+  work, not just removing the suppression.
+
+- **(#1, DEFECT 3) Raw-load-stable dark selectors for post-layout indirect flow.**
+  *Applied.* `selector_for_target` in both
+  `native/src/core/passes/preloaded_indirect_flow.cpp` and
+  `native/src/core/post_layout_indirect_flow.cpp` emitted a dark formal alias
+  (`formal_label_from_ordinal`) for *every* indirect-flow target. Those aliases
+  decode to the right address inside the calculator, but they are delivered to the
+  runtime/test harness as a **raw register preload**, and only the B/C/D-prefixed
+  aliases (targets `0..27`) survive that raw load. An E-prefixed alias
+  (`"E0".."E9"`, targets `28..37`) parses as exponent notation and throws, and an
+  F-prefixed alias (`"F0".."F9"`, targets `38..47`) has leading BCD nibble 15 that
+  normalizes away (e.g. `"F6" → 6`), so the delivered selector jumped to the wrong
+  address. The fix keeps the dark alias only for targets `0..27` and falls back to
+  the raw-stable plain decimal address for `28..47`. This is a pure correctness
+  fix at **zero size cost**: it re-blesses 11 examples (selector-value changes in
+  setup/listing only — `alaram`, `cave-treasure`, `dangerous-loading`,
+  `fox-hunt-mk61`, `game-100-pig`, `giants-country`, `minesweeper-9x7`,
+  `minesweeper-9x9`, `teleport`, `tic-tac-toe`, `treasure-hunter-2`) with **every
+  `hex`/`bytes` step count unchanged (delta 0)**. After this fix the
+  `BitMembership` fixture in `emulator_bitmask_facts` is correct
+  (`bit_has → 1`), confirming the earlier `R e = F2` "live-register clobber"
+  symptom was in fact this raw-load degradation, not a liveness bug (register `e`
+  is only used as a selector scratch in that program, never recalled as data).
+
+- **(#2) Position-independent `BEEr NN` two-digit text-display helper.**
+  *Applied (correctness only; no size win on any selectable form).*
+  `emit_two_digit_text_display` in `native/src/core/compiler.cpp` emits a
+  self-contained digit-renderer subroutine whose two internal targets — the `ПП`
+  call to the renderer entry and the renderer's own `F x<0` sign branch — were
+  hard-coded as the absolute addresses `34` and `45`, correct only when the body
+  starts at address `00`. `lower_text_display_statement` therefore bailed in two
+  ways: a `current_machine_address(context) != 0` guard (would have emitted wrong
+  absolute targets off address `00`) **and** an outright
+  `hoist_shared_helpers || hoist_procs` early return (so hoisted-helper variants
+  fell through to the generic display path and *threw* `… display literal "BEEr "
+  that is not lowerable yet`). The fix relocates the two targets by the body's
+  actual base address: `base = current_machine_address(context)` (the count of
+  non-label cells already emitted, i.e. the prologue length), then emits
+  `ПП (base + 34)` / `F x<0 (base + 45)`. At `base == 0` this reproduces the
+  original `ПП 34` / `F x<0 45` **byte-for-byte**, so every selectable default is
+  unchanged; off `00` the targets follow the body. (Relocating via post-layout
+  *labels* instead was rejected: it let the `return_suffix_gadget` IR pass fire on
+  the now-label-bearing renderer tail and cascade into a different default form,
+  which is out of scope here.) Both the address-`0` guard and the hoist early
+  return are removed; the lowering is still narrowly fenced (literal prefix is
+  exactly `"BEEr "`, two-digit `0..99` source in `R0`, fixed scratch registers
+  free). Emulator-verified: the `primary`, `hoistSharedHelpers`,
+  `hoistSharedHelpers+hoistProcs`, and default (candidate-search, behavioral-gate
+  on) compiles of `99-bottles` are all byte-identical (52 cells) and produce an
+  identical `mkpro::emulator::MK61` display transcript to the committed 52-cell
+  reference across `bottles ∈ {0,1,7,13,42,80,99}`; the default compile reports
+  `screen-text-lowering` and is **accepted** by
+  `candidate_behaviorally_matches_baseline` (not rejected). Measured oracle
+  change: **only `99-bottles/variants.txt`** — the six hoisted variants
+  (`hoistSharedHelpers`, `hoistSharedHelpers+hoistProcs`,
+  `shareRandomCell+hoistSharedHelpers`,
+  `hoistSharedHelpers+canonicalizeIfChains+tailBranchInversion`,
+  `guardedPrologueGadgets+hoistSharedHelpers+hoistProcs`,
+  `sharedBitMaskHelperCalls+hoistSharedHelpers`) move from `throws …` to
+  `steps=52 | …`, byte-identical to `primary`. For `99-bottles` the hoisted body
+  still lands at address `00` (it has no other helpers to hoist), so the relocated
+  targets equal the originals — there is **no cell-count win on any selectable
+  form**; the change purely makes the previously-failing hoisted variants compile
+  correctly (and makes the helper correct at any base for future programs that do
+  shift it). `hex`/`bytes`/`listing`/`setup` for `99-bottles` are unchanged
+  (delta 0) and no other example's oracle changed; full `ctest` stays green.
+
+#### Candidate status after the DEFECT-4 fix + behavioral gate
+
+Candidate **#1** is now **Applied** (see "Applied post-parity optimizations"
+above): the helper-overlay packing was repaired and the behavioral-equivalence
+selection gate makes the whole class of "smaller-but-wrong" forms unselectable.
+The remaining candidates below are now *mechanically unblocked* (they ride the
+same now-correct, gated rescue). On the committed example corpus #3 and #4
+produce no further shrink, and #2 has since been resolved on its own
+(position-independent relocation, now Applied above):
+
+- **(#3) Reference-size post-layout indirect-flow rescue (e.g. `Dungeon`
+  primary).** *Unblocked, no corpus shrink.* This rides the same post-layout
+  rescue fixed under #1, so it is now correct and behaviorally gated rather than
+  "likely-incorrect". With the rescue enabled by default the candidate is tried
+  and validated for every program, but on the current corpus no smaller
+  behaviorally-equivalent form is found/selected for `Dungeon` (stays 75) — the
+  gate reports no rejected aggressive candidate, i.e. the packed form is not
+  strictly smaller here. No oracle changes; nothing grows.
+
+- **(#4) `fox-hunt-100` post-layout forward-call selector packing.** *Unblocked,
+  no corpus shrink; historic target already beaten.* The mechanism is the
+  now-correct, gated rescue from #1. `fox-hunt-100` already compiles to **103**
+  cells under the corrected engine (well below the old 122-cell target the
+  variant aimed at), and no strictly-smaller behaviorally-equivalent form is
+  selected on top of that, so its oracle is unchanged.
+
+- **(#2) `BEEr NN` text-display lowering in hoisted-helper variants.** *Resolved
+  — now Applied (see "Applied post-parity optimizations" above).* The two-digit
+  text helper is position-independent: `emit_two_digit_text_display` relocates its
+  internal `ПП`/`F x<0` targets by the body's actual base address
+  (`current_machine_address`), so the form is correct at any address. Both the
+  `current_machine_address(context) != 0` guard and the
+  `hoist_shared_helpers || hoist_procs` early return were removed; the only oracle
+  change is `99-bottles/variants.txt` (six hoisted variants move from `throws …`
+  to a 52-cell fingerprint byte-identical to `primary`). There is no cell-count
+  win on any selectable form — it purely makes the latent hoisted variants
+  correct.
 
 This reference should be used as a working map while reading generated listings in explain/json mode: every named optimization corresponds to a concrete rewrite class that can be correlated with local sequences in emitted IR or final machine text.

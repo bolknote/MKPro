@@ -40,6 +40,18 @@ struct OverlayExecutable {
   std::string mnemonic;
 };
 
+// The address-code overlay folds an executable cell into a branch operand byte,
+// deleting exactly one cell. `removed_cell_address` is the pre-overlay address
+// of the executable that disappeared; `overlaid_cell_address` is the pre-overlay
+// address of the branch operand that now also executes that opcode. Selectors
+// that targeted a shifted cell must be retargeted with this mapping so preloaded
+// indirect flow keeps reaching the right helper entry (DEFECT 4).
+struct AddressCodeOverlayApplication {
+  std::vector<MachineItem> items;
+  int removed_cell_address = 0;
+  int overlaid_cell_address = 0;
+};
+
 struct MachineLayout {
   std::map<std::string, int> labels;
   std::map<int, int> item_index_by_address;
@@ -523,7 +535,7 @@ std::vector<MachineItem> immediate_overlay_candidate(const std::vector<MachineIt
   return candidate;
 }
 
-std::optional<PostLayoutIndirectFlowResult>
+std::optional<AddressCodeOverlayApplication>
 apply_address_code_overlay(const std::vector<MachineItem>& items) {
   const std::map<int, int> address_by_item = machine_address_by_item_index(items);
   const MachineLayout layout = machine_layout(items);
@@ -582,9 +594,13 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
     if (machine_cell_count(candidate) >= machine_cell_count(items))
       continue;
 
-    return PostLayoutIndirectFlowResult{
+    const auto executable_cell_it = address_by_item.find(labels_end);
+    if (executable_cell_it == address_by_item.end())
+      continue;
+    return AddressCodeOverlayApplication{
         .items = std::move(candidate),
-        .applied = 1,
+        .removed_cell_address = executable_cell_it->second,
+        .overlaid_cell_address = address_cell_it->second,
     };
   }
 
@@ -673,14 +689,72 @@ apply_address_code_overlay(const std::vector<MachineItem>& items) {
       if (machine_cell_count(candidate) >= machine_cell_count(items))
         continue;
 
-      return PostLayoutIndirectFlowResult{
+      const auto operand_address_it = layout.address_by_item_index.find(index + 1);
+      if (operand_address_it == layout.address_by_item_index.end())
+        continue;
+      return AddressCodeOverlayApplication{
           .items = std::move(candidate),
-          .applied = 1,
+          .removed_cell_address = removed_address_it->second,
+          .overlaid_cell_address = operand_address_it->second,
       };
     }
   }
 
   return std::nullopt;
+}
+
+std::optional<std::string> retargeted_selector_value(const std::string& register_name,
+                                                     const std::string& previous_value,
+                                                     int shifted_target);
+
+// Retarget preloaded indirect-flow selectors after an address-code overlay
+// deleted one cell. The overlay shifts every cell at or beyond
+// `removed_cell_address`; a selector whose decoded flow target sits in that
+// region must be rewritten to the shifted address (and the cell that was folded
+// into the branch operand now executes from `overlaid_cell_address`). Returns
+// std::nullopt when any selector cannot be safely retargeted, in which case the
+// caller leaves the overlay unapplied so behavior is preserved.
+std::optional<std::vector<PreloadReport>>
+retarget_selector_preloads_after_overlay(const std::vector<MachineItem>& after_items,
+                                         const std::vector<PreloadReport>& preloads,
+                                         int removed_cell_address, int overlaid_cell_address) {
+  const std::vector<MachineCell> after_cells = machine_cells(after_items);
+  std::vector<PreloadReport> next;
+  next.reserve(preloads.size());
+  for (const PreloadReport& preload : preloads) {
+    const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
+        preload.register_name, preload.value, IndirectOperationKind::Flow);
+    if (!decoded.has_value() || !decoded->actual_flow_target.has_value()) {
+      next.push_back(preload);
+      continue;
+    }
+    const int target = *decoded->actual_flow_target;
+    int new_target = target;
+    if (target == removed_cell_address)
+      new_target = overlaid_cell_address;
+    else if (target > removed_cell_address)
+      new_target = target - 1;
+    if (new_target == target) {
+      next.push_back(preload);
+      continue;
+    }
+    if (!machine_cell_at(after_cells, new_target).has_value())
+      return std::nullopt;
+    const std::optional<std::string> selector_value =
+        retargeted_selector_value(preload.register_name, preload.value, new_target);
+    if (!selector_value.has_value())
+      return std::nullopt;
+    const std::optional<IndirectAddressEvaluation> shifted = evaluate_indirect_address(
+        preload.register_name, *selector_value, IndirectOperationKind::Flow);
+    if (!shifted.has_value() || shifted->actual_flow_target != new_target)
+      return std::nullopt;
+    next.push_back(PreloadReport{
+        .register_name = preload.register_name,
+        .value = *selector_value,
+        .counts_against_program = preload.counts_against_program,
+    });
+  }
+  return next;
 }
 
 NumericTargetView numeric_target_view(const std::vector<IrOp>& ops,
@@ -777,7 +851,13 @@ std::string official_label(int target) {
 }
 
 std::string selector_for_target(int target) {
-  if (target <= 47)
+  // See preloaded_indirect_flow.cpp selector_for_target: dark formal aliases for
+  // targets 28..47 ("E0".."F9") are not raw-load-stable (E-prefix throws as
+  // exponent notation, F-prefix loses its leading nibble), so committing them as
+  // a RAW selector preload mis-delivers the address. Only the B/C/D-prefixed
+  // aliases (targets 0..27) survive raw loading; otherwise use the raw-stable
+  // plain decimal address.
+  if (target <= 27)
     return formal_label_from_ordinal(target + 112);
   return official_label(target);
 }
@@ -867,6 +947,22 @@ std::string indirect_branch_mnemonic(int opcode, const std::string& register_nam
 
 bool is_direct_branch_op(const IrOp& op) {
   return op.kind == IrKind::Jump || op.kind == IrKind::Call || op.kind == IrKind::CondJump;
+}
+
+// DEFECT 1 (conditional-branch conversion): a direct conditional jump
+// (`F x≠0 NN`, IrKind::CondJump) is rewritten into an indirect conditional
+// (`К x≠0 R`). On the MK-61 the indirect conditional branches through the
+// int-part of the selector register; that is only equivalent to the direct form
+// when (a) the register has no indirect-addressing side effect and (b) the
+// decoded int-part equals the proven target. The aggressive rescue only ever
+// borrows the STABLE registers 7..E (IndirectSelectorMutation::Stable -> no
+// pre-inc/pre-dec side effect) and every rewrite is validated to decode to the
+// branch target, so the conversion is provably equivalent. The selector value
+// is additionally constrained to be raw-load-stable (see selector_for_target),
+// which guarantees the int-part actually delivered at runtime is the proven
+// target. Conversions through side-effecting registers 0..6 are never produced.
+bool is_convertible_post_layout_branch(const IrOp& op) {
+  return is_direct_branch_op(op);
 }
 
 bool is_indirect_branch_op(const IrOp& op) {
@@ -1497,7 +1593,7 @@ std::optional<RewriteStep> validate_rewrite_at(
     const std::vector<MachineItem>& items, const CompileOptions& options) {
   const IrOp& rewritten = pass.ops.at(static_cast<std::size_t>(index));
   const IrOp& original = numeric.at(static_cast<std::size_t>(index));
-  if (!is_indirect_branch_op(rewritten) || !is_direct_branch_op(original))
+  if (!is_indirect_branch_op(rewritten) || !is_convertible_post_layout_branch(original))
     return std::nullopt;
   const std::optional<std::string>& label = target_labels.at(static_cast<std::size_t>(index));
   if (!label.has_value())
@@ -1574,7 +1670,7 @@ std::optional<RewriteStep> validate_rewrite_group(
   for (const int index : indices) {
     const IrOp& rewritten = pass.ops.at(static_cast<std::size_t>(index));
     const IrOp& original = numeric.at(static_cast<std::size_t>(index));
-    if (!is_indirect_branch_op(rewritten) || !is_direct_branch_op(original) ||
+    if (!is_indirect_branch_op(rewritten) || !is_convertible_post_layout_branch(original) ||
         rewritten.register_name != register_name) {
       return std::nullopt;
     }
@@ -1654,7 +1750,7 @@ std::optional<RewriteStep> validate_forward_rewrite_group(
 
   std::optional<int> final_target;
   for (const int index : indices) {
-    if (!is_direct_branch_op(ir.at(static_cast<std::size_t>(index))))
+    if (!is_convertible_post_layout_branch(ir.at(static_cast<std::size_t>(index))))
       return std::nullopt;
     const std::optional<std::string>& label = target_labels.at(static_cast<std::size_t>(index));
     if (!label.has_value())
@@ -1742,7 +1838,7 @@ std::optional<RewriteStep> apply_forward_rewrite(
   std::vector<std::pair<std::string, std::vector<int>>> groups;
   for (std::size_t index = 0; index < ir.size(); ++index) {
     const IrOp& op = ir.at(index);
-    if (passes::has_rewrite_barrier(op) || !is_direct_branch_op(op))
+    if (passes::has_rewrite_barrier(op) || !is_convertible_post_layout_branch(op))
       continue;
     const std::optional<std::string>& label = target_labels.at(index);
     if (!label.has_value())
@@ -2322,25 +2418,40 @@ optimize_post_layout_fractional_r0_flow(const std::vector<MachineItem>& items,
 }
 
 PostLayoutIndirectFlowResult
-optimize_post_layout_address_code_overlay(const std::vector<MachineItem>& items) {
+optimize_post_layout_address_code_overlay(const std::vector<MachineItem>& items,
+                                          const std::vector<PreloadReport>& preloads) {
   std::vector<MachineItem> current = items;
+  std::vector<PreloadReport> current_preloads = preloads;
   int applied = 0;
   for (int round = 0; round < 16; ++round) {
-    const std::optional<PostLayoutIndirectFlowResult> result = apply_address_code_overlay(current);
+    std::optional<AddressCodeOverlayApplication> result = apply_address_code_overlay(current);
     if (!result.has_value())
       break;
-    current = result->items;
-    applied += result->applied;
+    const std::optional<std::vector<PreloadReport>> retargeted =
+        retarget_selector_preloads_after_overlay(result->items, current_preloads,
+                                                 result->removed_cell_address,
+                                                 result->overlaid_cell_address);
+    if (!retargeted.has_value())
+      break;
+    std::map<std::string, std::string> selector_by_register;
+    for (const PreloadReport& preload : *retargeted)
+      selector_by_register[preload.register_name] = preload.value;
+    current =
+        retarget_machine_selector_comments(std::move(result->items), selector_by_register);
+    current_preloads = *retargeted;
+    ++applied;
   }
 
   if (applied == 0) {
     return PostLayoutIndirectFlowResult{
         .items = items,
+        .preloads = preloads,
     };
   }
 
   return PostLayoutIndirectFlowResult{
       .items = std::move(current),
+      .preloads = std::move(current_preloads),
       .optimizations =
           {
               passes::AppliedOptimization{

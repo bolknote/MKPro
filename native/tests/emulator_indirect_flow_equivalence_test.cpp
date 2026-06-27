@@ -148,10 +148,16 @@ void emulator_indirect_flow_equivalence_matches_typescript_contract() {
   const std::filesystem::path root = std::filesystem::current_path();
   const std::string source = read_text(root / "examples" / "human.mkpro");
 
-  const CompileResult before = compile_source(source);
-  CompileOptions after_options;
-  after_options.aggressive_post_layout_indirect_flow = true;
-  const CompileResult after = compile_source(source, after_options);
+  // The aggressive post-layout indirect-flow rescue is now enabled by default
+  // and is selected automatically by candidate search (guarded by the
+  // behavioral-equivalence gate in compile_source). To still exercise the
+  // shrink-and-preserve-behavior contract we compare the default compile
+  // (which now picks the aggressive form) against a non-aggressive reference
+  // produced by disabling candidate search entirely.
+  CompileOptions baseline_options;
+  baseline_options.disable_candidate_search = true;
+  const CompileResult before = compile_source(source, baseline_options);
+  const CompileResult after = compile_source(source);
 
   require(before.implemented, "baseline human.mkpro should compile");
   require(after.implemented, "aggressive indirect-flow human.mkpro should compile");

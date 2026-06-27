@@ -256,7 +256,15 @@ SelectorPlan selector_for_target(const std::vector<IrOp>& ops, const std::vector
         .super_dark = true,
     };
   }
-  if (target <= 47) {
+  // Dark formal aliases (formal_label_from_ordinal) for targets 0..47 decode to
+  // the same address as the plain decimal, but they are delivered as a register
+  // preload that the runtime/test harness loads RAW (as a number). Only the
+  // B/C/D-prefixed aliases (targets 0..27) survive that raw load: an E-prefixed
+  // alias ("E0".."E9") parses as exponent notation and throws, and an
+  // F-prefixed alias ("F0".."F9") has leading BCD nibble 15 that normalizes away
+  // (e.g. "F6" -> 6), so the delivered selector would jump to the wrong address.
+  // For targets 28..47 fall back to the raw-stable plain decimal address.
+  if (target <= 27) {
     return SelectorPlan{
         .selector_value = formal_label_from_ordinal(target + 112),
         .super_dark = false,
@@ -460,10 +468,12 @@ bool contains_formal_alias(const std::string& value) {
 } // namespace
 
 PassResult runtime_indirect_call_flow(const std::vector<IrOp>& ops, const PassContext& context) {
-  if (context.options.disable_candidate_search && !context.options.runtime_indirect_call_flow &&
-      !context.options.hoist_shared_helpers && !context.options.hoist_procs)
-    return PassResult{.ops = ops, .applied = 0, .optimizations = {}};
-
+  // Post-parity optimization (candidate #6): previously the runtime indirect-call
+  // selector rewrite was suppressed for non-hoisted, non-explicit test-only lowering
+  // variants (disable_candidate_search) so the variant fingerprints matched the
+  // TypeScript oracle's direct-call form. The rewrite already runs (and is exercised
+  // behaviorally) in the default candidate-search pipeline; lifting the parity gate
+  // simply lets the primary/non-hoisted variants surface their natural shorter form.
   const std::vector<RuntimeCallPlan> plans = runtime_indirect_call_plans(
       ops, context.options.aggressive_indirect_call_threshold,
       reserved_preloaded_registers(context.options.preloaded_constant_registers));

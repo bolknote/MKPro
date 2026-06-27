@@ -26,6 +26,19 @@ std::string read_text(const std::filesystem::path& path) {
   return buffer.str();
 }
 
+// Native oracle "bless" mode. When MKPRO_NATIVE_BLESS=1 is set, the oracle
+// contract tests re-anchor the committed oracle files to the current NATIVE
+// compiler output instead of asserting equality. This is how the native oracle
+// becomes the source of truth after the TypeScript-parity constraint is lifted.
+// The mode is a no-op when the environment variable is unset.
+void write_oracle_file(const std::filesystem::path& path, const std::string& content) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  if (!output)
+    throw std::runtime_error("cannot write native oracle: " + path.string());
+  output << content;
+}
+
 std::string trim_newlines(std::string value) {
   while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
     value.pop_back();
@@ -258,6 +271,7 @@ void golden_listing_contract_matches_typescript_contract() {
 
   const bool verify_variants = verify_variant_fingerprints();
   const bool progress = std::getenv("MKPRO_NATIVE_EXAMPLE_PROGRESS") != nullptr;
+  const bool bless = std::getenv("MKPRO_NATIVE_BLESS") != nullptr;
   const char* filter_env = std::getenv("MKPRO_NATIVE_EXAMPLE_FILTER");
   const std::string filter = filter_env != nullptr ? filter_env : "";
   std::size_t progress_index = 0;
@@ -278,25 +292,44 @@ void golden_listing_contract_matches_typescript_contract() {
     require(result.implemented, "golden listing should compile example: " + name);
     require(result.diagnostics.empty(), "golden listing example should not report diagnostics: " + name);
 
+    const std::string setup_program =
+        result.setup_program.has_value() ? format_program_tokens(result.setup_program->steps) : "";
+    const std::string actual_variants = variant_fingerprint(source, base_options);
+
+    if (bless) {
+      // Re-anchor the committed oracle files to native output. We rewrite the
+      // content-checked artifacts (listing/hex/setup/variants) plus the cheap
+      // space-joined bytes view. keys.txt has no native formatter and is left
+      // untouched (it is existence-checked only, not content-checked).
+      write_oracle_file(oracle_example_root / "listing.txt", result.listing + "\n");
+      write_oracle_file(oracle_example_root / "hex.txt", result.hex + "\n");
+      write_oracle_file(oracle_example_root / "setup.txt",
+                        setup_program.empty() ? std::string() : setup_program + "\n");
+      write_oracle_file(oracle_example_root / "variants.txt", actual_variants + "\n");
+      write_oracle_file(oracle_example_root / "bytes.txt", token_line(result.steps) + "\n");
+      if (progress) {
+        std::cerr << "[golden-listing] blessed " << name << " (" << result.steps.size()
+                  << " steps)" << std::endl;
+      }
+      continue;
+    }
+
     const std::string expected_listing = trim_newlines(read_text(oracle_example_root / "listing.txt"));
     require(result.listing == expected_listing,
-            "example listing should match the TS oracle for " + name +
+            "example listing should match the committed native oracle for " + name +
                 first_different_line(result.listing, expected_listing));
     const std::string expected_hex = trim_newlines(read_text(oracle_example_root / "hex.txt"));
     require(result.hex == expected_hex,
-            "example hex should match the TS oracle for " + name +
+            "example hex should match the committed native oracle for " + name +
                 first_different_line(result.hex, expected_hex));
-    const std::string setup_program =
-        result.setup_program.has_value() ? format_program_tokens(result.setup_program->steps) : "";
     const std::string expected_setup = trim_newlines(read_text(oracle_example_root / "setup.txt"));
     require(setup_program == expected_setup,
-            "example setup listing should match the TS oracle for " + name +
+            "example setup listing should match the committed native oracle for " + name +
                 first_different_line(setup_program, expected_setup));
-    const std::string actual_variants = variant_fingerprint(source, base_options);
     const std::string expected_variants =
         trim_newlines(read_text(oracle_example_root / "variants.txt"));
     require(actual_variants == expected_variants,
-            "example lowering variants should match TS oracle for " + name +
+            "example lowering variants should match the committed native oracle for " + name +
                 first_different_line(actual_variants, expected_variants));
   if (verify_variants) {
     const std::string actual_variants = variant_fingerprint(source, base_options);

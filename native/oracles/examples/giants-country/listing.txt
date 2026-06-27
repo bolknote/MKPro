@@ -39,11 +39,11 @@
    35 |  09  | 9                       |
    36 |  07  | 7                       |
    37 |  49  | X→П 9                   | setup R9
-   38 |  02  | 2                       |
-   39 |  08  | 8                       |
+   38 |  08  | 8                       |
+   39 |  02  | 2                       |
    40 |  4B  | X→П b                   | setup Rb
-   41 |  08  | 8                       |
-   42 |  02  | 2                       |
+   41 |  02  | 2                       |
+   42 |  08  | 8                       |
    43 |  4C  | X→П c                   | setup Rc
    44 |  3B  | К СЧ                    | random()
    45 |  09  | 9                       |
@@ -76,7 +76,7 @@
    06 |  65  | П→X 5                   | recall floor
    07 |  11  | −                       | expr -
    08 |  42  | X→П 2                   | set strength
-   09 |  8C  | К БП c                  | if end; preloaded Rc=82 indirect-target=82 shifted-forward indirect flow
+   09 |  8B  | К БП b                  | if end; preloaded Rb=82 indirect-target=82 shifted-forward indirect flow
    10 |  60  | П→X 0                   | recall plans
    11 |  64  | П→X 4                   | recall slot
    12 |  15  | F 10ˣ                   | pow10()
@@ -88,7 +88,7 @@
    18 |  41  | X→П 1                   | set tile
    19 |  08  | 8                       |
    20 |  11  | −                       | condition compare
-   21 |  EB  | К x=0 b                 | false branch for ==; preloaded Rb=E0 indirect-target=28 shifted-forward indirect flow
+   21 |  EC  | К x=0 c                 | false branch for ==; preloaded Rc=28 indirect-target=28 shifted-forward indirect flow
    22 |  62  | П→X 2                   | recall strength
    23 |  07  | 7                       |
    24 |  11  | −                       | expr -

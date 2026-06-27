@@ -14,10 +14,20 @@ bool has_optimization(const CompileResult& result, const std::string& name) {
                      [&](const OptimizationReport& item) { return item.name == name; });
 }
 
+// This suite pins the mid-level display-lowering structure (masks, helper
+// calls, inline-show stops). The aggressive post-layout indirect-flow rescue
+// is enabled by default for every program, so suppress it here to keep the
+// assertions targeting the display lowering rather than its repacked form.
+CompileResult compile_pinned(const std::string& source) {
+  CompileOptions options;
+  options.disable_aggressive_post_layout = true;
+  return compile_source(source, options);
+}
+
 } // namespace
 
 void compiler_display_lowering_matches_typescript_contract() {
-  const CompileResult result = compile_source(R"mkpro(
+  const CompileResult result = compile_pinned(R"mkpro(
 program FormattedCoordReport {
   field: board(0..9, 0..9)
 
@@ -54,7 +64,7 @@ program FormattedCoordReport {
           }),
           "formatted coord report should use the TS inline display stop");
 
-  const CompileResult leading_zero = compile_source(R"mkpro(
+  const CompileResult leading_zero = compile_pinned(R"mkpro(
 program LeadingZeroLiteralDisplay {
   loop {
     show("020")
@@ -95,7 +105,7 @@ program LeadingZeroLiteralDisplay {
                       }),
           "leading-zero literal setup should build the source display literal first digit");
 
-  const CompileResult zero_tail = compile_source(R"mkpro(
+  const CompileResult zero_tail = compile_pinned(R"mkpro(
 program ZeroDigitTailScreen {
   loop {
     show("2Е")
@@ -129,7 +139,7 @@ program ZeroDigitTailScreen {
                       }),
           "zero-digit tail display should emit the calculator stop");
 
-  const CompileResult sign_digit = compile_source(R"mkpro(
+  const CompileResult sign_digit = compile_pinned(R"mkpro(
 program SignDigitLiteralScreen {
   loop {
     show("3Е0000021")
@@ -163,6 +173,7 @@ program SignDigitLiteralScreen {
 
   CompileOptions display_preload_options;
   display_preload_options.general_constant_preloads = true;
+  display_preload_options.disable_aggressive_post_layout = true;
   const CompileResult text_literal_preload = compile_source(R"mkpro(
 program LiteralAlphabetScreen {
   loop {
@@ -201,7 +212,7 @@ program LiteralAlphabetScreen {
                       }),
           "setup display literal preload should use first-digit reuse instructions");
 
-  const CompileResult variable_mask = compile_source(R"mkpro(
+  const CompileResult variable_mask = compile_pinned(R"mkpro(
 program VariableLeadingSpaceLow {
   state {
     room: counter 1..20 = 1
@@ -236,7 +247,7 @@ program VariableLeadingSpaceLow {
               [](const ResolvedStep& step) { return step.comment == "display mask low branch"; }),
           "variable-leading display should emit the width dispatch branch");
 
-  const CompileResult text_display = compile_source(R"mkpro(
+  const CompileResult text_display = compile_pinned(R"mkpro(
 program GenericBeerTextDisplay {
   state {
     level: counter 0..99 = stack.X
@@ -279,7 +290,7 @@ program GenericBeerTextDisplay {
                       }),
           "generic text display should emit the visible text stop");
 
-  const CompileResult dynamic_line = compile_source(R"mkpro(
+  const CompileResult dynamic_line = compile_pinned(R"mkpro(
 program DynamicLineReportShow {
   state {
     line: counter 0..9 = 3
@@ -318,7 +329,7 @@ program DynamicLineReportShow {
                       }),
           "dynamic line report should emit the visible report stop");
 
-  const CompileResult dynamic_line_width = compile_source(R"mkpro(
+  const CompileResult dynamic_line_width = compile_pinned(R"mkpro(
 program DynamicLineReportWidth {
   state {
     line: counter 0..9 = 4
@@ -336,7 +347,7 @@ program DynamicLineReportWidth {
   require(has_optimization(dynamic_line_width, "screen-dynamic-line-report-lowering"),
           "explicit-width dynamic line report should report the TS strategy name");
 
-  const CompileResult literal_helper = compile_source(R"mkpro(
+  const CompileResult literal_helper = compile_pinned(R"mkpro(
 program RepeatedLiteralScreenHelper {
   loop {
     show("8-LСГ90")

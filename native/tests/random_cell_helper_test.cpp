@@ -15,6 +15,14 @@ bool has_optimization(const CompileResult& result, const std::string& name) {
                      [&](const OptimizationReport& item) { return item.name == name; });
 }
 
+// Pin the shared-helper / direct-call (ПП) structure this suite verifies by
+// suppressing the default-on aggressive post-layout indirect-flow repacking.
+CompileOptions pinned_options() {
+  CompileOptions options;
+  options.disable_aggressive_post_layout = true;
+  return options;
+}
+
 int count_optimization(const CompileResult& result, const std::string& name) {
   return static_cast<int>(
       std::count_if(result.optimizations.begin(), result.optimizations.end(),
@@ -64,7 +72,8 @@ program RandomLenReuse {
     halt(a + b + c)
   }
 }
-)mkpro");
+)mkpro",
+                                              pinned_options());
 
   require(result.implemented, "native compiler should lower repeated random(board) calls");
   require(result.diagnostics.empty(),

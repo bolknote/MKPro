@@ -119,13 +119,16 @@ void compiler_examples_match_typescript_contract() {
             "basic.mkpro should use the read field path in listing");
     const std::string expected_hex = trim_newlines(
         read_text(root / "native" / "oracles" / "examples" / "basic" / "hex.txt"));
-    require(result.hex == expected_hex, "basic.mkpro hex should match TS oracle");
+    require(result.hex == expected_hex, "basic.mkpro hex should match the committed native oracle");
   }
 
   {
     CompileOptions tiny_options;
     tiny_options.analysis = true;
     tiny_options.budget = 999;
+    // This block asserts the mid-level dispatch candidate reporting; pin off the
+    // default-on aggressive post-layout rescue so the candidate shape is stable.
+    tiny_options.disable_aggressive_post_layout = true;
     const CompileResult result =
         compile_source(read_text(root / "examples" / "tiny-game.mkpro"), tiny_options);
     require(result.implemented, "compiler examples contract should compile tiny-game.mkpro");
@@ -160,6 +163,7 @@ void compiler_examples_match_typescript_contract() {
     CompileOptions lunar_options;
     lunar_options.analysis = true;
     lunar_options.budget = 999;
+    lunar_options.disable_aggressive_post_layout = true;
     const CompileResult result = compile_source(read_text(root / "examples" / "lunar.mkpro"), lunar_options);
     require(result.implemented, "compiler examples contract should compile lunar.mkpro");
     require(result.diagnostics.empty(), "lunar.mkpro compile should be warning-free");
@@ -186,12 +190,21 @@ void compiler_examples_match_typescript_contract() {
             "e-94-digits should use decimal series lowering");
     const std::string expected_hex =
         trim_newlines(read_text(root / "native" / "oracles" / "examples" / "e-94-digits" / "hex.txt"));
-    require(result.hex == expected_hex, "e-94-digits hex should match TS oracle");
+    require(result.hex == expected_hex,
+            "e-94-digits hex should match the committed native oracle");
   }
 
   {
     const std::string source = read_text(root / "examples" / "human.mkpro");
-    const CompileResult result = compile_source(source, baseline_options);
+    // This block asserts the rich mid-level optimizer/dispatch reporting for the
+    // base lowering (step count, dispatch candidates, capabilities). The default
+    // compile now applies the aggressive post-layout indirect-flow rescue
+    // (human shrinks 27 -> 23, covered by the golden_listing oracle and the
+    // indirect-flow equivalence test), so pin it off here to keep targeting the
+    // base lowering structure.
+    CompileOptions human_options = baseline_options;
+    human_options.disable_aggressive_post_layout = true;
+    const CompileResult result = compile_source(source, human_options);
     require(result.implemented, "compiler examples contract should compile human.mkpro");
     require(result.ir.v2, "human.mkpro should report V2 IR");
     require(result.ir.lowered, "human.mkpro should report lowered IR");
@@ -211,16 +224,28 @@ void compiler_examples_match_typescript_contract() {
     require(has_machine_feature(result, "code-data-overlay"),
             "human.mkpro should report code-data-overlay machine feature use");
     require(has_proof(result, "value-ranges"), "human.mkpro should report value-range proofs");
-    // NOTE (test-parity audit, tests/compiler.test.ts human-centered / dark-dispatch cases):
-    // The TS oracle additionally surfaces, for human.mkpro, a "numeric-dispatch-residual-chain"
-    // optimization label and "dark-indirect-table" / "super-dark-dispatch" *report candidates*
-    // (considered-but-rejected, with "layout proof" reasons). Native emits byte-identical code
-    // (the golden_listing gate is byte-exact) and reports super-dark-dispatch as an optimizer
-    // *capability* (asserted above), but it does not enumerate those rejected dispatch candidates or
-    // that optimization label for this program. This is a report-only divergence with no codegen
-    // effect; the equivalent candidate-report assertions are exercised on tiny-game (selected
-    // fallthrough + rejected indirect-register-flow) and dangerous-loading (dispatch-default-merge),
-    // so it is noted here rather than asserted to avoid masking the byte-exact contract.
+    // The TS oracle surfaces, for human.mkpro, a "numeric-dispatch-residual-chain" optimization
+    // label plus "dark-indirect-table" / "super-dark-dispatch" considered-but-rejected dispatch
+    // candidates (mirroring selectDispatchCandidate). These are report-only entries; the emitted
+    // code stays byte-identical (the golden_listing gate is byte-exact).
+    require(has_optimization(result, "numeric-dispatch-residual-chain"),
+            "human.mkpro should report the numeric-dispatch-residual-chain dispatch lowering");
+    const CandidateReport* rejected_dark_table =
+        find_candidate(result.rejected_candidates, "dark-indirect-table");
+    require(rejected_dark_table != nullptr,
+            "human.mkpro should report the rejected dark-indirect-table dispatch candidate");
+    require(rejected_dark_table->reason.find(
+                "layout proof did not establish a conflict-free address/data table") !=
+                std::string::npos,
+            "human.mkpro dark-indirect-table rejection should report the TS layout-proof reason");
+    const CandidateReport* rejected_super_dark =
+        find_candidate(result.rejected_candidates, "super-dark-dispatch");
+    require(rejected_super_dark != nullptr,
+            "human.mkpro should report the rejected super-dark-dispatch dispatch candidate");
+    require(rejected_super_dark->reason.find(
+                "did not place one-command cases at 48..53 with tails at 01..06") !=
+                std::string::npos,
+            "human.mkpro super-dark-dispatch rejection should report the TS layout-proof reason");
   }
 
   {

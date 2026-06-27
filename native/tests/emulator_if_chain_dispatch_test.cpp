@@ -91,6 +91,10 @@ bool has_optimization(const CompileResult& result, const std::string& name) {
 CompileResult compile_if_chain_source(const char* source, const std::string& context) {
   CompileOptions options;
   options.budget = 999;
+  // Pin the if-chain-dispatch-canonicalization structure this suite verifies;
+  // the default-on aggressive post-layout indirect-flow rescue would otherwise
+  // repack the dispatch and drop the canonicalization optimization report.
+  options.disable_aggressive_post_layout = true;
   const CompileResult result = compile_source(source, options);
   require(result.implemented, context + " should compile");
   require(result.diagnostics.empty(), context + " should not report diagnostics");

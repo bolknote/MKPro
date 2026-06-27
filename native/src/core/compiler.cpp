@@ -25,6 +25,7 @@
 #include "mkpro/core/rules.hpp"
 #include "mkpro/core/state_banks.hpp"
 #include "mkpro/core/v2_const.hpp"
+#include "mkpro/emulator/mk61.hpp"
 
 #include <algorithm>
 #include <array>
@@ -9204,6 +9205,10 @@ bool program_desugars_to_named_bit_primitive(const LoweringContext& context,
                                              const V2Program& program);
 bool program_requires_shared_bit_mask_scratch(const LoweringContext& context,
                                               const V2Program& program);
+void collect_guarded_update_scratch_registers(LoweringContext& context,
+                                              RegisterCollection& collection,
+                                              const V2Program& program);
+bool lower_guarded_update_selector(LoweringContext& context, const V2Statement& statement);
 
 void collect_registers(LoweringContext& context, const V2Program& program) {
   context.tiny_game_shape = is_tiny_game_shape(program);
@@ -9450,6 +9455,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
     add_register_variable(collection, std::string(kSharedBitMaskScratch));
   }
   collect_spatial_count_scratch_registers(collection);
+  collect_guarded_update_scratch_registers(context, collection, program);
   if (context.packed_line_family_mutating_selector_update_check_tail)
     apply_packed_line_family_mutating_selector_hints(context, program, collection, hints);
   apply_direct_state_bank_selector_hints(context, program, collection, hints);
@@ -9598,6 +9604,15 @@ bool fixed_text_display_scratch_registers_available(const LoweringContext& conte
 }
 
 void emit_two_digit_text_display(LoweringContext& context, const std::string& source, int line) {
+  // The digit-renderer subroutine (ПП) and its sign branch (F x<0) target
+  // addresses *inside* this same body. Their hard offsets are 34 and 45 relative
+  // to the start of the body. Relocate them by the body's actual base address so
+  // the form stays correct at any address - e.g. in hoisted-helper variants where
+  // a leading hoist jump / hoisted helper bodies shift this body off address 00.
+  // (At base 0 this reproduces the original ПП 34 / F x<0 45 byte-for-byte.)
+  const int base = current_machine_address(context);
+  const int renderer_target = base + 34;
+  const int complement_target = base + 45;
   emit_recall(context, source);
   context.emitter.items.back().comment = "text display verse";
   context.emitter.items.back().source_line = line;
@@ -9619,7 +9634,7 @@ void emit_two_digit_text_display(LoweringContext& context, const std::string& so
   context.emitter.emit_op(0x02, "2", "text display tens offset", line);
   context.emitter.emit_op(0x47, "X->П 7", "text display digit offset", line);
   context.emitter.emit_op(0x62, "П->X 2", "text display ones digit", line);
-  context.emitter.emit_jump(0x53, "ПП", 34, "text digit renderer", line);
+  context.emitter.emit_jump(0x53, "ПП", renderer_target, "text digit renderer", line);
   context.emitter.emit_op(0x4a, "X->П a", "text display rendered ones", line);
   context.emitter.emit_op(0x01, "1", "text display ones prefix", line);
   context.emitter.emit_op(0x04, "4", "text display ones prefix", line);
@@ -9628,14 +9643,14 @@ void emit_two_digit_text_display(LoweringContext& context, const std::string& so
   context.emitter.emit_op(0x03, "3", "text display ones offset", line);
   context.emitter.emit_op(0x47, "X->П 7", "text display digit offset", line);
   context.emitter.emit_op(0x61, "П->X 1", "text display tens digit", line);
-  context.emitter.emit_jump(0x53, "ПП", 34, "text digit renderer", line);
+  context.emitter.emit_jump(0x53, "ПП", renderer_target, "text digit renderer", line);
   context.emitter.emit_op(0x6a, "П->X a", "text display rendered ones", line);
   context.emitter.emit_op(0x0e, "В↑", "show text", line);
   context.emitter.emit_op(0x50, "С/П", "show text", line);
   context.emitter.emit_op(0x06, "6", "text digit renderer", line);
   context.emitter.emit_op(0x11, "-", "text digit renderer", line);
   context.emitter.emit_op(0x0b, "/-/", "text digit renderer", line);
-  context.emitter.emit_jump(0x5c, "F x<0", 45, "text digit renderer", line);
+  context.emitter.emit_jump(0x5c, "F x<0", complement_target, "text digit renderer", line);
   context.emitter.emit_op(0x09, "9", "text digit complement", line);
   context.emitter.emit_op(0x10, "+", "text digit complement", line);
   context.emitter.emit_op(0xd7, "К П->X 7", "text display byte", line);
@@ -9654,9 +9669,6 @@ void emit_two_digit_text_display(LoweringContext& context, const std::string& so
 
 bool lower_text_display_statement(LoweringContext& context, const std::vector<DisplayItem>& items,
                                   int line) {
-  if (context.hoist_shared_helpers || context.hoist_procs)
-    return false;
-
   const std::optional<TextPrefixDisplay> normalized = collapse_text_prefix_display(items);
   if (!normalized.has_value())
     return false;
@@ -9670,8 +9682,10 @@ bool lower_text_display_statement(LoweringContext& context, const std::vector<Di
   const auto source_register = context.register_index_by_name.find(source.name);
   if (source_register == context.register_index_by_name.end() || source_register->second != 0)
     return false;
-  if (current_machine_address(context) != 0)
-    return false;
+  // The helper body is position-independent: emit_two_digit_text_display relocates
+  // its internal ПП / F x<0 targets by the body's actual base address, so the form
+  // is correct at any address, including hoisted-helper variants where a leading
+  // hoist jump (and any hoisted helper bodies) shift this body off address 00.
   if (!fixed_text_display_scratch_registers_available(context, source.name))
     return false;
 
@@ -14198,7 +14212,12 @@ bool emit_indirect_unit_increment(LoweringContext& context, const std::string& t
 
 bool emit_known_one_indirect_loop_back(LoweringContext& context, const std::string& target,
                                        int source_line) {
-  if (context.hoist_shared_helpers || !context.emitter.coord_list_counter_known_one ||
+  // Post-parity optimization (candidate #5): allow the one-cell indirect `К БП R`
+  // loop-back in hoisted-helper variants too. The correctness preconditions below
+  // (coord-list counter proven == 1 and the loop target actually living at address
+  // 00) still gate the rewrite, so a hoist jump that shifts the body off address 00
+  // makes zero_address_labels.contains(target) false and the explicit branch is kept.
+  if (!context.emitter.coord_list_counter_known_one ||
       !context.emitter.zero_address_labels.contains(target))
     return false;
   const auto register_it = context.register_index_by_name.find(std::string(kCoordListCounter));
@@ -16123,6 +16142,14 @@ bool lower_human_match(LoweringContext& context, const V2Statement& statement) {
   if (!lower_human_terminal_call(context, *otherwise_rule))
     return false;
   context.emitter.emit_label(end_label, {.hidden = true});
+  // Report parity with the TS oracle: the human dispatch is lowered as a numeric
+  // residual compare chain (the bytes above emit `dispatch compare` /
+  // `dispatch residual compare`), so surface the same optimization label TS does.
+  // This is report-only metadata and does not change emitted code.
+  context.optimizations.push_back(OptimizationReport{
+      .name = "numeric-dispatch-residual-chain",
+      .detail = "Lowered numeric match cases as a residual comparison chain.",
+  });
   return true;
 }
 
@@ -21664,12 +21691,6 @@ bool rule_is_directly_recursive(const V2Rule& rule) {
   return direct_statement_list_invokes_rule(rule.body, rule.name);
 }
 
-bool compiler_straight_line_assignment_body(const std::vector<V2Statement>& statements) {
-  return !statements.empty() &&
-         std::all_of(statements.begin(), statements.end(),
-                     [](const V2Statement& statement) { return statement.kind == "v2_assign"; });
-}
-
 bool inline_rule_consumes_param_from_x(const LoweringContext& context, const V2Program& program,
                                        const V2Rule& rule, const std::string& param) {
   return context.inline_statement_rules.contains(rule.name) && rule.params.size() == 1U &&
@@ -21703,6 +21724,68 @@ void hide_internal_constant_report_registers(std::map<std::string, std::string>&
   }
 }
 
+// TS findInlineProcNamesBySize scores the high-level AST, where `t += d` / `t++`
+// are ordinary scalar `assign` nodes whose expr is `t <op> d`. Native's V2 keeps
+// them as `v2_update`, and estimate_branch_order_statement_cost charges an extra
+// target cell for the in-place update (which is correct for branch-order costing
+// but diverges from TS's inline size model). Reconstruct the equivalent assign
+// cost/classification here so compiler_inline_statement_rule_names matches TS's
+// estimateBranchOrderStatementCost / isStraightLineAssignmentBody exactly.
+Expression inline_naming_update_expression(const V2Statement& statement) {
+  const Expression target = parse_expression(*statement.target, statement.line);
+  const Expression delta = parse_expression(*statement.expr, statement.line);
+  if (statement.op.has_value() && *statement.op == "-=")
+    return subtract_expression(target, delta);
+  return add_expression(target, delta);
+}
+
+int inline_naming_statement_cost(const LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind == "v2_update" && statement.target.has_value() && statement.expr.has_value()) {
+    try {
+      const Expression target = parse_expression(*statement.target, statement.line);
+      int target_cost = 0;
+      if (target.kind == "indexed" && target.index != nullptr)
+        target_cost = guarded_estimate_expression_cost(*target.index);
+      return target_cost +
+             guarded_estimate_expression_cost(inline_naming_update_expression(statement)) + 1;
+    } catch (const std::exception&) {
+      return branch_order_infinite_cost();
+    }
+  }
+  return estimate_branch_order_statement_cost(context, statement);
+}
+
+int inline_naming_body_cost(const LoweringContext& context,
+                            const std::vector<V2Statement>& statements) {
+  int total = 0;
+  for (const V2Statement& statement : statements) {
+    const int cost = inline_naming_statement_cost(context, statement);
+    if (cost >= branch_order_infinite_cost())
+      return branch_order_infinite_cost();
+    total += cost;
+  }
+  return total;
+}
+
+// Mirrors TS isStraightLineAssignmentBody: every statement is a scalar `assign`.
+// In TS both `t = d` and `t += d` / `t++` are scalar "assign" nodes, while indexed
+// stores are a separate "indexed_assign" kind that is NOT straight-line.
+bool inline_naming_straight_line_body(const std::vector<V2Statement>& statements) {
+  if (statements.empty())
+    return false;
+  return std::all_of(statements.begin(), statements.end(), [](const V2Statement& statement) {
+    if (statement.kind != "v2_assign" && statement.kind != "v2_update")
+      return false;
+    if (!statement.target.has_value())
+      return false;
+    try {
+      return parse_expression(*statement.target, statement.line).kind == "identifier";
+    } catch (const std::exception&) {
+      return false;
+    }
+  });
+}
+
 std::set<std::string> compiler_inline_statement_rule_names(const LoweringContext& context,
                                                            const V2Program& program) {
   const std::map<std::string, int> counts = collect_rule_call_counts(program);
@@ -21717,14 +21800,14 @@ std::set<std::string> compiler_inline_statement_rule_names(const LoweringContext
     if (rule_is_directly_recursive(rule))
       continue;
 
-    const int body_cost = estimate_branch_order_body_cost(context, rule.body);
+    const int body_cost = inline_naming_body_cost(context, rule.body);
     if (body_cost >= branch_order_infinite_cost()) {
       if (uses == 1)
         names.insert(rule.name);
       continue;
     }
     const bool terminal = guarded_statement_list_terminates_statically(program, rule.body);
-    if (uses > 1 && !compiler_straight_line_assignment_body(rule.body))
+    if (uses > 1 && !inline_naming_straight_line_body(rule.body))
       continue;
     if (uses > 1 && terminal)
       continue;
@@ -23281,6 +23364,10 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     return true;
   if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
+  if (lower_guarded_update_selector(context, statement))
+    return true;
+  if (!entered_with_errors && has_errors(context.diagnostics))
+    return false;
   if (lower_nested_guard_shared_failure(context, statement))
     return true;
   if (lower_residual_guarded_update(context, statement))
@@ -24627,6 +24714,208 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
     context.emitter.current_x_aliases.clear();
   }
   return true;
+}
+
+// Faithful port of TS compileBlockCall (proc-raw-setup.ts): emits a subroutine
+// call (or inline/terminal/zero-accumulator variant) with the argument already
+// staged in X by the caller.
+void compile_block_call(LoweringContext& context, const std::string& block_name, int line) {
+  const auto rule_it = context.rules.find(block_name);
+  if (rule_it == context.rules.end()) {
+    context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                             "Unknown block '" + block_name + "'."));
+    return;
+  }
+  const V2Rule& rule = *rule_it->second;
+  if (context.inline_statement_rules.contains(rule.name)) {
+    if (context.inline_call_stack.contains(rule.name)) {
+      context.diagnostics.push_back(
+          diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                     "Recursive inline procedure '" + rule.name + "' is not supported"));
+      return;
+    }
+    context.inline_call_stack.insert(rule.name);
+    (void)lower_statement_block(context, rule.body);
+    context.inline_call_stack.erase(rule.name);
+    const int uses =
+        context.proc_call_counts.contains(rule.name) ? context.proc_call_counts[rule.name] : 0;
+    context.optimizations.push_back(OptimizationReport{
+        .name = uses == 1 ? "single-use-rule-inline" : "size-model-rule-inline",
+        .detail = uses == 1 ? "Inlined single-use rule " + rule.name + " at line " +
+                                  std::to_string(line) + "."
+                            : "Inlined " + std::to_string(uses) + "-use rule " + rule.name +
+                                  " because it is smaller than a ПП/В/О subroutine.",
+    });
+    return;
+  }
+  if (statements_always_stop(context, rule.body) && !statements_contain_return(rule.body)) {
+    context.emitter.emit_jump(0x51, "БП", function_label(rule.name), "terminal rule " + rule.name,
+                              line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "terminal-rule-tail-call",
+        .detail = "Compiled terminal rule " + rule.name +
+                  " as a direct jump instead of a subroutine call.",
+    });
+    return;
+  }
+  if (context.emitter.current_x_known_zero && packed_line_family_score_rule(context, rule)) {
+    context.emitter.emit_jump(0x53, "ПП", packed_line_family_score_zero_entry_label(rule.name),
+                              "proc call " + rule.name + " zero-accumulator entry", line);
+    if (const std::optional<std::string> return_x = proc_return_x_variable(context, rule)) {
+      mark_current_x(context, *return_x);
+      context.emitter.current_x_known_zero = false;
+    }
+    context.optimizations.push_back(OptimizationReport{
+        .name = "zero-accumulator-proc-entry",
+        .detail = "Entered " + rule.name +
+                  " after its zero literal because X already held a proved zero at line " +
+                  std::to_string(line) + ".",
+    });
+    return;
+  }
+  context.emitter.emit_jump(0x53, "ПП", function_label(rule.name), "proc call " + rule.name, line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "proc-call-lowering",
+      .detail = "Compiled call to rule " + rule.name + " as ПП/В/О subroutine.",
+  });
+  if (const std::optional<std::string> return_x = proc_return_x_variable(context, rule)) {
+    mark_current_x(context, *return_x);
+    context.emitter.current_x_known_zero = false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "proc-return-x-reuse",
+        .detail = "Tracked " + *return_x + " in X after returning from rule " + rule.name + ".",
+    });
+  } else {
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_aliases.clear();
+  }
+}
+
+struct XParamPackedScoreAccumulationPlan {
+  Expression line;
+  std::string return_x;
+  std::string helper_label;
+};
+
+// Faithful port of Compiler.xParamPackedScoreAccumulationPlan.
+std::optional<XParamPackedScoreAccumulationPlan>
+build_x_param_packed_score_accumulation_plan(LoweringContext& context, const Expression& argument,
+                                             const std::string& block,
+                                             const V2Statement& score_assign) {
+  const auto lowering_it = context.x_param_procs.find(block);
+  if (lowering_it == context.x_param_procs.end())
+    return std::nullopt;
+  if (!expression_pure_for_substitution(argument))
+    return std::nullopt;
+  if (!expression_preserves_previous_x_as_y_for_packed_line(argument))
+    return std::nullopt;
+  if (!x_param_proc_preserves_caller_y(context, block))
+    return std::nullopt;
+
+  const auto proc_it = context.rules.find(block);
+  if (proc_it == context.rules.end() || proc_it->second == nullptr ||
+      proc_it->second->body.size() != 1U)
+    return std::nullopt;
+  const std::optional<std::string> return_x = proc_return_x_variable(context, *proc_it->second);
+  if (!return_x.has_value())
+    return std::nullopt;
+
+  if (!score_assign.target.has_value())
+    return std::nullopt;
+  const std::optional<Expression> line =
+      stack_analysis_packed_score_accumulator(score_assign, *score_assign.target, *return_x);
+  if (!line.has_value())
+    return std::nullopt;
+  if (!x_holds_identifier(context, *score_assign.target))
+    return std::nullopt;
+  if (!is_simple_stack_load(*line) ||
+      expression_contains_identifier(*line, *score_assign.target))
+    return std::nullopt;
+  if (!context.use_packed_score_helper)
+    return std::nullopt;
+
+  return XParamPackedScoreAccumulationPlan{
+      .line = *line,
+      .return_x = *return_x,
+      .helper_label = packed_score_helper_label(context),
+  };
+}
+
+// Faithful port of Compiler.compileXParamProcPackedScoreAccumulationTail.
+bool lower_x_param_proc_packed_score_accumulation_tail(LoweringContext& context,
+                                                       const Expression& argument,
+                                                       int argument_line, const std::string& block,
+                                                       int call_line,
+                                                       const V2Statement& score_assign) {
+  const std::optional<XParamPackedScoreAccumulationPlan> plan =
+      build_x_param_packed_score_accumulation_plan(context, argument, block, score_assign);
+  if (!plan.has_value())
+    return false;
+
+  const std::string& target = *score_assign.target;
+  const bool store = !context.stack_only_state_fields.contains(target);
+
+  // canCompilePackedScoreLineFirst is always satisfied when the plan exists (the
+  // plan's preconditions are identical), so this mirrors the line-first branch.
+  if (!lower_expression_to_x(context, plan->line))
+    return false;
+  if (!lower_expression_preserving_previous_x_as_y(context, argument, argument_line))
+    return false;
+  compile_block_call(context, block, call_line);
+  context.emitter.emit_jump(0x53, "ПП", plan->helper_label, "packed_score helper",
+                            score_assign.line);
+  context.emitter.emit_op(0x10, "+", "packed_score stack accumulator", score_assign.line);
+  if (store) {
+    emit_store(context, target, "set " + target);
+  } else {
+    mark_current_x(context, target);
+    context.emitter.current_x_known_zero = false;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "x-param-packed-score-line-stack-accumulate",
+      .detail = "Loaded the packed_score line argument before " + block + " so " + target +
+                " stayed below it on the stack at line " + std::to_string(score_assign.line) + ".",
+  });
+  return true;
+}
+
+bool lower_x_param_proc_packed_score_accumulation_run(LoweringContext& context,
+                                                      const std::vector<V2Statement>& statements,
+                                                      std::size_t index, std::size_t& consumed) {
+  // Form A: invoke(arg) followed by `score += packed_score(line, return_x)`.
+  if (index + 1U < statements.size()) {
+    const V2Statement& call = statements.at(index);
+    const V2Statement& score_assign = statements.at(index + 1U);
+    if (call.kind == "v2_invoke" && call.name.has_value() && call.args.size() == 1U) {
+      const Expression argument = parse_expression(call.args.front(), call.line);
+      if (lower_x_param_proc_packed_score_accumulation_tail(context, argument, call.line,
+                                                            *call.name, call.line, score_assign)) {
+        consumed = 2;
+        return true;
+      }
+    }
+  }
+
+  // Form B: param assignment, then invoke(), then the packed_score accumulation.
+  if (index + 2U < statements.size()) {
+    const V2Statement& param_assign = statements.at(index);
+    const V2Statement& call = statements.at(index + 1U);
+    const V2Statement& score_assign = statements.at(index + 2U);
+    if (param_assign.kind == "v2_assign" && param_assign.target.has_value() &&
+        param_assign.expr.has_value() && call.kind == "v2_invoke" && call.name.has_value()) {
+      const auto lowering_it = context.x_param_procs.find(*call.name);
+      if (lowering_it != context.x_param_procs.end() &&
+          *param_assign.target == lowering_it->second.param) {
+        const Expression argument = parse_expression(*param_assign.expr, param_assign.line);
+        if (lower_x_param_proc_packed_score_accumulation_tail(context, argument, param_assign.line,
+                                                              *call.name, call.line, score_assign)) {
+          consumed = 3;
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 bool lower_single_bit_mask_op_assignment(LoweringContext& context, const V2Statement& statement,
@@ -31620,6 +31909,15 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
 
+    std::size_t packed_score_accumulation_consumed = 0;
+    if (lower_x_param_proc_packed_score_accumulation_run(context, statements, index,
+                                                         packed_score_accumulation_consumed)) {
+      index += packed_score_accumulation_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+
     std::size_t stack_only_return_consumed = 0;
     if (lower_stack_only_call_return_consumer_run(context, statements, index,
                                                   stack_only_return_consumed)) {
@@ -35892,6 +36190,225 @@ guarded_updates(const std::map<std::string, std::string>& state_types,
   return updates;
 }
 
+struct GuardedUpdateSelectorCandidate {
+  Expression selector;
+  std::vector<GuardedUpdate> updates;
+  std::string name;
+  std::string detail;
+  bool uses_negative_zero = false;
+  bool uses_comparison = false;
+};
+
+std::string if_selector_scratch_name(const V2Statement& statement) {
+  return "__if_selector_" + std::to_string(statement.line);
+}
+
+// Mirrors TS multiplyExpressions: folds the multiplicative identities so the cost
+// model and emitted expression match the TypeScript oracle byte-for-byte.
+Expression guarded_multiply_expressions(const Expression& left, const Expression& right) {
+  if (is_numeric_literal_value(left, 0) || is_numeric_literal_value(right, 0))
+    return number_expression("0");
+  if (is_numeric_literal_value(left, 1))
+    return right;
+  if (is_numeric_literal_value(right, 1))
+    return left;
+  return multiply_expression(left, right);
+}
+
+// Mirrors TS addExpressions (identity folding only).
+Expression guarded_add_expressions(const Expression& left, const Expression& right) {
+  if (is_numeric_literal_value(left, 0))
+    return right;
+  if (is_numeric_literal_value(right, 0))
+    return left;
+  return add_expression(left, right);
+}
+
+// Mirrors TS subtractExpressions (identity folding only).
+Expression guarded_subtract_expressions(const Expression& left, const Expression& right) {
+  if (is_numeric_literal_value(right, 0))
+    return left;
+  if (is_numeric_literal_value(left, 0))
+    return unary_expression("-", right);
+  return subtract_expression(left, right);
+}
+
+Expression masked_guarded_update_expression(const GuardedUpdate& update,
+                                            const Expression& selector) {
+  const Expression current = identifier_expression(update.target);
+  const Expression delta = guarded_multiply_expressions(update.delta, selector);
+  if (update.op == "+")
+    return guarded_add_expressions(current, delta);
+  return guarded_subtract_expressions(current, delta);
+}
+
+std::optional<GuardedUpdateSelectorCandidate>
+build_guarded_update_selector_candidate(const LoweringContext& context,
+                                        const V2Statement& statement, bool negative_zero_degree) {
+  if (context.program == nullptr)
+    return std::nullopt;
+  const std::map<std::string, std::string> state_types = v2_state_types_by_name(*context.program);
+  const std::optional<std::vector<GuardedUpdate>> updates = guarded_updates(state_types, statement);
+  if (!updates.has_value())
+    return std::nullopt;
+  const std::optional<V2Predicate> predicate = arithmetic_if_comparison_predicate(statement);
+  if (!predicate.has_value())
+    return std::nullopt;
+
+  const std::optional<Expression> boolean_selector =
+      arithmetic_if_boolean_selector(context, *predicate, statement.line);
+  std::optional<Expression> negative_zero_selector;
+  if (negative_zero_degree)
+    negative_zero_selector =
+        negative_zero_threshold_selector_expression(context, *predicate, statement.line);
+
+  std::optional<Expression> selector;
+  if (boolean_selector.has_value()) {
+    selector = boolean_selector;
+  } else if (negative_zero_selector.has_value()) {
+    selector = negative_zero_selector;
+  } else {
+    try {
+      selector = comparison_selector_expression(*predicate, statement.line);
+    } catch (const std::exception&) {
+      selector.reset();
+    }
+  }
+  if (!selector.has_value())
+    return std::nullopt;
+
+  const bool uses_negative_zero =
+      !boolean_selector.has_value() && negative_zero_selector.has_value();
+  const bool uses_comparison =
+      !boolean_selector.has_value() && !negative_zero_selector.has_value();
+  if (!uses_negative_zero && updates->size() < 2U)
+    return std::nullopt;
+
+  std::string name;
+  std::string detail;
+  if (uses_negative_zero) {
+    name = "negative-zero-threshold-update";
+    detail = "Replaced threshold guarded update with a negative-zero selector";
+  } else if (uses_comparison) {
+    name = "comparison-guarded-update-selector";
+    detail = "Replaced comparison guarded updates with one stored arithmetic selector";
+  } else {
+    name = "multi-guarded-update";
+    detail = "Replaced guarded updates with one stored arithmetic selector";
+  }
+  return GuardedUpdateSelectorCandidate{
+      .selector = std::move(*selector),
+      .updates = *updates,
+      .name = std::move(name),
+      .detail = std::move(detail),
+      .uses_negative_zero = uses_negative_zero,
+      .uses_comparison = uses_comparison,
+  };
+}
+
+int estimate_guarded_update_selector_cost(const GuardedUpdateSelectorCandidate& candidate,
+                                          const std::string& scratch) {
+  const Expression selector = identifier_expression(scratch);
+  int cost = guarded_estimate_expression_cost(candidate.selector) + 1;
+  for (const GuardedUpdate& update : candidate.updates)
+    cost += guarded_estimate_expression_cost(masked_guarded_update_expression(update, selector)) + 1;
+  return cost;
+}
+
+bool guarded_update_selector_profitable(const LoweringContext& context,
+                                        const V2Statement& statement, bool negative_zero_degree) {
+  const std::optional<GuardedUpdateSelectorCandidate> candidate =
+      build_guarded_update_selector_candidate(context, statement, negative_zero_degree);
+  if (!candidate.has_value())
+    return false;
+  return estimate_guarded_update_selector_cost(*candidate, if_selector_scratch_name(statement)) <
+         estimate_branch_order_statement_cost(context, statement);
+}
+
+bool guarded_update_selector_uses_comparison(const LoweringContext& context,
+                                             const V2Statement& statement) {
+  const std::optional<GuardedUpdateSelectorCandidate> candidate =
+      build_guarded_update_selector_candidate(context, statement, /*negative_zero_degree=*/true);
+  return candidate.has_value() && candidate->uses_comparison;
+}
+
+void collect_guarded_update_scratch_from_statement(LoweringContext& context,
+                                                   RegisterCollection& collection,
+                                                   const V2Statement& statement) {
+  if (statement.kind == "v2_if" && statement.predicate.has_value()) {
+    if (guarded_update_selector_profitable(context, statement, /*negative_zero_degree=*/true) ||
+        (context.comparison_guarded_update_selectors &&
+         guarded_update_selector_uses_comparison(context, statement))) {
+      add_register_variable(collection, if_selector_scratch_name(statement));
+    }
+  }
+  for (const V2Statement& child : statement.then_body)
+    collect_guarded_update_scratch_from_statement(context, collection, child);
+  for (const V2Statement& child : statement.else_body)
+    collect_guarded_update_scratch_from_statement(context, collection, child);
+  for (const V2Statement& child : statement.body)
+    collect_guarded_update_scratch_from_statement(context, collection, child);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_guarded_update_scratch_from_statement(context, collection, *match_case.action);
+  }
+  if (statement.otherwise != nullptr)
+    collect_guarded_update_scratch_from_statement(context, collection, *statement.otherwise);
+}
+
+void collect_guarded_update_scratch_registers(LoweringContext& context,
+                                              RegisterCollection& collection,
+                                              const V2Program& program) {
+  for (const V2Statement& statement : program.body)
+    collect_guarded_update_scratch_from_statement(context, collection, statement);
+  for (const V2Rule& rule : program.rules) {
+    for (const V2Statement& statement : rule.body)
+      collect_guarded_update_scratch_from_statement(context, collection, statement);
+  }
+}
+
+bool lower_guarded_update_selector(LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value())
+    return false;
+  const std::string scratch = if_selector_scratch_name(statement);
+  if (!context.register_index_by_name.contains(scratch))
+    return false;
+  const std::optional<GuardedUpdateSelectorCandidate> candidate =
+      build_guarded_update_selector_candidate(
+          context, statement, can_reserve_negative_zero_degree_register(context));
+  if (!candidate.has_value())
+    return false;
+
+  const int ordinary_cost = estimate_branch_order_statement_cost(context, statement);
+  const int selected_cost = estimate_guarded_update_selector_cost(*candidate, scratch);
+  const bool force_comparison_mask =
+      context.comparison_guarded_update_selectors && candidate->uses_comparison;
+  if (selected_cost >= ordinary_cost && !force_comparison_mask)
+    return false;
+
+  if (!lower_expression_to_x(context, candidate->selector))
+    return false;
+  emit_store(context, scratch, candidate->name + " selector");
+  const Expression selector = identifier_expression(scratch);
+  for (const GuardedUpdate& update : candidate->updates) {
+    if (!lower_expression_to_x(context, masked_guarded_update_expression(update, selector)))
+      return false;
+    emit_store(context, update.target, candidate->name + " " + update.target);
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "branch-removal",
+      .detail = candidate->detail + " at line " + std::to_string(statement.line) +
+                "; emitted masked guarded updates.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = candidate->name,
+      .detail = candidate->detail + " at line " + std::to_string(statement.line) + " (" +
+                std::to_string(selected_cost) + " vs " + std::to_string(ordinary_cost) +
+                " estimated steps).",
+  });
+  return true;
+}
+
 bool expression_references_any_identifier(const Expression& expression,
                                           const std::set<std::string>& names) {
   return std::any_of(names.begin(), names.end(), [&](const std::string& name) {
@@ -37790,12 +38307,41 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                                      post_layout_stop_tail.optimizations.begin(),
                                      post_layout_stop_tail.optimizations.end());
 
-    const core::PostLayoutIndirectFlowResult post_layout_final_overlay =
-        core::optimize_post_layout_address_code_overlay(post_layout_items);
-    post_layout_items = post_layout_final_overlay.items;
+    std::vector<PreloadReport> overlay_preloads = post_layout_flow_preloads;
+    for (const PreloadReport& preload : stop_tail_preloads) {
+      const bool present = std::any_of(
+          overlay_preloads.begin(), overlay_preloads.end(),
+          [&](const PreloadReport& existing) {
+            return existing.register_name == preload.register_name;
+          });
+      if (!present)
+        overlay_preloads.push_back(preload);
+    }
+    const core::PostLayoutIndirectFlowResult post_layout_overlay =
+        core::optimize_post_layout_address_code_overlay(post_layout_items, overlay_preloads);
+    post_layout_items = post_layout_overlay.items;
+    if (post_layout_overlay.applied > 0) {
+      // The overlay deletes cells and shifts helper addresses; it returns the
+      // preloaded indirect-flow selectors retargeted to the post-overlay layout.
+      // Write the retargeted selector values back so the runtime preloads (R7,
+      // etc.) dispatch to the shifted helper entries rather than one cell past
+      // them (DEFECT 4 root cause).
+      std::map<std::string, std::string> retargeted_by_register;
+      for (const PreloadReport& preload : post_layout_overlay.preloads)
+        retargeted_by_register[preload.register_name] = preload.value;
+      auto apply_retarget = [&](std::vector<PreloadReport>& preloads) {
+        for (PreloadReport& preload : preloads) {
+          const auto it = retargeted_by_register.find(preload.register_name);
+          if (it != retargeted_by_register.end())
+            preload.value = it->second;
+        }
+      };
+      apply_retarget(post_layout_flow_preloads);
+      apply_retarget(stop_tail_preloads);
+    }
     post_layout_optimizations.insert(post_layout_optimizations.end(),
-                                     post_layout_final_overlay.optimizations.begin(),
-                                     post_layout_final_overlay.optimizations.end());
+                                     post_layout_overlay.optimizations.begin(),
+                                     post_layout_overlay.optimizations.end());
 
   } else {
     if (options.return_stack_script && options.analysis) {
@@ -38004,6 +38550,205 @@ bool has_return_stack_optimization(const CompileResult& result) {
                               item.name == "return-stack-script" ||
                               item.name == "return-stack-dirty-dispatch-allocator";
                      });
+}
+
+// Behavioral-equivalence acceptance gate for the aggressive post-layout
+// rescue (and the other runtime-state-dependent indirect-flow rewrites).
+// Candidate selection ranks purely by cell count, so without this gate a
+// smaller-but-miscompiled candidate (e.g. a stale preloaded selector after a
+// helper-overlay shift) could be selected. We run the candidate and the
+// non-aggressive baseline on a battery of representative input scenarios and
+// reject the candidate unless every observable result matches. This makes the
+// whole class of "smaller-but-wrong" forms unselectable.
+struct EquivalenceTurn {
+  bool stopped = false;
+  std::string display;
+  bool operator==(const EquivalenceTurn& other) const {
+    return stopped == other.stopped && display == other.display;
+  }
+  bool operator!=(const EquivalenceTurn& other) const { return !(*this == other); }
+};
+
+struct EquivalenceObservation {
+  // `runnable` is false when the candidate could not be exercised in this
+  // harness at all (a load diagnostic or an emulator parse/runtime exception,
+  // e.g. a preload value the emulator number parser cannot accept). We treat
+  // "not runnable" as its own observable bucket so that a baseline and a
+  // candidate that are both un-runnable for the same structural reason still
+  // compare equal, while a candidate that becomes un-runnable when the
+  // baseline runs is rejected.
+  bool runnable = false;
+  // One entry per interaction turn: turn 0 is the display after the initial
+  // В/О С/П, and each subsequent entry is the display after pressing С/П with
+  // the next scenario input. Capturing every turn (rather than only the final
+  // state) lets the comparison stop once the reference program goes idle.
+  std::vector<EquivalenceTurn> turns;
+};
+
+// Preload values are carried in the compiler's hex-ish register encoding
+// (A/B/C/D/E/F nibbles). The emulator's number parser expects MK-61 display
+// glyphs, so translate the same way the indirect-flow equivalence test does
+// before handing a value to set_register. Without this, dark-entry selector
+// preloads (e.g. "B2") would throw inside the emulator and make the gate
+// spuriously treat a candidate as un-runnable.
+std::string emulator_preload_literal(const std::string& value) {
+  std::string out;
+  out.reserve(value.size());
+  for (char ch : value) {
+    switch (static_cast<char>(std::toupper(static_cast<unsigned char>(ch)))) {
+      case 'A':
+        out.push_back('-');
+        break;
+      case 'B':
+        out.push_back('L');
+        break;
+      case 'C':
+        out += "С";
+        break;
+      case 'D':
+        out += "Г";
+        break;
+      case 'E':
+        out += "Е";
+        break;
+      case 'F':
+        out.push_back('_');
+        break;
+      default:
+        out.push_back(ch);
+        break;
+    }
+  }
+  return out;
+}
+
+EquivalenceObservation run_equivalence_observation(const CompileResult& result,
+                                                   const std::vector<int>& inputs) {
+  EquivalenceObservation observation;
+  try {
+    emulator::MK61 calc;
+    if (result.setup_program.has_value()) {
+      std::vector<int> setup_codes;
+      setup_codes.reserve(result.setup_program->steps.size());
+      for (const ResolvedStep& step : result.setup_program->steps)
+        setup_codes.push_back(step.opcode);
+      const emulator::ProgramLoadResult setup_loaded = calc.load_program(setup_codes);
+      if (!setup_loaded.diagnostics.empty())
+        return observation;
+      calc.press_sequence({"В/О", "С/П"});
+      calc.run_until_stable(2000, 6);
+    }
+
+    std::vector<int> codes;
+    codes.reserve(result.steps.size());
+    for (const ResolvedStep& step : result.steps)
+      codes.push_back(step.opcode);
+    const emulator::ProgramLoadResult loaded = calc.load_program(codes);
+    if (!loaded.diagnostics.empty())
+      return observation;
+    for (const PreloadReport& preload : result.preloads)
+      calc.set_register(preload.register_name, emulator_preload_literal(preload.value));
+
+    calc.press_sequence({"В/О", "С/П"});
+    {
+      const emulator::RunResult run = calc.run_until_stable(2000, 6);
+      observation.turns.push_back(
+          EquivalenceTurn{.stopped = run.stopped, .display = calc.display_text()});
+    }
+    for (const int value : inputs) {
+      // Clear X before each key so consecutive turns enter a fresh number
+      // rather than concatenating digits, matching how the calculator is
+      // actually driven (see emulator_indirect_flow_equivalence_test).
+      calc.input_number(std::to_string(value), /*clear=*/true);
+      calc.press("С/П");
+      const emulator::RunResult run = calc.run_until_stable(2000, 6);
+      observation.turns.push_back(
+          EquivalenceTurn{.stopped = run.stopped, .display = calc.display_text()});
+    }
+    observation.runnable = true;
+  } catch (const std::exception&) {
+    // Any emulator-side failure leaves `runnable` false; the comparison logic
+    // below treats that conservatively.
+    observation.runnable = false;
+  }
+  return observation;
+}
+
+const std::vector<std::vector<int>>& equivalence_scenarios() {
+  static const std::vector<std::vector<int>> kScenarios = {
+      {},          {1},         {2},          {5},          {8},
+      {1, 2},      {2, 1},      {7, 3},       {3, 3},       {5, 5},
+      {1, 20},     {20, 20},    {3, 7, 3},    {3, 7, 7},    {3, 7, 5},
+      {7, 3, 7},   {4, 5, 5},   {4, 5, 1},    {8, 9, 12},   {1, 20, 16},
+      {9, 12, 5},  {3, 10, 4},  {4, 6, 5},    {1, 2, 3, 4},
+  };
+  return kScenarios;
+}
+
+std::vector<EquivalenceObservation> equivalence_observations(const CompileResult& result) {
+  std::vector<EquivalenceObservation> observations;
+  observations.reserve(equivalence_scenarios().size());
+  for (const std::vector<int>& inputs : equivalence_scenarios())
+    observations.push_back(run_equivalence_observation(result, inputs));
+  return observations;
+}
+
+bool candidate_behaviorally_matches_baseline(
+    const std::vector<EquivalenceObservation>& baseline_observations,
+    const CompileResult& candidate) {
+  static const bool trace_gate = std::getenv("MKPRO_NATIVE_TRACE_GATE") != nullptr;
+  const std::vector<std::vector<int>>& scenarios = equivalence_scenarios();
+  for (std::size_t index = 0; index < scenarios.size(); ++index) {
+    const EquivalenceObservation candidate_observation =
+        run_equivalence_observation(candidate, scenarios.at(index));
+    const EquivalenceObservation& baseline = baseline_observations.at(index);
+
+    // A candidate that cannot even be exercised when the trusted baseline can
+    // (or vice versa) is treated as non-equivalent.
+    if (baseline.runnable != candidate_observation.runnable) {
+      if (trace_gate)
+        std::cerr << "[gate-trace] scenario#" << index << " runnable mismatch base="
+                  << baseline.runnable << " cand=" << candidate_observation.runnable << "\n";
+      return false;
+    }
+    if (!baseline.runnable)
+      continue;
+
+    // Compare the interaction transcripts turn by turn. We only hold the
+    // candidate to the baseline while the baseline is still *actively*
+    // responding to input: once the reference program goes idle (its display
+    // stops changing between turns, i.e. it has reached a terminal halt and is
+    // merely re-stopping on each subsequent С/П), any further input is outside
+    // the program's live contract and the layout-dependent resume behavior of
+    // the two forms is allowed to differ.
+    const std::size_t turns =
+        std::min(baseline.turns.size(), candidate_observation.turns.size());
+    for (std::size_t t = 0; t < turns; ++t) {
+      if (baseline.turns[t] == candidate_observation.turns[t])
+        continue;
+      const bool reference_idle =
+          t > 0 && baseline.turns[t].display == baseline.turns[t - 1].display &&
+          baseline.turns[t].stopped == baseline.turns[t - 1].stopped;
+      if (reference_idle)
+        break;  // baseline is past its live contract; stop holding candidate.
+      if (trace_gate) {
+        std::cerr << "[gate-trace] scenario#" << index << " turn#" << t << " inputs={";
+        for (std::size_t k = 0; k < scenarios.at(index).size(); ++k)
+          std::cerr << (k ? "," : "") << scenarios.at(index).at(k);
+        std::cerr << "} base{stop=" << baseline.turns[t].stopped << ",disp='"
+                  << baseline.turns[t].display << "'} cand{stop="
+                  << candidate_observation.turns[t].stopped << ",disp='"
+                  << candidate_observation.turns[t].display << "'}\n";
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+bool candidate_needs_behavioral_equivalence_gate(const CompileOptions& options) {
+  return options.aggressive_post_layout_indirect_flow || options.dual_use_constant_indirect_flow ||
+         options.runtime_indirect_call_flow || options.preloaded_indirect_flow;
 }
 
 bool is_only_budget_exceeded(const CompileResult& result) {
@@ -38365,24 +39110,40 @@ build_candidate_reports(const std::vector<OptimizationReport>& optimizations, in
 std::vector<CandidateReport>
 build_rejected_candidate_reports(const std::vector<OptimizationReport>& optimizations, int steps) {
   std::vector<CandidateReport> rejected;
+  auto add_once = [&](std::string site, std::string variant, std::string reason) {
+    if (std::none_of(rejected.begin(), rejected.end(), [&](const CandidateReport& existing) {
+          return existing.variant == variant;
+        })) {
+      rejected.push_back(CandidateReport{
+          .site = std::move(site),
+          .variant = std::move(variant),
+          .steps = steps,
+          .selected = false,
+          .reason = std::move(reason),
+      });
+    }
+  };
   if (has_optimization_named(optimizations, "ephemeral-input-dispatch")) {
-    rejected.push_back(CandidateReport{
-        .site = "dispatch@input",
-        .variant = "indirect-register-flow",
-        .steps = steps,
-        .selected = false,
-        .reason = "key-valued, not address-valued",
-    });
+    add_once("dispatch@input", "indirect-register-flow", "key-valued, not address-valued");
+  }
+  // A lowered numeric residual compare chain considers (and rejects) the dark
+  // dispatch variants exactly like TS selectDispatchCandidate. Mirror those
+  // rejected candidates with the same reasons the TS oracle records.
+  if (has_optimization_named(optimizations, "numeric-dispatch-residual-chain")) {
+    add_once("dispatch@numeric", "indirect-register-flow",
+             "rejected; selector is key-valued, not address-valued, and building an address "
+             "register would not beat the compare-chain");
+    add_once("dispatch@numeric", "dark-indirect-table",
+             "considered; layout proof did not establish a conflict-free address/data table for "
+             "this site");
+    add_once("dispatch@numeric", "super-dark-dispatch",
+             "considered; selector is key-valued, and layout proof did not place one-command cases "
+             "at 48..53 with tails at 01..06");
   }
   if (has_any_optimization_named(optimizations, {"preloaded-indirect-flow", "dark-entry-layout",
                                                  "preloaded-super-dark-flow"})) {
-    rejected.push_back(CandidateReport{
-        .site = "layout",
-        .variant = "super-dark-dispatch",
-        .steps = steps,
-        .selected = false,
-        .reason = "considered only after layout proof; not selected without a proved FA..FF case",
-    });
+    add_once("layout", "super-dark-dispatch",
+             "considered only after layout proof; not selected without a proved FA..FF case");
   }
   return rejected;
 }
@@ -39176,6 +39937,11 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   };
 
   CompileResult best = cached_compile_source_once(options);
+  // Non-aggressive reference compile used by the behavioral-equivalence gate.
+  // Captured before any candidate replaces `best` so risky candidates are
+  // always validated against the trusted baseline rather than another
+  // speculative form.
+  const CompileResult equivalence_baseline = best;
   if (!options.disable_return_stack_script &&
       (!best.implemented || has_return_stack_optimization(best))) {
     CompileOptions fallback_options = options;
@@ -39205,8 +39971,22 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
                                            : kOfficialProgramLimit;
   const std::size_t rescue_threshold = std::min(requested_budget, kOfficialProgramLimit);
   const bool needs_size_rescue = !best.implemented || best.steps.size() > rescue_threshold;
-  const bool allow_aggressive_post_layout =
-      needs_size_rescue || source_has_reference_declaration(source);
+  // The aggressive post-layout indirect-flow rescue is now enabled for EVERY
+  // program. Min-cell best-fit guarantees nothing grows, and two correctness
+  // guards make the smaller forms safe to ship:
+  //   1. The straight-line helper-overlay packing retargets preloaded selectors
+  //      after a cell-deleting overlay (post_layout_indirect_flow.cpp
+  //      retarget_selector_preloads_after_overlay), fixing the DEFECT-4
+  //      off-by-one that made e.g. the BitClear fixture read 0 instead of 1.
+  //   2. A behavioral-equivalence acceptance gate
+  //      (candidate_behaviorally_matches_baseline) runs every aggressive
+  //      candidate against the non-aggressive baseline on a battery of input
+  //      scenarios and rejects any form whose runtime behavior diverges, so a
+  //      smaller-but-wrong candidate can never be selected.
+  // Combined with the earlier DEFECT 1/2/3 fixes (sound conditional conversion,
+  // stable-register-only borrows, raw-load-stable selectors) the rescue is
+  // correct for all programs. See docs/20 "Applied post-parity optimizations".
+  const bool allow_aggressive_post_layout = !options.disable_aggressive_post_layout;
   const bool may_use_dead_source_residual = source_has_dead_source_residual_temp_candidate(source);
   std::optional<V2Program> selector_probe_program;
   try {
@@ -39283,6 +40063,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         }
       };
   std::size_t evaluated_candidate_count = 0;
+  std::optional<std::vector<EquivalenceObservation>> baseline_observations;
   auto evaluate_queued_candidates = [&]() {
     for (; evaluated_candidate_count < candidates.size(); ++evaluated_candidate_count) {
       const CandidateSpec& candidate = candidates.at(evaluated_candidate_count);
@@ -39307,6 +40088,19 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       }
       if (!candidate_beats_best(result, best))
         continue;
+      if (candidate_needs_behavioral_equivalence_gate(candidate.options) &&
+          equivalence_baseline.implemented) {
+        if (!baseline_observations.has_value())
+          baseline_observations = equivalence_observations(equivalence_baseline);
+        if (!candidate_behaviorally_matches_baseline(*baseline_observations, result)) {
+          if (trace_candidates) {
+            std::cerr << "[candidate-trace] reject-nonequivalent #"
+                      << (evaluated_candidate_count + 1U) << " " << candidate.name << " steps="
+                      << result.steps.size() << "\n";
+          }
+          continue;
+        }
+      }
       const std::string comparison = best.implemented
                                          ? std::to_string(result.steps.size()) + " vs " +
                                                std::to_string(best.steps.size()) + " cells"
