@@ -11,6 +11,7 @@ namespace mkpro::tests {
 void arithmetic_if_matches_typescript_contract();
 void bit_mask_quotient_reuse_matches_typescript_contract();
 void board_width_macros_matches_typescript_contract();
+void branch_target_x_reuse_matches_typescript_contract();
 void cfg_matches_typescript_contract();
 void compiler_coord_list_lowering_matches_typescript_contract();
 void compiler_display_lowering_matches_typescript_contract();
@@ -26,11 +27,43 @@ void display_byte_helpers_match_typescript_contract();
 void display_lowering_helpers_match_typescript_contract();
 void duplicate_failure_tail_matches_typescript_contract();
 void emitter_matches_initial_typescript_contract();
+void exact_decimal_arithmetic_matches_typescript_contract();
+void emulator_bitmask_facts_match_typescript_contract();
+void emulator_constants_dual_use_matches_typescript_contract();
+void emulator_domain_error_guard_matches_typescript_contract();
+void emulator_display_byte_facts_match_typescript_contract();
+void emulator_fractional_r0_matches_typescript_contract();
+void emulator_hex_arithmetic_facts_match_typescript_contract();
+void emulator_function_equivalence_matches_typescript_contract();
+void emulator_fl_counter_facts_match_typescript_contract();
+void emulator_if_chain_dispatch_matches_typescript_contract();
+void emulator_indirect_flow_equivalence_matches_typescript_contract();
+void emulator_indirect_incdec_facts_match_typescript_contract();
+void emulator_int_frac_shared_tail_matches_typescript_contract();
+void emulator_interprocedural_equivalence_matches_typescript_contract();
+void emulator_log_selector_premise_matches_typescript_contract();
+void emulator_mk61_execution_matches_typescript_contract();
+void emulator_near_any_helper_matches_typescript_contract();
+void emulator_number_entry_concat_matches_typescript_contract();
+void emulator_packed_position_facts_match_typescript_contract();
+void emulator_recall_side_effects_match_typescript_contract();
+void emulator_regression_matches_typescript_contract();
+void emulator_rom_tables_match_typescript_contract();
+void emulator_stack_dup_equivalence_matches_typescript_contract();
+void emulator_stack_resident_equivalence_matches_typescript_contract();
+void emulator_super_dark_matches_typescript_contract();
+void emulator_vo_return_matches_typescript_contract();
+void emulator_vp_splice_equivalence_matches_typescript_contract();
+void emulator_x2_dead_restore_matches_typescript_contract();
+void emulator_x2_restore_context_matches_typescript_contract();
+void emulator_z_stack_derived_tail_matches_typescript_contract();
 void example_sizes_match_typescript_baselines();
 void compiler_examples_match_typescript_contract();
 void supported_examples_match_native_oracles();
 void expression_helpers_match_typescript_contract();
 void expression_lowering_helpers_match_typescript_contract();
+void flow_structure_passes_match_typescript_contract();
+void flow_x_reuse_matches_typescript_contract();
 void formal_address_matches_typescript_contract();
 void format_primitives_match_typescript_contract();
 void golden_listing_contract_matches_typescript_contract();
@@ -40,6 +73,7 @@ void indirect_addressing_matches_typescript_contract();
 void indirect_selector_integer_part_matches_typescript_contract();
 void inline_floor_packed_row_matches_typescript_contract();
 void ir_round_trip_matches_typescript_contract();
+void last_x_reuse_matches_typescript_contract();
 void liveness_analysis_matches_typescript_contract();
 void lowering_helpers_match_typescript_contract();
 void machine_profile_matches_typescript_contract();
@@ -68,6 +102,7 @@ void safe_minmax_matches_typescript_contract();
 void segmented_bitplanes_match_typescript_contract();
 void setup_program_matches_typescript_contract();
 void setup_only_counted_loop_matches_typescript_contract();
+void store_recall_peephole_matches_typescript_contract();
 void show_read_guarded_transfer_matches_typescript_contract();
 void show_optimization_strategies_match_typescript_contract();
 void show_sequence_helpers_match_typescript_contract();
@@ -81,6 +116,24 @@ void style_lints_matches_typescript_contract();
 void super_dark_layout_matches_typescript_contract();
 void v2_const_matches_typescript_contract();
 void x2_register_dataflow_matches_typescript_contract();
+void x2_shape_data_model_matches_typescript_contract();
+void x2_display_cluster_matches_typescript_contract();
+void x2_structural_unary_matches_typescript_contract();
+void x2_structural_bitwise_matches_typescript_contract();
+void x2_structural_hex_binary_matches_typescript_contract();
+void x2_stable_expression_matches_typescript_contract();
+void x2_state_builders_matches_typescript_contract();
+void x2_vp_splice_matches_typescript_contract();
+void x2_vp_entry_matches_typescript_contract();
+void x2_transfer_plain_matches_typescript_contract();
+void x2_value_dataflow_matches_typescript_contract();
+void x2_join_matches_typescript_contract();
+void x2_noop_restore_matches_typescript_contract();
+void x2_hidden_temp_restore_matches_typescript_contract();
+void x2_literal_restore_matches_typescript_contract();
+void vp_x2_peephole_matches_typescript_contract();
+void vp_splice_matches_typescript_contract();
+void pre_shift_stack_lift_matches_typescript_contract();
 
 } // namespace mkpro::tests
 
@@ -105,7 +158,6 @@ bool env_flag_enabled(const char* name) {
 } // namespace
 
 int main(int argc, char** argv) {
-  const std::string filter = argc > 1 ? argv[1] : "";
   const std::vector<TestCase> tests = {
       {"arithmetic_if_matches_typescript_contract",
        mkpro::tests::arithmetic_if_matches_typescript_contract},
@@ -113,6 +165,8 @@ int main(int argc, char** argv) {
        mkpro::tests::bit_mask_quotient_reuse_matches_typescript_contract},
       {"board_width_macros_matches_typescript_contract",
        mkpro::tests::board_width_macros_matches_typescript_contract},
+      {"branch_target_x_reuse_matches_typescript_contract",
+       mkpro::tests::branch_target_x_reuse_matches_typescript_contract},
       {"cfg_matches_typescript_contract", mkpro::tests::cfg_matches_typescript_contract},
       {"compiler_coord_list_lowering_matches_typescript_contract",
        mkpro::tests::compiler_coord_list_lowering_matches_typescript_contract},
@@ -141,6 +195,66 @@ int main(int argc, char** argv) {
        mkpro::tests::duplicate_failure_tail_matches_typescript_contract},
       {"emitter_matches_initial_typescript_contract",
        mkpro::tests::emitter_matches_initial_typescript_contract},
+      {"exact_decimal_arithmetic_matches_typescript_contract",
+       mkpro::tests::exact_decimal_arithmetic_matches_typescript_contract},
+      {"emulator_bitmask_facts_match_typescript_contract",
+       mkpro::tests::emulator_bitmask_facts_match_typescript_contract},
+      {"emulator_constants_dual_use_matches_typescript_contract",
+       mkpro::tests::emulator_constants_dual_use_matches_typescript_contract},
+      {"emulator_domain_error_guard_matches_typescript_contract",
+       mkpro::tests::emulator_domain_error_guard_matches_typescript_contract},
+      {"emulator_display_byte_facts_match_typescript_contract",
+       mkpro::tests::emulator_display_byte_facts_match_typescript_contract},
+      {"emulator_fractional_r0_matches_typescript_contract",
+       mkpro::tests::emulator_fractional_r0_matches_typescript_contract},
+      {"emulator_hex_arithmetic_facts_match_typescript_contract",
+       mkpro::tests::emulator_hex_arithmetic_facts_match_typescript_contract},
+      {"emulator_function_equivalence_matches_typescript_contract",
+       mkpro::tests::emulator_function_equivalence_matches_typescript_contract},
+      {"emulator_fl_counter_facts_match_typescript_contract",
+       mkpro::tests::emulator_fl_counter_facts_match_typescript_contract},
+      {"emulator_if_chain_dispatch_matches_typescript_contract",
+       mkpro::tests::emulator_if_chain_dispatch_matches_typescript_contract},
+      {"emulator_indirect_flow_equivalence_matches_typescript_contract",
+       mkpro::tests::emulator_indirect_flow_equivalence_matches_typescript_contract},
+      {"emulator_indirect_incdec_facts_match_typescript_contract",
+       mkpro::tests::emulator_indirect_incdec_facts_match_typescript_contract},
+      {"emulator_int_frac_shared_tail_matches_typescript_contract",
+       mkpro::tests::emulator_int_frac_shared_tail_matches_typescript_contract},
+      {"emulator_interprocedural_equivalence_matches_typescript_contract",
+       mkpro::tests::emulator_interprocedural_equivalence_matches_typescript_contract},
+      {"emulator_log_selector_premise_matches_typescript_contract",
+       mkpro::tests::emulator_log_selector_premise_matches_typescript_contract},
+      {"emulator_mk61_execution_matches_typescript_contract",
+       mkpro::tests::emulator_mk61_execution_matches_typescript_contract},
+      {"emulator_near_any_helper_matches_typescript_contract",
+       mkpro::tests::emulator_near_any_helper_matches_typescript_contract},
+      {"emulator_number_entry_concat_matches_typescript_contract",
+       mkpro::tests::emulator_number_entry_concat_matches_typescript_contract},
+      {"emulator_packed_position_facts_match_typescript_contract",
+       mkpro::tests::emulator_packed_position_facts_match_typescript_contract},
+      {"emulator_recall_side_effects_match_typescript_contract",
+       mkpro::tests::emulator_recall_side_effects_match_typescript_contract},
+      {"emulator_regression_matches_typescript_contract",
+       mkpro::tests::emulator_regression_matches_typescript_contract},
+      {"emulator_rom_tables_match_typescript_contract",
+       mkpro::tests::emulator_rom_tables_match_typescript_contract},
+      {"emulator_stack_dup_equivalence_matches_typescript_contract",
+       mkpro::tests::emulator_stack_dup_equivalence_matches_typescript_contract},
+      {"emulator_stack_resident_equivalence_matches_typescript_contract",
+       mkpro::tests::emulator_stack_resident_equivalence_matches_typescript_contract},
+      {"emulator_super_dark_matches_typescript_contract",
+       mkpro::tests::emulator_super_dark_matches_typescript_contract},
+      {"emulator_vo_return_matches_typescript_contract",
+       mkpro::tests::emulator_vo_return_matches_typescript_contract},
+      {"emulator_vp_splice_equivalence_matches_typescript_contract",
+       mkpro::tests::emulator_vp_splice_equivalence_matches_typescript_contract},
+      {"emulator_x2_dead_restore_matches_typescript_contract",
+       mkpro::tests::emulator_x2_dead_restore_matches_typescript_contract},
+      {"emulator_x2_restore_context_matches_typescript_contract",
+       mkpro::tests::emulator_x2_restore_context_matches_typescript_contract},
+      {"emulator_z_stack_derived_tail_matches_typescript_contract",
+       mkpro::tests::emulator_z_stack_derived_tail_matches_typescript_contract},
       {"example_sizes_match_typescript_baselines",
        mkpro::tests::example_sizes_match_typescript_baselines, true},
       {"compiler_examples_match_typescript_contract",
@@ -151,6 +265,10 @@ int main(int argc, char** argv) {
        mkpro::tests::expression_helpers_match_typescript_contract},
       {"expression_lowering_helpers_match_typescript_contract",
        mkpro::tests::expression_lowering_helpers_match_typescript_contract},
+      {"flow_structure_passes_match_typescript_contract",
+       mkpro::tests::flow_structure_passes_match_typescript_contract},
+      {"flow_x_reuse_matches_typescript_contract",
+       mkpro::tests::flow_x_reuse_matches_typescript_contract},
       {"formal_address_matches_typescript_contract",
        mkpro::tests::formal_address_matches_typescript_contract},
       {"format_primitives_match_typescript_contract",
@@ -166,6 +284,8 @@ int main(int argc, char** argv) {
        mkpro::tests::inline_floor_packed_row_matches_typescript_contract},
       {"ir_round_trip_matches_typescript_contract",
        mkpro::tests::ir_round_trip_matches_typescript_contract},
+      {"last_x_reuse_matches_typescript_contract",
+       mkpro::tests::last_x_reuse_matches_typescript_contract},
       {"liveness_analysis_matches_typescript_contract",
        mkpro::tests::liveness_analysis_matches_typescript_contract},
       {"lowering_helpers_match_typescript_contract",
@@ -220,6 +340,8 @@ int main(int argc, char** argv) {
        mkpro::tests::setup_program_matches_typescript_contract},
       {"setup_only_counted_loop_matches_typescript_contract",
        mkpro::tests::setup_only_counted_loop_matches_typescript_contract},
+      {"store_recall_peephole_matches_typescript_contract",
+       mkpro::tests::store_recall_peephole_matches_typescript_contract},
       {"show_optimization_strategies_match_typescript_contract",
        mkpro::tests::show_optimization_strategies_match_typescript_contract},
       {"setup_formatting_matches_typescript_contract",
@@ -247,7 +369,74 @@ int main(int argc, char** argv) {
       {"v2_const_matches_typescript_contract", mkpro::tests::v2_const_matches_typescript_contract},
       {"x2_register_dataflow_matches_typescript_contract",
        mkpro::tests::x2_register_dataflow_matches_typescript_contract},
+      {"x2_shape_data_model_matches_typescript_contract",
+       mkpro::tests::x2_shape_data_model_matches_typescript_contract},
+      {"x2_display_cluster_matches_typescript_contract",
+       mkpro::tests::x2_display_cluster_matches_typescript_contract},
+      {"x2_structural_unary_matches_typescript_contract",
+       mkpro::tests::x2_structural_unary_matches_typescript_contract},
+      {"x2_structural_bitwise_matches_typescript_contract",
+       mkpro::tests::x2_structural_bitwise_matches_typescript_contract},
+      {"x2_structural_hex_binary_matches_typescript_contract",
+       mkpro::tests::x2_structural_hex_binary_matches_typescript_contract},
+      {"x2_stable_expression_matches_typescript_contract",
+       mkpro::tests::x2_stable_expression_matches_typescript_contract},
+      {"x2_state_builders_matches_typescript_contract",
+       mkpro::tests::x2_state_builders_matches_typescript_contract},
+      {"x2_vp_splice_matches_typescript_contract",
+       mkpro::tests::x2_vp_splice_matches_typescript_contract},
+      {"x2_vp_entry_matches_typescript_contract",
+       mkpro::tests::x2_vp_entry_matches_typescript_contract},
+      {"x2_transfer_plain_matches_typescript_contract",
+       mkpro::tests::x2_transfer_plain_matches_typescript_contract},
+      {"x2_value_dataflow_matches_typescript_contract",
+       mkpro::tests::x2_value_dataflow_matches_typescript_contract},
+      {"x2_join_matches_typescript_contract",
+       mkpro::tests::x2_join_matches_typescript_contract},
+      {"x2_noop_restore_matches_typescript_contract",
+       mkpro::tests::x2_noop_restore_matches_typescript_contract},
+      {"x2_hidden_temp_restore_matches_typescript_contract",
+       mkpro::tests::x2_hidden_temp_restore_matches_typescript_contract},
+      {"x2_literal_restore_matches_typescript_contract",
+       mkpro::tests::x2_literal_restore_matches_typescript_contract},
+      {"vp_x2_peephole_matches_typescript_contract",
+       mkpro::tests::vp_x2_peephole_matches_typescript_contract},
+      {"vp_splice_matches_typescript_contract",
+       mkpro::tests::vp_splice_matches_typescript_contract},
+      {"pre_shift_stack_lift_matches_typescript_contract",
+       mkpro::tests::pre_shift_stack_lift_matches_typescript_contract},
   };
+
+  std::string filter;
+  std::string exact;
+  bool list = false;
+  for (int i = 1; i < argc; ++i) {
+    const std::string argument = argv[i];
+    if (argument == "--list") {
+      list = true;
+      continue;
+    }
+    if (argument == "--exact") {
+      if (i + 1 >= argc) {
+        std::cerr << "--exact requires a test name" << std::endl;
+        return 2;
+      }
+      exact = argv[++i];
+      continue;
+    }
+    if (filter.empty()) {
+      filter = argument;
+      continue;
+    }
+    std::cerr << "Unexpected native test argument: " << argument << std::endl;
+    return 2;
+  }
+
+  if (list) {
+    for (const auto& test : tests)
+      std::cout << test.name << std::endl;
+    return 0;
+  }
 
   const bool run_slow_tests = !filter.empty() ||
                               env_flag_enabled("MKPRO_NATIVE_RUN_SLOW_TESTS") ||
@@ -256,6 +445,9 @@ int main(int argc, char** argv) {
   int selected = 0;
   int skipped = 0;
   for (const auto& test : tests) {
+    if (!exact.empty() && test.name != exact) {
+      continue;
+    }
     if (!filter.empty() && test.name.find(filter) == std::string::npos) {
       continue;
     }
@@ -284,7 +476,10 @@ int main(int argc, char** argv) {
   }
 
   if (selected == 0) {
-    std::cerr << "No native tests matched filter: " << filter << std::endl;
+    if (!exact.empty())
+      std::cerr << "No native tests matched exact name: " << exact << std::endl;
+    else
+      std::cerr << "No native tests matched filter: " << filter << std::endl;
     return 2;
   }
   if (failed > 0) {

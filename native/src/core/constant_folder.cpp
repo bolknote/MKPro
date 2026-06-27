@@ -53,6 +53,30 @@ std::string lower_ascii(std::string value) {
   return value;
 }
 
+std::string expression_to_source(const Expression& expression);
+
+int expression_binary_precedence(const std::string& op) {
+  return op == "*" || op == "/" ? 2 : 1;
+}
+
+int expression_precedence(const Expression& expression) {
+  if (expression.kind == "number" || expression.kind == "string" ||
+      expression.kind == "identifier" || expression.kind == "call" ||
+      expression.kind == "indexed") {
+    return 4;
+  }
+  if (expression.kind == "unary")
+    return 3;
+  if (expression.kind == "binary")
+    return expression_binary_precedence(expression.op);
+  return 0;
+}
+
+std::string wrap_expression_source(const Expression& expression, int parent_precedence) {
+  const std::string text = expression_to_source(expression);
+  return expression_precedence(expression) < parent_precedence ? "(" + text + ")" : text;
+}
+
 std::string expression_to_source(const Expression& expression) {
   if (expression.kind == "number")
     return expression.raw.empty() ? expression.text : expression.raw;
@@ -75,10 +99,13 @@ std::string expression_to_source(const Expression& expression) {
     return text;
   }
   if (expression.kind == "unary" && expression.expr != nullptr)
-    return "(" + expression.op + expression_to_source(*expression.expr) + ")";
+    return expression.op + wrap_expression_source(*expression.expr, 3);
   if (expression.kind == "binary" && expression.left != nullptr && expression.right != nullptr) {
-    return "(" + expression_to_source(*expression.left) + " " + expression.op + " " +
-           expression_to_source(*expression.right) + ")";
+    const int precedence = expression_binary_precedence(expression.op);
+    const int right_precedence =
+        precedence + (expression.op == "-" || expression.op == "/" ? 1 : 0);
+    return wrap_expression_source(*expression.left, precedence) + " " + expression.op + " " +
+           wrap_expression_source(*expression.right, right_precedence);
   }
   if (expression.kind == "call") {
     std::string text = expression.callee + "(";

@@ -164,7 +164,7 @@ bool numeric_literal_is_value(const Expression& expression, int value) {
   }
 }
 
-int estimate_expression_cost(const Expression& expression);
+int estimate_expression_cost_impl(const Expression& expression);
 
 int estimate_call_cost(const Expression& expression) {
   std::string name = expression.callee;
@@ -172,10 +172,10 @@ int estimate_call_cost(const Expression& expression) {
                  [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
   if (name == "random") {
     if (expression.args.size() == 1U)
-      return estimate_expression_cost(expression.args.front()) + 2;
+      return estimate_expression_cost_impl(expression.args.front()) + 2;
     if (expression.args.size() == 2U)
-      return estimate_expression_cost(expression.args.at(0)) +
-             estimate_expression_cost(expression.args.at(1)) + 2;
+      return estimate_expression_cost_impl(expression.args.at(0)) +
+             estimate_expression_cost_impl(expression.args.at(1)) + 2;
     return 1;
   }
   if (name == "pi")
@@ -184,19 +184,20 @@ int estimate_call_cost(const Expression& expression) {
     return 2;
   if (name == "pow") {
     if (expression.args.size() >= 2U && numeric_literal_is_value(expression.args.at(1), 2))
-      return estimate_expression_cost(expression.args.at(0)) + 1;
+      return estimate_expression_cost_impl(expression.args.at(0)) + 1;
     if (expression.args.size() >= 2U && numeric_literal_is_value(expression.args.at(0), 10))
-      return estimate_expression_cost(expression.args.at(1)) + 1;
+      return estimate_expression_cost_impl(expression.args.at(1)) + 1;
   }
   if (name == "min" || name == "max" || name == "safe_min" || name == "safe_max" ||
       name == "bit_and" || name == "bit_or" || name == "bit_xor" || name == "pow") {
-    return (expression.args.empty() ? 0 : estimate_expression_cost(expression.args.at(0))) +
-           (expression.args.size() < 2U ? 0 : estimate_expression_cost(expression.args.at(1))) + 1;
+    return (expression.args.empty() ? 0 : estimate_expression_cost_impl(expression.args.at(0))) +
+           (expression.args.size() < 2U ? 0 : estimate_expression_cost_impl(expression.args.at(1))) +
+           1;
   }
-  return (expression.args.empty() ? 0 : estimate_expression_cost(expression.args.front())) + 1;
+  return (expression.args.empty() ? 0 : estimate_expression_cost_impl(expression.args.front())) + 1;
 }
 
-int estimate_expression_cost(const Expression& expression) {
+int estimate_expression_cost_impl(const Expression& expression) {
   if (expression.kind == "string")
     return 0;
   if (expression.kind == "number")
@@ -204,12 +205,14 @@ int estimate_expression_cost(const Expression& expression) {
   if (expression.kind == "identifier")
     return 1;
   if (expression.kind == "indexed")
-    return (expression.index == nullptr ? 0 : estimate_expression_cost(*expression.index)) + 2;
+    return (expression.index == nullptr ? 0 : estimate_expression_cost_impl(*expression.index)) +
+           2;
   if (expression.kind == "unary")
-    return (expression.expr == nullptr ? 0 : estimate_expression_cost(*expression.expr)) + 1;
+    return (expression.expr == nullptr ? 0 : estimate_expression_cost_impl(*expression.expr)) + 1;
   if (expression.kind == "binary") {
-    return (expression.left == nullptr ? 0 : estimate_expression_cost(*expression.left)) +
-           (expression.right == nullptr ? 0 : estimate_expression_cost(*expression.right)) + 1;
+    return (expression.left == nullptr ? 0 : estimate_expression_cost_impl(*expression.left)) +
+           (expression.right == nullptr ? 0 : estimate_expression_cost_impl(*expression.right)) +
+           1;
   }
   if (expression.kind == "call")
     return estimate_call_cost(expression);
@@ -220,7 +223,7 @@ int estimate_expression_text_cost(const std::optional<std::string>& text, int li
   if (!text.has_value())
     return 0;
   try {
-    return estimate_expression_cost(parse_expression(*text, line));
+    return estimate_expression_cost_impl(parse_expression(*text, line));
   } catch (const std::exception&) {
     return kInfiniteCost;
   }
@@ -336,6 +339,10 @@ bool straight_line_assignment_body(const std::vector<V2Statement>& statements) {
 }
 
 } // namespace
+
+int estimate_expression_cost(const Expression& expression) {
+  return estimate_expression_cost_impl(expression);
+}
 
 std::set<std::string> inline_statement_rule_names(const V2Program& program) {
   const std::map<std::string, std::set<std::string>> graph = rule_call_graph(program);

@@ -1277,9 +1277,13 @@ std::string empty_stack_tail_call_comment(const MachineItem& call) {
   std::string comment = "empty-stack tail call";
   if (call.comment.has_value()) {
     constexpr std::string_view kProcCallPrefix = "proc call";
+    constexpr std::string_view kCallFunctionPrefix = "call function";
     if (call.comment->starts_with(kProcCallPrefix)) {
       comment = "empty-stack tail call" +
                 call.comment->substr(static_cast<std::size_t>(kProcCallPrefix.size()));
+    } else if (call.comment->starts_with(kCallFunctionPrefix)) {
+      comment = "empty-stack tail call" +
+                call.comment->substr(static_cast<std::size_t>(kCallFunctionPrefix.size()));
     } else {
       comment = *call.comment;
     }

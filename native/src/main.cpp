@@ -112,6 +112,173 @@ void print_json_string_map(const std::map<std::string, std::string>& values, std
   std::cout << indent.substr(0, indent.size() - 2U) << "}";
 }
 
+void print_json_string_array(const std::vector<std::string>& values, std::string indent) {
+  std::cout << "[";
+  if (!values.empty())
+    std::cout << "\n";
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    std::cout << indent << "  ";
+    print_json_string(std::cout, values[index]);
+    std::cout << (index + 1U == values.size() ? "" : ",") << "\n";
+  }
+  if (!values.empty())
+    std::cout << indent.substr(0, indent.size() - 2U);
+  std::cout << "]";
+}
+
+void print_json_reference(const mkpro::ReferenceReport& reference, std::string indent) {
+  std::cout << "{\n";
+  std::cout << indent << "  \"name\": ";
+  print_json_string(std::cout, reference.name);
+  std::cout << ",\n" << indent << "  \"referenceSteps\": " << reference.reference_steps;
+  std::cout << ",\n" << indent << "  \"referenceSpan\": " << reference.reference_span;
+  std::cout << ",\n" << indent << "  \"referenceEntries\": " << reference.reference_entries;
+  std::cout << ",\n" << indent << "  \"referenceGaps\": ";
+  print_json_string_array(reference.reference_gaps, indent + "  ");
+  std::cout << ",\n" << indent << "  \"compiledSteps\": " << reference.compiled_steps;
+  std::cout << ",\n" << indent << "  \"delta\": " << reference.delta;
+  std::cout << ",\n" << indent << "  \"parity\": ";
+  print_json_string(std::cout, reference.parity);
+  std::cout << "\n" << indent.substr(0, indent.size() - 2U) << "}";
+}
+
+void print_json_optimizer(const mkpro::OptimizerReport& optimizer, std::string indent) {
+  std::cout << "{\n";
+  std::cout << indent << "  \"automatic\": " << (optimizer.automatic ? "true" : "false");
+  std::cout << ",\n" << indent << "  \"active\": " << optimizer.active;
+  std::cout << ",\n" << indent << "  \"considered\": " << optimizer.considered;
+  std::cout << ",\n" << indent << "  \"candidate\": " << optimizer.candidate;
+  std::cout << ",\n" << indent << "  \"planned\": " << optimizer.planned;
+  std::cout << ",\n" << indent << "  \"capabilities\": [\n";
+  for (std::size_t index = 0; index < optimizer.capabilities.size(); ++index) {
+    const auto& capability = optimizer.capabilities[index];
+    std::cout << indent << "    {\"id\": ";
+    print_json_string(std::cout, capability.id);
+    std::cout << ", \"category\": ";
+    print_json_string(std::cout, capability.category);
+    std::cout << ", \"source\": ";
+    print_json_string(std::cout, capability.source);
+    std::cout << ", \"status\": ";
+    print_json_string(std::cout, capability.status);
+    std::cout << ", \"detail\": ";
+    print_json_string(std::cout, capability.detail);
+    std::cout << ", \"requires\": ";
+    print_json_string_array(capability.required_features, indent + "    ");
+    std::cout << "}" << (index + 1U == optimizer.capabilities.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent << "  ]\n";
+  std::cout << indent.substr(0, indent.size() - 2U) << "}";
+}
+
+void print_json_candidate_reports(const std::vector<mkpro::CandidateReport>& candidates,
+                                  std::string indent) {
+  std::cout << "[\n";
+  for (std::size_t index = 0; index < candidates.size(); ++index) {
+    const auto& candidate = candidates[index];
+    std::cout << indent << "  {\"site\": ";
+    print_json_string(std::cout, candidate.site);
+    std::cout << ", \"variant\": ";
+    print_json_string(std::cout, candidate.variant);
+    std::cout << ", \"steps\": " << candidate.steps;
+    std::cout << ", \"selected\": " << (candidate.selected ? "true" : "false");
+    std::cout << ", \"reason\": ";
+    print_json_string(std::cout, candidate.reason);
+    std::cout << "}" << (index + 1U == candidates.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent.substr(0, indent.size() - 2U) << "]";
+}
+
+void print_json_machine_features(const std::vector<mkpro::MachineFeatureUseReport>& features,
+                                 std::string indent) {
+  std::cout << "[\n";
+  for (std::size_t index = 0; index < features.size(); ++index) {
+    const auto& feature = features[index];
+    std::cout << indent << "  {\"id\": ";
+    print_json_string(std::cout, feature.id);
+    std::cout << ", \"source\": ";
+    print_json_string(std::cout, feature.source);
+    std::cout << ", \"detail\": ";
+    print_json_string(std::cout, feature.detail);
+    std::cout << "}" << (index + 1U == features.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent.substr(0, indent.size() - 2U) << "]";
+}
+
+void print_json_proofs(const std::vector<mkpro::ProofReport>& proofs, std::string indent) {
+  std::cout << "[\n";
+  for (std::size_t index = 0; index < proofs.size(); ++index) {
+    const auto& proof = proofs[index];
+    std::cout << indent << "  {\"id\": ";
+    print_json_string(std::cout, proof.id);
+    std::cout << ", \"status\": ";
+    print_json_string(std::cout, proof.status);
+    std::cout << ", \"detail\": ";
+    print_json_string(std::cout, proof.detail);
+    std::cout << "}" << (index + 1U == proofs.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent.substr(0, indent.size() - 2U) << "]";
+}
+
+void print_json_emulator_facts(const std::vector<mkpro::EmulatorFactReport>& facts,
+                               std::string indent) {
+  std::cout << "[\n";
+  for (std::size_t index = 0; index < facts.size(); ++index) {
+    const auto& fact = facts[index];
+    std::cout << indent << "  {\"id\": ";
+    print_json_string(std::cout, fact.id);
+    std::cout << ", \"status\": ";
+    print_json_string(std::cout, fact.status);
+    std::cout << ", \"detail\": ";
+    print_json_string(std::cout, fact.detail);
+    std::cout << "}" << (index + 1U == facts.size() ? "" : ",") << "\n";
+  }
+  std::cout << indent.substr(0, indent.size() - 2U) << "]";
+}
+
+void print_json_report(const mkpro::CompileResult& result) {
+  std::cout << "{\n";
+  std::cout << "    \"steps\": " << result.steps.size();
+  std::cout << ",\n    \"machine\": \"mk61\"";
+  std::cout << ",\n    \"registers\": ";
+  print_json_string_map(result.registers, "      ");
+  std::cout << ",\n    \"labels\": ";
+  print_json_string_map(result.labels, "      ");
+  std::cout << ",\n    \"optimizations\": [\n";
+  for (std::size_t index = 0; index < result.optimizations.size(); ++index) {
+    const auto& optimization = result.optimizations[index];
+    std::cout << "      {\"name\": ";
+    print_json_string(std::cout, optimization.name);
+    std::cout << ", \"detail\": ";
+    print_json_string(std::cout, optimization.detail);
+    std::cout << "}" << (index + 1U == result.optimizations.size() ? "" : ",") << "\n";
+  }
+  std::cout << "    ]";
+  std::cout << ",\n    \"warnings\": ";
+  print_json_string_array(result.warnings, "      ");
+  std::cout << ",\n    \"optimizer\": ";
+  print_json_optimizer(result.optimizer, "      ");
+  std::cout << ",\n    \"ir\": {\"lowered\": " << (result.ir.lowered ? "true" : "false")
+            << ", \"v2\": " << (result.ir.v2 ? "true" : "false")
+            << ", \"intentNodes\": " << result.ir.intent_nodes
+            << ", \"effectOps\": " << result.ir.effect_ops
+            << ", \"layoutCells\": " << result.ir.layout_cells << "}";
+  std::cout << ",\n    \"candidates\": ";
+  print_json_candidate_reports(result.candidates, "      ");
+  std::cout << ",\n    \"machineFeaturesUsed\": ";
+  print_json_machine_features(result.machine_features_used, "      ");
+  std::cout << ",\n    \"proofs\": ";
+  print_json_proofs(result.proofs, "      ");
+  std::cout << ",\n    \"emulatorFacts\": ";
+  print_json_emulator_facts(result.emulator_facts, "      ");
+  std::cout << ",\n    \"rejectedCandidates\": ";
+  print_json_candidate_reports(result.rejected_candidates, "      ");
+  if (result.reference.has_value()) {
+    std::cout << ",\n    \"reference\": ";
+    print_json_reference(*result.reference, "      ");
+  }
+  std::cout << "\n  }";
+}
+
 void print_json(const mkpro::CompileResult& result) {
   std::cout << "{\n  \"steps\": ";
   print_json_steps(result.steps, "    ");
@@ -165,6 +332,8 @@ void print_json(const mkpro::CompileResult& result) {
     print_json_steps(result.setup_program->steps, "    ");
     std::cout << "}";
   }
+  std::cout << ",\n  \"report\": ";
+  print_json_report(result);
   std::cout << ",\n  \"diagnostics\": " << result.diagnostics.size() << "\n}\n";
 }
 

@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <iomanip>
+#include <limits>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -73,8 +74,27 @@ int mutation_delta(IndirectSelectorMutation mutation) {
   return 0;
 }
 
-std::string negative_integer_mantissa(int value) {
-  std::string digits = std::to_string(std::abs(value));
+std::string int128_to_string(__int128 value) {
+  if (value == 0)
+    return "0";
+  const bool negative = value < 0;
+  if (negative)
+    value = -value;
+  std::string digits;
+  while (value > 0) {
+    digits.push_back(static_cast<char>('0' + static_cast<int>(value % 10)));
+    value /= 10;
+  }
+  if (negative)
+    digits.push_back('-');
+  std::reverse(digits.begin(), digits.end());
+  return digits;
+}
+
+std::string negative_integer_mantissa(long long value) {
+  std::string digits = std::to_string(value);
+  if (!digits.empty() && digits.front() == '-')
+    digits.erase(digits.begin());
   if (digits.size() > 8)
     digits = digits.substr(digits.size() - 8);
   if (digits.size() < 8)
@@ -92,12 +112,17 @@ std::optional<std::string> transform_decimal_selector_value(
     double value, IndirectSelectorMutation mutation) {
   if (!std::isfinite(value))
     return std::nullopt;
-  const int integer = static_cast<int>(std::trunc(value));
+  const long double truncated = std::trunc(static_cast<long double>(value));
+  if (truncated < static_cast<long double>(std::numeric_limits<long long>::min()) ||
+      truncated > static_cast<long double>(std::numeric_limits<long long>::max())) {
+    return std::nullopt;
+  }
+  const long long integer = static_cast<long long>(truncated);
   const int delta = mutation_delta(mutation);
   if (integer >= 0) {
     if (integer == 0 && delta < 0)
       return std::string("-99999999");
-    return std::to_string(integer + delta);
+    return int128_to_string(static_cast<__int128>(integer) + static_cast<__int128>(delta));
   }
 
   const int transformed = std::stoi(negative_integer_mantissa(integer));

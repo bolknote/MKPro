@@ -2526,6 +2526,21 @@ If proofs are insufficient, those transformations are not activated.
 
 ### Deferred better-than-TS candidates
 
+Any discovered way to produce shorter output than the TypeScript oracle during
+the parity port must be recorded in this section first. This includes real
+native strategies, accidental implementation side effects, example-specific
+debugging discoveries, explicit aggressive flags, and test-only lowering
+variants. Keep the default C++ output byte-for-byte aligned with TypeScript
+until the shorter form is accepted as an intentional post-parity optimization.
+
+Each entry must name the affected program or fixture, the lowering variant when
+known, the observed TS size and shorter native size when measured, the mechanism
+that made it shorter, why it is disabled for parity, and the gate needed before
+enabling it later. If the exact cell counts were not captured, mark the entry as
+qualitative/unmeasured and fill in the numbers before enabling it. An unrecorded
+shorter-by-default native result is treated as a parity bug, even if the
+generated program is semantically correct.
+
 - Post-layout indirect-flow can reduce small `cells(...)`/bit-mask programs even when they already fit in
   the official 105-cell window. This is intentionally deferred during the C++ parity port: the native
   translator must keep the same default rescue threshold as the TypeScript compiler unless an explicit
@@ -2541,7 +2556,12 @@ If proofs are insufficient, those transformations are not activated.
   membership and `line_count` paths in a shorter direct/shared-hybrid form even when the explicit
   `sharedBitMaskHelperCalls` strategy is selected. This produced a smaller test-only variant during
   the C++ parity port, but it is deferred until after byte-for-byte parity with the TypeScript
-  shared-helper layout is complete.
+  shared-helper layout is complete. A concrete observed case is the
+  `fox-hunt-100` `sharedBitMaskHelperCalls` lowering variant: native post-layout
+  forward-call selector packing reached 122 cells, while the TypeScript oracle
+  fingerprint keeps the variant at 125 cells through return-suffix shared-helper
+  layout. Preserve the 125-cell oracle shape during the parity port and revisit
+  the 122-cell form only as a deliberate post-parity optimization.
 - Hoisted-helper variants can sometimes keep the coord-list counter proof alive through a formatted
   report and replace a final `JP 00` loop-back with one-cell indirect `K JP R`. TypeScript keeps the
   explicit direct branch in those test-only variants, so the native port suppresses this shortcut

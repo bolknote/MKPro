@@ -181,6 +181,29 @@ struct RecallRemovalStackSchedulerPlan {
   bool removable = false;
 };
 
+struct X2ReplacementStackLiftOptions {
+  const std::set<int>* invalidated_producer_indexes = nullptr;
+  bool allow_duplicate_y_stack_proof = true;
+};
+
+struct X2ReplacementStackLiftPlan {
+  bool initially_exposes_stack_lift = false;
+  std::optional<int> stack_lift_producer_index;
+  bool stack_lift_already_supplied = false;
+  bool exposes_stack_lift = false;
+};
+
+struct X2HiddenTempReplacement {
+  int index = 0;
+  std::string register_name;
+};
+
+struct X2LiteralReplacement {
+  int start = 0;
+  int end = 0;
+  std::string display_value;
+};
+
 enum class X2DataflowEdgeKind {
   Normal,
   Fallthrough,
@@ -190,6 +213,59 @@ enum class X2DataflowEdgeKind {
 inline bool has_rewrite_barrier(const IrOp& op) {
   return op.meta.raw;
 }
+
+// Exact-decimal concrete-evaluation engine (faithful port of the TS BigInt
+// arithmetic). Exposed for focused unit testing in isolation.
+std::optional<std::string> concrete_decimal_binary_value(int opcode, const std::string& y,
+                                                         const std::string& x);
+std::optional<std::string> concrete_decimal_unary_value(int opcode, const std::string& value);
+
+// Deterministic shape-data-model serialization, exposed for the differential
+// unit test against the TypeScript oracle.
+std::string x2_shape_data_model_debug(const X2ShapeFact& fact);
+
+// Session A (concrete-eval engine) isolation test hooks. These exercise the
+// dead-code x2eval engine against the TypeScript oracle.
+std::string x2_display_cluster_debug(const X2ShapeFact& fact);
+std::string x2_decimal_fraction_part_shape_debug(const std::string& value);
+// Session A.2 (structural-hex unary engine) isolation test hook. Exercises the
+// dead-code plainProducesConcreteStructuralUnaryDecimal* entry points.
+std::string x2_structural_unary_debug(int opcode, const X2ShapeFact& fact);
+// Session A.2b (binary structural bitwise) isolation test hook.
+std::string x2_structural_bitwise_binary_debug(int opcode, const X2ValueSet& y, const X2ValueSet& x,
+                                               const X2ShapeSet& y_shape, const X2ShapeSet& x_shape);
+// Session A.2b (binary structural-hex arithmetic) isolation test hook.
+std::string x2_structural_hex_binary_debug(int opcode, const X2ValueSet& y, const X2ValueSet& x,
+                                           const X2ShapeSet& y_shape, const X2ShapeSet& x_shape,
+                                           const X2ShapeSet& direct_y_shape, const X2ShapeSet& direct_x_shape);
+
+// Session A.3 + A.4 (decimal concrete-eval + stable/opaque expression-key) isolation test hook.
+std::string x2_stable_expression_debug(int opcode, bool has_producer, int producer_index,
+                                       const X2ValueSet& x, const X2ValueSet& y, const X2ShapeSet& x_shape,
+                                       const X2ShapeSet& y_shape, const X2ShapeSet& direct_x_shape,
+                                       const X2ShapeSet& direct_y_shape);
+
+// Session B (entry/VP/structural state-machine builders) isolation test hook.
+std::string x2_state_builders_debug(const std::string& scenario, const std::string& a,
+                                    const std::string& b, const std::string& c);
+
+// Session C (VP first-digit splice machinery) isolation test hook.
+std::string x2_vp_splice_debug(const std::string& x_shape, const std::string& x2_shape,
+                               bool include_exponent_targets);
+
+// Session C.2 (transferPlainX2VpEntry* + shared*/vpSplice cluster) test hook.
+std::string x2_vp_entry_debug(int opcode, const std::string& x, const std::string& x2,
+                              const std::string& x_shape, const std::string& x2_shape,
+                              const std::string& in_vp_mantissa, const std::string& in_vp_sign_mantissa,
+                              const std::string& in_vp_shape, const std::string& in_vp_sign_shape,
+                              bool mantissa_transient, bool shape_transient);
+
+// Session C.3 (transfer dispatchers + transfer_plain_x2_value_state) test hook.
+std::string x2_transfer_plain_debug(const std::string& opcodes_csv, bool use_producer);
+std::string x2_join_debug(const std::string& csv_a, const std::string& csv_b, bool use_producer);
+
+// x2-noop-restore pass: faithful decision logic consumed by the pass.
+std::vector<int> x2_noop_restore_removed_indexes(const std::vector<IrOp>& ops);
 
 int cells_per_op(const IrOp& op);
 std::map<std::string, int> calculate_label_addresses(const std::vector<IrOp>& ops);
@@ -218,6 +294,9 @@ bool replacing_number_entry_can_expose_stack_lift(
     std::optional<int> numeric_target_must_be_before_index = std::nullopt);
 bool x2_sync_can_expose_context_sensitive_restore(const std::vector<IrOp>& ops, int sync_index,
                                                   const X2RestoreExposureOptions& options = {});
+bool x2_state_has_visible_unary_noop(const std::optional<X2ValueDataflowState>& state, int opcode);
+bool x2_states_have_same_vp_entry_source(const std::optional<X2ValueDataflowState>& left,
+                                         const std::optional<X2ValueDataflowState>& right);
 bool removing_recall_can_expose_x2_restore(const std::vector<IrOp>& ops, int recall_index,
                                            const X2RestoreExposureOptions& options = {});
 std::optional<int> x2_next_stack_shifting_producer_index(
@@ -241,12 +320,19 @@ analyze_recall_removal(const std::vector<IrOp>& ops, int recall_index,
                        const std::optional<RegisterValueSet>& x2_register_state,
                        const std::optional<X2ValueDataflowState>& x2_value_state,
                        const DirectReturnAnalysisContext* context = nullptr);
+X2ReplacementStackLiftPlan plan_x2_replacement_stack_lift(
+    const std::vector<IrOp>& ops, int replacement_start, int stack_exposure_end,
+    const std::optional<X2ValueDataflowState>& state, const DirectReturnAnalysisContext& context,
+    bool initially_exposes_stack_lift, const X2ReplacementStackLiftOptions& options = {});
 std::optional<RecallRemovalStackSchedulerPlan>
 plan_recall_removal_with_stack_scheduler(const std::vector<IrOp>& ops, int recall_index,
                                          const std::optional<RegisterValueSet>& x2_register_state,
                                          const std::optional<X2ValueDataflowState>& x2_value_state,
                                          const DirectReturnAnalysisContext& context,
                                          const RecallRemovalStackSchedulerOptions& options = {});
+std::vector<X2HiddenTempReplacement>
+x2_hidden_temp_restore_replacements(const std::vector<IrOp>& ops);
+std::vector<X2LiteralReplacement> x2_literal_restore_replacements(const std::vector<IrOp>& ops);
 bool is_known_return_call_op(const IrOp& op);
 std::optional<int> direct_call_target_index(const IrOp& call,
                                             const DirectReturnAnalysisContext& context);
@@ -298,5 +384,25 @@ X2ValueDataflowState join_x2_value_dataflow_states(
     bool track_register_memory = false);
 bool same_x2_value_dataflow_state(const std::optional<X2ValueDataflowState>& left,
                                  const std::optional<X2ValueDataflowState>& right);
+
+// vp-splice candidate planner (faithful port of helpers.ts
+// x2PlanVpSpliceCandidatesAt). The terminal sub-planners need the pass-supplied
+// predicates for fresh decimal digits / hard X2 overwrites without stack use.
+struct X2VpSplicePlannerOptions {
+  std::function<bool(const IrOp&, int)> is_decimal_digit;
+  std::function<bool(const IrOp&, int)> is_hard_x2_overwrite_without_stack_use;
+};
+
+struct X2VpSpliceCandidate {
+  std::string stage;
+  std::vector<int> removable_indexes;
+  std::optional<std::string> source_match_reason;
+  std::optional<std::string> sign_restore_source_proof_reason;
+};
+
+std::vector<X2VpSpliceCandidate> x2_plan_vp_splice_candidates_at(
+    const std::vector<IrOp>& ops, int index,
+    const std::vector<std::optional<X2ValueDataflowState>>& states,
+    const DirectReturnAnalysisContext& context, const X2VpSplicePlannerOptions& options);
 
 } // namespace mkpro::core::passes
