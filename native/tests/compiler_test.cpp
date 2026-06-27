@@ -90,6 +90,13 @@ std::vector<std::string> step_comments(const CompileResult& result) {
   return comments;
 }
 
+std::size_t count_steps_with_comment(const CompileResult& result, const std::string& comment) {
+  return static_cast<std::size_t>(
+      std::count_if(result.steps.begin(), result.steps.end(), [&](const ResolvedStep& step) {
+        return step.comment.has_value() && *step.comment == comment;
+      }));
+}
+
 std::vector<int> step_opcodes(const CompileResult& result) {
   std::vector<int> opcodes;
   opcodes.reserve(result.steps.size());
@@ -8208,22 +8215,25 @@ program SetupConstantDoubleSynthesis {
                       }),
           "setup double synthesis should report doubled setup synthesis");
 
-  // NOTE (test-parity audit, compiler.test.ts "inlines tiny multi-use rules when that beats a
-  // subroutine" — Task 2(a), investigated to root cause and deferred byte-exactly):
-  // TS inlines the 2-use one-statement rule bump() { score++ } and reports "size-model-rule-inline".
-  // The native inline-vs-subroutine decision (compiler_inline_statement_rule_names) is a faithful
-  // 1:1 port of TS findInlineProcNamesBySize, and the underlying cost helpers
-  // (estimate_branch_order_*_cost / guarded_estimate_expression_cost / guarded_estimate_number_cost)
-  // match estimateBranchOrderStatementCost / estimateExpressionCost / estimateNumberCost exactly.
-  // The divergence is purely structural: TS scores the *pristine source* body `score++`
-  // (estimateExpressionCost(score + 1) = 3, bodyCost = 4 → inline 8 < subroutine 9), whereas native
-  // scores the body inside a candidate V2Program where the counter increment has already been
-  // expanded, so its bodyCost is 7 (inline 14 >= subroutine 12) and the subroutine is kept. Making
-  // native score the pristine pre-lowering AST like TS is a pipeline-ordering change to the size
-  // model that is shared by every byte-exact example (branch ordering + all inline decisions), so it
-  // risks perturbing the golden gate. It is therefore left as a precisely-documented deferral rather
-  // than a size-model change. This program is not in the byte-exact example set, so the difference is
-  // not codegen-visible there.
+  // compiler.test.ts "inlines tiny multi-use rules when that beats a subroutine"
+  const CompileResult tiny_multi_use = compile_source(R"mkpro(
+program TinyMultiUseRule {
+  state {
+    score: counter 0..9 = 0
+  }
+  loop {
+    bump()
+    bump()
+    halt(score)
+  }
+  fn bump() {
+    score++
+  }
+}
+)mkpro");
+  require(tiny_multi_use.implemented, "TinyMultiUseRule program should compile");
+  require(has_optimization(tiny_multi_use, "size-model-rule-inline"),
+          "TinyMultiUseRule should inline the 2-use bump() rule by the size model");
 
   // NOTE (test-parity audit, tests/compiler.test.ts human-centered / dark-dispatch cases —
   // Task 2(b), report-only divergence deferred): for human.mkpro the TS oracle additionally surfaces
@@ -8372,16 +8382,107 @@ program IndirectMemoryAliasIndexedState {
     require(calc.display_text() == "2,", "indirect-memory-alias emulator display should match TS");
   }
 
-  // NOTE (test-parity audit, genuine native implementation gaps — documented deferrals):
-  //  * compiler.test.ts "uses one selector for multiple guarded updates when shorter"
-  //    (multi-guarded-update / branch-removal): native lowers BooleanMultiUpdate through a different
-  //    strategy (equality-zero-fallthrough + indirect-incdec-counter) and never emits the
-  //    "multi-guarded-update" optimization. Reaching parity requires implementing that selector-
-  //    sharing optimization natively; deferred to avoid perturbing the byte-exact example set.
-  //  * compiler.test.ts "accumulates packed_score with an X-parameter-produced index on the stack"
-  //    (x-param-packed-score-line-stack-accumulate): native does not implement this accumulator and
-  //    fails to lower PackedScoreXParamAccumulator (implemented == false), so the assertion cannot be
-  //    expressed faithfully without first porting the missing optimization; deferred.
+  // compiler.test.ts "uses one selector for multiple guarded updates when shorter"
+  const CompileResult multi_guarded_update = compile_source(R"mkpro(
+program BooleanMultiUpdate {
+  state {
+    flag: flag = 0
+    a: counter 0..9 = 1
+    b: counter 0..9 = 2
+  }
+  loop {
+    if flag == 1 {
+      a++
+      b--
+    }
+    halt(a + b)
+  }
+}
+)mkpro");
+  require(multi_guarded_update.implemented, "BooleanMultiUpdate program should compile");
+  require(has_optimization(multi_guarded_update, "multi-guarded-update"),
+          "BooleanMultiUpdate should share one selector across the guarded updates");
+  require(has_optimization(multi_guarded_update, "branch-removal"),
+          "BooleanMultiUpdate should report branch-removal for the shared selector");
+
+  // compiler.test.ts "accumulates packed_score with an X-parameter-produced index on the stack"
+  CompileOptions packed_score_xparam_options;
+  packed_score_xparam_options.analysis = true;
+  const CompileResult packed_score_xparam = compile_source(R"mkpro(
+program PackedScoreXParamAccumulator {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    x: counter 0..5 = 2
+    y: counter 0..5 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+
+  loop {
+    score = packed_score(a, y) + packed_score(b, x)
+    normalize(x + y)
+    score += packed_score(c, line)
+    normalize(x - y)
+    score += packed_score(d, line)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac((raw_line + 3) / 4) * 4 + 1
+  }
+}
+)mkpro",
+                                                          packed_score_xparam_options);
+  require(packed_score_xparam.implemented, "PackedScoreXParamAccumulator program should compile");
+  require(optimization_count(packed_score_xparam, "x-param-packed-score-line-stack-accumulate") == 2,
+          "PackedScoreXParamAccumulator should report two line-first stack accumulations");
+  require(count_steps_with_comment(packed_score_xparam, "packed_score returned-index order") == 0,
+          "PackedScoreXParamAccumulator should never fall back to returned-index order");
+  require(count_steps_with_comment(packed_score_xparam, "packed_score stack accumulator") == 2,
+          "PackedScoreXParamAccumulator should emit two stack accumulator adds");
+
+  // compiler.test.ts "accumulates packed_score after affine X-parameter index expressions"
+  CompileOptions packed_score_affine_options;
+  packed_score_affine_options.analysis = true;
+  const CompileResult packed_score_affine = compile_source(R"mkpro(
+program PackedScoreAffineXParamAccumulator {
+  state {
+    a: packed = 44444.4
+    b: packed = 44445.4
+    c: packed = 44446.4
+    d: packed = 44447.4
+    x: counter 0..5 = 2
+    y: counter 0..5 = 3
+    line: packed = 0
+    score: packed = 0
+  }
+
+  loop {
+    score = packed_score(a, y) + packed_score(b, x)
+    normalize(x + y - 1)
+    score += packed_score(c, line)
+    normalize(x - y + 3)
+    score += packed_score(d, line)
+    halt(score)
+  }
+
+  fn normalize(raw_line) {
+    line = frac(raw_line / 4) * 4 + 1
+  }
+}
+)mkpro",
+                                                          packed_score_affine_options);
+  require(packed_score_affine.implemented,
+          "PackedScoreAffineXParamAccumulator program should compile");
+  require(optimization_count(packed_score_affine, "x-param-packed-score-line-stack-accumulate") == 2,
+          "PackedScoreAffineXParamAccumulator should report two line-first stack accumulations");
+  require(count_steps_with_comment(packed_score_affine, "packed_score returned-index order") == 0,
+          "PackedScoreAffineXParamAccumulator should never fall back to returned-index order");
+  require(count_steps_with_comment(packed_score_affine, "packed_score stack accumulator") == 2,
+          "PackedScoreAffineXParamAccumulator should emit two stack accumulator adds");
 }
 
 } // namespace mkpro::tests

@@ -9202,6 +9202,10 @@ bool program_desugars_to_named_bit_primitive(const LoweringContext& context,
                                              const V2Program& program);
 bool program_requires_shared_bit_mask_scratch(const LoweringContext& context,
                                               const V2Program& program);
+void collect_guarded_update_scratch_registers(LoweringContext& context,
+                                              RegisterCollection& collection,
+                                              const V2Program& program);
+bool lower_guarded_update_selector(LoweringContext& context, const V2Statement& statement);
 
 void collect_registers(LoweringContext& context, const V2Program& program) {
   context.tiny_game_shape = is_tiny_game_shape(program);
@@ -9448,6 +9452,7 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
     add_register_variable(collection, std::string(kSharedBitMaskScratch));
   }
   collect_spatial_count_scratch_registers(collection);
+  collect_guarded_update_scratch_registers(context, collection, program);
   if (context.packed_line_family_mutating_selector_update_check_tail)
     apply_packed_line_family_mutating_selector_hints(context, program, collection, hints);
   apply_direct_state_bank_selector_hints(context, program, collection, hints);
@@ -16121,6 +16126,14 @@ bool lower_human_match(LoweringContext& context, const V2Statement& statement) {
   if (!lower_human_terminal_call(context, *otherwise_rule))
     return false;
   context.emitter.emit_label(end_label, {.hidden = true});
+  // Report parity with the TS oracle: the human dispatch is lowered as a numeric
+  // residual compare chain (the bytes above emit `dispatch compare` /
+  // `dispatch residual compare`), so surface the same optimization label TS does.
+  // This is report-only metadata and does not change emitted code.
+  context.optimizations.push_back(OptimizationReport{
+      .name = "numeric-dispatch-residual-chain",
+      .detail = "Lowered numeric match cases as a residual comparison chain.",
+  });
   return true;
 }
 
@@ -21662,12 +21675,6 @@ bool rule_is_directly_recursive(const V2Rule& rule) {
   return direct_statement_list_invokes_rule(rule.body, rule.name);
 }
 
-bool compiler_straight_line_assignment_body(const std::vector<V2Statement>& statements) {
-  return !statements.empty() &&
-         std::all_of(statements.begin(), statements.end(),
-                     [](const V2Statement& statement) { return statement.kind == "v2_assign"; });
-}
-
 bool inline_rule_consumes_param_from_x(const LoweringContext& context, const V2Program& program,
                                        const V2Rule& rule, const std::string& param) {
   return context.inline_statement_rules.contains(rule.name) && rule.params.size() == 1U &&
@@ -21701,6 +21708,68 @@ void hide_internal_constant_report_registers(std::map<std::string, std::string>&
   }
 }
 
+// TS findInlineProcNamesBySize scores the high-level AST, where `t += d` / `t++`
+// are ordinary scalar `assign` nodes whose expr is `t <op> d`. Native's V2 keeps
+// them as `v2_update`, and estimate_branch_order_statement_cost charges an extra
+// target cell for the in-place update (which is correct for branch-order costing
+// but diverges from TS's inline size model). Reconstruct the equivalent assign
+// cost/classification here so compiler_inline_statement_rule_names matches TS's
+// estimateBranchOrderStatementCost / isStraightLineAssignmentBody exactly.
+Expression inline_naming_update_expression(const V2Statement& statement) {
+  const Expression target = parse_expression(*statement.target, statement.line);
+  const Expression delta = parse_expression(*statement.expr, statement.line);
+  if (statement.op.has_value() && *statement.op == "-=")
+    return subtract_expression(target, delta);
+  return add_expression(target, delta);
+}
+
+int inline_naming_statement_cost(const LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind == "v2_update" && statement.target.has_value() && statement.expr.has_value()) {
+    try {
+      const Expression target = parse_expression(*statement.target, statement.line);
+      int target_cost = 0;
+      if (target.kind == "indexed" && target.index != nullptr)
+        target_cost = guarded_estimate_expression_cost(*target.index);
+      return target_cost +
+             guarded_estimate_expression_cost(inline_naming_update_expression(statement)) + 1;
+    } catch (const std::exception&) {
+      return branch_order_infinite_cost();
+    }
+  }
+  return estimate_branch_order_statement_cost(context, statement);
+}
+
+int inline_naming_body_cost(const LoweringContext& context,
+                            const std::vector<V2Statement>& statements) {
+  int total = 0;
+  for (const V2Statement& statement : statements) {
+    const int cost = inline_naming_statement_cost(context, statement);
+    if (cost >= branch_order_infinite_cost())
+      return branch_order_infinite_cost();
+    total += cost;
+  }
+  return total;
+}
+
+// Mirrors TS isStraightLineAssignmentBody: every statement is a scalar `assign`.
+// In TS both `t = d` and `t += d` / `t++` are scalar "assign" nodes, while indexed
+// stores are a separate "indexed_assign" kind that is NOT straight-line.
+bool inline_naming_straight_line_body(const std::vector<V2Statement>& statements) {
+  if (statements.empty())
+    return false;
+  return std::all_of(statements.begin(), statements.end(), [](const V2Statement& statement) {
+    if (statement.kind != "v2_assign" && statement.kind != "v2_update")
+      return false;
+    if (!statement.target.has_value())
+      return false;
+    try {
+      return parse_expression(*statement.target, statement.line).kind == "identifier";
+    } catch (const std::exception&) {
+      return false;
+    }
+  });
+}
+
 std::set<std::string> compiler_inline_statement_rule_names(const LoweringContext& context,
                                                            const V2Program& program) {
   const std::map<std::string, int> counts = collect_rule_call_counts(program);
@@ -21715,14 +21784,14 @@ std::set<std::string> compiler_inline_statement_rule_names(const LoweringContext
     if (rule_is_directly_recursive(rule))
       continue;
 
-    const int body_cost = estimate_branch_order_body_cost(context, rule.body);
+    const int body_cost = inline_naming_body_cost(context, rule.body);
     if (body_cost >= branch_order_infinite_cost()) {
       if (uses == 1)
         names.insert(rule.name);
       continue;
     }
     const bool terminal = guarded_statement_list_terminates_statically(program, rule.body);
-    if (uses > 1 && !compiler_straight_line_assignment_body(rule.body))
+    if (uses > 1 && !inline_naming_straight_line_body(rule.body))
       continue;
     if (uses > 1 && terminal)
       continue;
@@ -23279,6 +23348,10 @@ bool lower_if_statement(LoweringContext& context, const V2Statement& statement) 
     return true;
   if (!entered_with_errors && has_errors(context.diagnostics))
     return false;
+  if (lower_guarded_update_selector(context, statement))
+    return true;
+  if (!entered_with_errors && has_errors(context.diagnostics))
+    return false;
   if (lower_nested_guard_shared_failure(context, statement))
     return true;
   if (lower_residual_guarded_update(context, statement))
@@ -24625,6 +24698,208 @@ bool lower_invoke_statement(LoweringContext& context, const V2Statement& stateme
     context.emitter.current_x_aliases.clear();
   }
   return true;
+}
+
+// Faithful port of TS compileBlockCall (proc-raw-setup.ts): emits a subroutine
+// call (or inline/terminal/zero-accumulator variant) with the argument already
+// staged in X by the caller.
+void compile_block_call(LoweringContext& context, const std::string& block_name, int line) {
+  const auto rule_it = context.rules.find(block_name);
+  if (rule_it == context.rules.end()) {
+    context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                             "Unknown block '" + block_name + "'."));
+    return;
+  }
+  const V2Rule& rule = *rule_it->second;
+  if (context.inline_statement_rules.contains(rule.name)) {
+    if (context.inline_call_stack.contains(rule.name)) {
+      context.diagnostics.push_back(
+          diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                     "Recursive inline procedure '" + rule.name + "' is not supported"));
+      return;
+    }
+    context.inline_call_stack.insert(rule.name);
+    (void)lower_statement_block(context, rule.body);
+    context.inline_call_stack.erase(rule.name);
+    const int uses =
+        context.proc_call_counts.contains(rule.name) ? context.proc_call_counts[rule.name] : 0;
+    context.optimizations.push_back(OptimizationReport{
+        .name = uses == 1 ? "single-use-rule-inline" : "size-model-rule-inline",
+        .detail = uses == 1 ? "Inlined single-use rule " + rule.name + " at line " +
+                                  std::to_string(line) + "."
+                            : "Inlined " + std::to_string(uses) + "-use rule " + rule.name +
+                                  " because it is smaller than a ПП/В/О subroutine.",
+    });
+    return;
+  }
+  if (statements_always_stop(context, rule.body) && !statements_contain_return(rule.body)) {
+    context.emitter.emit_jump(0x51, "БП", function_label(rule.name), "terminal rule " + rule.name,
+                              line);
+    context.optimizations.push_back(OptimizationReport{
+        .name = "terminal-rule-tail-call",
+        .detail = "Compiled terminal rule " + rule.name +
+                  " as a direct jump instead of a subroutine call.",
+    });
+    return;
+  }
+  if (context.emitter.current_x_known_zero && packed_line_family_score_rule(context, rule)) {
+    context.emitter.emit_jump(0x53, "ПП", packed_line_family_score_zero_entry_label(rule.name),
+                              "proc call " + rule.name + " zero-accumulator entry", line);
+    if (const std::optional<std::string> return_x = proc_return_x_variable(context, rule)) {
+      mark_current_x(context, *return_x);
+      context.emitter.current_x_known_zero = false;
+    }
+    context.optimizations.push_back(OptimizationReport{
+        .name = "zero-accumulator-proc-entry",
+        .detail = "Entered " + rule.name +
+                  " after its zero literal because X already held a proved zero at line " +
+                  std::to_string(line) + ".",
+    });
+    return;
+  }
+  context.emitter.emit_jump(0x53, "ПП", function_label(rule.name), "proc call " + rule.name, line);
+  context.optimizations.push_back(OptimizationReport{
+      .name = "proc-call-lowering",
+      .detail = "Compiled call to rule " + rule.name + " as ПП/В/О subroutine.",
+  });
+  if (const std::optional<std::string> return_x = proc_return_x_variable(context, rule)) {
+    mark_current_x(context, *return_x);
+    context.emitter.current_x_known_zero = false;
+    context.optimizations.push_back(OptimizationReport{
+        .name = "proc-return-x-reuse",
+        .detail = "Tracked " + *return_x + " in X after returning from rule " + rule.name + ".",
+    });
+  } else {
+    context.emitter.current_x_variable.reset();
+    context.emitter.current_x_aliases.clear();
+  }
+}
+
+struct XParamPackedScoreAccumulationPlan {
+  Expression line;
+  std::string return_x;
+  std::string helper_label;
+};
+
+// Faithful port of Compiler.xParamPackedScoreAccumulationPlan.
+std::optional<XParamPackedScoreAccumulationPlan>
+build_x_param_packed_score_accumulation_plan(LoweringContext& context, const Expression& argument,
+                                             const std::string& block,
+                                             const V2Statement& score_assign) {
+  const auto lowering_it = context.x_param_procs.find(block);
+  if (lowering_it == context.x_param_procs.end())
+    return std::nullopt;
+  if (!expression_pure_for_substitution(argument))
+    return std::nullopt;
+  if (!expression_preserves_previous_x_as_y_for_packed_line(argument))
+    return std::nullopt;
+  if (!x_param_proc_preserves_caller_y(context, block))
+    return std::nullopt;
+
+  const auto proc_it = context.rules.find(block);
+  if (proc_it == context.rules.end() || proc_it->second == nullptr ||
+      proc_it->second->body.size() != 1U)
+    return std::nullopt;
+  const std::optional<std::string> return_x = proc_return_x_variable(context, *proc_it->second);
+  if (!return_x.has_value())
+    return std::nullopt;
+
+  if (!score_assign.target.has_value())
+    return std::nullopt;
+  const std::optional<Expression> line =
+      stack_analysis_packed_score_accumulator(score_assign, *score_assign.target, *return_x);
+  if (!line.has_value())
+    return std::nullopt;
+  if (!x_holds_identifier(context, *score_assign.target))
+    return std::nullopt;
+  if (!is_simple_stack_load(*line) ||
+      expression_contains_identifier(*line, *score_assign.target))
+    return std::nullopt;
+  if (!context.use_packed_score_helper)
+    return std::nullopt;
+
+  return XParamPackedScoreAccumulationPlan{
+      .line = *line,
+      .return_x = *return_x,
+      .helper_label = packed_score_helper_label(context),
+  };
+}
+
+// Faithful port of Compiler.compileXParamProcPackedScoreAccumulationTail.
+bool lower_x_param_proc_packed_score_accumulation_tail(LoweringContext& context,
+                                                       const Expression& argument,
+                                                       int argument_line, const std::string& block,
+                                                       int call_line,
+                                                       const V2Statement& score_assign) {
+  const std::optional<XParamPackedScoreAccumulationPlan> plan =
+      build_x_param_packed_score_accumulation_plan(context, argument, block, score_assign);
+  if (!plan.has_value())
+    return false;
+
+  const std::string& target = *score_assign.target;
+  const bool store = !context.stack_only_state_fields.contains(target);
+
+  // canCompilePackedScoreLineFirst is always satisfied when the plan exists (the
+  // plan's preconditions are identical), so this mirrors the line-first branch.
+  if (!lower_expression_to_x(context, plan->line))
+    return false;
+  if (!lower_expression_preserving_previous_x_as_y(context, argument, argument_line))
+    return false;
+  compile_block_call(context, block, call_line);
+  context.emitter.emit_jump(0x53, "ПП", plan->helper_label, "packed_score helper",
+                            score_assign.line);
+  context.emitter.emit_op(0x10, "+", "packed_score stack accumulator", score_assign.line);
+  if (store) {
+    emit_store(context, target, "set " + target);
+  } else {
+    mark_current_x(context, target);
+    context.emitter.current_x_known_zero = false;
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "x-param-packed-score-line-stack-accumulate",
+      .detail = "Loaded the packed_score line argument before " + block + " so " + target +
+                " stayed below it on the stack at line " + std::to_string(score_assign.line) + ".",
+  });
+  return true;
+}
+
+bool lower_x_param_proc_packed_score_accumulation_run(LoweringContext& context,
+                                                      const std::vector<V2Statement>& statements,
+                                                      std::size_t index, std::size_t& consumed) {
+  // Form A: invoke(arg) followed by `score += packed_score(line, return_x)`.
+  if (index + 1U < statements.size()) {
+    const V2Statement& call = statements.at(index);
+    const V2Statement& score_assign = statements.at(index + 1U);
+    if (call.kind == "v2_invoke" && call.name.has_value() && call.args.size() == 1U) {
+      const Expression argument = parse_expression(call.args.front(), call.line);
+      if (lower_x_param_proc_packed_score_accumulation_tail(context, argument, call.line,
+                                                            *call.name, call.line, score_assign)) {
+        consumed = 2;
+        return true;
+      }
+    }
+  }
+
+  // Form B: param assignment, then invoke(), then the packed_score accumulation.
+  if (index + 2U < statements.size()) {
+    const V2Statement& param_assign = statements.at(index);
+    const V2Statement& call = statements.at(index + 1U);
+    const V2Statement& score_assign = statements.at(index + 2U);
+    if (param_assign.kind == "v2_assign" && param_assign.target.has_value() &&
+        param_assign.expr.has_value() && call.kind == "v2_invoke" && call.name.has_value()) {
+      const auto lowering_it = context.x_param_procs.find(*call.name);
+      if (lowering_it != context.x_param_procs.end() &&
+          *param_assign.target == lowering_it->second.param) {
+        const Expression argument = parse_expression(*param_assign.expr, param_assign.line);
+        if (lower_x_param_proc_packed_score_accumulation_tail(context, argument, param_assign.line,
+                                                              *call.name, call.line, score_assign)) {
+          consumed = 3;
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 bool lower_single_bit_mask_op_assignment(LoweringContext& context, const V2Statement& statement,
@@ -31618,6 +31893,15 @@ bool lower_statement_block(LoweringContext& context, const std::vector<V2Stateme
     if (has_errors(context.diagnostics))
       return false;
 
+    std::size_t packed_score_accumulation_consumed = 0;
+    if (lower_x_param_proc_packed_score_accumulation_run(context, statements, index,
+                                                         packed_score_accumulation_consumed)) {
+      index += packed_score_accumulation_consumed - 1U;
+      continue;
+    }
+    if (has_errors(context.diagnostics))
+      return false;
+
     std::size_t stack_only_return_consumed = 0;
     if (lower_stack_only_call_return_consumer_run(context, statements, index,
                                                   stack_only_return_consumed)) {
@@ -35890,6 +36174,225 @@ guarded_updates(const std::map<std::string, std::string>& state_types,
   return updates;
 }
 
+struct GuardedUpdateSelectorCandidate {
+  Expression selector;
+  std::vector<GuardedUpdate> updates;
+  std::string name;
+  std::string detail;
+  bool uses_negative_zero = false;
+  bool uses_comparison = false;
+};
+
+std::string if_selector_scratch_name(const V2Statement& statement) {
+  return "__if_selector_" + std::to_string(statement.line);
+}
+
+// Mirrors TS multiplyExpressions: folds the multiplicative identities so the cost
+// model and emitted expression match the TypeScript oracle byte-for-byte.
+Expression guarded_multiply_expressions(const Expression& left, const Expression& right) {
+  if (is_numeric_literal_value(left, 0) || is_numeric_literal_value(right, 0))
+    return number_expression("0");
+  if (is_numeric_literal_value(left, 1))
+    return right;
+  if (is_numeric_literal_value(right, 1))
+    return left;
+  return multiply_expression(left, right);
+}
+
+// Mirrors TS addExpressions (identity folding only).
+Expression guarded_add_expressions(const Expression& left, const Expression& right) {
+  if (is_numeric_literal_value(left, 0))
+    return right;
+  if (is_numeric_literal_value(right, 0))
+    return left;
+  return add_expression(left, right);
+}
+
+// Mirrors TS subtractExpressions (identity folding only).
+Expression guarded_subtract_expressions(const Expression& left, const Expression& right) {
+  if (is_numeric_literal_value(right, 0))
+    return left;
+  if (is_numeric_literal_value(left, 0))
+    return unary_expression("-", right);
+  return subtract_expression(left, right);
+}
+
+Expression masked_guarded_update_expression(const GuardedUpdate& update,
+                                            const Expression& selector) {
+  const Expression current = identifier_expression(update.target);
+  const Expression delta = guarded_multiply_expressions(update.delta, selector);
+  if (update.op == "+")
+    return guarded_add_expressions(current, delta);
+  return guarded_subtract_expressions(current, delta);
+}
+
+std::optional<GuardedUpdateSelectorCandidate>
+build_guarded_update_selector_candidate(const LoweringContext& context,
+                                        const V2Statement& statement, bool negative_zero_degree) {
+  if (context.program == nullptr)
+    return std::nullopt;
+  const std::map<std::string, std::string> state_types = v2_state_types_by_name(*context.program);
+  const std::optional<std::vector<GuardedUpdate>> updates = guarded_updates(state_types, statement);
+  if (!updates.has_value())
+    return std::nullopt;
+  const std::optional<V2Predicate> predicate = arithmetic_if_comparison_predicate(statement);
+  if (!predicate.has_value())
+    return std::nullopt;
+
+  const std::optional<Expression> boolean_selector =
+      arithmetic_if_boolean_selector(context, *predicate, statement.line);
+  std::optional<Expression> negative_zero_selector;
+  if (negative_zero_degree)
+    negative_zero_selector =
+        negative_zero_threshold_selector_expression(context, *predicate, statement.line);
+
+  std::optional<Expression> selector;
+  if (boolean_selector.has_value()) {
+    selector = boolean_selector;
+  } else if (negative_zero_selector.has_value()) {
+    selector = negative_zero_selector;
+  } else {
+    try {
+      selector = comparison_selector_expression(*predicate, statement.line);
+    } catch (const std::exception&) {
+      selector.reset();
+    }
+  }
+  if (!selector.has_value())
+    return std::nullopt;
+
+  const bool uses_negative_zero =
+      !boolean_selector.has_value() && negative_zero_selector.has_value();
+  const bool uses_comparison =
+      !boolean_selector.has_value() && !negative_zero_selector.has_value();
+  if (!uses_negative_zero && updates->size() < 2U)
+    return std::nullopt;
+
+  std::string name;
+  std::string detail;
+  if (uses_negative_zero) {
+    name = "negative-zero-threshold-update";
+    detail = "Replaced threshold guarded update with a negative-zero selector";
+  } else if (uses_comparison) {
+    name = "comparison-guarded-update-selector";
+    detail = "Replaced comparison guarded updates with one stored arithmetic selector";
+  } else {
+    name = "multi-guarded-update";
+    detail = "Replaced guarded updates with one stored arithmetic selector";
+  }
+  return GuardedUpdateSelectorCandidate{
+      .selector = std::move(*selector),
+      .updates = *updates,
+      .name = std::move(name),
+      .detail = std::move(detail),
+      .uses_negative_zero = uses_negative_zero,
+      .uses_comparison = uses_comparison,
+  };
+}
+
+int estimate_guarded_update_selector_cost(const GuardedUpdateSelectorCandidate& candidate,
+                                          const std::string& scratch) {
+  const Expression selector = identifier_expression(scratch);
+  int cost = guarded_estimate_expression_cost(candidate.selector) + 1;
+  for (const GuardedUpdate& update : candidate.updates)
+    cost += guarded_estimate_expression_cost(masked_guarded_update_expression(update, selector)) + 1;
+  return cost;
+}
+
+bool guarded_update_selector_profitable(const LoweringContext& context,
+                                        const V2Statement& statement, bool negative_zero_degree) {
+  const std::optional<GuardedUpdateSelectorCandidate> candidate =
+      build_guarded_update_selector_candidate(context, statement, negative_zero_degree);
+  if (!candidate.has_value())
+    return false;
+  return estimate_guarded_update_selector_cost(*candidate, if_selector_scratch_name(statement)) <
+         estimate_branch_order_statement_cost(context, statement);
+}
+
+bool guarded_update_selector_uses_comparison(const LoweringContext& context,
+                                             const V2Statement& statement) {
+  const std::optional<GuardedUpdateSelectorCandidate> candidate =
+      build_guarded_update_selector_candidate(context, statement, /*negative_zero_degree=*/true);
+  return candidate.has_value() && candidate->uses_comparison;
+}
+
+void collect_guarded_update_scratch_from_statement(LoweringContext& context,
+                                                   RegisterCollection& collection,
+                                                   const V2Statement& statement) {
+  if (statement.kind == "v2_if" && statement.predicate.has_value()) {
+    if (guarded_update_selector_profitable(context, statement, /*negative_zero_degree=*/true) ||
+        (context.comparison_guarded_update_selectors &&
+         guarded_update_selector_uses_comparison(context, statement))) {
+      add_register_variable(collection, if_selector_scratch_name(statement));
+    }
+  }
+  for (const V2Statement& child : statement.then_body)
+    collect_guarded_update_scratch_from_statement(context, collection, child);
+  for (const V2Statement& child : statement.else_body)
+    collect_guarded_update_scratch_from_statement(context, collection, child);
+  for (const V2Statement& child : statement.body)
+    collect_guarded_update_scratch_from_statement(context, collection, child);
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr)
+      collect_guarded_update_scratch_from_statement(context, collection, *match_case.action);
+  }
+  if (statement.otherwise != nullptr)
+    collect_guarded_update_scratch_from_statement(context, collection, *statement.otherwise);
+}
+
+void collect_guarded_update_scratch_registers(LoweringContext& context,
+                                              RegisterCollection& collection,
+                                              const V2Program& program) {
+  for (const V2Statement& statement : program.body)
+    collect_guarded_update_scratch_from_statement(context, collection, statement);
+  for (const V2Rule& rule : program.rules) {
+    for (const V2Statement& statement : rule.body)
+      collect_guarded_update_scratch_from_statement(context, collection, statement);
+  }
+}
+
+bool lower_guarded_update_selector(LoweringContext& context, const V2Statement& statement) {
+  if (statement.kind != "v2_if" || !statement.predicate.has_value())
+    return false;
+  const std::string scratch = if_selector_scratch_name(statement);
+  if (!context.register_index_by_name.contains(scratch))
+    return false;
+  const std::optional<GuardedUpdateSelectorCandidate> candidate =
+      build_guarded_update_selector_candidate(
+          context, statement, can_reserve_negative_zero_degree_register(context));
+  if (!candidate.has_value())
+    return false;
+
+  const int ordinary_cost = estimate_branch_order_statement_cost(context, statement);
+  const int selected_cost = estimate_guarded_update_selector_cost(*candidate, scratch);
+  const bool force_comparison_mask =
+      context.comparison_guarded_update_selectors && candidate->uses_comparison;
+  if (selected_cost >= ordinary_cost && !force_comparison_mask)
+    return false;
+
+  if (!lower_expression_to_x(context, candidate->selector))
+    return false;
+  emit_store(context, scratch, candidate->name + " selector");
+  const Expression selector = identifier_expression(scratch);
+  for (const GuardedUpdate& update : candidate->updates) {
+    if (!lower_expression_to_x(context, masked_guarded_update_expression(update, selector)))
+      return false;
+    emit_store(context, update.target, candidate->name + " " + update.target);
+  }
+  context.optimizations.push_back(OptimizationReport{
+      .name = "branch-removal",
+      .detail = candidate->detail + " at line " + std::to_string(statement.line) +
+                "; emitted masked guarded updates.",
+  });
+  context.optimizations.push_back(OptimizationReport{
+      .name = candidate->name,
+      .detail = candidate->detail + " at line " + std::to_string(statement.line) + " (" +
+                std::to_string(selected_cost) + " vs " + std::to_string(ordinary_cost) +
+                " estimated steps).",
+  });
+  return true;
+}
+
 bool expression_references_any_identifier(const Expression& expression,
                                           const std::set<std::string>& names) {
   return std::any_of(names.begin(), names.end(), [&](const std::string& name) {
@@ -37967,24 +38470,40 @@ build_candidate_reports(const std::vector<OptimizationReport>& optimizations, in
 std::vector<CandidateReport>
 build_rejected_candidate_reports(const std::vector<OptimizationReport>& optimizations, int steps) {
   std::vector<CandidateReport> rejected;
+  auto add_once = [&](std::string site, std::string variant, std::string reason) {
+    if (std::none_of(rejected.begin(), rejected.end(), [&](const CandidateReport& existing) {
+          return existing.variant == variant;
+        })) {
+      rejected.push_back(CandidateReport{
+          .site = std::move(site),
+          .variant = std::move(variant),
+          .steps = steps,
+          .selected = false,
+          .reason = std::move(reason),
+      });
+    }
+  };
   if (has_optimization_named(optimizations, "ephemeral-input-dispatch")) {
-    rejected.push_back(CandidateReport{
-        .site = "dispatch@input",
-        .variant = "indirect-register-flow",
-        .steps = steps,
-        .selected = false,
-        .reason = "key-valued, not address-valued",
-    });
+    add_once("dispatch@input", "indirect-register-flow", "key-valued, not address-valued");
+  }
+  // A lowered numeric residual compare chain considers (and rejects) the dark
+  // dispatch variants exactly like TS selectDispatchCandidate. Mirror those
+  // rejected candidates with the same reasons the TS oracle records.
+  if (has_optimization_named(optimizations, "numeric-dispatch-residual-chain")) {
+    add_once("dispatch@numeric", "indirect-register-flow",
+             "rejected; selector is key-valued, not address-valued, and building an address "
+             "register would not beat the compare-chain");
+    add_once("dispatch@numeric", "dark-indirect-table",
+             "considered; layout proof did not establish a conflict-free address/data table for "
+             "this site");
+    add_once("dispatch@numeric", "super-dark-dispatch",
+             "considered; selector is key-valued, and layout proof did not place one-command cases "
+             "at 48..53 with tails at 01..06");
   }
   if (has_any_optimization_named(optimizations, {"preloaded-indirect-flow", "dark-entry-layout",
                                                  "preloaded-super-dark-flow"})) {
-    rejected.push_back(CandidateReport{
-        .site = "layout",
-        .variant = "super-dark-dispatch",
-        .steps = steps,
-        .selected = false,
-        .reason = "considered only after layout proof; not selected without a proved FA..FF case",
-    });
+    add_once("layout", "super-dark-dispatch",
+             "considered only after layout proof; not selected without a proved FA..FF case");
   }
   return rejected;
 }

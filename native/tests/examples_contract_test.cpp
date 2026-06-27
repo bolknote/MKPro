@@ -211,16 +211,28 @@ void compiler_examples_match_typescript_contract() {
     require(has_machine_feature(result, "code-data-overlay"),
             "human.mkpro should report code-data-overlay machine feature use");
     require(has_proof(result, "value-ranges"), "human.mkpro should report value-range proofs");
-    // NOTE (test-parity audit, tests/compiler.test.ts human-centered / dark-dispatch cases):
-    // The TS oracle additionally surfaces, for human.mkpro, a "numeric-dispatch-residual-chain"
-    // optimization label and "dark-indirect-table" / "super-dark-dispatch" *report candidates*
-    // (considered-but-rejected, with "layout proof" reasons). Native emits byte-identical code
-    // (the golden_listing gate is byte-exact) and reports super-dark-dispatch as an optimizer
-    // *capability* (asserted above), but it does not enumerate those rejected dispatch candidates or
-    // that optimization label for this program. This is a report-only divergence with no codegen
-    // effect; the equivalent candidate-report assertions are exercised on tiny-game (selected
-    // fallthrough + rejected indirect-register-flow) and dangerous-loading (dispatch-default-merge),
-    // so it is noted here rather than asserted to avoid masking the byte-exact contract.
+    // The TS oracle surfaces, for human.mkpro, a "numeric-dispatch-residual-chain" optimization
+    // label plus "dark-indirect-table" / "super-dark-dispatch" considered-but-rejected dispatch
+    // candidates (mirroring selectDispatchCandidate). These are report-only entries; the emitted
+    // code stays byte-identical (the golden_listing gate is byte-exact).
+    require(has_optimization(result, "numeric-dispatch-residual-chain"),
+            "human.mkpro should report the numeric-dispatch-residual-chain dispatch lowering");
+    const CandidateReport* rejected_dark_table =
+        find_candidate(result.rejected_candidates, "dark-indirect-table");
+    require(rejected_dark_table != nullptr,
+            "human.mkpro should report the rejected dark-indirect-table dispatch candidate");
+    require(rejected_dark_table->reason.find(
+                "layout proof did not establish a conflict-free address/data table") !=
+                std::string::npos,
+            "human.mkpro dark-indirect-table rejection should report the TS layout-proof reason");
+    const CandidateReport* rejected_super_dark =
+        find_candidate(result.rejected_candidates, "super-dark-dispatch");
+    require(rejected_super_dark != nullptr,
+            "human.mkpro should report the rejected super-dark-dispatch dispatch candidate");
+    require(rejected_super_dark->reason.find(
+                "did not place one-command cases at 48..53 with tails at 01..06") !=
+                std::string::npos,
+            "human.mkpro super-dark-dispatch rejection should report the TS layout-proof reason");
   }
 
   {
