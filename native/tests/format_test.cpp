@@ -33,7 +33,7 @@ void format_primitives_match_typescript_contract() {
   require(format_program_tokens({steps.begin(), steps.begin() + 3}) == "50\n41\n50",
           "program token formatter should emit one hex byte per line");
 
-  const std::vector<ResolvedStep> flow_steps = {
+  const std::vector<ResolvedStep> dot_steps = {
       {.address = 0, .opcode = 0x5e, .hex = "5E", .mnemonic = "F x=0", .comment = "if zero"},
       {.address = 1, .opcode = 0x05, .hex = "05", .mnemonic = "05"},
       {.address = 2, .opcode = 0xaf, .hex = "AF", .mnemonic = "К ПП 0 alias"},
@@ -41,30 +41,26 @@ void format_primitives_match_typescript_contract() {
       {.address = 4, .opcode = 0x8f, .hex = "8F", .mnemonic = "К БП 0 alias"},
       {.address = 5, .opcode = 0x50, .hex = "50", .mnemonic = "С/П", .comment = "halt"},
   };
-  const std::string flow = format_flow_steps(flow_steps);
-  require(flow.find("MK-61 execution flow") != std::string::npos,
-          "flow formatter should emit a heading");
-  require(flow.find("╭─[00..01] branch") != std::string::npos,
-          "flow formatter should box a direct conditional branch with its address operand");
-  require(flow.find("F x=0 05") != std::string::npos &&
-              flow.find("00:F x=0 05") == std::string::npos,
-          "flow formatter should keep commands in the block frame without per-command addresses");
-  require(flow.find("▼") != std::string::npos && flow.find("─") != std::string::npos,
-          "flow formatter should draw connected arrows into graph blocks");
-  require(flow.find("╭─[05] pause") != std::string::npos &&
-              flow.find("К ПП 0 alias") != std::string::npos,
-          "flow formatter should render both branch target blocks");
-  require(flow.find("[?] call R0") != std::string::npos,
-          "flow formatter should cover undocumented indirect call aliases");
-  require(flow.find("return stack") == std::string::npos &&
-              flow.find("return ─?") == std::string::npos,
-          "flow formatter should not invent a static return-stack target");
-  require(flow.find("╭─[04] entryless") != std::string::npos,
-          "flow formatter should keep decoded code without static entries visible");
-  require(flow.find("[?] jump R0") != std::string::npos,
-          "flow formatter should cover undocumented indirect jump aliases");
-  require(format_flow_steps(flow_steps, true).find("\033[") != std::string::npos,
-          "flow formatter should emit ANSI color when requested");
+  const std::string dot = format_dot_steps(dot_steps);
+  require(dot.find("digraph mk61_cfg") != std::string::npos,
+          "dot formatter should emit a Graphviz graph");
+  require(dot.find("n0 [label=\"[00..01] branch\\l  F x=0 05\\l\"") != std::string::npos,
+          "dot formatter should emit a direct conditional branch node with its address operand");
+  require(dot.find("n0 -> n5") != std::string::npos &&
+              dot.find("label=\"yes\"") != std::string::npos,
+          "dot formatter should emit the conditional target edge");
+  require(dot.find("n0 -> n2") != std::string::npos &&
+              dot.find("label=\"no\"") != std::string::npos,
+          "dot formatter should emit the conditional fallthrough edge");
+  require(dot.find("К ПП 0 alias") != std::string::npos &&
+              dot.find("[?] call") != std::string::npos && dot.find("R0") != std::string::npos,
+          "dot formatter should cover undocumented indirect call aliases");
+  require(dot.find("return stack") == std::string::npos,
+          "dot formatter should not invent a static return-stack target");
+  require(dot.find("n4 [label=\"[04] entryless") != std::string::npos,
+          "dot formatter should keep decoded code without static entries visible");
+  require(dot.find("[?] jump") != std::string::npos,
+          "dot formatter should cover undocumented indirect jump aliases");
 
   const std::vector<ResolvedStep> known_indirect_steps = {
       {.address = 0,
@@ -76,11 +72,12 @@ void format_primitives_match_typescript_contract() {
   const std::vector<PreloadReport> known_indirect_preloads = {
       {.register_name = "7", .value = "B2", .counts_against_program = false},
   };
-  const std::string known_flow =
-      format_flow_steps(known_indirect_steps, known_indirect_preloads);
-  require(known_flow.find("К БП 7") != std::string::npos &&
-              known_flow.find("[?]") == std::string::npos,
-          "flow formatter should resolve proved preloaded indirect branch targets");
+  const std::string known_dot =
+      format_dot_steps(known_indirect_steps, known_indirect_preloads);
+  require(known_dot.find("К БП 7") != std::string::npos &&
+              known_dot.find("n0 -> n0") != std::string::npos &&
+              known_dot.find("[?]") == std::string::npos,
+          "dot formatter should resolve proved preloaded indirect branch targets");
 
   const std::vector<PreloadReport> formal_preloads = {
       {.register_name = "7", .value = "C5", .counts_against_program = false},
