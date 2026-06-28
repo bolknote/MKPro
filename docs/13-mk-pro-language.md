@@ -112,6 +112,12 @@ promoted to scratch state fields without a warning. The `--strict` CLI flag
 including the silent `read()` promotion: strict programs must declare each
 variable explicitly.
 
+State may declare `expected_mode("rad"|"deg"|"grd")` to emit a setup-time
+angle-mode check. Use `expected_mode_only(...)` when the source also promises
+that the Р-ГРД-Г switch will not change while the program is running. That
+stronger form enables runtime trigonometric rewrites whose result depends on
+the selected angle units.
+
 Display output is a list of visible fragments. A fragment can be state or text:
 
 ```mkpro
@@ -2299,6 +2305,15 @@ The pipeline currently contains:
   floor digit directly. A stripe group is rejected when one expression would
   need to read multiple packed fields, because that needs a separate
   spill/scheduling pass to stay stack-safe.
+- **trig-fractional-pack** — under `expected_mode_only("grd")` or
+  `expected_mode_only("deg")`, tries compatible counter pairs as one hidden
+  `A + sin(B)` value. The first counter is recovered with `int(P)` and the
+  second with rounded `asin(frac(P))`. The first active form is deliberately
+  narrow: non-negative major counters up to `99`, minor counters up to `9`, and
+  integer self-updates only. Automatic candidate search only explores small,
+  unambiguous pair sets; use the parameterized candidate to test a specific
+  pair. Radian mode is not used for this unscaled form because integer
+  round-trip is only useful inside `0..pi/2`.
 - **inline-floor-packed-row-expression** — speculative lowering for
   `show(floor, ".", packed_expr)`: computes the packed row directly and uses
   the X2/`ВП` splice instead of allocating a hidden display-expression

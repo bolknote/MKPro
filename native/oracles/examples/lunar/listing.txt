@@ -1,37 +1,50 @@
-Setup Block:
-  `R3=100; R2=140; R4=0; R0=0; Rb=10; Rc=666; Rd=777; Re=9.8; R7=L2; R8=_3`
-
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |   -  | 100                     |
-   01 |  43  | X→П 3                   | setup R3
-   02 |   -  | 140                     |
-   03 |  42  | X→П 2                   | setup R2
-   04 |   -  | 0                       |
-   05 |  44  | X→П 4                   | setup R4
-   06 |  40  | X→П 0                   | setup R0
-   07 |  47  | X→П 7                   | setup R7
-   08 |   -  | 10                      |
+   00 |  02  | 2                       |
+   01 |  15  | F 10ˣ                   | setup constant 100
+   02 |  43  | X→П 3                   | setup R3
+   03 |  01  | 1                       |
+   04 |  04  | 4                       |
+   05 |  00  | 0                       |
+   06 |  42  | X→П 2                   | setup R2
+   07 |  01  | 1                       |
+   08 |  00  | 0                       |
    09 |  4B  | X→П b                   | setup Rb
-   10 |   -  | 666                     |
-   11 |  4C  | X→П c                   | setup Rc
-   12 |   -  | 777                     |
-   13 |  4D  | X→П d                   | setup Rd
-   14 |   -  | 9.8                     |
-   15 |  4E  | X→П e                   | setup Re
-   16 |   -  | 41                      |
-   17 |  48  | X→П 8                   | setup R8
+   10 |  06  | 6                       |
+   11 |  06  | 6                       |
+   12 |  06  | 6                       |
+   13 |  4C  | X→П c                   | setup Rc
+   14 |  07  | 7                       |
+   15 |  07  | 7                       |
+   16 |  07  | 7                       |
+   17 |  4D  | X→П d                   | setup Rd
+   18 |  09  | 9                       |
+   19 |  0A  | .                       |
+   20 |  08  | 8                       |
+   21 |  4E  | X→П e                   | setup Re
+   22 |  00  | 0                       |
+   23 |  44  | X→П 4                   | setup R4
+   24 |  40  | X→П 0                   | setup R0
+   25 |  47  | X→П 7                   | setup R7
+   26 |  04  | 4                       |
+   27 |  01  | 1                       |
+   28 |  48  | X→П 8                   | setup R8
+   29 |  09  | 9                       |
+   30 |  01  | 1                       |
+   31 |  1D  | F cos                   | expected_mode("grd") cosine
+   32 |  18  | F ln                    | expected_mode("grd") domain guard
+   33 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  63  | П→X 3                   | display __inline_show_26_0 source
-   01 |  50  | С/П                     | show __inline_show_26_0
-   02 |  64  | П→X 4                   | display __inline_show_27_1 source
-   03 |  50  | С/П                     | show __inline_show_27_1
-   04 |  62  | П→X 2                   | display __inline_show_28_2 source
-   05 |  50  | С/П                     | show __inline_show_28_2
+   00 |  63  | П→X 3                   | display __inline_show_28_0 source
+   01 |  50  | С/П                     | show __inline_show_28_0
+   02 |  64  | П→X 4                   | display __inline_show_29_1 source
+   03 |  50  | С/П                     | show __inline_show_29_1
+   04 |  62  | П→X 2                   | display __inline_show_30_2 source
+   05 |  50  | С/П                     | show __inline_show_30_2
    06 |  41  | X→П 1                   | read burn
    07 |  6B  | П→X b                   | preload const 10
    08 |  12  | ×                       | expr *

@@ -5,6 +5,8 @@ reference monatkodenis_clock
 
 program MonatkodenisClock {
   state {
+    expected_mode_only("grd")
+
     // Supply start time before pressing В/О С/П via stack values:
     // X — hour (0..23), Y — minute (0..59).
     hour: counter 0..23 = stack.X

@@ -85,6 +85,21 @@ program WithLooseAngleRequirement {
   require(loose_angle_program.v2->expected_mode.has_value(), "loose expected mode should parse");
   require(loose_angle_program.v2->expected_mode->mode == "grd",
           "loose expected mode should normalize by leading marker");
+  const ProgramAst fixed_angle_program = parse_program(R"mkpro(
+program WithFixedAngleRequirement {
+  state {
+    expected_mode_only("gradient")
+  }
+  loop {
+    halt(0)
+  }
+}
+)mkpro");
+  require(fixed_angle_program.v2->expected_mode.has_value(), "fixed expected mode should parse");
+  require(fixed_angle_program.v2->expected_mode->mode == "grd",
+          "fixed expected mode should normalize by leading marker");
+  require(fixed_angle_program.v2->expected_mode->only,
+          "expected_mode_only should mark the mode as a whole-program invariant");
   require_throws_contains(R"mkpro(
 program BadAngleRequirement {
   state {

@@ -58,8 +58,12 @@
    54 |  09  | 9                       |
    55 |  39  | К ⊕                     | setup formatted report mask
    56 |  41  | X→П 1                   | setup formatted report mask
-   57 |  07  | 7                       |
-   58 |  50  | С/П                     | setup complete
+   57 |  09  | 9                       |
+   58 |  01  | 1                       |
+   59 |  1D  | F cos                   | expected_mode("grd") cosine
+   60 |  18  | F ln                    | expected_mode("grd") domain guard
+   61 |  07  | 7                       |
+   62 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code     | Command                 | Comment
@@ -117,9 +121,9 @@
    54 | 07       | 7                       |
    55 | 15       | F 10ˣ                   | display formatted video anchor
    56 | 10       | +                       | display formatted video body
-   57 | 61       | П→X 1                   | display __inline_show_25_0 formatted mask
+   57 | 61       | П→X 1                   | display __inline_show_27_0 formatted mask
    58 | 39       | К ⊕                     | display formatted mask merge
    59 | 35       | К {x}                   | display formatted video fraction
    60 | 0B 0C 07 | -0E7                    | display formatted sign
-   63 | 50       | С/П                     | show __inline_show_25_0
+   63 | 50       | С/П                     | show __inline_show_27_0
    64 | 82       | К БП 2                  | loop back via known-one counter

@@ -3,6 +3,8 @@
 
 program TinyDialGame {
   state {
+    expected_mode_only("grd")
+
     dial: packed = 80000078
     // Charge is the only pressure in the game: the left key wastes it, the
     // right key escapes before the dial goes dead.

@@ -5,6 +5,8 @@ reference lordbss_pmk210
 
 program Alaram {
   state {
+    expected_mode_only("grd")
+
     // The cockpit display is a compact perspective picture: canopy edges,
     // reticle, steering wheel, and the intruder's relative bearing.
     fighter: coord(sky) = 0

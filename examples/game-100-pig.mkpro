@@ -9,6 +9,8 @@ program Game100Pig {
   die_faces: board(1..6, 1..1)
 
   state {
+    expected_mode_only("grd")
+
     die: coord(die_faces)
 
     player_total: counter 0..100 = 0

@@ -1,58 +1,71 @@
-Setup Block:
-  `R2=1; R3=2; R4=5; R5=6; R6=7; R7=8; R8=9; Re=1E6; R9=С7; Ra=38; Rb=72; Rc=Г5; Rd=С9`
-
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |   -  | 1                       |
+   00 |  01  | 1                       |
    01 |  42  | X→П 2                   | setup R2
-   02 |   -  | 2                       |
+   02 |  02  | 2                       |
    03 |  43  | X→П 3                   | setup R3
-   04 |   -  | 5                       |
+   04 |  05  | 5                       |
    05 |  44  | X→П 4                   | setup R4
-   06 |   -  | 6                       |
+   06 |  06  | 6                       |
    07 |  45  | X→П 5                   | setup R5
-   08 |   -  | 7                       |
+   08 |  07  | 7                       |
    09 |  46  | X→П 6                   | setup R6
-   10 |   -  | 8                       |
+   10 |  08  | 8                       |
    11 |  47  | X→П 7                   | setup R7
-   12 |   -  | 9                       |
+   12 |  09  | 9                       |
    13 |  48  | X→П 8                   | setup R8
-   14 |   -  | 1E6                     |
-   15 |  4E  | X→П e                   | setup Re
-   16 |   -  | 15                      |
-   17 |  49  | X→П 9                   | setup R9
-   18 |   -  | 38                      |
-   19 |  4A  | X→П a                   | setup Ra
-   20 |   -  | 72                      |
-   21 |  4B  | X→П b                   | setup Rb
-   22 |   -  | 23                      |
-   23 |  4C  | X→П c                   | setup Rc
-   24 |   -  | 17                      |
-   25 |  4D  | X→П d                   | setup Rd
+   14 |  01  | 1                       |
+   15 |  00  | 0                       |
+   16 |  00  | 0                       |
+   17 |  00  | 0                       |
+   18 |  00  | 0                       |
+   19 |  00  | 0                       |
+   20 |  00  | 0                       |
+   21 |  4E  | X→П e                   | setup Re
+   22 |  01  | 1                       |
+   23 |  05  | 5                       |
+   24 |  49  | X→П 9                   | setup R9
+   25 |  03  | 3                       |
+   26 |  08  | 8                       |
+   27 |  4A  | X→П a                   | setup Ra
+   28 |  07  | 7                       |
+   29 |  02  | 2                       |
+   30 |  4B  | X→П b                   | setup Rb
+   31 |  02  | 2                       |
+   32 |  03  | 3                       |
+   33 |  4C  | X→П c                   | setup Rc
+   34 |  01  | 1                       |
+   35 |  07  | 7                       |
+   36 |  4D  | X→П d                   | setup Rd
+   37 |  09  | 9                       |
+   38 |  01  | 1                       |
+   39 |  1D  | F cos                   | expected_mode("grd") cosine
+   40 |  18  | F ln                    | expected_mode("grd") domain guard
+   41 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  64  | П→X 4                   | display __inline_show_27_0 source
+   00 |  64  | П→X 4                   | display __inline_show_29_0 source
    01 |  0E  | В↑                      | keep displayed value in Y
-   02 |  50  | С/П                     | show __inline_show_27_0
+   02 |  50  | С/П                     | show __inline_show_29_0
    03 |  11  | −                       | risk combine
    04 |  31  | К |x|                   | risk integer result
    05 |  04  | 4                       |
    06 |  11  | −                       | dispatch compare
    07 |  5E  | F x=0                   | case mismatch
    08 |  28  | 28                      | case mismatch
-   09 |  67  | П→X 7                   | display __inline_show_40_1 source
-   10 |  50  | С/П                     | show __inline_show_40_1
+   09 |  67  | П→X 7                   | display __inline_show_42_1 source
+   10 |  50  | С/П                     | show __inline_show_42_1
    11 |  02  | 2                       |
    12 |  11  | −                       | condition compare
    13 |  7D  | К x≠0 d                 | false branch for !=; preloaded Rd=C9 indirect-target=17 shifted-forward indirect flow
    14 |  02  | 2                       |
    15 |  40  | X→П 0                   | set move
    16 |  8B  | К БП b                  | terminal rule win; preloaded Rb=72 indirect-target=72 shifted-forward indirect flow
-   17 |  68  | П→X 8                   | display __inline_show_46_2 source
-   18 |  50  | С/П                     | show __inline_show_46_2
+   17 |  68  | П→X 8                   | display __inline_show_48_2 source
+   18 |  50  | С/П                     | show __inline_show_48_2
    19 |  07  | 7                       |
    20 |  11  | −                       | condition compare
    21 |  5E  | F x=0                   | false branch for ==
@@ -66,24 +79,24 @@ Setup Block:
    29 |  10  | +                       | dispatch residual compare
    30 |  5E  | F x=0                   | case mismatch
    31 |  56  | 56                      | case mismatch
-   32 |  65  | П→X 5                   | display __inline_show_57_3 source
-   33 |  50  | С/П                     | show __inline_show_57_3
+   32 |  65  | П→X 5                   | display __inline_show_59_3 source
+   33 |  50  | С/П                     | show __inline_show_59_3
    34 |  04  | 4                       |
    35 |  11  | −                       | condition compare
    36 |  57  | F x≠0                   | false branch for !=
    37 |  40  | 40                      | false branch for !=
    38 |  04  | 4                       |
    39 |  89  | К БП 9                  | shared terminal tail; preloaded R9=C7 indirect-target=15 indirect flow
-   40 |  66  | П→X 6                   | display __inline_show_103_5 source
-   41 |  50  | С/П                     | show __inline_show_103_5
+   40 |  66  | П→X 6                   | display __inline_show_105_5 source
+   41 |  50  | С/П                     | show __inline_show_105_5
    42 |  03  | 3                       |
    43 |  11  | −                       | condition compare
    44 |  57  | F x≠0                   | false branch for !=
    45 |  48  | 48                      | false branch for !=
    46 |  03  | 3                       |
    47 |  89  | К БП 9                  | shared terminal tail; preloaded R9=C7 indirect-target=15 indirect flow
-   48 |  63  | П→X 3                   | display __inline_show_109_6 source
-   49 |  50  | С/П                     | show __inline_show_109_6
+   48 |  63  | П→X 3                   | display __inline_show_111_6 source
+   49 |  50  | С/П                     | show __inline_show_111_6
    50 |  08  | 8                       |
    51 |  11  | −                       | condition compare
    52 |  57  | F x≠0                   | false branch for !=
@@ -94,13 +107,13 @@ Setup Block:
    57 |  11  | −                       | dispatch residual compare
    58 |  5E  | F x=0                   | case mismatch
    59 |  78  | 78                      | case mismatch
-   60 |  65  | П→X 5                   | display __inline_show_57_3 source
-   61 |  50  | С/П                     | show __inline_show_57_3
+   60 |  65  | П→X 5                   | display __inline_show_59_3 source
+   61 |  50  | С/П                     | show __inline_show_59_3
    62 |  04  | 4                       |
    63 |  11  | −                       | condition compare
    64 |  EA  | К x=0 a                 | direct tail branch for !=; preloaded Ra=38 indirect-target=38 indirect flow
-   65 |  68  | П→X 8                   | display __inline_show_46_2 source
-   66 |  50  | С/П                     | show __inline_show_46_2
+   65 |  68  | П→X 8                   | display __inline_show_48_2 source
+   66 |  50  | С/П                     | show __inline_show_48_2
    67 |  03  | 3                       |
    68 |  11  | −                       | condition compare
    69 |  7C  | К x≠0 c                 | direct tail branch for ==; preloaded Rc=D5 indirect-target=23 indirect flow
@@ -112,21 +125,21 @@ Setup Block:
    75 |  50  | С/П                     | halt
    76 |  00  | 0                       | halt
    77 |  50  | С/П                     | halt
-   78 |  65  | П→X 5                   | display __inline_show_57_3 source
-   79 |  50  | С/П                     | show __inline_show_57_3
+   78 |  65  | П→X 5                   | display __inline_show_59_3 source
+   79 |  50  | С/П                     | show __inline_show_59_3
    80 |  04  | 4                       |
    81 |  11  | −                       | condition compare
    82 |  EA  | К x=0 a                 | direct tail branch for !=; preloaded Ra=38 indirect-target=38 indirect flow
-   83 |  62  | П→X 2                   | display __inline_show_63_4 source
-   84 |  50  | С/П                     | show __inline_show_63_4
+   83 |  62  | П→X 2                   | display __inline_show_65_4 source
+   84 |  50  | С/П                     | show __inline_show_65_4
    85 |  09  | 9                       |
    86 |  11  | −                       | condition compare
    87 |  57  | F x≠0                   | false branch for !=
    88 |  91  | 91                      | false branch for !=
    89 |  09  | 9                       |
    90 |  89  | К БП 9                  | shared terminal tail; preloaded R9=C7 indirect-target=15 indirect flow
-   91 |  67  | П→X 7                   | display __inline_show_40_1 source
-   92 |  50  | С/П                     | show __inline_show_40_1
+   91 |  67  | П→X 7                   | display __inline_show_42_1 source
+   92 |  50  | С/П                     | show __inline_show_42_1
    93 |  02  | 2                       |
    94 |  11  | −                       | condition compare
    95 |  57  | F x≠0                   | false branch for !=

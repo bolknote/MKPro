@@ -5,6 +5,8 @@ reference anvarov_dangerous_loading
 
 program DangerousLoading {
   state {
+    expected_mode_only("grd")
+
     // The display is a compact lane drama: boat position, telegraphed threat,
     // remaining cargo, and hulls left.
     boat: coord(harbor) = 8

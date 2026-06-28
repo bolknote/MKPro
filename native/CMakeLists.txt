@@ -212,6 +212,7 @@ add_executable(mkpro_tests
   tests/style_lints_test.cpp
   tests/super_dark_layout_test.cpp
   tests/test_main.cpp
+  tests/trig_fractional_pack_test.cpp
   tests/v2_const_test.cpp
   tests/x2_register_dataflow_test.cpp
   tests/x2_shape_data_model_test.cpp

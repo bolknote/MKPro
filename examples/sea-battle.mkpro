@@ -7,6 +7,8 @@ program SeaBattle {
   ocean: board(0..9, 0..9)
 
   state {
+    expected_mode_only("grd")
+
     // Shots are flat two-digit cells. The player's own fleet is not modeled as a
     // hidden cell set: the human reports calculator hits with a negative response.
     calculator_shot: coord(ocean) = 0

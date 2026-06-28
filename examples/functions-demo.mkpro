@@ -6,6 +6,8 @@
 
 program FunctionsDemo {
   state {
+    expected_mode_only("grd")
+
     result: counter 0..99 = 0
   }
 

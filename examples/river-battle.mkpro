@@ -11,6 +11,8 @@ program RiverBattle {
   river: board(0..9, 1..1)
 
   state {
+    expected_mode_only("grd")
+
     shot: coord(river) = 0
     response: counter 0..1 = 0
 

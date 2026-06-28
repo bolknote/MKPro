@@ -51,7 +51,10 @@
    45 |  35  | К {x}                   | random int fractional part
    46 |  11  | −                       | random int floor
    47 |  41  | X→П 1                   | setup enemy_fleet
-   48 |  50  | С/П                     | setup complete
+   48 |  6D  | П→X d                   | expected_mode("grd") probe
+   49 |  1D  | F cos                   | expected_mode("grd") cosine
+   50 |  18  | F ln                    | expected_mode("grd") domain guard
+   51 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -110,9 +113,9 @@
    51 |  6D  | П→X d                   | preload const 13139545
    52 |  3A  | К ИНВ                   | display literal video bytes
    53 |  0B  | /-/                     | display literal sign
-   54 |  50  | С/П                     | show __inline_show_30_0
+   54 |  50  | С/П                     | show __inline_show_32_0
    55 |  8A  | К БП a                  | if end; preloaded Ra=0.5 indirect-target=0 indirect flow
-   56 |  50  | С/П                     | show __inline_show_77_2
+   56 |  50  | С/П                     | show __inline_show_79_2
    57 |  8A  | К БП a                  | loop back; preloaded Ra=0.5 indirect-target=0 indirect flow
    58 |  3B  | К СЧ                    | random()
    59 |  6B  | П→X b                   | preload const 100
@@ -120,5 +123,5 @@
    61 |  0E  | В↑                      | random int keep scaled draw
    62 |  35  | К {x}                   | random int fractional part
    63 |  11  | −                       | random int floor
-   64 |  50  | С/П                     | show __inline_show_49_1
+   64 |  50  | С/П                     | show __inline_show_51_1
    65 |  52  | В/О                     | implicit return from proc

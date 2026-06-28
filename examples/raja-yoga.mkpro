@@ -8,6 +8,8 @@ program RajaYoga {
   life: board(1..7, 1..1)
 
   state {
+    expected_mode_only("grd")
+
     adept: coord(life) = 4
     goal: coord(life) = random(life)
     old_age: coord(life) = 1

@@ -32,13 +32,17 @@
    27 |  06  | 6                       |
    28 |  4B  | X→П b                   | setup Rb
    29 |  41  | X→П 1                   | setup player
-   30 |  50  | С/П                     | setup complete
+   30 |  09  | 9                       |
+   31 |  01  | 1                       |
+   32 |  1D  | F cos                   | expected_mode("grd") cosine
+   33 |  18  | F ln                    | expected_mode("grd") domain guard
+   34 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  61  | П→X 1                   | display __inline_show_25_0 source
-   01 |  50  | С/П                     | show __inline_show_25_0
+   00 |  61  | П→X 1                   | display __inline_show_27_0 source
+   01 |  50  | С/П                     | show __inline_show_27_0
    02 |  77  | К x≠0 7                 | case mismatch; preloaded R7=B2 indirect-target=0 indirect flow
    03 |  02  | 2                       |
    04 |  11  | −                       | dispatch residual compare

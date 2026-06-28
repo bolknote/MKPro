@@ -62,14 +62,17 @@
    58 |  01  | 1                       |
    59 |  10  | +                       | expr +
    60 |  40  | X→П 0                   | setup plans
-   61 |  50  | С/П                     | setup complete
+   61 |  63  | П→X 3                   | expected_mode("grd") probe
+   62 |  1D  | F cos                   | expected_mode("grd") cosine
+   63 |  18  | F ln                    | expected_mode("grd") domain guard
+   64 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  6E  | П→X e                   | preload const 11951203
    01 |  3A  | К ИНВ                   | display literal video bytes
-   02 |  50  | С/П                     | show __inline_show_38_0
+   02 |  50  | С/П                     | show __inline_show_40_0
    03 |  EA  | К x=0 a                 | false branch for ==; preloaded Ra=C2 indirect-target=10 shifted-forward indirect flow
    04 |  A8  | К ПП 8                  | proc call next_floor; preloaded R8=88 indirect-target=88 shifted-forward indirect flow
    05 |  62  | П→X 2                   | recall strength
@@ -99,8 +102,8 @@
    29 |  57  | F x≠0                   | false branch for !=
    30 |  80  | 80                      | false branch for !=
    31 |  63  | П→X 3                   | recall warning_pattern
-   32 |  61  | П→X 1                   | display __inline_show_90_1 source
-   33 |  50  | С/П                     | show __inline_show_90_1
+   32 |  61  | П→X 1                   | display __inline_show_92_1 source
+   33 |  50  | С/П                     | show __inline_show_92_1
    34 |  61  | П→X 1                   | recall tile
    35 |  11  | −                       | condition compare
    36 |  5E  | F x=0                   | false branch for ==

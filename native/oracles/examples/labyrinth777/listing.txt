@@ -57,17 +57,22 @@
    53 |  6C  | П→X c                   | preload const 9.5555555
    54 |  37  | К ∧                     | bit_and()
    55 |  44  | X→П 4                   | setup exit_view
-   56 |  50  | С/П                     | setup complete
+   56 |  01  | 1                       |
+   57 |  00  | 0                       |
+   58 |  00  | 0                       |
+   59 |  1D  | F cos                   | expected_mode("rad") cosine
+   60 |  18  | F ln                    | expected_mode("rad") domain guard
+   61 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code  | Command                 | Comment
 ------+-------+-------------------------+----------------
-   00 | 66    | П→X 6                   | display __inline_show_34_0 floor
-   01 | 67    | П→X 7                   | display __inline_show_34_0 packed row
+   00 | 66    | П→X 6                   | display __inline_show_36_0 floor
+   01 | 67    | П→X 7                   | display __inline_show_36_0 packed row
    02 | 14    | ↔                       | display packed row floor merge
    03 | 25    | F reverse               | display packed row preserve
    04 | 0C    | ВП                      | display packed row restore
-   05 | 50    | С/П                     | show __inline_show_34_0
+   05 | 50    | С/П                     | show __inline_show_36_0
    06 | 05    | 5                       |
    07 | 11    | −                       | expr -
    08 | 40    | X→П 0                   | set action

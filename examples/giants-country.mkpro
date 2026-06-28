@@ -5,6 +5,8 @@ reference lordbss_pmk198
 
 program GiantsCountry {
   state {
+    expected_mode_only("grd")
+
     // The original keeps the player's hall position in R5 and advances that
     // position directly; there is no separate turn counter modulo 10.
     slot: counter 1..99 = 1

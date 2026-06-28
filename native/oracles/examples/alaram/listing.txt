@@ -77,14 +77,18 @@
    73 |  02  | 2                       |
    74 |  04  | 4                       |
    75 |  49  | X→П 9                   | setup R9
-   76 |  50  | С/П                     | setup complete
+   76 |  09  | 9                       |
+   77 |  01  | 1                       |
+   78 |  1D  | F cos                   | expected_mode("grd") cosine
+   79 |  18  | F ln                    | expected_mode("grd") domain guard
+   80 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  6D  | П→X d                   | preload const 1320587
    01 |  3A  | К ИНВ                   | display literal video bytes
-   02 |  50  | С/П                     | show __inline_show_40_0
+   02 |  50  | С/П                     | show __inline_show_42_0
    03 |  E8  | К x=0 8                 | case mismatch; preloaded R8=C7 indirect-target=15 shifted-forward indirect flow
    04 |  6A  | П→X a                   | preload const 10
    05 |  65  | П→X 5                   | recall level
@@ -95,7 +99,7 @@
    10 |  97  | К x≥0 7                 | false branch for <=; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
    11 |  6E  | П→X e                   | preload const 13251587
    12 |  3A  | К ИНВ                   | display literal video bytes
-   13 |  50  | С/П                     | show __halt_literal_36
+   13 |  50  | С/П                     | show __halt_literal_38
    14 |  87  | К БП 7                  | dispatch end; preloaded R7=49 indirect-target=49 shifted-forward indirect flow
    15 |  02  | 2                       |
    16 |  11  | −                       | dispatch residual compare
@@ -145,6 +149,6 @@
    60 |  10  | +                       | expr +
    61 |  66  | П→X 6                   | recall range
    62 |  9B  | К x≥0 b                 | false branch for >=; preloaded Rb=100 indirect-target=0 indirect flow
-   63 |  6C  | П→X c                   | display __halt_literal_32 literal
-   64 |  50  | С/П                     | show __halt_literal_32
+   63 |  6C  | П→X c                   | display __halt_literal_34 literal
+   64 |  50  | С/П                     | show __halt_literal_34
    65 |  8B  | К БП b                  | loop back; preloaded Rb=100 indirect-target=0 indirect flow

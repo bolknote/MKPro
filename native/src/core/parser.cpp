@@ -20,7 +20,7 @@ struct SourceLine {
 
 const std::unordered_set<std::string> kReservedRuleNames = {
     "else", "fn",    "halt",   "if",     "loop", "match", "otherwise",
-    "program", "read", "expected_mode", "return", "show", "state",
+    "program", "read", "expected_mode", "expected_mode_only", "return", "show", "state",
 };
 
 std::string trim(std::string value) {
@@ -1270,21 +1270,23 @@ private:
   }
 
   void parse_expected_mode(const SourceLine& line, V2Program& program) {
-    static const std::regex mode_regex(R"mkpro(^expected_mode\(\s*"([^"]+)"\s*\)$)mkpro");
+    static const std::regex mode_regex(
+        R"mkpro(^(expected_mode|expected_mode_only)\(\s*"([^"]+)"\s*\)$)mkpro");
     std::smatch match;
     std::optional<std::string> mode;
     if (std::regex_match(line.text, match, mode_regex))
-      mode = normalize_expected_mode_text(match[1].str());
+      mode = normalize_expected_mode_text(match[2].str());
     if (!mode.has_value()) {
       throw ParseError(
-          "State setup mode check must look like 'expected_mode(\"rad\")' with a mode string "
-          "starting with r, d, or g",
+          "State setup mode check must look like 'expected_mode(\"rad\")' or "
+          "'expected_mode_only(\"rad\")' with a mode string starting with r, d, or g",
           line.line);
     }
     if (program.expected_mode.has_value()) {
       throw ParseError("State setup mode check may only be declared once", line.line);
     }
-    program.expected_mode = V2ExpectedMode{.mode = *mode, .line = line.line};
+    program.expected_mode =
+        V2ExpectedMode{.mode = *mode, .line = line.line, .only = match[1].str() == "expected_mode_only"};
   }
 
   void append_implicit_read_state_fields(V2Program& program) {

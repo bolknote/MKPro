@@ -30,7 +30,11 @@
    26 |  35  | К {x}                   | random int fractional part
    27 |  11  | −                       | random int floor
    28 |  42  | X→П 2                   | setup mines
-   29 |  50  | С/П                     | setup complete
+   29 |  09  | 9                       |
+   30 |  01  | 1                       |
+   31 |  1D  | F cos                   | expected_mode("grd") cosine
+   32 |  18  | F ln                    | expected_mode("grd") domain guard
+   33 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code  | Command                 | Comment
@@ -73,7 +77,7 @@
    38 | 6E    | П→X e                   | neighbor_count total
    39 | 10    | +                       | neighbor_count add hit
    40 | 4E    | X→П e                   | neighbor_count total
-   41 | 50    | С/П                     | show __inline_show_38_0
+   41 | 50    | С/П                     | show __inline_show_40_0
    42 | 51    | БП                      | loop back
    43 | 00    | 00                      | loop back
    44 | 6A    | П→X a                   | preload stack const 4

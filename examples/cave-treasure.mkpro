@@ -6,6 +6,8 @@ reference anvarov_demo
 
 program CaveTreasure {
   state {
+    expected_mode_only("rad")
+
     key: counter -10..10 = 0
 
     // The visible position is also the key into generated wall/cache masks. The

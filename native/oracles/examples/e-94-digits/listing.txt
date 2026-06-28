@@ -1,3 +1,13 @@
+# Setup Listing
+ Step | Code | Command                 | Comment
+------+------+-------------------------+----------------
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  50  | С/П                     | setup complete
+
+# Main Listing
  Step | Code     | Command                 | Comment
 ------+----------+-------------------------+----------------
    00 | 52       | В/О                     | decimal recurrence setup
