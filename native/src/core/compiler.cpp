@@ -17385,7 +17385,8 @@ indexed_packed_pow10_delta_report_branch(const LoweringContext& context, const V
 
 bool lower_indexed_packed_pow10_delta_report_branch(LoweringContext& context,
                                                     const V2Statement& assign,
-                                                    const V2Statement& branch) {
+                                                    const V2Statement& branch,
+                                                    bool proc_tail_x2 = false) {
   const std::optional<IndexedPackedReportBranch> report =
       indexed_packed_pow10_delta_report_branch(context, assign, branch);
   if (!report.has_value())
@@ -17397,6 +17398,30 @@ bool lower_indexed_packed_pow10_delta_report_branch(LoweringContext& context,
     if (!lower_expression_to_x(context, report->mask))
       return false;
     context.emitter.emit_op(0x37, "К ∧", "updated packed fractional report mask", branch.line);
+    if (proc_tail_x2) {
+      // When the fractional report check is the whole procedure tail, branch
+      // straight to the halt path on a win and let the no-win path fall into a
+      // bare В/О. The win path recalls the masked report through X2 (last-X),
+      // which `К {x}` left behind, saving the explicit В↑ keep + F reverse pair.
+      context.emitter.emit_op(0x35, "К {x}", "updated packed fractional report predicate",
+                              branch.line);
+      const std::string halt_label = context.emitter.fresh_label("packed_frac_report_x2_halt");
+      context.emitter.emit_jump(0x5e, "F x=0", halt_label,
+                                "true branch for packed fractional report !=", branch.line);
+      context.emitter.emit_op(0x52, "В/О", "packed fractional report return", branch.line);
+      context.emitter.emit_label(halt_label);
+      context.emitter.emit_op(0x0a, ".", "updated packed fractional report X2 restore",
+                              branch.line);
+      context.emitter.emit_op(0x50, "С/П", "halt", report->halt_line);
+      clear_current_x_facts(context);
+      context.optimizations.push_back(OptimizationReport{
+          .name = "indexed-packed-fractional-report-x2-tail",
+          .detail = "Restored the terminal fractional packed report through X2 after branching "
+                    "directly to the halt path at line " +
+                    std::to_string(branch.line) + ".",
+      });
+      return true;
+    }
     context.emitter.emit_op(0x0e, "В↑", "updated packed fractional report keep", branch.line);
     context.emitter.emit_op(0x35, "К {x}", "updated packed fractional report predicate",
                             branch.line);
@@ -26621,6 +26646,40 @@ bool lower_return_statement(LoweringContext& context, const V2Statement& stateme
   return true;
 }
 
+// Recognise a no-argument procedure whose entire body is
+//   selector--; lines[selector] = packed_add(lines[selector], ...);
+//   report = bit_and(lines[selector], MASK); if frac(report) != 0 { halt(report) }
+// (the shape of mark_one in tic-tac-toe-4x4 after the self-decrement rewrite).
+// The fractional report check is the procedure tail, so it can use the cheaper
+// X2 restore form instead of the В↑ keep + F reverse pair.
+bool lower_self_decrement_indexed_fractional_report_tail_rule(LoweringContext& context,
+                                                              const V2Rule& rule) {
+  if (rule.body.size() != 3 || !rule.params.empty())
+    return false;
+  const V2Statement& decrement = rule.body.at(0);
+  const V2Statement& assign = rule.body.at(1);
+  const V2Statement& branch = rule.body.at(2);
+  if (!statement_is_unit_decrement(decrement) || !decrement.target.has_value())
+    return false;
+  const std::string& selector = *decrement.target;
+
+  const std::optional<IndexedPackedReportBranch> report =
+      indexed_packed_pow10_delta_report_branch(context, assign, branch);
+  if (!report.has_value() || !report->fractional || !assign.target.has_value())
+    return false;
+  const Expression target = parse_expression(*assign.target, assign.line);
+  if (target.kind != "indexed" || target.index == nullptr ||
+      target.index->kind != "identifier" || target.index->name != selector)
+    return false;
+
+  if (!lower_statement(context, decrement, nullptr))
+    return false;
+  if (!lower_indexed_packed_pow10_delta_report_branch(context, assign, branch,
+                                                      /*proc_tail_x2=*/true))
+    return false;
+  return true;
+}
+
 bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
   struct CurrentRuleScope {
     LoweringContext& context;
@@ -26812,6 +26871,9 @@ bool lower_function_rule(LoweringContext& context, const V2Rule& rule) {
     context.emitter.emit_op(0x52, "В/О", "implicit return from proc", rule.line);
     return true;
   }
+
+  if (lower_self_decrement_indexed_fractional_report_tail_rule(context, rule))
+    return true;
 
   if (!lower_statement_block(context, rule.body))
     return false;
