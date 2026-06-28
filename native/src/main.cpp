@@ -1,7 +1,10 @@
 #include "mkpro/compiler.hpp"
+#include "mkpro/core/format.hpp"
 #include "mkpro/core/result.hpp"
 #include "mkpro/version.hpp"
 
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -10,11 +13,24 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
+
+enum class ColorMode {
+  Auto,
+  Always,
+  Never,
+};
 
 void print_usage(std::ostream& out) {
   out << "Usage:\n"
-      << "  mkpro-native compile <file.mkpro> [--out listing|hex|json|keys|all]\n"
+      << "  mkpro-native compile <file.mkpro> [--out listing|hex|flow|json|keys|all]\n"
+      << "                               [--color auto|always|never]\n"
       << "                               [--delivery manual|loader|hex] [--budget N]\n"
       << "                               [--analysis] [--strict]\n"
       << "                               [--return-stack-script|--no-return-stack-script]\n"
@@ -29,6 +45,8 @@ std::optional<mkpro::OutputFormat> parse_output_format(const std::string& value)
     return mkpro::OutputFormat::Listing;
   if (value == "hex")
     return mkpro::OutputFormat::Hex;
+  if (value == "flow")
+    return mkpro::OutputFormat::Flow;
   if (value == "json")
     return mkpro::OutputFormat::Json;
   if (value == "keys")
@@ -36,6 +54,32 @@ std::optional<mkpro::OutputFormat> parse_output_format(const std::string& value)
   if (value == "all")
     return mkpro::OutputFormat::All;
   return std::nullopt;
+}
+
+std::optional<ColorMode> parse_color_mode(const std::string& value) {
+  if (value == "auto")
+    return ColorMode::Auto;
+  if (value == "always")
+    return ColorMode::Always;
+  if (value == "never")
+    return ColorMode::Never;
+  return std::nullopt;
+}
+
+bool stdout_is_terminal() {
+#if defined(_WIN32)
+  return _isatty(_fileno(stdout)) != 0;
+#else
+  return isatty(fileno(stdout)) != 0;
+#endif
+}
+
+bool should_colorize(ColorMode mode) {
+  if (mode == ColorMode::Always)
+    return true;
+  if (mode == ColorMode::Never)
+    return false;
+  return std::getenv("NO_COLOR") == nullptr && stdout_is_terminal();
 }
 
 std::optional<mkpro::DeliveryMode> parse_delivery_mode(const std::string& value) {
@@ -337,9 +381,12 @@ void print_json(const mkpro::CompileResult& result) {
   std::cout << ",\n  \"diagnostics\": " << result.diagnostics.size() << "\n}\n";
 }
 
-void print_result(const mkpro::CompileResult& result, mkpro::OutputFormat output) {
+void print_result(const mkpro::CompileResult& result, mkpro::OutputFormat output,
+                  bool colorize_flow) {
   if (output == mkpro::OutputFormat::Hex) {
     std::cout << result.hex << "\n";
+  } else if (output == mkpro::OutputFormat::Flow) {
+    std::cout << mkpro::format_flow_result(result, colorize_flow) << "\n";
   } else if (output == mkpro::OutputFormat::Json) {
     print_json(result);
   } else if (output == mkpro::OutputFormat::All) {
@@ -362,6 +409,7 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
   args.erase(args.begin());
 
   mkpro::CompileOptions options;
+  ColorMode color_mode = ColorMode::Auto;
   if (command == "explain") {
     options.output = mkpro::OutputFormat::All;
     options.analysis = true;
@@ -513,6 +561,17 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
         return 64;
       }
       options.output = *output;
+    } else if (arg == "--color") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --color\n";
+        return 64;
+      }
+      auto color = parse_color_mode(args[++index]);
+      if (!color.has_value()) {
+        std::cerr << "unknown --color value: " << args[index] << "\n";
+        return 64;
+      }
+      color_mode = *color;
     } else if (arg == "--delivery") {
       if (index + 1 >= args.size()) {
         std::cerr << "missing value for --delivery\n";
@@ -545,7 +604,7 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
     const mkpro::CompileResult result = mkpro::compile_source(read_source(source_path), options);
     print_diagnostics(result);
     if (result.implemented)
-      print_result(result, options.output);
+      print_result(result, options.output, should_colorize(color_mode));
     return result.implemented ? 0 : 78;
   } catch (const std::exception& error) {
     std::cerr << "error: " << error.what() << "\n";

@@ -130,6 +130,7 @@ enum class DeliveryMode {
 enum class OutputFormat {
   Listing,
   Hex,
+  Flow,
   Json,
   Keys,
   All,

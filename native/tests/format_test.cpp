@@ -33,6 +33,49 @@ void format_primitives_match_typescript_contract() {
   require(format_program_tokens({steps.begin(), steps.begin() + 3}) == "50\n41\n50",
           "program token formatter should emit one hex byte per line");
 
+  const std::vector<ResolvedStep> flow_steps = {
+      {.address = 0, .opcode = 0x5e, .hex = "5E", .mnemonic = "F x=0", .comment = "if zero"},
+      {.address = 1, .opcode = 0x05, .hex = "05", .mnemonic = "05"},
+      {.address = 2, .opcode = 0xaf, .hex = "AF", .mnemonic = "К ПП 0 alias"},
+      {.address = 3, .opcode = 0x52, .hex = "52", .mnemonic = "В/О"},
+      {.address = 4, .opcode = 0x8f, .hex = "8F", .mnemonic = "К БП 0 alias"},
+      {.address = 5, .opcode = 0x50, .hex = "50", .mnemonic = "С/П", .comment = "halt"},
+  };
+  const std::string flow = format_flow_steps(flow_steps);
+  require(flow.find("MK-61 execution flow") != std::string::npos,
+          "flow formatter should emit a heading");
+  require(flow.find("╭─[00..01] branch") != std::string::npos,
+          "flow formatter should box a direct conditional branch with its address operand");
+  require(flow.find("├─ yes ─▶ [05]") != std::string::npos,
+          "flow formatter should show the taken direct branch edge");
+  require(flow.find("└─ no ─▼ [02]") != std::string::npos,
+          "flow formatter should show the direct branch fallthrough edge");
+  require(flow.find("├─ call ─? [?] (R0)") != std::string::npos,
+          "flow formatter should cover undocumented indirect call aliases");
+  require(flow.find("└─ ret ─▼ [03]") != std::string::npos,
+          "flow formatter should show the continuation after an indirect call");
+  require(flow.find("╭─[04] unreachable") != std::string::npos,
+          "flow formatter should keep unreachable decoded code visible");
+  require(flow.find("└─ jump ─? [?] (R0)") != std::string::npos,
+          "flow formatter should cover undocumented indirect jump aliases");
+  require(format_flow_steps(flow_steps, true).find("\033[") != std::string::npos,
+          "flow formatter should emit ANSI color when requested");
+
+  const std::vector<ResolvedStep> known_indirect_steps = {
+      {.address = 0,
+       .opcode = 0x87,
+       .hex = "87",
+       .mnemonic = "К БП 7",
+       .comment = "preloaded R7=B2 indirect-target=0 indirect flow"},
+  };
+  const std::vector<PreloadReport> known_indirect_preloads = {
+      {.register_name = "7", .value = "B2", .counts_against_program = false},
+  };
+  const std::string known_flow =
+      format_flow_steps(known_indirect_steps, known_indirect_preloads);
+  require(known_flow.find("└─ jump ─↺ [00] (R7=B2)") != std::string::npos,
+          "flow formatter should resolve proved preloaded indirect branch targets");
+
   const std::vector<PreloadReport> formal_preloads = {
       {.register_name = "7", .value = "C5", .counts_against_program = false},
       {.register_name = "8", .value = "FF", .counts_against_program = false},
