@@ -96,6 +96,10 @@ target_include_directories(mkpro_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_compile_features(mkpro_core PUBLIC cxx_std_23)
+if(UNIX AND NOT APPLE)
+  # std::llround is provided by libm on glibc/cosmocc targets.
+  target_link_libraries(mkpro_core PUBLIC m)
+endif()
 
 add_executable(mkpro_cli src/main.cpp)
 set_target_properties(mkpro_cli PROPERTIES OUTPUT_NAME mkpro-native)
