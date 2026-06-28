@@ -41983,6 +41983,69 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     };
     const std::size_t kBeamWidth = env_size("MKPRO_BEAM_WIDTH", 6);
     const int kBeamRounds = static_cast<int>(env_size("MKPRO_BEAM_ROUNDS", 6));
+    // Definitive search mode: feed the beam every single optimization flag as a
+    // standalone primitive (MKPRO_BEAM_PRIMITIVES), not just the curated
+    // multi-flag closures. This lets the beam form arbitrary flag subsets the
+    // curated bundles never expressed, conclusively answering whether any
+    // untried combination of existing passes beats the incumbent.
+    if (const char* prim = std::getenv("MKPRO_BEAM_PRIMITIVES");
+        prim != nullptr && prim[0] != '\0' && prim[0] != '0') {
+      const std::vector<std::function<void(CompileOptions&)>> primitive_toggles = {
+          [](CompileOptions& o) { o.aggressive_terminal_direct = true; },
+          [](CompileOptions& o) { o.invert_branch_order = true; },
+          [](CompileOptions& o) { o.canonicalize_if_chains = true; },
+          [](CompileOptions& o) { o.free_residual_dispatch_scratch = true; },
+          [](CompileOptions& o) { o.preserve_dispatch_case_order = true; },
+          [](CompileOptions& o) { o.single_bit_mask_op_copy_reuse = true; },
+          [](CompileOptions& o) { o.indirect_underflow_decrement = true; },
+          [](CompileOptions& o) { o.alias_x_reuse = true; },
+          [](CompileOptions& o) { o.segmented_bitplanes = true; },
+          [](CompileOptions& o) { o.segmented_line_count_scan = true; },
+          [](CompileOptions& o) { o.tail_branch_inversion = true; },
+          [](CompileOptions& o) { o.conditional_branch_trampoline = true; },
+          [](CompileOptions& o) { o.shared_straight_line_call_bodies = true; },
+          [](CompileOptions& o) { o.coalesce_copies = true; },
+          [](CompileOptions& o) { o.aggressive_indirect_call_threshold = true; },
+          [](CompileOptions& o) { o.dual_use_constant_indirect_flow = true; },
+          [](CompileOptions& o) { o.aggressive_post_layout_indirect_flow = true; },
+          [](CompileOptions& o) { o.return_stack_script = true; },
+          [](CompileOptions& o) { o.preloaded_indirect_flow = true; },
+          [](CompileOptions& o) { o.runtime_indirect_call_flow = true; },
+          [](CompileOptions& o) { o.general_constant_preloads = true; },
+          [](CompileOptions& o) { o.stack_resident_temps = true; },
+          [](CompileOptions& o) { o.share_random_cell = true; },
+          [](CompileOptions& o) { o.startup_aware_constant_preloads = true; },
+          [](CompileOptions& o) { o.guarded_prologue_gadgets = true; },
+          [](CompileOptions& o) { o.shared_bit_mask_helper_calls = true; },
+          [](CompileOptions& o) { o.compact_bit_mask_helper_body = true; },
+          [](CompileOptions& o) { o.signed_abs_match_pairs = true; },
+          [](CompileOptions& o) { o.synthesize_parametric_siblings = true; },
+          [](CompileOptions& o) { o.pack_counter_stripes = true; },
+          [](CompileOptions& o) { o.canonicalize_repeated_unary_update_args = true; },
+          [](CompileOptions& o) { o.x_param_value_functions = true; },
+          [](CompileOptions& o) { o.x_param_y_stack_stored_entry = true; },
+          [](CompileOptions& o) { o.packed_line_family_update_check_tail = true; },
+          [](CompileOptions& o) { o.packed_line_family_mutating_selector_update_check_tail = true; },
+          [](CompileOptions& o) {
+            o.packed_line_family_borrowed_mutating_selector_update_check_tail = true;
+          },
+          [](CompileOptions& o) { o.inline_floor_packed_row_expressions = true; },
+          [](CompileOptions& o) { o.unroll_counted_loops = true; },
+          [](CompileOptions& o) { o.setup_only_counted_loop_init = true; },
+          [](CompileOptions& o) { o.domain_error_guards = true; },
+          [](CompileOptions& o) { o.show_read_guarded_transfer = true; },
+          [](CompileOptions& o) { o.comparison_guarded_update_selectors = true; },
+          [](CompileOptions& o) { o.recall_stored_input_after_decrement = true; },
+          [](CompileOptions& o) { o.aggressive_indirect_call = true; },
+          [](CompileOptions& o) { o.dead_source_residual_temp_reuse = true; },
+          [](CompileOptions& o) { o.hoist_shared_helpers = true; },
+          [](CompileOptions& o) { o.hoist_procs = true; },
+          [](CompileOptions& o) { o.order_procs_by_call_count = true; },
+          [](CompileOptions& o) { o.collect_coalesce_shares = true; },
+      };
+      for (const std::function<void(CompileOptions&)>& toggle : primitive_toggles)
+        beam_configures.push_back(toggle);
+    }
     struct BeamNode {
       CompileOptions options;
       std::size_t size;
