@@ -34,6 +34,18 @@ jobs:
         run: |
           file build/native/mkpro-native
           ./build/native/mkpro-native compile examples/basic.mkpro --out hex
+      - name: Strip binary
+        run: strip --strip-all build/native/mkpro-native
+      - name: Install UPX
+        run: |
+          curl -fsSL -o upx.tar.xz https://github.com/upx/upx/releases/download/v5.0.2/upx-5.0.2-amd64_linux.tar.xz
+          tar -xf upx.tar.xz
+          sudo install upx-5.0.2-amd64_linux/upx /usr/local/bin/upx
+          upx --version
+      - name: Compress binary
+        run: upx --best --lzma build/native/mkpro-native
+      - name: Packaged smoke check
+        run: ./build/native/mkpro-native compile examples/basic.mkpro --out hex
       - name: Stage binary
         run: cp build/native/mkpro-native mkpro-native-linux-x86_64
       - uses: actions/upload-artifact@v6
@@ -60,6 +72,26 @@ jobs:
       - name: Build CLI
         run: cmake --build build --config Release --target mkpro_cli -j
       - name: Smoke check
+        run: ./build/native/Release/mkpro-native.exe compile examples/basic.mkpro --out hex
+      - name: Strip binary
+        shell: pwsh
+        run: |
+          $strip = Get-Command llvm-strip -ErrorAction SilentlyContinue
+          if ($strip) {
+            & $strip.Source --strip-all build\native\Release\mkpro-native.exe
+          } else {
+            Write-Host "llvm-strip not found; skipping strip"
+          }
+      - name: Install UPX
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/upx/upx/releases/download/v5.0.2/upx-5.0.2-win64.zip -OutFile upx.zip
+          Expand-Archive upx.zip -DestinationPath .
+          "$PWD\upx-5.0.2-win64" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          .\upx-5.0.2-win64\upx.exe --version
+      - name: Compress binary
+        run: upx --best --lzma build\native\Release\mkpro-native.exe
+      - name: Packaged smoke check
         run: ./build/native/Release/mkpro-native.exe compile examples/basic.mkpro --out hex
       - name: Stage binary
         run: copy build\native\Release\mkpro-native.exe mkpro-native-windows-x64.exe
@@ -115,6 +147,10 @@ jobs:
         run: |
           lipo -info build/native/mkpro-native
           ./build/native/mkpro-native compile examples/basic.mkpro --out hex
+      - name: Strip binary
+        run: strip build/native/mkpro-native
+      - name: Packaged smoke check
+        run: ./build/native/mkpro-native compile examples/basic.mkpro --out hex
       - name: Stage binary
         run: cp build/native/mkpro-native mkpro-native-macos-universal
       - uses: actions/upload-artifact@v6
