@@ -90,7 +90,7 @@ void example_sizes_match_typescript_baselines() {
       {"tic-tac-toe", 99},
       {"tiny-game", 23},
       {"treasure-hunter-2", 99},
-      {"wumpus", 103},
+      {"wumpus", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
       {"tic-tac-toe-4x4", 130},

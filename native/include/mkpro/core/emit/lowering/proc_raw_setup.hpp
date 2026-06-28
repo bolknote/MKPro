@@ -35,6 +35,7 @@ SetupProgramReport
 compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>& boards,
                                     const std::map<std::string, std::string>& registers,
                                     const std::vector<PreloadReport>& preloads,
-                                    const CompileOptions& options);
+                                    const CompileOptions& options,
+                                    std::optional<std::string> expected_mode = std::nullopt);
 
 } // namespace mkpro::core::emit::lowering

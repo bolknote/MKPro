@@ -1301,7 +1301,7 @@ class ConstantFolder {
 
 ConstantFoldResult fold_program_constants(V2Program& program,
                                           const std::map<std::string, Expression>& constants) {
-  return ConstantFolder(program.angle_mode.has_value() && program.angle_mode->mode == "grd",
+  return ConstantFolder(program.expected_mode.has_value() && program.expected_mode->mode == "grd",
                         constants)
       .fold_program(program);
 }

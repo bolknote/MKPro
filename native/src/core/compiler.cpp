@@ -1167,6 +1167,15 @@ struct XParamValueFunctionMatch {
   int line = 0;
 };
 
+struct TrigNearRuleMatch {
+  std::string param;
+  Expression value;
+  Expression threshold;
+  int line = 0;
+};
+
+std::optional<TrigNearRuleMatch> match_trig_near_rule(const V2Rule& rule);
+
 bool expression_is_param_plus_width(const Expression& expression, const std::string& param,
                                     int width) {
   if (expression.kind != "binary" || expression.op != "+" || expression.left == nullptr ||
@@ -1891,6 +1900,8 @@ void materialize_rule_param_state_fields(V2Program& program) {
     declared.insert(field.name);
 
   for (const V2Rule& rule : program.rules) {
+    if (match_trig_near_rule(rule).has_value())
+      continue;
     for (const std::string& param : rule.params) {
       if (!declared.insert(param).second)
         continue;
@@ -5218,7 +5229,6 @@ std::optional<Expression> small_set_expression_macro(const std::string& name,
       negated_distances.push_back(unary_expression("-", distance));
     return add_expression(radius, max_expression_list(negated_distances));
   }
-
   const Expression& value = args.front();
   std::vector<Expression> differences;
   for (std::size_t index = 1; index < args.size(); ++index)
@@ -9413,6 +9423,8 @@ void collect_registers(LoweringContext& context, const V2Program& program) {
                                   stack_only_excluded);
   }
   for (const V2Rule& rule : program.rules) {
+    if (match_trig_near_rule(rule).has_value())
+      continue;
     if (match_x_param_stack_stop_risk_rule(rule).has_value())
       continue;
     const std::optional<XParamReturnDecay> x_param_return = match_x_param_return_decay(rule);
@@ -18629,6 +18641,27 @@ bool lower_call_to_x(LoweringContext& context, const Expression& expression) {
     return false;
   }
   const V2Rule& rule = *rule_it->second;
+  if (const std::optional<TrigNearRuleMatch> trig_near = match_trig_near_rule(rule)) {
+    if (expression.args.size() != 1U) {
+      context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
+                                               rule.name + " expects one native argument"));
+      return false;
+    }
+    if (!lower_expression_to_x(context, expression.args.front()))
+      return false;
+    if (!lower_expression_to_x(context, trig_near->value))
+      return false;
+    context.emitter.emit_op(0x11, "-", "near() delta");
+    context.emitter.emit_op(0x1d, "F cos", "near() cosine");
+    if (!lower_expression_to_x(context, trig_near->threshold))
+      return false;
+    context.emitter.emit_op(0x11, "-", "near() margin");
+    context.optimizations.push_back(OptimizationReport{
+        .name = "trig-near-value-function-inline",
+        .detail = "Inlined " + rule.name + "() as cos-distance margin without a parameter register.",
+    });
+    return true;
+  }
   if (rule.name == "square") {
     if (expression.args.size() != 1) {
       context.diagnostics.push_back(diagnostic(DiagnosticSeverity::Error, "native-unsupported",
@@ -19442,14 +19475,20 @@ bool lower_negated_zero_false_branch(LoweringContext& context, const V2Predicate
 }
 
 struct NearAnyHelperConditionMatch {
+  std::string kind = "near_any";
   Expression value;
   Expression radius;
   std::vector<Expression> candidates;
   std::string op;
 };
 
-std::string near_any_helper_key(const Expression& value, const Expression& radius) {
-  return expression_to_json(value) + "|" + expression_to_json(radius);
+std::string near_any_helper_key(const std::string& kind, const Expression& value,
+                                const Expression& radius) {
+  return kind + "|" + expression_to_json(value) + "|" + expression_to_json(radius);
+}
+
+std::string near_any_helper_comment_kind(const std::string& kind) {
+  return kind == "trig_near" ? "near()" : "near_any";
 }
 
 std::string flip_zero_comparison_operands_op(const std::string& op) {
@@ -19486,6 +19525,97 @@ std::optional<Expression> near_any_simple_stack_load(LoweringContext& context,
     ++context.constant_indexed_state_resolutions;
   (void)source_line;
   return identifier_expression(state_bank_element_name(field, index));
+}
+
+std::optional<TrigNearRuleMatch> match_trig_near_rule(const V2Rule& rule) {
+  if (rule.params.size() != 1U || rule.body.size() != 1U)
+    return std::nullopt;
+  const V2Statement& ret = rule.body.front();
+  if (ret.kind != "v2_return" || !ret.expr.has_value())
+    return std::nullopt;
+
+  Expression margin;
+  try {
+    margin = parse_expression(*ret.expr, ret.line);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+  if (margin.kind != "binary" || margin.op != "-" || margin.left == nullptr ||
+      margin.right == nullptr) {
+    return std::nullopt;
+  }
+  const Expression& cos_call = *margin.left;
+  if (cos_call.kind != "call" || lower_ascii(cos_call.callee) != "cos" ||
+      cos_call.args.size() != 1U) {
+    return std::nullopt;
+  }
+  const Expression& delta = cos_call.args.front();
+  if (delta.kind != "binary" || delta.op != "-" || delta.left == nullptr ||
+      delta.right == nullptr) {
+    return std::nullopt;
+  }
+
+  const std::string& param = rule.params.front();
+  const Expression* value = nullptr;
+  if (identifier_expression_is(*delta.left, param)) {
+    value = delta.right.get();
+  } else if (identifier_expression_is(*delta.right, param)) {
+    value = delta.left.get();
+  } else {
+    return std::nullopt;
+  }
+  if (identifier_expression_is(*value, param))
+    return std::nullopt;
+
+  return TrigNearRuleMatch{
+      .param = param,
+      .value = *value,
+      .threshold = *margin.right,
+      .line = ret.line,
+  };
+}
+
+bool collect_trig_near_function_candidates(LoweringContext& context, const Expression& expression,
+                                           int source_line, bool report_resolution,
+                                           std::optional<Expression>& value,
+                                           std::optional<Expression>& threshold,
+                                           std::vector<Expression>& candidates) {
+  if (expression.kind != "call")
+    return false;
+  if (lower_ascii(expression.callee) == "max" && expression.args.size() >= 2U) {
+    for (const Expression& arg : expression.args) {
+      if (!collect_trig_near_function_candidates(context, arg, source_line, report_resolution,
+                                                 value, threshold, candidates)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  const auto rule_it = context.rules.find(expression.callee);
+  if (rule_it == context.rules.end())
+    return false;
+  const std::optional<TrigNearRuleMatch> near_rule = match_trig_near_rule(*rule_it->second);
+  if (!near_rule.has_value() || expression.args.size() != 1U)
+    return false;
+
+  std::optional<Expression> rule_value =
+      near_any_simple_stack_load(context, near_rule->value, report_resolution, source_line);
+  std::optional<Expression> rule_threshold =
+      near_any_simple_stack_load(context, near_rule->threshold, report_resolution, source_line);
+  std::optional<Expression> candidate =
+      near_any_simple_stack_load(context, expression.args.front(), report_resolution, source_line);
+  if (!rule_value.has_value() || !rule_threshold.has_value() || !candidate.has_value())
+    return false;
+
+  if (value.has_value() && !expression_equals(*value, *rule_value))
+    return false;
+  if (threshold.has_value() && !expression_equals(*threshold, *rule_threshold))
+    return false;
+  value = std::move(*rule_value);
+  threshold = std::move(*rule_threshold);
+  candidates.push_back(std::move(*candidate));
+  return true;
 }
 
 int condition_expression_cost(const LoweringContext& context, const Expression& expression) {
@@ -19552,11 +19682,20 @@ int near_any_margin_cost(const LoweringContext& context, const Expression& value
          1 + 1 + condition_expression_cost(context, radius) + 1;
 }
 
+int trig_near_margin_cost(const LoweringContext& context, const Expression& value,
+                          const Expression& threshold, const Expression& candidate) {
+  return condition_expression_cost(context, value) + condition_expression_cost(context, candidate) +
+         1 + 1 + condition_expression_cost(context, threshold) + 1;
+}
+
 int near_any_condition_inline_cost(const LoweringContext& context,
                                    const NearAnyHelperConditionMatch& match) {
   int cost = 0;
-  for (const Expression& candidate : match.candidates)
-    cost += near_any_margin_cost(context, match.value, match.radius, candidate);
+  for (const Expression& candidate : match.candidates) {
+    cost += match.kind == "trig_near"
+                ? trig_near_margin_cost(context, match.value, match.radius, candidate)
+                : near_any_margin_cost(context, match.value, match.radius, candidate);
+  }
   cost += static_cast<int>(match.candidates.empty() ? 0U : match.candidates.size() - 1U);
   cost += 2;
   return cost;
@@ -19596,10 +19735,28 @@ match_near_any_helper_condition(LoweringContext& context, const V2Predicate& pre
   }
   if (op != ">=" && op != "<")
     return std::nullopt;
-  if (tested.kind != "call" || lower_ascii(tested.callee) != "near_any" ||
-      tested.args.size() < 3U) {
+  if (tested.kind != "call")
     return std::nullopt;
+  const std::string kind = lower_ascii(tested.callee);
+  if (kind != "near_any") {
+    std::optional<Expression> value;
+    std::optional<Expression> threshold;
+    std::vector<Expression> candidates;
+    if (!collect_trig_near_function_candidates(context, tested, source_line, report_resolution,
+                                               value, threshold, candidates) ||
+        !value.has_value() || !threshold.has_value() || candidates.empty()) {
+      return std::nullopt;
+    }
+    return NearAnyHelperConditionMatch{
+        .kind = "trig_near",
+        .value = std::move(*value),
+        .radius = std::move(*threshold),
+        .candidates = std::move(candidates),
+        .op = op,
+    };
   }
+  if (tested.args.size() < 3U)
+    return std::nullopt;
 
   std::optional<Expression> value =
       near_any_simple_stack_load(context, tested.args.at(0), report_resolution, source_line);
@@ -19619,6 +19776,7 @@ match_near_any_helper_condition(LoweringContext& context, const V2Predicate& pre
   if (candidates.empty())
     return std::nullopt;
   return NearAnyHelperConditionMatch{
+      .kind = kind,
       .value = std::move(*value),
       .radius = std::move(*radius),
       .candidates = std::move(candidates),
@@ -19642,13 +19800,14 @@ void add_near_any_helper_stat(LoweringContext& context, const V2Predicate& predi
   if (!match.has_value())
     return;
 
-  const std::string key = near_any_helper_key(match->value, match->radius);
+  const std::string key = near_any_helper_key(match->kind, match->value, match->radius);
   const int helper_condition_cost = near_any_helper_condition_call_cost(context, *match);
   const int ordinary_cost = near_any_condition_inline_cost(context, *match);
   const auto existing = context.near_any_helper_stats.find(key);
   if (existing == context.near_any_helper_stats.end()) {
     const int helper_body_cost = condition_expression_cost(context, match->value) +
-                                 condition_expression_cost(context, match->radius) + 5;
+                                 condition_expression_cost(context, match->radius) +
+                                 (match->kind == "trig_near" ? 4 : 5);
     context.near_any_helper_stats.emplace(
         key, NearAnyHelperStats{
                  .candidate_count = static_cast<int>(match->candidates.size()),
@@ -19700,7 +19859,7 @@ void collect_near_any_helper_stats(LoweringContext& context, const V2Program& pr
 const NearAnyHelperRequest& ensure_near_any_helper(LoweringContext& context,
                                                    const NearAnyHelperConditionMatch& match,
                                                    int source_line) {
-  const std::string key = near_any_helper_key(match.value, match.radius);
+  const std::string key = near_any_helper_key(match.kind, match.value, match.radius);
   const auto existing = context.near_any_helper_labels.find(key);
   if (existing != context.near_any_helper_labels.end()) {
     const auto helper = std::find_if(
@@ -19709,11 +19868,13 @@ const NearAnyHelperRequest& ensure_near_any_helper(LoweringContext& context,
     if (helper != context.near_any_helpers.end())
       return *helper;
   }
-  const std::string label = "__near_any_" + std::to_string(context.near_any_helpers.size());
+  const std::string label_prefix = match.kind == "trig_near" ? "__trig_near_" : "__near_any_";
+  const std::string label = label_prefix + std::to_string(context.near_any_helpers.size());
   context.near_any_helper_labels[key] = label;
   context.near_any_helpers.push_back(NearAnyHelperRequest{
       .key = key,
       .label = label,
+      .kind = match.kind,
       .value = match.value,
       .radius = match.radius,
       .line = source_line,
@@ -19722,12 +19883,13 @@ const NearAnyHelperRequest& ensure_near_any_helper(LoweringContext& context,
 }
 
 bool lower_near_any_candidate_for_helper(LoweringContext& context, const Expression& candidate,
-                                         int source_line) {
+                                         int source_line, const std::string& kind) {
   if (candidate.kind == "identifier" && x_holds_identifier(context, candidate.name)) {
+    const std::string comment_kind = near_any_helper_comment_kind(kind);
     context.optimizations.push_back(OptimizationReport{
         .name = "stack-current-x-scheduling",
-        .detail = "Reused " + candidate.name + " already in X for near_any candidate at line " +
-                  std::to_string(source_line) + ".",
+        .detail = "Reused " + candidate.name + " already in X for " + comment_kind +
+                  " candidate at line " + std::to_string(source_line) + ".",
     });
     return true;
   }
@@ -19737,12 +19899,14 @@ bool lower_near_any_candidate_for_helper(LoweringContext& context, const Express
 bool lower_near_any_margin_with_helper(LoweringContext& context,
                                        const NearAnyHelperConditionMatch& match,
                                        const std::string& label, int source_line) {
+  const std::string comment_kind = near_any_helper_comment_kind(match.kind);
   for (std::size_t index = 0; index < match.candidates.size(); ++index) {
-    if (!lower_near_any_candidate_for_helper(context, match.candidates.at(index), source_line))
+    if (!lower_near_any_candidate_for_helper(context, match.candidates.at(index), source_line,
+                                             match.kind))
       return false;
-    context.emitter.emit_jump(0x53, "ПП", label, "near_any candidate", source_line);
+    context.emitter.emit_jump(0x53, "ПП", label, comment_kind + " candidate", source_line);
     if (index > 0)
-      context.emitter.emit_op(0x36, "К max", "near_any max margin", source_line);
+      context.emitter.emit_op(0x36, "К max", comment_kind + " max margin", source_line);
   }
   return true;
 }
@@ -19756,7 +19920,7 @@ bool lower_near_any_helper_condition_false_branch(LoweringContext& context,
       match_near_any_helper_condition(context, predicate, source_line, true);
   if (!match.has_value())
     return false;
-  const std::string key = near_any_helper_key(match->value, match->radius);
+  const std::string key = near_any_helper_key(match->kind, match->value, match->radius);
   const auto stats_it = context.near_any_helper_stats.find(key);
   if (stats_it == context.near_any_helper_stats.end() ||
       stats_it->second.helper_cost >= stats_it->second.ordinary_cost) {
@@ -19773,8 +19937,9 @@ bool lower_near_any_helper_condition_false_branch(LoweringContext& context,
                             "false branch for " + match->op, source_line);
   context.optimizations.push_back(OptimizationReport{
       .name = "near-any-helper-lowering",
-      .detail = "Lowered " + condition_text(predicate) +
-                " through shared near_any helper at line " + std::to_string(source_line) + " (" +
+      .detail = "Lowered " + condition_text(predicate) + " through shared " +
+                near_any_helper_comment_kind(match->kind) + " helper at line " +
+                std::to_string(source_line) + " (" +
                 std::to_string(stats_it->second.helper_cost) + " vs " +
                 std::to_string(stats_it->second.ordinary_cost) + " estimated group steps).",
   });
@@ -27001,6 +27166,8 @@ bool lower_function_rules(LoweringContext& context, const V2Program& program) {
   for (const V2Rule* rule : function_rule_emission_order(context, program)) {
     if (rule == nullptr)
       continue;
+    if (match_trig_near_rule(*rule).has_value())
+      continue;
     if (context.inline_statement_rules.contains(rule->name))
       continue;
     if (packed_line_consumed_update_rules.contains(rule->name))
@@ -32487,6 +32654,7 @@ bool lower_expression_helpers(LoweringContext& context) {
 
 bool lower_near_any_helpers(LoweringContext& context) {
   for (const NearAnyHelperRequest& helper : context.near_any_helpers) {
+    const std::string comment_kind = near_any_helper_comment_kind(helper.kind);
     context.emitter.emit_label(
         helper.label,
         {.procedure_boundary = "start", .procedure_name = helper.label, .hidden = true});
@@ -32494,22 +32662,25 @@ bool lower_near_any_helpers(LoweringContext& context) {
     context.emitting_near_any_helper = true;
     const bool lowered_value = lower_expression_to_x(context, helper.value);
     if (lowered_value)
-      context.emitter.emit_op(0x11, "-", "near_any delta", helper.line);
-    if (lowered_value)
+      context.emitter.emit_op(0x11, "-", comment_kind + " delta", helper.line);
+    if (lowered_value && helper.kind == "near_any")
       context.emitter.emit_op(0x31, "К |x|", "near_any distance", helper.line);
+    if (lowered_value && helper.kind == "trig_near")
+      context.emitter.emit_op(0x1d, "F cos", "near() cosine", helper.line);
     const bool lowered_radius = lowered_value && lower_expression_to_x(context, helper.radius);
-    if (lowered_radius)
+    if (lowered_radius && helper.kind == "near_any")
       context.emitter.emit_op(0x14, "<->", "near_any radius before distance", helper.line);
     if (lowered_radius)
-      context.emitter.emit_op(0x11, "-", "near_any margin", helper.line);
+      context.emitter.emit_op(0x11, "-", comment_kind + " margin", helper.line);
     context.emitting_near_any_helper = previous;
     if (!lowered_radius)
       return false;
-    context.emitter.emit_op(0x52, "В/О", "near_any return", helper.line);
+    context.emitter.emit_op(0x52, "В/О", comment_kind + " return", helper.line);
     context.optimizations.push_back(OptimizationReport{
         .name = "near-any-helper",
-        .detail = "Emitted shared near_any helper for " + expression_to_source(helper.value) +
-                  " / " + expression_to_source(helper.radius) + ".",
+        .detail = "Emitted shared " + comment_kind + " helper for " +
+                  expression_to_source(helper.value) + " / " +
+                  expression_to_source(helper.radius) + ".",
     });
   }
   return true;
@@ -34047,6 +34218,7 @@ std::string expression_to_source(const Expression& expression) {
 
 struct FunctionCallLiftState {
   std::set<std::string> functions;
+  std::set<std::string> trig_near_value_function_names;
   std::optional<std::string> x_param_value_scratch;
   std::set<std::string> x_param_value_proc_names;
   int lifted = 0;
@@ -34067,6 +34239,8 @@ FunctionCallLiftState make_function_call_lift_state(const V2Program& program,
   FunctionCallLiftState state;
   for (const V2Rule& rule : program.rules) {
     state.functions.insert(rule.name);
+    if (match_trig_near_rule(rule).has_value())
+      state.trig_near_value_function_names.insert(rule.name);
     if (reuse_x_param_value_scratch && match_x_param_value_function(rule).has_value())
       state.x_param_value_proc_names.insert(rule.name);
   }
@@ -34078,6 +34252,69 @@ FunctionCallLiftState make_function_call_lift_state(const V2Program& program,
 std::string fresh_lifted_function_call_temp(FunctionCallLiftState& state) {
   ++state.counter;
   return "__mkpro_call_" + std::to_string(state.counter);
+}
+
+bool expression_contains_liftable_function_call(const Expression& expression,
+                                                const FunctionCallLiftState& state) {
+  if (expression.kind == "call" && state.functions.contains(expression.callee))
+    return true;
+  if (expression.index != nullptr &&
+      expression_contains_liftable_function_call(*expression.index, state))
+    return true;
+  if (expression.expr != nullptr && expression_contains_liftable_function_call(*expression.expr, state))
+    return true;
+  if (expression.left != nullptr && expression_contains_liftable_function_call(*expression.left, state))
+    return true;
+  if (expression.right != nullptr &&
+      expression_contains_liftable_function_call(*expression.right, state))
+    return true;
+  return std::any_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+    return expression_contains_liftable_function_call(arg, state);
+  });
+}
+
+bool is_trig_near_condition_tree(const Expression& expression,
+                                 const FunctionCallLiftState& state) {
+  if (expression.kind != "call")
+    return false;
+  if (lower_ascii(expression.callee) == "max" && expression.args.size() >= 2U) {
+    return std::all_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
+      return is_trig_near_condition_tree(arg, state);
+    });
+  }
+  return state.trig_near_value_function_names.contains(expression.callee) &&
+         expression.args.size() == 1U &&
+         !expression_contains_liftable_function_call(expression.args.front(), state);
+}
+
+bool is_literal_zero_expression_text(const std::string& text, int line) {
+  try {
+    return numeric_expression_is(parse_expression(text, line), 0);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool is_trig_near_condition_expression_text(const std::string& text, int line,
+                                            const FunctionCallLiftState& state) {
+  try {
+    return is_trig_near_condition_tree(parse_expression(text, line), state);
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool should_preserve_trig_near_condition_side(const V2Predicate& predicate, bool left_side,
+                                              int line, const FunctionCallLiftState& state) {
+  if (predicate.kind != "v2_compare")
+    return false;
+  const std::string op = left_side ? predicate.op : flip_zero_comparison_operands_op(predicate.op);
+  if (op != ">=" && op != "<")
+    return false;
+  const std::string& expression_text = left_side ? predicate.left : predicate.right;
+  const std::string& zero_text = left_side ? predicate.right : predicate.left;
+  return is_literal_zero_expression_text(zero_text, line) &&
+         is_trig_near_condition_expression_text(expression_text, line, state);
 }
 
 struct RoutableUnaryCall {
@@ -34643,10 +34880,18 @@ std::vector<V2Statement> lift_function_calls_in_statement(const V2Statement& sta
     lift_function_calls_in_expression_text(rebuilt.expr, prelude, false, rebuilt.line, state);
   } else if (rebuilt.kind == "v2_if" || rebuilt.kind == "v2_while") {
     if (rebuilt.predicate.has_value()) {
-      lift_function_calls_in_expression_text(rebuilt.predicate->left, prelude, false, rebuilt.line,
-                                             state);
-      lift_function_calls_in_expression_text(rebuilt.predicate->right, prelude, false, rebuilt.line,
-                                             state);
+      const bool preserve_left =
+          should_preserve_trig_near_condition_side(*rebuilt.predicate, true, rebuilt.line, state);
+      const bool preserve_right =
+          should_preserve_trig_near_condition_side(*rebuilt.predicate, false, rebuilt.line, state);
+      if (!preserve_left) {
+        lift_function_calls_in_expression_text(rebuilt.predicate->left, prelude, false,
+                                               rebuilt.line, state);
+      }
+      if (!preserve_right) {
+        lift_function_calls_in_expression_text(rebuilt.predicate->right, prelude, false,
+                                               rebuilt.line, state);
+      }
       lift_function_calls_in_expression_text(rebuilt.predicate->collection, prelude, false,
                                              rebuilt.line, state);
       lift_function_calls_in_expression_text(rebuilt.predicate->item, prelude, false, rebuilt.line,
@@ -34840,7 +35085,7 @@ int fold_grd_statement_constants(V2Statement& statement,
 [[maybe_unused]] int
 fold_grd_angle_mode_constants(V2Program& program,
                               const std::map<std::string, Expression>& constants) {
-  if (!program.angle_mode.has_value() || program.angle_mode->mode != "grd")
+  if (!program.expected_mode.has_value() || program.expected_mode->mode != "grd")
     return 0;
 
   int assumptions = 0;
@@ -37722,7 +37967,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
         context.optimizations.push_back(OptimizationReport{
             .name = "grd-angle-mode-assumption",
             .detail = "Folded " + std::to_string(folded_constants.grd_angle_assumptions) +
-                      " ГРД-only trigonometric identity node(s) under requires angle_mode(grd).",
+                      " ГРД-only trigonometric identity node(s) under expected_mode(\"grd\").",
         });
       }
       if (!context.setup_only_counted_loop_init) {
@@ -37757,7 +38002,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
           context.optimizations.push_back(OptimizationReport{
               .name = "grd-angle-mode-assumption",
               .detail = "Folded " + std::to_string(refolded_constants.grd_angle_assumptions) +
-                        " ГРД-only trigonometric identity node(s) under requires angle_mode(grd).",
+                        " ГРД-only trigonometric identity node(s) under expected_mode(\"grd\").",
           });
         }
       }
@@ -38524,14 +38769,21 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
       }
     }
   }
-  if (!setup_program_preloads.empty() &&
-      needs_generated_setup_program(context, setup_program_preloads)) {
+  std::optional<std::string> expected_mode;
+  if (ast.v2->expected_mode.has_value())
+    expected_mode = ast.v2->expected_mode->mode;
+  if ((expected_mode.has_value() || !setup_program_preloads.empty()) &&
+      (expected_mode.has_value() ||
+       needs_generated_setup_program(context, setup_program_preloads))) {
     trace_stage("setup-program");
     result.setup_program = core::emit::lowering::compile_setup_program_with_preloads(
-        context.boards, context.registers, setup_program_preloads, options);
+        context.boards, context.registers, setup_program_preloads, options, expected_mode);
     result.optimizations.push_back(OptimizationReport{
         .name = "generated-setup-program",
-        .detail = "Generated optimized setup program for compiler-owned preloads.",
+        .detail = expected_mode.has_value() && setup_program_preloads.empty()
+                      ? "Generated optimized setup program for expected_mode(\"" +
+                            *expected_mode + "\")."
+                      : "Generated optimized setup program for compiler-owned preloads.",
     });
     for (const OptimizationReport& optimization : result.setup_program->optimizations) {
       std::string name = "setup-" + optimization.name;

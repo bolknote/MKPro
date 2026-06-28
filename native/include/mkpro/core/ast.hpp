@@ -36,7 +36,7 @@ struct DisplayItem {
   int line = 0;
 };
 
-struct V2ProgramRequirement {
+struct V2ExpectedMode {
   std::string mode;
   int line = 0;
 };
@@ -167,7 +167,7 @@ struct V2Program {
   std::string kind = "v2_program";
   std::string name;
   std::vector<V2Const> consts;
-  std::optional<V2ProgramRequirement> angle_mode;
+  std::optional<V2ExpectedMode> expected_mode;
   std::vector<V2StateField> state;
   std::vector<V2Board> boards;
   std::vector<V2World> worlds;

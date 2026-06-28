@@ -20,7 +20,7 @@ struct SourceLine {
 
 const std::unordered_set<std::string> kReservedRuleNames = {
     "else", "fn",    "halt",   "if",     "loop", "match", "otherwise",
-    "program", "read", "requires", "return", "show", "state",
+    "program", "read", "expected_mode", "return", "show", "state",
 };
 
 std::string trim(std::string value) {
@@ -903,6 +903,30 @@ std::string lower_ascii_text(std::string value) {
   return value;
 }
 
+std::optional<std::string> normalize_expected_mode_text(std::string value) {
+  value = trim(std::move(value));
+  if (value.empty())
+    return std::nullopt;
+  const std::string lower = lower_ascii_text(value);
+  if (starts_with(lower, "r"))
+    return "rad";
+  if (starts_with(lower, "d"))
+    return "deg";
+  if (starts_with(lower, "g"))
+    return "grd";
+  if (starts_with(value, "Р") || starts_with(value, "р"))
+    return "rad";
+  if (starts_with(value, "ГР") || starts_with(value, "Гр") || starts_with(value, "гР") ||
+      starts_with(value, "гр")) {
+    return "grd";
+  }
+  if (starts_with(value, "Г") || starts_with(value, "г") || starts_with(value, "Д") ||
+      starts_with(value, "д")) {
+    return "deg";
+  }
+  return std::nullopt;
+}
+
 std::string decimal_ones_expression_text(const std::string& expr) {
   return "(" + expr + ") - 10 * int((" + expr + ") / 10)";
 }
@@ -1204,11 +1228,6 @@ private:
         rewrite_v2_spatial_expressions(program);
         return program;
       }
-      if (starts_with(line.text, "requires ")) {
-        ++index_;
-        parse_requirement(line, program);
-        continue;
-      }
       if (starts_with(line.text, "const ")) {
         ++index_;
         program.consts.push_back(parse_const(line));
@@ -1216,7 +1235,7 @@ private:
       }
       if (line.text == "state {") {
         ++index_;
-        auto fields = parse_state_block();
+        auto fields = parse_state_block(program);
         program.state.insert(program.state.end(), fields.begin(), fields.end());
         continue;
       }
@@ -1250,13 +1269,22 @@ private:
     throw ParseError("Unclosed program block", header.line);
   }
 
-  void parse_requirement(const SourceLine& line, V2Program& program) {
-    static const std::regex angle_regex(R"(^requires\s+angle_mode\(([^)]+)\)$)");
+  void parse_expected_mode(const SourceLine& line, V2Program& program) {
+    static const std::regex mode_regex(R"mkpro(^expected_mode\(\s*"([^"]+)"\s*\)$)mkpro");
     std::smatch match;
-    if (!std::regex_match(line.text, match, angle_regex) || trim(match[1].str()) != "grd") {
-      throw ParseError("Program requirement must look like 'requires angle_mode(grd)'", line.line);
+    std::optional<std::string> mode;
+    if (std::regex_match(line.text, match, mode_regex))
+      mode = normalize_expected_mode_text(match[1].str());
+    if (!mode.has_value()) {
+      throw ParseError(
+          "State setup mode check must look like 'expected_mode(\"rad\")' with a mode string "
+          "starting with r, d, or g",
+          line.line);
     }
-    program.angle_mode = V2ProgramRequirement{.mode = "grd", .line = line.line};
+    if (program.expected_mode.has_value()) {
+      throw ParseError("State setup mode check may only be declared once", line.line);
+    }
+    program.expected_mode = V2ExpectedMode{.mode = *mode, .line = line.line};
   }
 
   void append_implicit_read_state_fields(V2Program& program) {
@@ -1388,13 +1416,18 @@ private:
     return V2Const{.name = match[1].str(), .expr = trim(match[2].str()), .line = line.line};
   }
 
-  std::vector<V2StateField> parse_state_block() {
+  std::vector<V2StateField> parse_state_block(V2Program& program) {
     std::vector<V2StateField> fields;
     while (!done()) {
       const SourceLine line = peek();
       if (line.text == "}") {
         ++index_;
         return fields;
+      }
+      if (starts_with(line.text, "expected_mode")) {
+        ++index_;
+        parse_expected_mode(line, program);
+        continue;
       }
       if (std::regex_match(
               line.text,

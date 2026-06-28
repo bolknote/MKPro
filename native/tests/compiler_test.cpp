@@ -7831,7 +7831,9 @@ program ConstantPow10Synthesis {
   trig_options.analysis = true;
   const CompileResult guarded_trig = compile_source(R"mkpro(
 program GrdTrigConstants {
-  requires angle_mode(grd)
+  state {
+    expected_mode("gradient")
+  }
 
   loop {
     halt(acos(0) + cos(100))
@@ -8221,6 +8223,72 @@ program SetupConstantDoubleSynthesis {
                                item.detail.find("doubled setup") != std::string::npos;
                       }),
           "setup double synthesis should report doubled setup synthesis");
+
+  const CompileResult expected_mode_guard = compile_source(R"mkpro(
+program ExpectedModeSetupGuard {
+  state {
+    expected_mode("radians")
+  }
+
+  loop {
+    halt(0)
+  }
+}
+)mkpro",
+                                                           setup_synthesis_options);
+  require(expected_mode_guard.setup_program.has_value(),
+          "expected_mode should generate a setup program even without preloads");
+  require(std::any_of(expected_mode_guard.setup_program->steps.begin(),
+                      expected_mode_guard.setup_program->steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x1d && step.comment.has_value() &&
+                               *step.comment == "expected_mode(\"rad\") cosine";
+                      }),
+          "expected_mode setup guard should emit F cos");
+  require(std::any_of(expected_mode_guard.setup_program->steps.begin(),
+                      expected_mode_guard.setup_program->steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.opcode == 0x18 && step.comment.has_value() &&
+                               *step.comment == "expected_mode(\"rad\") domain guard";
+                      }),
+          "expected_mode setup guard should emit F ln");
+
+  const CompileResult expected_mode_reuse = compile_source(R"mkpro(
+program ExpectedModeReuse {
+  state {
+    expected_mode("rad")
+    probe: packed = 100
+    seed: packed = random()
+  }
+
+  loop {
+    if probe == -1 {
+      halt(probe)
+    }
+    if seed == -1 {
+      halt(seed)
+    }
+    halt(0)
+  }
+}
+)mkpro",
+                                                           setup_synthesis_options);
+  require(expected_mode_reuse.setup_program.has_value(),
+          "expected_mode preload reuse should expose setup program");
+  require(std::any_of(expected_mode_reuse.setup_program->steps.begin(),
+                      expected_mode_reuse.setup_program->steps.end(),
+                      [](const ResolvedStep& step) {
+                        return step.mnemonic.starts_with("П->X") && step.comment.has_value() &&
+                               *step.comment == "expected_mode(\"rad\") probe";
+                      }),
+          "expected_mode setup guard should reuse a suitable existing preload");
+  require(std::any_of(expected_mode_reuse.setup_program->optimizations.begin(),
+                      expected_mode_reuse.setup_program->optimizations.end(),
+                      [](const OptimizationReport& item) {
+                        return item.name == "expected-mode-setup-check" &&
+                               item.detail.find("reusing R") != std::string::npos;
+                      }),
+          "expected_mode setup guard should report preload reuse");
 
   // compiler.test.ts "inlines tiny multi-use rules when that beats a subroutine"
   const CompileResult tiny_multi_use = compile_source(R"mkpro(

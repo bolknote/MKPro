@@ -42,6 +42,26 @@ void setup_program_matches_typescript_contract() {
                                               return step.comment == "setup R7";
                                             }));
   require(stores_to_r7 == 1U, "duplicate setup preload should store R7 only once");
+
+  for (const std::string mode : {"rad", "deg", "grd"}) {
+    const SetupProgramReport mode_report = core::emit::lowering::compile_setup_program_with_preloads(
+        {}, {}, {}, options, mode);
+    require(has_setup_optimization_detail(mode_report, "expected-mode-setup-check",
+                                          "expected_mode(\"" + mode + "\")"),
+            "expected mode setup check should report mode " + mode);
+    require(std::any_of(mode_report.steps.begin(), mode_report.steps.end(),
+                        [&](const ResolvedStep& step) {
+                          return step.opcode == 0x1d && step.comment.has_value() &&
+                                 *step.comment == "expected_mode(\"" + mode + "\") cosine";
+                        }),
+            "expected mode setup check should emit cosine for " + mode);
+    require(std::any_of(mode_report.steps.begin(), mode_report.steps.end(),
+                        [&](const ResolvedStep& step) {
+                          return step.opcode == 0x18 && step.comment.has_value() &&
+                                 *step.comment == "expected_mode(\"" + mode + "\") domain guard";
+                        }),
+            "expected mode setup check should emit domain guard for " + mode);
+  }
 }
 
 } // namespace mkpro::tests

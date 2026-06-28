@@ -572,6 +572,80 @@ bool emit_stack_preload_setup(MachineEmitter& setup, const PreloadReport& preloa
   return true;
 }
 
+double cosine_probe_value(double value, std::string_view mode) {
+  static constexpr double kPi = 3.141592653589793238462643383279502884;
+  if (mode == "rad")
+    return std::cos(value);
+  if (mode == "deg")
+    return std::cos(value * kPi / 180.0);
+  if (mode == "grd")
+    return std::cos(value * kPi / 200.0);
+  return std::numeric_limits<double>::quiet_NaN();
+}
+
+bool expected_mode_probe_value_matches(double value, std::string_view expected_mode) {
+  static constexpr double kTolerance = 1e-12;
+  if (!std::isfinite(value))
+    return false;
+  if (cosine_probe_value(value, expected_mode) <= kTolerance)
+    return false;
+  for (const std::string_view mode : {std::string_view{"rad"}, std::string_view{"deg"},
+                                      std::string_view{"grd"}}) {
+    if (mode == expected_mode)
+      continue;
+    if (cosine_probe_value(value, mode) > kTolerance)
+      return false;
+  }
+  return true;
+}
+
+std::string default_expected_mode_probe_value(std::string_view expected_mode) {
+  if (expected_mode == "deg")
+    return "272";
+  if (expected_mode == "grd")
+    return "91";
+  return "100";
+}
+
+std::optional<std::string>
+expected_mode_probe_preload_register(const std::vector<PreloadReport>& preloads,
+                                     std::string_view expected_mode) {
+  for (const PreloadReport& preload : preloads) {
+    if (preload.setup_expression)
+      continue;
+    const std::optional<double> value = executable_setup_number(preload.value);
+    if (value.has_value() && expected_mode_probe_value_matches(*value, expected_mode))
+      return preload.register_name;
+  }
+  return std::nullopt;
+}
+
+void emit_expected_mode_setup_check(MachineEmitter& setup,
+                                    std::vector<OptimizationReport>& optimizations,
+                                    const std::vector<PreloadReport>& preloads,
+                                    const std::string& expected_mode) {
+  const std::optional<std::string> probe_register =
+      expected_mode_probe_preload_register(preloads, expected_mode);
+  if (probe_register.has_value()) {
+    emit_setup_recall(setup, *probe_register, "expected_mode(\"" + expected_mode + "\") probe");
+  } else {
+    setup.emit_number(default_expected_mode_probe_value(expected_mode));
+  }
+  setup.emit_op(0x1d, "F cos", "expected_mode(\"" + expected_mode + "\") cosine",
+                std::nullopt, true);
+  setup.emit_op(0x18, "F ln", "expected_mode(\"" + expected_mode + "\") domain guard",
+                std::nullopt, true);
+  optimizations.push_back(OptimizationReport{
+      .name = "expected-mode-setup-check",
+      .detail = probe_register.has_value()
+                    ? "Inserted setup-time expected_mode(\"" + expected_mode +
+                          "\") guard reusing R" + *probe_register + "."
+                    : "Inserted setup-time expected_mode(\"" + expected_mode +
+                          "\") guard with probe " + default_expected_mode_probe_value(expected_mode) +
+                          ".",
+  });
+}
+
 std::optional<std::pair<int, std::string>> setup_unary_opcode(const std::string& name) {
   static const std::map<std::string, std::pair<int, std::string>> opcodes = {
       {"abs", {0x31, "К |x|"}},      {"sign", {0x32, "К ЗН"}},     {"int", {0x34, "К [x]"}},
@@ -1905,7 +1979,8 @@ SetupProgramReport
 compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>& boards,
                                     const std::map<std::string, std::string>& registers,
                                     const std::vector<PreloadReport>& preloads,
-                                    const CompileOptions& options) {
+                                    const CompileOptions& options,
+                                    std::optional<std::string> expected_mode) {
   MachineEmitter setup;
   std::vector<OptimizationReport> optimizations;
   std::set<std::size_t> consumed;
@@ -2302,6 +2377,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   if (setup_r0_dirty)
     emit_restore_setup_pointer_r0(setup, preloads, setup_r0_current_value,
                                   !options.disable_candidate_search);
+  if (expected_mode.has_value())
+    emit_expected_mode_setup_check(setup, optimizations, preloads, *expected_mode);
   if (initialized_random_coord_list && !initialized_segmented_bitplanes)
     setup.emit_number("7");
   setup.emit_op(0x50, "С/П", "setup complete", std::nullopt, true);
@@ -2309,7 +2386,9 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   const ResolvedProgram resolved = resolve_machine_items(setup.items, options);
   return SetupProgramReport{
       .steps = resolved.steps,
-      .reason = "initializes compiler-owned preloads",
+      .reason = preloads.empty() && expected_mode.has_value()
+                    ? "checks setup expected mode"
+                    : "initializes compiler-owned preloads",
       .optimizations = std::move(optimizations),
   };
 }

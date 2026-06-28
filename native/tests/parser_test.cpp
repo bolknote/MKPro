@@ -62,23 +62,37 @@ program WithConst {
   const ProgramAst angle_program = parse_program(R"mkpro(
 # leading comment
 program WithAngleRequirement {
-  requires angle_mode(grd)
+  state {
+    expected_mode("grd")
+  }
   loop {
     halt(cos(100)) // trailing comment
   }
 }
 )mkpro");
-  require(angle_program.v2->angle_mode.has_value(), "angle requirement should parse");
-  require(angle_program.v2->angle_mode->mode == "grd", "angle mode should be grd");
-  require_throws_contains(R"mkpro(
-program BadAngleRequirement {
-  requires angle_mode(deg)
+  require(angle_program.v2->expected_mode.has_value(), "expected mode should parse");
+  require(angle_program.v2->expected_mode->mode == "grd", "expected mode should be grd");
+  const ProgramAst loose_angle_program = parse_program(R"mkpro(
+program WithLooseAngleRequirement {
+  state {
+    expected_mode("gradient")
+  }
   loop {
     halt(0)
   }
 }
+)mkpro");
+  require(loose_angle_program.v2->expected_mode.has_value(), "loose expected mode should parse");
+  require(loose_angle_program.v2->expected_mode->mode == "grd",
+          "loose expected mode should normalize by leading marker");
+  require_throws_contains(R"mkpro(
+program BadAngleRequirement {
+  state {
+    expected_mode("turnip")
+  }
+}
 )mkpro",
-                          "requires angle_mode(grd)");
+                          "expected_mode(\"rad\")");
 
   const ProgramAst rich_program = parse_program(R"mkpro(
 reference demo_reference

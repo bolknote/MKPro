@@ -48,7 +48,7 @@ const MachineProfile& mk61_profile() {
                "sentinels when X2-normalization boundaries are controlled."},
               {"grd-angle-mode", "machine",
                "Trigonometric identities that depend on the Р-ГРД-Г switch are valid only when "
-               "the source program explicitly requires ГРД angle mode."},
+               "the source program declares expected_mode(\"grd\")."},
               {"extra-cells", "machine",
                "Extra physical cells are tracked separately from official program cells."},
               {"error-stops", "machine",
@@ -90,7 +90,7 @@ const MachineProfile& mk61_profile() {
                "zero/nonzero threshold at |X|=1."},
               {"grd-angle-trig-identities", "documented",
                "In ГРД angle mode, cos(100) is zero and acos(0) is 100; optimizer use must be "
-               "guarded by an explicit angle-mode requirement."},
+               "guarded by expected_mode(\"grd\")."},
               {"step-vs-run-delta", "probed",
                "Continuous-run behavior is the default profile; step-only divergences are "
                "explicit exact-machine facts."},

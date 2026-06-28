@@ -404,11 +404,11 @@ std::string v2_program_to_json(const V2Program& program) {
   add_field(out, first, "consts", json_array(program.consts, [](const V2Const& constant) {
               return const_to_json(constant);
             }));
-  if (program.angle_mode.has_value()) {
-    std::ostringstream requirements;
-    requirements << "{\"angleMode\":{\"mode\":" << json_escape(program.angle_mode->mode)
-                 << ",\"line\":" << program.angle_mode->line << "}}";
-    add_field(out, first, "requirements", requirements.str());
+  if (program.expected_mode.has_value()) {
+    std::ostringstream expected_mode;
+    expected_mode << "{\"mode\":" << json_escape(program.expected_mode->mode)
+                  << ",\"line\":" << program.expected_mode->line << "}";
+    add_field(out, first, "expectedMode", expected_mode.str());
   }
   add_field(out, first, "state", json_array(program.state, [](const V2StateField& field) {
               return state_field_to_json(field);

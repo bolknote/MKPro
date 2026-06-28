@@ -3,54 +3,62 @@
 ------+------+-------------------------+----------------
    00 |  01  | 1                       |
    01 |  46  | X→П 6                   | setup R6
-   02 |  01  | 1                       |
-   03 |  00  | 0                       |
-   04 |  4D  | X→П d                   | setup Rd
-   05 |  02  | 2                       |
+   02 |  00  | 0                       |
+   03 |  47  | X→П 7                   | setup R7
+   04 |  45  | X→П 5                   | setup R5
+   05 |  01  | 1                       |
    06 |  00  | 0                       |
    07 |  4C  | X→П c                   | setup Rc
-   08 |  07  | 7                       |
-   09 |  07  | 7                       |
-   10 |  07  | 7                       |
-   11 |  4E  | X→П e                   | setup Re
-   12 |  09  | 9                       |
-   13 |  06  | 6                       |
-   14 |  49  | X→П 9                   | setup R9
+   08 |  02  | 2                       |
+   09 |  00  | 0                       |
+   10 |  4B  | X→П b                   | setup Rb
+   11 |  07  | 7                       |
+   12 |  07  | 7                       |
+   13 |  07  | 7                       |
+   14 |  4E  | X→П e                   | setup Re
    15 |  00  | 0                       |
-   16 |  47  | X→П 7                   | setup R7
-   17 |  45  | X→П 5                   | setup R5
-   18 |  4A  | X→П a                   | setup Ra
-   19 |  06  | 6                       |
-   20 |  01  | 1                       |
-   21 |  4B  | X→П b                   | setup Rb
-   22 |  05  | 5                       |
-   23 |  40  | X→П 0                   | setup indexed pointer hazard_pit_1..hazard_bat_2
-   24 |  3B  | К СЧ                    | random()
-   25 |  6C  | П→X c                   | preload const 20
-   26 |  12  | ×                       | expr *
-   27 |  0E  | В↑                      | random int keep scaled draw
-   28 |  35  | К {x}                   | random int fractional part
-   29 |  11  | −                       | random int floor
-   30 |  01  | 1                       |
-   31 |  10  | +                       | expr +
-   32 |  B0  | К X→П 0                 | setup indexed hazard_pit_1..hazard_bat_2
-   33 |  60  | П→X 0                   | setup indexed pointer
-   34 |  01  | 1                       |
-   35 |  11  | −                       | setup indexed remaining
-   36 |  5E  | F x=0                   | setup indexed loop hazard_pit_1..hazard_bat_2
-   37 |  24  | 24                      | setup indexed loop hazard_pit_1..hazard_bat_2
-   38 |  05  | 5                       |
-   39 |  40  | X→П 0                   | restore setup R0
-   40 |  3B  | К СЧ                    | random()
-   41 |  6C  | П→X c                   | preload const 20
-   42 |  12  | ×                       | expr *
-   43 |  0E  | В↑                      | random int keep scaled draw
-   44 |  35  | К {x}                   | random int fractional part
-   45 |  11  | −                       | random int floor
-   46 |  01  | 1                       |
-   47 |  10  | +                       | expr +
-   48 |  48  | X→П 8                   | setup wumpus
-   49 |  50  | С/П                     | setup complete
+   16 |  0A  | .                       |
+   17 |  08  | 8                       |
+   18 |  4D  | X→П d                   | setup Rd
+   19 |  09  | 9                       |
+   20 |  09  | 9                       |
+   21 |  49  | X→П 9                   | setup R9
+   22 |  06  | 6                       |
+   23 |  07  | 7                       |
+   24 |  4A  | X→П a                   | setup Ra
+   25 |  05  | 5                       |
+   26 |  40  | X→П 0                   | setup indexed pointer hazard_pit_1..hazard_bat_2
+   27 |  3B  | К СЧ                    | random()
+   28 |  6B  | П→X b                   | preload const 20
+   29 |  12  | ×                       | expr *
+   30 |  0E  | В↑                      | random int keep scaled draw
+   31 |  35  | К {x}                   | random int fractional part
+   32 |  11  | −                       | random int floor
+   33 |  01  | 1                       |
+   34 |  10  | +                       | expr +
+   35 |  B0  | К X→П 0                 | setup indexed hazard_pit_1..hazard_bat_2
+   36 |  60  | П→X 0                   | setup indexed pointer
+   37 |  01  | 1                       |
+   38 |  11  | −                       | setup indexed remaining
+   39 |  5E  | F x=0                   | setup indexed loop hazard_pit_1..hazard_bat_2
+   40 |  27  | 27                      | setup indexed loop hazard_pit_1..hazard_bat_2
+   41 |  05  | 5                       |
+   42 |  40  | X→П 0                   | restore setup R0
+   43 |  3B  | К СЧ                    | random()
+   44 |  6B  | П→X b                   | preload const 20
+   45 |  12  | ×                       | expr *
+   46 |  0E  | В↑                      | random int keep scaled draw
+   47 |  35  | К {x}                   | random int fractional part
+   48 |  11  | −                       | random int floor
+   49 |  01  | 1                       |
+   50 |  10  | +                       | expr +
+   51 |  48  | X→П 8                   | setup wumpus
+   52 |  01  | 1                       |
+   53 |  00  | 0                       |
+   54 |  00  | 0                       |
+   55 |  1D  | F cos                   | expected_mode("rad") cosine
+   56 |  18  | F ln                    | expected_mode("rad") domain guard
+   57 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -58,45 +66,45 @@
    00 |  05  | 5                       |
    01 |  45  | X→П 5                   | set clue
    02 |  63  | П→X 3                   | recall hazard_bat_1
-   03 |  A9  | К ПП 9                  | near_any candidate; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
+   03 |  A9  | К ПП 9                  | near() candidate; preloaded R9=99 indirect-target=99 shifted-forward indirect flow
    04 |  64  | П→X 4                   | recall hazard_bat_2
-   05 |  A9  | К ПП 9                  | near_any candidate; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
-   06 |  36  | К max                   | near_any max margin
+   05 |  A9  | К ПП 9                  | near() candidate; preloaded R9=99 indirect-target=99 shifted-forward indirect flow
+   06 |  36  | К max                   | near() max margin
    07 |  59  | F x≥0                   | false branch for >=
    08 |  11  | 11                      | false branch for >=
    09 |  08  | 8                       |
    10 |  45  | X→П 5                   | set clue
    11 |  61  | П→X 1                   | recall hazard_pit_1
-   12 |  A9  | К ПП 9                  | near_any candidate; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
+   12 |  A9  | К ПП 9                  | near() candidate; preloaded R9=99 indirect-target=99 shifted-forward indirect flow
    13 |  62  | П→X 2                   | recall hazard_pit_2
-   14 |  A9  | К ПП 9                  | near_any candidate; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
-   15 |  36  | К max                   | near_any max margin
+   14 |  A9  | К ПП 9                  | near() candidate; preloaded R9=99 indirect-target=99 shifted-forward indirect flow
+   15 |  36  | К max                   | near() max margin
    16 |  59  | F x≥0                   | false branch for >=
    17 |  20  | 20                      | false branch for >=
    18 |  00  | 0                       | set clue
    19 |  45  | X→П 5                   | set clue
    20 |  68  | П→X 8                   | recall wumpus
-   21 |  A9  | К ПП 9                  | near_any candidate; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
+   21 |  A9  | К ПП 9                  | near() candidate; preloaded R9=99 indirect-target=99 shifted-forward indirect flow
    22 |  59  | F x≥0                   | false branch for >=
    23 |  26  | 26                      | false branch for >=
    24 |  03  | 3                       |
    25 |  45  | X→П 5                   | set clue
-   26 |  60  | П→X 0                   | display __inline_show_38_0 source
-   27 |  6D  | П→X d                   | preload const 10
-   28 |  13  | ÷                       | display __inline_show_38_0 decimal point
-   29 |  66  | П→X 6                   | display __inline_show_38_0 integer part
-   30 |  10  | +                       | display __inline_show_38_0 integer append
-   31 |  50  | С/П                     | show __inline_show_38_0
-   32 |  65  | П→X 5                   | display __inline_show_39_1 source
-   33 |  50  | С/П                     | show __inline_show_39_1
+   26 |  60  | П→X 0                   | display __inline_show_47_0 source
+   27 |  6C  | П→X c                   | preload const 10
+   28 |  13  | ÷                       | display __inline_show_47_0 decimal point
+   29 |  66  | П→X 6                   | display __inline_show_47_0 integer part
+   30 |  10  | +                       | display __inline_show_47_0 integer append
+   31 |  50  | С/П                     | show __inline_show_47_0
+   32 |  65  | П→X 5                   | display __inline_show_48_1 source
+   33 |  50  | С/П                     | show __inline_show_48_1
    34 |  47  | X→П 7                   | read target
    35 |  59  | F x≥0                   | false branch for >=
    36 |  42  | 42                      | false branch for >=
-   37 |  A9  | К ПП 9                  | near_any candidate; preloaded R9=96 indirect-target=96 shifted-forward indirect flow
-   38 |  9A  | К x≥0 a                 | false branch for >=; preloaded Ra=B2 indirect-target=0 indirect flow
+   37 |  A9  | К ПП 9                  | near() candidate; preloaded R9=99 indirect-target=99 shifted-forward indirect flow
+   38 |  9D  | К x≥0 d                 | false branch for >=; preloaded Rd=0.8 indirect-target=0 indirect flow
    39 |  67  | П→X 7                   | recall target
    40 |  51  | БП                      | tail jump return suffix gadget
-   41 |  84  | 84                      | return suffix gadget target
+   41 |  96  | 96                      | return suffix gadget target
    42 |  60  | П→X 0                   | recall arrows
    43 |  01  | 1                       |
    44 |  11  | −                       | expr -
@@ -109,52 +117,54 @@
    51 |  6E  | П→X e                   | preload const 777
    52 |  50  | С/П                     | halt
    53 |  60  | П→X 0                   | recall arrows
-   54 |  7B  | К x≠0 b                 | false branch for !=; reused preloaded Rb=61 indirect-target=61 direct flow
-   55 |  53  | ПП                      | random cell int(random(20)) + 1
-   56 |  87  | 87                      | random cell int(random(20)) + 1
-   57 |  48  | X→П 8                   | set wumpus
-   58 |  66  | П→X 6                   | recall room
-   59 |  11  | −                       | condition compare
-   60 |  EA  | К x=0 a                 | false branch for ==; preloaded Ra=B2 indirect-target=0 indirect flow
-   61 |  29  | К ÷                     | halt literal ЕГГ0Г
-   62 |  66  | П→X 6                   | recall room
-   63 |  68  | П→X 8                   | recall wumpus
-   64 |  11  | −                       | condition compare
-   65 |  7B  | К x≠0 b                 | false branch for !=; preloaded Rb=61 indirect-target=61 indirect flow
-   66 |  66  | П→X 6                   | recall room
-   67 |  61  | П→X 1                   | recall hazard_pit_1
-   68 |  11  | −                       | expr -
-   69 |  66  | П→X 6                   | recall room
-   70 |  62  | П→X 2                   | recall hazard_pit_2
-   71 |  11  | −                       | expr -
-   72 |  12  | ×                       | expr *
-   73 |  7B  | К x≠0 b                 | false branch for !=; preloaded Rb=61 indirect-target=61 indirect flow
-   74 |  66  | П→X 6                   | recall room
-   75 |  63  | П→X 3                   | recall hazard_bat_1
-   76 |  11  | −                       | expr -
-   77 |  66  | П→X 6                   | recall room
-   78 |  64  | П→X 4                   | recall hazard_bat_2
-   79 |  11  | −                       | expr -
-   80 |  12  | ×                       | expr *
-   81 |  EA  | К x=0 a                 | false branch for ==; preloaded Ra=B2 indirect-target=0 indirect flow
-   82 |  53  | ПП                      | random cell int(random(20)) + 1
-   83 |  87  | 87                      | random cell int(random(20)) + 1
-   84 |  46  | X→П 6                   | set room
-   85 |  51  | БП                      | tail call inspect
-   86 |  62  | 62                      | proc call inspect
-   87 |  3B  | К СЧ                    | random()
-   88 |  6C  | П→X c                   | preload const 20
-   89 |  12  | ×                       | expr *
-   90 |  0E  | В↑                      | random int keep scaled draw
-   91 |  35  | К {x}                   | random int fractional part
-   92 |  11  | −                       | random int floor
-   93 |  01  | 1                       |
-   94 |  10  | +                       | expr +
-   95 |  52  | В/О                     | random coordinate helper return
-   96 |  66  | П→X 6                   | recall room
-   97 |  11  | −                       | near_any delta
-   98 |  31  | К |x|                   | near_any distance
-   99 |  01  | 1                       |
-   A0 |  14  | ↔                       | near_any radius before distance
-   A1 |  11  | −                       | near_any margin
-   A2 |  52  | В/О                     | near_any return
+   54 |  7A  | К x≠0 a                 | false branch for !=; reused preloaded Ra=67 indirect-target=67 direct flow
+   55 |  3B  | К СЧ                    | random()
+   56 |  6B  | П→X b                   | preload const 20
+   57 |  12  | ×                       | expr *
+   58 |  0E  | В↑                      | random int keep scaled draw
+   59 |  35  | К {x}                   | random int fractional part
+   60 |  11  | −                       | random int floor
+   61 |  01  | 1                       |
+   62 |  10  | +                       | expr +
+   63 |  48  | X→П 8                   | set wumpus
+   64 |  66  | П→X 6                   | recall room
+   65 |  11  | −                       | condition compare
+   66 |  ED  | К x=0 d                 | false branch for ==; preloaded Rd=0.8 indirect-target=0 indirect flow
+   67 |  29  | К ÷                     | halt literal ЕГГ0Г
+   68 |  66  | П→X 6                   | recall room
+   69 |  68  | П→X 8                   | recall wumpus
+   70 |  11  | −                       | condition compare
+   71 |  7A  | К x≠0 a                 | false branch for !=; preloaded Ra=67 indirect-target=67 indirect flow
+   72 |  66  | П→X 6                   | recall room
+   73 |  61  | П→X 1                   | recall hazard_pit_1
+   74 |  11  | −                       | expr -
+   75 |  66  | П→X 6                   | recall room
+   76 |  62  | П→X 2                   | recall hazard_pit_2
+   77 |  11  | −                       | expr -
+   78 |  12  | ×                       | expr *
+   79 |  7A  | К x≠0 a                 | false branch for !=; preloaded Ra=67 indirect-target=67 indirect flow
+   80 |  66  | П→X 6                   | recall room
+   81 |  63  | П→X 3                   | recall hazard_bat_1
+   82 |  11  | −                       | expr -
+   83 |  66  | П→X 6                   | recall room
+   84 |  64  | П→X 4                   | recall hazard_bat_2
+   85 |  11  | −                       | expr -
+   86 |  12  | ×                       | expr *
+   87 |  ED  | К x=0 d                 | false branch for ==; preloaded Rd=0.8 indirect-target=0 indirect flow
+   88 |  3B  | К СЧ                    | random()
+   89 |  6B  | П→X b                   | preload const 20
+   90 |  12  | ×                       | expr *
+   91 |  0E  | В↑                      | random int keep scaled draw
+   92 |  35  | К {x}                   | random int fractional part
+   93 |  11  | −                       | random int floor
+   94 |  01  | 1                       |
+   95 |  10  | +                       | expr +
+   96 |  46  | X→П 6                   | set room
+   97 |  51  | БП                      | tail call inspect
+   98 |  68  | 68                      | proc call inspect
+   99 |  66  | П→X 6                   | recall room
+   A0 |  11  | −                       | near() delta
+   A1 |  1D  | F cos                   | near() cosine
+   A2 |  6D  | П→X d                   | preload const 0.8
+   A3 |  11  | −                       | near() margin
+   A4 |  52  | В/О                     | near() return

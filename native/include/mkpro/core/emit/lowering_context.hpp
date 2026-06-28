@@ -98,6 +98,7 @@ struct ExpressionHelperRequest {
 struct NearAnyHelperRequest {
   std::string key;
   std::string label;
+  std::string kind = "near_any";
   Expression value;
   Expression radius;
   int line = 0;
