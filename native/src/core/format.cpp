@@ -1081,6 +1081,18 @@ void put_flow_edge_label_in_segment(FlowCanvas& canvas, int x1, int x2, int y,
   }
 }
 
+int flow_line_bits_at(const FlowCanvas& canvas, int x, int y) {
+  if (!canvas.contains(x, y))
+    return 0;
+  return FlowCanvas::line_bits(
+      canvas.cells[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)].text);
+}
+
+bool flow_cell_is_crossing(const FlowCanvas& canvas, int x, int y) {
+  return flow_line_bits_at(canvas, x, y) ==
+         (FlowCanvas::kNorth | FlowCanvas::kSouth | FlowCanvas::kWest | FlowCanvas::kEast);
+}
+
 void connect_flow_node_side(FlowCanvas& canvas, const FlowGraphNode& node, int y, bool left,
                             FlowTone tone) {
   if (y <= node.y || y >= node.y + node.height - 1)
@@ -1190,9 +1202,7 @@ void draw_flow_graph_edge(FlowCanvas& canvas, const FlowGraphNode& source,
       canvas.draw_h(lane, target.x - 1, target_mid_y, tone);
       canvas.set(lane, source_side_y,
                  source.x + source.width <= lane ? "\u256f" : "\u2570", tone);
-      const int target_join_bits = FlowCanvas::line_bits(
-          canvas.cells[static_cast<std::size_t>(target_mid_y)][static_cast<std::size_t>(lane)]
-              .text);
+      const int target_join_bits = flow_line_bits_at(canvas, lane, target_mid_y);
       canvas.set(lane, target_mid_y,
                  (target_join_bits & FlowCanvas::kWest) != 0 ? "\u252c" : "\u256d", tone);
       canvas.set(target.x - 1, target_mid_y, "\u25b6", tone);
@@ -1229,8 +1239,10 @@ void draw_flow_graph_edge(FlowCanvas& canvas, const FlowGraphNode& source,
     canvas.draw_h(lane, source.x - 1, source_mid_y, tone);
     canvas.draw_v(lane, source_mid_y, target_mid_y, tone);
     canvas.draw_h(lane, target.x - 1, target_mid_y, tone);
-    canvas.set(lane, source_mid_y, "\u2570", tone);
-    canvas.set(lane, target_mid_y, "\u256d", tone);
+    if (!flow_cell_is_crossing(canvas, lane, source_mid_y))
+      canvas.set(lane, source_mid_y, "\u2570", tone);
+    if (!flow_cell_is_crossing(canvas, lane, target_mid_y))
+      canvas.set(lane, target_mid_y, "\u256d", tone);
     canvas.set(target.x - 1, target_mid_y, "\u25b6", tone);
   } else {
     connect_flow_node_side(canvas, source, source_mid_y, true, tone);
