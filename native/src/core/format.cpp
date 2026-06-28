@@ -8,10 +8,8 @@
 #include <cctype>
 #include <exception>
 #include <iomanip>
-#include <limits>
 #include <map>
 #include <optional>
-#include <queue>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -729,6 +727,7 @@ std::vector<std::string> utf8_cells(std::string_view value) {
 struct FlowCanvasCell {
   std::string text = " ";
   std::optional<FlowTone> tone;
+  bool label = false;
 };
 
 struct FlowCanvas {
@@ -814,6 +813,7 @@ struct FlowCanvas {
     FlowCanvasCell& target = cells[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)];
     target.text = value;
     target.tone = tone;
+    target.label = false;
   }
 
   void add_line_bits(int x, int y, int bits, FlowTone tone) {
@@ -825,6 +825,7 @@ struct FlowCanvas {
     target.text = line_from_bits(line_bits(target.text) | bits);
     if (!target.tone.has_value())
       target.tone = tone;
+    target.label = false;
   }
 
   void put_text(int x, int y, std::string_view value,
@@ -832,6 +833,15 @@ struct FlowCanvas {
     int cursor = x;
     for (const std::string& cell : utf8_cells(value))
       set(cursor++, y, cell, tone);
+  }
+
+  void put_label_text(int x, int y, std::string_view value, FlowTone tone) {
+    int cursor = x;
+    for (const std::string& cell : utf8_cells(value)) {
+      set(cursor, y, cell, tone);
+      cells[static_cast<std::size_t>(y)][static_cast<std::size_t>(cursor)].label = true;
+      ++cursor;
+    }
   }
 
   void draw_h(int x1, int x2, int y, FlowTone tone) {
@@ -917,57 +927,6 @@ struct FlowGraphEdge {
   int source = 0;
   int target = 0;
   FlowEdge edge;
-};
-
-struct FlowPendingLabel {
-  int x = 0;
-  int y = 0;
-  std::string label;
-  FlowTone tone = FlowTone::Normal;
-};
-
-struct FlowBorderConnector {
-  int x = 0;
-  int y = 0;
-  int bits = 0;
-  FlowTone tone = FlowTone::Normal;
-};
-
-struct FlowPoint {
-  int x = 0;
-  int y = 0;
-};
-
-enum class FlowPortSide {
-  Top,
-  Right,
-  Bottom,
-  Left,
-};
-
-struct FlowPort {
-  FlowPoint point;
-  FlowPoint stem;
-  int border_x = 0;
-  int border_y = 0;
-  int border_bits = 0;
-  int stem_to_block_bits = 0;
-  int approach_dir = -1;
-  int preference = 0;
-  FlowPortSide side = FlowPortSide::Right;
-  std::string arrow;
-};
-
-struct FlowSearchResult {
-  std::vector<FlowPoint> points;
-  int cost = 0;
-};
-
-struct FlowRouteResult {
-  FlowPort source;
-  FlowPort target;
-  std::vector<FlowPoint> points;
-  int cost = 0;
 };
 
 std::string compact_flow_token(const std::vector<ResolvedStep>& steps,
@@ -1076,574 +1035,208 @@ void draw_flow_node(FlowCanvas& canvas, const FlowGraphNode& node) {
                   node.tone);
 }
 
-int flow_label_width(const std::string& label) {
-  if (label.empty())
-    return 0;
-  return static_cast<int>(utf8_codepoint_count("\u2500 " + label + " \u2500"));
-}
-
-bool can_put_flow_edge_label(const FlowCanvas& canvas, int x, int y,
-                             const std::string& label) {
-  if (label.empty())
-    return false;
+bool flow_label_fits(const FlowCanvas& canvas, int x, int y, std::string_view value) {
   int cursor = x;
-  const std::vector<std::string> cells = utf8_cells("\u2500 " + label + " \u2500");
+  const std::vector<std::string> cells = utf8_cells(value);
   for (std::size_t index = 0; index < cells.size(); ++index) {
     if (!canvas.contains(cursor, y))
       return false;
     const FlowCanvasCell& target =
         canvas.cells[static_cast<std::size_t>(y)][static_cast<std::size_t>(cursor)];
-    if (target.text != " " && FlowCanvas::line_bits(target.text) == 0)
+    const int bits = FlowCanvas::line_bits(target.text);
+    if (target.label)
       return false;
+    if (target.text != " " && bits != FlowCanvas::kWest && bits != FlowCanvas::kEast &&
+        bits != (FlowCanvas::kWest | FlowCanvas::kEast)) {
+      return false;
+    }
     ++cursor;
   }
   return true;
 }
 
-bool put_flow_edge_label(FlowCanvas& canvas, int x, int y, const std::string& label,
-                         FlowTone tone) {
-  if (label.empty())
-    return false;
-  if (!can_put_flow_edge_label(canvas, x, y, label))
-    return false;
-  canvas.put_text(x, y, "\u2500 " + label + " \u2500", tone);
-  return true;
-}
-
-void queue_flow_edge_label(std::vector<FlowPendingLabel>& labels, int x, int y,
-                           const std::string& label, FlowTone tone) {
+void put_flow_edge_label_in_segment(FlowCanvas& canvas, int x1, int x2, int y,
+                                    const std::string& label, FlowTone tone) {
   if (label.empty())
     return;
-  labels.push_back(FlowPendingLabel{.x = x, .y = y, .label = label, .tone = tone});
-}
-
-void queue_flow_border_connector(std::vector<FlowBorderConnector>& connectors, int x,
-                                 int y, int bits, FlowTone tone) {
-  if (bits == 0)
+  if (x1 > x2)
+    std::swap(x1, x2);
+  const std::string text = "\u2500 " + label + " \u2500";
+  const int width = static_cast<int>(utf8_codepoint_count(text));
+  if (x2 - x1 + 1 < width)
     return;
-  connectors.push_back(FlowBorderConnector{.x = x, .y = y, .bits = bits, .tone = tone});
-}
 
-int flow_dir_bit(int dir) {
-  switch (dir) {
-  case 0:
-    return FlowCanvas::kNorth;
-  case 1:
-    return FlowCanvas::kEast;
-  case 2:
-    return FlowCanvas::kSouth;
-  case 3:
-    return FlowCanvas::kWest;
-  default:
-    return 0;
-  }
-}
-
-int flow_opposite_dir_bit(int dir) {
-  switch (dir) {
-  case 0:
-    return FlowCanvas::kSouth;
-  case 1:
-    return FlowCanvas::kWest;
-  case 2:
-    return FlowCanvas::kNorth;
-  case 3:
-    return FlowCanvas::kEast;
-  default:
-    return 0;
-  }
-}
-
-int flow_direction_between(const FlowPoint& from, const FlowPoint& to) {
-  if (to.x == from.x && to.y == from.y - 1)
-    return 0;
-  if (to.x == from.x + 1 && to.y == from.y)
-    return 1;
-  if (to.x == from.x && to.y == from.y + 1)
-    return 2;
-  if (to.x == from.x - 1 && to.y == from.y)
-    return 3;
-  return -1;
-}
-
-bool flow_same_point(const FlowPoint& left, const FlowPoint& right) {
-  return left.x == right.x && left.y == right.y;
-}
-
-int flow_point_index(int width, const FlowPoint& point) { return point.y * width + point.x; }
-
-int flow_node_middle_y(const FlowGraphNode& node) {
-  return node.y + std::max(1, (node.height - 1) / 2);
-}
-
-int flow_source_side_y(const FlowGraphNode& node, const FlowEdge& edge) {
-  const int middle = flow_node_middle_y(node);
-  if (edge.label == "no")
-    return std::min(node.y + node.height - 2, middle + 1);
-  return middle;
-}
-
-FlowPort make_flow_source_port(const FlowGraphNode& node, FlowPortSide side, int side_y,
-                               int label_width, int preference) {
-  const int center_x = node.x + node.width / 2;
-  FlowPort port;
-  port.side = side;
-  port.preference = preference;
-  switch (side) {
-  case FlowPortSide::Left:
-    port.stem = FlowPoint{.x = node.x - 1, .y = side_y};
-    port.point = label_width > 0 ? FlowPoint{.x = node.x - label_width - 2, .y = side_y}
-                                 : port.stem;
-    port.border_x = node.x;
-    port.border_y = side_y;
-    port.border_bits = FlowCanvas::kWest;
-    port.stem_to_block_bits = FlowCanvas::kEast;
-    break;
-  case FlowPortSide::Right:
-    port.stem = FlowPoint{.x = node.x + node.width, .y = side_y};
-    port.point = label_width > 0
-                     ? FlowPoint{.x = node.x + node.width + label_width + 1, .y = side_y}
-                     : port.stem;
-    port.border_x = node.x + node.width - 1;
-    port.border_y = side_y;
-    port.border_bits = FlowCanvas::kEast;
-    port.stem_to_block_bits = FlowCanvas::kWest;
-    break;
-  case FlowPortSide::Top:
-    port.stem = FlowPoint{.x = center_x, .y = node.y - 1};
-    port.point = port.stem;
-    port.border_x = center_x;
-    port.border_y = node.y;
-    port.border_bits = 0;
-    port.stem_to_block_bits = FlowCanvas::kSouth;
-    break;
-  case FlowPortSide::Bottom:
-    port.stem = FlowPoint{.x = center_x, .y = node.y + node.height};
-    port.point = port.stem;
-    port.border_x = center_x;
-    port.border_y = node.y + node.height - 1;
-    port.border_bits = 0;
-    port.stem_to_block_bits = FlowCanvas::kNorth;
-    break;
-  }
-  return port;
-}
-
-FlowPort make_flow_target_port(const FlowGraphNode& node, FlowPortSide side,
-                               int preference) {
-  const int center_x = node.x + node.width / 2;
-  const int middle_y = flow_node_middle_y(node);
-  FlowPort port;
-  port.side = side;
-  port.preference = preference;
-  switch (side) {
-  case FlowPortSide::Left:
-    port.point = FlowPoint{.x = node.x - 1, .y = middle_y};
-    port.stem = port.point;
-    port.border_x = node.x;
-    port.border_y = middle_y;
-    port.border_bits = FlowCanvas::kWest;
-    port.approach_dir = 1;
-    port.arrow = "\u25b6";
-    break;
-  case FlowPortSide::Right:
-    port.point = FlowPoint{.x = node.x + node.width, .y = middle_y};
-    port.stem = port.point;
-    port.border_x = node.x + node.width - 1;
-    port.border_y = middle_y;
-    port.border_bits = FlowCanvas::kEast;
-    port.approach_dir = 3;
-    port.arrow = "\u25c0";
-    break;
-  case FlowPortSide::Top:
-    port.point = FlowPoint{.x = center_x, .y = node.y - 1};
-    port.stem = port.point;
-    port.border_x = center_x;
-    port.border_y = node.y;
-    port.border_bits = 0;
-    port.approach_dir = 2;
-    port.arrow = "\u25bc";
-    break;
-  case FlowPortSide::Bottom:
-    port.point = FlowPoint{.x = center_x, .y = node.y + node.height};
-    port.stem = port.point;
-    port.border_x = center_x;
-    port.border_y = node.y + node.height - 1;
-    port.border_bits = 0;
-    port.approach_dir = 0;
-    port.arrow = "\u25b2";
-    break;
-  }
-  return port;
-}
-
-void append_unique_flow_side(std::vector<FlowPortSide>& sides, FlowPortSide side) {
-  if (std::find(sides.begin(), sides.end(), side) == sides.end())
-    sides.push_back(side);
-}
-
-std::vector<FlowPortSide> flow_source_side_order(const FlowGraphNode& source,
-                                                 const FlowGraphNode& target,
-                                                 const std::string& label) {
-  std::vector<FlowPortSide> sides;
-  if (target.rank < source.rank) {
-    append_unique_flow_side(sides, target.column > source.column ? FlowPortSide::Right
-                                                                 : FlowPortSide::Left);
-    append_unique_flow_side(sides, FlowPortSide::Top);
-  } else if (target.rank == source.rank) {
-    append_unique_flow_side(sides, target.x >= source.x ? FlowPortSide::Right
-                                                        : FlowPortSide::Left);
-    append_unique_flow_side(sides, FlowPortSide::Bottom);
-    append_unique_flow_side(sides, FlowPortSide::Top);
-  } else if (!label.empty() && target.column == source.column) {
-    append_unique_flow_side(sides, source.column == 0 ? FlowPortSide::Left
-                                                      : FlowPortSide::Right);
-    append_unique_flow_side(sides, FlowPortSide::Bottom);
-  } else {
-    append_unique_flow_side(sides, target.x >= source.x ? FlowPortSide::Right
-                                                        : FlowPortSide::Left);
-    append_unique_flow_side(sides, FlowPortSide::Bottom);
-  }
-  append_unique_flow_side(sides, FlowPortSide::Right);
-  append_unique_flow_side(sides, FlowPortSide::Left);
-  append_unique_flow_side(sides, FlowPortSide::Bottom);
-  append_unique_flow_side(sides, FlowPortSide::Top);
-  return sides;
-}
-
-std::vector<FlowPortSide> flow_target_side_order(const FlowGraphNode& source,
-                                                 const FlowGraphNode& target) {
-  std::vector<FlowPortSide> sides;
-  if (target.rank > source.rank) {
-    append_unique_flow_side(sides, FlowPortSide::Top);
-    append_unique_flow_side(sides, target.x >= source.x ? FlowPortSide::Left
-                                                        : FlowPortSide::Right);
-  } else if (target.rank < source.rank) {
-    append_unique_flow_side(sides, target.column > source.column ? FlowPortSide::Right
-                                                                 : FlowPortSide::Left);
-    append_unique_flow_side(sides, FlowPortSide::Bottom);
-  } else {
-    append_unique_flow_side(sides, target.x >= source.x ? FlowPortSide::Left
-                                                        : FlowPortSide::Right);
-    append_unique_flow_side(sides, FlowPortSide::Top);
-    append_unique_flow_side(sides, FlowPortSide::Bottom);
-  }
-  append_unique_flow_side(sides, FlowPortSide::Left);
-  append_unique_flow_side(sides, FlowPortSide::Right);
-  append_unique_flow_side(sides, FlowPortSide::Top);
-  append_unique_flow_side(sides, FlowPortSide::Bottom);
-  return sides;
-}
-
-bool flow_point_allowed(const FlowCanvas& canvas, const std::vector<bool>& blocked,
-                        const std::vector<bool>& label_reserved, const FlowPoint& point,
-                        const FlowPoint& source, const FlowPoint& target) {
-  if (!canvas.contains(point.x, point.y))
-    return false;
-  if (flow_same_point(point, source) || flow_same_point(point, target))
-    return true;
-  const std::size_t index = static_cast<std::size_t>(flow_point_index(canvas.width, point));
-  if (blocked[index] || label_reserved[index])
-    return false;
-  const FlowCanvasCell& cell = canvas.cells[static_cast<std::size_t>(point.y)]
-                                           [static_cast<std::size_t>(point.x)];
-  return cell.text == " " || FlowCanvas::line_bits(cell.text) != 0;
-}
-
-int flow_existing_line_penalty(const FlowCanvas& canvas, const FlowPoint& point, int dir) {
-  const FlowCanvasCell& cell = canvas.cells[static_cast<std::size_t>(point.y)]
-                                           [static_cast<std::size_t>(point.x)];
-  const int bits = FlowCanvas::line_bits(cell.text);
-  if (bits == 0)
-    return 0;
-  const bool horizontal_step = dir == 1 || dir == 3;
-  const bool horizontal_line = (bits & (FlowCanvas::kWest | FlowCanvas::kEast)) != 0;
-  const bool vertical_line = (bits & (FlowCanvas::kNorth | FlowCanvas::kSouth)) != 0;
-  if ((horizontal_step && horizontal_line && !vertical_line) ||
-      (!horizontal_step && vertical_line && !horizontal_line))
-    return 80;
-  return 2000;
-}
-
-std::optional<FlowSearchResult>
-find_flow_grid_path(const FlowCanvas& canvas, const std::vector<bool>& blocked,
-                    const std::vector<bool>& label_reserved, const FlowPort& source,
-                    const FlowPort& target) {
-  if (!canvas.contains(source.point.x, source.point.y) ||
-      !canvas.contains(target.point.x, target.point.y))
-    return std::nullopt;
-
-  constexpr int kNoDir = 4;
-  constexpr int kInf = std::numeric_limits<int>::max() / 4;
-  constexpr int kDx[4] = {0, 1, 0, -1};
-  constexpr int kDy[4] = {-1, 0, 1, 0};
-  const int state_count = canvas.width * canvas.height * 5;
-  auto state_index = [&](int x, int y, int dir) {
-    return (y * canvas.width + x) * 5 + dir;
-  };
-  auto state_point = [&](int state) {
-    const int cell = state / 5;
-    return FlowPoint{.x = cell % canvas.width, .y = cell / canvas.width};
-  };
-
-  struct QueueItem {
-    int cost = 0;
-    int state = 0;
-  };
-  struct QueueGreater {
-    bool operator()(const QueueItem& left, const QueueItem& right) const {
-      return left.cost > right.cost;
-    }
-  };
-
-  std::vector<int> distance(static_cast<std::size_t>(state_count), kInf);
-  std::vector<int> previous(static_cast<std::size_t>(state_count), -1);
-  std::priority_queue<QueueItem, std::vector<QueueItem>, QueueGreater> queue;
-  const int start_state = state_index(source.point.x, source.point.y, kNoDir);
-  distance[static_cast<std::size_t>(start_state)] = 0;
-  queue.push(QueueItem{.cost = 0, .state = start_state});
-
-  int best_state = -1;
-  while (!queue.empty()) {
-    const QueueItem item = queue.top();
-    queue.pop();
-    if (item.cost != distance[static_cast<std::size_t>(item.state)])
-      continue;
-    const FlowPoint current = state_point(item.state);
-    const int current_dir = item.state % 5;
-    if (flow_same_point(current, target.point) &&
-        (target.approach_dir < 0 || current_dir == target.approach_dir)) {
-      best_state = item.state;
-      break;
-    }
-
-    for (int dir = 0; dir < 4; ++dir) {
-      const FlowPoint next{.x = current.x + kDx[dir], .y = current.y + kDy[dir]};
-      if (!flow_point_allowed(canvas, blocked, label_reserved, next, source.point,
-                              target.point))
-        continue;
-      if (flow_same_point(next, target.point) && target.approach_dir >= 0 &&
-          dir != target.approach_dir)
-        continue;
-
-      int step_cost = 10 + flow_existing_line_penalty(canvas, next, dir);
-      if (current_dir != kNoDir && current_dir != dir)
-        step_cost += 18;
-      const int next_state = state_index(next.x, next.y, dir);
-      const int next_cost = item.cost + step_cost;
-      if (next_cost >= distance[static_cast<std::size_t>(next_state)])
-        continue;
-      distance[static_cast<std::size_t>(next_state)] = next_cost;
-      previous[static_cast<std::size_t>(next_state)] = item.state;
-      queue.push(QueueItem{.cost = next_cost, .state = next_state});
+  const int preferred = x1 + (x2 - x1 + 1 - width) / 2;
+  for (int x = preferred; x >= x1; --x) {
+    if (flow_label_fits(canvas, x, y, text)) {
+      canvas.put_label_text(x, y, text, tone);
+      return;
     }
   }
-
-  if (best_state < 0)
-    return std::nullopt;
-
-  FlowSearchResult result;
-  result.cost = distance[static_cast<std::size_t>(best_state)];
-  for (int state = best_state; state >= 0; state = previous[static_cast<std::size_t>(state)])
-    result.points.push_back(state_point(state));
-  std::reverse(result.points.begin(), result.points.end());
-  return result;
-}
-
-std::vector<FlowPort> make_flow_source_ports(const FlowGraphNode& source,
-                                             const FlowGraphNode& target,
-                                             const FlowEdge& edge,
-                                             const std::string& label) {
-  const int label_width = flow_label_width(label);
-  const int side_y = flow_source_side_y(source, edge);
-  const std::vector<FlowPortSide> sides = flow_source_side_order(source, target, label);
-  std::vector<FlowPort> ports;
-  ports.reserve(sides.size());
-  for (std::size_t index = 0; index < sides.size(); ++index) {
-    ports.push_back(make_flow_source_port(source, sides[index], side_y, label_width,
-                                          static_cast<int>(index) * 70));
-  }
-  return ports;
-}
-
-std::vector<FlowPort> make_flow_target_ports(const FlowGraphNode& source,
-                                             const FlowGraphNode& target) {
-  const std::vector<FlowPortSide> sides = flow_target_side_order(source, target);
-  std::vector<FlowPort> ports;
-  ports.reserve(sides.size());
-  for (std::size_t index = 0; index < sides.size(); ++index)
-    ports.push_back(make_flow_target_port(target, sides[index], static_cast<int>(index) * 70));
-  return ports;
-}
-
-std::optional<FlowRouteResult>
-route_flow_edge_path(const FlowCanvas& canvas, const std::vector<bool>& blocked,
-                     const std::vector<bool>& label_reserved, const FlowGraphNode& source,
-                     const FlowGraphNode& target, const FlowEdge& edge,
-                     const std::string& label) {
-  std::optional<FlowRouteResult> best;
-  const std::vector<FlowPort> source_ports = make_flow_source_ports(source, target, edge, label);
-  const std::vector<FlowPort> target_ports = make_flow_target_ports(source, target);
-  for (const FlowPort& source_port : source_ports) {
-    if (!canvas.contains(source_port.point.x, source_port.point.y) ||
-        !canvas.contains(source_port.stem.x, source_port.stem.y))
-      continue;
-    for (const FlowPort& target_port : target_ports) {
-      if (!canvas.contains(target_port.point.x, target_port.point.y))
-        continue;
-      const std::optional<FlowSearchResult> path =
-          find_flow_grid_path(canvas, blocked, label_reserved, source_port, target_port);
-      if (!path.has_value())
-        continue;
-      const int cost = path->cost + source_port.preference + target_port.preference;
-      if (best.has_value() && cost >= best->cost)
-        continue;
-      best = FlowRouteResult{.source = source_port,
-                             .target = target_port,
-                             .points = path->points,
-                             .cost = cost};
+  for (int x = preferred + 1; x + width - 1 <= x2; ++x) {
+    if (flow_label_fits(canvas, x, y, text)) {
+      canvas.put_label_text(x, y, text, tone);
+      return;
     }
   }
-  return best;
 }
 
-void draw_flow_port_stem(FlowCanvas& canvas, const FlowPort& port, FlowTone tone) {
-  if (flow_same_point(port.point, port.stem)) {
-    canvas.add_line_bits(port.point.x, port.point.y, port.stem_to_block_bits, tone);
+void connect_flow_node_side(FlowCanvas& canvas, const FlowGraphNode& node, int y, bool left,
+                            FlowTone tone) {
+  if (y <= node.y || y >= node.y + node.height - 1)
     return;
-  }
-  if (port.point.y == port.stem.y)
-    canvas.draw_h(port.point.x, port.stem.x, port.stem.y, tone);
-  else
-    canvas.draw_v(port.stem.x, port.point.y, port.stem.y, tone);
-  canvas.add_line_bits(port.stem.x, port.stem.y, port.stem_to_block_bits, tone);
+  canvas.add_line_bits(left ? node.x : node.x + node.width - 1, y,
+                       left ? FlowCanvas::kWest : FlowCanvas::kEast, tone);
 }
 
-bool can_reserve_flow_label(const FlowCanvas& canvas, const std::vector<bool>& blocked,
-                            const std::vector<bool>& label_reserved, int x, int y,
-                            int label_width) {
-  for (int offset = 0; offset < label_width; ++offset) {
-    const FlowPoint point{.x = x + offset, .y = y};
-    if (!canvas.contains(point.x, point.y))
-      return false;
-    const std::size_t index = static_cast<std::size_t>(flow_point_index(canvas.width, point));
-    if (blocked[index] || label_reserved[index])
-      return false;
-    const FlowCanvasCell& cell = canvas.cells[static_cast<std::size_t>(point.y)]
-                                             [static_cast<std::size_t>(point.x)];
-    const int bits = FlowCanvas::line_bits(cell.text);
-    if (cell.text != " " && bits == 0)
-      return false;
-    if ((bits & (FlowCanvas::kNorth | FlowCanvas::kSouth)) != 0)
-      return false;
-  }
-  return true;
-}
-
-bool reserve_flow_label(FlowCanvas& canvas, std::vector<bool>& label_reserved,
-                        const std::vector<bool>& blocked,
-                        std::vector<FlowPendingLabel>& labels, int x, int y,
-                        const std::string& label, FlowTone tone) {
-  const int width = flow_label_width(label);
-  if (width == 0 || !can_reserve_flow_label(canvas, blocked, label_reserved, x, y, width))
-    return false;
-  for (int offset = 0; offset < width; ++offset) {
-    const FlowPoint point{.x = x + offset, .y = y};
-    label_reserved[static_cast<std::size_t>(flow_point_index(canvas.width, point))] = true;
-  }
-  queue_flow_edge_label(labels, x, y, label, tone);
-  return true;
-}
-
-bool reserve_flow_stem_label(FlowCanvas& canvas, std::vector<bool>& label_reserved,
-                             const std::vector<bool>& blocked,
-                             std::vector<FlowPendingLabel>& labels, const FlowPort& source,
-                             const std::string& label, FlowTone tone) {
-  if (label.empty() || flow_same_point(source.point, source.stem) ||
-      source.point.y != source.stem.y)
-    return false;
-  const int label_x = source.point.x < source.stem.x ? source.point.x + 1 : source.stem.x;
-  return reserve_flow_label(canvas, label_reserved, blocked, labels, label_x, source.point.y,
-                            label, tone);
-}
-
-bool reserve_flow_path_label(FlowCanvas& canvas, std::vector<bool>& label_reserved,
-                             const std::vector<bool>& blocked,
-                             std::vector<FlowPendingLabel>& labels,
-                             const std::vector<FlowPoint>& points,
-                             const std::string& label, FlowTone tone) {
-  const int label_width = flow_label_width(label);
-  if (label_width == 0)
-    return false;
-  for (std::size_t index = 0; index + 1 < points.size(); ++index) {
-    if (points[index].y != points[index + 1].y)
-      continue;
-    int left = std::min(points[index].x, points[index + 1].x);
-    int right = std::max(points[index].x, points[index + 1].x);
-    std::size_t cursor = index + 1;
-    while (cursor + 1 < points.size() && points[cursor].y == points[cursor + 1].y) {
-      left = std::min(left, points[cursor + 1].x);
-      right = std::max(right, points[cursor + 1].x);
-      ++cursor;
-    }
-    index = cursor - 1;
-    if (right - left + 1 < label_width)
-      continue;
-    const int centered = left + (right - left + 1 - label_width) / 2;
-    for (int delta = 0; delta <= right - left; ++delta) {
-      const int candidates[2] = {centered - delta, centered + delta};
-      for (const int label_x : candidates) {
-        if (label_x < left || label_x + label_width - 1 > right)
-          continue;
-        if (reserve_flow_label(canvas, label_reserved, blocked, labels, label_x,
-                               points[index].y, label, tone))
-          return true;
-      }
-    }
-  }
-  return false;
-}
-
-void draw_flow_routed_path(FlowCanvas& canvas, std::vector<bool>& label_reserved,
-                           const std::vector<bool>& blocked,
-                           std::vector<FlowPendingLabel>& labels,
-                           std::vector<FlowBorderConnector>& connectors,
-                           const FlowRouteResult& route, const std::string& label,
-                           FlowTone tone) {
-  draw_flow_port_stem(canvas, route.source, tone);
-  for (std::size_t index = 0; index + 1 < route.points.size(); ++index) {
-    const FlowPoint current = route.points[index];
-    const FlowPoint next = route.points[index + 1];
-    const int dir = flow_direction_between(current, next);
-    if (dir < 0)
-      continue;
-    canvas.add_line_bits(current.x, current.y, flow_dir_bit(dir), tone);
-    canvas.add_line_bits(next.x, next.y, flow_opposite_dir_bit(dir), tone);
-  }
-  canvas.set(route.target.point.x, route.target.point.y, route.target.arrow, tone);
-  queue_flow_border_connector(connectors, route.source.border_x, route.source.border_y,
-                              route.source.border_bits, tone);
-  queue_flow_border_connector(connectors, route.target.border_x, route.target.border_y,
-                              route.target.border_bits, tone);
-  if (!reserve_flow_stem_label(canvas, label_reserved, blocked, labels, route.source, label,
-                               tone)) {
-    reserve_flow_path_label(canvas, label_reserved, blocked, labels, route.points, label, tone);
-  }
-}
-
-void draw_flow_graph_edge(FlowCanvas& canvas, const std::vector<bool>& blocked,
-                          std::vector<bool>& label_reserved, const FlowGraphNode& source,
-                          const FlowGraphNode& target, const FlowEdge& edge,
-                          std::vector<FlowPendingLabel>& labels,
-                          std::vector<FlowBorderConnector>& connectors) {
+void draw_flow_graph_edge(FlowCanvas& canvas, const FlowGraphNode& source,
+                          const FlowGraphNode& target, const FlowEdge& edge, int side_lane,
+                          int grid_right, bool decorate) {
   const FlowTone tone = source.reachable ? edge.tone : FlowTone::Muted;
   const std::string label = graph_edge_label(edge);
-  const std::optional<FlowRouteResult> route =
-      route_flow_edge_path(canvas, blocked, label_reserved, source, target, edge, label);
-  if (!route.has_value())
+  const int label_width = label.empty()
+                              ? 0
+                              : static_cast<int>(utf8_codepoint_count("\u2500 " + label +
+                                                                       " \u2500"));
+  const int source_center_x = source.x + source.width / 2;
+  const int target_center_x = target.x + target.width / 2;
+  const int source_bottom_y = source.y + source.height;
+  const int target_top_y = target.y - 1;
+  const int source_mid_y = source.y + std::max(1, (source.height - 1) / 2);
+  const int target_mid_y = target.y + std::max(1, (target.height - 1) / 2);
+  const int source_side_y =
+      edge.label == "no" ? std::min(source.y + source.height - 2, source_mid_y + 1)
+                         : source_mid_y;
+
+  if (target.rank == source.rank + 1 && target.column == source.column) {
+    if (!label.empty()) {
+      const int route_x = source.x + source.width + label_width + 2;
+      const int return_y = target_top_y - 1;
+      if (!decorate) {
+        canvas.draw_h(source.x + source.width, route_x, source_side_y, tone);
+        canvas.draw_v(route_x, source_side_y, return_y, tone);
+        canvas.draw_h(source_center_x, route_x, return_y, tone);
+        canvas.set(route_x, source_side_y, "\u256e", tone);
+        canvas.set(route_x, return_y, "\u256f", tone);
+        canvas.set(source_center_x, return_y, "\u256d", tone);
+        canvas.set(source_center_x, target_top_y, "\u25bc", tone);
+      } else {
+        connect_flow_node_side(canvas, source, source_side_y, false, tone);
+        put_flow_edge_label_in_segment(canvas, source.x + source.width, route_x - 1,
+                                       source_side_y, label, tone);
+      }
+      return;
+    }
+    if (!decorate && source_bottom_y <= target_top_y - 1)
+      canvas.draw_v(source_center_x, source_bottom_y, target_top_y - 1, tone);
+    if (!decorate)
+      canvas.set(source_center_x, target_top_y, "\u25bc", tone);
     return;
-  draw_flow_routed_path(canvas, label_reserved, blocked, labels, connectors, *route, label,
-                        tone);
+  }
+
+  if (target.rank == source.rank + 1) {
+    const int mid_y = source_bottom_y + std::max(1, (target_top_y - source_bottom_y) / 2);
+    if (!decorate) {
+      canvas.draw_v(source_center_x, source_bottom_y, mid_y, tone);
+      canvas.draw_h(source_center_x, target_center_x, mid_y, tone);
+      if (mid_y + 1 <= target_top_y - 1)
+        canvas.draw_v(target_center_x, mid_y + 1, target_top_y - 1, tone);
+      if (source_center_x < target_center_x) {
+        canvas.set(source_center_x, mid_y, "\u2570", tone);
+        canvas.set(target_center_x, mid_y, "\u256e", tone);
+      } else if (source_center_x > target_center_x) {
+        canvas.set(source_center_x, mid_y, "\u256f", tone);
+        canvas.set(target_center_x, mid_y, "\u256d", tone);
+      }
+      canvas.set(target_center_x, target_top_y, "\u25bc", tone);
+    } else {
+      put_flow_edge_label_in_segment(canvas, std::min(source_center_x, target_center_x) + 1,
+                                     std::max(source_center_x, target_center_x) - 1, mid_y, label,
+                                     tone);
+    }
+    return;
+  }
+
+  if (target.rank == source.rank) {
+    if (source.x < target.x) {
+      if (!decorate) {
+        canvas.draw_h(source.x + source.width, target.x - 2, source_side_y, tone);
+        canvas.set(target.x - 1, source_side_y, "\u25b6", tone);
+      } else {
+        connect_flow_node_side(canvas, source, source_side_y, false, tone);
+        connect_flow_node_side(canvas, target, source_side_y, true, tone);
+        put_flow_edge_label_in_segment(canvas, source.x + source.width, target.x - 2,
+                                       source_side_y, label, tone);
+      }
+    } else {
+      if (!decorate) {
+        canvas.draw_h(target.x + target.width + 1, source.x - 1, source_side_y, tone);
+        canvas.set(target.x + target.width, source_side_y, "\u25c0", tone);
+      } else {
+        connect_flow_node_side(canvas, source, source_side_y, true, tone);
+        connect_flow_node_side(canvas, target, source_side_y, false, tone);
+        put_flow_edge_label_in_segment(canvas, target.x + target.width + 1, source.x - 1,
+                                       source_side_y, label, tone);
+      }
+    }
+    return;
+  }
+
+  if (target.rank < source.rank && target.column > source.column) {
+    const int lane = target.x - 2 - (side_lane % 2);
+    if (!decorate) {
+      canvas.draw_h(source.x + source.width, lane, source_side_y, tone);
+      canvas.draw_v(lane, source_side_y, target_mid_y, tone);
+      canvas.draw_h(lane, target.x - 1, target_mid_y, tone);
+      canvas.set(lane, source_side_y,
+                 source.x + source.width <= lane ? "\u256f" : "\u2570", tone);
+      const int target_join_bits = FlowCanvas::line_bits(
+          canvas.cells[static_cast<std::size_t>(target_mid_y)][static_cast<std::size_t>(lane)]
+              .text);
+      canvas.set(lane, target_mid_y,
+                 (target_join_bits & FlowCanvas::kWest) != 0 ? "\u252c" : "\u256d", tone);
+      canvas.set(target.x - 1, target_mid_y, "\u25b6", tone);
+    } else {
+      connect_flow_node_side(canvas, source, source_side_y, false, tone);
+      connect_flow_node_side(canvas, target, target_mid_y, true, tone);
+      put_flow_edge_label_in_segment(canvas, source.x + source.width, lane, source_side_y, label,
+                                     tone);
+    }
+    return;
+  }
+
+  if (target.rank > source.rank) {
+    const int lane =
+        std::max(grid_right + 2 + side_lane * 3, source.x + source.width + label_width + 2);
+    if (!decorate) {
+      canvas.draw_h(source.x + source.width, lane, source_side_y, tone);
+      canvas.draw_v(lane, source_side_y, target_mid_y, tone);
+      canvas.draw_h(target.x + target.width, lane, target_mid_y, tone);
+      canvas.set(lane, source_side_y, "\u256e", tone);
+      canvas.set(lane, target_mid_y, "\u256f", tone);
+      canvas.set(target.x + target.width, target_mid_y, "\u25c0", tone);
+    } else {
+      connect_flow_node_side(canvas, source, source_side_y, false, tone);
+      connect_flow_node_side(canvas, target, target_mid_y, false, tone);
+      put_flow_edge_label_in_segment(canvas, source.x + source.width, lane - 1, source_side_y,
+                                     label, tone);
+    }
+    return;
+  }
+
+  const int lane = source.x - 3 - side_lane * 3;
+  if (!decorate) {
+    canvas.draw_h(lane, source.x - 1, source_mid_y, tone);
+    canvas.draw_v(lane, source_mid_y, target_mid_y, tone);
+    canvas.draw_h(lane, target.x - 1, target_mid_y, tone);
+    canvas.set(lane, source_mid_y, "\u2570", tone);
+    canvas.set(lane, target_mid_y, "\u256d", tone);
+    canvas.set(target.x - 1, target_mid_y, "\u25b6", tone);
+  } else {
+    connect_flow_node_side(canvas, source, source_mid_y, true, tone);
+    connect_flow_node_side(canvas, target, target_mid_y, true, tone);
+    put_flow_edge_label_in_segment(canvas, lane, source.x - 1, source_mid_y, label, tone);
+  }
 }
 
 std::string render_flow_graph(const std::vector<FlowBlock>& blocks,
@@ -1653,12 +1246,11 @@ std::string render_flow_graph(const std::vector<FlowBlock>& blocks,
 
   constexpr int kContentWidth = 26;
   constexpr int kNodeWidth = kContentWidth + 6;
-  constexpr int kColumnGap = 4;
+  constexpr int kColumnGap = 8;
   constexpr int kMaxColumns = 2;
-  constexpr int kMaxBackwardLanes = 8;
-  constexpr int kMaxForwardLanes = 8;
-  constexpr int kRowGap = 5;
-  constexpr int kLeftLabelGutter = 8;
+  constexpr int kMaxBackwardLanes = 3;
+  constexpr int kMaxForwardLanes = 4;
+  constexpr int kRowGap = 4;
 
   std::vector<FlowGraphNode> nodes;
   std::map<int, int> node_by_address;
@@ -1774,16 +1366,7 @@ std::string render_flow_graph(const std::vector<FlowBlock>& blocks,
       if (target.column == 0)
         ++left_lanes;
     } else if (target.rank > source.rank + 1) {
-      if (source.column == 0 && target.column == source.column &&
-          !graph_edge_label(edge.edge).empty())
-        ++left_lanes;
-      else
-        ++right_lanes;
-    } else if (target.rank == source.rank && !graph_edge_label(edge.edge).empty()) {
-      if (target.column > source.column)
-        ++right_lanes;
-      else
-        ++left_lanes;
+      ++right_lanes;
     } else if (target.rank == source.rank + 1 && target.column == source.column &&
                !graph_edge_label(edge.edge).empty()) {
       ++right_lanes;
@@ -1794,7 +1377,7 @@ std::string render_flow_graph(const std::vector<FlowBlock>& blocks,
   right_lanes = std::min(right_lanes, kMaxForwardLanes);
 
   const int column_width = kNodeWidth + kColumnGap;
-  const int left_gutter = 5 + left_lanes * 3 + (left_lanes > 0 ? kLeftLabelGutter : 0);
+  const int left_gutter = 5 + left_lanes * 3;
   const int grid_right = left_gutter + max_columns * column_width - kColumnGap;
   const int canvas_width = grid_right + 12 + right_lanes * 3;
 
@@ -1813,34 +1396,30 @@ std::string render_flow_graph(const std::vector<FlowBlock>& blocks,
   const int canvas_height = std::max(1, y - 2);
 
   FlowCanvas canvas(canvas_width, canvas_height);
-  std::vector<bool> blocked(static_cast<std::size_t>(canvas_width * canvas_height), false);
-  for (const FlowGraphNode& node : nodes) {
-    for (int yy = node.y; yy < node.y + node.height; ++yy) {
-      for (int xx = node.x; xx < node.x + node.width; ++xx) {
-        if (canvas.contains(xx, yy))
-          blocked[static_cast<std::size_t>(yy * canvas_width + xx)] = true;
+
+  auto draw_edges = [&](bool decorate) {
+    int left_lane = 0;
+    int right_lane = 0;
+    for (std::size_t index = 0; index < edges.size(); ++index) {
+      const FlowGraphEdge& edge = edges[index];
+      const FlowGraphNode& source = nodes[static_cast<std::size_t>(edge.source)];
+      const FlowGraphNode& target = nodes[static_cast<std::size_t>(edge.target)];
+      int side_lane = 0;
+      if (target.rank < source.rank && target.column == 0 && left_lanes > 0) {
+        side_lane = left_lane++ % left_lanes;
+      } else if (target.rank > source.rank + 1 && right_lanes > 0) {
+        side_lane = right_lane++ % right_lanes;
       }
+      draw_flow_graph_edge(canvas, source, target, edge.edge, side_lane, grid_right, decorate);
     }
-  }
-  std::vector<bool> label_reserved(static_cast<std::size_t>(canvas_width * canvas_height),
-                                   false);
-  std::vector<FlowPendingLabel> pending_labels;
-  std::vector<FlowBorderConnector> pending_connectors;
-  for (std::size_t index = 0; index < edges.size(); ++index) {
-    const FlowGraphEdge& edge = edges[index];
-    const FlowGraphNode& source = nodes[static_cast<std::size_t>(edge.source)];
-    const FlowGraphNode& target = nodes[static_cast<std::size_t>(edge.target)];
-    draw_flow_graph_edge(canvas, blocked, label_reserved, source, target, edge.edge,
-                         pending_labels, pending_connectors);
-  }
-  for (const FlowPendingLabel& label : pending_labels)
-    put_flow_edge_label(canvas, label.x, label.y, label.label, label.tone);
+  };
+
+  draw_edges(false);
   for (const std::vector<int>& rank_nodes : ranks) {
     for (const int node_id : rank_nodes)
       draw_flow_node(canvas, nodes[static_cast<std::size_t>(node_id)]);
   }
-  for (const FlowBorderConnector& connector : pending_connectors)
-    canvas.add_line_bits(connector.x, connector.y, connector.bits, connector.tone);
+  draw_edges(true);
 
   return canvas.str(color);
 }
