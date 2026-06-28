@@ -18,7 +18,7 @@ program TicTacToe4x4 {
     best_score: packed
     score: packed
     line: packed
-    slot: counter 0..7
+    slot: counter 0..8
   }
 
   fn draw() {
@@ -49,8 +49,10 @@ program TicTacToe4x4 {
     }
   }
 
-  fn mark_one(next_slot) {
-    slot = next_slot
+  fn mark_one() {
+    // Walk the four line banks 7..4 by self-decrementing the shared selector,
+    // so callers no longer spend a literal cell per bank index.
+    slot--
     lines[slot] = packed_add(lines[slot], line, best_score)
     report = bit_and(lines[slot], 88888834)
     if frac(report) != 0 {
@@ -60,14 +62,15 @@ program TicTacToe4x4 {
 
   fn mark_lines_and_check(mark_sign) {
     best_score = mark_sign
+    slot = 8
     line = x
-    mark_one(7)
+    mark_one()
     line = y
-    mark_one(6)
+    mark_one()
     normalize(x + y)
-    mark_one(5)
+    mark_one()
     normalize(x - y)
-    mark_one(4)
+    mark_one()
   }
 
   fn choose_calculator_move() {
