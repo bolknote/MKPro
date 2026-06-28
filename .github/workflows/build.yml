@@ -170,7 +170,22 @@ jobs:
           sudo apt-get install -y unzip
       - name: Fetch cosmocc toolchain
         run: |
-          curl -fsSL -o /tmp/cosmocc.zip https://cosmo.zip/pub/cosmocc/cosmocc.zip
+          set -euo pipefail
+          ok=0
+          for url in \
+            https://cosmo.zip/pub/cosmocc/cosmocc.zip \
+            https://cosmo.zip/pub/cosmos/bin/cosmocc.zip \
+            https://github.com/jart/cosmopolitan/releases/latest/download/cosmocc.zip; do
+            echo "Trying to download cosmocc from $url"
+            if curl -fsSL -o /tmp/cosmocc.zip "$url"; then
+              ok=1
+              break
+            fi
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo "Failed to download cosmocc from all known sources"
+            exit 1
+          fi
           unzip -q /tmp/cosmocc.zip -d /tmp/cosmocc
       - name: Configure and build Linux x86_64 target with cosmocc
         run: |
