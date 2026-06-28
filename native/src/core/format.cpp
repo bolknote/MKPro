@@ -4,14 +4,17 @@
 #include "mkpro/core/opcodes.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <exception>
 #include <iomanip>
+#include <map>
 #include <optional>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <string>
+#include <utility>
 
 namespace mkpro {
 
@@ -238,6 +241,569 @@ std::string pad_start(std::string value, std::size_t width) {
   return value;
 }
 
+int step_opcode(const ResolvedStep& step) {
+  if (step.opcode != 0 || upper_ascii(step.hex) == "00")
+    return step.opcode;
+  try {
+    return std::stoi(step.hex, nullptr, 16);
+  } catch (const std::exception&) {
+    return step.opcode;
+  }
+}
+
+bool is_direct_conditional_opcode(int opcode) {
+  return opcode >= 0x57 && opcode <= 0x5e;
+}
+
+bool is_indirect_conditional_opcode(int opcode) {
+  const int base = opcode & 0xf0;
+  return base == 0x70 || base == 0x90 || base == 0xc0 || base == 0xe0;
+}
+
+bool is_indirect_jump_opcode(int opcode) {
+  return (opcode & 0xf0) == 0x80;
+}
+
+bool is_indirect_call_opcode(int opcode) {
+  return (opcode & 0xf0) == 0xa0;
+}
+
+bool is_flow_control_opcode(int opcode) {
+  return opcode == 0x50 || opcode == 0x51 || opcode == 0x52 || opcode == 0x53 ||
+         is_direct_conditional_opcode(opcode) || is_indirect_conditional_opcode(opcode) ||
+         is_indirect_jump_opcode(opcode) || is_indirect_call_opcode(opcode);
+}
+
+enum class FlowTone {
+  Normal,
+  Branch,
+  Call,
+  Return,
+  Stop,
+  Unknown,
+  Muted,
+};
+
+enum class FlowArrow {
+  Down,
+  Forward,
+  Back,
+  Unknown,
+};
+
+struct FlowContext {
+  std::map<std::string, std::string> preloaded_registers;
+  std::map<int, int> indirect_targets;
+};
+
+struct FlowInstruction {
+  int address = 0;
+  std::size_t step_index = 0;
+  int opcode = 0;
+  std::optional<std::size_t> operand_index;
+  std::optional<int> target;
+};
+
+struct FlowEdge {
+  std::string label;
+  std::optional<int> target;
+  std::optional<std::string> detail;
+  FlowArrow arrow = FlowArrow::Unknown;
+  FlowTone tone = FlowTone::Normal;
+};
+
+struct FlowBlock {
+  int start = 0;
+  int end = 0;
+  std::vector<FlowInstruction> instructions;
+  std::vector<FlowEdge> edges;
+  FlowTone tone = FlowTone::Normal;
+  bool reachable = true;
+};
+
+std::string flow_ref(int address) {
+  return "[" + format_step_address(address) + "]";
+}
+
+std::string flow_register_name(int opcode) {
+  static constexpr std::array<std::string_view, 15> kRegisters = {
+      "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e",
+  };
+  const int index = opcode & 0x0f;
+  if (index >= 0 && index <= 0x0e)
+    return std::string{kRegisters[static_cast<std::size_t>(index)]};
+  return "0";
+}
+
+std::optional<int> parse_indirect_target_comment(const ResolvedStep& step) {
+  if (!step.comment.has_value())
+    return std::nullopt;
+  static const std::regex pattern(R"(indirect-target=([0-9]+))");
+  std::smatch match;
+  if (!std::regex_search(*step.comment, match, pattern))
+    return std::nullopt;
+  try {
+    return std::stoi(match[1].str());
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+std::optional<int> parse_preloaded_formal_address(const std::string& value) {
+  const std::optional<int> opcode = parse_formal_address_opcode(value);
+  if (!opcode.has_value())
+    return std::nullopt;
+  return code_to_address(*opcode);
+}
+
+FlowContext build_flow_context(const std::vector<ResolvedStep>& steps,
+                               const std::vector<PreloadReport>& preloads) {
+  FlowContext context;
+  for (const PreloadReport& preload : preloads)
+    context.preloaded_registers[preload.register_name] = preload.value;
+  for (const ResolvedStep& step : steps) {
+    if (const std::optional<int> target = parse_indirect_target_comment(step))
+      context.indirect_targets[step.address] = *target;
+  }
+  return context;
+}
+
+std::optional<int> known_indirect_target(const FlowInstruction& instruction,
+                                         const FlowContext& context) {
+  const auto comment_target = context.indirect_targets.find(instruction.address);
+  if (comment_target != context.indirect_targets.end())
+    return comment_target->second;
+
+  const auto preload = context.preloaded_registers.find(flow_register_name(instruction.opcode));
+  if (preload == context.preloaded_registers.end())
+    return std::nullopt;
+  return parse_preloaded_formal_address(preload->second);
+}
+
+std::optional<std::string> indirect_detail(const FlowInstruction& instruction,
+                                           const FlowContext& context) {
+  const std::string reg = flow_register_name(instruction.opcode);
+  const auto preload = context.preloaded_registers.find(reg);
+  if (preload == context.preloaded_registers.end())
+    return "R" + reg;
+  return "R" + reg + "=" + preload->second;
+}
+
+FlowArrow target_arrow(int source, int target) {
+  if (target == source)
+    return FlowArrow::Back;
+  return target > source ? FlowArrow::Forward : FlowArrow::Back;
+}
+
+std::optional<FlowInstruction> decode_flow_instruction(
+    const std::vector<ResolvedStep>& steps, const std::map<int, std::size_t>& by_address,
+    int address) {
+  const auto it = by_address.find(address);
+  if (it == by_address.end())
+    return std::nullopt;
+
+  const ResolvedStep& step = steps[it->second];
+  FlowInstruction instruction{
+      .address = address,
+      .step_index = it->second,
+      .opcode = step_opcode(step),
+  };
+
+  const OpcodeInfo& info = opcode_by_code(instruction.opcode);
+  if (info.takes_address && it->second + 1U < steps.size()) {
+    instruction.operand_index = it->second + 1U;
+    instruction.target = code_to_address(step_opcode(steps[it->second + 1U]));
+  }
+  return instruction;
+}
+
+std::optional<int> address_after_instruction(const std::vector<ResolvedStep>& steps,
+                                             const FlowInstruction& instruction) {
+  const std::size_t next =
+      instruction.operand_index.has_value() ? *instruction.operand_index + 1U
+                                            : instruction.step_index + 1U;
+  if (next >= steps.size())
+    return std::nullopt;
+  return steps[next].address;
+}
+
+std::string conditional_taken_label(const std::string& mnemonic) {
+  return mnemonic.find('x') != std::string::npos || mnemonic.find('X') != std::string::npos
+             ? "yes"
+             : "taken";
+}
+
+std::string conditional_fallthrough_label(const std::string& mnemonic) {
+  return mnemonic.find('x') != std::string::npos || mnemonic.find('X') != std::string::npos
+             ? "no"
+             : "next";
+}
+
+std::vector<FlowEdge> instruction_edges(const std::vector<ResolvedStep>& steps,
+                                        const FlowInstruction& instruction,
+                                        const FlowContext& context) {
+  const ResolvedStep& step = steps[instruction.step_index];
+  const std::optional<int> next = address_after_instruction(steps, instruction);
+  const int opcode = instruction.opcode;
+  std::vector<FlowEdge> edges;
+
+  auto append_next = [&](std::string label, FlowTone tone) {
+    if (next.has_value())
+      edges.push_back(FlowEdge{
+          .label = std::move(label),
+          .target = next,
+          .arrow = FlowArrow::Down,
+          .tone = tone,
+      });
+  };
+  auto append_target = [&](std::string label, FlowTone tone) {
+    if (instruction.target.has_value()) {
+      edges.push_back(FlowEdge{
+          .label = std::move(label),
+          .target = instruction.target,
+          .arrow = target_arrow(instruction.address, *instruction.target),
+          .tone = tone,
+      });
+    } else {
+      edges.push_back(FlowEdge{
+          .label = std::move(label),
+          .arrow = FlowArrow::Unknown,
+          .tone = FlowTone::Unknown,
+      });
+    }
+  };
+  auto append_indirect = [&](std::string label, FlowTone tone) {
+    const std::optional<int> target = known_indirect_target(instruction, context);
+    FlowArrow arrow = FlowArrow::Unknown;
+    if (target.has_value())
+      arrow = target_arrow(instruction.address, *target);
+    edges.push_back(FlowEdge{
+        .label = std::move(label),
+        .target = target,
+        .detail = indirect_detail(instruction, context),
+        .arrow = arrow,
+        .tone = target.has_value() ? tone : FlowTone::Unknown,
+    });
+  };
+
+  if (opcode == 0x51) {
+    append_target("jump", FlowTone::Branch);
+  } else if (opcode == 0x53) {
+    append_target("call", FlowTone::Call);
+    append_next("after", FlowTone::Muted);
+  } else if (opcode == 0x52) {
+    return edges;
+  } else if (opcode == 0x50) {
+    append_next("resume", FlowTone::Muted);
+  } else if (is_direct_conditional_opcode(opcode)) {
+    append_target(conditional_taken_label(step.mnemonic), FlowTone::Branch);
+    append_next(conditional_fallthrough_label(step.mnemonic), FlowTone::Branch);
+  } else if (is_indirect_jump_opcode(opcode)) {
+    append_indirect("jump", FlowTone::Branch);
+  } else if (is_indirect_call_opcode(opcode)) {
+    append_indirect("call", FlowTone::Call);
+    append_next("after", FlowTone::Muted);
+  } else if (is_indirect_conditional_opcode(opcode)) {
+    append_indirect(conditional_taken_label(step.mnemonic), FlowTone::Branch);
+    append_next(conditional_fallthrough_label(step.mnemonic), FlowTone::Branch);
+  } else {
+    append_next("next", FlowTone::Muted);
+  }
+  return edges;
+}
+
+FlowTone instruction_tone(const FlowInstruction& instruction) {
+  const int opcode = instruction.opcode;
+  if (opcode == 0x50)
+    return FlowTone::Stop;
+  if (opcode == 0x52)
+    return FlowTone::Return;
+  if (opcode == 0x53 || is_indirect_call_opcode(opcode))
+    return FlowTone::Call;
+  if (is_direct_conditional_opcode(opcode) || is_indirect_conditional_opcode(opcode))
+    return FlowTone::Branch;
+  if (opcode == 0x51 || is_indirect_jump_opcode(opcode))
+    return FlowTone::Branch;
+  return FlowTone::Normal;
+}
+
+FlowBlock decode_flow_block(const std::vector<ResolvedStep>& steps,
+                            const std::map<int, std::size_t>& by_address,
+                            const std::set<int>& leaders, const FlowContext& context, int start) {
+  FlowBlock block{.start = start, .end = start};
+  std::set<int> seen;
+  std::optional<int> cursor = start;
+  while (cursor.has_value() && !seen.contains(*cursor)) {
+    seen.insert(*cursor);
+    std::optional<FlowInstruction> instruction =
+        decode_flow_instruction(steps, by_address, *cursor);
+    if (!instruction.has_value())
+      break;
+
+    block.end = instruction->address;
+    if (instruction->operand_index.has_value())
+      block.end = steps[*instruction->operand_index].address;
+    block.tone = instruction_tone(*instruction);
+    block.instructions.push_back(*instruction);
+
+    if (is_flow_control_opcode(instruction->opcode))
+      break;
+
+    std::optional<int> next = address_after_instruction(steps, *instruction);
+    if (!next.has_value() || (leaders.contains(*next) && *next != start))
+      break;
+    cursor = next;
+  }
+
+  if (!block.instructions.empty())
+    block.edges = instruction_edges(steps, block.instructions.back(), context);
+  return block;
+}
+
+std::vector<FlowBlock> build_flow_blocks(const std::vector<ResolvedStep>& steps,
+                                         const FlowContext& context) {
+  if (steps.empty())
+    return {};
+
+  std::map<int, std::size_t> by_address;
+  for (std::size_t index = 0; index < steps.size(); ++index)
+    by_address[steps[index].address] = index;
+
+  std::set<int> leaders{steps.front().address};
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    const std::vector<int> snapshot(leaders.begin(), leaders.end());
+    for (int leader : snapshot) {
+      const FlowBlock block = decode_flow_block(steps, by_address, leaders, context, leader);
+      for (const FlowEdge& edge : block.edges) {
+        if (edge.target.has_value() && by_address.contains(*edge.target) &&
+            leaders.insert(*edge.target).second) {
+          changed = true;
+        }
+      }
+    }
+  }
+
+  const std::set<int> reachable = leaders;
+  std::vector<FlowBlock> blocks;
+  std::set<int> covered_all_addresses;
+  for (int leader : leaders) {
+    FlowBlock block = decode_flow_block(steps, by_address, leaders, context, leader);
+    if (block.instructions.empty())
+      continue;
+    for (const FlowInstruction& instruction : block.instructions) {
+      covered_all_addresses.insert(instruction.address);
+      if (instruction.operand_index.has_value())
+        covered_all_addresses.insert(steps[*instruction.operand_index].address);
+    }
+    blocks.push_back(std::move(block));
+  }
+
+  for (std::size_t index = 0; index < steps.size();) {
+    const int address = steps[index].address;
+    if (!covered_all_addresses.contains(address)) {
+      leaders.insert(address);
+      FlowBlock block = decode_flow_block(steps, by_address, leaders, context, address);
+      block.reachable = reachable.contains(address);
+      if (!block.reachable)
+        block.tone = FlowTone::Muted;
+      blocks.push_back(std::move(block));
+    }
+    const std::optional<FlowInstruction> instruction =
+        decode_flow_instruction(steps, by_address, address);
+    if (instruction.has_value() && instruction->operand_index.has_value())
+      index = *instruction->operand_index + 1U;
+    else
+      ++index;
+  }
+
+  for (FlowBlock& block : blocks) {
+    block.reachable = reachable.contains(block.start);
+    if (!block.reachable)
+      block.tone = FlowTone::Muted;
+  }
+  std::sort(blocks.begin(), blocks.end(), [](const FlowBlock& a, const FlowBlock& b) {
+    if (a.start != b.start)
+      return a.start < b.start;
+    return a.end < b.end;
+  });
+  return blocks;
+}
+
+std::string flow_role(const FlowBlock& block) {
+  if (!block.reachable)
+    return "entryless";
+  if (block.instructions.empty())
+    return "empty";
+  const int opcode = block.instructions.back().opcode;
+  if (opcode == 0x50)
+    return "pause";
+  if (opcode == 0x52)
+    return "return";
+  if (opcode == 0x51 || is_indirect_jump_opcode(opcode))
+    return "jump";
+  if (opcode == 0x53 || is_indirect_call_opcode(opcode))
+    return "call";
+  if (is_direct_conditional_opcode(opcode) || is_indirect_conditional_opcode(opcode))
+    return "branch";
+  return "linear";
+}
+
+std::string flow_block_title(const FlowBlock& block) {
+  std::string range = flow_ref(block.start);
+  if (block.end != block.start)
+    range = "[" + format_step_address(block.start) + ".." + format_step_address(block.end) + "]";
+  return range + " " + flow_role(block);
+}
+
+std::string compact_flow_token(const std::vector<ResolvedStep>& steps,
+                               const FlowInstruction& instruction) {
+  const ResolvedStep& step = steps[instruction.step_index];
+  std::ostringstream out;
+  out << to_keycaps(step.mnemonic);
+  if (instruction.operand_index.has_value() && instruction.target.has_value())
+    out << " " << format_step_address(*instruction.target);
+  return out.str();
+}
+
+std::string dot_edge_label(const FlowEdge& edge) {
+  if (edge.label == "next" || edge.label == "resume" || edge.label == "after")
+    return "";
+  if (edge.label == "taken")
+    return "yes";
+  return edge.label;
+}
+
+std::string dot_escape(std::string_view value) {
+  std::string escaped;
+  for (const char ch : value) {
+    if (ch == '\\' || ch == '"')
+      escaped.push_back('\\');
+    if (ch == '\n') {
+      escaped += "\\n";
+    } else {
+      escaped.push_back(ch);
+    }
+  }
+  return escaped;
+}
+
+std::string dot_id_for_address(int address) {
+  return "n" + std::to_string(address);
+}
+
+std::string dot_color(FlowTone tone) {
+  switch (tone) {
+    case FlowTone::Normal:
+      return "#4ade80";
+    case FlowTone::Branch:
+      return "#fbbf24";
+    case FlowTone::Call:
+      return "#60a5fa";
+    case FlowTone::Return:
+      return "#c084fc";
+    case FlowTone::Stop:
+      return "#f87171";
+    case FlowTone::Unknown:
+      return "#fb7185";
+    case FlowTone::Muted:
+      return "#64748b";
+  }
+  return "#94a3b8";
+}
+
+std::string dot_fill_color(FlowTone tone) {
+  switch (tone) {
+    case FlowTone::Branch:
+      return "#3a2a05";
+    case FlowTone::Call:
+      return "#082f49";
+    case FlowTone::Return:
+      return "#2e1065";
+    case FlowTone::Stop:
+      return "#3f1218";
+    case FlowTone::Unknown:
+      return "#3f1218";
+    case FlowTone::Muted:
+      return "#111827";
+    case FlowTone::Normal:
+      return "#052e1b";
+  }
+  return "#0f172a";
+}
+
+std::string dot_node_label(const FlowBlock& block, const std::vector<ResolvedStep>& steps) {
+  std::string label = dot_escape(flow_block_title(block)) + "\\l";
+  for (const FlowInstruction& instruction : block.instructions)
+    label += dot_escape("  " + compact_flow_token(steps, instruction)) + "\\l";
+  return label;
+}
+
+std::string dot_unknown_node_label(const FlowEdge& edge) {
+  std::string label = dot_escape("[?] " + edge.label);
+  if (edge.detail.has_value())
+    label += "\\l" + dot_escape("  " + *edge.detail);
+  else if (edge.target.has_value())
+    label += "\\l" + dot_escape("  target " + flow_ref(*edge.target));
+  else
+    label += "\\l" + dot_escape("  unknown target");
+  return label + "\\l";
+}
+
+std::string render_dot_graph(const std::vector<FlowBlock>& blocks,
+                             const std::vector<ResolvedStep>& steps) {
+  std::ostringstream out;
+  out << "digraph mk61_cfg {\n"
+      << "  graph [rankdir=TB, splines=polyline, nodesep=0.45, ranksep=0.65, pad=0.1, "
+         "bgcolor=\"#0b0f14\"];\n"
+      << "  node [shape=box, style=\"rounded,filled\", fontname=\"monospace\", fontsize=10, "
+         "margin=\"0.08,0.05\", penwidth=1.4, fontcolor=\"#f8fafc\"];\n"
+      << "  edge [fontname=\"monospace\", fontsize=9, arrowsize=0.7, penwidth=1.2, "
+         "fontcolor=\"#cbd5e1\"];\n\n";
+
+  std::map<int, const FlowBlock*> block_by_address;
+  for (const FlowBlock& block : blocks) {
+    block_by_address[block.start] = &block;
+    const FlowTone tone = block.reachable ? block.tone : FlowTone::Muted;
+    out << "  " << dot_id_for_address(block.start) << " [label=\""
+        << dot_node_label(block, steps) << "\", color=\"" << dot_color(tone)
+        << "\", fillcolor=\"" << dot_fill_color(tone) << "\"";
+    if (!block.reachable)
+      out << ", style=\"rounded,filled,dashed\"";
+    out << "];\n";
+  }
+
+  int unknown_index = 0;
+  out << "\n";
+  for (const FlowBlock& block : blocks) {
+    const std::string source_id = dot_id_for_address(block.start);
+    for (const FlowEdge& edge : block.edges) {
+      std::string target_id;
+      if (edge.target.has_value() && block_by_address.contains(*edge.target)) {
+        target_id = dot_id_for_address(*edge.target);
+      } else {
+        target_id = "unknown" + std::to_string(unknown_index++);
+        out << "  " << target_id << " [label=\"" << dot_unknown_node_label(edge)
+            << "\", color=\"" << dot_color(FlowTone::Unknown)
+            << "\", fillcolor=\"" << dot_fill_color(FlowTone::Unknown) << "\"];\n";
+      }
+
+      const FlowTone tone = block.reachable ? edge.tone : FlowTone::Muted;
+      out << "  " << source_id << " -> " << target_id << " [color=\"" << dot_color(tone)
+          << "\", fontcolor=\"" << dot_color(tone) << "\"";
+      if (const std::string label = dot_edge_label(edge); !label.empty())
+        out << ", label=\"" << dot_escape(label) << "\"";
+      if (edge.tone == FlowTone::Muted || !block.reachable)
+        out << ", style=dashed";
+      out << "];\n";
+    }
+  }
+
+  out << "}\n";
+  return out.str();
+}
+
 bool is_number_entry_step(const ResolvedStep& step) {
   return (step.mnemonic.size() == 1 &&
           std::isdigit(static_cast<unsigned char>(step.mnemonic.front())) != 0) ||
@@ -401,6 +967,21 @@ std::string format_hex_steps(const std::vector<ResolvedStep>& steps) {
 
 std::string format_listing_steps(const std::vector<ResolvedStep>& steps) {
   return format_listing_rows(coalesce_number_entry_rows(steps));
+}
+
+std::string format_dot_steps(const std::vector<ResolvedStep>& steps) {
+  return format_dot_steps(steps, std::vector<PreloadReport>{});
+}
+
+std::string format_dot_steps(const std::vector<ResolvedStep>& steps,
+                             const std::vector<PreloadReport>& preloads) {
+  const FlowContext context = build_flow_context(steps, preloads);
+  const std::vector<FlowBlock> blocks = build_flow_blocks(steps, context);
+  return render_dot_graph(blocks, steps);
+}
+
+std::string format_dot_result(const CompileResult& result) {
+  return format_dot_steps(result.steps, result.preloads);
 }
 
 std::string format_manual_input_value(const ManualSetupInput& input) {

@@ -24,6 +24,7 @@ The CLI binary is produced at `build/release/native/mkpro-native`.
 ```sh
 build/release/native/mkpro-native compile examples/basic.mkpro --out listing
 build/release/native/mkpro-native compile examples/basic.mkpro --out hex
+build/release/native/mkpro-native compile examples/basic.mkpro --out dot
 build/release/native/mkpro-native compile examples/basic.mkpro --out json
 build/release/native/mkpro-native explain examples/tiny-game.mkpro
 ```
@@ -31,7 +32,7 @@ build/release/native/mkpro-native explain examples/tiny-game.mkpro
 The CLI shape is:
 
 ```sh
-mkpro-native compile file.mkpro --out listing|hex|json|keys|all
+mkpro-native compile file.mkpro --out listing|hex|dot|json|keys|all
 mkpro-native explain file.mkpro
 ```
 
@@ -41,6 +42,11 @@ Flags:
   metadata for listings.
 - `--out keys` prints a bare press/input stream, including generated setup when
   the program needs one.
+- `--out dot` prints a Graphviz DOT execution graph for the compiled MK-61
+  bytecode. Pipe it to stable Graphviz file renderers such as `dot -Tsvg` or
+  `dot -Tpng`; the default graph style uses a dark background for terminal
+  image previews. Terminal renderers such as `kitty` and `vt` emit terminal
+  control sequences and only work in compatible terminals with direct stdout.
 - `--budget N` (default `105`). Hard error if exceeded.
 - `--analysis`, `--strict` and various optimizer toggles (e.g.
   `--return-stack-script`/`--no-return-stack-script`) are also available; see

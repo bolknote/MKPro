@@ -10,6 +10,10 @@ namespace mkpro {
 
 std::string format_hex_steps(const std::vector<ResolvedStep>& steps);
 std::string format_listing_steps(const std::vector<ResolvedStep>& steps);
+std::string format_dot_steps(const std::vector<ResolvedStep>& steps);
+std::string format_dot_steps(const std::vector<ResolvedStep>& steps,
+                             const std::vector<PreloadReport>& preloads);
+std::string format_dot_result(const CompileResult& result);
 std::string format_setup_listing_steps(const std::vector<ManualSetupInput>& manual_inputs,
                                        const std::vector<ResolvedStep>& steps);
 std::optional<std::string>
