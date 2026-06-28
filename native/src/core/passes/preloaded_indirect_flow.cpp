@@ -63,6 +63,11 @@ bool has_role(const std::vector<CellRole>& roles, std::string_view role) {
   return std::find(roles.begin(), roles.end(), role) != roles.end();
 }
 
+bool call_consumes_current_x(const IrOp& op) {
+  return has_role(op.meta.roles, "x-argument-call") ||
+         has_role(op.meta.roles, "statement-proc-call");
+}
+
 void restore_statement_proc_call_comment(IrMeta& meta) {
   constexpr std::string_view kCallFunctionPrefix = "call function";
   if (!has_role(meta.roles, "statement-proc-call") || !meta.comment.has_value() ||
@@ -390,7 +395,7 @@ std::vector<RuntimeCallPlan> runtime_indirect_call_plans(
   std::map<int, RuntimeCallTarget> targets;
   for (std::size_t index = 0; index < ops.size(); ++index) {
     const IrOp& op = ops.at(index);
-    if (has_rewrite_barrier(op) || op.kind != IrKind::Call)
+    if (has_rewrite_barrier(op) || op.kind != IrKind::Call || call_consumes_current_x(op))
       continue;
     if (op.target_meta.formal_opcode.has_value() ||
         std::find(op.target_meta.roles.begin(), op.target_meta.roles.end(), "formal-address") !=

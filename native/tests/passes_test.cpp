@@ -1390,6 +1390,35 @@ void pass_pipeline_matches_initial_typescript_contract() {
   }
 
   {
+    auto x_argument_call_to = [](std::string target) {
+      IrOp op = call_to(std::move(target));
+      op.meta.roles.push_back("x-argument-call");
+      return op;
+    };
+    std::vector<IrOp> program = {
+        plain(0x09),
+        store("7"),
+        label("helper"),
+        plain(0x00),
+        ret(),
+        x_argument_call_to("helper"),
+        x_argument_call_to("helper"),
+        x_argument_call_to("helper"),
+        x_argument_call_to("helper"),
+        x_argument_call_to("helper"),
+    };
+    const core::passes::PassResult result = run_runtime_indirect_call_flow(program);
+    require(result.applied == 0,
+            "runtime-indirect-call-flow must not clobber X-argument calls");
+    const int indirect_calls =
+        static_cast<int>(std::count_if(result.ops.begin(), result.ops.end(), [](const IrOp& op) {
+          return op.kind == IrKind::IndirectCall;
+        }));
+    require(indirect_calls == 0,
+            "runtime-indirect-call-flow rewrote an X-argument call");
+  }
+
+  {
     std::vector<IrOp> program = {
         label("helper"),   recall("7"),
         recall("8"),       recall("9"),

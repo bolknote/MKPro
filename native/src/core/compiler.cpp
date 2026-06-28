@@ -16366,6 +16366,12 @@ std::string function_label(const std::string& name) {
   return "__fn_" + name;
 }
 
+void mark_last_emitted_call_role(LoweringContext& context, std::string role) {
+  if (context.emitter.items.size() < 2U)
+    return;
+  context.emitter.items.at(context.emitter.items.size() - 2U).roles.push_back(std::move(role));
+}
+
 std::string x_param_y_stack_stored_entry_label(const std::string& name) {
   return "__xparam_ystack_entry_" + name;
 }
@@ -16491,9 +16497,8 @@ bool lower_x_param_rule_call(LoweringContext& context, const V2Rule& rule,
   }
   context.emitter.emit_jump(0x53, "ПП", function_label(rule.name), "call function " + rule.name,
                             line);
-  if (context.emitter.items.size() >= 2U)
-    context.emitter.items.at(context.emitter.items.size() - 2U).roles.push_back(
-        "statement-proc-call");
+  mark_last_emitted_call_role(context, "statement-proc-call");
+  mark_last_emitted_call_role(context, "x-argument-call");
   context.optimizations.push_back(OptimizationReport{
       .name = "x-param-proc-call",
       .detail = "Passed " + lowering.param + " to " + rule.name + " through X" +
@@ -16562,6 +16567,7 @@ bool emit_x_param_return_decay_call(LoweringContext& context, const V2Rule& rule
                                     bool through_x_detail) {
   context.emitter.emit_jump(0x53, "ПП", function_label(rule.name), "call function " + rule.name,
                             line);
+  mark_last_emitted_call_role(context, "x-argument-call");
   context.optimizations.push_back(OptimizationReport{
       .name = "x-param-return-decay-call",
       .detail = through_x_detail ? "Passed " + decay.param + " to " + rule.name + " through X."

@@ -41,7 +41,7 @@ Generated with `npm run examples:size`.
 | `minesweeper-9x7.mkpro` | 79 | 999999 | -999920 | ok: <= reference | main+setup load ok |
 | `minesweeper-9x9.mkpro` | 79 | 97 | -18 | ok: <= reference | main+setup load ok |
 | `raja-yoga.mkpro` | 77 | 98 | -21 | ok: <= reference | main+setup load ok |
-| `rambo-iii.mkpro` | 103 | 999999 | -999896 | ok: <= reference | load ok |
+| `rambo-iii.mkpro` | 104 | 999999 | -999895 | ok: <= reference | load ok |
 | `river-battle.mkpro` | 95 | - | - | ok: no reference | main+setup load ok |
 | `sea-battle.mkpro` | 66 | 102 | -36 | ok: <= reference | main+setup load ok |
 | `teleport.mkpro` | 96 | 105 | -9 | ok: <= reference | main+setup load ok |

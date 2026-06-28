@@ -83,7 +83,7 @@ void example_sizes_match_typescript_baselines() {
       {"minesweeper-9x7", 79},
       {"minesweeper-9x9", 79},
       {"raja-yoga", 77},
-      {"rambo-iii", 103},
+      {"rambo-iii", 104},
       {"river-battle", 95},
       {"sea-battle", 66},
       {"teleport", 96},
