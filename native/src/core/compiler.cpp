@@ -41974,16 +41974,59 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   // same single-step mutations on each, so multi-step chains among the existing
   // general passes can be discovered and validated through the behavioral gate.
   if (beam_search_enabled) {
-    constexpr std::size_t kBeamWidth = 6;
-    constexpr int kBeamRounds = 6;
+    const auto env_size = [](const char* name, std::size_t fallback) -> std::size_t {
+      const char* value = std::getenv(name);
+      if (value == nullptr || value[0] == '\0')
+        return fallback;
+      const long parsed = std::strtol(value, nullptr, 10);
+      return parsed > 0 ? static_cast<std::size_t>(parsed) : fallback;
+    };
+    const std::size_t kBeamWidth = env_size("MKPRO_BEAM_WIDTH", 6);
+    const int kBeamRounds = static_cast<int>(env_size("MKPRO_BEAM_ROUNDS", 6));
     struct BeamNode {
       CompileOptions options;
       std::size_t size;
     };
-    std::set<std::string> beam_seen{implemented_candidate_key(best_options)};
+    std::set<std::string> beam_seen;
+    auto beam_gate_ok = [&](const CompileOptions& candidate_options,
+                            const CompileResult& result) -> bool {
+      if (candidate_needs_behavioral_equivalence_gate(candidate_options) &&
+          equivalence_baseline.implemented) {
+        if (!baseline_observations.has_value())
+          baseline_observations = equivalence_observations(equivalence_baseline);
+        if (!candidate_behaviorally_matches_baseline(*baseline_observations, result))
+          return false;
+      }
+      return true;
+    };
+    // Seed the frontier from the top-K smallest of every curated candidate that
+    // was already compiled above (cache hits, so this is cheap), not just the
+    // single winner. Chaining from a structurally different - but locally
+    // slightly worse - form is the most likely place a sub-incumbent result
+    // hides, which a winner-only seed can never reach.
     std::vector<BeamNode> frontier;
-    if (best.implemented)
+    if (best.implemented) {
+      beam_seen.insert(implemented_candidate_key(best_options));
       frontier.push_back(BeamNode{best_options, best.steps.size()});
+    }
+    for (const CandidateSpec& candidate : candidates) {
+      const std::string key = implemented_candidate_key(candidate.options);
+      if (!beam_seen.insert(key).second)
+        continue;
+      CompileResult result;
+      try {
+        result = cached_compile_source_once(candidate.options);
+      } catch (const std::exception&) {
+        continue;
+      }
+      if (!result.implemented || !beam_gate_ok(candidate.options, result))
+        continue;
+      frontier.push_back(BeamNode{candidate.options, result.steps.size()});
+    }
+    std::sort(frontier.begin(), frontier.end(),
+              [](const BeamNode& a, const BeamNode& b) { return a.size < b.size; });
+    if (frontier.size() > kBeamWidth)
+      frontier.resize(kBeamWidth);
     for (int round = 0; round < kBeamRounds && !frontier.empty(); ++round) {
       std::vector<BeamNode> expanded = frontier;
       for (const BeamNode& node : frontier) {
@@ -41999,15 +42042,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           } catch (const std::exception&) {
             continue;
           }
-          if (!result.implemented)
+          if (!result.implemented || !beam_gate_ok(candidate_options, result))
             continue;
-          if (candidate_needs_behavioral_equivalence_gate(candidate_options) &&
-              equivalence_baseline.implemented) {
-            if (!baseline_observations.has_value())
-              baseline_observations = equivalence_observations(equivalence_baseline);
-            if (!candidate_behaviorally_matches_baseline(*baseline_observations, result))
-              continue;
-          }
           const std::size_t result_size = result.steps.size();
           if (candidate_beats_best(result, best)) {
             result.optimizations.push_back(OptimizationReport{
