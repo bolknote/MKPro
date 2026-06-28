@@ -110,6 +110,10 @@ using core::emit::ZeroDigitTailDisplayProgram;
 
 bool is_zero_expression(const LoweringContext& context, const Expression& expression);
 
+long long round_to_long_long(double value) {
+  return static_cast<long long>(std::round(value));
+}
+
 Diagnostic diagnostic(DiagnosticSeverity severity, std::string code, std::string message) {
   return Diagnostic{
       .severity = severity,
@@ -518,7 +522,7 @@ std::optional<int> integer_literal_value(const std::string& text, int line) {
         core::numeric_value_of_expression(expression, std::map<std::string, Expression>{});
     if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
       return std::nullopt;
-    return static_cast<int>(std::llround(*value));
+    return static_cast<int>(round_to_long_long(*value));
   } catch (const std::exception&) {
     return std::nullopt;
   }
@@ -5615,7 +5619,7 @@ std::vector<V2Predicate> guarded_equivalent_condition_candidates(const V2Program
         continue;
       }
       const auto shifted = guarded_shifted_integer_boundary(
-          candidate.op, static_cast<long long>(std::llround(*value)));
+          candidate.op, round_to_long_long(*value));
       if (!shifted.has_value())
         continue;
       V2Predicate boundary = candidate;
@@ -10227,7 +10231,7 @@ std::optional<std::string> constant_indexed_state_element(LoweringContext& conte
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12) {
     return std::nullopt;
   }
-  const int index = static_cast<int>(std::llround(*value));
+  const int index = static_cast<int>(round_to_long_long(*value));
   if (index < field.bank->min || index > field.bank->max) {
     context.diagnostics.push_back(
         diagnostic(DiagnosticSeverity::Error, "native-unsupported",
@@ -10751,7 +10755,7 @@ bool emit_indexed_recall(LoweringContext& context, const Expression& expression,
   emit_recall(context, *element);
   if (!context.emitter.items.empty()) {
     const std::optional<double> value = numeric_value_of_expression(context, *expression.index);
-    const int index = value.has_value() ? static_cast<int>(std::llround(*value)) : 0;
+    const int index = value.has_value() ? static_cast<int>(round_to_long_long(*value)) : 0;
     context.emitter.items.back().comment = "indexed recall " +
                                            bank_member_key(expression.base, expression.field) +
                                            "[" + std::to_string(index) + "]";
@@ -10771,7 +10775,7 @@ bool emit_indexed_store(LoweringContext& context, const Expression& expression, 
     return emit_dynamic_indexed_store(context, expression, source_line);
   }
   const std::optional<double> value = numeric_value_of_expression(context, *expression.index);
-  const int index = value.has_value() ? static_cast<int>(std::llround(*value)) : 0;
+  const int index = value.has_value() ? static_cast<int>(round_to_long_long(*value)) : 0;
   emit_store(context, *element,
              "indexed set " + bank_member_key(expression.base, expression.field) + "[" +
                  std::to_string(index) + "]");
@@ -17007,7 +17011,7 @@ std::optional<int> integer_value_of_expression(const LoweringContext& context,
   const std::optional<double> value = numeric_value_of_expression(context, expression);
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
     return std::nullopt;
-  return static_cast<int>(std::llround(*value));
+  return static_cast<int>(round_to_long_long(*value));
 }
 
 bool is_zero_expression(const LoweringContext& context, const Expression& expression) {
@@ -19290,7 +19294,7 @@ std::vector<V2Predicate> equivalent_condition_candidates(const LoweringContext& 
         continue;
       }
       const std::optional<std::pair<std::string, long long>> shifted =
-          shifted_integer_boundary(candidate.op, static_cast<long long>(std::llround(*value)));
+          shifted_integer_boundary(candidate.op, round_to_long_long(*value));
       if (!shifted.has_value())
         continue;
       V2Predicate boundary = candidate;
@@ -19524,7 +19528,7 @@ std::optional<Expression> near_any_simple_stack_load(LoweringContext& context,
   const std::optional<double> value = numeric_value_of_expression(context, *expression.index);
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
     return std::nullopt;
-  const int index = static_cast<int>(std::llround(*value));
+  const int index = static_cast<int>(round_to_long_long(*value));
   if (index < field.bank->min || index > field.bank->max)
     return std::nullopt;
   if (report_resolution)
@@ -20282,7 +20286,7 @@ std::optional<int> integer_constant_expression(const LoweringContext& context,
   const std::optional<double> value = numeric_value_of_expression(context, expression);
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
     return std::nullopt;
-  return static_cast<int>(std::llround(*value));
+  return static_cast<int>(round_to_long_long(*value));
 }
 
 std::optional<EqualityConstantCondition>
@@ -28825,7 +28829,7 @@ integer_value_of_parsed_expression_without_constants(const Expression& expressio
       core::numeric_value_of_expression(expression, std::map<std::string, Expression>{});
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
     return std::nullopt;
-  return static_cast<int>(std::llround(*value));
+  return static_cast<int>(round_to_long_long(*value));
 }
 
 std::optional<std::string> scalar_target_identifier(const std::optional<std::string>& target,
@@ -33952,7 +33956,7 @@ std::optional<int> integer_numeric_literal(const Expression& expression) {
   const double rounded = std::round(*value);
   if (std::fabs(*value - rounded) >= 1e-12)
     return std::nullopt;
-  return static_cast<int>(std::llround(rounded));
+  return static_cast<int>(round_to_long_long(rounded));
 }
 
 struct ConstantDispatchCondition {
