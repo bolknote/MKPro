@@ -40005,6 +40005,20 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   };
 
   CompileResult best = cached_compile_source_once(options);
+  // Option-set that produced the current `best`, tracked so an optional
+  // non-greedy beam pass (MKPRO_BEAM_SEARCH) can layer further candidates on
+  // the winning combination instead of only the fixed base.
+  CompileOptions best_options = options;
+  // Opt-in non-greedy beam search over the existing candidate mutations. Off by
+  // default so normal builds and CI keep the fast greedy pass; computed once to
+  // avoid per-compile getenv/bookkeeping overhead when disabled.
+  const bool beam_search_enabled = [] {
+    const char* env = std::getenv("MKPRO_BEAM_SEARCH");
+    return env != nullptr && env[0] != '\0' && env[0] != '0';
+  }();
+  // Single-step candidate mutations, retained so the beam pass can replay them
+  // on top of arbitrary frontier states rather than just the base options.
+  std::vector<std::function<void(CompileOptions&)>> beam_configures;
   // Non-aggressive reference compile used by the behavioral-equivalence gate.
   // Captured before any candidate replaces `best` so risky candidates are
   // always validated against the trusted baseline rather than another
@@ -40090,6 +40104,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   };
   auto add_candidate = [&](const std::function<void(CompileOptions&)>& configure, std::string name,
                            std::string detail, CandidateGate gate = CandidateGate::Always) {
+    if (beam_search_enabled)
+      beam_configures.push_back(configure);
     CompileOptions candidate_options = options;
     configure(candidate_options);
     add_configured_candidate(std::move(candidate_options), std::move(name), std::move(detail),
@@ -40177,6 +40193,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           .name = candidate.name,
           .detail = candidate.detail + " (" + comparison + ").",
       });
+      best_options = candidate.options;
       best = std::move(result);
     }
   };
@@ -41560,6 +41577,27 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       base_options.dual_use_constant_indirect_flow = true;
       base_options.tail_branch_inversion = true;
     });
+    // Pair dual-use/tail-branch fractional selectors with stack-resident
+    // temporaries and call-count proc ordering. This combination frees a
+    // register and reshapes the layout so a fractional constant can absorb a
+    // direct-flow target, which the per-flag greedy passes never reach on their
+    // own.
+    add_fractional_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+      base_options.stack_resident_temps = true;
+      base_options.order_procs_by_call_count = true;
+    });
+    add_fractional_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.tail_branch_inversion = true;
+      base_options.stack_resident_temps = true;
+    });
+    add_fractional_base([](CompileOptions& base_options) {
+      base_options.dual_use_constant_indirect_flow = true;
+      base_options.stack_resident_temps = true;
+      base_options.order_procs_by_call_count = true;
+    });
     add_fractional_base(
         [](CompileOptions& base_options) { base_options.conditional_branch_trampoline = true; });
     add_fractional_base([](CompileOptions& base_options) {
@@ -41927,6 +41965,71 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   }
 
   evaluate_queued_candidates();
+
+  // Optional non-greedy beam search (opt-in via MKPRO_BEAM_SEARCH). The curated
+  // candidate pass above is greedy: it only ever keeps strictly-smaller forms,
+  // so enabling steps that are locally size-neutral (and only pay off once a
+  // later step builds on them) are discarded. The beam keeps the K smallest
+  // frontier states regardless of whether they beat the incumbent, layering the
+  // same single-step mutations on each, so multi-step chains among the existing
+  // general passes can be discovered and validated through the behavioral gate.
+  if (beam_search_enabled) {
+    constexpr std::size_t kBeamWidth = 6;
+    constexpr int kBeamRounds = 6;
+    struct BeamNode {
+      CompileOptions options;
+      std::size_t size;
+    };
+    std::set<std::string> beam_seen{implemented_candidate_key(best_options)};
+    std::vector<BeamNode> frontier;
+    if (best.implemented)
+      frontier.push_back(BeamNode{best_options, best.steps.size()});
+    for (int round = 0; round < kBeamRounds && !frontier.empty(); ++round) {
+      std::vector<BeamNode> expanded = frontier;
+      for (const BeamNode& node : frontier) {
+        for (const std::function<void(CompileOptions&)>& configure : beam_configures) {
+          CompileOptions candidate_options = node.options;
+          configure(candidate_options);
+          const std::string key = implemented_candidate_key(candidate_options);
+          if (!beam_seen.insert(key).second)
+            continue;
+          CompileResult result;
+          try {
+            result = cached_compile_source_once(candidate_options);
+          } catch (const std::exception&) {
+            continue;
+          }
+          if (!result.implemented)
+            continue;
+          if (candidate_needs_behavioral_equivalence_gate(candidate_options) &&
+              equivalence_baseline.implemented) {
+            if (!baseline_observations.has_value())
+              baseline_observations = equivalence_observations(equivalence_baseline);
+            if (!candidate_behaviorally_matches_baseline(*baseline_observations, result))
+              continue;
+          }
+          const std::size_t result_size = result.steps.size();
+          if (candidate_beats_best(result, best)) {
+            result.optimizations.push_back(OptimizationReport{
+                .name = "beam-search-multi-step",
+                .detail = "Non-greedy beam search reached " + std::to_string(result_size) +
+                          " cells.",
+            });
+            best_options = candidate_options;
+            best = std::move(result);
+          }
+          expanded.push_back(BeamNode{std::move(candidate_options), result_size});
+        }
+      }
+      std::sort(expanded.begin(), expanded.end(),
+                [](const BeamNode& a, const BeamNode& b) { return a.size < b.size; });
+      if (expanded.size() > kBeamWidth)
+        expanded.resize(kBeamWidth);
+      frontier = std::move(expanded);
+    }
+    std::cerr << "[beam] best_main_cells=" << (best.implemented ? best.steps.size() : 0)
+              << " best_key=" << implemented_candidate_key(best_options) << "\n";
+  }
 
   write_compile_result_cache(source, options, best);
   return best;
