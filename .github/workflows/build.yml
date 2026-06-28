@@ -217,8 +217,8 @@ jobs:
             -l /tmp/cosmocc/bin/ape-aarch64.elf \
             -M /tmp/cosmocc/bin/ape-m1.c \
             -o mkpro-native-universal.com \
-            build/mkpro-ape-x86_64_linux/mkpro-native \
-            build/mkpro-ape-aarch64_linux/mkpro-native
+            build/mkpro-ape-x86_64_linux/native/mkpro-native \
+            build/mkpro-ape-aarch64_linux/native/mkpro-native
       - name: Smoke check
         run: |
           file mkpro-native-universal.com
