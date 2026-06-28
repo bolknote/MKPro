@@ -362,6 +362,7 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
   args.erase(args.begin());
 
   mkpro::CompileOptions options;
+  bool behavior_digest = false;
   if (command == "explain") {
     options.output = mkpro::OutputFormat::All;
     options.analysis = true;
@@ -371,6 +372,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
     const std::string& arg = args[index];
     if (arg == "--analysis") {
       options.analysis = true;
+    } else if (arg == "--behavior-digest") {
+      behavior_digest = true;
     } else if (arg == "--disable-candidate-search") {
       options.disable_candidate_search = true;
     } else if (arg == "--collect-coalesce-shares") {
@@ -543,6 +546,10 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
 
   try {
     const mkpro::CompileResult result = mkpro::compile_source(read_source(source_path), options);
+    if (behavior_digest) {
+      std::cout << mkpro::program_behavior_digest(result);
+      return result.implemented ? 0 : 78;
+    }
     print_diagnostics(result);
     if (result.implemented)
       print_result(result, options.output);

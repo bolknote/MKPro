@@ -38757,6 +38757,38 @@ std::vector<EquivalenceObservation> equivalence_observations(const CompileResult
   return observations;
 }
 
+std::string equivalence_observations_digest(const std::vector<EquivalenceObservation>& obs) {
+  const std::vector<std::vector<int>>& scenarios = equivalence_scenarios();
+  std::string out;
+  for (std::size_t index = 0; index < obs.size(); ++index) {
+    out += '[';
+    if (index < scenarios.size()) {
+      for (std::size_t i = 0; i < scenarios[index].size(); ++i) {
+        if (i != 0)
+          out += ',';
+        out += std::to_string(scenarios[index][i]);
+      }
+    }
+    out += "] ";
+    if (!obs[index].runnable) {
+      out += "<not-runnable>";
+    } else {
+      for (std::size_t t = 0; t < obs[index].turns.size(); ++t) {
+        if (t != 0)
+          out += " | ";
+        out += obs[index].turns[t].stopped ? "stop:" : "run:";
+        out += obs[index].turns[t].display;
+      }
+    }
+    out += '\n';
+  }
+  return out;
+}
+
+std::string program_behavior_digest(const CompileResult& result) {
+  return equivalence_observations_digest(equivalence_observations(result));
+}
+
 bool candidate_behaviorally_matches_baseline(
     const std::vector<EquivalenceObservation>& baseline_observations,
     const CompileResult& candidate) {
