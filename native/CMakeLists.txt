@@ -9,6 +9,7 @@ option(MKPRO_ENABLE_ASAN_UBSAN "Enable AddressSanitizer and UndefinedBehaviorSan
 option(MKPRO_ENABLE_TSAN "Enable ThreadSanitizer" OFF)
 option(MKPRO_STATIC "Statically link the CLI (GNU/Clang on non-Apple platforms)" OFF)
 option(MKPRO_FORCE_INT128_FALLBACK "Use the software 128-bit integer even where a builtin __int128 exists" OFF)
+option(MKPRO_BUILD_TOOLS "Build auxiliary research/diagnostic tools (e.g. the address solver)" OFF)
 
 if(MKPRO_ENABLE_ASAN_UBSAN AND MKPRO_ENABLE_TSAN)
   message(FATAL_ERROR "ASan/UBSan and TSan cannot be enabled in the same build")
@@ -415,3 +416,12 @@ mkpro_configure_target(mkpro_core)
 mkpro_configure_target(mkpro_cli)
 mkpro_configure_target(mkpro_tests)
 mkpro_configure_target(mkpro_int128_selftest)
+
+# Auxiliary research tools. Off by default; these intentionally skip the strict
+# warning/-Werror configuration applied to the shipping targets because they are
+# exploratory probes (heavy implicit numeric conversions in the search grids).
+if(MKPRO_BUILD_TOOLS)
+  add_executable(mkpro_address_solver tools/address_solver.cpp)
+  target_link_libraries(mkpro_address_solver PRIVATE mkpro_core)
+  target_include_directories(mkpro_address_solver PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+endif()
