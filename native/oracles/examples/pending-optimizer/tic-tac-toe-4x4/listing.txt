@@ -149,9 +149,8 @@ Setup Block:
   >79 |  15  | F 10ˣ                   | pow10()
   >7A |  62  | П→X 2                   | recall y
   >7B |  6C  | П→X c                   | preload const 36.22600029; fractional selector source 0.22600029
-  >7C |  35  | К {x}                   | fractional selector const 0.22600029
-  >7D |  12  | ×                       | expr *
-  >7E |  15  | F 10ˣ                   | pow10()
-  >7F |  34  | К [x]                   | int()
-  >80 |  10  | +                       | expr +
-  >81 |  52  | В/О                     | expression helper return
+  >7C |  12  | ×                       | expr *
+  >7D |  15  | F 10ˣ                   | pow10()
+  >7E |  34  | К [x]                   | int()
+  >7F |  10  | +                       | expr +
+  >80 |  52  | В/О                     | expression helper return

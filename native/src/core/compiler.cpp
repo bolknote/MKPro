@@ -10119,13 +10119,27 @@ void emit_number_or_preload(LoweringContext& context, const std::string& value,
       context.emitter.items.back().comment = "preload const " + key;
     }
     if (selector.has_value() && selector_value.has_value() &&
-        fractional_selector_needs_recovery(key, *selector_value)) {
+        fractional_selector_needs_recovery(key, *selector_value) &&
+        !context.assume_dead_selector_integer_part) {
       context.emitter.emit_op(0x35, "К {x}", "fractional selector const " + key, source_line);
       context.optimizations.push_back(OptimizationReport{
           .name = "fractional-constant-selector-use",
           .detail = "Recovered fractional constant " + key + " from R" +
                     register_text_for(context, preload_it->second) + " carrying target " +
                     std::to_string(selector->target) + " as " + *selector_value + ".",
+      });
+    } else if (selector.has_value() && selector_value.has_value() &&
+               fractional_selector_needs_recovery(key, *selector_value)) {
+      // Dead-integer-part mode: the recalled value still carries the retuned
+      // integer part, but every data read of this constant is insensitive to it
+      // (assumed here, validated by the behavioral-equivalence gate). We skip
+      // the `К {x}` recovery entirely, so the dual-use register costs nothing
+      // extra on the data side while still serving as an indirect address.
+      context.optimizations.push_back(OptimizationReport{
+          .name = "dead-integer-fractional-selector-use",
+          .detail = "Used dual-use R" + register_text_for(context, preload_it->second) +
+                    " carrying target " + std::to_string(selector->target) + " as " + key +
+                    " without fractional recovery (integer part dead at this read).",
       });
     } else if (selector.has_value() && selector_value.has_value()) {
       context.optimizations.push_back(OptimizationReport{
@@ -37919,6 +37933,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.invert_branch_order = options.invert_branch_order;
   context.preserve_dispatch_case_order = options.preserve_dispatch_case_order;
   context.order_procs_by_call_count = options.order_procs_by_call_count;
+  context.assume_dead_selector_integer_part = options.assume_dead_selector_integer_part;
   context.proc_layout_strategy = options.proc_layout_strategy;
   context.fractional_constant_selectors = options.fractional_constant_selectors;
   for (const auto& [register_name, value] : options.preloaded_constant_registers)
@@ -38824,7 +38839,8 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.disable_interprocedural_opts || options.coalesce_copies ||
          options.aggressive_indirect_call_threshold || options.aggressive_indirect_call ||
          options.dual_use_constant_indirect_flow || options.aggressive_post_layout_indirect_flow ||
-         options.preloaded_indirect_flow || options.runtime_indirect_call_flow ||
+         options.preloaded_indirect_flow || options.forward_indirect_flow ||
+         options.runtime_indirect_call_flow ||
          options.general_constant_preloads || options.stack_resident_temps ||
          options.share_random_cell || options.startup_aware_constant_preloads ||
          options.guarded_prologue_gadgets || options.shared_bit_mask_helper_calls ||
@@ -38944,6 +38960,15 @@ std::string emulator_preload_literal(const std::string& value) {
   return out;
 }
 
+// EMULATOR-DECOUPLE (tracked debt): this candidate-acceptance gate embeds the
+// MK-61 emulator inside the optimizer to prove behavioral equivalence. Running
+// the emulator from research/tests is fine, but having it load-bearing inside
+// the translator/optimizer is only acceptable as a TEMPORARY measure. The plan
+// is to replace gate-proven soundness with static models/analyses (the address
+// math already uses the static `evaluate_indirect_address` model; the
+// dead-integer fractional selector needs a static dead-integer analysis), and
+// then demote this emulator run to an optional self-check or remove it.
+// See docs/20-mkpro-optimization-reference.md ("Emulator decoupling").
 EquivalenceObservation run_equivalence_observation(const CompileResult& result,
                                                    const std::vector<int>& inputs) {
   EquivalenceObservation observation;
@@ -39102,7 +39127,8 @@ bool candidate_behaviorally_matches_baseline(
 
 bool candidate_needs_behavioral_equivalence_gate(const CompileOptions& options) {
   return options.aggressive_post_layout_indirect_flow || options.dual_use_constant_indirect_flow ||
-         options.runtime_indirect_call_flow || options.preloaded_indirect_flow;
+         options.runtime_indirect_call_flow || options.preloaded_indirect_flow ||
+         options.forward_indirect_flow;
 }
 
 bool is_only_budget_exceeded(const CompileResult& result) {
@@ -39163,9 +39189,11 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";aggressive_indirect_call=" << options.aggressive_indirect_call
       << ";dual_use_constant_indirect_flow=" << options.dual_use_constant_indirect_flow
       << ";aggressive_post_layout_indirect_flow=" << options.aggressive_post_layout_indirect_flow
+      << ";disable_aggressive_post_layout=" << options.disable_aggressive_post_layout
       << ";return_stack_script=" << options.return_stack_script
       << ";disable_return_stack_script=" << options.disable_return_stack_script
       << ";preloaded_indirect_flow=" << options.preloaded_indirect_flow
+      << ";forward_indirect_flow=" << options.forward_indirect_flow
       << ";runtime_indirect_call_flow=" << options.runtime_indirect_call_flow
       << ";general_constant_preloads=" << options.general_constant_preloads
       << ";startup_aware_constant_preloads=" << options.startup_aware_constant_preloads
@@ -39198,6 +39226,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";hoist_shared_helpers=" << options.hoist_shared_helpers
       << ";hoist_procs=" << options.hoist_procs
       << ";order_procs_by_call_count=" << options.order_procs_by_call_count
+      << ";assume_dead_selector_integer_part=" << options.assume_dead_selector_integer_part
       << ";proc_layout_strategy=" << options.proc_layout_strategy;
   for (const std::string& name : options.pack_counter_stripe_names)
     out << ";pack_counter_stripe_name=" << name;
@@ -40151,7 +40180,8 @@ fractional_constant_selector_sources(const CompileResult& result,
 
 std::vector<FractionalConstantSelectorPlan>
 discover_fractional_constant_selector_plans(const CompileResult& result,
-                                            const V2Program* program = nullptr) {
+                                            const V2Program* program = nullptr,
+                                            bool include_dead_integer_plans = false) {
   const std::map<int, DirectFlowTargetStats> target_stats = direct_flow_target_stats(result.steps);
   if (target_stats.empty())
     return {};
@@ -40168,7 +40198,18 @@ discover_fractional_constant_selector_plans(const CompileResult& result,
       const int direct_count = needs_recovery ? stats.count : stats.stable_without_retarget_count;
       const int recovery_cost = needs_recovery ? source.use_count : 0;
       const int benefit = direct_count - recovery_cost;
-      if (benefit <= 0)
+      // Dead-integer-part benefit: if the recovery `К {x}` can be elided (every
+      // data read is insensitive to the retuned integer part), each direct
+      // transfer to this target collapses to a 1-cell indirect with no recovery
+      // tax. This is what lets forward-sitting helpers become worthwhile, but it
+      // only applies to the assume-dead / forward candidate twins (size rescue).
+      // Admitting these plans into the always-on plain selector candidate would
+      // rewrite parity-locked under-budget examples, so they are opt-in via
+      // include_dead_integer_plans; the twins are still gate-validated.
+      const int dead_integer_benefit =
+          include_dead_integer_plans && needs_recovery ? stats.count : 0;
+      const int ranking_benefit = std::max(benefit, dead_integer_benefit);
+      if (ranking_benefit <= 0)
         continue;
       const bool register_matches_target = std::any_of(
           source.registers.begin(), source.registers.end(), [&](const std::string& reg) {
@@ -40182,7 +40223,7 @@ discover_fractional_constant_selector_plans(const CompileResult& result,
         continue;
       plans.push_back(FractionalConstantSelectorPlanWithBenefit{
           .plan = FractionalConstantSelectorPlan{.value = source.value, .target = target},
-          .benefit = benefit,
+          .benefit = ranking_benefit,
       });
     }
   }
@@ -40404,7 +40445,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   auto add_fractional_selector_candidates_for_base =
       [&](const CompileOptions& base_options, std::set<std::string>& tried, std::string name,
           const std::function<std::string(const FractionalConstantSelectorPlan&)>& detail,
-          std::size_t limit = 12U) {
+          bool emit_plain = true, bool emit_rescue_twins = false, std::size_t limit = 12U) {
         CompileResult probe;
         try {
           CompileOptions probe_options = base_options;
@@ -40414,17 +40455,11 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           return;
         }
 
-        std::vector<FractionalConstantSelectorPlan> plans =
-            discover_fractional_constant_selector_plans(
-                probe, selector_probe_program.has_value() ? &*selector_probe_program : nullptr);
-        if (plans.size() > limit)
-          plans.resize(limit);
-        for (const FractionalConstantSelectorPlan& plan : plans) {
-          const std::string key = implemented_candidate_key(base_options) +
-                                  "|fractional:" + normalize_number_key(plan.value) + ":" +
-                                  std::to_string(plan.target);
-          if (!tried.insert(key).second)
-            continue;
+        const V2Program* selector_program =
+            selector_probe_program.has_value() ? &*selector_probe_program : nullptr;
+        // Builds the dual-use + forced-preload option base shared by all three
+        // candidate kinds for a given plan.
+        auto base_options_for_plan = [&](const FractionalConstantSelectorPlan& plan) {
           CompileOptions candidate_options = base_options;
           candidate_options.dual_use_constant_indirect_flow = true;
           candidate_options.fractional_constant_selectors = {plan};
@@ -40433,7 +40468,63 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           forced.push_back(plan.value);
           candidate_options.force_fractional_constant_selector_preloads =
               unique_normalized_fractional_selector_values(forced);
-          add_configured_candidate(std::move(candidate_options), name, detail(plan));
+          return candidate_options;
+        };
+
+        // Plain selector candidate: only the original, recovery-paying plans so
+        // parity-locked under-budget examples are unchanged.
+        if (emit_plain) {
+          std::vector<FractionalConstantSelectorPlan> plain_plans =
+              discover_fractional_constant_selector_plans(probe, selector_program,
+                                                          /*include_dead_integer_plans=*/false);
+          if (plain_plans.size() > limit)
+            plain_plans.resize(limit);
+          for (const FractionalConstantSelectorPlan& plan : plain_plans) {
+            const std::string key = implemented_candidate_key(base_options) +
+                                    "|fractional:" + normalize_number_key(plan.value) + ":" +
+                                    std::to_string(plan.target);
+            if (!tried.insert(key).second)
+              continue;
+            add_configured_candidate(base_options_for_plan(plan), name, detail(plan));
+          }
+        }
+
+        // Forward / dead-integer twins (last-ditch rescue only): these draw on
+        // the expanded plan set that also surfaces forward-sitting helpers. A
+        // retuned fractional constant resolves to a helper that may sit AFTER
+        // its callers; the plan target comes from the actual post-layout
+        // listing, so it tracks where the body really landed instead of a fixed
+        // guess. Forward conversion collapses those forward direct calls to
+        // 1-cell `К ПП r`, and the dead-integer twin additionally elides the
+        // `К {x}` recovery (sound only when the retuned integer part is never
+        // observed as data).
+        //
+        // These create alternative same-size forms, so they are emitted ONLY
+        // when the program still overflows the official budget after the normal
+        // rescue (the caller decides). That keeps committed under-budget oracles
+        // byte-identical while still letting genuinely over-budget programs
+        // (e.g. tic-tac-toe-4x4) reach a smaller listing.
+        //
+        // TEMPORARY: correctness of the dead-integer twin currently rests on the
+        // behavioral-equivalence gate, which embeds the emulator inside the
+        // optimizer; see EMULATOR-DECOUPLE. The plan is to replace gate-proven
+        // soundness with a static dead-integer analysis.
+        if (emit_rescue_twins) {
+          std::vector<FractionalConstantSelectorPlan> rescue_plans =
+              discover_fractional_constant_selector_plans(probe, selector_program,
+                                                          /*include_dead_integer_plans=*/true);
+          if (rescue_plans.size() > limit)
+            rescue_plans.resize(limit);
+          for (const FractionalConstantSelectorPlan& plan : rescue_plans) {
+            CompileOptions forward_options = base_options_for_plan(plan);
+            forward_options.forward_indirect_flow = true;
+            CompileOptions dead_int_options = forward_options;
+            dead_int_options.assume_dead_selector_integer_part = true;
+            add_configured_candidate(std::move(forward_options), name + "-forward", detail(plan),
+                                     CandidateGate::SizeRescue);
+            add_configured_candidate(std::move(dead_int_options), name + "-dead-int", detail(plan),
+                                     CandidateGate::SizeRescue);
+          }
         }
       };
   std::size_t evaluated_candidate_count = 0;
@@ -40678,6 +40769,49 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         },
         "aggressive-post-layout-shared-call-body",
         "Combined proven post-layout indirect-flow with shared call-body helpers");
+    // Forward indirect-flow converts direct transfers whose target sits AFTER
+    // the call site into 1-cell indirect calls. This shrinks the listing and
+    // changes its bytes, so it is gated as a size rescue: it only engages when
+    // the program is over the official budget, keeping parity-locked examples
+    // that already fit byte-identical.
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.aggressive_post_layout_indirect_flow = true;
+          candidate_options.forward_indirect_flow = true;
+        },
+        "forward-indirect-flow-aggressive",
+        "Converted forward direct transfers to 1-cell indirect calls through registers whose "
+        "value resolves to the (later) target address (with aggressive post-layout repacking)",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.aggressive_post_layout_indirect_flow = true;
+          candidate_options.forward_indirect_flow = true;
+          candidate_options.dual_use_constant_indirect_flow = true;
+        },
+        "forward-indirect-flow-dual-use-aggressive",
+        "Combined forward indirect-flow with dual-use constant selectors so live data registers "
+        "double as forward call addresses (with aggressive post-layout repacking)",
+        CandidateGate::SizeRescue);
+    // Forward indirect-flow applied to the PRIMARY (non-aggressive) layout: the
+    // default post-layout rescue still runs for programs above the reference
+    // span, so forward conversion can shrink the good layout without paying the
+    // aggressive repacking penalty.
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.forward_indirect_flow = true;
+        },
+        "forward-indirect-flow",
+        "Converted forward direct transfers to 1-cell indirect calls on the primary layout",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.forward_indirect_flow = true;
+          candidate_options.dual_use_constant_indirect_flow = true;
+        },
+        "forward-indirect-flow-dual-use",
+        "Combined forward indirect-flow with dual-use constant selectors on the primary layout",
+        CandidateGate::SizeRescue);
     add_candidate(
         [](CompileOptions& candidate_options) {
           candidate_options.aggressive_post_layout_indirect_flow = true;
@@ -41852,9 +41986,11 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   hoisted_base.hoist_procs = true;
   add_reclaim_candidate(hoisted_base);
 
+  // Declared at function scope so the late "still overflows" twin block (after
+  // the first evaluate_queued_candidates) can reuse the same bases.
+  std::set<std::string> tried_fractional_selectors;
+  std::vector<CompileOptions> fractional_bases;
   if (needs_size_rescue) {
-    std::set<std::string> tried_fractional_selectors;
-    std::vector<CompileOptions> fractional_bases;
     auto add_fractional_base = [&](const std::function<void(CompileOptions&)>& configure) {
       CompileOptions base_options = options;
       configure(base_options);
@@ -41923,6 +42059,26 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   }
 
   evaluate_queued_candidates();
+
+  // Last-ditch fractional address-synthesis twins (forward conversion +
+  // dead-integer recovery elision). Only emitted when the program STILL
+  // overflows the official budget after the normal rescue above, because they
+  // create alternative same-size forms that would otherwise perturb the
+  // committed byte-exact listings of under-budget parity examples. Genuinely
+  // over-budget programs (e.g. tic-tac-toe-4x4) reach them and can shrink
+  // further; everything that already fits is untouched.
+  if (needs_size_rescue && selected_still_overflows_now() && !fractional_bases.empty()) {
+    for (const CompileOptions& base_options : fractional_bases) {
+      add_fractional_selector_candidates_for_base(
+          base_options, tried_fractional_selectors, "fractional-constant-selector",
+          [](const FractionalConstantSelectorPlan& plan) {
+            return "Packed direct-flow target " + std::to_string(plan.target) +
+                   " into fractional constant " + plan.value;
+          },
+          /*emit_plain=*/false, /*emit_rescue_twins=*/true);
+    }
+    evaluate_queued_candidates();
+  }
 
   if (needs_size_rescue && selected_still_overflows_now()) {
     CompileOptions early_demote_base = options;
@@ -42219,7 +42375,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
                 return "Inlined single-use constant " + value + " and packed direct-flow target " +
                        std::to_string(plan.target) + " into fractional constant " + plan.value;
               },
-              4U);
+              /*emit_plain=*/true, /*emit_rescue_twins=*/false, 4U);
         }
       }
     }

@@ -2720,3 +2720,46 @@ produce no further shrink, and #2 has since been resolved on its own
   correct.
 
 This reference should be used as a working map while reading generated listings in explain/json mode: every named optimization corresponds to a concrete rewrite class that can be correlated with local sequences in emitted IR or final machine text.
+
+## Dead-integer fractional selectors (address synthesis on data registers)
+
+A fractional data constant `C` (0 < C < 1) preloaded into a register can double
+as an indirect jump/call address by retuning the register's integer part to a
+target address `T`, so the register holds `T.C`. The integer part `T` is what
+the calculator's address resolution consumes, while the fractional part `C` is
+the data. The candidate plans are discovered from the **actual post-layout
+listing** (`direct_flow_target_stats`), so the target tracks where each helper
+body really landed rather than a fixed guess; forward-sitting helpers are
+eligible too (`fractional-constant-selector-forward`).
+
+Normally reusing such a register on the data side costs a `К {x}` recovery op to
+strip the integer part. The `assume_dead_selector_integer_part` mode
+(`-dead-int` candidate twins) elides that recovery — sound **only** when every
+data read of the constant is insensitive to the integer part. This is exactly
+the density trick used by hand-written reference programs (one register serving
+as both data and address with no recovery tax).
+
+## Emulator decoupling (tracked architectural debt)
+
+The candidate-acceptance **behavioral-equivalence gate**
+(`run_equivalence_observation` / `candidate_needs_behavioral_equivalence_gate`)
+currently embeds the MK-61 emulator inside the optimizer to validate the
+indirect-flow family (aggressive post-layout, dual-use, runtime/preloaded/forward
+indirect flow) and, most recently, the dead-integer fractional selectors above.
+
+Using the emulator for research and tests is fine; having it **load-bearing
+inside the translator/optimizer is only a TEMPORARY measure**. The address math
+itself is already emulator-free (the static `evaluate_indirect_address` model).
+The remaining gap is that the dead-integer optimization proves its soundness via
+the gate rather than statically.
+
+Decoupling plan:
+1. Implement a static **dead-integer analysis**: prove that every data read of a
+   fractional selector constant is insensitive to the retuned integer part
+   (e.g. each read is immediately consumed by fractional extraction `{x}` or by
+   an operation whose result does not depend on the integer part).
+2. With (1) in place, the `-dead-int` candidates are sound by construction; the
+   emulator run can be demoted to an optional self-check (debug builds / CI) and
+   removed from the hot optimization path.
+
+Code anchor: search `EMULATOR-DECOUPLE` in `native/src/core/compiler.cpp`.

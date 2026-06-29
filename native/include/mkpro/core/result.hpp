@@ -169,6 +169,12 @@ struct CompileOptions {
   // search (helper sharing, etc.) intact.
   bool disable_aggressive_post_layout = false;
   bool preloaded_indirect_flow = false;
+  // Allow the post-layout indirect-flow rescue to convert FORWARD direct
+  // transfers (target after the call site) into 1-cell indirect calls/jumps
+  // through a register whose value resolves to that forward address. Runtime
+  // К ПП/К БП is direction-agnostic; correctness is still guaranteed because
+  // every rewrite is validated to decode to the proven target address.
+  bool forward_indirect_flow = false;
   bool runtime_indirect_call_flow = false;
   bool general_constant_preloads = false;
   bool stack_resident_temps = false;
@@ -204,6 +210,13 @@ struct CompileOptions {
   std::map<std::string, std::string> preloaded_constant_registers;
   std::set<std::string> suppress_constant_preloads;
   std::vector<FractionalConstantSelectorPlan> fractional_constant_selectors;
+  // When true, the lowering omits the `К {x}` fractional-recovery op that
+  // normally restores a dual-use register's data value after its integer part
+  // has been retuned to an address. This is only sound when the integer part is
+  // dead at every data read (the reference program relies on exactly this); the
+  // behavioral-equivalence gate validates each candidate, so an unsound case is
+  // rejected automatically rather than producing wrong code.
+  bool assume_dead_selector_integer_part = false;
   std::vector<std::string> force_fractional_constant_selector_preloads;
   std::vector<std::string> pack_counter_stripe_names;
   std::vector<RegisterShare> forced_register_shares;

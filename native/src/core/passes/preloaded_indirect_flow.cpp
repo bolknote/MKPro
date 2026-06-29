@@ -561,7 +561,8 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
     }
     const std::optional<int> target = branch_target(op);
     const int site_address = addresses.at(index);
-    if (!target.has_value() || *target > site_address ||
+    if (!target.has_value() ||
+        (!flow_options.allow_forward_targets && *target > site_address) ||
         (!flow_options.relax_max_target_guard && max_target > site_address)) {
       continue;
     }
@@ -651,7 +652,8 @@ PassResult run_preloaded_indirect_flow(const std::vector<IrOp>& ops,
     }
     const std::optional<int> target = branch_target(op);
     const int site_address = addresses.at(index);
-    if (!target.has_value() || *target > site_address ||
+    if (!target.has_value() ||
+        (!flow_options.allow_forward_targets && *target > site_address) ||
         (!flow_options.relax_max_target_guard && max_target > site_address)) {
       result.push_back(op);
       continue;

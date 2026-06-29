@@ -262,6 +262,7 @@ struct LoweringContext {
   bool invert_branch_order = false;
   bool preserve_dispatch_case_order = false;
   bool order_procs_by_call_count = false;
+  bool assume_dead_selector_integer_part = false;
   std::string proc_layout_strategy;
 };
 

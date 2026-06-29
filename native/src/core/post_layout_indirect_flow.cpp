@@ -1935,7 +1935,8 @@ std::optional<RewriteStep> apply_one_rewrite(const std::vector<MachineItem>& ite
 
   const passes::PassResult pass = passes::run_preloaded_indirect_flow(
       view.numeric, passes::PassContext{.options = round_options},
-      passes::IndirectFlowOptions{.relax_max_target_guard = true});
+      passes::IndirectFlowOptions{.relax_max_target_guard = true,
+                                  .allow_forward_targets = round_options.forward_indirect_flow});
   if (trace) {
     std::cerr << "[post-layout] apply-one cells=" << machine_cell_count(items)
               << " ir=" << ir.size() << " pass_applied=" << pass.applied

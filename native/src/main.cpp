@@ -418,6 +418,8 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
     } else if (arg == "--preloaded-indirect-flow") {
       options.preloaded_indirect_flow = true;
       options.aggressive_post_layout_indirect_flow = true;
+    } else if (arg == "--forward-indirect-flow") {
+      options.forward_indirect_flow = true;
     } else if (arg == "--runtime-indirect-call-flow") {
       options.runtime_indirect_call_flow = true;
     } else if (arg == "--aggressive-post-layout-indirect-flow") {
