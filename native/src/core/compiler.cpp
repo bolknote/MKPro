@@ -39780,6 +39780,30 @@ enum class CandidateGate {
   SizeRescue,
 };
 
+int estimated_candidate_search_cost_ms(std::string_view name) {
+  if (name == "dual-use-constant-indirect-flow" ||
+      name == "dual-use-constant-tail-branch-layout" ||
+      name == "conditional-branch-trampoline-layout" ||
+      name == "dual-use-constant-conditional-trampoline-layout" ||
+      name == "dual-use-constant-tail-conditional-trampoline-layout") {
+    return 350;
+  }
+  if (name.find("fractional") != std::string_view::npos ||
+      name.find("computed-dispatch") != std::string_view::npos ||
+      name.find("demote") != std::string_view::npos) {
+    return 1200;
+  }
+  if (name.find("hoist") != std::string_view::npos ||
+      name.find("layout") != std::string_view::npos ||
+      name.find("domain-error") != std::string_view::npos ||
+      name.find("stack-resident") != std::string_view::npos ||
+      name.find("share-random") != std::string_view::npos ||
+      name.find("break-even") != std::string_view::npos) {
+    return 900;
+  }
+  return 300;
+}
+
 bool source_may_use_segmented_line_count_scan(const std::string& source) {
   return source.find("line_count") != std::string::npos &&
          source.find("board(0..9, 0..9)") != std::string::npos;
@@ -40769,9 +40793,42 @@ struct ComputedDispatchMatch {
   int line = 0;
   std::vector<std::pair<double, int>> value_case;  // (case value, case index)
   int case_count = 0;
+  bool reverse_packed_decimal_cents = false;
 };
 
-std::optional<double> parse_computed_dispatch_match_value(const std::string& text) {
+bool looks_like_reverse_packed_decimal_cents(std::string text) {
+  text = trim_ascii(std::move(text));
+  if (!text.empty() && text.front() == '+')
+    text.erase(text.begin());
+  if (text.empty() || text.front() == '-')
+    return false;
+  const std::size_t dot = text.find('.');
+  if (dot == std::string::npos || text.find('.', dot + 1U) != std::string::npos)
+    return false;
+  const std::string integer = text.substr(0, dot);
+  const std::string cents = text.substr(dot + 1U);
+  if (integer.empty() || cents.size() != 2)
+    return false;
+  if (!std::all_of(integer.begin(), integer.end(),
+                   [](unsigned char ch) { return std::isdigit(ch) != 0; }) ||
+      !std::all_of(cents.begin(), cents.end(),
+                   [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
+    return false;
+  }
+  try {
+    return std::stoll(integer) < 1000000LL;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+struct ParsedComputedDispatchValue {
+  double value = 0.0;
+  bool reverse_packed_decimal_cents = false;
+};
+
+std::optional<ParsedComputedDispatchValue> parse_computed_dispatch_match_value(
+    const std::string& text) {
   try {
     std::size_t pos = 0;
     const double value = std::stod(text, &pos);
@@ -40782,8 +40839,10 @@ std::optional<double> parse_computed_dispatch_match_value(const std::string& tex
     if (!std::isfinite(value))
       return std::nullopt;
     if (std::fabs(value - std::round(value)) <= 1e-9)
-      return std::round(value);
-    return value;
+      return ParsedComputedDispatchValue{.value = std::round(value)};
+    if (!looks_like_reverse_packed_decimal_cents(text))
+      return std::nullopt;
+    return ParsedComputedDispatchValue{.value = value, .reverse_packed_decimal_cents = true};
   } catch (const std::exception&) {
     return std::nullopt;
   }
@@ -40798,8 +40857,9 @@ void collect_computed_dispatch_matches_stmt(const V2Statement& statement,
   // values are eligible: a computed jump has no fall-through default, so an
   // unmatched selector value would jump to an unintended address. The
   // equivalence gate is the final guard, but requiring no otherwise keeps the
-  // candidate honest up front. Non-integer values are allowed so reverse-packed
-  // selectors (payload.target, reached by e.g. scale=100) can participate.
+  // candidate honest up front. Non-integer values are admitted only for the
+  // reverse-packed decimal-cents shape (payload.target, reached by scale=100);
+  // arbitrary fractional matches would explode the post-layout formula search.
   if (statement.kind == "v2_match" && statement.expr.has_value() &&
       statement.otherwise == nullptr && statement.cases.size() >= 3) {
     ComputedDispatchMatch info;
@@ -40814,12 +40874,15 @@ void collect_computed_dispatch_matches_stmt(const V2Statement& statement,
         break;
       }
       for (const std::string& value : match_case.values) {
-        const std::optional<double> numeric = parse_computed_dispatch_match_value(value);
-        if (!numeric.has_value() || !seen.insert(*numeric).second) {
+        const std::optional<ParsedComputedDispatchValue> numeric =
+            parse_computed_dispatch_match_value(value);
+        if (!numeric.has_value() || !seen.insert(numeric->value).second) {
           ok = false;
           break;
         }
-        info.value_case.emplace_back(*numeric, static_cast<int>(case_index));
+        info.reverse_packed_decimal_cents =
+            info.reverse_packed_decimal_cents || numeric->reverse_packed_decimal_cents;
+        info.value_case.emplace_back(numeric->value, static_cast<int>(case_index));
       }
     }
     if (ok && !info.value_case.empty())
@@ -40929,6 +40992,10 @@ bool compile_result_cache_enabled() {
 
 std::string compile_result_cache_key(const std::string& source, const CompileOptions& options) {
   std::string key = compile_once_cache_key(options);
+  key += ";fast_candidate_search=";
+  key += options.fast_candidate_search ? "1" : "0";
+  key += ";fast_candidate_threshold_ms=";
+  key += std::to_string(options.fast_candidate_threshold_ms);
   key.push_back('\0');
   key += source;
   return key;
@@ -41090,11 +41157,23 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
 
   std::vector<CandidateSpec> candidates;
   std::set<std::string> candidate_effective_keys{implemented_candidate_key(options)};
+  auto fast_candidate_allowed = [&](std::string_view name) {
+    return !options.fast_candidate_search ||
+           estimated_candidate_search_cost_ms(name) <= options.fast_candidate_threshold_ms;
+  };
   auto add_configured_candidate = [&](CompileOptions candidate_options, std::string name,
                                       std::string detail,
                                       CandidateGate gate = CandidateGate::Always) {
     if (gate == CandidateGate::SizeRescue && !needs_size_rescue)
       return;
+    if (!fast_candidate_allowed(name)) {
+      if (trace_candidates) {
+        std::cerr << "[candidate-trace] skip-fast " << name << " estimated_ms="
+                  << estimated_candidate_search_cost_ms(name)
+                  << " threshold_ms=" << options.fast_candidate_threshold_ms << "\n";
+      }
+      return;
+    }
     const std::string effective_key = implemented_candidate_key(candidate_options);
     if (!candidate_effective_keys.insert(effective_key).second)
       return;
@@ -41253,6 +41332,66 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   auto selected_still_overflows_now = [&]() {
     return best.implemented && best.steps.size() > kOfficialProgramLimit;
   };
+  auto fast_search_target_met = [&]() {
+    return best.implemented && best.steps.size() <= rescue_threshold;
+  };
+  auto finish_fast_search = [&](std::string detail) {
+    best.optimizations.push_back(OptimizationReport{
+        .name = "fast-candidate-search",
+        .detail = std::move(detail),
+    });
+    write_compile_result_cache(source, options, best);
+  };
+
+  if (options.fast_candidate_search && fast_search_target_met()) {
+    finish_fast_search("Stopped before candidate search because the base program already fits " +
+                       std::to_string(rescue_threshold) + " cells.");
+    return best;
+  }
+
+  if (options.fast_candidate_search && needs_size_rescue) {
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.dual_use_constant_indirect_flow = true;
+        },
+        "dual-use-constant-indirect-flow",
+        "Reused existing setup constant preloads as indirect-flow selectors when store-target "
+        "proofs keep those registers stable",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.dual_use_constant_indirect_flow = true;
+          candidate_options.tail_branch_inversion = true;
+        },
+        "dual-use-constant-tail-branch-layout",
+        "Combined dual-use constant indirect-flow selectors with tail-branch inversion after full "
+        "layout",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.conditional_branch_trampoline = true;
+        },
+        "conditional-branch-trampoline-layout",
+        "Retargeted repeated condition branches through later identical conditionals",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.dual_use_constant_indirect_flow = true;
+          candidate_options.conditional_branch_trampoline = true;
+        },
+        "dual-use-constant-conditional-trampoline-layout",
+        "Combined dual-use constant indirect-flow selectors with conditional branch trampolines "
+        "after full layout",
+        CandidateGate::SizeRescue);
+    evaluate_queued_candidates();
+    if (fast_search_target_met()) {
+      finish_fast_search("Stopped after fast rescue candidates reached " +
+                         std::to_string(best.steps.size()) + " cells within the " +
+                         std::to_string(rescue_threshold) + "-cell target; candidate threshold " +
+                         std::to_string(options.fast_candidate_threshold_ms) + " ms.");
+      return best;
+    }
+  }
 
   add_candidate(
       [](CompileOptions& candidate_options) {
@@ -42654,7 +42793,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     dead_source_tail_base.tail_branch_inversion = true;
     add_reclaim_candidate(dead_source_tail_base);
   }
-  if (needs_size_rescue) {
+  if (needs_size_rescue && fast_candidate_allowed("fractional-constant-selector")) {
     CompileOptions setup_only_base = options;
     setup_only_base.setup_only_counted_loop_init = true;
     add_reclaim_candidate(setup_only_base);
@@ -42760,7 +42899,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   // committed byte-exact listings of under-budget parity examples. Genuinely
   // over-budget programs (e.g. tic-tac-toe-4x4) reach them and can shrink
   // further; everything that already fits is untouched.
-  if (needs_size_rescue && selected_still_overflows_now() && !fractional_bases.empty()) {
+  if (needs_size_rescue && selected_still_overflows_now() && !fractional_bases.empty() &&
+      fast_candidate_allowed("fractional-constant-selector")) {
     for (const CompileOptions& base_options : fractional_bases) {
       add_fractional_selector_candidates_for_base(
           base_options, tried_fractional_selectors, "fractional-constant-selector",
@@ -42778,7 +42918,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   // the actual post-layout case-body entry addresses via a small fixpoint (the
   // dispatch prefix size depends on the formula, which shifts the entries), then
   // queued as a behavioral-equivalence-gated SizeRescue candidate.
-  if (needs_size_rescue && selector_probe_program.has_value()) {
+  if (needs_size_rescue && selector_probe_program.has_value() &&
+      fast_candidate_allowed("computed-dispatch")) {
     const std::vector<ComputedDispatchMatch> dispatch_matches =
         collect_computed_dispatch_matches(*selector_probe_program);
     const std::optional<std::string> jump_register = free_stable_dispatch_register(best);
@@ -42797,6 +42938,13 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         solver_options.angle_fixed = angle_mode.has_value();
         if (angle_mode.has_value())
           solver_options.angle_mode = *angle_mode;
+        if (match.reverse_packed_decimal_cents) {
+          solver_options.allow_affine = false;
+          solver_options.scale_min = 100.0;
+          solver_options.scale_max = 100.0;
+          solver_options.scale_step = 1.0;
+          solver_options.offset_abs_max = 0.0;
+        }
         bool converged = false;
         for (int iteration = 0; iteration < 6 && !converged; ++iteration) {
           CompileOptions probe_options = options;
@@ -42844,7 +42992,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     }
   }
 
-  if (needs_size_rescue && selected_still_overflows_now()) {
+  if (needs_size_rescue && selected_still_overflows_now() &&
+      fast_candidate_allowed("demote-constant-indirect-flow")) {
     CompileOptions early_demote_base = options;
     early_demote_base.shared_bit_mask_helper_calls = true;
     early_demote_base.hoist_shared_helpers = true;
@@ -42971,7 +43120,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     }
   }
 
-  if (needs_size_rescue && selected_still_overflows) {
+  if (needs_size_rescue && selected_still_overflows &&
+      fast_candidate_allowed("demote-constant-indirect-flow")) {
     std::vector<CompileOptions> demote_bases;
     std::set<std::string> demote_base_keys;
     auto add_demote_base = [&](const std::function<void(CompileOptions&)>& configure) {
