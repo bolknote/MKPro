@@ -38,6 +38,7 @@ add_library(mkpro_core STATIC
   src/core/interprocedural_value_propagation.cpp
   src/core/ir.cpp
   src/core/machine_profile.cpp
+  src/core/mk61_trig.cpp
   src/core/opcodes.cpp
   src/core/parser.cpp
   src/core/passes/arithmetic_if.cpp
@@ -180,6 +181,7 @@ add_executable(mkpro_tests
   tests/machine_profile_test.cpp
   tests/match_blocks_test.cpp
   tests/maxmin_zero_lint_test.cpp
+  tests/mk61_trig_test.cpp
   tests/opcodes_test.cpp
   tests/oracle_test.cpp
   tests/packed_counter_stripes_test.cpp
@@ -239,6 +241,21 @@ add_executable(mkpro_tests
   tests/pre_shift_stack_lift_pass_test.cpp
 )
 target_link_libraries(mkpro_tests PRIVATE mkpro_core)
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+  add_custom_target(mkpro_validate_trig
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/validate_mk61_trig.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+    COMMENT "Validating MK-61 trig runtime against ROM-derived microcode"
+  )
+  add_test(
+    NAME mkpro.validate_trig
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/validate_mk61_trig.py
+  )
+  set_tests_properties(mkpro.validate_trig PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+  )
+endif()
 set(MKPRO_NATIVE_TEST_NAMES
   address_formula_solver_synthesizes_dispatch
   computed_dispatch_targets_survive_dead_code_elimination
@@ -313,6 +330,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   machine_profile_matches_typescript_contract
   match_blocks_match_typescript_contract
   maxmin_zero_lint_matches_typescript_contract
+  mk61_trig_matches_rom_derived_contract
   opcode_catalog_matches_typescript_contract
   oracle_index_loads_committed_artifacts
   packed_counter_stripes_match_typescript_contract
