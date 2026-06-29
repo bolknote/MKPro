@@ -23,6 +23,8 @@ void format_primitives_match_typescript_contract() {
 
   require(format_hex_steps(steps) == "00: 50 41 50 61 10 50 51 00\n08: 21",
           "hex formatter should use 8 columns and formal addresses");
+  require(format_mk61s_steps(steps) == "0000 504150611050510021",
+          "mk61s formatter should emit compact hout-compatible rows");
   require(format_listing_steps({steps.begin(), steps.begin() + 3}) ==
               " Step | Code | Command                 | Comment\n"
               "------+------+-------------------------+----------------\n"
@@ -32,6 +34,42 @@ void format_primitives_match_typescript_contract() {
           "listing formatter should use TS table layout");
   require(format_program_tokens({steps.begin(), steps.begin() + 3}) == "50\n41\n50",
           "program token formatter should emit one hex byte per line");
+
+  std::vector<ResolvedStep> mk61s_steps;
+  for (int index = 0; index < 25; ++index)
+    mk61s_steps.push_back({.address = index, .hex = index == 24 ? "18" : "50", .mnemonic = "noop"});
+  require(format_mk61s_steps(mk61s_steps) ==
+              "0000 505050505050505050505050505050505050505050505050\n"
+              "0024 18",
+          "mk61s formatter should wrap after 24 bytes and keep a short tail");
+
+  CompileResult mk61s_result;
+  mk61s_result.steps = {steps.begin(), steps.begin() + 3};
+  mk61s_result.setup_program = SetupProgramReport{
+      .steps = {steps.begin() + 3, steps.begin() + 6},
+      .reason = "test setup",
+      .optimizations = {},
+  };
+  require(format_mk61s_result(mk61s_result) ==
+              "hin 0000 611050\n"
+              "run\n"
+              "hin 0000 504150",
+          "mk61s result formatter should emit setup load, setup run, then program load");
+  mk61s_result.expected_mode = "grd";
+  require(format_mk61s_result(mk61s_result) ==
+              "kbd 9\n"
+              "hin 0000 611050\n"
+              "run\n"
+              "hin 0000 504150",
+          "mk61s result formatter should set expected angle mode before hin rows");
+
+  CompileResult mk61s_no_setup_result;
+  mk61s_no_setup_result.expected_mode = "rad";
+  mk61s_no_setup_result.steps = {steps.begin(), steps.begin() + 3};
+  require(format_mk61s_result(mk61s_no_setup_result) ==
+              "kbd E\n"
+              "0000 504150",
+          "mk61s result formatter should set expected angle mode before program rows");
 
   const std::vector<ResolvedStep> dot_steps = {
       {.address = 0, .opcode = 0x5e, .hex = "5E", .mnemonic = "F x=0", .comment = "if zero"},

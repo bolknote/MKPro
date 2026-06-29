@@ -146,6 +146,7 @@ enum class DeliveryMode {
 enum class OutputFormat {
   Listing,
   Hex,
+  Mk61s,
   Dot,
   Json,
   Keys,
@@ -265,6 +266,7 @@ struct CompileResult {
   std::vector<EmulatorFactReport> emulator_facts;
   std::vector<CandidateReport> rejected_candidates;
   std::optional<SetupProgramReport> setup_program;
+  std::optional<std::string> expected_mode;
   std::vector<RegisterShare> coalesce_shares;
   std::string hex;
   std::string listing;

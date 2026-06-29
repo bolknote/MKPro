@@ -39296,17 +39296,21 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   std::optional<std::string> expected_mode;
   if (ast.v2->expected_mode.has_value())
     expected_mode = ast.v2->expected_mode->mode;
-  if ((expected_mode.has_value() || !setup_program_preloads.empty()) &&
-      (expected_mode.has_value() ||
+  result.expected_mode = expected_mode;
+  const std::optional<std::string> setup_program_expected_mode =
+      options.output == OutputFormat::Mk61s ? std::nullopt : expected_mode;
+  if ((setup_program_expected_mode.has_value() || !setup_program_preloads.empty()) &&
+      (setup_program_expected_mode.has_value() ||
        needs_generated_setup_program(context, setup_program_preloads))) {
     trace_stage("setup-program");
     result.setup_program = core::emit::lowering::compile_setup_program_with_preloads(
-        context.boards, context.registers, setup_program_preloads, options, expected_mode);
+        context.boards, context.registers, setup_program_preloads, options,
+        setup_program_expected_mode);
     result.optimizations.push_back(OptimizationReport{
         .name = "generated-setup-program",
-        .detail = expected_mode.has_value() && setup_program_preloads.empty()
+        .detail = setup_program_expected_mode.has_value() && setup_program_preloads.empty()
                       ? "Generated optimized setup program for expected_mode(\"" +
-                            *expected_mode + "\")."
+                            *setup_program_expected_mode + "\")."
                       : "Generated optimized setup program for compiler-owned preloads.",
     });
     for (const OptimizationReport& optimization : result.setup_program->optimizations) {

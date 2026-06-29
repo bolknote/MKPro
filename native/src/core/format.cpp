@@ -21,6 +21,7 @@ namespace mkpro {
 namespace {
 
 constexpr int kHexColumns = 8;
+constexpr int kMk61sColumns = 24;
 constexpr int kListingInlineCodeTokens = 4;
 
 struct ListingRow {
@@ -57,6 +58,37 @@ std::string upper_ascii(std::string value) {
 
 bool regex_matches(std::string_view value, const std::regex& pattern) {
   return std::regex_match(value.data(), value.data() + value.size(), pattern);
+}
+
+std::string format_mk61s_address(std::size_t address) {
+  std::ostringstream out;
+  out << std::setw(4) << std::setfill('0') << address;
+  return out.str();
+}
+
+std::string format_mk61s_steps_with_prefix(const std::vector<ResolvedStep>& steps,
+                                           const std::string& prefix) {
+  std::ostringstream out;
+  for (std::size_t index = 0; index < steps.size(); index += kMk61sColumns) {
+    if (index > 0)
+      out << '\n';
+    out << prefix << format_mk61s_address(index) << ' ';
+    const std::size_t end =
+        std::min(index + static_cast<std::size_t>(kMk61sColumns), steps.size());
+    for (std::size_t step = index; step < end; ++step)
+      out << steps.at(step).hex;
+  }
+  return out.str();
+}
+
+std::optional<std::string> mk61s_angle_mode_key(std::string_view mode) {
+  if (mode == "rad")
+    return "E";
+  if (mode == "grd")
+    return "9";
+  if (mode == "deg")
+    return "4";
+  return std::nullopt;
 }
 
 bool is_scientific_decimal(std::string_view value) {
@@ -962,6 +994,42 @@ std::string format_hex_steps(const std::vector<ResolvedStep>& steps) {
     for (std::size_t step = index; step < end; ++step)
       out << ' ' << steps.at(step).hex;
   }
+  return out.str();
+}
+
+
+std::string format_mk61s_steps(const std::vector<ResolvedStep>& steps) {
+  return format_mk61s_steps_with_prefix(steps, "");
+}
+
+std::string format_mk61s_result(const CompileResult& result) {
+  std::ostringstream out;
+  bool has_output = false;
+  if (result.expected_mode.has_value()) {
+    const std::optional<std::string> key = mk61s_angle_mode_key(*result.expected_mode);
+    if (key.has_value()) {
+      out << "kbd " << *key;
+      has_output = true;
+    }
+  }
+
+  const auto append_line_break = [&out, &has_output] {
+    if (has_output)
+      out << '\n';
+    has_output = true;
+  };
+
+  if (!result.setup_program.has_value()) {
+    append_line_break();
+    out << format_mk61s_steps(result.steps);
+    return out.str();
+  }
+
+  append_line_break();
+  out << format_mk61s_steps_with_prefix(result.setup_program->steps, "hin ");
+  out << "\nrun";
+  if (!result.steps.empty())
+    out << '\n' << format_mk61s_steps_with_prefix(result.steps, "hin ");
   return out.str();
 }
 

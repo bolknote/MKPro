@@ -62,6 +62,26 @@ void setup_program_matches_typescript_contract() {
                         }),
             "expected mode setup check should emit domain guard for " + mode);
   }
+
+  const SetupProgramReport guarded_preload_report =
+      core::emit::lowering::compile_setup_program_with_preloads(
+          {}, {}, {PreloadReport{.register_name = "1", .value = "100"}}, options, "rad");
+  const auto guard_it = std::find_if(guarded_preload_report.steps.begin(),
+                                    guarded_preload_report.steps.end(),
+                                    [](const ResolvedStep& step) {
+                                      return step.comment == "expected_mode(\"rad\") domain guard";
+                                    });
+  const auto setup_it = std::find_if(guarded_preload_report.steps.begin(),
+                                    guarded_preload_report.steps.end(),
+                                    [](const ResolvedStep& step) {
+                                      return step.comment == "setup R1";
+                                    });
+  require(guard_it != guarded_preload_report.steps.end() &&
+              setup_it != guarded_preload_report.steps.end() && guard_it < setup_it,
+          "expected mode setup guard should run before state preload setup");
+  require(has_setup_optimization_detail(guarded_preload_report, "expected-mode-setup-check",
+                                        "guard with probe 100"),
+          "first expected mode setup guard should use its own probe instead of a future preload");
 }
 
 } // namespace mkpro::tests

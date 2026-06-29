@@ -8253,8 +8253,8 @@ program ExpectedModeSetupGuard {
                       }),
           "expected_mode setup guard should emit F ln");
 
-  const CompileResult expected_mode_reuse = compile_source(R"mkpro(
-program ExpectedModeReuse {
+  const CompileResult expected_mode_first = compile_source(R"mkpro(
+program ExpectedModeFirst {
   state {
     expected_mode("rad")
     probe: packed = 100
@@ -8273,22 +8273,30 @@ program ExpectedModeReuse {
 }
 )mkpro",
                                                            setup_synthesis_options);
-  require(expected_mode_reuse.setup_program.has_value(),
-          "expected_mode preload reuse should expose setup program");
-  require(std::any_of(expected_mode_reuse.setup_program->steps.begin(),
-                      expected_mode_reuse.setup_program->steps.end(),
-                      [](const ResolvedStep& step) {
-                        return step.mnemonic.starts_with("П->X") && step.comment.has_value() &&
-                               *step.comment == "expected_mode(\"rad\") probe";
-                      }),
-          "expected_mode setup guard should reuse a suitable existing preload");
-  require(std::any_of(expected_mode_reuse.setup_program->optimizations.begin(),
-                      expected_mode_reuse.setup_program->optimizations.end(),
+  require(expected_mode_first.setup_program.has_value(),
+          "expected_mode preload setup should expose setup program");
+  const auto guard_it = std::find_if(expected_mode_first.setup_program->steps.begin(),
+                                    expected_mode_first.setup_program->steps.end(),
+                                    [](const ResolvedStep& step) {
+                                      return step.comment == "expected_mode(\"rad\") domain guard";
+                                    });
+  const auto preload_it = std::find_if(expected_mode_first.setup_program->steps.begin(),
+                                      expected_mode_first.setup_program->steps.end(),
+                                      [](const ResolvedStep& step) {
+                                        return step.comment.has_value() &&
+                                               step.comment->starts_with("setup R");
+                                      });
+  require(guard_it != expected_mode_first.setup_program->steps.end() &&
+              preload_it != expected_mode_first.setup_program->steps.end() &&
+              guard_it < preload_it,
+          "expected_mode setup guard should run before state preloads");
+  require(std::any_of(expected_mode_first.setup_program->optimizations.begin(),
+                      expected_mode_first.setup_program->optimizations.end(),
                       [](const OptimizationReport& item) {
                         return item.name == "expected-mode-setup-check" &&
-                               item.detail.find("reusing R") != std::string::npos;
+                               item.detail.find("guard with probe 100") != std::string::npos;
                       }),
-          "expected_mode setup guard should report preload reuse");
+          "expected_mode setup guard should report its own probe");
 
   // compiler.test.ts "inlines tiny multi-use rules when that beats a subroutine"
   const CompileResult tiny_multi_use = compile_source(R"mkpro(

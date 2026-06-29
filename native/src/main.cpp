@@ -15,7 +15,7 @@ namespace {
 
 void print_usage(std::ostream& out) {
   out << "Usage:\n"
-      << "  mkpro-native compile <file.mkpro> [--out listing|hex|dot|json|keys|all]\n"
+      << "  mkpro-native compile <file.mkpro> [--out listing|hex|mk61s|dot|json|keys|all]\n"
       << "                               [--delivery manual|loader|hex] [--budget N]\n"
       << "                               [--analysis] [--strict]\n"
       << "                               [--fast] [--fast-threshold-ms N]\n"
@@ -31,6 +31,8 @@ std::optional<mkpro::OutputFormat> parse_output_format(const std::string& value)
     return mkpro::OutputFormat::Listing;
   if (value == "hex")
     return mkpro::OutputFormat::Hex;
+  if (value == "mk61s")
+    return mkpro::OutputFormat::Mk61s;
   if (value == "dot")
     return mkpro::OutputFormat::Dot;
   if (value == "json")
@@ -344,6 +346,8 @@ void print_json(const mkpro::CompileResult& result) {
 void print_result(const mkpro::CompileResult& result, mkpro::OutputFormat output) {
   if (output == mkpro::OutputFormat::Hex) {
     std::cout << result.hex << "\n";
+  } else if (output == mkpro::OutputFormat::Mk61s) {
+    std::cout << mkpro::format_mk61s_result(result) << "\n";
   } else if (output == mkpro::OutputFormat::Dot) {
     std::cout << mkpro::format_dot_result(result);
   } else if (output == mkpro::OutputFormat::Json) {

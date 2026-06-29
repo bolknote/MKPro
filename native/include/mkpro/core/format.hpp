@@ -9,6 +9,8 @@
 namespace mkpro {
 
 std::string format_hex_steps(const std::vector<ResolvedStep>& steps);
+std::string format_mk61s_steps(const std::vector<ResolvedStep>& steps);
+std::string format_mk61s_result(const CompileResult& result);
 std::string format_listing_steps(const std::vector<ResolvedStep>& steps);
 std::string format_dot_steps(const std::vector<ResolvedStep>& steps);
 std::string format_dot_steps(const std::vector<ResolvedStep>& steps,

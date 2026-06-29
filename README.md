@@ -32,7 +32,7 @@ build/release/native/mkpro-native explain examples/tiny-game.mkpro
 The CLI shape is:
 
 ```sh
-mkpro-native compile file.mkpro --out listing|hex|dot|json|keys|all
+mkpro-native compile file.mkpro --out listing|hex|mk61s|dot|json|keys|all
 mkpro-native explain file.mkpro
 ```
 
@@ -40,6 +40,12 @@ Flags:
 
 - `--delivery manual|loader|hex` (default `hex`) controls opcode delivery
   metadata for listings.
+- `--out mk61s` prints MK-61s mini terminal hex rows. Without generated setup,
+  rows are `hout`-compatible `0000 HEX...` chunks of up to 24 commands. With
+  generated setup, output is a pasteable terminal script: optional angle-mode
+  `kbd` for `expected_mode(...)`, setup `hin` rows, `run`, then main-program
+  `hin` rows. In this format, generated `expected_mode(...)` guards are replaced
+  by the terminal `kbd` command.
 - `--out keys` prints a bare press/input stream, including generated setup when
   the program needs one.
 - `--out dot` prints a Graphviz DOT execution graph for the compiled MK-61
