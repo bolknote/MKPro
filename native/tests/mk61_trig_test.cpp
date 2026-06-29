@@ -1,4 +1,4 @@
-#include "mkpro/core/mk61_trig_generated.hpp"
+#include "mkpro/core/mk61_trig.hpp"
 
 #include "test_support.hpp"
 
@@ -17,13 +17,13 @@ void expect_display(AngleMode mode,
                     std::string_view expected) {
   const std::string actual = core::mk61_trig::calculate_display(mode, function, value);
   require(actual == expected,
-          "generated MK-61 trig result mismatch for value " + std::string(value) +
-              ": got " + actual + ", expected " + std::string(expected));
+          "MK-61 trig result mismatch for value " + std::string(value) + ": got " + actual +
+              ", expected " + std::string(expected));
 }
 
 }  // namespace
 
-void mk61_trig_generated_matches_rom_derived_contract() {
+void mk61_trig_matches_rom_derived_contract() {
   expect_display(AngleMode::Rad, Function::Sin, "0.25", "2,4740395-01");
   expect_display(AngleMode::Rad, Function::Sin, "-0.25", "-2,4740395-01");
   expect_display(AngleMode::Rad, Function::Tg, "-0.25", "-2,5534191-01");

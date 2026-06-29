@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Validate the generated MK-61 trig runtime against the ROM/microcode probe.
+"""Validate the compact MK-61 trig runtime against the ROM/microcode probe.
 
-This intentionally compares display strings, because the MK-61 value contract is the
-calculator-visible BCD result rather than host floating-point equality.
+The comparison is display-string based. For this API the calculator-visible
+BCD display result is the contract; host floating-point equality is not.
 """
 
 from __future__ import annotations
 
 import argparse
+import platform
 import subprocess
 import sys
 import tempfile
@@ -19,9 +20,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 from mk61_trig_corpus import FUNCTIONS, MODES, stress_values, values as corpus_values
 
 PROBE_SRC = ROOT / "tools" / "mk61_trig_microcode_probe.cpp"
-GENERATOR = ROOT / "tools" / "generate_mk61_trig_generated.py"
-NATIVE_SRC = ROOT / "native" / "src" / "core" / "mk61_trig_generated.cpp"
-NATIVE_HEADER = ROOT / "native" / "include" / "mkpro" / "core" / "mk61_trig_generated.hpp"
+NATIVE_SRC = ROOT / "native" / "src" / "core" / "mk61_trig.cpp"
+NATIVE_HEADER = ROOT / "native" / "include" / "mkpro" / "core" / "mk61_trig.hpp"
 
 VALUES = corpus_values()
 
@@ -36,17 +36,12 @@ FORBIDDEN_RUNTIME_TOKENS = (
     "native/src/emulator",
     "mk61.cpp",
     "rom.cpp",
-)
-
-EXPECTED_COMMAND_SET_SUMMARY = (
-    "mk61-trig-command-set "
-    "ik1302:addresses=83,commands=80 "
-    "ik1303:addresses=136,commands=132 "
-    "ik1306:addresses=9,commands=7"
+    "execute_order_list",
+    "generated_address_dispatch",
 )
 
 CLI_SOURCE = r'''
-#include "mkpro/core/mk61_trig_generated.hpp"
+#include "mkpro/core/mk61_trig.hpp"
 
 #include <iostream>
 #include <string>
@@ -86,8 +81,9 @@ def compile_artifacts(cxx: str, build_dir: Path) -> tuple[Path, Path]:
     cli_src = build_dir / "mk61_native_trig_cli.cpp"
     cli_src.write_text(CLI_SOURCE)
 
+    math_link = ["-lm"] if platform.system() != "Darwin" else []
     commands = (
-        [cxx, "-std=c++20", "-O2", str(PROBE_SRC), "-o", str(probe_bin)],
+        [cxx, "-std=c++20", "-O2", str(PROBE_SRC), "-o", str(probe_bin), *math_link],
         [
             cxx,
             "-std=c++23",
@@ -98,6 +94,7 @@ def compile_artifacts(cxx: str, build_dir: Path) -> tuple[Path, Path]:
             str(cli_src),
             "-o",
             str(native_cli),
+            *math_link,
         ],
     )
     for command in commands:
@@ -110,48 +107,30 @@ def compile_artifacts(cxx: str, build_dir: Path) -> tuple[Path, Path]:
 
 
 def validate_no_runtime_rom_tables() -> None:
-    source = NATIVE_SRC.read_text() + "\n" + NATIVE_HEADER.read_text()
+    source = "\n".join(
+        (
+            NATIVE_SRC.read_text(),
+            NATIVE_HEADER.read_text(),
+        )
+    )
     found = [token for token in FORBIDDEN_RUNTIME_TOKENS if token in source]
     if found:
-        raise SystemExit("forbidden runtime ROM/emulator tokens: " + ", ".join(found))
+        raise SystemExit("forbidden runtime ROM/generated-dispatch tokens: " + ", ".join(found))
 
 
-def validate_dump_generator(probe_bin: Path) -> None:
-    result = run([str(probe_bin), "--dump-chip-specialization", "IK1303", "422e9a"])
-    if result.returncode != 0:
-        sys.stderr.write(result.stderr)
-        raise SystemExit(result.returncode)
-    required = (
-        "if (branch_l) s1 |= key_y;",
-        "if (((kCommand >> 16) & 0x3F) > 0)",
-        "s1 = key_y;",
-        "t = 1;",
-    )
-    missing = [text for text in required if text not in result.stdout]
-    if missing:
-        raise SystemExit("generator dump misses ROM-derived key semantics: " + ", ".join(missing))
-
-
-def validate_source_is_reproducible(probe_bin: Path) -> None:
-    result = run([sys.executable, str(GENERATOR), "--check", "--probe-bin", str(probe_bin)])
-    if result.returncode != 0:
-        sys.stderr.write(result.stdout)
-        sys.stderr.write(result.stderr)
-        raise SystemExit(result.returncode)
-    sys.stdout.write(result.stdout)
-    if EXPECTED_COMMAND_SET_SUMMARY not in result.stdout:
-        raise SystemExit(
-            "generated MK-61 trig command set changed; inspect whether the "
-            "ROM-derived coverage expanded or the runtime now contains "
-            "unnecessary specializations"
-        )
-
-
-def validate_values(probe_bin: Path, native_cli: Path, value_corpus: tuple[str, ...]) -> int:
+def validate_values(
+    probe_bin: Path,
+    native_cli: Path,
+    value_corpus: tuple[str, ...],
+    max_failures: int,
+    modes: tuple[str, ...],
+    functions: tuple[str, ...],
+) -> int:
     checked = 0
     failures: list[str] = []
-    for mode in MODES:
-        for fn in FUNCTIONS:
+    stop_after_failures = max_failures > 0
+    for mode in modes:
+        for fn in functions:
             for value in value_corpus:
                 probe = run([str(probe_bin), f"--{mode}", f"--{fn}", value])
                 native = run([str(native_cli), mode, fn, value])
@@ -166,11 +145,11 @@ def validate_values(probe_bin: Path, native_cli: Path, value_corpus: tuple[str, 
                         f"probe rc={probe.returncode} out={probe.stdout.strip()!r} err={probe.stderr.strip()!r}; "
                         f"native rc={native.returncode} out={native.stdout.strip()!r} err={native.stderr.strip()!r}"
                     )
-                    if len(failures) >= 40:
+                    if stop_after_failures and len(failures) >= max_failures:
                         break
-            if len(failures) >= 40:
+            if stop_after_failures and len(failures) >= max_failures:
                 break
-        if len(failures) >= 40:
+        if stop_after_failures and len(failures) >= max_failures:
             break
 
     if failures:
@@ -183,18 +162,46 @@ def validate_values(probe_bin: Path, native_cli: Path, value_corpus: tuple[str, 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cxx", default="c++", help="C++ compiler command")
-    parser.add_argument("--stress", action="store_true",
-                        help="also run deterministic stress values not used for generation")
+    parser.add_argument(
+        "--stress",
+        action="store_true",
+        help="also run deterministic stress values not used by the base gate",
+    )
+    parser.add_argument(
+        "--max-fail",
+        type=int,
+        default=40,
+        help="maximum failures to print before stopping; 0 means no limit",
+    )
+    parser.add_argument(
+        "--mode",
+        action="append",
+        choices=MODES,
+        help="limit validation to one angle mode; may be passed more than once",
+    )
+    parser.add_argument(
+        "--function",
+        action="append",
+        choices=FUNCTIONS,
+        help="limit validation to one trig function; may be passed more than once",
+    )
     args = parser.parse_args()
+    if args.max_fail < 0:
+        parser.error("--max-fail must be non-negative")
 
     validate_no_runtime_rom_tables()
     with tempfile.TemporaryDirectory(prefix="mk61-trig-validate-") as tmp:
         probe_bin, native_cli = compile_artifacts(args.cxx, Path(tmp))
-        validate_dump_generator(probe_bin)
-        validate_source_is_reproducible(probe_bin)
         value_corpus = VALUES + stress_values() if args.stress else VALUES
-        checked = validate_values(probe_bin, native_cli, value_corpus)
-    print(f"mk61-trig-generated-ok checked={checked}")
+        checked = validate_values(
+            probe_bin,
+            native_cli,
+            value_corpus,
+            args.max_fail,
+            tuple(args.mode) if args.mode else MODES,
+            tuple(args.function) if args.function else FUNCTIONS,
+        )
+    print(f"mk61-trig-ok checked={checked}")
     return 0
 
 

@@ -1,4 +1,4 @@
-"""Deterministic value corpus for ROM-derived MK-61 trig generation/validation."""
+"""Deterministic value corpus for ROM-derived MK-61 trig validation."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ MODES = ("rad", "deg", "grad")
 FUNCTIONS = ("sin", "cos", "tg")
 
 BASE_VALUES = (
-    "-360", "-270", "-180", "-100", "-90", "-60", "-45", "-30", "-10",
+    "-360", "-270", "-180", "-120", "-100", "-90", "-60", "-45", "-30", "-10",
     "-1", "-0.5", "-0.25", "-0.1", "0", "0.0001", "0.001", "0.01",
     "0.1", "0.25", "0.5", "1", "2", "3", "3.1415926", "6.2831853",
     "10", "30", "45", "50", "60", "89", "90", "99", "100", "120",
