@@ -20,6 +20,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(mkpro_core STATIC
+  src/core/address_formula_solver.cpp
   src/core/ast_json.cpp
   src/core/compiler.cpp
   src/core/constant_folder.cpp
@@ -107,6 +108,7 @@ set_target_properties(mkpro_cli PROPERTIES OUTPUT_NAME mkpro-native)
 target_link_libraries(mkpro_cli PRIVATE mkpro_core)
 
 add_executable(mkpro_tests
+  tests/address_formula_solver_test.cpp
   tests/arithmetic_if_pass_test.cpp
   tests/bit_mask_quotient_reuse_test.cpp
   tests/board_width_macros_test.cpp
@@ -237,6 +239,7 @@ add_executable(mkpro_tests
 )
 target_link_libraries(mkpro_tests PRIVATE mkpro_core)
 set(MKPRO_NATIVE_TEST_NAMES
+  address_formula_solver_synthesizes_dispatch
   arithmetic_if_matches_typescript_contract
   bit_mask_quotient_reuse_matches_typescript_contract
   board_width_macros_matches_typescript_contract

@@ -8,6 +8,7 @@
 
 namespace mkpro::tests {
 
+void address_formula_solver_synthesizes_dispatch();
 void arithmetic_if_matches_typescript_contract();
 void bit_mask_quotient_reuse_matches_typescript_contract();
 void board_width_macros_matches_typescript_contract();
@@ -152,6 +153,8 @@ struct TestCase {
 
 int main(int argc, char** argv) {
   const std::vector<TestCase> tests = {
+      {"address_formula_solver_synthesizes_dispatch",
+       mkpro::tests::address_formula_solver_synthesizes_dispatch},
       {"arithmetic_if_matches_typescript_contract",
        mkpro::tests::arithmetic_if_matches_typescript_contract},
       {"bit_mask_quotient_reuse_matches_typescript_contract",
