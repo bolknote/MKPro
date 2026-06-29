@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the compact MK-61 trig runtime against the ROM/microcode probe.
+"""Validate the compact MK-61 trig runtime against the emulator.
 
 The comparison is display-string based. For this API the calculator-visible
 BCD display result is the contract; host floating-point equality is not.
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -19,7 +20,8 @@ sys.path.insert(0, str(ROOT / "tools"))
 
 from mk61_trig_corpus import FUNCTIONS, MODES, stress_values, values as corpus_values
 
-PROBE_SRC = ROOT / "tools" / "mk61_trig_microcode_probe.cpp"
+EMULATOR_SRC = ROOT / "native" / "src" / "emulator" / "mk61.cpp"
+ROM_SRC = ROOT / "native" / "src" / "emulator" / "rom.cpp"
 NATIVE_SRC = ROOT / "native" / "src" / "core" / "mk61_trig.cpp"
 NATIVE_HEADER = ROOT / "native" / "include" / "mkpro" / "core" / "mk61_trig.hpp"
 
@@ -39,6 +41,49 @@ FORBIDDEN_RUNTIME_TOKENS = (
     "execute_order_list",
     "generated_address_dispatch",
 )
+
+EMULATOR_CLI_SOURCE = r'''
+#include "mkpro/emulator/mk61.hpp"
+
+#include <iostream>
+#include <string>
+#include <vector>
+
+int opcode_for_function(const std::string& fn) {
+  if (fn == "sin") return 0x1c;
+  if (fn == "cos") return 0x1d;
+  if (fn == "tg") return 0x1e;
+  return -1;
+}
+
+int main(int argc, char** argv) {
+  if (argc != 4) return 2;
+
+  const std::string mode = argv[1];
+  const std::string fn = argv[2];
+  const int opcode = opcode_for_function(fn);
+  if (opcode < 0) return 3;
+
+  mkpro::emulator::MK61 calc(mkpro::emulator::MK61Options{.angle_mode = mode});
+  calc.set_register("x", argv[3]);
+  const mkpro::emulator::ProgramLoadResult loaded = calc.load_program({opcode, 0x50});
+  if (!loaded.diagnostics.empty()) {
+    for (const std::string& diagnostic : loaded.diagnostics) {
+      std::cerr << diagnostic << '\n';
+    }
+    return 4;
+  }
+
+  calc.press_sequence({"В/О", "С/П"});
+  const mkpro::emulator::RunResult run = calc.run_until_stable(1000, 5);
+  if (!run.stopped) {
+    std::cerr << "emulator did not stop: " << run.signature << '\n';
+    return 5;
+  }
+
+  std::cout << calc.display_text() << '\n';
+}
+'''
 
 CLI_SOURCE = r'''
 #include "mkpro/core/mk61_trig.hpp"
@@ -75,15 +120,37 @@ def run(cmd: list[str], *, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]
     return subprocess.run(cmd, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
+def canonical_display(text: str) -> str:
+    text = text.strip()
+    match = re.match(r"^(.+?)( +)([- ]\d{2})$", text)
+    if match:
+        return match.group(1) + match.group(3)
+    return text
+
+
 def compile_artifacts(cxx: str, build_dir: Path) -> tuple[Path, Path]:
-    probe_bin = build_dir / "mk61_trig_probe"
+    emulator_cli = build_dir / "mk61_emulator_trig_cli"
     native_cli = build_dir / "mk61_native_trig_cli"
+    emulator_cli_src = build_dir / "mk61_emulator_trig_cli.cpp"
     cli_src = build_dir / "mk61_native_trig_cli.cpp"
+    emulator_cli_src.write_text(EMULATOR_CLI_SOURCE)
     cli_src.write_text(CLI_SOURCE)
 
     math_link = ["-lm"] if platform.system() != "Darwin" else []
     commands = (
-        [cxx, "-std=c++20", "-O2", str(PROBE_SRC), "-o", str(probe_bin), *math_link],
+        [
+            cxx,
+            "-std=c++20",
+            "-O2",
+            "-I",
+            str(ROOT / "native" / "include"),
+            str(EMULATOR_SRC),
+            str(ROM_SRC),
+            str(emulator_cli_src),
+            "-o",
+            str(emulator_cli),
+            *math_link,
+        ],
         [
             cxx,
             "-std=c++23",
@@ -103,7 +170,7 @@ def compile_artifacts(cxx: str, build_dir: Path) -> tuple[Path, Path]:
             sys.stderr.write(result.stdout)
             sys.stderr.write(result.stderr)
             raise SystemExit(result.returncode)
-    return probe_bin, native_cli
+    return emulator_cli, native_cli
 
 
 def validate_no_runtime_rom_tables() -> None:
@@ -119,7 +186,7 @@ def validate_no_runtime_rom_tables() -> None:
 
 
 def validate_values(
-    probe_bin: Path,
+    emulator_cli: Path,
     native_cli: Path,
     value_corpus: tuple[str, ...],
     max_failures: int,
@@ -132,18 +199,20 @@ def validate_values(
     for mode in modes:
         for fn in functions:
             for value in value_corpus:
-                probe = run([str(probe_bin), f"--{mode}", f"--{fn}", value])
+                emulator = run([str(emulator_cli), mode, fn, value])
                 native = run([str(native_cli), mode, fn, value])
+                emulator_display = canonical_display(emulator.stdout)
+                native_display = canonical_display(native.stdout)
                 checked += 1
                 if (
-                    probe.returncode != 0
+                    emulator.returncode != 0
                     or native.returncode != 0
-                    or probe.stdout.strip() != native.stdout.strip()
+                    or emulator_display != native_display
                 ):
                     failures.append(
                         f"{mode} {fn} {value}: "
-                        f"probe rc={probe.returncode} out={probe.stdout.strip()!r} err={probe.stderr.strip()!r}; "
-                        f"native rc={native.returncode} out={native.stdout.strip()!r} err={native.stderr.strip()!r}"
+                        f"emulator rc={emulator.returncode} out={emulator.stdout.strip()!r} display={emulator_display!r} err={emulator.stderr.strip()!r}; "
+                        f"native rc={native.returncode} out={native.stdout.strip()!r} display={native_display!r} err={native.stderr.strip()!r}"
                     )
                     if stop_after_failures and len(failures) >= max_failures:
                         break
@@ -191,10 +260,10 @@ def main() -> int:
 
     validate_no_runtime_rom_tables()
     with tempfile.TemporaryDirectory(prefix="mk61-trig-validate-") as tmp:
-        probe_bin, native_cli = compile_artifacts(args.cxx, Path(tmp))
+        emulator_cli, native_cli = compile_artifacts(args.cxx, Path(tmp))
         value_corpus = VALUES + stress_values() if args.stress else VALUES
         checked = validate_values(
-            probe_bin,
+            emulator_cli,
             native_cli,
             value_corpus,
             args.max_fail,

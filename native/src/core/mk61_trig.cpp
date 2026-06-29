@@ -1076,6 +1076,23 @@ std::string format_display(long double value) {
   return format_number_ring(ring);
 }
 
+bool tg_emulator_error_argument(long double value, AngleMode mode) {
+  if (mode == AngleMode::Deg) {
+    long double normalized = fmodl(value, 180.0L);
+    if (normalized < 0.0L) normalized += 180.0L;
+    return near_equal(normalized, 90.0L);
+  }
+  if (mode == AngleMode::Grad) {
+    long double normalized = fmodl(value, 200.0L);
+    if (normalized < 0.0L) normalized += 200.0L;
+    return near_equal(normalized, 100.0L);
+  }
+
+  bool negate_sin = false;
+  bool negate_cos = false;
+  return near_equal(primary_radians(value, AngleMode::Rad, negate_sin, negate_cos), kHalfPi);
+}
+
 long double calculate_value(AngleMode mode, Function function, std::string_view literal) {
   const long double value = parse_mk61_input(std::string(literal));
   switch (function) {
@@ -1094,7 +1111,25 @@ long double calculate_value(AngleMode mode, Function function, std::string_view 
 namespace mkpro::core::mk61_trig {
 
 std::string calculate_display(AngleMode mode, Function function, std::string_view literal) {
-  return format_display(calculate_value(mode, function, literal));
+  const long double value = parse_mk61_input(std::string(literal));
+  if (function == Function::Tg && tg_emulator_error_argument(value, mode)) {
+    return "ЕГГ0Г";
+  }
+
+  long double result = 0.0L;
+  switch (function) {
+    case Function::Sin:
+      result = mk61_sin(value, mode);
+      break;
+    case Function::Cos:
+      result = mk61_cos(value, mode);
+      break;
+    case Function::Tg:
+      result = mk61_tg(value, mode);
+      break;
+  }
+  if (function == Function::Tg && result == 0.0L && value < 0.0L) return "-0,";
+  return format_display(result);
 }
 
 std::string sin_display(AngleMode mode, std::string_view literal) {

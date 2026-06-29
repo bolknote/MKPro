@@ -1,4 +1,4 @@
-"""Deterministic value corpus for ROM-derived MK-61 trig validation."""
+"""Deterministic value corpus for emulator-backed MK-61 trig validation."""
 
 from __future__ import annotations
 
