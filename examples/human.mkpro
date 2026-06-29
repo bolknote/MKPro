@@ -3,6 +3,8 @@
 
 program CounterGame {
   state {
+    expected_mode_only("grd")
+
     score: counter 0..9 = 0
     food: counter 0..9 = 5
   }

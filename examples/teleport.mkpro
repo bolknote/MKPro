@@ -10,6 +10,8 @@ program Teleport {
   const LADDER_MASK = 9.8888888
 
   state {
+    expected_mode_only("rad")
+
     floors: packed[1..4] = [max(frac(bit_and(random(), LADDER_MASK)) / 8, 0.0000001), max(frac(bit_and(random(), LADDER_MASK)) / 8, 0.0000001), max(frac(bit_and(random(), LADDER_MASK)) / 8, 0.0000001), 0]
 
     charges: counter -99..99 = 5

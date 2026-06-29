@@ -471,12 +471,14 @@ committed example oracles under `native/oracles/`.
 - `signed-abs-shared-bit-helper-hoisted-proc-layout` — combines signed abs/sign candidate with hoisted helper/procedure layout.
 - `comparison-guarded-update-selector` — candidate that tries abs/sign comparison masks for guarded arithmetic updates after full layout, so locally longer branchless forms are adopted only when they pay back globally.
 - `packed-counter-stripes` — candidate that packs compatible fixed-width counters into one striped register.
+- `trig-fractional-pack` — candidate gated by `expected_mode_only("grd")` or `expected_mode_only("deg")` that packs one non-negative major counter and one small minor counter as `A + sin(B)`, with reads rewritten through integer/fractional extraction and minor self-updates re-encoded with `sin`. Automatic discovery is limited to small, unambiguous pair sets; use the parameterized candidate when probing a specific pair.
 - `repeated-unary-update-arg-temp` — candidate that routes repeated X-transform unary-call arguments through one hidden scratch so repeated helper tails can be shared; only attempted when a cheap structural scan finds a routable-unary shape that repeats within some statement list.
 - `x-param-value-function` — candidate that passes simple positive-modulo value-function arguments through `X` instead of allocating a parameter register.
 - `x-param-value-function-with-unary-arg-temp` — combines X-parameter value functions with repeated unary-call scratch canonicalization.
 - `x-param-value-function-unary-arg-temp-coalesce` — additionally enables copy coalescing for the same value-function / unary-call scratch shape.
 - `x-param-unary-arg-shared-call-hoisted-proc` — combines X-parameter value functions, repeated unary-call scratch canonicalization, shared call-body helper extraction, and front-hoisted helper/procedure layout. This lets repeated straight-line bodies that contain direct calls become one hoisted helper after their arguments have been made structurally identical.
 - `packed-counter-stripes:<id+id+…>` — parameterized variant for each packed stripe set combination.
+- `trig-fractional-pack:<major+minor>` — parameterized variant for each compatible `A + sin(B)` counter pair.
 - `counted-loop-unroll` — candidate that fully unrolls small constant-trip counted loops.
 - `startup-aware-constant-preloads` — candidate balancing main/ setup constant trade-offs.
 - `counted-loop-unroll-free-scratch` — combines counted-loop unrolling with residual-dispatch scratch freeing.

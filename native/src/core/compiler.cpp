@@ -110,6 +110,10 @@ using core::emit::ZeroDigitTailDisplayProgram;
 
 bool is_zero_expression(const LoweringContext& context, const Expression& expression);
 
+long long round_to_long_long(double value) {
+  return static_cast<long long>(std::round(value));
+}
+
 Diagnostic diagnostic(DiagnosticSeverity severity, std::string code, std::string message) {
   return Diagnostic{
       .severity = severity,
@@ -518,7 +522,7 @@ std::optional<int> integer_literal_value(const std::string& text, int line) {
         core::numeric_value_of_expression(expression, std::map<std::string, Expression>{});
     if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
       return std::nullopt;
-    return static_cast<int>(std::llround(*value));
+    return static_cast<int>(round_to_long_long(*value));
   } catch (const std::exception&) {
     return std::nullopt;
   }
@@ -5615,7 +5619,7 @@ std::vector<V2Predicate> guarded_equivalent_condition_candidates(const V2Program
         continue;
       }
       const auto shifted = guarded_shifted_integer_boundary(
-          candidate.op, static_cast<long long>(std::llround(*value)));
+          candidate.op, round_to_long_long(*value));
       if (!shifted.has_value())
         continue;
       V2Predicate boundary = candidate;
@@ -10241,7 +10245,7 @@ std::optional<std::string> constant_indexed_state_element(LoweringContext& conte
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12) {
     return std::nullopt;
   }
-  const int index = static_cast<int>(std::llround(*value));
+  const int index = static_cast<int>(round_to_long_long(*value));
   if (index < field.bank->min || index > field.bank->max) {
     context.diagnostics.push_back(
         diagnostic(DiagnosticSeverity::Error, "native-unsupported",
@@ -10765,7 +10769,7 @@ bool emit_indexed_recall(LoweringContext& context, const Expression& expression,
   emit_recall(context, *element);
   if (!context.emitter.items.empty()) {
     const std::optional<double> value = numeric_value_of_expression(context, *expression.index);
-    const int index = value.has_value() ? static_cast<int>(std::llround(*value)) : 0;
+    const int index = value.has_value() ? static_cast<int>(round_to_long_long(*value)) : 0;
     context.emitter.items.back().comment = "indexed recall " +
                                            bank_member_key(expression.base, expression.field) +
                                            "[" + std::to_string(index) + "]";
@@ -10785,7 +10789,7 @@ bool emit_indexed_store(LoweringContext& context, const Expression& expression, 
     return emit_dynamic_indexed_store(context, expression, source_line);
   }
   const std::optional<double> value = numeric_value_of_expression(context, *expression.index);
-  const int index = value.has_value() ? static_cast<int>(std::llround(*value)) : 0;
+  const int index = value.has_value() ? static_cast<int>(round_to_long_long(*value)) : 0;
   emit_store(context, *element,
              "indexed set " + bank_member_key(expression.base, expression.field) + "[" +
                  std::to_string(index) + "]");
@@ -17021,7 +17025,7 @@ std::optional<int> integer_value_of_expression(const LoweringContext& context,
   const std::optional<double> value = numeric_value_of_expression(context, expression);
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
     return std::nullopt;
-  return static_cast<int>(std::llround(*value));
+  return static_cast<int>(round_to_long_long(*value));
 }
 
 bool is_zero_expression(const LoweringContext& context, const Expression& expression) {
@@ -19304,7 +19308,7 @@ std::vector<V2Predicate> equivalent_condition_candidates(const LoweringContext& 
         continue;
       }
       const std::optional<std::pair<std::string, long long>> shifted =
-          shifted_integer_boundary(candidate.op, static_cast<long long>(std::llround(*value)));
+          shifted_integer_boundary(candidate.op, round_to_long_long(*value));
       if (!shifted.has_value())
         continue;
       V2Predicate boundary = candidate;
@@ -19538,7 +19542,7 @@ std::optional<Expression> near_any_simple_stack_load(LoweringContext& context,
   const std::optional<double> value = numeric_value_of_expression(context, *expression.index);
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
     return std::nullopt;
-  const int index = static_cast<int>(std::llround(*value));
+  const int index = static_cast<int>(round_to_long_long(*value));
   if (index < field.bank->min || index > field.bank->max)
     return std::nullopt;
   if (report_resolution)
@@ -20296,7 +20300,7 @@ std::optional<int> integer_constant_expression(const LoweringContext& context,
   const std::optional<double> value = numeric_value_of_expression(context, expression);
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
     return std::nullopt;
-  return static_cast<int>(std::llround(*value));
+  return static_cast<int>(round_to_long_long(*value));
 }
 
 std::optional<EqualityConstantCondition>
@@ -28839,7 +28843,7 @@ integer_value_of_parsed_expression_without_constants(const Expression& expressio
       core::numeric_value_of_expression(expression, std::map<std::string, Expression>{});
   if (!value.has_value() || std::fabs(*value - std::round(*value)) >= 1e-12)
     return std::nullopt;
-  return static_cast<int>(std::llround(*value));
+  return static_cast<int>(round_to_long_long(*value));
 }
 
 std::optional<std::string> scalar_target_identifier(const std::optional<std::string>& target,
@@ -33966,7 +33970,7 @@ std::optional<int> integer_numeric_literal(const Expression& expression) {
   const double rounded = std::round(*value);
   if (std::fabs(*value - rounded) >= 1e-12)
     return std::nullopt;
-  return static_cast<int>(std::llround(rounded));
+  return static_cast<int>(round_to_long_long(rounded));
 }
 
 struct ConstantDispatchCondition {
@@ -36162,6 +36166,404 @@ void pack_counter_stripes(V2Program& program, std::vector<OptimizationReport>& o
   });
 }
 
+struct TrigFractionalPackPlan {
+  std::size_t insert_index = 0;
+  std::string packed;
+  std::string major;
+  std::string minor;
+  std::string mode;
+  std::string initial;
+};
+
+std::optional<std::string> trig_fractional_pack_mode(const V2Program& program) {
+  if (!program.expected_mode.has_value() || !program.expected_mode->only)
+    return std::nullopt;
+  if (program.expected_mode->mode == "grd" || program.expected_mode->mode == "deg")
+    return program.expected_mode->mode;
+  return std::nullopt;
+}
+
+bool trig_fractional_major_field(const V2StateField& field) {
+  const std::optional<int> width = decimal_counter_width(field);
+  return width.has_value() && *width <= 2;
+}
+
+bool trig_fractional_minor_field(const V2StateField& field) {
+  return field.type == "counter" && field.min.has_value() && field.max.has_value() &&
+         *field.min >= 0 && *field.max <= 9 && !field.initial_stack.has_value();
+}
+
+bool integer_delta(double value) {
+  return std::fabs(value - std::round(value)) < 1e-12;
+}
+
+bool trig_fractional_update_deltas_ok_statement(const V2Statement& statement,
+                                                const std::string& major,
+                                                const std::string& minor);
+
+bool trig_fractional_update_deltas_ok_statements(const std::vector<V2Statement>& statements,
+                                                 const std::string& major,
+                                                 const std::string& minor) {
+  return std::all_of(statements.begin(), statements.end(), [&](const V2Statement& statement) {
+    return trig_fractional_update_deltas_ok_statement(statement, major, minor);
+  });
+}
+
+bool trig_fractional_update_deltas_ok_statement(const V2Statement& statement,
+                                                const std::string& major,
+                                                const std::string& minor) {
+  if ((statement.kind == "v2_assign" || statement.kind == "v2_update") &&
+      statement.target.has_value() &&
+      (*statement.target == major || *statement.target == minor)) {
+    const std::optional<double> delta = numeric_self_update_delta(*statement.target, statement);
+    if (!delta.has_value() || !integer_delta(*delta))
+      return false;
+  }
+  if (!trig_fractional_update_deltas_ok_statements(statement.body, major, minor) ||
+      !trig_fractional_update_deltas_ok_statements(statement.then_body, major, minor) ||
+      !trig_fractional_update_deltas_ok_statements(statement.else_body, major, minor)) {
+    return false;
+  }
+  for (const V2MatchCase& match_case : statement.cases) {
+    if (match_case.action != nullptr &&
+        !trig_fractional_update_deltas_ok_statement(*match_case.action, major, minor)) {
+      return false;
+    }
+  }
+  return statement.otherwise == nullptr ||
+         trig_fractional_update_deltas_ok_statement(*statement.otherwise, major, minor);
+}
+
+bool trig_fractional_usages_ok(const V2Program& program, const std::string& major,
+                               const std::string& minor) {
+  const std::vector<std::string> names{major, minor};
+  return packed_counter_usages_ok(program, names) &&
+         trig_fractional_update_deltas_ok_statements(program.body, major, minor) &&
+         std::all_of(program.rules.begin(), program.rules.end(), [&](const V2Rule& rule) {
+           return trig_fractional_update_deltas_ok_statements(rule.body, major, minor);
+         });
+}
+
+std::string fresh_trig_fractional_pack_name(const V2Program& program) {
+  std::set<std::string> used;
+  for (const V2StateField& field : program.state)
+    used.insert(field.name);
+  for (const V2Rule& rule : program.rules) {
+    used.insert(rule.name);
+    for (const std::string& param : rule.params)
+      used.insert(param);
+    for (const V2Statement& statement : rule.body)
+      collect_packed_counter_used_names_from_statement(statement, used);
+  }
+  for (const V2Statement& statement : program.body)
+    collect_packed_counter_used_names_from_statement(statement, used);
+  for (int index = 0;; ++index) {
+    const std::string candidate = "__trig_packed_counter_" + std::to_string(index);
+    if (!used.contains(candidate))
+      return candidate;
+  }
+}
+
+double trig_fractional_angle_scale(const std::string& mode) {
+  return mode == "deg" ? 180.0 : 200.0;
+}
+
+std::optional<std::string> trig_fractional_initial(const V2StateField& major,
+                                                   const V2StateField& minor,
+                                                   const std::string& mode) {
+  const std::optional<double> major_value = packed_counter_initial_value(major);
+  const std::optional<double> minor_value = packed_counter_initial_value(minor);
+  if (!major_value.has_value() || !minor_value.has_value() || !integer_delta(*minor_value))
+    return std::nullopt;
+  static constexpr double kPi = 3.14159265358979323846264338327950288;
+  const double packed = *major_value + std::sin(*minor_value * kPi / trig_fractional_angle_scale(mode));
+  return format_number_literal(packed);
+}
+
+std::optional<TrigFractionalPackPlan>
+build_trig_fractional_pack_plan(const V2Program& program, const V2StateField& major,
+                                std::size_t major_index, const V2StateField& minor,
+                                std::size_t minor_index) {
+  const std::optional<std::string> mode = trig_fractional_pack_mode(program);
+  if (major.name == minor.name || !mode.has_value() ||
+      !trig_fractional_major_field(major) || !trig_fractional_minor_field(minor) ||
+      !trig_fractional_usages_ok(program, major.name, minor.name)) {
+    return std::nullopt;
+  }
+  const std::optional<std::string> initial = trig_fractional_initial(major, minor, *mode);
+  if (!initial.has_value())
+    return std::nullopt;
+  return TrigFractionalPackPlan{
+      .insert_index = std::min(major_index, minor_index),
+      .packed = fresh_trig_fractional_pack_name(program),
+      .major = major.name,
+      .minor = minor.name,
+      .mode = *mode,
+      .initial = *initial,
+  };
+}
+
+std::vector<TrigFractionalPackPlan> select_trig_fractional_pack_plans(
+    const V2Program& program, const std::optional<std::vector<std::string>>& requested_names) {
+  std::vector<TrigFractionalPackPlan> plans;
+  if (!trig_fractional_pack_mode(program).has_value())
+    return plans;
+
+  if (requested_names.has_value()) {
+    if (requested_names->size() != 2U)
+      return plans;
+    const auto major_it =
+        std::find_if(program.state.begin(), program.state.end(),
+                     [&](const V2StateField& field) { return field.name == requested_names->at(0); });
+    const auto minor_it =
+        std::find_if(program.state.begin(), program.state.end(),
+                     [&](const V2StateField& field) { return field.name == requested_names->at(1); });
+    if (major_it == program.state.end() || minor_it == program.state.end())
+      return plans;
+    if (std::optional<TrigFractionalPackPlan> plan = build_trig_fractional_pack_plan(
+            program, *major_it, static_cast<std::size_t>(std::distance(program.state.begin(), major_it)),
+            *minor_it, static_cast<std::size_t>(std::distance(program.state.begin(), minor_it)))) {
+      plans.push_back(std::move(*plan));
+    }
+    return plans;
+  }
+
+  for (std::size_t major_index = 0; major_index < program.state.size(); ++major_index) {
+    for (std::size_t minor_index = 0; minor_index < program.state.size(); ++minor_index) {
+      if (major_index == minor_index)
+        continue;
+      if (std::optional<TrigFractionalPackPlan> plan = build_trig_fractional_pack_plan(
+              program, program.state.at(major_index), major_index, program.state.at(minor_index),
+              minor_index)) {
+        plans.push_back(std::move(*plan));
+      }
+    }
+  }
+  return plans;
+}
+
+std::optional<TrigFractionalPackPlan> select_trig_fractional_pack_plan(
+    const V2Program& program, const std::optional<std::vector<std::string>>& requested_names) {
+  const std::vector<TrigFractionalPackPlan> plans =
+      select_trig_fractional_pack_plans(program, requested_names);
+  return plans.empty() ? std::nullopt : std::optional<TrigFractionalPackPlan>{plans.front()};
+}
+
+std::vector<std::vector<std::string>> discover_trig_fractional_pack_variant_names(
+    const std::string& source) {
+  ProgramAst ast;
+  try {
+    ast = parse_program(source);
+  } catch (const std::exception&) {
+    return {};
+  }
+  if (!ast.v2.has_value())
+    return {};
+  constexpr std::size_t kMaxTrigFractionalPackVariants = 4;
+  std::vector<std::vector<std::string>> result;
+  const std::vector<TrigFractionalPackPlan> plans =
+      select_trig_fractional_pack_plans(*ast.v2, std::nullopt);
+  if (plans.size() > kMaxTrigFractionalPackVariants)
+    return result;
+  for (const TrigFractionalPackPlan& plan : plans) {
+    result.push_back({plan.major, plan.minor});
+  }
+  return result;
+}
+
+Expression trig_fractional_pack_expr(const TrigFractionalPackPlan& plan) {
+  return identifier_expression(plan.packed);
+}
+
+Expression trig_fractional_major_extract_expr(const TrigFractionalPackPlan& plan) {
+  return int_expression(trig_fractional_pack_expr(plan));
+}
+
+Expression trig_fractional_minor_raw_expr(const TrigFractionalPackPlan& plan) {
+  return call_expression("asin", {frac_expression(trig_fractional_pack_expr(plan))});
+}
+
+Expression trig_fractional_minor_extract_expr(const TrigFractionalPackPlan& plan) {
+  return int_expression(add_expression(trig_fractional_minor_raw_expr(plan), number_expression("0.5")));
+}
+
+Expression trig_fractional_extract_expr(const TrigFractionalPackPlan& plan,
+                                        const std::string& name) {
+  if (name == plan.major)
+    return trig_fractional_major_extract_expr(plan);
+  return trig_fractional_minor_extract_expr(plan);
+}
+
+Expression rewrite_trig_fractional_expr(Expression expression, const TrigFractionalPackPlan& plan) {
+  if (expression.kind == "identifier") {
+    if (expression.name == plan.major || expression.name == plan.minor)
+      return trig_fractional_extract_expr(plan, expression.name);
+    return expression;
+  }
+  if (expression.index != nullptr)
+    expression.index =
+        std::make_shared<Expression>(rewrite_trig_fractional_expr(*expression.index, plan));
+  if (expression.expr != nullptr)
+    expression.expr =
+        std::make_shared<Expression>(rewrite_trig_fractional_expr(*expression.expr, plan));
+  if (expression.left != nullptr)
+    expression.left =
+        std::make_shared<Expression>(rewrite_trig_fractional_expr(*expression.left, plan));
+  if (expression.right != nullptr)
+    expression.right =
+        std::make_shared<Expression>(rewrite_trig_fractional_expr(*expression.right, plan));
+  for (Expression& arg : expression.args)
+    arg = rewrite_trig_fractional_expr(std::move(arg), plan);
+  return expression;
+}
+
+std::string rewrite_trig_fractional_expr_text(const std::string& text, int line,
+                                              const TrigFractionalPackPlan& plan) {
+  try {
+    Expression expression = parse_expression(text, line);
+    Expression rewritten = rewrite_trig_fractional_expr(expression, plan);
+    if (expression_equals(expression, rewritten))
+      return text;
+    return expression_to_source(rewritten);
+  } catch (const std::exception&) {
+    return text;
+  }
+}
+
+V2Predicate rewrite_trig_fractional_predicate(V2Predicate predicate,
+                                              const TrigFractionalPackPlan& plan) {
+  predicate.left = rewrite_trig_fractional_expr_text(predicate.left, 0, plan);
+  predicate.right = rewrite_trig_fractional_expr_text(predicate.right, 0, plan);
+  predicate.collection = rewrite_trig_fractional_expr_text(predicate.collection, 0, plan);
+  predicate.item = rewrite_trig_fractional_expr_text(predicate.item, 0, plan);
+  return predicate;
+}
+
+Expression trig_fractional_update_expr(const TrigFractionalPackPlan& plan,
+                                       const std::string& target, double delta) {
+  if (target == plan.major) {
+    if (std::fabs(delta) < 1e-12)
+      return trig_fractional_pack_expr(plan);
+    if (delta > 0.0)
+      return add_expression(trig_fractional_pack_expr(plan),
+                            number_expression(format_number_literal(delta)));
+    return subtract_expression(trig_fractional_pack_expr(plan),
+                               number_expression(format_number_literal(std::fabs(delta))));
+  }
+  Expression next_minor =
+      add_expression(trig_fractional_minor_extract_expr(plan), number_expression(format_number_literal(delta)));
+  return add_expression(trig_fractional_major_extract_expr(plan),
+                        call_expression("sin", {std::move(next_minor)}));
+}
+
+DisplayItem rewrite_trig_fractional_display_item(DisplayItem item,
+                                                 const TrigFractionalPackPlan& plan) {
+  std::optional<Expression> rewritten;
+  if (item.kind == "source" && !item.expr.has_value()) {
+    if (item.name == plan.major || item.name == plan.minor)
+      rewritten = trig_fractional_extract_expr(plan, item.name);
+  } else if (item.kind == "source" && item.expr.has_value()) {
+    Expression expression = *item.expr;
+    Expression next = rewrite_trig_fractional_expr(expression, plan);
+    if (!expression_equals(expression, next))
+      rewritten = std::move(next);
+  }
+  if (!rewritten.has_value())
+    return item;
+  item.name = expression_to_source(*rewritten);
+  item.expr = std::move(rewritten);
+  return item;
+}
+
+void rewrite_trig_fractional_statement(V2Statement& statement,
+                                       const TrigFractionalPackPlan& plan);
+
+void rewrite_trig_fractional_statements(std::vector<V2Statement>& statements,
+                                        const TrigFractionalPackPlan& plan) {
+  for (V2Statement& statement : statements)
+    rewrite_trig_fractional_statement(statement, plan);
+}
+
+void rewrite_trig_fractional_statement(V2Statement& statement,
+                                       const TrigFractionalPackPlan& plan) {
+  if ((statement.kind == "v2_assign" || statement.kind == "v2_update") &&
+      statement.target.has_value() &&
+      (*statement.target == plan.major || *statement.target == plan.minor)) {
+    const double delta = numeric_self_update_delta(*statement.target, statement).value_or(0.0);
+    const std::string target = *statement.target;
+    statement.kind = "v2_assign";
+    statement.target = plan.packed;
+    statement.expr = expression_to_source(trig_fractional_update_expr(plan, target, delta));
+    statement.op.reset();
+    return;
+  }
+
+  if (statement.target.has_value())
+    statement.target = rewrite_trig_fractional_expr_text(*statement.target, statement.line, plan);
+  if (statement.expr.has_value())
+    statement.expr = rewrite_trig_fractional_expr_text(*statement.expr, statement.line, plan);
+  for (std::string& arg : statement.args)
+    arg = rewrite_trig_fractional_expr_text(arg, statement.line, plan);
+  if (statement.predicate.has_value())
+    statement.predicate = rewrite_trig_fractional_predicate(*statement.predicate, plan);
+  if (statement.items.has_value()) {
+    for (DisplayItem& item : *statement.items)
+      item = rewrite_trig_fractional_display_item(std::move(item), plan);
+  }
+  for (V2RawInput& input : statement.inputs)
+    input.expr = rewrite_trig_fractional_expr_text(input.expr, input.line, plan);
+  rewrite_trig_fractional_statements(statement.body, plan);
+  rewrite_trig_fractional_statements(statement.then_body, plan);
+  rewrite_trig_fractional_statements(statement.else_body, plan);
+  for (V2MatchCase& match_case : statement.cases) {
+    for (std::string& value : match_case.values)
+      value = rewrite_trig_fractional_expr_text(value, match_case.line, plan);
+    if (match_case.action != nullptr)
+      rewrite_trig_fractional_statement(*match_case.action, plan);
+  }
+  if (statement.otherwise != nullptr)
+    rewrite_trig_fractional_statement(*statement.otherwise, plan);
+}
+
+void pack_trig_fractional_counters(
+    V2Program& program, std::vector<OptimizationReport>& optimizations,
+    const std::optional<std::vector<std::string>>& requested_names) {
+  std::optional<TrigFractionalPackPlan> plan =
+      select_trig_fractional_pack_plan(program, requested_names);
+  if (!plan.has_value())
+    return;
+
+  const std::set<std::string> removed_names{plan->major, plan->minor};
+  V2StateField packed_field;
+  packed_field.name = plan->packed;
+  packed_field.type = "packed";
+  packed_field.initial = plan->initial;
+  packed_field.line =
+      program.state.empty()
+          ? program.line
+          : program.state.at(std::min(plan->insert_index, program.state.size() - 1U)).line;
+
+  std::vector<V2StateField> state;
+  state.reserve(program.state.size() - removed_names.size() + 1U);
+  for (std::size_t index = 0; index < program.state.size(); ++index) {
+    if (index == plan->insert_index)
+      state.push_back(packed_field);
+    if (!removed_names.contains(program.state.at(index).name))
+      state.push_back(std::move(program.state.at(index)));
+  }
+  program.state = std::move(state);
+
+  rewrite_trig_fractional_statements(program.body, *plan);
+  for (V2Rule& rule : program.rules)
+    rewrite_trig_fractional_statements(rule.body, *plan);
+
+  optimizations.push_back(OptimizationReport{
+      .name = "trig-fractional-pack",
+      .detail = "Packed counters " + plan->major + " and " + plan->minor + " into " +
+                plan->packed + " as A + sin(B) under expected_mode_only(\"" + plan->mode + "\").",
+  });
+}
+
 std::string display_expression_target_name(const V2Statement& statement, std::size_t index) {
   return std::string("__display_expr_") + std::to_string(statement.line) + "_" +
          std::to_string(index);
@@ -37969,6 +38371,13 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
                 : std::optional<std::vector<std::string>>{options.pack_counter_stripe_names};
         pack_counter_stripes(*ast.v2, context.optimizations, true, requested_names);
       }
+      if (options.trig_fractional_pack) {
+        const std::optional<std::vector<std::string>> requested_names =
+            options.trig_fractional_pack_names.empty()
+                ? std::nullopt
+                : std::optional<std::vector<std::string>>{options.trig_fractional_pack_names};
+        pack_trig_fractional_counters(*ast.v2, context.optimizations, requested_names);
+      }
       resolve_constant_indexed_state(*ast.v2, context.optimizations);
       materialize_display_expressions(*ast.v2, context.optimizations,
                                       options.inline_floor_packed_row_expressions);
@@ -38846,7 +39255,8 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.guarded_prologue_gadgets || options.shared_bit_mask_helper_calls ||
          options.compact_bit_mask_helper_body || options.signed_abs_match_pairs ||
          options.synthesize_parametric_siblings || options.pack_counter_stripes ||
-         options.canonicalize_repeated_unary_update_args || options.x_param_value_functions ||
+         options.trig_fractional_pack || options.canonicalize_repeated_unary_update_args ||
+         options.x_param_value_functions ||
          options.x_param_y_stack_stored_entry || options.packed_line_family_update_check_tail ||
          options.packed_line_family_mutating_selector_update_check_tail ||
          options.packed_line_family_borrowed_mutating_selector_update_check_tail ||
@@ -38857,6 +39267,7 @@ bool has_explicit_lowering_variant(const CompileOptions& options) {
          options.dead_source_residual_temp_reuse || options.hoist_shared_helpers ||
          options.hoist_procs || options.order_procs_by_call_count ||
          !options.proc_layout_strategy.empty() || !options.pack_counter_stripe_names.empty() ||
+         !options.trig_fractional_pack_names.empty() ||
          !options.preloaded_constant_registers.empty() ||
          !options.suppress_constant_preloads.empty() ||
          !options.force_fractional_constant_selector_preloads.empty() ||
@@ -39206,6 +39617,7 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";signed_abs_match_pairs=" << options.signed_abs_match_pairs
       << ";synthesize_parametric_siblings=" << options.synthesize_parametric_siblings
       << ";pack_counter_stripes=" << options.pack_counter_stripes
+      << ";trig_fractional_pack=" << options.trig_fractional_pack
       << ";canonicalize_repeated_unary_update_args="
       << options.canonicalize_repeated_unary_update_args
       << ";x_param_value_functions=" << options.x_param_value_functions
@@ -39230,6 +39642,8 @@ std::string reclaim_base_key(const CompileOptions& options) {
       << ";proc_layout_strategy=" << options.proc_layout_strategy;
   for (const std::string& name : options.pack_counter_stripe_names)
     out << ";pack_counter_stripe_name=" << name;
+  for (const std::string& name : options.trig_fractional_pack_names)
+    out << ";trig_fractional_pack_name=" << name;
   return out.str();
 }
 
@@ -41026,6 +41440,16 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         "Packed counters " + join_strings(names, ", ") +
             " into one hidden decimal-striped register");
   }
+  for (const std::vector<std::string>& names : discover_trig_fractional_pack_variant_names(source)) {
+    add_candidate(
+        [names](CompileOptions& candidate_options) {
+          candidate_options.trig_fractional_pack = true;
+          candidate_options.trig_fractional_pack_names = names;
+        },
+        "trig-fractional-pack:" + join_strings(names, "+"),
+        "Packed counters " + join_strings(names, ", ") +
+            " into one A+sin(B) register under fixed angle mode");
+  }
   add_candidate(
       [](CompileOptions& candidate_options) {
         candidate_options.canonicalize_repeated_unary_update_args = true;
@@ -41471,6 +41895,17 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           "packed-counter-stripes:" + join_strings(names, "+"),
           "Packed counters " + join_strings(names, ", ") +
               " into one hidden decimal-striped register");
+    }
+    for (const std::vector<std::string>& names :
+         discover_trig_fractional_pack_variant_names(source)) {
+      add_candidate(
+          [names](CompileOptions& candidate_options) {
+            candidate_options.trig_fractional_pack = true;
+            candidate_options.trig_fractional_pack_names = names;
+          },
+          "trig-fractional-pack:" + join_strings(names, "+"),
+          "Packed counters " + join_strings(names, ", ") +
+              " into one A+sin(B) register under fixed angle mode");
     }
     add_candidate(
         [](CompileOptions& candidate_options) {

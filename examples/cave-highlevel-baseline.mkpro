@@ -5,6 +5,8 @@ reference kei_treasure_cave
 
 program CaveHighlevelBaseline {
   state {
+    expected_mode_only("rad")
+
     // The article starts at floor 1, rightmost top row. The first visible stop is
     // still 0; screen holds the previous result that the next read resumes from.
     player: coord(cave) = 1.0000008

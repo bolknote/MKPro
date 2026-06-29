@@ -49,7 +49,11 @@
    45 |  01  | 1                       |
    46 |  02  | 2                       |
    47 |  49  | X→П 9                   | setup R9
-   48 |  50  | С/П                     | setup complete
+   48 |  09  | 9                       |
+   49 |  01  | 1                       |
+   50 |  1D  | F cos                   | expected_mode("grd") cosine
+   51 |  18  | F ln                    | expected_mode("grd") domain guard
+   52 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code     | Command                 | Comment
@@ -78,8 +82,8 @@
    21 | 65       | П→X 5                   | recall player_total
    22 | 10       | +                       | expr +
    23 | 46       | X→П 6                   | set preview_total
-   24 | 53       | ПП                      | show __inline_show_80_0
-   25 | 69       | 69                      | show __inline_show_80_0
+   24 | 53       | ПП                      | show __inline_show_82_0
+   25 | 69       | 69                      | show __inline_show_82_0
    26 | E9       | К x=0 9                 | false branch for ==; preloaded R9=C4 indirect-target=12 indirect flow
    27 | 66       | П→X 6                   | recall preview_total
    28 | 45       | X→П 5                   | set player_total
@@ -104,8 +108,8 @@
    47 | 60       | П→X 0                   | recall calculator_total
    48 | 10       | +                       | expr +
    49 | 46       | X→П 6                   | set preview_total
-   50 | 53       | ПП                      | show __inline_show_80_0
-   51 | 69       | 69                      | show __inline_show_80_0
+   50 | 53       | ПП                      | show __inline_show_82_0
+   51 | 69       | 69                      | show __inline_show_82_0
    52 | 67       | П→X 7                   | recall turn_score
    53 | 6A       | П→X a                   | preload const 20
    54 | 11       | −                       | condition compare
@@ -123,29 +127,29 @@
    66 | 47       | X→П 7                   | set turn_score
    67 | 44       | X→П 4                   | set roll_count
    68 | 89       | К БП 9                  | tail call roll_player; preloaded R9=C4 indirect-target=12 indirect flow
-   69 | 67       | П→X 7                   | display __inline_show_80_0 score
+   69 | 67       | П→X 7                   | display __inline_show_82_0 score
    70 | 6C       | П→X c                   | preload const 1000
    71 | 13       | ÷                       | display template score shift
-   72 | 66       | П→X 6                   | display __inline_show_80_0 total
+   72 | 66       | П→X 6                   | display __inline_show_82_0 total
    73 | 6D       | П→X d                   | preload const 10000000
    74 | 13       | ÷                       | display template total shift
    75 | 10       | +                       | display template total append
    76 | 09       | 9                       | display template numeric anchor
    77 | 10       | +                       | display template numeric body
-   78 | 6E       | П→X e                   | display __inline_show_80_0 separator mask
+   78 | 6E       | П→X e                   | display __inline_show_82_0 separator mask
    79 | 38       | К ∨                     | display template body merge
-   80 | 42       | X→П 2                   | display __inline_show_80_0 body
-   81 | 64       | П→X 4                   | display __inline_show_80_0 exponent
-   82 | 41       | X→П 1                   | display __inline_show_80_0 exponent counter
-   83 | 62       | П→X 2                   | display __inline_show_80_0 body
+   80 | 42       | X→П 2                   | display __inline_show_82_0 body
+   81 | 64       | П→X 4                   | display __inline_show_82_0 exponent
+   82 | 41       | X→П 1                   | display __inline_show_82_0 exponent counter
+   83 | 62       | П→X 2                   | display __inline_show_82_0 body
    84 | 0C 01 0B | 0E-1                    | display template exponent entry
    87 | 5B       | F L1                    | display template exponent loop
    88 | 84       | 84                      | display template exponent loop
-   89 | 42       | X→П 2                   | display __inline_show_80_0 exponent body
-   90 | 63       | П→X 3                   | display __inline_show_80_0 leader
-   91 | 62       | П→X 2                   | display __inline_show_80_0 body
+   89 | 42       | X→П 2                   | display __inline_show_82_0 exponent body
+   90 | 63       | П→X 3                   | display __inline_show_82_0 leader
+   91 | 62       | П→X 2                   | display __inline_show_82_0 body
    92 | 14       | ↔                       | display template leader merge
    93 | 54       | К НОП                   | display template leader preserve
    94 | 0C       | ВП                      | display template leader restore
-   95 | 50       | С/П                     | show __inline_show_80_0
-   96 | 52       | В/О                     | display __inline_show_80_0 return
+   95 | 50       | С/П                     | show __inline_show_82_0
+   96 | 52       | В/О                     | display __inline_show_82_0 return

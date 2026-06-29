@@ -1,16 +1,20 @@
-Setup Block:
-  `R5=0; R7=С3; R8=L2; R9=С5`
-
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |   -  | 0                       |
-   01 |  45  | X→П 5                   | setup R5
-   02 |  48  | X→П 8                   | setup R8
-   03 |   -  | 11                      |
-   04 |  47  | X→П 7                   | setup R7
-   05 |   -  | 13                      |
-   06 |  49  | X→П 9                   | setup R9
+   00 |  01  | 1                       |
+   01 |  01  | 1                       |
+   02 |  47  | X→П 7                   | setup R7
+   03 |  00  | 0                       |
+   04 |  45  | X→П 5                   | setup R5
+   05 |  48  | X→П 8                   | setup R8
+   06 |  01  | 1                       |
+   07 |  03  | 3                       |
+   08 |  49  | X→П 9                   | setup R9
+   09 |  09  | 9                       |
+   10 |  01  | 1                       |
+   11 |  1D  | F cos                   | expected_mode("grd") cosine
+   12 |  18  | F ln                    | expected_mode("grd") domain guard
+   13 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment

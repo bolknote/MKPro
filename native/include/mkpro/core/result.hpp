@@ -186,6 +186,7 @@ struct CompileOptions {
   bool signed_abs_match_pairs = false;
   bool synthesize_parametric_siblings = false;
   bool pack_counter_stripes = false;
+  bool trig_fractional_pack = false;
   bool canonicalize_repeated_unary_update_args = false;
   bool x_param_value_functions = false;
   bool x_param_y_stack_stored_entry = false;
@@ -219,6 +220,7 @@ struct CompileOptions {
   bool assume_dead_selector_integer_part = false;
   std::vector<std::string> force_fractional_constant_selector_preloads;
   std::vector<std::string> pack_counter_stripe_names;
+  std::vector<std::string> trig_fractional_pack_names;
   std::vector<RegisterShare> forced_register_shares;
 };
 

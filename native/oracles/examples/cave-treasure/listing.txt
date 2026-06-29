@@ -65,13 +65,18 @@
    60 |  35  | К {x}                   | random int fractional part
    61 |  11  | −                       | random int floor
    62 |  44  | X→П 4                   | setup caches
-   63 |  50  | С/П                     | setup complete
+   63 |  01  | 1                       |
+   64 |  00  | 0                       |
+   65 |  00  | 0                       |
+   66 |  1D  | F cos                   | expected_mode("rad") cosine
+   67 |  18  | F ln                    | expected_mode("rad") domain guard
+   68 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  6D  | П→X d                   | display __inline_show_35_0 source
-   01 |  50  | С/П                     | show __inline_show_35_0
+   00 |  6D  | П→X d                   | display __inline_show_37_0 source
+   01 |  50  | С/П                     | show __inline_show_37_0
    02 |  45  | X→П 5                   | read key
    03 |  D1  | К П→X 1                 | predecrement resources_1
    04 |  61  | П→X 1                   | decrement/test resources_1
@@ -143,7 +148,7 @@
    70 |  22  | F x²                    | sqr()
    71 |  10  | +                       | expr +
    72 |  0E  | В↑                      | x-param inline keep displayed value
-   73 |  50  | С/П                     | show __inline_show_111_2
+   73 |  50  | С/П                     | show __inline_show_113_2
    74 |  1C  | F sin                   | risk input read()
    75 |  01  | 1                       | risk multiplier
    76 |  10  | +                       | risk multiplier

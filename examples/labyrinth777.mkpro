@@ -5,6 +5,8 @@ reference anvarov_labyrinth777
 
 program Labyrinth777 {
   state {
+    expected_mode_only("rad")
+
     energy: counter -9..9 = 9
 
     // The original register layout keeps the three coordinates separately:

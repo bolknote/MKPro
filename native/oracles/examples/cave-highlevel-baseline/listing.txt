@@ -106,13 +106,18 @@
    A2 |  43  | X→П 3                   | setup passages_3
    A3 |  20  | F π                     | pi()
    A4 |  40  | X→П 0                   | setup caches
-  >69 |  50  | С/П                     | setup complete
+  >69 |  01  | 1                       |
+  >6A |  00  | 0                       |
+  >6B |  00  | 0                       |
+  >6C |  1D  | F cos                   | expected_mode("rad") cosine
+  >6D |  18  | F ln                    | expected_mode("rad") domain guard
+  >6E |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code  | Command                 | Comment
 ------+-------+-------------------------+----------------
    00 | 00    | 0                       | initial prompt screen
-   01 | 50    | С/П                     | show __inline_show_39_0
+   01 | 50    | С/П                     | show __inline_show_41_0
    02 | 47    | X→П 7                   | read command
    03 | 64    | П→X 4                   | decrement/test resources_1
    04 | 01    | 1                       |
@@ -143,7 +148,7 @@
    29 | 15    | F 10ˣ                   | pow10()
    30 | 10    | +                       | expr +
    31 | 0E    | В↑                      | x-param inline keep displayed value
-   32 | 50    | С/П                     | show __inline_show_131_1
+   32 | 50    | С/П                     | show __inline_show_133_1
    33 | 1C    | F sin                   | risk input read()
    34 | 01    | 1                       | risk multiplier
    35 | 10    | +                       | risk multiplier

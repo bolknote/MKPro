@@ -33,17 +33,21 @@
    27 |  44  | X→П 4                   | setup minute
    28 |  14  | X↔Y                     | restore stack.X after minute
    29 |  45  | X→П 5                   | setup hour
-   30 |  50  | С/П                     | setup complete
+   30 |  09  | 9                       |
+   31 |  01  | 1                       |
+   32 |  1D  | F cos                   | expected_mode("grd") cosine
+   33 |  18  | F ln                    | expected_mode("grd") domain guard
+   34 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code  | Command                 | Comment
 ------+-------+-------------------------+----------------
-   00 | 65    | П→X 5                   | display __inline_show_18_0 source
+   00 | 65    | П→X 5                   | display __inline_show_20_0 source
    01 | 6E    | П→X e                   | preload const 100
    02 | 12    | ×                       | packed display field shift
-   03 | 64    | П→X 4                   | display __inline_show_18_0 source
+   03 | 64    | П→X 4                   | display __inline_show_20_0 source
    04 | 10    | +                       | packed display field append
-   05 | 50    | С/П                     | show __inline_show_18_0
+   05 | 50    | С/П                     | show __inline_show_20_0
    06 | 6B    | П→X b                   | preload const 10
    07 | 42    | X→П 2                   | set outer_delay
    08 | 62    | П→X 2                   | recall outer_delay

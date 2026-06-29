@@ -9,6 +9,8 @@ program FoxHuntMK61 {
   field: board(0..9, 0..9)
 
   state {
+    expected_mode_only("grd")
+
     cell: coord(field)
     foxes: coord_list(field, 9) = random_unique()
     bearing: counter 0..9 = 0

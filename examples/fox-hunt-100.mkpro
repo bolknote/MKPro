@@ -7,6 +7,8 @@ program FoxHunt100 {
   field: board(0..9, 0..9)
 
   state {
+    expected_mode_only("grd")
+
     // Decimal-pair coordinates keep the radio-orienteering feel of the original:
     // the player thinks in x.y cells, not in a flat index.
     cell: coord(field)

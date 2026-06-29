@@ -7,6 +7,8 @@ program Minesweeper9x9 {
   minefield: board(1..9, 1..9)
 
   state {
+    expected_mode_only("grd")
+
     // The original uses two-digit cell names from 11 to 99; preserving that
     // convention keeps the player's paper board aligned with the listing.
     // Mines are generated once and never shown.

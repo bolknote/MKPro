@@ -1,45 +1,61 @@
-Setup Block:
-  `R2=8; R3=2; R0=42134124; R4=0; R1=0; Re=10; R7=51; R8=L2; R9=67; Ra=_1; Rb=С9; Rc=Е5; Rd=_3`
-
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |   -  | 8                       |
+   00 |  08  | 8                       |
    01 |  42  | X→П 2                   | setup R2
-   02 |   -  | 2                       |
+   02 |  02  | 2                       |
    03 |  43  | X→П 3                   | setup R3
-   04 |   -  | 42134124                |
-   05 |  40  | X→П 0                   | setup R0
-   06 |   -  | 0                       |
-   07 |  44  | X→П 4                   | setup R4
-   08 |  41  | X→П 1                   | setup R1
-   09 |  48  | X→П 8                   | setup R8
-   10 |   -  | 10                      |
-   11 |  4E  | X→П e                   | setup Re
-   12 |   -  | 51                      |
-   13 |  47  | X→П 7                   | setup R7
-   14 |   -  | 67                      |
-   15 |  49  | X→П 9                   | setup R9
-   16 |   -  | 39                      |
-   17 |  4A  | X→П a                   | setup Ra
-   18 |   -  | 17                      |
-   19 |  4B  | X→П b                   | setup Rb
-   20 |   -  | 33                      |
-   21 |  4C  | X→П c                   | setup Rc
-   22 |   -  | 41                      |
-   23 |  4D  | X→П d                   | setup Rd
+   04 |  04  | 4                       |
+   05 |  02  | 2                       |
+   06 |  01  | 1                       |
+   07 |  03  | 3                       |
+   08 |  04  | 4                       |
+   09 |  01  | 1                       |
+   10 |  02  | 2                       |
+   11 |  04  | 4                       |
+   12 |  40  | X→П 0                   | setup R0
+   13 |  00  | 0                       |
+   14 |  44  | X→П 4                   | setup R4
+   15 |  41  | X→П 1                   | setup R1
+   16 |  48  | X→П 8                   | setup R8
+   17 |  01  | 1                       |
+   18 |  00  | 0                       |
+   19 |  4E  | X→П e                   | setup Re
+   20 |  05  | 5                       |
+   21 |  01  | 1                       |
+   22 |  47  | X→П 7                   | setup R7
+   23 |  06  | 6                       |
+   24 |  07  | 7                       |
+   25 |  49  | X→П 9                   | setup R9
+   26 |  03  | 3                       |
+   27 |  09  | 9                       |
+   28 |  4A  | X→П a                   | setup Ra
+   29 |  01  | 1                       |
+   30 |  07  | 7                       |
+   31 |  4B  | X→П b                   | setup Rb
+   32 |  03  | 3                       |
+   33 |  03  | 3                       |
+   34 |  4C  | X→П c                   | setup Rc
+   35 |  04  | 4                       |
+   36 |  01  | 1                       |
+   37 |  4D  | X→П d                   | setup Rd
+   38 |  09  | 9                       |
+   39 |  01  | 1                       |
+   40 |  1D  | F cos                   | expected_mode("grd") cosine
+   41 |  18  | F ln                    | expected_mode("grd") domain guard
+   42 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  62  | П→X 2                   | display __inline_show_30_0 source
+   00 |  62  | П→X 2                   | display __inline_show_32_0 source
    01 |  6E  | П→X e                   | preload const 10
    02 |  12  | ×                       | packed display field shift
-   03 |  63  | П→X 3                   | display __inline_show_30_0 source
+   03 |  63  | П→X 3                   | display __inline_show_32_0 source
    04 |  10  | +                       | packed display field append
-   05 |  50  | С/П                     | show __inline_show_30_0
-   06 |  60  | П→X 0                   | display __inline_show_31_1 source
-   07 |  50  | С/П                     | show __inline_show_31_1
+   05 |  50  | С/П                     | show __inline_show_32_0
+   06 |  60  | П→X 0                   | display __inline_show_33_1 source
+   07 |  50  | С/П                     | show __inline_show_33_1
    08 |  0E  | В↑                      | separate adjacent number entry
    09 |  04  | 4                       |
    10 |  11  | −                       | dispatch compare

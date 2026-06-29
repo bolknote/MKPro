@@ -6,6 +6,8 @@ reference bolknote_99_bottles
 
 program NinetyNineBottles {
   state {
+    expected_mode_only("grd")
+
     bottles: counter 0..99 = stack.X
   }
 

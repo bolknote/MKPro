@@ -6,6 +6,8 @@ reference lordbss_pmk164
 
 program Dungeon {
   state {
+    expected_mode_only("grd")
+
     // The player sees position and height. The generated plan says which height
     // is blocked by a wall at each corridor position; score stays in R4.
     pos: coord(dungeon) = 8

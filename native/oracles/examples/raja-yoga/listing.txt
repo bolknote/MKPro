@@ -47,7 +47,10 @@
    43 |  35  | К {x}                   | random int fractional part
    44 |  11  | −                       | random int floor
    45 |  43  | X→П 3                   | setup obstacles
-   46 |  50  | С/П                     | setup complete
+   46 |  6D  | П→X d                   | expected_mode("grd") probe
+   47 |  1D  | F cos                   | expected_mode("grd") cosine
+   48 |  18  | F ln                    | expected_mode("grd") domain guard
+   49 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -55,20 +58,20 @@
    00 |  88  | К БП 9                  | empty-stack tail call await_effort; preloaded R9=B5 indirect-target=3 shifted-forward indirect flow
    01 |  6E  | П→X e                   | preload const -999
    02 |  50  | С/П                     | halt
-   03 |  65  | П→X 5                   | display __inline_show_34_0 source
+   03 |  65  | П→X 5                   | display __inline_show_36_0 source
    04 |  6C  | П→X c                   | preload const 10
    05 |  12  | ×                       | packed display field shift
-   06 |  60  | П→X 0                   | display __inline_show_34_0 source
+   06 |  60  | П→X 0                   | display __inline_show_36_0 source
    07 |  10  | +                       | packed display field append
    08 |  6C  | П→X c                   | preload const 10
    09 |  12  | ×                       | packed display field shift
-   10 |  62  | П→X 2                   | display __inline_show_34_0 source
+   10 |  62  | П→X 2                   | display __inline_show_36_0 source
    11 |  10  | +                       | packed display field append
    12 |  6C  | П→X c                   | preload const 10
    13 |  12  | ×                       | packed display field shift
-   14 |  66  | П→X 6                   | display __inline_show_34_0 source
+   14 |  66  | П→X 6                   | display __inline_show_36_0 source
    15 |  10  | +                       | packed display field append
-   16 |  50  | С/П                     | show __inline_show_34_0
+   16 |  50  | С/П                     | show __inline_show_36_0
    17 |  41  | X→П 1                   | read effort
    18 |  D4  | К П→X 4                 | increment steps
    19 |  64  | П→X 4                   | recall steps

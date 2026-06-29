@@ -61,7 +61,12 @@
    57 |  13  | ÷                       | expr /
    58 |  3A  | К ИНВ                   | bit_not()
    59 |  47  | X→П 7                   | setup empty_row
-   60 |  50  | С/П                     | setup complete
+   60 |  01  | 1                       |
+   61 |  00  | 0                       |
+   62 |  00  | 0                       |
+   63 |  1D  | F cos                   | expected_mode("rad") cosine
+   64 |  18  | F ln                    | expected_mode("rad") domain guard
+   65 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -81,12 +86,12 @@
    12 |  38  | К ∨                     | bit_or()
    13 |  39  | К ⊕                     | bit_xor()
    14 |  49  | X→П 9                   | set row
-   15 |  6D  | П→X d                   | display __inline_show_36_0 floor
-   16 |  69  | П→X 9                   | display __inline_show_36_0 packed row
+   15 |  6D  | П→X d                   | display __inline_show_38_0 floor
+   16 |  69  | П→X 9                   | display __inline_show_38_0 packed row
    17 |  14  | ↔                       | display packed row floor merge
    18 |  25  | F reverse               | display packed row preserve
    19 |  0C  | ВП                      | display packed row restore
-   20 |  50  | С/П                     | show __inline_show_36_0
+   20 |  50  | С/П                     | show __inline_show_38_0
    21 |  46  | X→П 6                   | read command
    22 |  35  | К {x}                   | current-X frac
    23 |  EA  | К x=0 a                 | false branch for ==; preloaded Ra=B2 indirect-target=0 indirect flow

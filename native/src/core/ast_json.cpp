@@ -407,7 +407,8 @@ std::string v2_program_to_json(const V2Program& program) {
   if (program.expected_mode.has_value()) {
     std::ostringstream expected_mode;
     expected_mode << "{\"mode\":" << json_escape(program.expected_mode->mode)
-                  << ",\"line\":" << program.expected_mode->line << "}";
+                  << ",\"line\":" << program.expected_mode->line
+                  << ",\"only\":" << (program.expected_mode->only ? "true" : "false") << "}";
     add_field(out, first, "expectedMode", expected_mode.str());
   }
   add_field(out, first, "state", json_array(program.state, [](const V2StateField& field) {

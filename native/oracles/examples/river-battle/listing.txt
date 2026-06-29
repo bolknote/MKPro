@@ -67,18 +67,22 @@
    63 |  B6  | К X→П 6                 | random coord store
    64 |  58  | F L2                    | random coord outer loop
    65 |  19  | 19                      | random coord outer loop
-   66 |  07  | 7                       |
-   67 |  50  | С/П                     | setup complete
+   66 |  09  | 9                       |
+   67 |  01  | 1                       |
+   68 |  1D  | F cos                   | expected_mode("grd") cosine
+   69 |  18  | F ln                    | expected_mode("grd") domain guard
+   70 |  07  | 7                       |
+   71 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code  | Command                 | Comment
 ------+-------+-------------------------+----------------
-   00 | 63    | П→X 3                   | display __inline_show_34_0 source
+   00 | 63    | П→X 3                   | display __inline_show_36_0 source
    01 | 6D    | П→X d                   | preload const 10
    02 | 12    | ×                       | packed display field shift
-   03 | 6C    | П→X c                   | display __inline_show_34_0 source
+   03 | 6C    | П→X c                   | display __inline_show_36_0 source
    04 | 10    | +                       | packed display field append
-   05 | 50    | С/П                     | show __inline_show_34_0
+   05 | 50    | С/П                     | show __inline_show_36_0
    06 | 45    | X→П 5                   | read shot
    07 | 63    | П→X 3                   | recall shells
    08 | 01    | 1                       |
@@ -149,7 +153,7 @@
    74 | 0E    | В↑                      | random int keep scaled draw
    75 | 35    | К {x}                   | random int fractional part
    76 | 11    | −                       | random int floor
-   77 | 50    | С/П                     | show __inline_show_68_1
+   77 | 50    | С/П                     | show __inline_show_70_1
    78 | 0B    | /-/                     | negate response for zero test
    79 | 5C    | F x<0                   | false branch for >
    80 | 00    | 00                      | false branch for >

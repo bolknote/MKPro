@@ -40,7 +40,11 @@
    35 |  35  | К {x}                   | random int fractional part
    36 |  11  | −                       | random int floor
    37 |  46  | X→П 6                   | setup foxes
-   38 |  50  | С/П                     | setup complete
+   38 |  09  | 9                       |
+   39 |  01  | 1                       |
+   40 |  1D  | F cos                   | expected_mode("grd") cosine
+   41 |  18  | F ln                    | expected_mode("grd") domain guard
+   42 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code     | Command                 | Comment
@@ -101,7 +105,7 @@
    54 | 44       | X→П 4                   | line_count step
    55 | 61       | П→X 1                   | preload const 19
    56 | AE       | К ПП e                  | line_count progression; preloaded Re=60 indirect-target=60 shifted-forward indirect flow
-   57 | 50       | С/П                     | show __inline_show_33_0
+   57 | 50       | С/П                     | show __inline_show_35_0
    58 | 51       | БП                      | loop back
    59 | 00       | 00                      | loop back
    60 | 43       | X→П 3                   | line_count counter

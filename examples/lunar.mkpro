@@ -6,6 +6,8 @@ reference lordbss_pmk38
 
 program LunarLander {
   state {
+    expected_mode_only("grd")
+
     height: counter 0..999 = 100
     fuel: counter 0..999 = 140
     // Speed is signed: falling and braking are both first-class states, not

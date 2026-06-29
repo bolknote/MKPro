@@ -1,6 +1,10 @@
 reference anvarov_e_94_digits
 
 program E94Digits {
+  state {
+    expected_mode_only("grd")
+  }
+
   digits = 94
   n = 65
   e = 1

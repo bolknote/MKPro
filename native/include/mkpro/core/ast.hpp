@@ -39,6 +39,7 @@ struct DisplayItem {
 struct V2ExpectedMode {
   std::string mode;
   int line = 0;
+  bool only = false;
 };
 
 struct V2Const {

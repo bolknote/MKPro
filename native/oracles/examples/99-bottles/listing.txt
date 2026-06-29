@@ -3,7 +3,11 @@
 ------+------+-------------------------+----------------
    -- |   -  | enter bottles           | enter any value 0..99 in X
    00 |  40  | X→П 0                   | setup bottles
-   01 |  50  | С/П                     | setup complete
+   01 |  09  | 9                       |
+   02 |  01  | 1                       |
+   03 |  1D  | F cos                   | expected_mode("grd") cosine
+   04 |  18  | F ln                    | expected_mode("grd") domain guard
+   05 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code  | Command                 | Comment

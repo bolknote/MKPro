@@ -80,6 +80,7 @@ void lowering_helpers_match_typescript_contract();
 void machine_profile_matches_typescript_contract();
 void match_blocks_match_typescript_contract();
 void maxmin_zero_lint_matches_typescript_contract();
+void mk61_trig_generated_matches_rom_derived_contract();
 void opcode_catalog_matches_typescript_contract();
 void oracle_index_loads_committed_artifacts();
 void packed_counter_stripes_match_typescript_contract();
@@ -115,6 +116,7 @@ void stack_residency_matches_typescript_contract();
 void strict_allocation_matches_typescript_contract();
 void style_lints_matches_typescript_contract();
 void super_dark_layout_matches_typescript_contract();
+void trig_fractional_pack_matches_strategy_contract();
 void v2_const_matches_typescript_contract();
 void x2_register_dataflow_matches_typescript_contract();
 void x2_shape_data_model_matches_typescript_contract();
@@ -289,6 +291,8 @@ int main(int argc, char** argv) {
        mkpro::tests::match_blocks_match_typescript_contract},
       {"maxmin_zero_lint_matches_typescript_contract",
        mkpro::tests::maxmin_zero_lint_matches_typescript_contract},
+      {"mk61_trig_generated_matches_rom_derived_contract",
+       mkpro::tests::mk61_trig_generated_matches_rom_derived_contract},
       {"opcode_catalog_matches_typescript_contract",
        mkpro::tests::opcode_catalog_matches_typescript_contract},
       {"oracle_index_loads_committed_artifacts",
@@ -359,6 +363,8 @@ int main(int argc, char** argv) {
        mkpro::tests::style_lints_matches_typescript_contract},
       {"super_dark_layout_matches_typescript_contract",
        mkpro::tests::super_dark_layout_matches_typescript_contract},
+      {"trig_fractional_pack_matches_strategy_contract",
+       mkpro::tests::trig_fractional_pack_matches_strategy_contract},
       {"v2_const_matches_typescript_contract", mkpro::tests::v2_const_matches_typescript_contract},
       {"x2_register_dataflow_matches_typescript_contract",
        mkpro::tests::x2_register_dataflow_matches_typescript_contract},

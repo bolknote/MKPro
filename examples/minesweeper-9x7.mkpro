@@ -8,6 +8,8 @@ program Minesweeper9x7 {
   minefield: board(1..9, 0..6)
 
   state {
+    expected_mode_only("grd")
+
     // The source asks for X, stack lift, then Y. As intent, that is a single
     // board coordinate: x is 1..9 and y is 0..6, matching the paper grid.
     mines: cells(minefield) = random()
