@@ -1,6 +1,10 @@
 # MK-Pro Optimization and Lowering Strategy Reference
 
-This is an implementation-level reference for the current translator in this repository. It describes what the compiler optimizes and lowers, where each optimization is applied, and how to read reported capabilities.
+This is an implementation-level reference for the current translator in this
+repository. It describes what the compiler optimizes and lowers, where each
+optimization is applied, and how to read reported capabilities.
+It is the canonical home for detailed optimization lists and pass-order notes;
+the MK-Pro language reference keeps only the source-level optimizer contract.
 
 The translator runs on MK-Pro source and emits MK-61 program bytes. Optimizations are selected only when semantics are preserved under the selected MK-61 exact-machine profile. If an optimization is skipped, it is usually because the prerequisite constraints, control-flow shape, or machine feature preconditions were not met.
 
@@ -2461,7 +2465,9 @@ These are not independent optimizations; they gate whether the lowering strategy
 
 - `report.machine` — fixed to `mk61` for this toolchain.
 - `report.machineFeaturesUsed` — feature names set from successful candidate/evidence, as listed above.
-- `report.emulatorFacts` — probe-backed machine truths used by lowering and verified rewrites.
+- `report.emulatorFacts` — static probe-backed machine truths used by lowering and verified
+  rewrites. They are report/profile facts, not a runtime emulator oracle and not an
+  optimizer candidate-acceptance gate; risky candidates still need local proof obligations.
 
 - `undocumented-opcodes` (feature precondition) — source-level pass uses `F0..FF` and undocumented aliases only where exact behavior is proved safe.
 - `extra-cells` (feature precondition) — non-official/extra physical cells are tracked via
@@ -2540,7 +2546,7 @@ the deferral policy is lifted.
 #### Applied post-parity optimizations
 
 - **(#1, DEFECT 4) Aggressive post-layout indirect-flow rescue enabled by default
-  for every program + behavioral-equivalence selection gate.** *Applied.*
+  for every program + static-proof selection gate.** *Applied.*
   `allow_aggressive_post_layout` in `native/src/core/compiler.cpp` is now `true`
   for all programs (it only honors an explicit `disable_aggressive_post_layout`
   opt-out used by focused unit tests). Two correctness guards make the smaller
@@ -2560,26 +2566,25 @@ the deferral policy is lifted.
      `retarget_selector_preloads_after_overlay` rewrites the affected preload
      values (and their listing comments) to the post-shift target. `BitClear`
      now answers `1`; `emulator_bitmask_facts` is green with the rescue on.
-  2. **Behavioral-equivalence acceptance gate.** Candidate selection ranks purely
-     by cell count, so a smaller-but-miscompiled candidate could otherwise win.
-     `candidate_behaviorally_matches_baseline` (in `compiler.cpp`) runs every
-     risky candidate (`aggressive_post_layout_indirect_flow`,
+  2. **Static proof acceptance gate.** Candidate selection ranks purely by cell
+     count, so a smaller-but-miscompiled candidate could otherwise win.
+     `candidate_needs_static_proof_gate` marks the risky families
+     (`aggressive_post_layout_indirect_flow`,
      `dual_use_constant_indirect_flow`, `runtime_indirect_call_flow`,
-     `preloaded_indirect_flow`) and the trusted non-aggressive baseline on a
-     battery of input scenarios via the in-process `mkpro::emulator::MK61`, and
-     rejects any candidate whose runtime transcript diverges. The harness
-     records the display/stopped state **per interaction turn** and only holds a
-     candidate to the baseline while the baseline is still *actively* responding:
-     once the reference program goes idle (its display stops changing between
-     turns, i.e. it has reached a terminal halt and merely re-stops on each
-     further `С/П`), subsequent inputs are out of the program's live contract and
-     the layout-dependent resume behavior of the two forms is allowed to differ.
-     Preload values are translated from the compiler's hex-ish nibble encoding
-     (`A/B/C/D/E/F`) to MK-61 display glyphs before `set_register`, and any
-     emulator load/parse failure marks the observation un-runnable (compared as
-     its own bucket) so the gate never throws.
+     `preloaded_indirect_flow`, forward indirect flow, dead-integer fractional
+     selector elision, fractional selector packing/forced preloading,
+     synthesized dispatch);
+     `optimizer_static_gate_accepts` accepts them only when the final candidate
+     artifact passes the local verifier for that optimization boundary
+     (`indirect-flow-targets`, `runtime-indirect-call-targets`,
+     `fractional-selector-data-values`, `suppressed-constant-preloads`,
+     `computed-dispatch-targets`). The same verifier results are published in
+     `ProofReport`; the report is not the source of acceptance. The
+     emulator-backed `program_behavior_digest` remains available for
+     CLI/debug/regression checks, but is not load-bearing in optimizer candidate
+     acceptance.
 
-  Measured, behaviorally-verified wins (`MKPRO_NATIVE_BLESS=1` re-blessed,
+  Measured, proof-gated wins (`MKPRO_NATIVE_BLESS=1` re-blessed,
   `git diff` step deltas ≤ 0): `basic` 8→7, `functions-demo` 25→21,
   `human` 27→23, `tiny-game` 27→23. The `human` shrink is independently checked
   by `emulator_indirect_flow_equivalence_matches_typescript_contract` (now
@@ -2614,7 +2619,7 @@ the deferral policy is lifted.
   `native/src/core/passes/preloaded_indirect_flow.cpp` previously skipped
   non-hoisted, non-explicit `disable_candidate_search` variants so their
   fingerprints kept the TypeScript direct-call form. The pass already runs (and is
-  exercised behaviorally) in the default candidate-search pipeline; the parity
+  exercised by regression tests) in the default candidate-search pipeline; the parity
   skip was removed. On the current example corpus this produces no fingerprint
   change: native's `runtime_indirect_call_plans` finds no plans for the
   non-hoisted primary variants (e.g. `rambo-iii` primary stays at 129 cells even
@@ -2672,8 +2677,8 @@ the deferral policy is lifted.
   on) compiles of `99-bottles` are all byte-identical (52 cells) and produce an
   identical `mkpro::emulator::MK61` display transcript to the committed 52-cell
   reference across `bottles ∈ {0,1,7,13,42,80,99}`; the default compile reports
-  `screen-text-lowering` and is **accepted** by
-  `candidate_behaviorally_matches_baseline` (not rejected). Measured oracle
+  `screen-text-lowering` and is accepted by the optimizer selection pipeline.
+  Measured oracle
   change: **only `99-bottles/variants.txt`** — the six hoisted variants
   (`hoistSharedHelpers`, `hoistSharedHelpers+hoistProcs`,
   `shareRandomCell+hoistSharedHelpers`,
@@ -2688,11 +2693,11 @@ the deferral policy is lifted.
   shift it). `hex`/`bytes`/`listing`/`setup` for `99-bottles` are unchanged
   (delta 0) and no other example's oracle changed; full `ctest` stays green.
 
-#### Candidate status after the DEFECT-4 fix + behavioral gate
+#### Candidate status after the DEFECT-4 fix + static proof gate
 
 Candidate **#1** is now **Applied** (see "Applied post-parity optimizations"
-above): the helper-overlay packing was repaired and the behavioral-equivalence
-selection gate makes the whole class of "smaller-but-wrong" forms unselectable.
+above): the helper-overlay packing was repaired and the static proof selection
+gate makes the whole class of "smaller-but-wrong" unproved forms unselectable.
 The remaining candidates below are now *mechanically unblocked* (they ride the
 same now-correct, gated rescue). On the committed example corpus #3 and #4
 produce no further shrink, and #2 has since been resolved on its own
@@ -2700,10 +2705,10 @@ produce no further shrink, and #2 has since been resolved on its own
 
 - **(#3) Reference-size post-layout indirect-flow rescue (e.g. `Dungeon`
   primary).** *Unblocked, no corpus shrink.* This rides the same post-layout
-  rescue fixed under #1, so it is now correct and behaviorally gated rather than
+  rescue fixed under #1, so it is now correct and statically proof-gated rather than
   "likely-incorrect". With the rescue enabled by default the candidate is tried
   and validated for every program, but on the current corpus no smaller
-  behaviorally-equivalent form is found/selected for `Dungeon` (stays 75) — the
+  statically-proved form is found/selected for `Dungeon` (stays 75) — the
   gate reports no rejected aggressive candidate, i.e. the packed form is not
   strictly smaller here. No oracle changes; nothing grows.
 
@@ -2711,7 +2716,7 @@ produce no further shrink, and #2 has since been resolved on its own
   no corpus shrink; historic target already beaten.* The mechanism is the
   now-correct, gated rescue from #1. `fox-hunt-100` already compiles to **103**
   cells under the corrected engine (well below the old 122-cell target the
-  variant aimed at), and no strictly-smaller behaviorally-equivalent form is
+  variant aimed at), and no strictly-smaller statically-proved form is
   selected on top of that, so its oracle is unchanged.
 
 - **(#2) `BEEr NN` text-display lowering in hoisted-helper variants.** *Resolved
@@ -2746,27 +2751,78 @@ data read of the constant is insensitive to the integer part. This is exactly
 the density trick used by hand-written reference programs (one register serving
 as both data and address with no recovery tax).
 
-## Emulator decoupling (tracked architectural debt)
+The native optimizer currently treats `-dead-int` as a dangerous unproved form:
+it is generated only as a last-ditch candidate, enters the static proof gate via
+`assume_dead_selector_integer_part`, and is rejected until a local
+dead-component proof exists. The emulator is not used to bless this candidate.
 
-The candidate-acceptance **behavioral-equivalence gate**
-(`run_equivalence_observation` / `candidate_needs_behavioral_equivalence_gate`)
-currently embeds the MK-61 emulator inside the optimizer to validate the
-indirect-flow family (aggressive post-layout, dual-use, runtime/preloaded/forward
-indirect flow) and, most recently, the dead-integer fractional selectors above.
+## Emulator decoupling
 
-Using the emulator for research and tests is fine; having it **load-bearing
-inside the translator/optimizer is only a TEMPORARY measure**. The address math
-itself is already emulator-free (the static `evaluate_indirect_address` model).
-The remaining gap is that the dead-integer optimization proves its soundness via
-the gate rather than statically.
+Optimizer candidate acceptance is static-proof gated. Any new optimizer option that changes control flow, selector meaning, delivered preloads, or data/control dual use must be added to the static proof-gate predicate together with a local verifier, or remain unselectable by automatic candidate search. The MK-61 emulator is not
+load-bearing in the candidate-selection path: `program_behavior_digest` and the
+equivalence scenarios remain for CLI/debug/regression checks, while dangerous
+optimizer candidates must satisfy local proof obligations at the boundary of the
+specific rewrite.
 
-Decoupling plan:
-1. Implement a static **dead-integer analysis**: prove that every data read of a
-   fractional selector constant is insensitive to the retuned integer part
-   (e.g. each read is immediately consumed by fractional extraction `{x}` or by
-   an operation whose result does not depend on the integer part).
-2. With (1) in place, the `-dead-int` candidates are sound by construction; the
-   emulator run can be demoted to an optional self-check (debug builds / CI) and
-   removed from the hot optimization path.
+The build graph enforces the same boundary: `mkpro_core` contains the production
+compiler and optimizer, while the emulator-backed behavior digest and emulator
+sources live in the separate `mkpro_debug` target used by CLI/debug/regression
+surfaces.
 
-Code anchor: search `EMULATOR-DECOUPLE` in `native/src/core/compiler.cpp`.
+This gate covers automatic optimizer candidate ranking and selection. Explicitly
+forced compile options remain an expert/debug surface: they can still request a
+rewrite directly, but the optimizer will not select an unproved dangerous
+candidate on its own.
+
+Current code anchors:
+
+- `candidate_needs_static_proof_gate` identifies candidate families that are not
+  safe to rank by size alone.
+- `optimizer_static_gate_accepts` accepts only candidates whose final emitted
+  artifact passes the relevant local proof verifier; `ProofReport` mirrors that
+  result for public reporting.
+- `address_formula_matches_constraints` re-checks synthesized dispatch formulas
+  without running the emulator.
+
+Current local proof obligations:
+
+- `computed-dispatch-targets`: every saved dispatch constraint must be reproduced
+  by the saved formula through the static address resolver, and each solved plan
+  must have a matching final `К БП r` artifact whose comment starts with
+  `computed dispatch;`, has a non-empty
+  `computed-dispatch-targets=...` marker for the same stable selector register
+  and a `computed-dispatch-proof-targets=...` marker whose numeric targets match
+  the saved proof constraints.
+- `indirect-flow-targets`: every annotated preloaded indirect branch/call must
+  use a stable selector register, have a matching final selector value for that
+  register, and that value must statically resolve to the annotated target.
+  Annotated targets outside the MK-61 program address range `0..104` are not
+  proof artifacts.
+- `runtime-indirect-call-targets`: runtime indirect-call rewrites, including
+  aggressive threshold variants, must enter the target literal digits immediately
+  before the selector store, store into the same stable register used by the
+  annotated indirect call, and avoid any later store that overwrites that
+  register first. The annotated target must be in the MK-61 program address range
+  `0..104`.
+- `fractional-selector-data-values`: selector reuse and forced fractional selector
+  preloads must prove every required selector value individually. Each value must
+  either be recovered with a proof marker attached to the `К {x}` recovery opcode
+  or match a natural value in the final preload table for a stable indirect
+  selector register that already preserves the fractional data. A copied comment
+  on any other opcode is not a proof.
+- `suppressed-constant-preloads`: each suppressed preload value must be absent
+  from the final preload table. This is a standalone proof gate for suppress-only
+  candidates and a sub-obligation for mixed indirect-flow candidates.
+The `indirect-target=...`, `preloaded Rn=...`, `runtime indirect call selector
+...`, and `runtime indirect call; ...` comments emitted by these rewrites are
+proof-carrying metadata. They must be preserved by later layout/reporting passes:
+the static gate parses them to connect the final emitted opcode, the final delivered
+selector value, and the local proof obligation. They are not merely listing
+decoration.
+
+The marker format is intentionally strict. Runtime markers must appear as the
+comment prefix, numeric marker fields must end at a field boundary, and formal
+selector aliases are compared as aliases rather than normalized as numbers.
+For preloaded indirect flow, `preloaded Rn=...` and `indirect-target=...` must
+appear in that order in the same comment. Malformed, reordered, or embedded
+marker text is ignored or rejected by the static gate.
