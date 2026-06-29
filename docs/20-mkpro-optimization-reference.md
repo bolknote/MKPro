@@ -61,6 +61,7 @@ the same generalized lowering strategy.
 - `arithmetic-if-extrema` — replaces branching for `max/min` with a short arithmetic form.
 - `zero-condition-test` — shortens checks such as `== 0` to a cheaper machine pattern.
 - `dispatch-compare-chain` — compresses long compare-and-branch chains.
+- `computed-dispatch` — lowers eligible exhaustive multi-way `match` dispatch to a single computed indirect jump using a solved affine formula (`op(scale*x + offset)`) after post-layout address resolution.
 - `indirect-flow` — enables indirect jumps/dispatch when preconditions are proven.
 - `indirect-memory-table` — reads the next-cell address through an indirect table instead of long absolute labels.
 - `tail-call-lowering` — lowers tail calls to a shorter jump-based form instead of a full call frame.
@@ -156,7 +157,8 @@ implementation and tuning, many of those names fall into broader families:
   indirect side effects when legal. Includes `affine-indexed-selector-reuse`,
   `indexed-selector-cache`, `indirect-memory-alias-selector`,
   `fractional-indirect-addressing`, `indirect-selector-integer-part-reuse`,
-  `destructive-selector-operand-order`, `stable-indirect-flow`,
+  `destructive-selector-operand-order`, `computed-dispatch`,
+  `stable-indirect-flow`,
   `preloaded-indirect-flow`, `runtime-indirect-call-flow`,
   `r0-fractional-sentinel`, and `super-dark-*`.
 - **Helperization, shared bodies, and tail merging** — extracts or jumps into
@@ -204,6 +206,7 @@ These transformations run on source constructs before machine lowering:
 - `fractional-indirect-addressing` — if `bank[int(selector)]` targets a physically aligned contiguous bank and `selector` is already in `R7..Re`, uses that register directly as the indirect-memory selector. This relies on MK-61 indirect memory addressing ignoring the fractional tail, so packed coordinates can select by their integer part without an explicit `К [x]`. When the lowering proves that exact `int(selector)` form, it marks the indirect op so later IR passes may also reuse the selector register's post-indirect integer-part side effect.
 - `destructive-selector-operand-order` — for deterministic commutative primitives such as `bit_and(table[int(coord)], bit_not(frac(coord)))`, evaluates the fractional operand first and leaves the destructive indirect-memory access last. This preserves the packed coordinate tail while still allowing `fractional-indirect-addressing` to use the coordinate register itself as the selector.
 - `indexed-selector-cache` — when repeated dynamic bank accesses share the same index expression, reuses the cached selector directly or derives a sibling field selector by applying only the contiguous offset delta.
+- `computed-dispatch` — for source-level exhaustive match chains (typically `k >= 3` cases and no `otherwise`), solves a post-layout affine selector formula and emits a computed indirect jump path (`К БП r`) instead of compare chains.
 - `display-string-inline` — moves text templates directly into `show`, removing separate temporary definitions.
 - `display-string-guarded-show` — hoists guarded string value selection into the display path when safe.
 - `display-string-assignment-elimination` — deletes compile-time removable display-string assignments that only flow into later `show` inputs and are never consumed elsewhere.
@@ -447,6 +450,7 @@ committed example oracles under `native/oracles/`.
 - `late-layout-if-variant` — re-runs lowering with an aggressive terminal-if lowering variant after full layout.
 - `late-layout-branch-order` — re-runs with swapped terminal-if branch order after full layout.
 - `late-layout-if-branch-order` — combines aggressive terminal-if and branch-order re-runs after full layout.
+- `fast-candidate-search` — enables early candidate-search termination when the base implementation already meets rescue limit or the threshold is hit, with a `fast-candidate-search` optimization marker recording the stop reason.
 - `break-even-indirect-call` — hoists procs/shared helpers and evaluates a guarded indirect-call candidate to collapse repeated direct calls into one-cell indirect flow.
 - `hoisted-helper-indirect-layout` — hoists shared helpers before re-layout and recompiles for better preloaded indirect flow.
 - `hoisted-proc-indirect-layout` — additionally hoists ordinary procedures before re-layout for tighter call/jump sequences.
@@ -590,6 +594,7 @@ The translator aggressively evaluates when undocumented/edge MK-61 behavior can 
 - `post-layout-stop-tail-reuse` — after preloaded indirect-flow has proved a reusable stop tail, replaces repeated `С/П; loop` tails and direct branches to those shims with one-cell indirect jumps/conditionals to the existing stop tail, retargeting generated selector preloads when deleted cells shift later targets.
 - `runtime-indirect-call-flow` — for repeated backward helper calls with legal numeric targets, initializes a dead stable register once at runtime and replaces direct `ПП addr` pairs with one-cell `К ПП r` calls.
 - `preloaded-super-dark-flow` — super-dark path with a preloaded indirect target.
+- `computed-dispatch` — for eligible exhaustive match trees, emits one computed `К БП r` path using the solved affine mapping between selector value and case target instead of full branch chains.
 - `indirect-incdec-counter` — lowers a unit `x++`/`x--` through the indirect pre-increment (R4..R6) or pre-decrement (R0..R3) side effect of `К П->X r`. Unit increments are allowed for any proved nonnegative counter because the incidental recalled `X` value is discarded. Unit decrements are allowed when the source range proves the pre-decrement input is positive; the speculative `indirect-underflow-decrement` candidate also allows them when backward control-flow proves the possible zero-underflow sentinel reaches a terminal nonpositive guard before any observable read/write of the decremented value. That proof scans loop bodies and single-use procedure bodies, but a read of the counter before the guard remains a barrier.
 - `indirect-underflow-decrement` — extends the same R0..R3 pre-decrement fact to fused underflow guards by using `К П->X r` for the mutation and a direct `П->X r` for the observable `< 0` test; stored-input show/read variants restore the input from its register afterward.
 - `r0-indirect-counter` — uses R0 as a readable counter/switch for jump dispatch where provably safe.
