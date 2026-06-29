@@ -242,6 +242,7 @@ target_link_libraries(mkpro_tests PRIVATE mkpro_core)
 set(MKPRO_NATIVE_TEST_NAMES
   address_formula_solver_synthesizes_dispatch
   computed_dispatch_targets_survive_dead_code_elimination
+  computed_dispatch_discovery_keeps_program_correct
   arithmetic_if_matches_typescript_contract
   bit_mask_quotient_reuse_matches_typescript_contract
   board_width_macros_matches_typescript_contract

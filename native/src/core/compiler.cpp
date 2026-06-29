@@ -24637,6 +24637,19 @@ bool lower_numeric_residual_match_statement(LoweringContext& context,
 // candidate); the behavioral-equivalence gate validates the result.
 bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& statement,
                                 const SynthesizedDispatchPlan& plan) {
+  // Reserve the indirect-jump register up front (before emitting anything) so we
+  // can bail cleanly to the compare-chain lowering if no register is free. The
+  // allocator picks the physical register; the static resolver is
+  // register-independent across stable (index >= 7) registers, so any stable one
+  // reproduces the formula solved during discovery. A non-stable register would
+  // mutate under К БП, so reject it.
+  const std::string jump_var = "__dispatch_jump_" + std::to_string(statement.line);
+  if (!ensure_hidden_register(context, jump_var))
+    return false;
+  const int jump_index = register_index_for(context, jump_var);
+  if (jump_index < 7)
+    return false;
+
   const Expression match_expr = parse_expression(*statement.expr, statement.line);
   if (!lower_expression_to_x(context, match_expr))
     return false;
@@ -24665,12 +24678,7 @@ bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& sta
   for (std::size_t index = 0; index < statement.cases.size(); ++index)
     entry_labels.push_back(context.emitter.fresh_label("dispatch_case_entry"));
 
-  // Bind a synthetic variable to the plan's physical stable register and store
-  // the computed address there, then jump through it. A stable (mutation-free,
-  // index >= 7) register makes the static resolver register-independent.
-  const int jump_index = register_index(plan.indirect_register);
-  const std::string jump_var = "__dispatch_jump_" + std::to_string(statement.line);
-  bind_register(context, jump_var, jump_index);
+  // Store the computed address into the reserved register, then jump through it.
   emit_store(context, jump_var, "dispatch computed address");
 
   std::string targets_marker = "computed-dispatch-targets=";
@@ -24679,8 +24687,7 @@ bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& sta
       targets_marker += ",";
     targets_marker += entry_labels.at(index);
   }
-  context.emitter.emit_op(0x80 + jump_index,
-                          "К БП " + core::register_name_for_index(jump_index),
+  context.emitter.emit_op(0x80 + jump_index, "К БП " + register_text_for(context, jump_var),
                           "computed dispatch; " + targets_marker, statement.line);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression.reset();
@@ -24701,8 +24708,7 @@ bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& sta
   context.optimizations.push_back(OptimizationReport{
       .name = "computed-dispatch",
       .detail = "Lowered match at line " + std::to_string(statement.line) +
-                " as a computed indirect dispatch via " +
-                register_text_for(context, plan.indirect_register) + ".",
+                " as a computed indirect dispatch via " + register_text_for(context, jump_var) + ".",
   });
   return true;
 }
@@ -40752,6 +40758,144 @@ discover_fractional_constant_selector_plans(const CompileResult& result,
   return result_plans;
 }
 
+// ---- Computed-dispatch discovery (Stage 2 part B) -------------------------
+// Finds `match` statements that can be lowered as a single computed indirect
+// jump (op(scale*x + offset) -> К БП r) instead of a k-way compare chain, and
+// solves the address formula against the actual post-layout case-body entry
+// addresses. Emulator-free: the formula is confirmed through the solver core,
+// and the whole candidate is still behavioral-equivalence gated.
+
+struct ComputedDispatchMatch {
+  int line = 0;
+  std::vector<std::pair<double, int>> value_case;  // (case value, case index)
+  int case_count = 0;
+};
+
+std::optional<double> parse_integer_match_value(const std::string& text) {
+  try {
+    std::size_t pos = 0;
+    const double value = std::stod(text, &pos);
+    while (pos < text.size() && std::isspace(static_cast<unsigned char>(text.at(pos))) != 0)
+      ++pos;
+    if (pos != text.size())
+      return std::nullopt;
+    if (std::fabs(value - std::round(value)) > 1e-9)
+      return std::nullopt;
+    return std::round(value);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
+void collect_computed_dispatch_matches_in(const std::vector<V2Statement>& statements,
+                                          std::vector<ComputedDispatchMatch>& out);
+
+void collect_computed_dispatch_matches_stmt(const V2Statement& statement,
+                                            std::vector<ComputedDispatchMatch>& out) {
+  // Only exhaustive (no `otherwise`) k>=3 matches over distinct integer case
+  // values are eligible: a computed jump has no fall-through default, so an
+  // unmatched selector value would jump to an unintended address. The
+  // equivalence gate is the final guard, but requiring no otherwise keeps the
+  // candidate honest up front.
+  if (statement.kind == "v2_match" && statement.expr.has_value() &&
+      statement.otherwise == nullptr && statement.cases.size() >= 3) {
+    ComputedDispatchMatch info;
+    info.line = statement.line;
+    info.case_count = static_cast<int>(statement.cases.size());
+    bool ok = true;
+    std::set<double> seen;
+    for (std::size_t case_index = 0; case_index < statement.cases.size() && ok; ++case_index) {
+      const V2MatchCase& match_case = statement.cases.at(case_index);
+      if (match_case.values.empty()) {
+        ok = false;
+        break;
+      }
+      for (const std::string& value : match_case.values) {
+        const std::optional<double> numeric = parse_integer_match_value(value);
+        if (!numeric.has_value() || !seen.insert(*numeric).second) {
+          ok = false;
+          break;
+        }
+        info.value_case.emplace_back(*numeric, static_cast<int>(case_index));
+      }
+    }
+    if (ok && !info.value_case.empty())
+      out.push_back(std::move(info));
+  }
+  collect_computed_dispatch_matches_in(statement.body, out);
+  collect_computed_dispatch_matches_in(statement.then_body, out);
+  collect_computed_dispatch_matches_in(statement.else_body, out);
+  for (const V2MatchCase& match_case : statement.cases)
+    if (match_case.action != nullptr)
+      collect_computed_dispatch_matches_stmt(*match_case.action, out);
+  if (statement.otherwise != nullptr)
+    collect_computed_dispatch_matches_stmt(*statement.otherwise, out);
+}
+
+void collect_computed_dispatch_matches_in(const std::vector<V2Statement>& statements,
+                                          std::vector<ComputedDispatchMatch>& out) {
+  for (const V2Statement& statement : statements)
+    collect_computed_dispatch_matches_stmt(statement, out);
+}
+
+std::vector<ComputedDispatchMatch> collect_computed_dispatch_matches(const V2Program& program) {
+  std::vector<ComputedDispatchMatch> out;
+  collect_computed_dispatch_matches_in(program.body, out);
+  for (const V2Rule& rule : program.rules)
+    collect_computed_dispatch_matches_in(rule.body, out);
+  return out;
+}
+
+// Case-body entry addresses (in case order) from a probe compile that lowered the
+// match through the computed dispatch. Returns empty unless exactly case_count
+// entry labels are present.
+std::vector<int> computed_dispatch_entry_addresses(const std::vector<MachineItem>& items,
+                                                   int case_count) {
+  const std::map<std::string, int> labels = machine_item_label_address_map(items);
+  const std::string prefix = "__dispatch_case_entry_";
+  std::vector<std::pair<long long, int>> found;
+  for (const auto& [name, address] : labels) {
+    if (name.rfind(prefix, 0) != 0)
+      continue;
+    try {
+      found.emplace_back(std::stoll(name.substr(prefix.size())), address);
+    } catch (const std::exception&) {
+    }
+  }
+  if (static_cast<int>(found.size()) != case_count)
+    return {};
+  std::sort(found.begin(), found.end());
+  std::vector<int> addresses;
+  addresses.reserve(found.size());
+  for (const auto& [suffix, address] : found)
+    addresses.push_back(address);
+  return addresses;
+}
+
+// A free stable (mutation-free, index >= 7) register that is not occupied by
+// state or a preloaded constant in `result`. The static resolver is
+// register-independent across stable registers, so any free one works.
+std::optional<std::string> free_stable_dispatch_register(const CompileResult& result) {
+  std::set<int> used;
+  for (const auto& [name, reg] : result.registers) {
+    (void)name;
+    try {
+      used.insert(register_index(reg));
+    } catch (const std::exception&) {
+    }
+  }
+  for (const PreloadReport& preload : result.preloads) {
+    try {
+      used.insert(register_index(preload.register_name));
+    } catch (const std::exception&) {
+    }
+  }
+  for (int index = 14; index >= 7; --index)
+    if (!used.contains(index))
+      return core::register_name_for_index(index);
+  return std::nullopt;
+}
+
 namespace {
 
 constexpr std::size_t kMaxCompileResultCacheEntries = 4096;
@@ -42605,6 +42749,73 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           /*emit_plain=*/false, /*emit_rescue_twins=*/true);
     }
     evaluate_queued_candidates();
+  }
+
+  // Computed-dispatch rescue: convert an exhaustive k-way `match` compare chain
+  // into a single computed indirect jump. The address formula is solved against
+  // the actual post-layout case-body entry addresses via a small fixpoint (the
+  // dispatch prefix size depends on the formula, which shifts the entries), then
+  // queued as a behavioral-equivalence-gated SizeRescue candidate.
+  if (needs_size_rescue && selector_probe_program.has_value()) {
+    const std::vector<ComputedDispatchMatch> dispatch_matches =
+        collect_computed_dispatch_matches(*selector_probe_program);
+    const std::optional<std::string> jump_register = free_stable_dispatch_register(best);
+    if (!dispatch_matches.empty() && jump_register.has_value()) {
+      for (const ComputedDispatchMatch& match : dispatch_matches) {
+        SynthesizedDispatchPlan plan;
+        plan.match_line = match.line;
+        plan.indirect_register = *jump_register;
+        plan.op_opcode = -1;
+        plan.scale = 1.0;
+        plan.offset = 0.0;
+        core::AddressSolverOptions solver_options;
+        solver_options.allow_affine = true;
+        solver_options.angle_fixed = false;
+        bool converged = false;
+        for (int iteration = 0; iteration < 6 && !converged; ++iteration) {
+          CompileOptions probe_options = options;
+          probe_options.synthesized_dispatch_plans = {plan};
+          CompileResult probe;
+          try {
+            probe = cached_compile_source_once(probe_options);
+          } catch (const std::exception&) {
+            break;
+          }
+          if (!probe.implemented)
+            break;
+          const std::vector<int> entries =
+              computed_dispatch_entry_addresses(probe.items, match.case_count);
+          if (entries.empty())
+            break;
+          std::vector<core::AddressConstraint> constraints;
+          constraints.reserve(match.value_case.size());
+          for (const auto& [value, case_index] : match.value_case)
+            constraints.push_back({value, entries.at(static_cast<std::size_t>(case_index))});
+          const std::optional<core::AddressFormula> formula =
+              core::search_address_formula(constraints, plan.indirect_register, solver_options);
+          if (!formula.has_value())
+            break;
+          const bool same = formula->op_opcode == plan.op_opcode &&
+                            std::fabs(formula->scale - plan.scale) < 1e-9 &&
+                            std::fabs(formula->offset - plan.offset) < 1e-9;
+          plan.op_opcode = formula->op_opcode;
+          plan.op_name = formula->op_name;
+          plan.scale = formula->scale;
+          plan.offset = formula->offset;
+          if (same)
+            converged = true;
+        }
+        if (!converged)
+          continue;
+        CompileOptions candidate_options = options;
+        candidate_options.synthesized_dispatch_plans = {plan};
+        add_configured_candidate(std::move(candidate_options), "computed-dispatch",
+                                 "Computed indirect dispatch for match at line " +
+                                     std::to_string(match.line),
+                                 CandidateGate::SizeRescue);
+      }
+      evaluate_queued_candidates();
+    }
   }
 
   if (needs_size_rescue && selected_still_overflows_now()) {

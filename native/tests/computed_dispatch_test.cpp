@@ -1,3 +1,4 @@
+#include "mkpro/compiler.hpp"
 #include "mkpro/core/ir.hpp"
 #include "mkpro/core/passes/dead_code_after_halt.hpp"
 #include "mkpro/core/result.hpp"
@@ -93,6 +94,56 @@ void computed_dispatch_targets_survive_dead_code_elimination() {
     require(has_plain(kept.ops, "body_c"),
             "marked computed-dispatch must keep case body C reachable");
   }
+}
+
+namespace {
+
+bool has_error_diagnostic(const CompileResult& result) {
+  return std::any_of(
+      result.diagnostics.begin(), result.diagnostics.end(),
+      [](const Diagnostic& item) { return item.severity == DiagnosticSeverity::Error; });
+}
+
+}  // namespace
+
+// Forcing the computed-dispatch rescue (via an artificially tiny budget) must
+// never break a program: the discovery fixpoint either converges to a formula
+// the behavioral-equivalence gate accepts, or it is rejected and the compiler
+// keeps the compare-chain lowering. Either way the result stays implemented and
+// error-free. This guards the discovery + lowering plumbing against regressions
+// independently of whether the dispatch happens to win on size.
+void computed_dispatch_discovery_keeps_program_correct() {
+  const std::string source = R"mkpro(
+program DispatchProbe {
+  state {
+    score: counter 0..99 = 0
+    sel: counter 0..2 = 0
+  }
+  loop {
+    sel = read()
+    match sel {
+      0 => bump_a()
+      1 => bump_b()
+      2 => bump_c()
+    }
+  }
+  fn bump_a() { score = score + 4 }
+  fn bump_b() { score = score + 5 }
+  fn bump_c() { score = score + 6 }
+}
+)mkpro";
+
+  CompileOptions baseline_options;
+  const CompileResult baseline = compile_source(source, baseline_options);
+  require(baseline.implemented, "baseline match program should compile");
+
+  CompileOptions rescued_options;
+  rescued_options.budget = 4;  // force the size-rescue path, exercising discovery
+  const CompileResult rescued = compile_source(source, rescued_options);
+  require(rescued.implemented,
+          "forcing computed-dispatch discovery must keep the program implemented");
+  require(!has_error_diagnostic(rescued),
+          "computed-dispatch discovery must not introduce error diagnostics");
 }
 
 }  // namespace mkpro::tests
