@@ -241,21 +241,16 @@ add_executable(mkpro_tests
   tests/pre_shift_stack_lift_pass_test.cpp
 )
 target_link_libraries(mkpro_tests PRIVATE mkpro_core)
-find_package(Python3 COMPONENTS Interpreter)
-if(Python3_Interpreter_FOUND)
-  add_custom_target(mkpro_validate_trig
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/validate_mk61_trig.py
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
-    COMMENT "Validating MK-61 trig runtime against the emulator"
-  )
-  add_test(
-    NAME mkpro.validate_trig
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/validate_mk61_trig.py
-  )
-  set_tests_properties(mkpro.validate_trig PROPERTIES
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
-  )
-endif()
+
+add_executable(mkpro_validate_trig tools/validate_mk61_trig.cpp)
+target_link_libraries(mkpro_validate_trig PRIVATE mkpro_core)
+add_test(
+  NAME mkpro.validate_trig
+  COMMAND mkpro_validate_trig --source-root ${CMAKE_CURRENT_SOURCE_DIR}/..
+)
+set_tests_properties(mkpro.validate_trig PROPERTIES
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
+)
 set(MKPRO_NATIVE_TEST_NAMES
   address_formula_solver_synthesizes_dispatch
   computed_dispatch_targets_survive_dead_code_elimination
@@ -445,6 +440,7 @@ add_test(NAME int128_selftest COMMAND mkpro_int128_selftest)
 mkpro_configure_target(mkpro_core)
 mkpro_configure_target(mkpro_cli)
 mkpro_configure_target(mkpro_tests)
+mkpro_configure_target(mkpro_validate_trig)
 mkpro_configure_target(mkpro_int128_selftest)
 
 # Auxiliary research tools. Off by default; these intentionally skip the strict

@@ -51,13 +51,14 @@ it is not linked into production trig code.
 Run the full emulator parity gate:
 
 ```bash
-tools/validate_mk61_trig.py
+cmake --build native/build --target mkpro_validate_trig
+native/build/mkpro_validate_trig --source-root .
 ```
 
 Run the extended deterministic stress parity gate:
 
 ```bash
-tools/validate_mk61_trig.py --stress
+native/build/mkpro_validate_trig --source-root . --stress
 ```
 
 The same gate is available through CMake and CTest:
@@ -78,7 +79,7 @@ native/build/mkpro_tests --exact mk61_trig_matches_emulator_contract
 The deterministic validation corpus is defined in:
 
 ```text
-tools/mk61_trig_corpus.py
+native/tools/validate_mk61_trig.cpp
 ```
 
 It covers representative BCD mantissas, signs, exponents, small-angle paths,
