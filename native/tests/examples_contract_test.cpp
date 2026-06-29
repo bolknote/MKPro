@@ -278,6 +278,37 @@ void compiler_examples_match_typescript_contract() {
   }
 
   {
+    CompileOptions fast_wumpus_options;
+    fast_wumpus_options.fast_candidate_search = true;
+    const CompileResult result =
+        compile_source(read_text(root / "examples" / "wumpus.mkpro"), fast_wumpus_options);
+    require(result.implemented, "fast wumpus compile should implement the program");
+    require(result.steps.size() <= 105, "fast wumpus compile should fit the MK-61 budget");
+    require(has_proof(result, "indirect-flow-targets"),
+            "fast wumpus compile should keep indirect-flow proof reporting");
+    require(has_optimization(result, "dual-use-constant-indirect-flow"),
+            "fast wumpus compile should use the static dual-use rescue");
+    require(has_optimization(result, "fast-candidate-search"),
+            "fast wumpus compile should report fast candidate search");
+  }
+
+  {
+    CompileOptions fast_labyrinth_options;
+    fast_labyrinth_options.fast_candidate_search = true;
+    const CompileResult result =
+        compile_source(read_text(root / "examples" / "labyrinth777.mkpro"), fast_labyrinth_options);
+    require(result.implemented, "fast labyrinth777 compile should implement the program");
+    require(result.steps.size() <= 105,
+            "fast labyrinth777 compile should fit the MK-61 budget");
+    require(has_optimization(result, "call-count-proc-layout") ||
+                has_optimization(result, "size-desc-proc-layout") ||
+                has_optimization(result, "reverse-proc-layout"),
+            "fast labyrinth777 compile should use a cheap proc-layout rescue");
+    require(has_optimization(result, "fast-candidate-search"),
+            "fast labyrinth777 compile should report fast candidate search");
+  }
+
+  {
     const std::string source = read_text(root / "examples" / "dangerous-loading.mkpro");
     const CompileResult result = compile_source(source, baseline_options);
     require(result.implemented, "dangerous-loading.mkpro should compile");

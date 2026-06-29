@@ -39781,13 +39781,18 @@ enum class CandidateGate {
 };
 
 int estimated_candidate_search_cost_ms(std::string_view name) {
+  if (name == "call-count-proc-layout" || name == "size-desc-proc-layout" ||
+      name == "reverse-proc-layout") {
+    return 300;
+  }
   if (name == "dual-use-constant-indirect-flow" ||
-      name == "dual-use-constant-tail-branch-layout" ||
-      name == "conditional-branch-trampoline-layout" ||
-      name == "dual-use-constant-conditional-trampoline-layout" ||
-      name == "dual-use-constant-tail-conditional-trampoline-layout") {
+      name == "dual-use-constant-tail-branch-layout") {
     return 350;
   }
+  if (name == "conditional-branch-trampoline-layout" ||
+      name == "dual-use-constant-conditional-trampoline-layout" ||
+      name == "dual-use-constant-tail-conditional-trampoline-layout")
+    return 600;
   if (name.find("fractional") != std::string_view::npos ||
       name.find("computed-dispatch") != std::string_view::npos ||
       name.find("demote") != std::string_view::npos) {
@@ -39942,6 +39947,11 @@ bool has_optimization_named(const std::vector<OptimizationReport>& optimizations
                      [&](const OptimizationReport& optimization) {
                        return optimization.name == name;
                      });
+}
+
+bool has_proof_named(const std::vector<ProofReport>& proofs, std::string_view id) {
+  return std::any_of(proofs.begin(), proofs.end(),
+                     [&](const ProofReport& proof) { return proof.id == id; });
 }
 
 bool has_any_optimization_named(const std::vector<OptimizationReport>& optimizations,
@@ -41278,6 +41288,23 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           }
         }
       };
+  auto fast_static_gate_accepts = [&](const CandidateSpec& candidate,
+                                      const CompileResult& result) {
+    if (!options.fast_candidate_search || candidate.name != "dual-use-constant-indirect-flow")
+      return false;
+    if (!candidate.options.dual_use_constant_indirect_flow ||
+        candidate.options.aggressive_post_layout_indirect_flow ||
+        candidate.options.preloaded_indirect_flow || candidate.options.forward_indirect_flow ||
+        candidate.options.runtime_indirect_call_flow ||
+        candidate.options.assume_dead_selector_integer_part ||
+        !candidate.options.fractional_constant_selectors.empty() ||
+        !candidate.options.synthesized_dispatch_plans.empty() ||
+        !candidate.options.force_fractional_constant_selector_preloads.empty()) {
+      return false;
+    }
+    return has_optimization_named(result.optimizations, "constants-dual-use") &&
+           has_proof_named(result.proofs, "indirect-flow-targets");
+  };
   std::size_t evaluated_candidate_count = 0;
   std::optional<std::vector<EquivalenceObservation>> baseline_observations;
   auto evaluate_queued_candidates = [&]() {
@@ -41305,7 +41332,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       if (!candidate_beats_best(result, best))
         continue;
       if (candidate_needs_behavioral_equivalence_gate(candidate.options) &&
-          equivalence_baseline.implemented) {
+          equivalence_baseline.implemented && !fast_static_gate_accepts(candidate, result)) {
         if (!baseline_observations.has_value())
           baseline_observations = equivalence_observations(equivalence_baseline);
         if (!candidate_behaviorally_matches_baseline(*baseline_observations, result)) {
@@ -41327,6 +41354,11 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       });
       best_options = candidate.options;
       best = std::move(result);
+      if (options.fast_candidate_search && best.implemented &&
+          best.steps.size() <= rescue_threshold) {
+        ++evaluated_candidate_count;
+        break;
+      }
     }
   };
   auto selected_still_overflows_now = [&]() {
@@ -41382,6 +41414,23 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         "dual-use-constant-conditional-trampoline-layout",
         "Combined dual-use constant indirect-flow selectors with conditional branch trampolines "
         "after full layout",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.order_procs_by_call_count = true;
+        },
+        "call-count-proc-layout",
+        "Emitted procedures in descending call-count order so hot helpers occupy the cheapest "
+        "addresses",
+        CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) {
+          candidate_options.proc_layout_strategy = "size-desc";
+        },
+        "size-desc-proc-layout", "Emitted the largest procedures first", CandidateGate::SizeRescue);
+    add_candidate(
+        [](CompileOptions& candidate_options) { candidate_options.proc_layout_strategy = "reverse"; },
+        "reverse-proc-layout", "Emitted procedures in reverse source order",
         CandidateGate::SizeRescue);
     evaluate_queued_candidates();
     if (fast_search_target_met()) {

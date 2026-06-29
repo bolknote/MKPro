@@ -223,6 +223,8 @@ struct CompileOptions {
   bool order_procs_by_call_count = false;
   std::string proc_layout_strategy;
   bool disable_candidate_search = false;
+  bool fast_candidate_search = false;
+  int fast_candidate_threshold_ms = 500;
   bool collect_coalesce_shares = false;
   std::map<std::string, std::string> preloaded_constant_registers;
   std::set<std::string> suppress_constant_preloads;

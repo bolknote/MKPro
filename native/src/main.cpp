@@ -18,6 +18,7 @@ void print_usage(std::ostream& out) {
       << "  mkpro-native compile <file.mkpro> [--out listing|hex|dot|json|keys|all]\n"
       << "                               [--delivery manual|loader|hex] [--budget N]\n"
       << "                               [--analysis] [--strict]\n"
+      << "                               [--fast] [--fast-threshold-ms N]\n"
       << "                               [--return-stack-script|--no-return-stack-script]\n"
       << "                               [--share-random-cell] [--hoist-shared-helpers]\n"
       << "                               [--hoist-procs]\n"
@@ -381,6 +382,24 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
       behavior_digest = true;
     } else if (arg == "--disable-candidate-search") {
       options.disable_candidate_search = true;
+    } else if (arg == "--fast") {
+      options.fast_candidate_search = true;
+    } else if (arg == "--fast-threshold-ms") {
+      if (index + 1 >= args.size()) {
+        std::cerr << "missing value for --fast-threshold-ms\n";
+        return 64;
+      }
+      try {
+        options.fast_candidate_threshold_ms = std::stoi(args[++index]);
+      } catch (const std::exception&) {
+        std::cerr << "invalid --fast-threshold-ms value: " << args[index] << "\n";
+        return 64;
+      }
+      if (options.fast_candidate_threshold_ms <= 0) {
+        std::cerr << "invalid --fast-threshold-ms value: " << args[index] << "\n";
+        return 64;
+      }
+      options.fast_candidate_search = true;
     } else if (arg == "--collect-coalesce-shares") {
       options.collect_coalesce_shares = true;
       options.analysis = true;
