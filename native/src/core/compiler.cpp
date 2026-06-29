@@ -40771,7 +40771,7 @@ struct ComputedDispatchMatch {
   int case_count = 0;
 };
 
-std::optional<double> parse_integer_match_value(const std::string& text) {
+std::optional<double> parse_computed_dispatch_match_value(const std::string& text) {
   try {
     std::size_t pos = 0;
     const double value = std::stod(text, &pos);
@@ -40779,9 +40779,11 @@ std::optional<double> parse_integer_match_value(const std::string& text) {
       ++pos;
     if (pos != text.size())
       return std::nullopt;
-    if (std::fabs(value - std::round(value)) > 1e-9)
+    if (!std::isfinite(value))
       return std::nullopt;
-    return std::round(value);
+    if (std::fabs(value - std::round(value)) <= 1e-9)
+      return std::round(value);
+    return value;
   } catch (const std::exception&) {
     return std::nullopt;
   }
@@ -40792,11 +40794,12 @@ void collect_computed_dispatch_matches_in(const std::vector<V2Statement>& statem
 
 void collect_computed_dispatch_matches_stmt(const V2Statement& statement,
                                             std::vector<ComputedDispatchMatch>& out) {
-  // Only exhaustive (no `otherwise`) k>=3 matches over distinct integer case
+  // Only exhaustive (no `otherwise`) k>=3 matches over distinct numeric case
   // values are eligible: a computed jump has no fall-through default, so an
   // unmatched selector value would jump to an unintended address. The
   // equivalence gate is the final guard, but requiring no otherwise keeps the
-  // candidate honest up front.
+  // candidate honest up front. Non-integer values are allowed so reverse-packed
+  // selectors (payload.target, reached by e.g. scale=100) can participate.
   if (statement.kind == "v2_match" && statement.expr.has_value() &&
       statement.otherwise == nullptr && statement.cases.size() >= 3) {
     ComputedDispatchMatch info;
@@ -40811,7 +40814,7 @@ void collect_computed_dispatch_matches_stmt(const V2Statement& statement,
         break;
       }
       for (const std::string& value : match_case.values) {
-        const std::optional<double> numeric = parse_integer_match_value(value);
+        const std::optional<double> numeric = parse_computed_dispatch_match_value(value);
         if (!numeric.has_value() || !seen.insert(*numeric).second) {
           ok = false;
           break;

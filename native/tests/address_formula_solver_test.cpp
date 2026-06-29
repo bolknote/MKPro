@@ -101,7 +101,32 @@ void address_formula_solver_synthesizes_dispatch() {
             "no trig op may be selected when the angle mode is not contractually fixed");
   }
 
-  // 4) Empty constraints yield no formula.
+  // 4) Reverse packing: keep the user payload in the integer part and put the
+  //    address in the fractional cents. The solver should recover the target by
+  //    multiplying by 100 before resolving the indirect address.
+  {
+    std::vector<AddressConstraint> cs = {
+        {1.03, 3},
+        {2.07, 7},
+        {3.12, 12},
+        {42.37, 37},
+    };
+    AddressSolverOptions options;
+    options.allow_affine = false;
+    options.angle_fixed = false;
+    options.scale_min = 100.0;
+    options.scale_max = 100.0;
+    options.scale_step = 1.0;
+    const std::optional<AddressFormula> f = search_address_formula(cs, selector, options);
+    require(f.has_value(), "solver should synthesize a reverse-packed fractional-address formula");
+    require(f->op_opcode == -1, "reverse-packed dispatch should not need a unary op");
+    require(std::fabs(f->scale - 100.0) < 1e-9,
+            "reverse-packed dispatch should lift fractional address cents with scale=100");
+    require(formula_reproduces(*f, selector, cs),
+            "reverse-packed formula must reproduce every target");
+  }
+
+  // 5) Empty constraints yield no formula.
   {
     AddressSolverOptions options;
     const std::optional<AddressFormula> f = search_address_formula({}, selector, options);

@@ -12,10 +12,10 @@
 // (evaluate_indirect_address), never by running the emulator.  The emulator
 // stays an offline oracle in the research tool only.
 //
-// Trig ops (Ftg / Farctg) interpret/produce angles per the Р/Г/ГРД switch, so
-// they are only offered when the angle mode is contractually FIXED for the whole
-// run (expected_mode_only(...)).  sin/cos are intentionally absent: their exact
-// ROM rule is not derived, so they must never back address synthesis.
+// Trig ops (sin/cos/tg) interpret values per the Р/Г/ГРД switch, so they are
+// only offered when the angle mode is contractually FIXED for the whole run
+// (expected_mode_only(...)). They are evaluated through the compact MK-61 trig
+// runtime, not the host libm. Inverse trig is intentionally absent.
 
 #include <optional>
 #include <string>
@@ -63,6 +63,10 @@ struct AddressSolverOptions {
 
 // Search the cheapest op + affine so that, for every constraint,
 // resolve_flow_target(selector, op(scale*input + offset)) == target.
+// The input is deliberately opaque: callers may pass either classic
+// address-in-integer packed values (target.payload) or reverse-packed
+// address-in-fraction values (payload.target), which the solver can discover as
+// an affine scale such as 100.
 // Every returned formula is re-confirmed through resolve_flow_target (the static
 // model), so callers can trust it without the emulator.  Returns nullopt when no
 // formula in the configured library/grid satisfies all constraints.
