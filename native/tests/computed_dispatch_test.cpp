@@ -144,6 +144,38 @@ program DispatchProbe {
           "forcing computed-dispatch discovery must keep the program implemented");
   require(!has_error_diagnostic(rescued),
           "computed-dispatch discovery must not introduce error diagnostics");
+
+  // Stage 3: with a contractually fixed angle mode, discovery additionally lets
+  // the solver offer trig ops (angle_fixed). That path must stay correct too:
+  // any trig-backed formula is still behavioral-equivalence gated, so the result
+  // is implemented and error-free whether or not a trig dispatch is chosen.
+  const std::string angle_fixed_source = R"mkpro(
+program DispatchProbeAngle {
+  state {
+    expected_mode_only("rad")
+    score: counter 0..99 = 0
+    sel: counter 0..2 = 0
+  }
+  loop {
+    sel = read()
+    match sel {
+      0 => bump_a()
+      1 => bump_b()
+      2 => bump_c()
+    }
+  }
+  fn bump_a() { score = score + 4 }
+  fn bump_b() { score = score + 5 }
+  fn bump_c() { score = score + 6 }
+}
+)mkpro";
+  CompileOptions angle_options;
+  angle_options.budget = 4;
+  const CompileResult angle_fixed = compile_source(angle_fixed_source, angle_options);
+  require(angle_fixed.implemented,
+          "computed-dispatch discovery under expected_mode_only must stay implemented");
+  require(!has_error_diagnostic(angle_fixed),
+          "trig-eligible dispatch discovery must not introduce error diagnostics");
 }
 
 }  // namespace mkpro::tests

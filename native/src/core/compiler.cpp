@@ -40896,6 +40896,25 @@ std::optional<std::string> free_stable_dispatch_register(const CompileResult& re
   return std::nullopt;
 }
 
+// The contractually pinned angle mode, if the program declares
+// expected_mode_only(...). Trig ops (Ftg/Farctg) interpret angles per the Р/Г/ГРД
+// switch, so the dispatch solver may only offer them when the mode is fixed for
+// the whole run; a plain expected_mode(...) hint (only == false) is not enough.
+std::optional<core::SolverAngleMode> solver_angle_mode_for(const V2Program& program) {
+  if (!program.expected_mode.has_value() || !program.expected_mode->only)
+    return std::nullopt;
+  std::string mode = program.expected_mode->mode;
+  std::transform(mode.begin(), mode.end(), mode.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (mode == "rad")
+    return core::SolverAngleMode::Rad;
+  if (mode == "grd")
+    return core::SolverAngleMode::Grd;
+  if (mode == "deg")
+    return core::SolverAngleMode::Deg;
+  return std::nullopt;
+}
+
 namespace {
 
 constexpr std::size_t kMaxCompileResultCacheEntries = 4096;
@@ -42760,6 +42779,8 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     const std::vector<ComputedDispatchMatch> dispatch_matches =
         collect_computed_dispatch_matches(*selector_probe_program);
     const std::optional<std::string> jump_register = free_stable_dispatch_register(best);
+    const std::optional<core::SolverAngleMode> angle_mode =
+        solver_angle_mode_for(*selector_probe_program);
     if (!dispatch_matches.empty() && jump_register.has_value()) {
       for (const ComputedDispatchMatch& match : dispatch_matches) {
         SynthesizedDispatchPlan plan;
@@ -42770,7 +42791,9 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         plan.offset = 0.0;
         core::AddressSolverOptions solver_options;
         solver_options.allow_affine = true;
-        solver_options.angle_fixed = false;
+        solver_options.angle_fixed = angle_mode.has_value();
+        if (angle_mode.has_value())
+          solver_options.angle_mode = *angle_mode;
         bool converged = false;
         for (int iteration = 0; iteration < 6 && !converged; ++iteration) {
           CompileOptions probe_options = options;
