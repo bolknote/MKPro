@@ -11,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <stdexcept>
@@ -436,13 +437,15 @@ long double from_bcd8(Bcd8 value) {
   return value.negative ? -result : result;
 }
 
-__int128 pow10_i128(int power) {
-  __int128 result = 1;
+using DecimalWide = std::uint64_t;
+
+DecimalWide pow10_wide(int power) {
+  DecimalWide result = 1;
   while (power-- > 0) result *= 10;
   return result;
 }
 
-int decimal_digits(__int128 value) {
+int decimal_digits(DecimalWide value) {
   int digits = 1;
   while (value >= 10) {
     value /= 10;
@@ -451,7 +454,7 @@ int decimal_digits(__int128 value) {
   return digits;
 }
 
-Bcd8 normalize_decimal(bool negative, __int128 raw_digits, int scale_exp, RoundingMode rounding) {
+Bcd8 normalize_decimal(bool negative, DecimalWide raw_digits, int scale_exp, RoundingMode rounding) {
   if (raw_digits == 0) return {};
 
   const int raw_digit_count = decimal_digits(raw_digits);
@@ -460,11 +463,11 @@ Bcd8 normalize_decimal(bool negative, __int128 raw_digits, int scale_exp, Roundi
   out.exponent = scale_exp + raw_digit_count - 1;
 
   if (raw_digit_count > 8) {
-    const __int128 divisor = pow10_i128(raw_digit_count - 8);
-    __int128 digits = raw_digits / divisor;
-    const __int128 remainder = raw_digits % divisor;
+    const DecimalWide divisor = pow10_wide(raw_digit_count - 8);
+    DecimalWide digits = raw_digits / divisor;
+    const DecimalWide remainder = raw_digits % divisor;
     if (rounding == RoundingMode::Nearest && remainder * 2 >= divisor) ++digits;
-    if (digits >= 100000000) {
+    if (digits >= 100000000ULL) {
       digits /= 10;
       ++out.exponent;
     }
@@ -472,7 +475,7 @@ Bcd8 normalize_decimal(bool negative, __int128 raw_digits, int scale_exp, Roundi
     return out;
   }
 
-  out.digits = static_cast<long long>(raw_digits * pow10_i128(8 - raw_digit_count));
+  out.digits = static_cast<long long>(raw_digits * pow10_wide(8 - raw_digit_count));
   return out;
 }
 
@@ -480,7 +483,8 @@ Bcd8 mul_bcd8(Bcd8 left, Bcd8 right, RoundingMode rounding) {
   if (left.digits == 0 || right.digits == 0) return {};
 
   const bool negative = left.negative != right.negative;
-  const __int128 raw = static_cast<__int128>(left.digits) * static_cast<__int128>(right.digits);
+  const DecimalWide raw =
+      static_cast<DecimalWide>(left.digits) * static_cast<DecimalWide>(right.digits);
   return normalize_decimal(negative, raw, left.exponent + right.exponent - 14, rounding);
 }
 
@@ -494,16 +498,16 @@ Bcd8 div_bcd8(Bcd8 left, Bcd8 right, RoundingMode rounding) {
   int shift = left.exponent - right.exponent + 7 - exponent;
 
   for (int attempts = 0; attempts < 4; ++attempts) {
-    __int128 numerator = left.digits;
-    __int128 denominator = right.digits;
+    DecimalWide numerator = static_cast<DecimalWide>(left.digits);
+    DecimalWide denominator = static_cast<DecimalWide>(right.digits);
     if (shift >= 0) {
-      numerator *= pow10_i128(shift);
+      numerator *= pow10_wide(shift);
     } else {
-      denominator *= pow10_i128(-shift);
+      denominator *= pow10_wide(-shift);
     }
 
-    __int128 digits = numerator / denominator;
-    const __int128 remainder = numerator % denominator;
+    DecimalWide digits = numerator / denominator;
+    const DecimalWide remainder = numerator % denominator;
     if (rounding == RoundingMode::Nearest && remainder * 2 >= denominator) ++digits;
 
     Bcd8 out = normalize_decimal(negative, digits, exponent - 7, RoundingMode::Truncate);
