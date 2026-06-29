@@ -246,7 +246,7 @@ if(Python3_Interpreter_FOUND)
   add_custom_target(mkpro_validate_trig
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tools/validate_mk61_trig.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/..
-    COMMENT "Validating MK-61 trig runtime against ROM-derived microcode"
+    COMMENT "Validating MK-61 trig runtime against the emulator"
   )
   add_test(
     NAME mkpro.validate_trig
@@ -330,7 +330,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   machine_profile_matches_typescript_contract
   match_blocks_match_typescript_contract
   maxmin_zero_lint_matches_typescript_contract
-  mk61_trig_matches_rom_derived_contract
+  mk61_trig_matches_emulator_contract
   mk61_trig_calculate_matches_rom_values
   opcode_catalog_matches_typescript_contract
   oracle_index_loads_committed_artifacts

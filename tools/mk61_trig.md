@@ -34,18 +34,21 @@ dispatchers, or hardcoded result tables.
 
 ## Source of truth for validation
 
-The ROM-derived oracle is:
+The validation oracle is the native emulator:
 
 ```text
-tools/mk61_trig_microcode_probe.cpp
+native/src/emulator/mk61.cpp
+native/src/emulator/rom.cpp
 ```
 
-That tool contains the ROM/microcode data and is used only by validation. It is
-not linked into production code.
+The validator builds a tiny CLI around the emulator, loads the single
+`sin` / `cos` / `tg` opcode plus `С/П`, and compares calculator display
+strings against the compact runtime. The emulator is used only by validation;
+it is not linked into production trig code.
 
 ## Validation
 
-Run the full ROM-derived parity gate:
+Run the full emulator parity gate:
 
 ```bash
 tools/validate_mk61_trig.py
@@ -67,7 +70,7 @@ ctest --test-dir native/build -R '^mkpro\.validate_trig$' --output-on-failure
 The quick native API guard is:
 
 ```bash
-native/build/mkpro_tests --exact mk61_trig_matches_rom_derived_contract
+native/build/mkpro_tests --exact mk61_trig_matches_emulator_contract
 ```
 
 ## Corpus
@@ -79,7 +82,7 @@ tools/mk61_trig_corpus.py
 ```
 
 It covers representative BCD mantissas, signs, exponents, small-angle paths,
-range reduction, and large magnitudes. The base validator compares
-`3 modes * 3 functions * 157 values = 1413` display strings against the
-ROM/microcode probe. The optional stress mode adds deterministic pseudo-random
-BCD-shaped values and compares `2565` display strings.
+range reduction, and large magnitudes. The base validator compares all
+`rad` / `deg` / `grad` and `sin` / `cos` / `tg` display strings against the
+emulator. The optional stress mode adds deterministic pseudo-random BCD-shaped
+values.

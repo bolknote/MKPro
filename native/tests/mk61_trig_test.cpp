@@ -25,7 +25,7 @@ void expect_display(AngleMode mode,
 
 }  // namespace
 
-void mk61_trig_matches_rom_derived_contract() {
+void mk61_trig_matches_emulator_contract() {
   expect_display(AngleMode::Rad, Function::Sin, "0.25", "2,4740395-01");
   expect_display(AngleMode::Rad, Function::Sin, "-0.25", "-2,4740395-01");
   expect_display(AngleMode::Rad, Function::Tg, "-0.25", "-2,5534191-01");
