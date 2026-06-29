@@ -121,6 +121,22 @@ struct FractionalConstantSelectorPlan {
   int target = 0;
 };
 
+// A solved computed-dispatch for one `match` statement: instead of a k-way
+// compare chain, the selector value is transformed by op(scale*x + offset) and
+// used as an indirect jump (К БП r), landing directly on the matching case body.
+// The formula is found post-layout by the address-formula solver so that each
+// case value resolves to that case body entry address. Emitted only behind a
+// SizeRescue candidate and validated by the behavioral-equivalence gate.
+struct SynthesizedDispatchPlan {
+  int match_line = 0;            // identifies the match statement to rewrite
+  std::string selector_register; // stable register holding the raw selector value
+  std::string indirect_register; // stable register used for the К БП indirect jump
+  int op_opcode = -1;            // unary op applied last (-1 = identity)
+  std::string op_name;           // human-readable op name (for listing comments)
+  double scale = 1.0;            // affine pre-multiply
+  double offset = 0.0;           // affine pre-add
+};
+
 enum class DeliveryMode {
   Manual,
   Loader,
@@ -218,6 +234,9 @@ struct CompileOptions {
   // behavioral-equivalence gate validates each candidate, so an unsound case is
   // rejected automatically rather than producing wrong code.
   bool assume_dead_selector_integer_part = false;
+  // Solved computed-dispatch plans (one per rewritten match). Default empty:
+  // normal compiles keep the compare-chain lowering untouched.
+  std::vector<SynthesizedDispatchPlan> synthesized_dispatch_plans;
   std::vector<std::string> force_fractional_constant_selector_preloads;
   std::vector<std::string> pack_counter_stripe_names;
   std::vector<std::string> trig_fractional_pack_names;

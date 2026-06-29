@@ -24628,6 +24628,65 @@ bool lower_numeric_residual_match_statement(LoweringContext& context,
   return true;
 }
 
+// Computed-dispatch lowering: replace a k-way compare chain with a single
+// indirect jump whose target is synthesized from the selector value by
+// op(scale*x + offset). The formula in `plan` was solved post-layout by the
+// address-formula solver so each case value lands on its case body entry. Only
+// reached when a matching SynthesizedDispatchPlan is present (SizeRescue
+// candidate); the behavioral-equivalence gate validates the result.
+bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& statement,
+                                const SynthesizedDispatchPlan& plan) {
+  const Expression match_expr = parse_expression(*statement.expr, statement.line);
+  if (!lower_expression_to_x(context, match_expr))
+    return false;
+
+  if (std::fabs(plan.scale - 1.0) > 1e-9) {
+    emit_number_or_preload(context, format_number_literal(plan.scale), std::nullopt,
+                           statement.line);
+    context.emitter.emit_op(0x12, "×", "dispatch formula scale", statement.line);
+  }
+  if (std::fabs(plan.offset) > 1e-9) {
+    emit_number_or_preload(context, format_number_literal(std::fabs(plan.offset)), std::nullopt,
+                           statement.line);
+    context.emitter.emit_op(plan.offset < 0 ? 0x11 : 0x10, plan.offset < 0 ? "-" : "+",
+                            "dispatch formula offset", statement.line);
+  }
+  if (plan.op_opcode >= 0) {
+    const std::string mnemonic =
+        plan.op_name.empty() ? opcode_by_code(plan.op_opcode).name : plan.op_name;
+    context.emitter.emit_op(plan.op_opcode, mnemonic, "dispatch formula op", statement.line);
+  }
+
+  emit_store(context, plan.indirect_register, "dispatch computed address");
+  const int reg_index = register_index_for(context, plan.indirect_register);
+  context.emitter.emit_op(0x80 + reg_index,
+                          "К БП " + register_text_for(context, plan.indirect_register),
+                          "computed dispatch", statement.line);
+  context.emitter.current_x_variable.reset();
+  context.emitter.current_x_expression.reset();
+  context.emitter.current_x_aliases.clear();
+
+  const std::string end_label = context.emitter.fresh_label("match_end");
+  for (const V2MatchCase& match_case : statement.cases) {
+    const std::string entry_label = context.emitter.fresh_label("dispatch_case_entry");
+    context.emitter.emit_label(entry_label, {.hidden = true});
+    if (match_case.action != nullptr && !lower_match_action(context, *match_case.action))
+      return false;
+    if (!match_action_terminates_statically(context, match_case.action.get()))
+      context.emitter.emit_jump(0x51, "БП", end_label, "dispatch end", match_case.line);
+  }
+  if (statement.otherwise != nullptr && !lower_match_action(context, *statement.otherwise))
+    return false;
+  context.emitter.emit_label(end_label, {.hidden = true});
+  context.optimizations.push_back(OptimizationReport{
+      .name = "computed-dispatch",
+      .detail = "Lowered match at line " + std::to_string(statement.line) +
+                " as a computed indirect dispatch via " +
+                register_text_for(context, plan.indirect_register) + ".",
+  });
+  return true;
+}
+
 bool lower_match_statement(LoweringContext& context, const V2Statement& statement) {
   if (statement.kind != "v2_match" || !statement.expr.has_value())
     return false;
@@ -24646,6 +24705,14 @@ bool lower_match_statement(LoweringContext& context, const V2Statement& statemen
     if (lowered_statement.otherwise == nullptr)
       return true;
     return lower_match_action(context, *lowered_statement.otherwise);
+  }
+
+  for (const SynthesizedDispatchPlan& plan : context.synthesized_dispatch_plans) {
+    if (plan.match_line != lowered_statement.line)
+      continue;
+    if (lower_synthesized_dispatch(context, lowered_statement, plan))
+      return true;
+    break;
   }
 
   if (lower_numeric_residual_match_statement(context, lowered_statement)) {
@@ -38336,6 +38403,7 @@ CompileResult compile_source_once(std::string source, const CompileOptions& opti
   context.preserve_dispatch_case_order = options.preserve_dispatch_case_order;
   context.order_procs_by_call_count = options.order_procs_by_call_count;
   context.assume_dead_selector_integer_part = options.assume_dead_selector_integer_part;
+  context.synthesized_dispatch_plans = options.synthesized_dispatch_plans;
   context.proc_layout_strategy = options.proc_layout_strategy;
   context.fractional_constant_selectors = options.fractional_constant_selectors;
   for (const auto& [register_name, value] : options.preloaded_constant_registers)
@@ -39539,7 +39607,7 @@ bool candidate_behaviorally_matches_baseline(
 bool candidate_needs_behavioral_equivalence_gate(const CompileOptions& options) {
   return options.aggressive_post_layout_indirect_flow || options.dual_use_constant_indirect_flow ||
          options.runtime_indirect_call_flow || options.preloaded_indirect_flow ||
-         options.forward_indirect_flow;
+         options.forward_indirect_flow || !options.synthesized_dispatch_plans.empty();
 }
 
 bool is_only_budget_exceeded(const CompileResult& result) {
@@ -39657,6 +39725,10 @@ std::string implemented_candidate_key(const CompileOptions& options) {
     out << ";suppress_constant=" << value;
   for (const FractionalConstantSelectorPlan& plan : options.fractional_constant_selectors)
     out << ";fractional_selector=" << normalize_number_key(plan.value) << ":" << plan.target;
+  for (const SynthesizedDispatchPlan& plan : options.synthesized_dispatch_plans)
+    out << ";synth_dispatch=" << plan.match_line << ":" << plan.selector_register << ":"
+        << plan.indirect_register << ":" << plan.op_opcode << ":" << plan.scale << ":"
+        << plan.offset;
   for (const std::string& value : options.force_fractional_constant_selector_preloads)
     out << ";force_fractional_selector_preload=" << normalize_number_key(value);
   for (const RegisterShare& share : options.forced_register_shares)

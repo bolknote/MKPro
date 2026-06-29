@@ -263,6 +263,7 @@ struct LoweringContext {
   bool preserve_dispatch_case_order = false;
   bool order_procs_by_call_count = false;
   bool assume_dead_selector_integer_part = false;
+  std::vector<SynthesizedDispatchPlan> synthesized_dispatch_plans;
   std::string proc_layout_strategy;
 };
 
