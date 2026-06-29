@@ -2,6 +2,8 @@
 
 #include "test_support.hpp"
 
+#include <cmath>
+#include <string>
 #include <string_view>
 
 namespace mkpro::tests {
@@ -35,6 +37,28 @@ void mk61_trig_matches_rom_derived_contract() {
 
   expect_display(AngleMode::Grad, Function::Tg, "50", "1,");
   expect_display(AngleMode::Grad, Function::Tg, "-50", "-1,");
+}
+
+namespace {
+
+void expect_value(AngleMode mode, Function function, double value, double expected) {
+  const double actual = core::mk61_trig::calculate(mode, function, value);
+  require(std::fabs(actual - expected) < 1e-7,
+          "MK-61 trig numeric result mismatch: got " + std::to_string(actual) + ", expected " +
+              std::to_string(expected));
+}
+
+}  // namespace
+
+// The numeric calculate() API (used by the address-formula solver) must return
+// the same ROM-faithful values the display API formats.
+void mk61_trig_calculate_matches_rom_values() {
+  expect_value(AngleMode::Rad, Function::Sin, 0.25, 0.24740395);
+  expect_value(AngleMode::Rad, Function::Tg, -0.25, -0.25534191);
+  expect_value(AngleMode::Deg, Function::Sin, 30.0, 0.50000002);
+  expect_value(AngleMode::Deg, Function::Cos, 60.0, 0.50000002);
+  expect_value(AngleMode::Grad, Function::Tg, 50.0, 1.0);
+  expect_value(AngleMode::Grad, Function::Tg, -50.0, -1.0);
 }
 
 }  // namespace mkpro::tests

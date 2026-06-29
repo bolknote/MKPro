@@ -23,4 +23,9 @@ std::string sin_display(AngleMode mode, std::string_view literal);
 std::string cos_display(AngleMode mode, std::string_view literal);
 std::string tg_display(AngleMode mode, std::string_view literal);
 
+// Numeric counterpart of calculate_display: returns the ROM-faithful result as a
+// value (the same number the machine would hold in X), for callers that reason
+// in doubles rather than display strings (e.g. the address-formula solver).
+double calculate(AngleMode mode, Function function, double value);
+
 }  // namespace mkpro::core::mk61_trig

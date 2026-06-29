@@ -1111,4 +1111,13 @@ std::string tg_display(AngleMode mode, std::string_view literal) {
   return calculate_display(mode, Function::Tg, literal);
 }
 
+double calculate(AngleMode mode, Function function, double value) {
+  // Route through the same parse/compute pipeline; calculate_value already
+  // returns a numeric result, so no display string is parsed back. %.17g keeps
+  // the input value lossless for the (re)quantization parse_mk61_input applies.
+  char buffer[64];
+  std::snprintf(buffer, sizeof buffer, "%.17g", value);
+  return static_cast<double>(calculate_value(mode, function, std::string(buffer)));
+}
+
 }  // namespace mkpro::core::mk61_trig

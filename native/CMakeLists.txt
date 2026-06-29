@@ -331,6 +331,7 @@ set(MKPRO_NATIVE_TEST_NAMES
   match_blocks_match_typescript_contract
   maxmin_zero_lint_matches_typescript_contract
   mk61_trig_matches_rom_derived_contract
+  mk61_trig_calculate_matches_rom_values
   opcode_catalog_matches_typescript_contract
   oracle_index_loads_committed_artifacts
   packed_counter_stripes_match_typescript_contract

@@ -84,6 +84,7 @@ void machine_profile_matches_typescript_contract();
 void match_blocks_match_typescript_contract();
 void maxmin_zero_lint_matches_typescript_contract();
 void mk61_trig_matches_rom_derived_contract();
+void mk61_trig_calculate_matches_rom_values();
 void opcode_catalog_matches_typescript_contract();
 void oracle_index_loads_committed_artifacts();
 void packed_counter_stripes_match_typescript_contract();
@@ -302,6 +303,8 @@ int main(int argc, char** argv) {
        mkpro::tests::maxmin_zero_lint_matches_typescript_contract},
       {"mk61_trig_matches_rom_derived_contract",
        mkpro::tests::mk61_trig_matches_rom_derived_contract},
+      {"mk61_trig_calculate_matches_rom_values",
+       mkpro::tests::mk61_trig_calculate_matches_rom_values},
       {"opcode_catalog_matches_typescript_contract",
        mkpro::tests::opcode_catalog_matches_typescript_contract},
       {"oracle_index_loads_committed_artifacts",

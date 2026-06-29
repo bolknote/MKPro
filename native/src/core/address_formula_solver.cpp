@@ -1,6 +1,7 @@
 #include "mkpro/core/address_formula_solver.hpp"
 
 #include "mkpro/core/indirect_addressing.hpp"
+#include "mkpro/core/mk61_trig.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -12,20 +13,6 @@
 namespace mkpro::core {
 
 namespace {
-
-constexpr double kPi = 3.14159265358979323846;
-
-double angle_factor(SolverAngleMode mode) {
-  switch (mode) {
-    case SolverAngleMode::Rad:
-      return 1.0;
-    case SolverAngleMode::Grd:
-      return kPi / 200.0;
-    case SolverAngleMode::Deg:
-    default:
-      return kPi / 180.0;
-  }
-}
 
 // Round to the MK-61's 8 significant digits, matching how the hardware would
 // hold an intermediate result before it is used as an indirect selector.
@@ -67,8 +54,20 @@ struct Op {
   bool needs_fixed_angle = false;
 };
 
+mk61_trig::AngleMode to_trig_mode(SolverAngleMode mode) {
+  switch (mode) {
+    case SolverAngleMode::Rad:
+      return mk61_trig::AngleMode::Rad;
+    case SolverAngleMode::Grd:
+      return mk61_trig::AngleMode::Grad;
+    case SolverAngleMode::Deg:
+    default:
+      return mk61_trig::AngleMode::Deg;
+  }
+}
+
 std::vector<Op> op_library(const AddressSolverOptions& options) {
-  const double k = angle_factor(options.angle_mode);
+  const mk61_trig::AngleMode trig_mode = to_trig_mode(options.angle_mode);
   std::vector<Op> all = {
       {"id", -1, [](double x) { return x; }, false},
       {"neg", 0x0B, [](double x) { return -x; }, false},
@@ -87,11 +86,20 @@ std::vector<Op> op_library(const AddressSolverOptions& options) {
       {"x^2", 0x22, [](double x) { return x * x; }, false},
       {"1/x", 0x23, [](double x) { return 1.0 / x; }, false},
       {"sqrt", 0x21, [](double x) { return std::sqrt(x); }, false},
-      // Trig: only tangent/arctangent are modeled in C++ (tan passes the offline
-      // ROM self-check).  sin/cos are intentionally excluded -- their exact ROM
-      // rule is not derived, so they must never back address synthesis.
-      {"tan", 0x1E, [k](double x) { return std::tan(x * k); }, true},
-      {"arctg", 0x1B, [k](double x) { return std::atan(x) / k; }, true},
+      // Trig: ROM-faithful sin/cos/tg via the compact mk61_trig runtime, so the
+      // synthesized value matches exactly what the machine computes.  Only
+      // offered when the angle mode is contractually fixed (see needs_fixed_angle
+      // gating below).  Inverse trig is intentionally absent: the runtime models
+      // only the forward functions, so arctg must not back address synthesis.
+      {"sin", 0x1C, [trig_mode](double x) {
+         return mk61_trig::calculate(trig_mode, mk61_trig::Function::Sin, x);
+       }, true},
+      {"cos", 0x1D, [trig_mode](double x) {
+         return mk61_trig::calculate(trig_mode, mk61_trig::Function::Cos, x);
+       }, true},
+      {"tan", 0x1E, [trig_mode](double x) {
+         return mk61_trig::calculate(trig_mode, mk61_trig::Function::Tg, x);
+       }, true},
   };
   if (options.angle_fixed) return all;
   std::vector<Op> out;
