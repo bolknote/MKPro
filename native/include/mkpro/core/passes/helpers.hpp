@@ -277,6 +277,11 @@ std::optional<int> target_address(const IrTarget& target, const std::map<std::st
 std::optional<std::string> known_indirect_memory_target(const IrOp& op);
 std::optional<std::set<std::string>> known_indirect_memory_targets(const IrOp& op);
 std::optional<int> known_indirect_flow_target(const IrOp& op);
+// Target entry labels advertised by a computed-dispatch indirect jump (empty for
+// every other op). These edges are otherwise invisible to the CFG because the
+// jump address is computed at runtime; reachability/overlay passes consult this
+// so the dispatched case bodies are not treated as dead/unreferenced.
+std::vector<std::string> computed_dispatch_target_labels(const IrOp& op);
 std::optional<std::string> removable_recall_value_register(const IrOp& op);
 std::optional<std::string> stored_current_x_value_register(const IrOp& op);
 std::optional<int> next_executable_index(const std::vector<IrOp>& ops, int start);

@@ -449,10 +449,14 @@ build_register_value_graph(const std::vector<IrOp>& ops) {
     case IrKind::IndirectCall:
       if (const std::optional<int> target = known_indirect_flow_target(op))
         jump_to_address(*target);
+      for (const std::string& label : computed_dispatch_target_labels(op))
+        jump_to(label);
       break;
     case IrKind::IndirectCondJump:
       if (const std::optional<int> target = known_indirect_flow_target(op))
         jump_to_address(*target);
+      for (const std::string& label : computed_dispatch_target_labels(op))
+        jump_to(label);
       fallthrough();
       break;
     case IrKind::Return:
@@ -728,6 +732,42 @@ std::optional<int> known_indirect_flow_target(const IrOp& op) {
   if (target < 0 || target > 104)
     return std::nullopt;
   return target;
+}
+
+std::vector<std::string> computed_dispatch_target_labels(const IrOp& op) {
+  std::vector<std::string> labels;
+  if (op.kind != IrKind::IndirectJump && op.kind != IrKind::IndirectCall &&
+      op.kind != IrKind::IndirectCondJump) {
+    return labels;
+  }
+  if (!op.meta.comment.has_value())
+    return labels;
+
+  constexpr std::string_view kMarker = "computed-dispatch-targets=";
+  const std::string& comment = *op.meta.comment;
+  const std::size_t marker = comment.find(kMarker);
+  if (marker == std::string::npos)
+    return labels;
+
+  std::size_t cursor = marker + kMarker.size();
+  std::string current;
+  while (cursor < comment.size()) {
+    const char ch = comment.at(cursor);
+    if (ch == ',') {
+      if (!current.empty()) {
+        labels.push_back(current);
+        current.clear();
+      }
+    } else if (std::isspace(static_cast<unsigned char>(ch)) != 0 || ch == ';') {
+      break;
+    } else {
+      current.push_back(ch);
+    }
+    ++cursor;
+  }
+  if (!current.empty())
+    labels.push_back(current);
+  return labels;
 }
 
 std::optional<std::string> removable_recall_value_register(const IrOp& op) {

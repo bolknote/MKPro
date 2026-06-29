@@ -100,6 +100,11 @@ std::set<int> reachable_from_entry(const std::vector<IrOp>& ops) {
     case IrKind::IndirectJump:
       if (const std::optional<int> known_target = known_indirect_flow_target(op))
         target_address(*known_target);
+      for (const std::string& label : computed_dispatch_target_labels(op)) {
+        const auto found = label_index.find(label);
+        if (found != label_index.end())
+          stack.push_back(found->second);
+      }
       break;
     case IrKind::IndirectCall:
       if (const std::optional<int> known_target = known_indirect_flow_target(op))

@@ -1,5 +1,6 @@
 #include "mkpro/core/compiler.hpp"
 
+#include "mkpro/core/address_formula_solver.hpp"
 #include "mkpro/core/constant_folder.hpp"
 #include "mkpro/core/emit/lowering/coord_list.hpp"
 #include "mkpro/core/emit/lowering/display.hpp"
@@ -24657,19 +24658,38 @@ bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& sta
     context.emitter.emit_op(plan.op_opcode, mnemonic, "dispatch formula op", statement.line);
   }
 
-  emit_store(context, plan.indirect_register, "dispatch computed address");
-  const int reg_index = register_index_for(context, plan.indirect_register);
-  context.emitter.emit_op(0x80 + reg_index,
-                          "К БП " + register_text_for(context, plan.indirect_register),
-                          "computed dispatch", statement.line);
+  // Pre-generate one entry label per case so the computed `К БП` can advertise
+  // its (otherwise invisible) target edges to the reachability/overlay passes.
+  std::vector<std::string> entry_labels;
+  entry_labels.reserve(statement.cases.size());
+  for (std::size_t index = 0; index < statement.cases.size(); ++index)
+    entry_labels.push_back(context.emitter.fresh_label("dispatch_case_entry"));
+
+  // Bind a synthetic variable to the plan's physical stable register and store
+  // the computed address there, then jump through it. A stable (mutation-free,
+  // index >= 7) register makes the static resolver register-independent.
+  const int jump_index = register_index(plan.indirect_register);
+  const std::string jump_var = "__dispatch_jump_" + std::to_string(statement.line);
+  bind_register(context, jump_var, jump_index);
+  emit_store(context, jump_var, "dispatch computed address");
+
+  std::string targets_marker = "computed-dispatch-targets=";
+  for (std::size_t index = 0; index < entry_labels.size(); ++index) {
+    if (index > 0)
+      targets_marker += ",";
+    targets_marker += entry_labels.at(index);
+  }
+  context.emitter.emit_op(0x80 + jump_index,
+                          "К БП " + core::register_name_for_index(jump_index),
+                          "computed dispatch; " + targets_marker, statement.line);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression.reset();
   context.emitter.current_x_aliases.clear();
 
   const std::string end_label = context.emitter.fresh_label("match_end");
-  for (const V2MatchCase& match_case : statement.cases) {
-    const std::string entry_label = context.emitter.fresh_label("dispatch_case_entry");
-    context.emitter.emit_label(entry_label, {.hidden = true});
+  for (std::size_t index = 0; index < statement.cases.size(); ++index) {
+    const V2MatchCase& match_case = statement.cases.at(index);
+    context.emitter.emit_label(entry_labels.at(index), {.hidden = true});
     if (match_case.action != nullptr && !lower_match_action(context, *match_case.action))
       return false;
     if (!match_action_terminates_statically(context, match_case.action.get()))

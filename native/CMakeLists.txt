@@ -109,6 +109,7 @@ target_link_libraries(mkpro_cli PRIVATE mkpro_core)
 
 add_executable(mkpro_tests
   tests/address_formula_solver_test.cpp
+  tests/computed_dispatch_test.cpp
   tests/arithmetic_if_pass_test.cpp
   tests/bit_mask_quotient_reuse_test.cpp
   tests/board_width_macros_test.cpp
@@ -240,6 +241,7 @@ add_executable(mkpro_tests
 target_link_libraries(mkpro_tests PRIVATE mkpro_core)
 set(MKPRO_NATIVE_TEST_NAMES
   address_formula_solver_synthesizes_dispatch
+  computed_dispatch_targets_survive_dead_code_elimination
   arithmetic_if_matches_typescript_contract
   bit_mask_quotient_reuse_matches_typescript_contract
   board_width_macros_matches_typescript_contract
