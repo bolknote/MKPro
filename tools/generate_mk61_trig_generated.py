@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Regenerate native/src/core/mk61_trig_generated.cpp from ROM-derived probe output.
+
+The generator intentionally does not copy ROM tables into the production source. It uses
+mk61_trig_microcode_probe.cpp as the build-time ROM/microcode reader, asks it for the
+command words covered by the trig path, then asks it to dump specialized command bodies.
+"""
+
+from __future__ import annotations
+
+import argparse
+import difflib
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+
+from mk61_trig_corpus import FUNCTIONS, MODES, values as corpus_values
+
+PROBE_SRC = ROOT / "tools" / "mk61_trig_microcode_probe.cpp"
+DEFAULT_OUTPUT = ROOT / "native" / "src" / "core" / "mk61_trig_generated.cpp"
+
+VALUES = corpus_values()
+
+CHIPS = ("ik1302", "ik1303", "ik1306")
+COVERAGE_LINE_RE = re.compile(r"^(IK130[236]) command_words\(\d+\):\s*(.*)$")
+COMMAND_WORD_RE = re.compile(r"([0-9a-f]{2}):([0-9a-f]{6})")
+FIRST_BODY_RE = re.compile(r"\n  void execute_(?:ik130[26]_)?[0-9a-f]{6}_pre_add_orders")
+HELPER_RE = re.compile(
+    r"\n  bool key_micro_order_25\(uint32_t decoded_command, int tick, bool branch_l\) const \{.*?\n  \}\n\n",
+    re.S,
+)
+
+
+def run(cmd: list[str], *, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def compile_probe(cxx: str, build_dir: Path) -> Path:
+    probe_bin = build_dir / "mk61_trig_probe"
+    result = run([cxx, "-std=c++20", "-O2", str(PROBE_SRC), "-o", str(probe_bin)])
+    if result.returncode != 0:
+        sys.stderr.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        raise SystemExit(result.returncode)
+    return probe_bin
+
+
+def collect_command_words(probe_bin: Path) -> dict[str, dict[str, str]]:
+    needed: dict[str, dict[str, str]] = {chip: {} for chip in CHIPS}
+    for mode in MODES:
+        for fn in FUNCTIONS:
+            for value in VALUES:
+                result = run([
+                    str(probe_bin),
+                    "--skip-common-prolog",
+                    "--coverage",
+                    f"--{mode}",
+                    f"--{fn}",
+                    value,
+                ])
+                if result.returncode != 0:
+                    sys.stderr.write(result.stdout)
+                    sys.stderr.write(result.stderr)
+                    raise SystemExit(result.returncode)
+                for line in result.stdout.splitlines():
+                    match = COVERAGE_LINE_RE.match(line)
+                    if not match:
+                        continue
+                    chip = match.group(1).lower()
+                    for address, word in COMMAND_WORD_RE.findall(match.group(2)):
+                        needed[chip][address] = word
+    return needed
+
+
+def dump_specialization(probe_bin: Path, chip: str, word: str) -> str:
+    result = run([str(probe_bin), "--dump-chip-specialization", chip.upper(), word])
+    if result.returncode != 0:
+        sys.stderr.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        raise SystemExit(result.returncode)
+    return result.stdout.rstrip() + "\n"
+
+
+def tick_function(chip: str, word: str) -> str:
+    return f"tick_{chip}_{word}_decoded"
+
+
+def render_dispatch(chip: str, address_words: dict[str, str]) -> str:
+    lines: list[str] = []
+    lines.append(f"  bool tick_{chip}_generated_address_dispatch() {{")
+    lines.append(f"    if (tick_index != 0) return tick_{chip}_generated_command_dispatch(command);")
+    lines.append("    switch (command_address_for_trace()) {")
+    for address, word in sorted(address_words.items()):
+        lines.append(f"      case 0x{address}: {tick_function(chip, word)}(); return true;")
+    lines.append("      default: return false;")
+    lines.append("    }")
+    lines.append("  }")
+    lines.append(f"  bool tick_{chip}_generated_command_dispatch(uint32_t decoded_command) {{")
+    lines.append("    switch (decoded_command) {")
+    for word in sorted(set(address_words.values())):
+        lines.append(f"      case 0x{word}: {tick_function(chip, word)}(); return true;")
+    lines.append("      default: return false;")
+    lines.append("    }")
+    lines.append("  }")
+    return "\n".join(lines) + "\n"
+
+
+def split_template(template_text: str) -> tuple[str, str]:
+    first_body = FIRST_BODY_RE.search(template_text)
+    if not first_body:
+        raise SystemExit("cannot find first generated command body in template")
+    suffix_marker = "\n  void close_ring(uint8_t value)"
+    suffix_pos = template_text.find(suffix_marker, first_body.start())
+    if suffix_pos < 0:
+        raise SystemExit("cannot find generated command block suffix marker")
+    prefix = template_text[: first_body.start()]
+    if prefix.startswith("// Generated by tools/generate_mk61_trig_generated.py."):
+        include_pos = prefix.find("#include ")
+        if include_pos < 0:
+            raise SystemExit("generated banner found, but template include block is missing")
+        prefix = prefix[include_pos:]
+    prefix = HELPER_RE.sub("\n", prefix)
+    suffix = template_text[suffix_pos:]
+    return prefix.rstrip() + "\n\n", suffix
+
+
+def command_set_summary(command_words: dict[str, dict[str, str]]) -> str:
+    parts: list[str] = []
+    for chip in CHIPS:
+        addresses = len(command_words[chip])
+        commands = len(set(command_words[chip].values()))
+        parts.append(f"{chip}:addresses={addresses},commands={commands}")
+    return " ".join(parts)
+
+
+def render_banner(command_words: dict[str, dict[str, str]]) -> str:
+    return (
+        "// Generated by tools/generate_mk61_trig_generated.py.\n"
+        "// Source of truth: tools/mk61_trig_microcode_probe.cpp reads the MK-61 ROM/microcode.\n"
+        "// Do not edit command bodies or dispatch tables by hand; run:\n"
+        "//   tools/generate_mk61_trig_generated.py\n"
+        "// Verify reproducibility and value parity with:\n"
+        "//   tools/validate_mk61_trig_generated.py\n"
+        "// Runtime intentionally contains specialized ROM-derived code only, not ROM tables or emulator sources.\n"
+        f"// Command set: {command_set_summary(command_words)}\n\n"
+    )
+
+
+def render_source(template_text: str, probe_bin: Path) -> tuple[str, dict[str, dict[str, str]]]:
+    prefix, suffix = split_template(template_text)
+    command_words = collect_command_words(probe_bin)
+
+    body_parts: list[str] = []
+    for chip in CHIPS:
+        emitted_words: set[str] = set()
+        for _address, word in sorted(command_words[chip].items()):
+            if word in emitted_words:
+                continue
+            body_parts.append(dump_specialization(probe_bin, chip, word))
+            emitted_words.add(word)
+
+    dispatch_parts = [render_dispatch(chip, command_words[chip]) for chip in CHIPS]
+    generated = render_banner(command_words) + prefix + "\n".join(body_parts) + "\n" + "\n".join(dispatch_parts) + suffix
+    return generated, command_words
+
+
+def write_or_check(output: Path, generated: str, check: bool) -> None:
+    current = output.read_text()
+    if check:
+        if current != generated:
+            diff = difflib.unified_diff(
+                current.splitlines(keepends=True),
+                generated.splitlines(keepends=True),
+                fromfile=str(output),
+                tofile=str(output) + " (generated)",
+                n=3,
+            )
+            sys.stderr.writelines(diff)
+            raise SystemExit(1)
+        print(f"mk61-trig-generated-source-ok {output}")
+    else:
+        output.write_text(generated)
+        print(f"wrote {output}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--cxx", default="c++", help="C++ compiler command")
+    parser.add_argument("--probe-bin", type=Path, help="already built mk61_trig_microcode_probe binary")
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--template", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--check", action="store_true")
+    args = parser.parse_args()
+
+    template_text = args.template.read_text()
+    if args.probe_bin:
+        probe_bin = args.probe_bin
+        generated, command_words = render_source(template_text, probe_bin)
+        write_or_check(args.out, generated, args.check)
+    else:
+        with tempfile.TemporaryDirectory(prefix="mk61-trig-generate-") as tmp:
+            probe_bin = compile_probe(args.cxx, Path(tmp))
+            generated, command_words = render_source(template_text, probe_bin)
+            write_or_check(args.out, generated, args.check)
+    print("mk61-trig-command-set " + command_set_summary(command_words))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
