@@ -135,11 +135,10 @@ static std::vector<Op> ops(bool angle_fixed) {
       {"1/x", 0x23, [](double x) { return 1.0 / x; }, false},
       {"sqrt", 0x21, [](double x) { return std::sqrt(x); }, false},
       // Trig: PURE closed forms, converted with the current fixed-mode factor.
-      // (tan passes the offline ROM self-check; sin/cos do NOT yet -- their true
-      //  rule still needs deriving, so treat their hits as unvalidated.)
+      // Only tan/arctg are modeled in C++ (tan passes the offline ROM self-check).
+      // sin/cos are intentionally NOT included -- their exact ROM rule is not
+      // derived, so we never synthesize addresses through them.
       {"tan", 0x1E, [](double x) { return std::tan(x * angle_factor()); }, true},
-      {"sin", 0x1C, [](double x) { return std::sin(x * angle_factor()); }, true},
-      {"cos", 0x1D, [](double x) { return std::cos(x * angle_factor()); }, true},
       {"arctg", 0x1B, [](double x) { return std::atan(x) / angle_factor(); }, true},
   };
   std::vector<Op> out;

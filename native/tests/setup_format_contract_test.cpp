@@ -72,16 +72,20 @@ void setup_formatting_matches_typescript_contract() {
     analysis_options.budget = 999;
     const CompileResult rambo = compile_source(read_text(root / "examples" / "rambo-iii.mkpro"),
                                               analysis_options);
-    require(rambo.listing.find("Setup Block:") != std::string::npos,
-            "setup-format should include setup-block values for high-value constants");
-    require(rambo.listing.find("   00 |   -  | 25") != std::string::npos,
-            "setup-format should show compact setup load for decimal constant");
-    require(rambo.listing.find("   02 |   -  | 0.5") != std::string::npos,
-            "setup-format should show compact setup load for 0.5");
-    require(rambo.listing.find("   05 |  41  | X→П 1") != std::string::npos,
-            "setup-format should show setup program register moves");
+    // rambo-iii declares expected_mode_only("grd"), so the compiler emits a
+    // generated setup program (which seeds the registers and pins the angle
+    // mode) instead of the compact "Setup Block:" preload digest.
+    require(rambo.listing.find("Setup Block:") == std::string::npos,
+            "expected_mode setup program should replace the compact setup block");
     require(rambo.listing.find("# Setup Listing") != std::string::npos,
-            "setup-format should show setup listing for over-budget programs");
+            "setup-format should show setup listing for expected_mode programs");
+    require(rambo.listing.find("# Main Listing") != std::string::npos,
+            "setup-format should show main listing after the setup program");
+    require(rambo.listing.find("X→П 1") != std::string::npos &&
+                rambo.listing.find("setup R1") != std::string::npos,
+            "setup program should seed registers via explicit transfers");
+    require(rambo.listing.find("expected_mode(\"grd\")") != std::string::npos,
+            "setup program should embed the expected_mode(\"grd\") angle-mode guard");
   }
 
   {
