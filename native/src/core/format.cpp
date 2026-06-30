@@ -251,6 +251,13 @@ std::string format_step_address(int address) {
   }
 }
 
+std::string format_address_operand_key(int opcode) {
+  const int address = code_to_address(opcode);
+  if (address >= 0 && address <= 104)
+    return format_address(address);
+  return format_formal_address_opcode(opcode);
+}
+
 std::size_t utf8_codepoint_count(std::string_view value) {
   std::size_t count = 0;
   for (char raw : value) {
@@ -850,7 +857,7 @@ std::optional<std::string> manual_key_for_step(const std::vector<ResolvedStep>& 
   if (index >= steps.size())
     return std::nullopt;
   if (index > 0 && opcode_by_code(steps.at(index - 1U).opcode).takes_address)
-    return format_address(code_to_address(steps.at(index).opcode));
+    return format_address_operand_key(steps.at(index).opcode);
   const OpcodeInfo& info = opcode_by_code(steps.at(index).opcode);
   if (steps.at(index).opcode == 0x3e)
     return std::nullopt;

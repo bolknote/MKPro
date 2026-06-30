@@ -432,6 +432,13 @@ void print_json(const mkpro::CompileResult& result) {
   std::cout << ",\n  \"diagnostics\": " << result.diagnostics.size() << "\n}\n";
 }
 
+std::string format_address_operand_key(int opcode) {
+  const int address = mkpro::code_to_address(opcode);
+  if (address >= 0 && address <= 104)
+    return mkpro::format_address(address);
+  return mkpro::format_formal_address_opcode(opcode);
+}
+
 void append_step_keys(std::vector<std::string>& tokens, const std::vector<mkpro::ResolvedStep>& steps) {
   std::optional<std::string> previous_cell_key;
   for (std::size_t index = 0; index < steps.size(); ++index) {
@@ -456,8 +463,7 @@ void append_step_keys(std::vector<std::string>& tokens, const std::vector<mkpro:
     }
     tokens.push_back(opcode.keys);
     if (opcode.takes_address && index + 1U < steps.size()) {
-      const std::string address_key =
-          mkpro::format_address(mkpro::code_to_address(steps[index + 1U].opcode));
+      const std::string address_key = format_address_operand_key(steps[index + 1U].opcode);
       tokens.push_back(address_key);
       ++index;
       previous_cell_key = address_key;
