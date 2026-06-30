@@ -19,6 +19,34 @@ bool has_register_prefix(const CompileResult& result, const std::string& prefix)
                      [&](const auto& entry) { return entry.first.rfind(prefix, 0) == 0; });
 }
 
+bool has_preload_value(const CompileResult& result, const std::string& value) {
+  return std::any_of(result.preloads.begin(), result.preloads.end(),
+                     [&](const PreloadReport& preload) { return preload.value == value; });
+}
+
+bool has_decimal_extract_preload_sequence(const CompileResult& result) {
+  for (std::size_t index = 0; index + 3U < result.steps.size(); ++index) {
+    const ResolvedStep& slash = result.steps.at(index);
+    const ResolvedStep& frac = result.steps.at(index + 1U);
+    const ResolvedStep& multiply = result.steps.at(index + 2U);
+    const ResolvedStep& integer = result.steps.at(index + 3U);
+    if (slash.opcode != 0x13 || frac.opcode != 0x35 || multiply.opcode != 0x12 ||
+        integer.opcode != 0x34) {
+      continue;
+    }
+    bool has_divisor = false;
+    bool has_scale = false;
+    const std::size_t preload_start = index > 3U ? index - 3U : 0U;
+    for (std::size_t preload_index = preload_start; preload_index < index; ++preload_index) {
+      has_divisor = has_divisor || result.steps.at(preload_index).comment == "preload const 10000";
+      has_scale = has_scale || result.steps.at(preload_index).comment == "preload const 100";
+    }
+    if (has_divisor && has_scale)
+      return true;
+  }
+  return false;
+}
+
 const CandidateReport* find_candidate(const std::vector<CandidateReport>& candidates,
                                       const std::string& variant) {
   const auto it = std::find_if(candidates.begin(), candidates.end(),
@@ -158,6 +186,44 @@ program MultiPackedCounters {
   require(!multi.registers.contains("a"), "forced three-counter packing should remove a");
   require(!multi.registers.contains("b"), "forced three-counter packing should remove b");
   require(!multi.registers.contains("c"), "forced three-counter packing should remove c");
+
+  CompileOptions two_digit_options = options;
+  two_digit_options.disable_candidate_search = true;
+  two_digit_options.pack_counter_stripes = true;
+  two_digit_options.pack_counter_stripe_names = {"a", "b", "c"};
+  const std::string two_digit_source = R"mkpro(
+program TwoDigitPackedCounters {
+  state {
+    a: counter 0..99 = 75
+    b: counter 0..99 = 61
+    c: counter 0..99 = 20
+  }
+
+  loop {
+    halt(b)
+  }
+}
+)mkpro";
+  const CompileResult two_digit = compile_source(two_digit_source, two_digit_options);
+  require(two_digit.implemented, "forced two-digit counter packing should compile");
+  require(two_digit.diagnostics.empty(),
+          "forced two-digit counter packing should not report diagnostics: " +
+              diagnostics_text(two_digit));
+  require(has_optimization(two_digit, "packed-counter-stripes"),
+          "forced two-digit counter packing should report packed-counter-stripes");
+  require(has_preload_value(two_digit, "10000") && has_preload_value(two_digit, "100"),
+          "middle two-digit stripe extraction should preload decimal divisor and scale");
+  require(has_decimal_extract_preload_sequence(two_digit),
+          "middle two-digit stripe extraction should use preloaded divisor/scale commands");
+  CompileOptions two_digit_without_decimal_preload_options = two_digit_options;
+  two_digit_without_decimal_preload_options.suppress_constant_preloads.insert("100");
+  two_digit_without_decimal_preload_options.suppress_constant_preloads.insert("10000");
+  const CompileResult two_digit_without_decimal_preload =
+      compile_source(two_digit_source, two_digit_without_decimal_preload_options);
+  require(two_digit_without_decimal_preload.implemented,
+          "forced two-digit counter packing without decimal preloads should compile");
+  require(two_digit.steps.size() < two_digit_without_decimal_preload.steps.size(),
+          "middle two-digit stripe extraction should be smaller with decimal preloads");
 
   CompileOptions wide_options = options;
   wide_options.pack_counter_stripes = true;

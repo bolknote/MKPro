@@ -12583,6 +12583,14 @@ int dual_use_address_constant_preload_bonus(const std::string& value) {
   return natural->second > 0 && natural->second <= 104 ? 4 : 0;
 }
 
+bool packed_counter_decimal_extract_preload_value(const std::string& value) {
+  const std::optional<long long> integer = safe_integer_number(value);
+  if (!integer.has_value() || *integer <= 1)
+    return false;
+  const std::optional<int> exponent = positive_power_of_ten_exponent(*integer);
+  return exponent.has_value() && *exponent >= 2 && *exponent <= 8;
+}
+
 std::vector<std::string> collect_preload_constant_values(const LoweringContext& context,
                                                          const V2Program& program,
                                                          bool startup_aware) {
@@ -12648,6 +12656,16 @@ std::vector<std::string> collect_preload_constant_values(const LoweringContext& 
   for (const std::string& value :
        core::emit::display_constant_preload_values_for_program(context, program)) {
     values.insert(normalize_preload_key(value));
+  }
+
+  if (uses_packed_counter) {
+    for (const auto& [value, unused_count] : occurrences) {
+      (void)unused_count;
+      if (packed_counter_decimal_extract_preload_value(value)) {
+        boost(value, 3);
+        add_bonus(value, 1);
+      }
+    }
   }
 
   std::vector<std::string> ranked = values.ordered;
