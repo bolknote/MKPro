@@ -25,7 +25,8 @@ void print_usage(std::ostream& out) {
 
 Commands:
   compile                         Compile an MKPRO source file.
-  explain                         Compile with --analysis and --out all.
+  explain                         Compile with --analysis and --out all, including
+                                  a human-readable optimizer report.
 
 Global options:
   -h, --help                      Show this help.
@@ -40,7 +41,8 @@ Output and execution model:
                                   not-normally-enterable commands. manual is the
                                   default.
   --budget N                      Set the maximum accepted compiled program size.
-  --analysis                      Include optimizer analysis/report data.
+  --analysis                      Include optimizer analysis/report data. With
+                                  --out all, also print a human-readable report.
   --strict                        Treat undeclared allocation as an error.
   --behavior-digest               Print a stable behavior digest instead of the
                                   selected output format.
@@ -457,7 +459,111 @@ std::string format_keys_result(const mkpro::CompileResult& result) {
   return out.str();
 }
 
-void print_result(const mkpro::CompileResult& result, mkpro::OutputFormat output) {
+std::string join_strings(const std::vector<std::string>& values, std::string_view separator) {
+  std::ostringstream out;
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    if (index != 0)
+      out << separator;
+    out << values[index];
+  }
+  return out.str();
+}
+
+const char* yes_no(bool value) {
+  return value ? "yes" : "no";
+}
+
+void print_human_analysis_report(const mkpro::CompileResult& result) {
+  std::cout << "\n## Optimizer Report\n";
+  std::cout << "automatic: " << yes_no(result.optimizer.automatic)
+            << ", active: " << result.optimizer.active
+            << ", considered: " << result.optimizer.considered
+            << ", candidate: " << result.optimizer.candidate
+            << ", planned: " << result.optimizer.planned << "\n";
+
+  std::cout << "\n### Capabilities\n";
+  if (result.optimizer.capabilities.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    for (const auto& capability : result.optimizer.capabilities) {
+      std::cout << "- " << capability.id << " [" << capability.status << "]";
+      if (!capability.category.empty())
+        std::cout << " category=" << capability.category;
+      if (!capability.source.empty())
+        std::cout << " source=" << capability.source;
+      if (!capability.required_features.empty())
+        std::cout << " requires=" << join_strings(capability.required_features, ",");
+      if (!capability.detail.empty())
+        std::cout << " - " << capability.detail;
+      std::cout << "\n";
+    }
+  }
+
+  std::cout << "\n### Applied Optimizations\n";
+  if (result.optimizations.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    for (const auto& optimization : result.optimizations) {
+      std::cout << "- " << optimization.name;
+      if (!optimization.detail.empty())
+        std::cout << " - " << optimization.detail;
+      std::cout << "\n";
+    }
+  }
+
+  std::cout << "\n### Candidate Paths\n";
+  if (result.candidates.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    for (const auto& candidate : result.candidates) {
+      std::cout << "- " << candidate.site << " :: " << candidate.variant
+                << " steps=" << candidate.steps
+                << " selected=" << yes_no(candidate.selected);
+      if (!candidate.reason.empty())
+        std::cout << " - " << candidate.reason;
+      std::cout << "\n";
+    }
+  }
+
+  std::cout << "\n### Rejected Candidate Paths\n";
+  if (result.rejected_candidates.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    for (const auto& candidate : result.rejected_candidates) {
+      std::cout << "- " << candidate.site << " :: " << candidate.variant
+                << " steps=" << candidate.steps;
+      if (!candidate.reason.empty())
+        std::cout << " - " << candidate.reason;
+      std::cout << "\n";
+    }
+  }
+
+  std::cout << "\n### Proofs\n";
+  if (result.proofs.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    for (const auto& proof : result.proofs) {
+      std::cout << "- " << proof.id << " [" << proof.status << "]";
+      if (!proof.detail.empty())
+        std::cout << " - " << proof.detail;
+      std::cout << "\n";
+    }
+  }
+
+  std::cout << "\n### Emulator Facts\n";
+  if (result.emulator_facts.empty()) {
+    std::cout << "(none)\n";
+  } else {
+    for (const auto& fact : result.emulator_facts) {
+      std::cout << "- " << fact.id << " [" << fact.status << "]";
+      if (!fact.detail.empty())
+        std::cout << " - " << fact.detail;
+      std::cout << "\n";
+    }
+  }
+}
+
+void print_result(const mkpro::CompileResult& result, mkpro::OutputFormat output, bool analysis) {
   if (output == mkpro::OutputFormat::Hex) {
     std::cout << result.hex << "\n";
   } else if (output == mkpro::OutputFormat::Mk61s) {
@@ -473,6 +579,8 @@ void print_result(const mkpro::CompileResult& result, mkpro::OutputFormat output
     if (!result.setup_hex.empty())
       std::cout << "\n## Setup Hex\n" << result.setup_hex << "\n";
     std::cout << "\n## Hex\n" << result.hex << "\n";
+    if (analysis)
+      print_human_analysis_report(result);
   } else {
     std::cout << result.listing << "\n";
   }
@@ -703,7 +811,7 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
     }
     print_diagnostics(result);
     if (result.implemented)
-      print_result(result, options.output);
+      print_result(result, options.output, options.analysis);
     return result.implemented ? 0 : 78;
   } catch (const std::exception& error) {
     std::cerr << "error: " << error.what() << "\n";
