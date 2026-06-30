@@ -79,6 +79,8 @@ bool statements_read_identifier(const std::vector<V2Statement>& statements,
                                 const std::string& name);
 
 bool statement_reads_identifier(const V2Statement& statement, const std::string& name) {
+  if (statement.kind == "v2_invoke")
+    return true;
   if (expression_text_references_identifier(statement.target, name, statement.line) ||
       expression_text_references_identifier(statement.expr, name, statement.line)) {
     return true;
@@ -205,11 +207,7 @@ bool validate_stack_resident_expression(const Expression& expression,
            stack_temp_other_operand_is_safe(*expression.right);
   }
   if (expression.kind == "call") {
-    if (expression.args.empty())
-      return false;
-    return std::all_of(expression.args.begin(), expression.args.end(), [&](const Expression& arg) {
-      return validate_stack_resident_expression(arg, temps);
-    });
+    return false;
   }
   return false;
 }
