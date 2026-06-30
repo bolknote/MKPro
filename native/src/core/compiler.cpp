@@ -29914,10 +29914,16 @@ bool is_bit_or_update(const Expression& expression, const std::string& collectio
   return (left == collection && right == temp) || (left == temp && right == collection);
 }
 
+bool expression_is_cell_mask_call(const Expression& expression) {
+  return expression.kind == "call" && lower_ascii(expression.callee) == "cell_mask" &&
+         expression.args.size() == 2U;
+}
+
 struct BitOrTestAndSetBranch {
   std::string collection;
   std::vector<V2Statement> else_tail;
   int update_line = 0;
+  bool source_is_cell_mask = false;
 };
 
 std::optional<BitOrTestAndSetBranch> bit_or_test_and_set_branch(LoweringContext& context,
@@ -29954,6 +29960,7 @@ std::optional<BitOrTestAndSetBranch> bit_or_test_and_set_branch(LoweringContext&
       .collection = *collection,
       .else_tail = std::move(else_tail),
       .update_line = update.line,
+      .source_is_cell_mask = expression_is_cell_mask_call(assigned),
   };
 }
 
@@ -30024,6 +30031,14 @@ bool lower_bit_or_test_and_set_branch(LoweringContext& context, const V2Statemen
                 " membership test, bit_or update, and occupied branch at line " +
                 std::to_string(branch.line) + ".",
   });
+  if (match->source_is_cell_mask) {
+    context.optimizations.push_back(OptimizationReport{
+        .name = "cell-mask-occupied-test-set",
+        .detail = "Used the returned cell_mask directly for " + match->collection +
+                  " membership, update, and retry branching at line " +
+                  std::to_string(branch.line) + ".",
+    });
+  }
   return true;
 }
 
@@ -40418,6 +40433,12 @@ void append_candidate_report_once(std::vector<CandidateReport>& reports,
     reports.push_back(std::move(candidate));
 }
 
+bool should_report_nonwinning_candidate(std::string_view name) {
+  return name == "packed-line-family-update-check-tail" ||
+         name == "packed-line-family-mutating-selector-update-check-tail" ||
+         name == "packed-line-family-borrowed-mutating-selector-update-check-tail";
+}
+
 OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& optimizations,
                                        const std::vector<CandidateReport>& candidates,
                                        const std::vector<CandidateReport>& rejected_candidates) {
@@ -42368,8 +42389,22 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
                   << candidate.name << " implemented=" << (result.implemented ? "yes" : "no")
                   << " steps=" << result.steps.size() << "\n";
       }
-      if (!candidate_beats_best(result, best))
+      if (!candidate_beats_best(result, best)) {
+        if (options.analysis && result.implemented &&
+            should_report_nonwinning_candidate(candidate.name)) {
+          append_candidate_report_once(
+              search_rejected_candidates,
+              CandidateReport{
+                  .site = "candidate-search",
+                  .variant = candidate.name,
+                  .steps = static_cast<int>(result.steps.size()),
+                  .selected = false,
+                  .reason = "not selected because it did not improve the current best during "
+                            "candidate search",
+              });
+        }
         continue;
+      }
       if (candidate_needs_static_proof_gate(candidate.options) &&
           !optimizer_static_gate_accepts(candidate.options, result)) {
         const std::optional<std::string> rejection_reason =

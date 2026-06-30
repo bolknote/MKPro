@@ -57,6 +57,13 @@ const CandidateReport* find_candidate(const std::vector<CandidateReport>& candid
   return it == candidates.end() ? nullptr : &*it;
 }
 
+bool has_optimization(const CompileResult& result, const std::string& name) {
+  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                     [&](const OptimizationReport& optimization) {
+                       return optimization.name == name;
+                     });
+}
+
 std::vector<std::string> example_file_names(const std::filesystem::path& dir) {
   std::vector<std::string> names;
   for (const auto& entry : std::filesystem::directory_iterator(dir)) {
@@ -159,6 +166,15 @@ void example_sizes_match_typescript_baselines() {
     require(result.steps.size() == expected,
             "pending example " + name + " step count should match TS baseline");
     if (name == "tic-tac-toe-4x4") {
+      require(has_optimization(result, "cell-mask-occupied-test-set"),
+              "tic-tac-toe-4x4 should report cell_mask/occupied test-and-set fusion");
+      const CandidateReport* packed_line_update_tail =
+          find_candidate(result.rejected_candidates, "packed-line-family-update-check-tail");
+      require(packed_line_update_tail != nullptr,
+              "tic-tac-toe-4x4 should report nonwinning packed-line update/check tail candidate");
+      require(packed_line_update_tail->steps >= static_cast<int>(result.steps.size()),
+              "tic-tac-toe-4x4 packed-line update/check tail should not be reported as a hidden "
+              "smaller candidate");
       const CandidateReport* rejected_dead_integer =
           find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
       require(rejected_dead_integer != nullptr,
