@@ -1,43 +1,43 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  08  | 8                       |
-   01 |  42  | X→П 2                   | setup R2
-   02 |  03  | 3                       |
-   03 |  44  | X→П 4                   | setup R4
-   04 |  41  | X→П 1                   | setup R1
-   05 |  09  | 9                       |
-   06 |  43  | X→П 3                   | setup R3
-   07 |  00  | 0                       |
-   08 |  40  | X→П 0                   | setup R0
-   09 |  01  | 1                       |
-   10 |  00  | 0                       |
-   11 |  4C  | X→П c                   | setup Rc
-   12 |  07  | 7                       |
-   13 |  07  | 7                       |
-   14 |  07  | 7                       |
-   15 |  4D  | X→П d                   | setup Rd
-   16 |  09  | 9                       |
-   17 |  09  | 9                       |
-   18 |  09  | 9                       |
-   19 |  0B  | /-/                     | negative number
-   20 |  4E  | X→П e                   | setup Re
-   21 |  07  | 7                       |
-   22 |  05  | 5                       |
-   23 |  47  | X→П 7                   | setup R7
-   24 |  02  | 2                       |
-   25 |  01  | 1                       |
-   26 |  48  | X→П 8                   | setup R8
-   27 |  02  | 2                       |
-   28 |  03  | 3                       |
-   29 |  49  | X→П 9                   | setup R9
-   30 |  03  | 3                       |
-   31 |  00  | 0                       |
-   32 |  4A  | X→П a                   | setup Ra
-   33 |  09  | 9                       |
-   34 |  01  | 1                       |
-   35 |  1D  | F cos                   | expected_mode("grd") cosine
-   36 |  18  | F ln                    | expected_mode("grd") domain guard
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  08  | 8                       |
+   05 |  42  | X→П 2                   | setup R2
+   06 |  03  | 3                       |
+   07 |  44  | X→П 4                   | setup R4
+   08 |  41  | X→П 1                   | setup R1
+   09 |  09  | 9                       |
+   10 |  43  | X→П 3                   | setup R3
+   11 |  00  | 0                       |
+   12 |  40  | X→П 0                   | setup R0
+   13 |  01  | 1                       |
+   14 |  00  | 0                       |
+   15 |  4C  | X→П c                   | setup Rc
+   16 |  07  | 7                       |
+   17 |  07  | 7                       |
+   18 |  07  | 7                       |
+   19 |  4D  | X→П d                   | setup Rd
+   20 |  09  | 9                       |
+   21 |  09  | 9                       |
+   22 |  09  | 9                       |
+   23 |  0B  | /-/                     | negative number
+   24 |  4E  | X→П e                   | setup Re
+   25 |  07  | 7                       |
+   26 |  05  | 5                       |
+   27 |  47  | X→П 7                   | setup R7
+   28 |  02  | 2                       |
+   29 |  01  | 1                       |
+   30 |  48  | X→П 8                   | setup R8
+   31 |  02  | 2                       |
+   32 |  03  | 3                       |
+   33 |  49  | X→П 9                   | setup R9
+   34 |  03  | 3                       |
+   35 |  00  | 0                       |
+   36 |  4A  | X→П a                   | setup Ra
    37 |  50  | С/П                     | setup complete
 
 # Main Listing
@@ -68,7 +68,7 @@
    22 |  8A  | К БП a                  | empty-stack tail call resolve_turn; preloaded Ra=30 indirect-target=30 shifted-forward indirect flow
    23 |  02  | 2                       |
    24 |  11  | −                       | dispatch residual compare
-   25 |  EA  | К x=0 b                 | case mismatch; preloaded Rb=30 indirect-target=30 shifted-forward indirect flow
+   25 |  EA  | К x=0 a                 | case mismatch; preloaded Ra=30 indirect-target=30 shifted-forward indirect flow
    26 |  01  | 1                       |
    27 |  62  | П→X 2                   | recall boat
    28 |  10  | +                       | expr +

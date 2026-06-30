@@ -58,7 +58,7 @@
 # Main Listing
  Step | Code     | Command                 | Comment
 ------+----------+-------------------------+----------------
-   00 | 8C       | К БП e                  | skip hoisted shared helpers; preloaded Re=C9 indirect-target=17 shifted-forward indirect flow
+   00 | 8C       | К БП c                  | skip hoisted shared helpers; preloaded Rc=C9 indirect-target=17 shifted-forward indirect flow
    01 | DD       | К П→X d                 | indexed recall rows.row; indirect-memory-targets=1,2,3,4,5,6,7,8,9
    02 | 05       | 5                       |
    03 | 60       | П→X 0                   | recall pos

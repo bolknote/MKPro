@@ -1,86 +1,86 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  00  | 0                       |
-   01 |  42  | X→П 2                   | setup R2
-   02 |  40  | X→П 0                   | setup R0
-   03 |  41  | X→П 1                   | setup R1
-   04 |  03  | 3                       |
-   05 |  44  | X→П 4                   | setup R4
-   06 |  45  | X→П 5                   | setup R5
-   07 |  43  | X→П 3                   | setup R3
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  00  | 0                       |
+   05 |  42  | X→П 2                   | setup R2
+   06 |  40  | X→П 0                   | setup R0
+   07 |  41  | X→П 1                   | setup R1
    08 |  03  | 3                       |
-   09 |  00  | 0                       |
-   10 |  00  | 0                       |
-   11 |  0B  | /-/                     | negative number
-   12 |  46  | X→П 6                   | setup R6
-   13 |  01  | 1                       |
+   09 |  44  | X→П 4                   | setup R4
+   10 |  45  | X→П 5                   | setup R5
+   11 |  43  | X→П 3                   | setup R3
+   12 |  03  | 3                       |
+   13 |  00  | 0                       |
    14 |  00  | 0                       |
-   15 |  4A  | X→П a                   | setup Ra
-   16 |  01  | 1                       |
-   17 |  00  | 0                       |
+   15 |  0B  | /-/                     | negative number
+   16 |  46  | X→П 6                   | setup R6
+   17 |  01  | 1                       |
    18 |  00  | 0                       |
-   19 |  4B  | X→П b                   | setup Rb
+   19 |  4A  | X→П a                   | setup Ra
    20 |  01  | 1                       |
-   21 |  03  | 3                       |
-   22 |  02  | 2                       |
-   23 |  00  | 0                       |
-   24 |  05  | 5                       |
-   25 |  08  | 8                       |
-   26 |  07  | 7                       |
-   27 |  4D  | X→П d                   | setup Rd
-   28 |  01  | 1                       |
-   29 |  03  | 3                       |
-   30 |  02  | 2                       |
-   31 |  05  | 5                       |
+   21 |  00  | 0                       |
+   22 |  00  | 0                       |
+   23 |  4B  | X→П b                   | setup Rb
+   24 |  01  | 1                       |
+   25 |  03  | 3                       |
+   26 |  02  | 2                       |
+   27 |  00  | 0                       |
+   28 |  05  | 5                       |
+   29 |  08  | 8                       |
+   30 |  07  | 7                       |
+   31 |  4D  | X→П d                   | setup Rd
    32 |  01  | 1                       |
-   33 |  05  | 5                       |
-   34 |  08  | 8                       |
-   35 |  07  | 7                       |
-   36 |  4E  | X→П e                   | setup Re
-   37 |  01  | 1                       |
-   38 |  00  | 0                       |
-   39 |  00  | 0                       |
-   40 |  06  | 6                       |
-   41 |  02  | 2                       |
-   42 |  06  | 6                       |
+   33 |  03  | 3                       |
+   34 |  02  | 2                       |
+   35 |  05  | 5                       |
+   36 |  01  | 1                       |
+   37 |  05  | 5                       |
+   38 |  08  | 8                       |
+   39 |  07  | 7                       |
+   40 |  4E  | X→П e                   | setup Re
+   41 |  01  | 1                       |
+   42 |  00  | 0                       |
    43 |  00  | 0                       |
-   44 |  00  | 0                       |
-   45 |  0E  | В↑                      | setup Rc body split
-   46 |  09  | 9                       |
-   47 |  01  | 1                       |
-   48 |  06  | 6                       |
-   49 |  08  | 8                       |
+   44 |  06  | 6                       |
+   45 |  02  | 2                       |
+   46 |  06  | 6                       |
+   47 |  00  | 0                       |
+   48 |  00  | 0                       |
+   49 |  0E  | В↑                      | setup Rc body split
    50 |  09  | 9                       |
-   51 |  09  | 9                       |
-   52 |  09  | 9                       |
-   53 |  01  | 1                       |
-   54 |  39  | К ⊕                     | setup Rc body
-   55 |  4C  | X→П c                   | setup Rc body scratch
-   56 |  01  | 1                       |
-   57 |  02  | 2                       |
-   58 |  3A  | К ИНВ                   | setup Rc first digit
-   59 |  35  | К {x}                   | setup Rc first digit
-   60 |  6C  | П→X c                   | setup Rc body scratch
-   61 |  14  | ↔                       | display sign-digit first-cell splice
-   62 |  54  | К НОП                   | display sign-digit first-cell splice
-   63 |  0C  | ВП                      | display sign-digit first-cell splice
-   64 |  0C  | ВП                      | setup Rc exponent
-   65 |  07  | 7                       | setup Rc exponent
-   66 |  4C  | X→П c                   | setup Rc
-   67 |  04  | 4                       |
-   68 |  09  | 9                       |
-   69 |  47  | X→П 7                   | setup R7
-   70 |  01  | 1                       |
-   71 |  05  | 5                       |
-   72 |  48  | X→П 8                   | setup R8
-   73 |  02  | 2                       |
-   74 |  04  | 4                       |
-   75 |  49  | X→П 9                   | setup R9
-   76 |  09  | 9                       |
-   77 |  01  | 1                       |
-   78 |  1D  | F cos                   | expected_mode("grd") cosine
-   79 |  18  | F ln                    | expected_mode("grd") domain guard
+   51 |  01  | 1                       |
+   52 |  06  | 6                       |
+   53 |  08  | 8                       |
+   54 |  09  | 9                       |
+   55 |  09  | 9                       |
+   56 |  09  | 9                       |
+   57 |  01  | 1                       |
+   58 |  39  | К ⊕                     | setup Rc body
+   59 |  4C  | X→П c                   | setup Rc body scratch
+   60 |  01  | 1                       |
+   61 |  02  | 2                       |
+   62 |  3A  | К ИНВ                   | setup Rc first digit
+   63 |  35  | К {x}                   | setup Rc first digit
+   64 |  6C  | П→X c                   | setup Rc body scratch
+   65 |  14  | ↔                       | display sign-digit first-cell splice
+   66 |  54  | К НОП                   | display sign-digit first-cell splice
+   67 |  0C  | ВП                      | display sign-digit first-cell splice
+   68 |  0C  | ВП                      | setup Rc exponent
+   69 |  07  | 7                       | setup Rc exponent
+   70 |  4C  | X→П c                   | setup Rc
+   71 |  04  | 4                       |
+   72 |  09  | 9                       |
+   73 |  47  | X→П 7                   | setup R7
+   74 |  01  | 1                       |
+   75 |  05  | 5                       |
+   76 |  48  | X→П 8                   | setup R8
+   77 |  02  | 2                       |
+   78 |  04  | 4                       |
+   79 |  49  | X→П 9                   | setup R9
    80 |  50  | С/П                     | setup complete
 
 # Main Listing

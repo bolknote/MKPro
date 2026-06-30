@@ -61,6 +61,14 @@ void setup_program_matches_typescript_contract() {
                                  *step.comment == "expected_mode(\"" + mode + "\") domain guard";
                         }),
             "expected mode setup check should emit domain guard for " + mode);
+    const auto first_commented_it =
+        std::find_if(mode_report.steps.begin(), mode_report.steps.end(),
+                     [](const ResolvedStep& step) {
+                       return step.comment.has_value() && !step.comment->empty();
+                     });
+    require(first_commented_it != mode_report.steps.end() &&
+                first_commented_it->comment->starts_with("expected_mode(\"" + mode + "\")"),
+            "expected mode setup guard should be first when setup has no input preloads");
   }
 
   const SetupProgramReport guarded_preload_report =
@@ -77,8 +85,8 @@ void setup_program_matches_typescript_contract() {
                                       return step.comment == "setup R1";
                                     });
   require(guard_it != guarded_preload_report.steps.end() &&
-              setup_it != guarded_preload_report.steps.end() && setup_it < guard_it,
-          "expected mode setup guard should run after state preload setup");
+              setup_it != guarded_preload_report.steps.end() && guard_it < setup_it,
+          "expected mode setup guard should run before non-input state preload setup");
   require(has_setup_optimization_detail(guarded_preload_report, "expected-mode-setup-check",
                                         "guard with probe 100"),
           "first expected mode setup guard should use its own probe instead of a future preload");
@@ -108,9 +116,9 @@ void setup_program_matches_typescript_contract() {
   require(stack_setup_it != stack_guarded_preload_report.steps.end() &&
               stack_guard_it != stack_guarded_preload_report.steps.end() &&
               numeric_setup_it != stack_guarded_preload_report.steps.end() &&
-              stack_setup_it < stack_guard_it && numeric_setup_it < stack_guard_it,
-          "expected mode setup guard should run after stack input setup and other state preload "
-          "setup");
+              stack_setup_it < stack_guard_it && stack_guard_it < numeric_setup_it,
+          "expected mode setup guard should run immediately after stack input setup and before "
+          "other state preload setup");
 }
 
 } // namespace mkpro::tests

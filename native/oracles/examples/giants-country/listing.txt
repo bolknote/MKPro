@@ -1,71 +1,72 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  01  | 1                       |
-   01 |  44  | X→П 4                   | setup R4
-   02 |  45  | X→П 5                   | setup R5
-   03 |  04  | 4                       |
-   04 |  00  | 0                       |
-   05 |  42  | X→П 2                   | setup R2
-   06 |  00  | 0                       |
-   07 |  46  | X→П 6                   | setup R6
-   08 |  41  | X→П 1                   | setup R1
-   09 |  47  | X→П 7                   | setup R7
-   10 |  07  | 7                       |
-   11 |  00  | 0                       |
-   12 |  00  | 0                       |
-   13 |  00  | 0                       |
-   14 |  00  | 0                       |
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  01  | 1                       |
+   05 |  44  | X→П 4                   | setup R4
+   06 |  45  | X→П 5                   | setup R5
+   07 |  04  | 4                       |
+   08 |  00  | 0                       |
+   09 |  42  | X→П 2                   | setup R2
+   10 |  00  | 0                       |
+   11 |  46  | X→П 6                   | setup R6
+   12 |  41  | X→П 1                   | setup R1
+   13 |  47  | X→П 7                   | setup R7
+   14 |  07  | 7                       |
    15 |  00  | 0                       |
    16 |  00  | 0                       |
-   17 |  08  | 8                       |
-   18 |  43  | X→П 3                   | setup R3
-   19 |  01  | 1                       |
+   17 |  00  | 0                       |
+   18 |  00  | 0                       |
+   19 |  00  | 0                       |
    20 |  00  | 0                       |
-   21 |  4D  | X→П d                   | setup Rd
-   22 |  4A  | X→П a                   | setup Ra
+   21 |  08  | 8                       |
+   22 |  43  | X→П 3                   | setup R3
    23 |  01  | 1                       |
-   24 |  01  | 1                       |
-   25 |  09  | 9                       |
-   26 |  05  | 5                       |
+   24 |  00  | 0                       |
+   25 |  4D  | X→П d                   | setup Rd
+   26 |  4A  | X→П a                   | setup Ra
    27 |  01  | 1                       |
-   28 |  02  | 2                       |
-   29 |  00  | 0                       |
-   30 |  03  | 3                       |
-   31 |  4E  | X→П e                   | setup Re
-   32 |  08  | 8                       |
-   33 |  08  | 8                       |
-   34 |  48  | X→П 8                   | setup R8
-   35 |  09  | 9                       |
-   36 |  07  | 7                       |
-   37 |  49  | X→П 9                   | setup R9
-   38 |  08  | 8                       |
-   39 |  02  | 2                       |
-   40 |  4B  | X→П b                   | setup Rb
-   41 |  02  | 2                       |
+   28 |  01  | 1                       |
+   29 |  09  | 9                       |
+   30 |  05  | 5                       |
+   31 |  01  | 1                       |
+   32 |  02  | 2                       |
+   33 |  00  | 0                       |
+   34 |  03  | 3                       |
+   35 |  4E  | X→П e                   | setup Re
+   36 |  08  | 8                       |
+   37 |  08  | 8                       |
+   38 |  48  | X→П 8                   | setup R8
+   39 |  09  | 9                       |
+   40 |  07  | 7                       |
+   41 |  49  | X→П 9                   | setup R9
    42 |  08  | 8                       |
-   43 |  4C  | X→П c                   | setup Rc
-   44 |  3B  | К СЧ                    | random()
-   45 |  09  | 9                       |
-   46 |  09  | 9                       |
-   47 |  09  | 9                       |
-   48 |  09  | 9                       |
+   43 |  02  | 2                       |
+   44 |  4B  | X→П b                   | setup Rb
+   45 |  02  | 2                       |
+   46 |  08  | 8                       |
+   47 |  4C  | X→П c                   | setup Rc
+   48 |  3B  | К СЧ                    | random()
    49 |  09  | 9                       |
    50 |  09  | 9                       |
    51 |  09  | 9                       |
    52 |  09  | 9                       |
    53 |  09  | 9                       |
-   54 |  12  | ×                       | expr *
-   55 |  0E  | В↑                      | random int keep scaled draw
-   56 |  35  | К {x}                   | random int fractional part
-   57 |  11  | −                       | random int floor
-   58 |  01  | 1                       |
-   59 |  10  | +                       | expr +
-   60 |  40  | X→П 0                   | setup plans
-   61 |  63  | П→X 3                   | expected_mode("grd") probe
-   62 |  1D  | F cos                   | expected_mode("grd") cosine
-   63 |  18  | F ln                    | expected_mode("grd") domain guard
-   64 |  50  | С/П                     | setup complete
+   54 |  09  | 9                       |
+   55 |  09  | 9                       |
+   56 |  09  | 9                       |
+   57 |  09  | 9                       |
+   58 |  12  | ×                       | expr *
+   59 |  0E  | В↑                      | random int keep scaled draw
+   60 |  35  | К {x}                   | random int fractional part
+   61 |  11  | −                       | random int floor
+   62 |  01  | 1                       |
+   63 |  10  | +                       | expr +
+   64 |  40  | X→П 0                   | setup plans
+   65 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment

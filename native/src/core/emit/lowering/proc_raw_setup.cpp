@@ -1968,48 +1968,65 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   };
   std::vector<std::size_t> preload_order;
   preload_order.reserve(preloads.size());
+  std::set<std::size_t> ordered_preload_indices;
+  auto push_preload_order = [&](std::size_t index) {
+    if (ordered_preload_indices.insert(index).second)
+      preload_order.push_back(index);
+  };
   const std::set<std::size_t> empty_consumed;
   auto is_indexed_setup_group_start = [&](const std::size_t index) {
     return indexed_setup_preload_group_at(preloads, empty_consumed, index).has_value();
   };
+  auto is_stack_setup_preload = [&](const PreloadReport& preload, const std::string& stack_value) {
+    return !executable_setup_preload(preload) && !deferred_direct_setup_preload(preload) &&
+           preload.value == stack_value;
+  };
+  if (expected_mode.has_value()) {
+    for (std::size_t index = 0; index < preloads.size(); ++index) {
+      if (is_stack_setup_preload(preloads.at(index), "stack.Y"))
+        push_preload_order(index);
+    }
+    for (std::size_t index = 0; index < preloads.size(); ++index) {
+      if (is_stack_setup_preload(preloads.at(index), "stack.X"))
+        push_preload_order(index);
+    }
+  }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (executable_setup_preload(preloads.at(index)) &&
         !is_formatted_coord_report_mask_preload(preloads.at(index))) {
-      preload_order.push_back(index);
+      push_preload_order(index);
     }
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (deferred_direct_setup_preload(preloads.at(index)))
-      preload_order.push_back(index);
+      push_preload_order(index);
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
-    if (!executable_setup_preload(preloads.at(index)) &&
-        !deferred_direct_setup_preload(preloads.at(index)) && preloads.at(index).value == "stack.Y")
-      preload_order.push_back(index);
+    if (is_stack_setup_preload(preloads.at(index), "stack.Y"))
+      push_preload_order(index);
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
-    if (!executable_setup_preload(preloads.at(index)) &&
-        !deferred_direct_setup_preload(preloads.at(index)) && preloads.at(index).value == "stack.X")
-      preload_order.push_back(index);
+    if (is_stack_setup_preload(preloads.at(index), "stack.X"))
+      push_preload_order(index);
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (!executable_setup_preload(preloads.at(index)) &&
         !deferred_direct_setup_preload(preloads.at(index)) &&
         preloads.at(index).value != "stack.Y" && preloads.at(index).value != "stack.X" &&
         is_indexed_setup_group_start(index))
-      preload_order.push_back(index);
+      push_preload_order(index);
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (!executable_setup_preload(preloads.at(index)) &&
         !deferred_direct_setup_preload(preloads.at(index)) &&
         preloads.at(index).value != "stack.Y" && preloads.at(index).value != "stack.X" &&
         !is_indexed_setup_group_start(index))
-      preload_order.push_back(index);
+      push_preload_order(index);
   }
   for (std::size_t index = 0; index < preloads.size(); ++index) {
     if (executable_setup_preload(preloads.at(index)) &&
         is_formatted_coord_report_mask_preload(preloads.at(index))) {
-      preload_order.push_back(index);
+      push_preload_order(index);
     }
   }
 
@@ -2056,10 +2073,19 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     numeric_segment.clear();
   };
 
+  bool expected_mode_guard_emitted = false;
   for (const std::size_t index : preload_order) {
+    const PreloadReport& preload = preloads.at(index);
+    const bool from_stack_x = preload.value == "stack.X";
+    const bool from_stack_y = preload.value == "stack.Y";
+    if (expected_mode.has_value() && !expected_mode_guard_emitted && !from_stack_x &&
+        !from_stack_y) {
+      flush_numeric_segment();
+      emit_expected_mode_setup_check(setup, optimizations, *expected_mode);
+      expected_mode_guard_emitted = true;
+    }
     if (consumed.contains(index))
       continue;
-    const PreloadReport& preload = preloads.at(index);
     if (uses_r0_setup_pointer && preload.register_name == "0" && !preload.setup_expression &&
         has_executable_setup_number_value(preload.value)) {
       consumed.insert(index);
@@ -2070,8 +2096,6 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
       continue;
     }
     flush_numeric_segment();
-    const bool from_stack_x = preload.value == "stack.X";
-    const bool from_stack_y = preload.value == "stack.Y";
     if (!r0_needs_non_numeric_restore) {
       const std::optional<IndexedSetupPreloadGroup> group =
           indexed_setup_preload_group_at(preloads, consumed, index);
@@ -2326,7 +2350,7 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   if (setup_r0_dirty)
     emit_restore_setup_pointer_r0(setup, preloads, setup_r0_current_value,
                                   !options.disable_candidate_search);
-  if (expected_mode.has_value())
+  if (expected_mode.has_value() && !expected_mode_guard_emitted)
     emit_expected_mode_setup_check(setup, optimizations, *expected_mode);
   if (initialized_random_coord_list && !initialized_segmented_bitplanes)
     setup.emit_number("7");

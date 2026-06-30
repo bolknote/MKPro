@@ -3,40 +3,40 @@
 ------+------+-------------------------+----------------
    -- |   -  | enter hour              | enter any value 0..23 in X
    -- |   -  | enter minute            | enter any value 0..59 in Y
-   00 |  01  | 1                       |
-   01 |  01  | 1                       |
-   02 |  43  | X→П 3                   | setup R3
-   03 |  01  | 1                       |
-   04 |  00  | 0                       |
-   05 |  42  | X→П 2                   | setup R2
-   06 |  4B  | X→П b                   | setup Rb
-   07 |  02  | 2                       |
-   08 |  04  | 4                       |
-   09 |  4C  | X→П c                   | setup Rc
-   10 |  06  | 6                       |
-   11 |  00  | 0                       |
-   12 |  4D  | X→П d                   | setup Rd
-   13 |  62  | П→X 2                   | setup constant 100 base 10
-   14 |  22  | F x²                    | setup constant 100
-   15 |  4E  | X→П e                   | setup Re
-   16 |  00  | 0                       |
-   17 |  47  | X→П 7                   | setup R7
-   18 |  08  | 8                       |
-   19 |  48  | X→П 8                   | setup R8
-   20 |  01  | 1                       |
-   21 |  05  | 5                       |
-   22 |  49  | X→П 9                   | setup R9
-   23 |  01  | 1                       |
-   24 |  09  | 9                       |
-   25 |  4A  | X→П a                   | setup Ra
-   26 |  14  | X↔Y                     | setup minute from stack.Y
-   27 |  44  | X→П 4                   | setup minute
-   28 |  14  | X↔Y                     | restore stack.X after minute
-   29 |  45  | X→П 5                   | setup hour
-   30 |  09  | 9                       |
+   00 |  14  | X↔Y                     | setup minute from stack.Y
+   01 |  44  | X→П 4                   | setup minute
+   02 |  14  | X↔Y                     | restore stack.X after minute
+   03 |  45  | X→П 5                   | setup hour
+   04 |  09  | 9                       |
+   05 |  01  | 1                       |
+   06 |  1D  | F cos                   | expected_mode("grd") cosine
+   07 |  18  | F ln                    | expected_mode("grd") domain guard
+   08 |  01  | 1                       |
+   09 |  01  | 1                       |
+   10 |  43  | X→П 3                   | setup R3
+   11 |  01  | 1                       |
+   12 |  00  | 0                       |
+   13 |  42  | X→П 2                   | setup R2
+   14 |  4B  | X→П b                   | setup Rb
+   15 |  02  | 2                       |
+   16 |  04  | 4                       |
+   17 |  4C  | X→П c                   | setup Rc
+   18 |  06  | 6                       |
+   19 |  00  | 0                       |
+   20 |  4D  | X→П d                   | setup Rd
+   21 |  62  | П→X 2                   | setup constant 100 base 10
+   22 |  22  | F x²                    | setup constant 100
+   23 |  4E  | X→П e                   | setup Re
+   24 |  00  | 0                       |
+   25 |  47  | X→П 7                   | setup R7
+   26 |  08  | 8                       |
+   27 |  48  | X→П 8                   | setup R8
+   28 |  01  | 1                       |
+   29 |  05  | 5                       |
+   30 |  49  | X→П 9                   | setup R9
    31 |  01  | 1                       |
-   32 |  1D  | F cos                   | expected_mode("grd") cosine
-   33 |  18  | F ln                    | expected_mode("grd") domain guard
+   32 |  09  | 9                       |
+   33 |  4A  | X→П a                   | setup Ra
    34 |  50  | С/П                     | setup complete
 
 # Main Listing
