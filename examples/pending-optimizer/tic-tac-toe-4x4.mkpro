@@ -16,7 +16,7 @@ program TicTacToe4x4 {
     x: counter 0..5
     y: counter 0..5
 
-    best_y: counter 0..5
+    best_y: packed
     best_score: packed
     score: packed
     line: packed
@@ -28,11 +28,11 @@ program TicTacToe4x4 {
   }
 
   fn occupied_cell() {
-    // The source branches back to the input stop without recalling the score.
+    best_y = -99999999
   }
 
   loop {
-    show(y)
+    show(best_y)
     // Source UI is X ПП Y С/П: ПП executes only the first entered() store,
     // then С/П resumes at the second one with the new X value.
     x = entered()
