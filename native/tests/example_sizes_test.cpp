@@ -113,7 +113,7 @@ void example_sizes_match_typescript_baselines() {
       {"wumpus", 105},
   };
   const std::map<std::string, std::size_t> PENDING_BASELINE{
-      {"tic-tac-toe-4x4", 132},
+      {"tic-tac-toe-4x4", 130},
   };
 
   const std::filesystem::path root = std::filesystem::current_path();
@@ -179,8 +179,8 @@ void example_sizes_match_typescript_baselines() {
           find_candidate(result.rejected_candidates, "fractional-constant-selector-dead-int");
       require(rejected_dead_integer != nullptr,
               "tic-tac-toe-4x4 should report rejected dead-integer fractional selector rescue");
-      require(rejected_dead_integer->steps == 131,
-              "tic-tac-toe-4x4 rejected dead-integer fractional selector should show 131 cells");
+      require(rejected_dead_integer->steps == 129,
+              "tic-tac-toe-4x4 rejected dead-integer fractional selector should show 129 cells");
       require(rejected_dead_integer->reason.find("before K {x}") != std::string::npos,
               "tic-tac-toe-4x4 dead-integer rejection should explain the unsafe consumer");
     }

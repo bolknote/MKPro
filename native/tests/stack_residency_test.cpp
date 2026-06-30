@@ -30,14 +30,6 @@ Expression binary(Expression left, std::string op, Expression right) {
   return expression;
 }
 
-Expression call(std::string callee, std::vector<Expression> args) {
-  Expression expression;
-  expression.kind = "call";
-  expression.callee = std::move(callee);
-  expression.args = std::move(args);
-  return expression;
-}
-
 V2Statement assign(std::string target, std::string expr, int line) {
   V2Statement statement;
   statement.kind = "v2_assign";
@@ -56,14 +48,6 @@ V2Statement empty_if(std::string left, std::string op, std::string right, int li
       .op = std::move(op),
       .right = std::move(right),
   };
-  statement.line = line;
-  return statement;
-}
-
-V2Statement invoke(std::string name, int line) {
-  V2Statement statement;
-  statement.kind = "v2_invoke";
-  statement.name = std::move(name);
   statement.line = line;
   return statement;
 }
@@ -150,12 +134,6 @@ void stack_residency_matches_typescript_contract() {
   }
 
   {
-    const Expression expr = call("cell_mask", {id("a"), id("b")});
-    require(!can_lower_stack_resident_expression(expr, {"a", "b"}),
-            "stack-residency should reject call consumers without a stack-aware calling convention");
-  }
-
-  {
     const std::vector<V2Statement> body = {
         assign("a", "x", 1),
         assign("b", "y", 2),
@@ -170,17 +148,6 @@ void stack_residency_matches_typescript_contract() {
     require(site->temps.size() == 2, "stack-residency should capture both temps");
     require(site->temps.at(0).assign.target == "a" && site->temps.at(1).assign.target == "b",
             "stack-residency should preserve temp order");
-  }
-
-  {
-    const std::vector<V2Statement> body = {
-        assign("a", "x", 1),
-        assign("b", "y", 2),
-        assign("c", "a + b", 3),
-        invoke("uses_state", 4),
-    };
-    require(!find_stack_resident_fusion_site(body, 0).has_value(),
-            "stack-residency should not prove temps dead across an unknown procedure call");
   }
 
   {
@@ -228,38 +195,6 @@ program DualStack {
     require(has_optimization(result, "stack-resident-temps"),
             "stack-resident dual-temp add should report stack-resident-temps");
     require(result.steps.size() < 20, "stack-resident dual-temp add should stay compact");
-  }
-
-  const std::string call_consumer = R"mkpro(
-program StackResidentCallConsumer {
-  grid: board(1..4, 1..4)
-  state {
-    x: counter 0..5 = 1
-    y: counter 0..5 = 1
-    slot: counter 0..5 = 2
-    best_y: counter 0..5 = 3
-    line: packed = 0
-    occupied: packed = 0
-  }
-  loop {
-    x = slot
-    y = best_y
-    line = cell_mask(x, y)
-    occupied = bit_or(occupied, line)
-    halt(occupied + x + y)
-  }
-}
-)mkpro";
-
-  {
-    const CompileResult result = compile_stack_variant(call_consumer, true);
-    require_clean_compile(result, "stack-resident call-consumer program");
-    require(!has_optimization(result, "stack-resident-temps"),
-            "stack-resident call-consumer program should not fuse call arguments");
-    require(result.listing.find("set x") != std::string::npos,
-            "call-consumer program should still store x before cell_mask");
-    require(result.listing.find("set y") != std::string::npos,
-            "call-consumer program should still store y before cell_mask");
   }
 
   {

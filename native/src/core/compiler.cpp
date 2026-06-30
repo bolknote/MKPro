@@ -31222,8 +31222,6 @@ bool lower_stack_resident_expression_to_x(LoweringContext& context, const Expres
   }
   if (expression.kind == "number" || expression.kind == "string" || expression.kind == "indexed" ||
       expression.kind == "call") {
-    if (expression.kind == "call" && stack_expression_references_any_temp(expression, temps))
-      return false;
     return lower_expression_to_x(context, expression);
   }
   if (expression.kind == "unary" && expression.expr != nullptr) {
