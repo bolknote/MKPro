@@ -693,6 +693,95 @@ program OpportunityReportProbe {
           "computed-dispatch capability should be considered when an opportunity is reported");
 }
 
+void optimizer_analysis_reports_decimal_and_multi_sign_pack_opportunities() {
+  const std::string source = R"mkpro(
+program StatePackingOpportunityProbe {
+  state {
+    flag_a: flag = 0
+    flag_b: flag = 1
+    mode: counter 0..3 = 0
+    small_c: counter 0..99 = 12
+    small_a: counter 0..9 = 3
+    small_b: counter 0..9 = 4
+    carry_a: counter 1..9 = 1
+    carry_b: counter 1..9 = 2
+  }
+
+  loop {
+    command = read()
+    if command == 1 {
+      flag_a = 1
+    }
+    else {
+      flag_a = 0
+    }
+    if command == 2 {
+      flag_b = 1
+    }
+    else {
+      flag_b = 0
+    }
+    if flag_a == 1 {
+      small_a = 5
+      mode = 3
+    }
+    else {
+      small_a = 6
+      mode = 2
+    }
+    if flag_b == 1 {
+      small_b = 7
+    }
+    else {
+      small_b = 8
+    }
+    halt(mode + small_a + small_b + small_c + carry_a + carry_b)
+  }
+}
+)mkpro";
+
+  CompileOptions options;
+  options.analysis = true;
+  options.disable_candidate_search = true;
+  const CompileResult result = compile_source(source, options);
+  require(result.implemented, "state-packing opportunity probe should compile");
+  require(!has_error_diagnostic(result),
+          "state-packing opportunity probe should be diagnostic-free");
+
+  const CandidateReport* decimal_pack = find_candidate(result.candidates, "decimal-pack-state");
+  require(decimal_pack != nullptr,
+          "analysis should report a decimal state-packing opportunity");
+  require(!decimal_pack->selected, "decimal pack opportunity must be report-only");
+  require(decimal_pack->reason.find("small_a") != std::string::npos &&
+              decimal_pack->reason.find("small_b") != std::string::npos &&
+              decimal_pack->reason.find("small_c") != std::string::npos,
+          "decimal pack opportunity should name the compact small fields");
+
+  const CandidateReport* sign_tuple =
+      find_candidate(result.candidates, "sign-pack-state-tuple");
+  require(sign_tuple != nullptr,
+          "analysis should report a multi-sign state-packing opportunity");
+  require(!sign_tuple->selected, "multi-sign opportunity must be report-only");
+  require(sign_tuple->reason.find("flag_a") != std::string::npos &&
+              sign_tuple->reason.find("flag_b") != std::string::npos &&
+              sign_tuple->reason.find("carry_a") != std::string::npos &&
+              sign_tuple->reason.find("carry_b") != std::string::npos,
+          "multi-sign opportunity should pair boolean fields with sign carriers");
+  const bool reports_two_sign_range =
+      std::any_of(result.candidates.begin(), result.candidates.end(),
+                  [](const CandidateReport& candidate) {
+                    return candidate.variant == "sign-pack-state-tuple" &&
+                           candidate.reason.find("mode") != std::string::npos;
+                  });
+  require(reports_two_sign_range,
+          "multi-sign opportunity should also cover a 0..3 state field");
+
+  require(capability_status(result, "decimal-packed-state") == "considered",
+          "decimal-packed-state capability should be considered when an opportunity is reported");
+  require(capability_status(result, "sign-packed-state") == "considered",
+          "sign-packed-state capability should be considered for multi-sign opportunities");
+}
+
 void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
   CompileOptions computed_options;
   computed_options.synthesized_dispatch_plans.push_back(identity_dispatch_plan());

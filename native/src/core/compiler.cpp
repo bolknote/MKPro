@@ -40543,9 +40543,12 @@ OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& op
       {"dispatch-default-merge", "flow", "documented", {},
        {"dispatch-default-merge"}, false,
        "Merges dispatch cases whose bodies are identical to the default branch."},
+      {"decimal-packed-state", "state", "documented", {"decimal-digits"},
+       {"decimal-pack-state"}, false,
+       "Considers packing several small non-negative hidden fields into decimal digits of one register."},
       {"sign-packed-state", "state", "undocumented", {"sign-digits"},
-       {"sign-pack-state"}, false,
-       "Considers carrying one boolean state bit in the sign of a positive hidden counter."},
+       {"sign-pack-state", "sign-pack-state-tuple"}, false,
+       "Considers carrying boolean state bits in signs of positive hidden counters."},
       {"preloaded-indirect-flow", "flow", "undocumented", {"indirect-flow"},
        {"preloaded-indirect-flow"}, false,
        "Uses compiler-owned setup-time branch selectors for one-cell indirect flow."},
@@ -42119,6 +42122,26 @@ bool analysis_positive_sign_carrier_field(const V2StateField& field) {
   return *field.min >= 1 && *field.max <= 99;
 }
 
+std::optional<int> analysis_decimal_pack_width(const V2StateField& field) {
+  if (field.bank.has_value())
+    return std::nullopt;
+  if (field.type == "flag")
+    return 1;
+  if ((field.type != "counter" && field.type != "range") || !field.min.has_value() ||
+      !field.max.has_value())
+    return std::nullopt;
+  if (*field.min < 0 || *field.max > 99)
+    return std::nullopt;
+  return *field.max <= 9 ? 1 : 2;
+}
+
+bool analysis_two_sign_state_field(const V2StateField& field) {
+  if ((field.type != "counter" && field.type != "range") || !field.min.has_value() ||
+      !field.max.has_value())
+    return false;
+  return *field.min == 0 && *field.max >= 2 && *field.max <= 3;
+}
+
 std::string analysis_register_suffix(const std::map<std::string, std::string>& registers,
                                      const std::string& name) {
   const auto it = registers.find(name);
@@ -42186,6 +42209,134 @@ std::vector<CandidateReport> build_sign_pack_opportunity_reports(const V2Program
                      .reason = std::move(reason),
                  });
   }
+  return reports;
+}
+
+std::vector<CandidateReport> build_decimal_pack_opportunity_reports(const V2Program& program,
+                                                                    const CompileResult& result,
+                                                                    int steps) {
+  struct DecimalPackField {
+    const V2StateField* field = nullptr;
+    int width = 0;
+  };
+
+  std::vector<CandidateReport> reports;
+  const std::set<std::string> displayed = display_source_names(program);
+  std::vector<DecimalPackField> eligible;
+  for (const V2StateField& field : program.state) {
+    if (displayed.contains(field.name))
+      continue;
+    const std::optional<int> width = analysis_decimal_pack_width(field);
+    if (!width.has_value())
+      continue;
+    eligible.push_back(DecimalPackField{.field = &field, .width = *width});
+  }
+
+  std::vector<std::string> packed_names;
+  int packed_width = 0;
+  for (const DecimalPackField& item : eligible) {
+    if (packed_width + item.width > 8)
+      continue;
+    packed_width += item.width;
+    packed_names.push_back(item.field->name + "[" + std::to_string(item.width) + "d]" +
+                           analysis_register_suffix(result.registers, item.field->name));
+    if (packed_width == 8)
+      break;
+  }
+  if (packed_names.size() < 2)
+    return reports;
+
+  std::string reason = "small hidden non-negative fields fit in one 8-digit decimal register: " +
+                       join_strings(packed_names, ", ");
+  if (eligible.size() > packed_names.size())
+    reason += "; " + std::to_string(eligible.size() - packed_names.size()) +
+              " more eligible field(s) did not fit this first group";
+  if (result.registers.size() >= 14)
+    reason += "; current allocation uses " + std::to_string(result.registers.size()) +
+              " state register(s)";
+
+  append_analysis_candidate_once(
+      reports, CandidateReport{
+                   .site = "state@decimal-pack",
+                   .variant = "decimal-pack-state",
+                   .steps = steps,
+                   .selected = false,
+                   .reason = std::move(reason),
+               });
+  return reports;
+}
+
+std::vector<CandidateReport> build_sign_tuple_pack_opportunity_reports(const V2Program& program,
+                                                                       const CompileResult& result,
+                                                                       int steps) {
+  std::vector<CandidateReport> reports;
+  const std::set<std::string> displayed = display_source_names(program);
+  std::vector<const V2StateField*> booleans;
+  std::vector<const V2StateField*> two_sign_fields;
+  std::vector<const V2StateField*> carriers;
+  for (const V2StateField& field : program.state) {
+    if (analysis_positive_sign_carrier_field(field) && !displayed.contains(field.name)) {
+      carriers.push_back(&field);
+      continue;
+    }
+    if (displayed.contains(field.name))
+      continue;
+    if (analysis_boolean_state_field(field)) {
+      booleans.push_back(&field);
+    } else if (analysis_two_sign_state_field(field)) {
+      two_sign_fields.push_back(&field);
+    }
+  }
+
+  if (carriers.size() >= 2 && booleans.size() >= 2) {
+    const std::size_t bit_count = std::min<std::size_t>({booleans.size(), carriers.size(), 8});
+    std::vector<std::string> bit_names;
+    std::vector<std::string> carrier_names;
+    for (std::size_t index = 0; index < bit_count; ++index) {
+      bit_names.push_back(booleans.at(index)->name +
+                          analysis_register_suffix(result.registers, booleans.at(index)->name));
+      carrier_names.push_back(carriers.at(index)->name +
+                              analysis_register_suffix(result.registers, carriers.at(index)->name));
+    }
+    const int combinations = 1 << static_cast<int>(bit_count);
+    std::string reason = std::to_string(bit_count) +
+                         " hidden boolean state fields can encode " +
+                         std::to_string(combinations) +
+                         " combinations in signs of positive hidden carriers: " +
+                         join_strings(bit_names, ", ") + " via " +
+                         join_strings(carrier_names, ", ");
+    append_analysis_candidate_once(
+        reports, CandidateReport{
+                     .site = "state@sign-tuple",
+                     .variant = "sign-pack-state-tuple",
+                     .steps = steps,
+                     .selected = false,
+                     .reason = std::move(reason),
+                 });
+  }
+
+  if (carriers.size() >= 2 && !two_sign_fields.empty()) {
+    const V2StateField* field = two_sign_fields.front();
+    std::vector<std::string> carrier_names;
+    for (std::size_t index = 0; index < 2; ++index) {
+      carrier_names.push_back(carriers.at(index)->name +
+                              analysis_register_suffix(result.registers, carriers.at(index)->name));
+    }
+    std::string reason =
+        field->name + analysis_register_suffix(result.registers, field->name) +
+        " has range 0.." + std::to_string(*field->max) +
+        " and can be encoded by two signs of positive hidden carriers: " +
+        join_strings(carrier_names, ", ");
+    append_analysis_candidate_once(
+        reports, CandidateReport{
+                     .site = "state@sign-tuple:" + field->name,
+                     .variant = "sign-pack-state-tuple",
+                     .steps = steps,
+                     .selected = false,
+                     .reason = std::move(reason),
+                 });
+  }
+
   return reports;
 }
 
@@ -42305,6 +42456,14 @@ std::vector<CandidateReport> build_analysis_opportunity_reports(const ProgramAst
   const int steps = static_cast<int>(result.steps.size());
   for (CandidateReport& candidate :
        build_sign_pack_opportunity_reports(*ast.v2, result, steps)) {
+    append_analysis_candidate_once(reports, std::move(candidate));
+  }
+  for (CandidateReport& candidate :
+       build_decimal_pack_opportunity_reports(*ast.v2, result, steps)) {
+    append_analysis_candidate_once(reports, std::move(candidate));
+  }
+  for (CandidateReport& candidate :
+       build_sign_tuple_pack_opportunity_reports(*ast.v2, result, steps)) {
     append_analysis_candidate_once(reports, std::move(candidate));
   }
   for (CandidateReport& candidate :
