@@ -147,6 +147,7 @@ struct SynthesizedDispatchPlan {
   double scale = 1.0;            // affine pre-multiply
   double offset = 0.0;           // affine pre-add
   std::vector<SynthesizedDispatchProofConstraint> proof_constraints;
+  bool default_guard = false;     // true => explicit unmatched values branch to `otherwise`
   bool proof_angle_fixed = false; // true => proof_angle_mode pins trig op semantics
   std::string proof_angle_mode;   // "deg", "rad", or "grd" for proof re-checks
 };

@@ -24657,6 +24657,11 @@ bool lower_numeric_residual_match_statement(LoweringContext& context,
 // candidate); the static proof gate validates the result.
 bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& statement,
                                 const SynthesizedDispatchPlan& plan) {
+  if (statement.otherwise != nullptr && !plan.default_guard)
+    return false;
+  if (plan.default_guard && statement.otherwise == nullptr)
+    return false;
+
   // Reserve the indirect-jump register up front (before emitting anything) so we
   // can bail cleanly to the compare-chain lowering if no register is free. The
   // allocator picks the physical register; the static resolver is
@@ -24671,8 +24676,58 @@ bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& sta
     return false;
 
   const Expression match_expr = parse_expression(*statement.expr, statement.line);
-  if (!lower_expression_to_x(context, match_expr))
+  std::string selector_name;
+  std::optional<std::string> guarded_default_label;
+  if (plan.default_guard) {
+    if (match_expr.kind == "identifier" &&
+        context.register_index_by_name.contains(match_expr.name)) {
+      selector_name = match_expr.name;
+    } else {
+      selector_name = "__dispatch_selector_" + std::to_string(statement.line);
+      if (!ensure_hidden_register(context, selector_name))
+        return false;
+      if (!lower_expression_to_x(context, match_expr))
+        return false;
+      emit_store(context, selector_name, "dispatch guard selector");
+    }
+
+    std::vector<std::pair<std::string, int>> guard_values;
+    for (const V2MatchCase& match_case : statement.cases) {
+      for (const std::string& value : match_case.values)
+        guard_values.emplace_back(value, match_case.line);
+    }
+    if (guard_values.empty())
+      return false;
+
+    const std::string dispatch_label =
+        context.emitter.fresh_label("computed_dispatch_guard_hit");
+    const std::string default_label =
+        context.emitter.fresh_label("computed_dispatch_default");
+    guarded_default_label = default_label;
+    for (std::size_t index = 0; index < guard_values.size(); ++index) {
+      const bool last = index + 1U == guard_values.size();
+      const std::string next_label =
+          last ? default_label : context.emitter.fresh_label("computed_dispatch_guard_next");
+      V2Predicate predicate;
+      predicate.kind = "v2_compare";
+      predicate.left = selector_name;
+      predicate.op = "==";
+      predicate.right = guard_values.at(index).first;
+      if (!lower_condition_false_branch(context, predicate, false, next_label,
+                                        guard_values.at(index).second,
+                                        "computed dispatch guard mismatch"))
+        return false;
+      if (!last) {
+        context.emitter.emit_jump(0x51, "БП", dispatch_label, "computed dispatch guard hit",
+                                  guard_values.at(index).second);
+        context.emitter.emit_label(next_label, {.hidden = true});
+      }
+    }
+    context.emitter.emit_label(dispatch_label, {.hidden = true});
+    emit_recall(context, selector_name);
+  } else if (!lower_expression_to_x(context, match_expr)) {
     return false;
+  }
 
   if (std::fabs(plan.scale - 1.0) > 1e-9) {
     emit_number_or_preload(context, format_number_literal(plan.scale), std::nullopt,
@@ -24696,7 +24751,8 @@ bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& sta
   std::vector<std::string> entry_labels;
   entry_labels.reserve(statement.cases.size());
   for (std::size_t index = 0; index < statement.cases.size(); ++index)
-    entry_labels.push_back(context.emitter.fresh_label("dispatch_case_entry"));
+    entry_labels.push_back(
+        context.emitter.fresh_label("dispatch_case_entry_line" + std::to_string(statement.line)));
 
   // Store the computed address into the reserved register, then jump through it.
   emit_store(context, jump_var, "dispatch computed address");
@@ -24729,13 +24785,19 @@ bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& sta
     if (!match_action_terminates_statically(context, match_case.action.get()))
       context.emitter.emit_jump(0x51, "БП", end_label, "dispatch end", match_case.line);
   }
-  if (statement.otherwise != nullptr && !lower_match_action(context, *statement.otherwise))
-    return false;
+  if (statement.otherwise != nullptr) {
+    if (plan.default_guard)
+      context.emitter.emit_label(*guarded_default_label, {.hidden = true});
+    if (!lower_match_action(context, *statement.otherwise))
+      return false;
+  }
   context.emitter.emit_label(end_label, {.hidden = true});
   context.optimizations.push_back(OptimizationReport{
       .name = "computed-dispatch",
       .detail = "Lowered match at line " + std::to_string(statement.line) +
-                " as a computed indirect dispatch via " + register_text_for(context, jump_var) + ".",
+                " as a computed indirect dispatch" +
+                std::string(plan.default_guard ? " with a default guard" : "") + " via " +
+                register_text_for(context, jump_var) + ".",
   });
   return true;
 }
@@ -40090,7 +40152,8 @@ std::string implemented_candidate_key(const CompileOptions& options) {
   for (const SynthesizedDispatchPlan& plan : options.synthesized_dispatch_plans)
     out << ";synth_dispatch=" << plan.match_line << ":" << plan.selector_register << ":"
         << plan.indirect_register << ":" << plan.op_opcode << ":" << plan.scale << ":"
-        << plan.offset << ":" << plan.proof_angle_fixed << ":" << plan.proof_angle_mode;
+        << plan.offset << ":" << plan.default_guard << ":" << plan.proof_angle_fixed << ":"
+        << plan.proof_angle_mode;
   for (const std::string& value : options.force_fractional_constant_selector_preloads)
     out << ";force_fractional_selector_preload=" << normalize_number_key(value);
   for (const RegisterShare& share : options.forced_register_shares)
@@ -41893,6 +41956,7 @@ struct ComputedDispatchMatch {
   int line = 0;
   std::vector<std::pair<double, int>> value_case;  // (case value, case index)
   int case_count = 0;
+  bool default_guard = false;
   bool reverse_packed_decimal_cents = false;
 };
 
@@ -41953,26 +42017,33 @@ void collect_computed_dispatch_matches_in(const std::vector<V2Statement>& statem
 
 void collect_computed_dispatch_matches_stmt(const V2Statement& statement,
                                             std::vector<ComputedDispatchMatch>& out) {
-  // Only exhaustive (no `otherwise`) k>=3 matches over distinct numeric case
-  // values are eligible: a computed jump has no fall-through default, so an
-  // unmatched selector value would jump to an unintended address. The static
-  // computed-dispatch proof gate is the final guard, but requiring no otherwise
-  // keeps the candidate honest up front. Non-integer values are admitted only for the
-  // reverse-packed decimal-cents shape (payload.target, reached by scale=100);
-  // arbitrary fractional matches would explode the post-layout formula search.
+  // Exhaustive k>=3 numeric matches can dispatch directly. Matches with
+  // `otherwise` are only eligible as guarded rescue candidates: the generated
+  // prefix first proves that the selector is one of the explicit values, and
+  // unmatched values branch to the default body before the computed jump.
+  // Non-integer values are admitted only for the reverse-packed decimal-cents
+  // shape (payload.target, reached by scale=100); arbitrary fractional matches
+  // would explode the post-layout formula search.
   if (statement.kind == "v2_match" && statement.expr.has_value() &&
-      statement.otherwise == nullptr && statement.cases.size() >= 3) {
+      statement.cases.size() >= 3) {
     ComputedDispatchMatch info;
     info.line = statement.line;
-    info.case_count = static_cast<int>(statement.cases.size());
+    info.default_guard = statement.otherwise != nullptr;
     bool ok = true;
     std::set<double> seen;
+    std::vector<std::vector<ParsedComputedDispatchValue>> parsed_cases;
+    parsed_cases.reserve(statement.cases.size());
+    std::optional<std::vector<V2Statement>> default_body;
+    if (statement.otherwise != nullptr)
+      default_body = action_to_common_branch_body(statement.otherwise);
     for (std::size_t case_index = 0; case_index < statement.cases.size() && ok; ++case_index) {
       const V2MatchCase& match_case = statement.cases.at(case_index);
-      if (match_case.values.empty()) {
+      if (match_case.values.size() != 1U) {
         ok = false;
         break;
       }
+      std::vector<ParsedComputedDispatchValue> parsed_values;
+      parsed_values.reserve(match_case.values.size());
       for (const std::string& value : match_case.values) {
         const std::optional<ParsedComputedDispatchValue> numeric =
             parse_computed_dispatch_match_value(value);
@@ -41982,10 +42053,29 @@ void collect_computed_dispatch_matches_stmt(const V2Statement& statement,
         }
         info.reverse_packed_decimal_cents =
             info.reverse_packed_decimal_cents || numeric->reverse_packed_decimal_cents;
-        info.value_case.emplace_back(numeric->value, static_cast<int>(case_index));
+        parsed_values.push_back(*numeric);
       }
+      parsed_cases.push_back(std::move(parsed_values));
     }
-    if (ok && !info.value_case.empty())
+
+    if (ok) {
+      int kept_case_index = 0;
+      for (std::size_t case_index = 0; case_index < statement.cases.size(); ++case_index) {
+        const V2MatchCase& match_case = statement.cases.at(case_index);
+        const bool case_matches_default =
+            default_body.has_value() && match_case.action != nullptr &&
+            common_branch_statement_lists_equal(action_to_common_branch_body(match_case.action),
+                                                *default_body);
+        if (case_matches_default)
+          continue;
+        for (const ParsedComputedDispatchValue& parsed : parsed_cases.at(case_index))
+          info.value_case.emplace_back(parsed.value, kept_case_index);
+        ++kept_case_index;
+      }
+      info.case_count = kept_case_index;
+    }
+
+    if (ok && info.case_count >= 3 && !info.value_case.empty())
       out.push_back(std::move(info));
   }
   collect_computed_dispatch_matches_in(statement.body, out);
@@ -42185,8 +42275,8 @@ std::vector<CandidateReport> build_computed_dispatch_opportunity_reports(
     } else if (opportunity.duplicate_value) {
       reason = "match repeats a case value; computed dispatch needs a one-to-one value proof";
     } else if (opportunity.has_otherwise) {
-      reason = "numeric match has an otherwise/default branch; computed indirect dispatch has no "
-               "safe fallback target yet";
+      reason = "numeric match has an otherwise/default branch; guarded computed dispatch can be "
+               "measured as a rescue candidate";
     } else {
       reason = "exhaustive numeric match with " + std::to_string(opportunity.value_count) +
                " value(s); address formula solver can try op(scale*x+offset) after layout";
@@ -42225,18 +42315,23 @@ std::vector<CandidateReport> build_analysis_opportunity_reports(const ProgramAst
 }
 
 // Case-body entry addresses (in case order) from a probe compile that lowered the
-// match through the computed dispatch. Returns empty unless exactly case_count
-// entry labels are present.
+// requested match through the computed dispatch. Returns empty unless exactly
+// case_count entry labels for that match line are present.
 std::vector<int> computed_dispatch_entry_addresses(const std::vector<MachineItem>& items,
-                                                   int case_count) {
+                                                   int match_line, int case_count) {
   const std::map<std::string, int> labels = machine_item_label_address_map(items);
-  const std::string prefix = "__dispatch_case_entry_";
+  const std::string prefix =
+      "__dispatch_case_entry_line" + std::to_string(match_line) + "_";
   std::vector<std::pair<long long, int>> found;
   for (const auto& [name, address] : labels) {
     if (name.rfind(prefix, 0) != 0)
       continue;
     try {
-      found.emplace_back(std::stoll(name.substr(prefix.size())), address);
+      std::size_t consumed = 0;
+      const long long suffix = std::stoll(name.substr(prefix.size()), &consumed);
+      if (consumed != name.size() - prefix.size())
+        continue;
+      found.emplace_back(suffix, address);
     } catch (const std::exception&) {
     }
   }
@@ -44299,6 +44394,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         SynthesizedDispatchPlan plan;
         plan.match_line = match.line;
         plan.indirect_register = *jump_register;
+        plan.default_guard = match.default_guard;
         plan.op_opcode = -1;
         plan.scale = 1.0;
         plan.offset = 0.0;
@@ -44330,7 +44426,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           if (!probe.implemented)
             break;
           const std::vector<int> entries =
-              computed_dispatch_entry_addresses(probe.items, match.case_count);
+              computed_dispatch_entry_addresses(probe.items, match.line, match.case_count);
           if (entries.empty())
             break;
           std::vector<core::AddressConstraint> constraints;
@@ -44366,8 +44462,10 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         CompileOptions candidate_options = options;
         candidate_options.synthesized_dispatch_plans = {plan};
         add_configured_candidate(std::move(candidate_options), "computed-dispatch",
-                                 "Computed indirect dispatch for match at line " +
-                                     std::to_string(match.line),
+                                 std::string(match.default_guard
+                                                 ? "Computed guarded indirect dispatch for match "
+                                                 : "Computed indirect dispatch for match ") +
+                                     "at line " + std::to_string(match.line),
                                  CandidateGate::SizeRescue);
       }
       evaluate_queued_candidates();

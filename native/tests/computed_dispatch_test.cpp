@@ -580,6 +580,52 @@ program DispatchProbeAngle {
   }
 }
 
+void guarded_computed_dispatch_default_discovery_keeps_program_correct() {
+  const std::string source = R"mkpro(
+program GuardedDispatchProbe {
+  state {
+    score: counter 0..99 = 0
+    sel: counter 0..9 = 0
+  }
+  loop {
+    sel = read()
+    match sel {
+      1 => bump_a()
+      4 => bump_b()
+      7 => bump_c()
+      otherwise => bump_default()
+    }
+  }
+  fn bump_a() { score = score + 1 }
+  fn bump_b() { score = score + 2 }
+  fn bump_c() { score = score + 3 }
+  fn bump_default() { score = score + 9 }
+}
+)mkpro";
+
+  CompileOptions rescued_options;
+  rescued_options.budget = 4;
+  const CompileResult rescued = compile_source(source, rescued_options);
+  require(rescued.implemented,
+          "forcing guarded computed-dispatch discovery must keep the program implemented");
+  require(!has_error_diagnostic(rescued),
+          "guarded computed-dispatch discovery must not introduce error diagnostics");
+  if (has_optimization(rescued, "computed-dispatch")) {
+    require(has_proof(rescued, "computed-dispatch-targets"),
+            "selected guarded computed-dispatch must report its static target proof");
+  }
+
+  CompileOptions analysis_options;
+  analysis_options.analysis = true;
+  analysis_options.disable_candidate_search = true;
+  const CompileResult analysis = compile_source(source, analysis_options);
+  const CandidateReport* candidate =
+      find_candidate(analysis.candidates, "computed-dispatch-formula");
+  require(candidate != nullptr, "analysis should report guarded computed-dispatch opportunity");
+  require(candidate->reason.find("guarded computed dispatch") != std::string::npos,
+          "default match opportunity should describe the guarded dispatch path");
+}
+
 void optimizer_analysis_reports_sign_pack_and_address_formula_opportunities() {
   const std::string source = R"mkpro(
 program OpportunityReportProbe {
