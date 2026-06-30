@@ -1,6 +1,7 @@
 #include "mkpro/compiler.hpp"
 #include "mkpro/core/compiler_behavior_digest.hpp"
 #include "mkpro/core/format.hpp"
+#include "mkpro/core/opcodes.hpp"
 #include "mkpro/core/result.hpp"
 #include "mkpro/version.hpp"
 
@@ -10,21 +11,102 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
 
 void print_usage(std::ostream& out) {
-  out << "Usage:\n"
-      << "  mkpro-native compile <file.mkpro> [--out listing|hex|mk61s|dot|json|keys|all]\n"
-      << "                               [--delivery manual|loader|hex] [--budget N]\n"
-      << "                               [--analysis] [--strict]\n"
-      << "                               [--fast] [--fast-threshold-ms N]\n"
-      << "                               [--return-stack-script|--no-return-stack-script]\n"
-      << "                               [--share-random-cell] [--hoist-shared-helpers]\n"
-      << "                               [--hoist-procs]\n"
-      << "                               [--inline-floor-packed-row-expressions]\n"
-      << "  mkpro-native explain <file.mkpro> [--budget N] [--analysis] [--strict]\n";
+  out << R"(Usage:
+  mkpro-native compile <file.mkpro> [options]
+  mkpro-native explain <file.mkpro> [options]
+  mkpro-native --help
+  mkpro-native --version
+
+Commands:
+  compile                         Compile an MKPRO source file.
+  explain                         Compile with --analysis and --out all.
+
+Global options:
+  -h, --help                      Show this help.
+  --version                       Show native compiler version.
+
+Output and execution model:
+  --out listing|hex|mk61s|dot|json|keys|all
+                                  Select output format. listing is the default.
+                                  keys prints a space-separated manual key stream
+                                  derived from setup and main resolved opcodes.
+  --delivery manual|loader|hex    Select opcode delivery assumptions for raw or
+                                  not-normally-enterable commands. manual is the
+                                  default.
+  --budget N                      Set the maximum accepted compiled program size.
+  --analysis                      Include optimizer analysis/report data.
+  --strict                        Treat undeclared allocation as an error.
+  --behavior-digest               Print a stable behavior digest instead of the
+                                  selected output format.
+
+Candidate search:
+  --disable-candidate-search      Compile only the requested option set.
+  --fast                          Enable fast candidate search.
+  --fast-threshold-ms N           Enable fast search and set per-candidate limit.
+  --collect-coalesce-shares       Collect register coalesce-share suggestions and
+                                  enable --analysis.
+
+IR and lowering optimizer switches:
+  --x-param-value-functions       Recognize X-parameter value functions.
+  --x-param-y-stack-stored-entry  Use Y-stack stored entry for X-parameter paths.
+  --canonicalize-repeated-unary-update-args
+                                  Canonicalize repeated unary update arguments.
+  --coalesce-copies               Coalesce copy-only register moves.
+  --shared-straight-line-call-bodies
+                                  Share duplicate straight-line call bodies.
+  --segmented-bitplanes           Use segmented bitplane lowering.
+  --segmented-line-count-scan     Use segmented bitplanes with line-count scan.
+  --compact-bit-mask-helper-body  Compact generated bit-mask helper bodies.
+  --shared-bit-mask-helper-calls  Share calls to generated bit-mask helpers.
+  --general-constant-preloads     Allow general setup-time constant preloads.
+  --dual-use-constant-indirect-flow
+                                  Reuse constant preloads for indirect flow.
+  --indirect-underflow-decrement  Use indirect decrement flow for underflow paths.
+  --tail-branch-inversion         Invert tail branches when that shortens flow.
+  --invert-branch-order           Invert branch order in eligible conditionals.
+  --conditional-branch-trampoline Insert trampolines for eligible conditionals.
+  --preloaded-indirect-flow       Enable preloaded indirect-flow rewrite.
+  --forward-indirect-flow         Allow indirect-flow rewrites to forward targets.
+  --runtime-indirect-call-flow    Enable runtime indirect-call flow rewrite.
+  --aggressive-post-layout-indirect-flow
+                                  Enable aggressive post-layout indirect-flow pass.
+  --return-stack-script           Enable return-stack script post-layout rewrite.
+  --no-return-stack-script        Disable return-stack script rewrite.
+  --dead-source-residual-temp-reuse
+                                  Reuse residual temporaries with dead sources.
+  --free-residual-dispatch-scratch
+                                  Free scratch register in residual dispatch.
+  --domain-error-guards           Emit domain-error guards for eligible formulas.
+  --unroll-counted-loops          Unroll eligible counted loops.
+  --setup-only-counted-loop-init  Move counted-loop initialization into setup.
+  --show-read-guarded-transfer    Guard read-driven transfers for display safety.
+  --stack-resident-temps          Keep eligible temporaries on the stack.
+  --inline-floor-packed-row-expressions
+                                  Inline floor-packed row expressions.
+  --order-procs-by-call-count     Layout procedures by call frequency.
+  --proc-layout-strategy reverse|size-asc|size-desc
+                                  Select explicit procedure layout strategy.
+  --aggressive-indirect-call      Use aggressive indirect-call lowering.
+  --share-random-cell             Share the random-cell state slot when safe.
+  --hoist-shared-helpers          Hoist shared helper bodies.
+  --hoist-procs                   Hoist procedure bodies.
+
+Manual optimizer overrides:
+  --suppress-constant-preload VALUE
+                                  Do not preload the normalized constant VALUE.
+  --fractional-selector VALUE:TARGET
+                                  Force a fractional selector plan for TARGET.
+  --force-fractional-selector-preload VALUE
+                                  Force setup preload for fractional VALUE.
+  --force-register-share FREE:KEEP
+                                  Force a register coalesce share from FREE to KEEP.
+)";
 }
 
 std::optional<mkpro::OutputFormat> parse_output_format(const std::string& value) {
@@ -53,6 +135,10 @@ std::optional<mkpro::DeliveryMode> parse_delivery_mode(const std::string& value)
   if (value == "hex")
     return mkpro::DeliveryMode::Hex;
   return std::nullopt;
+}
+
+bool is_proc_layout_strategy(std::string_view value) {
+  return value == "reverse" || value == "size-asc" || value == "size-desc";
 }
 
 std::string read_source(const std::filesystem::path& path) {
@@ -344,6 +430,33 @@ void print_json(const mkpro::CompileResult& result) {
   std::cout << ",\n  \"diagnostics\": " << result.diagnostics.size() << "\n}\n";
 }
 
+void append_step_keys(std::vector<std::string>& tokens, const std::vector<mkpro::ResolvedStep>& steps) {
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    const mkpro::ResolvedStep& step = steps[index];
+    const mkpro::OpcodeInfo& opcode = mkpro::opcode_by_code(step.opcode);
+    tokens.push_back(opcode.keys);
+    if (opcode.takes_address && index + 1U < steps.size()) {
+      tokens.push_back(mkpro::format_address(mkpro::code_to_address(steps[index + 1U].opcode)));
+      ++index;
+    }
+  }
+}
+
+std::string format_keys_result(const mkpro::CompileResult& result) {
+  std::vector<std::string> tokens;
+  if (result.setup_program.has_value())
+    append_step_keys(tokens, result.setup_program->steps);
+  append_step_keys(tokens, result.steps);
+
+  std::ostringstream out;
+  for (std::size_t index = 0; index < tokens.size(); ++index) {
+    if (index != 0)
+      out << ' ';
+    out << tokens[index];
+  }
+  return out.str();
+}
+
 void print_result(const mkpro::CompileResult& result, mkpro::OutputFormat output) {
   if (output == mkpro::OutputFormat::Hex) {
     std::cout << result.hex << "\n";
@@ -353,6 +466,8 @@ void print_result(const mkpro::CompileResult& result, mkpro::OutputFormat output
     std::cout << mkpro::format_dot_result(result);
   } else if (output == mkpro::OutputFormat::Json) {
     print_json(result);
+  } else if (output == mkpro::OutputFormat::Keys) {
+    std::cout << format_keys_result(result) << "\n";
   } else if (output == mkpro::OutputFormat::All) {
     std::cout << "## Listing\n" << result.listing << "\n";
     if (!result.setup_hex.empty())
@@ -476,7 +591,12 @@ int run_compile_like(const std::string& command, std::vector<std::string> args) 
         std::cerr << "missing value for --proc-layout-strategy\n";
         return 64;
       }
-      options.proc_layout_strategy = args[++index];
+      const std::string value = args[++index];
+      if (!is_proc_layout_strategy(value)) {
+        std::cerr << "unknown --proc-layout-strategy value: " << value << "\n";
+        return 64;
+      }
+      options.proc_layout_strategy = value;
     } else if (arg == "--aggressive-indirect-call") {
       options.aggressive_indirect_call = true;
     } else if (arg == "--share-random-cell") {
