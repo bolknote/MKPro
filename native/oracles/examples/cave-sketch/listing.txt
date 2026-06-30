@@ -2,40 +2,40 @@
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    -- |   -  | enter player            | enter a value in X
-   00 |  01  | 1                       |
-   01 |  00  | 0                       |
-   02 |  4C  | X→П c                   | setup Rc
-   03 |  00  | 0                       |
-   04 |  0A  | .                       |
-   05 |  00  | 0                       |
+   00 |  41  | X→П 1                   | setup player
+   01 |  09  | 9                       |
+   02 |  01  | 1                       |
+   03 |  1D  | F cos                   | expected_mode("grd") cosine
+   04 |  18  | F ln                    | expected_mode("grd") domain guard
+   05 |  01  | 1                       |
    06 |  00  | 0                       |
-   07 |  00  | 0                       |
+   07 |  4C  | X→П c                   | setup Rc
    08 |  00  | 0                       |
-   09 |  00  | 0                       |
-   10 |  01  | 1                       |
-   11 |  4E  | X→П e                   | setup Re
-   12 |  02  | 2                       |
-   13 |  0C  | ВП                      | exponent
-   14 |  07  | 7                       |
-   15 |  0B  | /-/                     | negative exponent
-   16 |  4D  | X→П d                   | setup Rd
-   17 |  00  | 0                       |
-   18 |  47  | X→П 7                   | setup R7
-   19 |  09  | 9                       |
-   20 |  48  | X→П 8                   | setup R8
-   21 |  07  | 7                       |
-   22 |  49  | X→П 9                   | setup R9
-   23 |  01  | 1                       |
-   24 |  01  | 1                       |
-   25 |  4A  | X→П a                   | setup Ra
-   26 |  01  | 1                       |
-   27 |  06  | 6                       |
-   28 |  4B  | X→П b                   | setup Rb
-   29 |  41  | X→П 1                   | setup player
-   30 |  09  | 9                       |
+   09 |  0A  | .                       |
+   10 |  00  | 0                       |
+   11 |  00  | 0                       |
+   12 |  00  | 0                       |
+   13 |  00  | 0                       |
+   14 |  00  | 0                       |
+   15 |  01  | 1                       |
+   16 |  4E  | X→П e                   | setup Re
+   17 |  02  | 2                       |
+   18 |  0C  | ВП                      | exponent
+   19 |  07  | 7                       |
+   20 |  0B  | /-/                     | negative exponent
+   21 |  4D  | X→П d                   | setup Rd
+   22 |  00  | 0                       |
+   23 |  47  | X→П 7                   | setup R7
+   24 |  09  | 9                       |
+   25 |  48  | X→П 8                   | setup R8
+   26 |  07  | 7                       |
+   27 |  49  | X→П 9                   | setup R9
+   28 |  01  | 1                       |
+   29 |  01  | 1                       |
+   30 |  4A  | X→П a                   | setup Ra
    31 |  01  | 1                       |
-   32 |  1D  | F cos                   | expected_mode("grd") cosine
-   33 |  18  | F ln                    | expected_mode("grd") domain guard
+   32 |  06  | 6                       |
+   33 |  4B  | X→П b                   | setup Rb
    34 |  50  | С/П                     | setup complete
 
 # Main Listing

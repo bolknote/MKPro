@@ -1,71 +1,71 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  05  | 5                       |
-   01 |  45  | X→П 5                   | setup R5
-   02 |  01  | 1                       |
-   03 |  4D  | X→П d                   | setup Rd
-   04 |  07  | 7                       |
-   05 |  48  | X→П 8                   | setup R8
-   06 |  01  | 1                       |
-   07 |  00  | 0                       |
-   08 |  4E  | X→П e                   | setup Re
-   09 |  00  | 0                       |
-   10 |  46  | X→П 6                   | setup R6
-   11 |  49  | X→П 9                   | setup R9
-   12 |  44  | X→П 4                   | setup R4
-   13 |  4A  | X→П a                   | setup Ra
-   14 |  08  | 8                       |
-   15 |  00  | 0                       |
-   16 |  4B  | X→П b                   | setup Rb
-   17 |  03  | 3                       |
-   18 |  02  | 2                       |
-   19 |  4C  | X→П c                   | setup Rc
-   20 |  04  | 4                       |
-   21 |  40  | X→П 0                   | setup indexed pointer floors_1..floors_3
-   22 |  3B  | К СЧ                    | random()
-   23 |  09  | 9                       |
-   24 |  0A  | .                       |
-   25 |  08  | 8                       |
-   26 |  08  | 8                       |
-   27 |  08  | 8                       |
-   28 |  08  | 8                       |
-   29 |  08  | 8                       |
+   00 |  01  | 1                       |
+   01 |  00  | 0                       |
+   02 |  00  | 0                       |
+   03 |  1D  | F cos                   | expected_mode("rad") cosine
+   04 |  18  | F ln                    | expected_mode("rad") domain guard
+   05 |  05  | 5                       |
+   06 |  45  | X→П 5                   | setup R5
+   07 |  01  | 1                       |
+   08 |  4D  | X→П d                   | setup Rd
+   09 |  07  | 7                       |
+   10 |  48  | X→П 8                   | setup R8
+   11 |  01  | 1                       |
+   12 |  00  | 0                       |
+   13 |  4E  | X→П e                   | setup Re
+   14 |  00  | 0                       |
+   15 |  46  | X→П 6                   | setup R6
+   16 |  49  | X→П 9                   | setup R9
+   17 |  44  | X→П 4                   | setup R4
+   18 |  4A  | X→П a                   | setup Ra
+   19 |  08  | 8                       |
+   20 |  00  | 0                       |
+   21 |  4B  | X→П b                   | setup Rb
+   22 |  03  | 3                       |
+   23 |  02  | 2                       |
+   24 |  4C  | X→П c                   | setup Rc
+   25 |  04  | 4                       |
+   26 |  40  | X→П 0                   | setup indexed pointer floors_1..floors_3
+   27 |  3B  | К СЧ                    | random()
+   28 |  09  | 9                       |
+   29 |  0A  | .                       |
    30 |  08  | 8                       |
    31 |  08  | 8                       |
-   32 |  37  | К ∧                     | bit_and()
-   33 |  35  | К {x}                   | frac()
+   32 |  08  | 8                       |
+   33 |  08  | 8                       |
    34 |  08  | 8                       |
-   35 |  13  | ÷                       | expr /
-   36 |  00  | 0                       |
-   37 |  0A  | .                       |
-   38 |  00  | 0                       |
-   39 |  00  | 0                       |
-   40 |  00  | 0                       |
+   35 |  08  | 8                       |
+   36 |  08  | 8                       |
+   37 |  37  | К ∧                     | bit_and()
+   38 |  35  | К {x}                   | frac()
+   39 |  08  | 8                       |
+   40 |  13  | ÷                       | expr /
    41 |  00  | 0                       |
-   42 |  00  | 0                       |
+   42 |  0A  | .                       |
    43 |  00  | 0                       |
-   44 |  01  | 1                       |
-   45 |  36  | К max                   | max()
-   46 |  B0  | К X→П 0                 | setup indexed floors_1..floors_3
-   47 |  60  | П→X 0                   | setup indexed pointer
-   48 |  01  | 1                       |
-   49 |  11  | −                       | setup indexed remaining
-   50 |  5E  | F x=0                   | setup indexed loop floors_1..floors_3
-   51 |  22  | 22                      | setup indexed loop floors_1..floors_3
-   52 |  09  | 9                       |
-   53 |  40  | X→П 0                   | restore setup R0
-   54 |  05  | 5                       |
-   55 |  0E  | В↑                      | separate adjacent number entry
-   56 |  09  | 9                       |
-   57 |  13  | ÷                       | expr /
-   58 |  3A  | К ИНВ                   | bit_not()
-   59 |  47  | X→П 7                   | setup empty_row
-   60 |  01  | 1                       |
-   61 |  00  | 0                       |
-   62 |  00  | 0                       |
-   63 |  1D  | F cos                   | expected_mode("rad") cosine
-   64 |  18  | F ln                    | expected_mode("rad") domain guard
+   44 |  00  | 0                       |
+   45 |  00  | 0                       |
+   46 |  00  | 0                       |
+   47 |  00  | 0                       |
+   48 |  00  | 0                       |
+   49 |  01  | 1                       |
+   50 |  36  | К max                   | max()
+   51 |  B0  | К X→П 0                 | setup indexed floors_1..floors_3
+   52 |  60  | П→X 0                   | setup indexed pointer
+   53 |  01  | 1                       |
+   54 |  11  | −                       | setup indexed remaining
+   55 |  5E  | F x=0                   | setup indexed loop floors_1..floors_3
+   56 |  27  | 27                      | setup indexed loop floors_1..floors_3
+   57 |  09  | 9                       |
+   58 |  40  | X→П 0                   | restore setup R0
+   59 |  05  | 5                       |
+   60 |  0E  | В↑                      | separate adjacent number entry
+   61 |  09  | 9                       |
+   62 |  13  | ÷                       | expr /
+   63 |  3A  | К ИНВ                   | bit_not()
+   64 |  47  | X→П 7                   | setup empty_row
    65 |  50  | С/П                     | setup complete
 
 # Main Listing

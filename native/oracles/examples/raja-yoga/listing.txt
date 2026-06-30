@@ -1,61 +1,62 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  04  | 4                       |
-   01 |  40  | X→П 0                   | setup R0
-   02 |  01  | 1                       |
-   03 |  46  | X→П 6                   | setup R6
-   04 |  45  | X→П 5                   | setup R5
-   05 |  47  | X→П 7                   | setup R7
-   06 |  00  | 0                       |
-   07 |  41  | X→П 1                   | setup R1
-   08 |  44  | X→П 4                   | setup R4
-   09 |  01  | 1                       |
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  04  | 4                       |
+   05 |  40  | X→П 0                   | setup R0
+   06 |  01  | 1                       |
+   07 |  46  | X→П 6                   | setup R6
+   08 |  45  | X→П 5                   | setup R5
+   09 |  47  | X→П 7                   | setup R7
    10 |  00  | 0                       |
-   11 |  4C  | X→П c                   | setup Rc
-   12 |  09  | 9                       |
-   13 |  09  | 9                       |
-   14 |  4B  | X→П b                   | setup Rb
-   15 |  08  | 8                       |
-   16 |  08  | 8                       |
-   17 |  08  | 8                       |
-   18 |  4D  | X→П d                   | setup Rd
-   19 |  09  | 9                       |
-   20 |  09  | 9                       |
-   21 |  09  | 9                       |
-   22 |  0B  | /-/                     | negative number
-   23 |  4E  | X→П e                   | setup Re
-   24 |  03  | 3                       |
-   25 |  48  | X→П 8                   | setup R8
-   26 |  06  | 6                       |
-   27 |  07  | 7                       |
-   28 |  4A  | X→П a                   | setup Ra
-   29 |  3B  | К СЧ                    | random()
-   30 |  07  | 7                       |
-   31 |  12  | ×                       | expr *
-   32 |  0E  | В↑                      | random int keep scaled draw
-   33 |  35  | К {x}                   | random int fractional part
-   34 |  11  | −                       | random int floor
-   35 |  01  | 1                       |
-   36 |  10  | +                       | expr +
-   37 |  42  | X→П 2                   | setup goal
-   38 |  3B  | К СЧ                    | random()
-   39 |  6E  | П→X e                   | constant 999 base -999
-   40 |  0B  | /-/                     | constant 999
-   41 |  12  | ×                       | expr *
-   42 |  0E  | В↑                      | random int keep scaled draw
-   43 |  35  | К {x}                   | random int fractional part
-   44 |  11  | −                       | random int floor
-   45 |  43  | X→П 3                   | setup obstacles
-   46 |  6D  | П→X d                   | expected_mode("grd") probe
-   47 |  1D  | F cos                   | expected_mode("grd") cosine
-   48 |  18  | F ln                    | expected_mode("grd") domain guard
-   49 |  50  | С/П                     | setup complete
+   11 |  41  | X→П 1                   | setup R1
+   12 |  44  | X→П 4                   | setup R4
+   13 |  01  | 1                       |
+   14 |  00  | 0                       |
+   15 |  4C  | X→П c                   | setup Rc
+   16 |  09  | 9                       |
+   17 |  09  | 9                       |
+   18 |  4B  | X→П b                   | setup Rb
+   19 |  08  | 8                       |
+   20 |  08  | 8                       |
+   21 |  08  | 8                       |
+   22 |  4D  | X→П d                   | setup Rd
+   23 |  09  | 9                       |
+   24 |  09  | 9                       |
+   25 |  09  | 9                       |
+   26 |  0B  | /-/                     | negative number
+   27 |  4E  | X→П e                   | setup Re
+   28 |  03  | 3                       |
+   29 |  48  | X→П 8                   | setup R8
+   30 |  06  | 6                       |
+   31 |  07  | 7                       |
+   32 |  4A  | X→П a                   | setup Ra
+   33 |  3B  | К СЧ                    | random()
+   34 |  07  | 7                       |
+   35 |  12  | ×                       | expr *
+   36 |  0E  | В↑                      | random int keep scaled draw
+   37 |  35  | К {x}                   | random int fractional part
+   38 |  11  | −                       | random int floor
+   39 |  01  | 1                       |
+   40 |  10  | +                       | expr +
+   41 |  42  | X→П 2                   | setup goal
+   42 |  3B  | К СЧ                    | random()
+   43 |  6E  | П→X e                   | constant 999 base -999
+   44 |  0B  | /-/                     | constant 999
+   45 |  12  | ×                       | expr *
+   46 |  0E  | В↑                      | random int keep scaled draw
+   47 |  35  | К {x}                   | random int fractional part
+   48 |  11  | −                       | random int floor
+   49 |  43  | X→П 3                   | setup obstacles
+   50 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  88  | К БП 9                  | empty-stack tail call await_effort; preloaded R9=B5 indirect-target=3 shifted-forward indirect flow
+   00 |  88  | К БП 8                  | empty-stack tail call await_effort; preloaded R8=B5 indirect-target=3 shifted-forward indirect flow
    01 |  6E  | П→X e                   | preload const -999
    02 |  50  | С/П                     | halt
    03 |  65  | П→X 5                   | display __inline_show_36_0 source

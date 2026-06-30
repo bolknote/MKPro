@@ -1,76 +1,76 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  07  | 7                       |
-   01 |  43  | X→П 3                   | setup R3
-   02 |  00  | 0                       |
-   03 |  45  | X→П 5                   | setup R5
-   04 |  4C  | X→П c                   | setup Rc
-   05 |  05  | 5                       |
-   06 |  05  | 5                       |
-   07 |  44  | X→П 4                   | setup R4
-   08 |  01  | 1                       |
-   09 |  00  | 0                       |
-   10 |  4D  | X→П d                   | setup Rd
-   11 |  00  | 0                       |
-   12 |  0A  | .                       |
-   13 |  01  | 1                       |
-   14 |  4E  | X→П e                   | setup Re
-   15 |  3B  | К СЧ                    | random coord seed
-   16 |  4B  | X→П b                   | random coord seed
-   17 |  05  | 5                       |
-   18 |  42  | X→П 2                   | random coord remaining
-   19 |  6B  | П→X b                   | random coord seed
-   20 |  03  | 3                       |
-   21 |  07  | 7                       |
-   22 |  12  | ×                       | random coord next seed
-   23 |  35  | К {x}                   | random coord seed fraction
-   24 |  4B  | X→П b                   | random coord seed
-   25 |  6D  | П→X d                   | preload const 10
-   26 |  12  | ×                       | random coord scaled seed
-   27 |  34  | К [x]                   | random coord flat index
-   28 |  40  | X→П 0                   | random coord flat index
-   29 |  60  | П→X 0                   | recall __coord_list_current
-   30 |  6D  | П→X d                   | preload const 10
-   31 |  13  | ÷                       | expr /
-   32 |  34  | К [x]                   | int()
-   33 |  41  | X→П 1                   | random coord row
-   34 |  60  | П→X 0                   | recall __coord_list_current
-   35 |  6D  | П→X d                   | preload const 10
-   36 |  61  | П→X 1                   | recall __coord_list_dx
-   37 |  12  | ×                       | expr *
-   38 |  11  | −                       | expr -
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  07  | 7                       |
+   05 |  43  | X→П 3                   | setup R3
+   06 |  00  | 0                       |
+   07 |  45  | X→П 5                   | setup R5
+   08 |  4C  | X→П c                   | setup Rc
+   09 |  05  | 5                       |
+   10 |  05  | 5                       |
+   11 |  44  | X→П 4                   | setup R4
+   12 |  01  | 1                       |
+   13 |  00  | 0                       |
+   14 |  4D  | X→П d                   | setup Rd
+   15 |  00  | 0                       |
+   16 |  0A  | .                       |
+   17 |  01  | 1                       |
+   18 |  4E  | X→П e                   | setup Re
+   19 |  3B  | К СЧ                    | random coord seed
+   20 |  4B  | X→П b                   | random coord seed
+   21 |  05  | 5                       |
+   22 |  42  | X→П 2                   | random coord remaining
+   23 |  6B  | П→X b                   | random coord seed
+   24 |  03  | 3                       |
+   25 |  07  | 7                       |
+   26 |  12  | ×                       | random coord next seed
+   27 |  35  | К {x}                   | random coord seed fraction
+   28 |  4B  | X→П b                   | random coord seed
+   29 |  6D  | П→X d                   | preload const 10
+   30 |  12  | ×                       | random coord scaled seed
+   31 |  34  | К [x]                   | random coord flat index
+   32 |  40  | X→П 0                   | random coord flat index
+   33 |  60  | П→X 0                   | recall __coord_list_current
+   34 |  6D  | П→X d                   | preload const 10
+   35 |  13  | ÷                       | expr /
+   36 |  34  | К [x]                   | int()
+   37 |  41  | X→П 1                   | random coord row
+   38 |  60  | П→X 0                   | recall __coord_list_current
    39 |  6D  | П→X d                   | preload const 10
-   40 |  01  | 1                       |
-   41 |  61  | П→X 1                   | recall __coord_list_dx
-   42 |  10  | +                       | expr +
-   43 |  12  | ×                       | expr *
-   44 |  10  | +                       | expr +
-   45 |  40  | X→П 0                   | random coord candidate
-   46 |  05  | 5                       |
-   47 |  62  | П→X 2                   | random coord remaining
-   48 |  11  | −                       | random coord previous count
-   49 |  41  | X→П 1                   | random coord previous count
-   50 |  06  | 6                       |
-   51 |  46  | X→П 6                   | random coord pointer
-   52 |  61  | П→X 1                   | random coord previous count
-   53 |  57  | F x≠0                   | random coord first item
-   54 |  62  | 62                      | random coord first item
-   55 |  60  | П→X 0                   | random coord candidate
-   56 |  D6  | К П→X 6                 | random coord previous
-   57 |  11  | −                       | random coord uniqueness
-   58 |  57  | F x≠0                   | random coord collision
-   59 |  19  | 19                      | random coord collision
-   60 |  5B  | F L1                    | random coord previous loop
-   61 |  55  | 55                      | random coord previous loop
-   62 |  60  | П→X 0                   | random coord candidate
-   63 |  B6  | К X→П 6                 | random coord store
-   64 |  58  | F L2                    | random coord outer loop
-   65 |  19  | 19                      | random coord outer loop
-   66 |  09  | 9                       |
-   67 |  01  | 1                       |
-   68 |  1D  | F cos                   | expected_mode("grd") cosine
-   69 |  18  | F ln                    | expected_mode("grd") domain guard
+   40 |  61  | П→X 1                   | recall __coord_list_dx
+   41 |  12  | ×                       | expr *
+   42 |  11  | −                       | expr -
+   43 |  6D  | П→X d                   | preload const 10
+   44 |  01  | 1                       |
+   45 |  61  | П→X 1                   | recall __coord_list_dx
+   46 |  10  | +                       | expr +
+   47 |  12  | ×                       | expr *
+   48 |  10  | +                       | expr +
+   49 |  40  | X→П 0                   | random coord candidate
+   50 |  05  | 5                       |
+   51 |  62  | П→X 2                   | random coord remaining
+   52 |  11  | −                       | random coord previous count
+   53 |  41  | X→П 1                   | random coord previous count
+   54 |  06  | 6                       |
+   55 |  46  | X→П 6                   | random coord pointer
+   56 |  61  | П→X 1                   | random coord previous count
+   57 |  57  | F x≠0                   | random coord first item
+   58 |  66  | 66                      | random coord first item
+   59 |  60  | П→X 0                   | random coord candidate
+   60 |  D6  | К П→X 6                 | random coord previous
+   61 |  11  | −                       | random coord uniqueness
+   62 |  57  | F x≠0                   | random coord collision
+   63 |  23  | 23                      | random coord collision
+   64 |  5B  | F L1                    | random coord previous loop
+   65 |  59  | 59                      | random coord previous loop
+   66 |  60  | П→X 0                   | random coord candidate
+   67 |  B6  | К X→П 6                 | random coord store
+   68 |  58  | F L2                    | random coord outer loop
+   69 |  23  | 23                      | random coord outer loop
    70 |  07  | 7                       |
    71 |  50  | С/П                     | setup complete
 

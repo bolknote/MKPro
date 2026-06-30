@@ -1,39 +1,39 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  00  | 0                       |
-   01 |  41  | X→П 1                   | setup R1
-   02 |  01  | 1                       |
-   03 |  4C  | X→П c                   | setup Rc
-   04 |  02  | 2                       |
-   05 |  4B  | X→П b                   | setup Rb
-   06 |  04  | 4                       |
-   07 |  4A  | X→П a                   | setup Ra
-   08 |  08  | 8                       |
-   09 |  49  | X→П 9                   | setup R9
-   10 |  00  | 0                       |
-   11 |  0A  | .                       |
-   12 |  05  | 5                       |
-   13 |  4D  | X→П d                   | setup Rd
-   14 |  04  | 4                       |
-   15 |  04  | 4                       |
-   16 |  47  | X→П 7                   | setup R7
-   17 |  06  | 6                       |
-   18 |  08  | 8                       |
-   19 |  48  | X→П 8                   | setup R8
-   20 |  3B  | К СЧ                    | random()
-   21 |  09  | 9                       |
-   22 |  09  | 9                       |
-   23 |  09  | 9                       |
-   24 |  12  | ×                       | expr *
-   25 |  0E  | В↑                      | random int keep scaled draw
-   26 |  35  | К {x}                   | random int fractional part
-   27 |  11  | −                       | random int floor
-   28 |  42  | X→П 2                   | setup mines
-   29 |  09  | 9                       |
-   30 |  01  | 1                       |
-   31 |  1D  | F cos                   | expected_mode("grd") cosine
-   32 |  18  | F ln                    | expected_mode("grd") domain guard
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  00  | 0                       |
+   05 |  41  | X→П 1                   | setup R1
+   06 |  01  | 1                       |
+   07 |  4C  | X→П c                   | setup Rc
+   08 |  02  | 2                       |
+   09 |  4B  | X→П b                   | setup Rb
+   10 |  04  | 4                       |
+   11 |  4A  | X→П a                   | setup Ra
+   12 |  08  | 8                       |
+   13 |  49  | X→П 9                   | setup R9
+   14 |  00  | 0                       |
+   15 |  0A  | .                       |
+   16 |  05  | 5                       |
+   17 |  4D  | X→П d                   | setup Rd
+   18 |  04  | 4                       |
+   19 |  04  | 4                       |
+   20 |  47  | X→П 7                   | setup R7
+   21 |  06  | 6                       |
+   22 |  08  | 8                       |
+   23 |  48  | X→П 8                   | setup R8
+   24 |  3B  | К СЧ                    | random()
+   25 |  09  | 9                       |
+   26 |  09  | 9                       |
+   27 |  09  | 9                       |
+   28 |  12  | ×                       | expr *
+   29 |  0E  | В↑                      | random int keep scaled draw
+   30 |  35  | К {x}                   | random int fractional part
+   31 |  11  | −                       | random int floor
+   32 |  42  | X→П 2                   | setup mines
    33 |  50  | С/П                     | setup complete
 
 # Main Listing

@@ -3103,7 +3103,7 @@ program IndexedPreincrementStore {
                       preincrement_indexed_store.steps.end(),
                       [](const ResolvedStep& step) {
                         return step.comment.has_value() &&
-                               *step.comment == "preincrement indexed set slots";
+                               step.comment->rfind("preincrement indexed set slots", 0) == 0;
                       }),
           "preincrement indexed store should use the fused indirect store comment");
   require(std::none_of(preincrement_indexed_store.steps.begin(),
@@ -8312,7 +8312,7 @@ program ExpectedModeFirst {
   require(guard_it != expected_mode_first.setup_program->steps.end() &&
               preload_it != expected_mode_first.setup_program->steps.end() &&
               guard_it < preload_it,
-          "expected_mode setup guard should run before state preloads");
+          "expected_mode setup guard should run before non-input state preloads");
   require(std::any_of(expected_mode_first.setup_program->optimizations.begin(),
                       expected_mode_first.setup_program->optimizations.end(),
                       [](const OptimizationReport& item) {

@@ -1,67 +1,67 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  09  | 9                       |
-   01 |  43  | X→П 3                   | setup R3
-   02 |  04  | 4                       |
-   03 |  42  | X→П 2                   | setup R2
-   04 |  46  | X→П 6                   | setup R6
-   05 |  45  | X→П 5                   | setup R5
-   06 |  00  | 0                       |
-   07 |  47  | X→П 7                   | setup R7
-   08 |  4A  | X→П a                   | setup Ra
-   09 |  01  | 1                       |
-   10 |  00  | 0                       |
-   11 |  4B  | X→П b                   | setup Rb
-   12 |  09  | 9                       |
-   13 |  0A  | .                       |
-   14 |  05  | 5                       |
-   15 |  05  | 5                       |
-   16 |  05  | 5                       |
-   17 |  05  | 5                       |
-   18 |  05  | 5                       |
+   00 |  01  | 1                       |
+   01 |  00  | 0                       |
+   02 |  00  | 0                       |
+   03 |  1D  | F cos                   | expected_mode("rad") cosine
+   04 |  18  | F ln                    | expected_mode("rad") domain guard
+   05 |  09  | 9                       |
+   06 |  43  | X→П 3                   | setup R3
+   07 |  04  | 4                       |
+   08 |  42  | X→П 2                   | setup R2
+   09 |  46  | X→П 6                   | setup R6
+   10 |  45  | X→П 5                   | setup R5
+   11 |  00  | 0                       |
+   12 |  47  | X→П 7                   | setup R7
+   13 |  4A  | X→П a                   | setup Ra
+   14 |  01  | 1                       |
+   15 |  00  | 0                       |
+   16 |  4B  | X→П b                   | setup Rb
+   17 |  09  | 9                       |
+   18 |  0A  | .                       |
    19 |  05  | 5                       |
    20 |  05  | 5                       |
-   21 |  4C  | X→П c                   | setup Rc
-   22 |  08  | 8                       |
-   23 |  00  | 0                       |
-   24 |  49  | X→П 9                   | setup R9
-   25 |  08  | 8                       |
-   26 |  06  | 6                       |
-   27 |  4D  | X→П d                   | setup Rd
-   28 |  09  | 9                       |
-   29 |  06  | 6                       |
-   30 |  4E  | X→П e                   | setup Re
-   31 |  3B  | К СЧ                    | random()
-   32 |  48  | X→П 8                   | setup seed
-   33 |  68  | П→X 8                   | recall seed
-   34 |  3B  | К СЧ                    | random()
-   35 |  07  | 7                       |
-   36 |  12  | ×                       | expr *
-   37 |  0E  | В↑                      | random int keep scaled draw
-   38 |  35  | К {x}                   | random int fractional part
-   39 |  11  | −                       | random int floor
-   40 |  01  | 1                       |
-   41 |  10  | +                       | expr +
-   42 |  1C  | F sin                   | sin()
-   43 |  13  | ÷                       | expr /
-   44 |  3B  | К СЧ                    | random()
-   45 |  07  | 7                       |
-   46 |  12  | ×                       | expr *
-   47 |  0E  | В↑                      | random int keep scaled draw
-   48 |  35  | К {x}                   | random int fractional part
-   49 |  11  | −                       | random int floor
-   50 |  01  | 1                       |
-   51 |  10  | +                       | expr +
-   52 |  12  | ×                       | expr *
-   53 |  6C  | П→X c                   | preload const 9.5555555
-   54 |  37  | К ∧                     | bit_and()
-   55 |  44  | X→П 4                   | setup exit_view
-   56 |  01  | 1                       |
-   57 |  00  | 0                       |
-   58 |  00  | 0                       |
-   59 |  1D  | F cos                   | expected_mode("rad") cosine
-   60 |  18  | F ln                    | expected_mode("rad") domain guard
+   21 |  05  | 5                       |
+   22 |  05  | 5                       |
+   23 |  05  | 5                       |
+   24 |  05  | 5                       |
+   25 |  05  | 5                       |
+   26 |  4C  | X→П c                   | setup Rc
+   27 |  08  | 8                       |
+   28 |  00  | 0                       |
+   29 |  49  | X→П 9                   | setup R9
+   30 |  08  | 8                       |
+   31 |  06  | 6                       |
+   32 |  4D  | X→П d                   | setup Rd
+   33 |  09  | 9                       |
+   34 |  06  | 6                       |
+   35 |  4E  | X→П e                   | setup Re
+   36 |  3B  | К СЧ                    | random()
+   37 |  48  | X→П 8                   | setup seed
+   38 |  68  | П→X 8                   | recall seed
+   39 |  3B  | К СЧ                    | random()
+   40 |  07  | 7                       |
+   41 |  12  | ×                       | expr *
+   42 |  0E  | В↑                      | random int keep scaled draw
+   43 |  35  | К {x}                   | random int fractional part
+   44 |  11  | −                       | random int floor
+   45 |  01  | 1                       |
+   46 |  10  | +                       | expr +
+   47 |  1C  | F sin                   | sin()
+   48 |  13  | ÷                       | expr /
+   49 |  3B  | К СЧ                    | random()
+   50 |  07  | 7                       |
+   51 |  12  | ×                       | expr *
+   52 |  0E  | В↑                      | random int keep scaled draw
+   53 |  35  | К {x}                   | random int fractional part
+   54 |  11  | −                       | random int floor
+   55 |  01  | 1                       |
+   56 |  10  | +                       | expr +
+   57 |  12  | ×                       | expr *
+   58 |  6C  | П→X c                   | preload const 9.5555555
+   59 |  37  | К ∧                     | bit_and()
+   60 |  44  | X→П 4                   | setup exit_view
    61 |  50  | С/П                     | setup complete
 
 # Main Listing

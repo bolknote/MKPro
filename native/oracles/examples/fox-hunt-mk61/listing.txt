@@ -1,67 +1,67 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  00  | 0                       |
-   01 |  44  | X→П 4                   | setup R4
-   02 |  3B  | К СЧ                    | random coord seed
-   03 |  4E  | X→П e                   | random coord seed
-   04 |  09  | 9                       |
-   05 |  42  | X→П 2                   | random coord remaining
-   06 |  6E  | П→X e                   | random coord seed
-   07 |  03  | 3                       |
-   08 |  07  | 7                       |
-   09 |  12  | ×                       | random coord next seed
-   10 |  35  | К {x}                   | random coord seed fraction
-   11 |  4E  | X→П e                   | random coord seed
-   12 |  02  | 2                       |
-   13 |  15  | F 10ˣ                   | constant 100
-   14 |  12  | ×                       | random coord scaled seed
-   15 |  34  | К [x]                   | random coord flat index
-   16 |  01  | 1                       |
-   17 |  00  | 0                       |
-   18 |  13  | ÷                       | random coord scaled decimal cell
-   19 |  40  | X→П 0                   | random coord scaled decimal cell
-   20 |  09  | 9                       |
-   21 |  62  | П→X 2                   | random coord remaining
-   22 |  11  | −                       | random coord previous count
-   23 |  41  | X→П 1                   | random coord previous count
-   24 |  05  | 5                       |
-   25 |  45  | X→П 5                   | random coord pointer
-   26 |  61  | П→X 1                   | random coord previous count
-   27 |  57  | F x≠0                   | random coord first item
-   28 |  36  | 36                      | random coord first item
-   29 |  60  | П→X 0                   | random coord candidate
-   30 |  D5  | К П→X 5                 | random coord previous
-   31 |  11  | −                       | random coord uniqueness
-   32 |  57  | F x≠0                   | random coord collision
-   33 |  06  | 06                      | random coord collision
-   34 |  5B  | F L1                    | random coord previous loop
-   35 |  29  | 29                      | random coord previous loop
-   36 |  60  | П→X 0                   | random coord candidate
-   37 |  B5  | К X→П 5                 | random coord store
-   38 |  58  | F L2                    | random coord outer loop
-   39 |  06  | 06                      | random coord outer loop
-   40 |  01  | 1                       |
-   41 |  02  | 2                       |
-   42 |  00  | 0                       |
-   43 |  00  | 0                       |
-   44 |  02  | 2                       |
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  00  | 0                       |
+   05 |  44  | X→П 4                   | setup R4
+   06 |  3B  | К СЧ                    | random coord seed
+   07 |  4E  | X→П e                   | random coord seed
+   08 |  09  | 9                       |
+   09 |  42  | X→П 2                   | random coord remaining
+   10 |  6E  | П→X e                   | random coord seed
+   11 |  03  | 3                       |
+   12 |  07  | 7                       |
+   13 |  12  | ×                       | random coord next seed
+   14 |  35  | К {x}                   | random coord seed fraction
+   15 |  4E  | X→П e                   | random coord seed
+   16 |  02  | 2                       |
+   17 |  15  | F 10ˣ                   | constant 100
+   18 |  12  | ×                       | random coord scaled seed
+   19 |  34  | К [x]                   | random coord flat index
+   20 |  01  | 1                       |
+   21 |  00  | 0                       |
+   22 |  13  | ÷                       | random coord scaled decimal cell
+   23 |  40  | X→П 0                   | random coord scaled decimal cell
+   24 |  09  | 9                       |
+   25 |  62  | П→X 2                   | random coord remaining
+   26 |  11  | −                       | random coord previous count
+   27 |  41  | X→П 1                   | random coord previous count
+   28 |  05  | 5                       |
+   29 |  45  | X→П 5                   | random coord pointer
+   30 |  61  | П→X 1                   | random coord previous count
+   31 |  57  | F x≠0                   | random coord first item
+   32 |  40  | 40                      | random coord first item
+   33 |  60  | П→X 0                   | random coord candidate
+   34 |  D5  | К П→X 5                 | random coord previous
+   35 |  11  | −                       | random coord uniqueness
+   36 |  57  | F x≠0                   | random coord collision
+   37 |  10  | 10                      | random coord collision
+   38 |  5B  | F L1                    | random coord previous loop
+   39 |  33  | 33                      | random coord previous loop
+   40 |  60  | П→X 0                   | random coord candidate
+   41 |  B5  | К X→П 5                 | random coord store
+   42 |  58  | F L2                    | random coord outer loop
+   43 |  10  | 10                      | random coord outer loop
+   44 |  01  | 1                       |
    45 |  02  | 2                       |
-   46 |  06  | 6                       |
-   47 |  0E  | В↑                      | setup formatted report mask split
-   48 |  09  | 9                       |
-   49 |  08  | 8                       |
-   50 |  00  | 0                       |
-   51 |  00  | 0                       |
-   52 |  08  | 8                       |
+   46 |  00  | 0                       |
+   47 |  00  | 0                       |
+   48 |  02  | 2                       |
+   49 |  02  | 2                       |
+   50 |  06  | 6                       |
+   51 |  0E  | В↑                      | setup formatted report mask split
+   52 |  09  | 9                       |
    53 |  08  | 8                       |
-   54 |  09  | 9                       |
-   55 |  39  | К ⊕                     | setup formatted report mask
-   56 |  41  | X→П 1                   | setup formatted report mask
-   57 |  09  | 9                       |
-   58 |  01  | 1                       |
-   59 |  1D  | F cos                   | expected_mode("grd") cosine
-   60 |  18  | F ln                    | expected_mode("grd") domain guard
+   54 |  00  | 0                       |
+   55 |  00  | 0                       |
+   56 |  08  | 8                       |
+   57 |  08  | 8                       |
+   58 |  09  | 9                       |
+   59 |  39  | К ⊕                     | setup formatted report mask
+   60 |  41  | X→П 1                   | setup formatted report mask
    61 |  07  | 7                       |
    62 |  50  | С/П                     | setup complete
 

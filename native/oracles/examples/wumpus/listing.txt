@@ -2,62 +2,62 @@
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    00 |  01  | 1                       |
-   01 |  46  | X→П 6                   | setup R6
+   01 |  00  | 0                       |
    02 |  00  | 0                       |
-   03 |  47  | X→П 7                   | setup R7
-   04 |  45  | X→П 5                   | setup R5
+   03 |  1D  | F cos                   | expected_mode("rad") cosine
+   04 |  18  | F ln                    | expected_mode("rad") domain guard
    05 |  01  | 1                       |
-   06 |  00  | 0                       |
-   07 |  4C  | X→П c                   | setup Rc
-   08 |  02  | 2                       |
-   09 |  00  | 0                       |
-   10 |  4B  | X→П b                   | setup Rb
-   11 |  07  | 7                       |
-   12 |  07  | 7                       |
-   13 |  07  | 7                       |
-   14 |  4E  | X→П e                   | setup Re
-   15 |  00  | 0                       |
-   16 |  0A  | .                       |
-   17 |  08  | 8                       |
-   18 |  4D  | X→П d                   | setup Rd
-   19 |  09  | 9                       |
-   20 |  09  | 9                       |
-   21 |  49  | X→П 9                   | setup R9
-   22 |  06  | 6                       |
-   23 |  07  | 7                       |
-   24 |  4A  | X→П a                   | setup Ra
-   25 |  05  | 5                       |
-   26 |  40  | X→П 0                   | setup indexed pointer hazard_pit_1..hazard_bat_2
-   27 |  3B  | К СЧ                    | random()
-   28 |  6B  | П→X b                   | preload const 20
-   29 |  12  | ×                       | expr *
-   30 |  0E  | В↑                      | random int keep scaled draw
-   31 |  35  | К {x}                   | random int fractional part
-   32 |  11  | −                       | random int floor
-   33 |  01  | 1                       |
-   34 |  10  | +                       | expr +
-   35 |  B0  | К X→П 0                 | setup indexed hazard_pit_1..hazard_bat_2
-   36 |  60  | П→X 0                   | setup indexed pointer
-   37 |  01  | 1                       |
-   38 |  11  | −                       | setup indexed remaining
-   39 |  5E  | F x=0                   | setup indexed loop hazard_pit_1..hazard_bat_2
-   40 |  27  | 27                      | setup indexed loop hazard_pit_1..hazard_bat_2
-   41 |  05  | 5                       |
-   42 |  40  | X→П 0                   | restore setup R0
-   43 |  3B  | К СЧ                    | random()
-   44 |  6B  | П→X b                   | preload const 20
-   45 |  12  | ×                       | expr *
-   46 |  0E  | В↑                      | random int keep scaled draw
-   47 |  35  | К {x}                   | random int fractional part
-   48 |  11  | −                       | random int floor
-   49 |  01  | 1                       |
-   50 |  10  | +                       | expr +
-   51 |  48  | X→П 8                   | setup wumpus
-   52 |  01  | 1                       |
-   53 |  00  | 0                       |
-   54 |  00  | 0                       |
-   55 |  1D  | F cos                   | expected_mode("rad") cosine
-   56 |  18  | F ln                    | expected_mode("rad") domain guard
+   06 |  46  | X→П 6                   | setup R6
+   07 |  00  | 0                       |
+   08 |  47  | X→П 7                   | setup R7
+   09 |  45  | X→П 5                   | setup R5
+   10 |  01  | 1                       |
+   11 |  00  | 0                       |
+   12 |  4C  | X→П c                   | setup Rc
+   13 |  02  | 2                       |
+   14 |  00  | 0                       |
+   15 |  4B  | X→П b                   | setup Rb
+   16 |  07  | 7                       |
+   17 |  07  | 7                       |
+   18 |  07  | 7                       |
+   19 |  4E  | X→П e                   | setup Re
+   20 |  00  | 0                       |
+   21 |  0A  | .                       |
+   22 |  08  | 8                       |
+   23 |  4D  | X→П d                   | setup Rd
+   24 |  09  | 9                       |
+   25 |  09  | 9                       |
+   26 |  49  | X→П 9                   | setup R9
+   27 |  06  | 6                       |
+   28 |  07  | 7                       |
+   29 |  4A  | X→П a                   | setup Ra
+   30 |  05  | 5                       |
+   31 |  40  | X→П 0                   | setup indexed pointer hazard_pit_1..hazard_bat_2
+   32 |  3B  | К СЧ                    | random()
+   33 |  6B  | П→X b                   | preload const 20
+   34 |  12  | ×                       | expr *
+   35 |  0E  | В↑                      | random int keep scaled draw
+   36 |  35  | К {x}                   | random int fractional part
+   37 |  11  | −                       | random int floor
+   38 |  01  | 1                       |
+   39 |  10  | +                       | expr +
+   40 |  B0  | К X→П 0                 | setup indexed hazard_pit_1..hazard_bat_2
+   41 |  60  | П→X 0                   | setup indexed pointer
+   42 |  01  | 1                       |
+   43 |  11  | −                       | setup indexed remaining
+   44 |  5E  | F x=0                   | setup indexed loop hazard_pit_1..hazard_bat_2
+   45 |  32  | 32                      | setup indexed loop hazard_pit_1..hazard_bat_2
+   46 |  05  | 5                       |
+   47 |  40  | X→П 0                   | restore setup R0
+   48 |  3B  | К СЧ                    | random()
+   49 |  6B  | П→X b                   | preload const 20
+   50 |  12  | ×                       | expr *
+   51 |  0E  | В↑                      | random int keep scaled draw
+   52 |  35  | К {x}                   | random int fractional part
+   53 |  11  | −                       | random int floor
+   54 |  01  | 1                       |
+   55 |  10  | +                       | expr +
+   56 |  48  | X→П 8                   | setup wumpus
    57 |  50  | С/П                     | setup complete
 
 # Main Listing

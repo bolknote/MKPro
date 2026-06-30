@@ -2,48 +2,48 @@
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    -- |   -  | enter remaining_foxes   | enter any value 1..100 in Y
-   00 |  00  | 0                       |
-   01 |  40  | X→П 0                   | setup R0
-   02 |  01  | 1                       |
-   03 |  00  | 0                       |
-   04 |  4C  | X→П c                   | setup Rc
-   05 |  01  | 1                       |
-   06 |  01  | 1                       |
-   07 |  47  | X→П 7                   | setup R7
-   08 |  01  | 1                       |
-   09 |  09  | 9                       |
-   10 |  41  | X→П 1                   | setup R1
-   11 |  09  | 9                       |
-   12 |  09  | 9                       |
-   13 |  0B  | /-/                     | negative number
-   14 |  4B  | X→П b                   | setup Rb
-   15 |  08  | 8                       |
-   16 |  01  | 1                       |
-   17 |  0B  | /-/                     | negative number
-   18 |  4A  | X→П a                   | setup Ra
-   19 |  00  | 0                       |
-   20 |  0A  | .                       |
-   21 |  05  | 5                       |
-   22 |  49  | X→П 9                   | setup R9
-   23 |  06  | 6                       |
-   24 |  00  | 0                       |
-   25 |  4E  | X→П e                   | setup Re
-   26 |  14  | X↔Y                     | setup remaining_foxes from stack.Y
-   27 |  42  | X→П 2                   | setup remaining_foxes
-   28 |  14  | X↔Y                     | restore stack.X after remaining_foxes
-   29 |  3B  | К СЧ                    | random()
-   30 |  09  | 9                       |
-   31 |  09  | 9                       |
-   32 |  09  | 9                       |
-   33 |  12  | ×                       | expr *
-   34 |  0E  | В↑                      | random int keep scaled draw
-   35 |  35  | К {x}                   | random int fractional part
-   36 |  11  | −                       | random int floor
-   37 |  46  | X→П 6                   | setup foxes
-   38 |  09  | 9                       |
-   39 |  01  | 1                       |
-   40 |  1D  | F cos                   | expected_mode("grd") cosine
-   41 |  18  | F ln                    | expected_mode("grd") domain guard
+   00 |  14  | X↔Y                     | setup remaining_foxes from stack.Y
+   01 |  42  | X→П 2                   | setup remaining_foxes
+   02 |  14  | X↔Y                     | restore stack.X after remaining_foxes
+   03 |  09  | 9                       |
+   04 |  01  | 1                       |
+   05 |  1D  | F cos                   | expected_mode("grd") cosine
+   06 |  18  | F ln                    | expected_mode("grd") domain guard
+   07 |  00  | 0                       |
+   08 |  40  | X→П 0                   | setup R0
+   09 |  01  | 1                       |
+   10 |  00  | 0                       |
+   11 |  4C  | X→П c                   | setup Rc
+   12 |  01  | 1                       |
+   13 |  01  | 1                       |
+   14 |  47  | X→П 7                   | setup R7
+   15 |  01  | 1                       |
+   16 |  09  | 9                       |
+   17 |  41  | X→П 1                   | setup R1
+   18 |  09  | 9                       |
+   19 |  09  | 9                       |
+   20 |  0B  | /-/                     | negative number
+   21 |  4B  | X→П b                   | setup Rb
+   22 |  08  | 8                       |
+   23 |  01  | 1                       |
+   24 |  0B  | /-/                     | negative number
+   25 |  4A  | X→П a                   | setup Ra
+   26 |  00  | 0                       |
+   27 |  0A  | .                       |
+   28 |  05  | 5                       |
+   29 |  49  | X→П 9                   | setup R9
+   30 |  06  | 6                       |
+   31 |  00  | 0                       |
+   32 |  4E  | X→П e                   | setup Re
+   33 |  3B  | К СЧ                    | random()
+   34 |  09  | 9                       |
+   35 |  09  | 9                       |
+   36 |  09  | 9                       |
+   37 |  12  | ×                       | expr *
+   38 |  0E  | В↑                      | random int keep scaled draw
+   39 |  35  | К {x}                   | random int fractional part
+   40 |  11  | −                       | random int floor
+   41 |  46  | X→П 6                   | setup foxes
    42 |  50  | С/П                     | setup complete
 
 # Main Listing

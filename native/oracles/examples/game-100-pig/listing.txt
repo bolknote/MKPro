@@ -1,58 +1,58 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  00  | 0                       |
-   01 |  45  | X→П 5                   | setup R5
-   02 |  40  | X→П 0                   | setup R0
-   03 |  47  | X→П 7                   | setup R7
-   04 |  44  | X→П 4                   | setup R4
-   05 |  46  | X→П 6                   | setup R6
-   06 |  02  | 2                       |
-   07 |  00  | 0                       |
-   08 |  4A  | X→П a                   | setup Ra
-   09 |  02  | 2                       |
-   10 |  15  | F 10ˣ                   | setup constant 100
-   11 |  4B  | X→П b                   | setup Rb
-   12 |  03  | 3                       |
-   13 |  15  | F 10ˣ                   | setup constant 1000
-   14 |  4C  | X→П c                   | setup Rc
-   15 |  07  | 7                       |
-   16 |  15  | F 10ˣ                   | setup constant 10000000
-   17 |  4D  | X→П d                   | setup Rd
-   18 |  01  | 1                       |
-   19 |  02  | 2                       |
-   20 |  00  | 0                       |
-   21 |  00  | 0                       |
-   22 |  02  | 2                       |
-   23 |  00  | 0                       |
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  00  | 0                       |
+   05 |  45  | X→П 5                   | setup R5
+   06 |  40  | X→П 0                   | setup R0
+   07 |  47  | X→П 7                   | setup R7
+   08 |  44  | X→П 4                   | setup R4
+   09 |  46  | X→П 6                   | setup R6
+   10 |  02  | 2                       |
+   11 |  00  | 0                       |
+   12 |  4A  | X→П a                   | setup Ra
+   13 |  02  | 2                       |
+   14 |  15  | F 10ˣ                   | setup constant 100
+   15 |  4B  | X→П b                   | setup Rb
+   16 |  03  | 3                       |
+   17 |  15  | F 10ˣ                   | setup constant 1000
+   18 |  4C  | X→П c                   | setup Rc
+   19 |  07  | 7                       |
+   20 |  15  | F 10ˣ                   | setup constant 10000000
+   21 |  4D  | X→П d                   | setup Rd
+   22 |  01  | 1                       |
+   23 |  02  | 2                       |
    24 |  00  | 0                       |
    25 |  00  | 0                       |
-   26 |  0E  | В↑                      | setup Re body split
-   27 |  09  | 9                       |
-   28 |  08  | 8                       |
+   26 |  02  | 2                       |
+   27 |  00  | 0                       |
+   28 |  00  | 0                       |
    29 |  00  | 0                       |
-   30 |  00  | 0                       |
-   31 |  08  | 8                       |
-   32 |  00  | 0                       |
+   30 |  0E  | В↑                      | setup Re body split
+   31 |  09  | 9                       |
+   32 |  08  | 8                       |
    33 |  00  | 0                       |
    34 |  00  | 0                       |
-   35 |  39  | К ⊕                     | setup Re body
-   36 |  4E  | X→П e                   | setup Re body scratch
-   37 |  6E  | П→X e                   | setup Re body scratch
-   38 |  54  | К НОП                   | setup Re first digit reuse
-   39 |  0C  | ВП                      | setup Re first digit reuse
-   40 |  0C  | ВП                      | setup Re exponent
-   41 |  00  | 0                       | setup Re exponent
-   42 |  4E  | X→П e                   | setup Re
-   43 |  01  | 1                       |
-   44 |  48  | X→П 8                   | setup R8
-   45 |  01  | 1                       |
-   46 |  02  | 2                       |
-   47 |  49  | X→П 9                   | setup R9
-   48 |  09  | 9                       |
+   35 |  08  | 8                       |
+   36 |  00  | 0                       |
+   37 |  00  | 0                       |
+   38 |  00  | 0                       |
+   39 |  39  | К ⊕                     | setup Re body
+   40 |  4E  | X→П e                   | setup Re body scratch
+   41 |  6E  | П→X e                   | setup Re body scratch
+   42 |  54  | К НОП                   | setup Re first digit reuse
+   43 |  0C  | ВП                      | setup Re first digit reuse
+   44 |  0C  | ВП                      | setup Re exponent
+   45 |  00  | 0                       | setup Re exponent
+   46 |  4E  | X→П e                   | setup Re
+   47 |  01  | 1                       |
+   48 |  48  | X→П 8                   | setup R8
    49 |  01  | 1                       |
-   50 |  1D  | F cos                   | expected_mode("grd") cosine
-   51 |  18  | F ln                    | expected_mode("grd") domain guard
+   50 |  02  | 2                       |
+   51 |  49  | X→П 9                   | setup R9
    52 |  50  | С/П                     | setup complete
 
 # Main Listing

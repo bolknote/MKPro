@@ -2,74 +2,74 @@
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
    -- |   -  | enter pos               | enter a value in X
-   00 |  04  | 4                       |
-   01 |  42  | X→П 2                   | setup R2
-   02 |  00  | 0                       |
-   03 |  45  | X→П 5                   | setup R5
-   04 |  43  | X→П 3                   | setup R3
-   05 |  01  | 1                       |
-   06 |  01  | 1                       |
-   07 |  49  | X→П 9                   | setup R9
-   08 |  00  | 0                       |
-   09 |  0A  | .                       |
-   10 |  00  | 0                       |
+   00 |  14  | X↔Y                     | setup resources_1 from stack.Y
+   01 |  41  | X→П 1                   | setup resources_1
+   02 |  14  | X↔Y                     | restore stack.X after resources_1
+   03 |  4D  | X→П d                   | setup pos
+   04 |  01  | 1                       |
+   05 |  00  | 0                       |
+   06 |  00  | 0                       |
+   07 |  1D  | F cos                   | expected_mode("rad") cosine
+   08 |  18  | F ln                    | expected_mode("rad") domain guard
+   09 |  04  | 4                       |
+   10 |  42  | X→П 2                   | setup R2
    11 |  00  | 0                       |
-   12 |  00  | 0                       |
-   13 |  00  | 0                       |
-   14 |  00  | 0                       |
+   12 |  45  | X→П 5                   | setup R5
+   13 |  43  | X→П 3                   | setup R3
+   14 |  01  | 1                       |
    15 |  01  | 1                       |
-   16 |  4B  | X→П b                   | setup Rb
-   17 |  6B  | П→X b                   | setup constant -0.000001 base 0.000001
-   18 |  0B  | /-/                     | setup constant -0.000001
-   19 |  4E  | X→П e                   | setup Re
-   20 |  03  | 3                       |
-   21 |  0A  | .                       |
+   16 |  49  | X→П 9                   | setup R9
+   17 |  00  | 0                       |
+   18 |  0A  | .                       |
+   19 |  00  | 0                       |
+   20 |  00  | 0                       |
+   21 |  00  | 0                       |
    22 |  00  | 0                       |
    23 |  00  | 0                       |
-   24 |  00  | 0                       |
-   25 |  00  | 0                       |
-   26 |  00  | 0                       |
-   27 |  00  | 0                       |
-   28 |  08  | 8                       |
-   29 |  4C  | X→П c                   | setup Rc
-   30 |  02  | 2                       |
-   31 |  0C  | ВП                      | exponent
-   32 |  07  | 7                       |
-   33 |  0B  | /-/                     | negative exponent
-   34 |  4A  | X→П a                   | setup Ra
-   35 |  09  | 9                       |
-   36 |  02  | 2                       |
-   37 |  47  | X→П 7                   | setup R7
-   38 |  03  | 3                       |
-   39 |  09  | 9                       |
-   40 |  48  | X→П 8                   | setup R8
-   41 |  14  | X↔Y                     | setup resources_1 from stack.Y
-   42 |  41  | X→П 1                   | setup resources_1
-   43 |  14  | X↔Y                     | restore stack.X after resources_1
-   44 |  4D  | X→П d                   | setup pos
-   45 |  3B  | К СЧ                    | random()
-   46 |  09  | 9                       |
-   47 |  09  | 9                       |
+   24 |  01  | 1                       |
+   25 |  4B  | X→П b                   | setup Rb
+   26 |  6B  | П→X b                   | setup constant -0.000001 base 0.000001
+   27 |  0B  | /-/                     | setup constant -0.000001
+   28 |  4E  | X→П e                   | setup Re
+   29 |  03  | 3                       |
+   30 |  0A  | .                       |
+   31 |  00  | 0                       |
+   32 |  00  | 0                       |
+   33 |  00  | 0                       |
+   34 |  00  | 0                       |
+   35 |  00  | 0                       |
+   36 |  00  | 0                       |
+   37 |  08  | 8                       |
+   38 |  4C  | X→П c                   | setup Rc
+   39 |  02  | 2                       |
+   40 |  0C  | ВП                      | exponent
+   41 |  07  | 7                       |
+   42 |  0B  | /-/                     | negative exponent
+   43 |  4A  | X→П a                   | setup Ra
+   44 |  09  | 9                       |
+   45 |  02  | 2                       |
+   46 |  47  | X→П 7                   | setup R7
+   47 |  03  | 3                       |
    48 |  09  | 9                       |
-   49 |  12  | ×                       | expr *
-   50 |  0E  | В↑                      | random int keep scaled draw
-   51 |  35  | К {x}                   | random int fractional part
-   52 |  11  | −                       | random int floor
-   53 |  46  | X→П 6                   | setup walls
-   54 |  3B  | К СЧ                    | random()
-   55 |  09  | 9                       |
-   56 |  09  | 9                       |
-   57 |  09  | 9                       |
-   58 |  12  | ×                       | expr *
-   59 |  0E  | В↑                      | random int keep scaled draw
-   60 |  35  | К {x}                   | random int fractional part
-   61 |  11  | −                       | random int floor
-   62 |  44  | X→П 4                   | setup caches
-   63 |  01  | 1                       |
-   64 |  00  | 0                       |
-   65 |  00  | 0                       |
-   66 |  1D  | F cos                   | expected_mode("rad") cosine
-   67 |  18  | F ln                    | expected_mode("rad") domain guard
+   49 |  48  | X→П 8                   | setup R8
+   50 |  3B  | К СЧ                    | random()
+   51 |  09  | 9                       |
+   52 |  09  | 9                       |
+   53 |  09  | 9                       |
+   54 |  12  | ×                       | expr *
+   55 |  0E  | В↑                      | random int keep scaled draw
+   56 |  35  | К {x}                   | random int fractional part
+   57 |  11  | −                       | random int floor
+   58 |  46  | X→П 6                   | setup walls
+   59 |  3B  | К СЧ                    | random()
+   60 |  09  | 9                       |
+   61 |  09  | 9                       |
+   62 |  09  | 9                       |
+   63 |  12  | ×                       | expr *
+   64 |  0E  | В↑                      | random int keep scaled draw
+   65 |  35  | К {x}                   | random int fractional part
+   66 |  11  | −                       | random int floor
+   67 |  44  | X→П 4                   | setup caches
    68 |  50  | С/П                     | setup complete
 
 # Main Listing

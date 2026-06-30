@@ -1,24 +1,24 @@
 # Setup Listing
  Step | Code | Command                 | Comment
 ------+------+-------------------------+----------------
-   00 |  05  | 5                       |
-   01 |  42  | X→П 2                   | setup R2
-   02 |  01  | 1                       |
-   03 |  00  | 0                       |
-   04 |  4E  | X→П e                   | setup Re
-   05 |  00  | 0                       |
-   06 |  44  | X→П 4                   | setup R4
-   07 |  47  | X→П 7                   | setup R7
-   08 |  01  | 1                       |
-   09 |  02  | 2                       |
-   10 |  48  | X→П 8                   | setup R8
-   11 |  02  | 2                       |
-   12 |  00  | 0                       |
-   13 |  49  | X→П 9                   | setup R9
-   14 |  09  | 9                       |
-   15 |  01  | 1                       |
-   16 |  1D  | F cos                   | expected_mode("grd") cosine
-   17 |  18  | F ln                    | expected_mode("grd") domain guard
+   00 |  09  | 9                       |
+   01 |  01  | 1                       |
+   02 |  1D  | F cos                   | expected_mode("grd") cosine
+   03 |  18  | F ln                    | expected_mode("grd") domain guard
+   04 |  05  | 5                       |
+   05 |  42  | X→П 2                   | setup R2
+   06 |  01  | 1                       |
+   07 |  00  | 0                       |
+   08 |  4E  | X→П e                   | setup Re
+   09 |  00  | 0                       |
+   10 |  44  | X→П 4                   | setup R4
+   11 |  47  | X→П 7                   | setup R7
+   12 |  01  | 1                       |
+   13 |  02  | 2                       |
+   14 |  48  | X→П 8                   | setup R8
+   15 |  02  | 2                       |
+   16 |  00  | 0                       |
+   17 |  49  | X→П 9                   | setup R9
    18 |  50  | С/П                     | setup complete
 
 # Main Listing

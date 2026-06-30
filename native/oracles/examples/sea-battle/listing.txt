@@ -3,58 +3,59 @@
 ------+------+-------------------------+----------------
    -- |   -  | enter own_ships         | enter any value 0..99 in X
    -- |   -  | enter enemy_ships       | enter any value 0..99 in X
-   00 |  00  | 0                       |
-   01 |  40  | X→П 0                   | setup R0
-   02 |  44  | X→П 4                   | setup R4
+   00 |  42  | X→П 2                   | setup own_ships
+   01 |  43  | X→П 3                   | setup enemy_ships
+   02 |  09  | 9                       |
    03 |  01  | 1                       |
-   04 |  49  | X→П 9                   | setup R9
-   05 |  02  | 2                       |
-   06 |  48  | X→П 8                   | setup R8
-   07 |  04  | 4                       |
-   08 |  47  | X→П 7                   | setup R7
-   09 |  02  | 2                       |
-   10 |  15  | F 10ˣ                   | setup constant 100
-   11 |  4B  | X→П b                   | setup Rb
-   12 |  01  | 1                       |
-   13 |  03  | 3                       |
-   14 |  01  | 1                       |
-   15 |  03  | 3                       |
-   16 |  09  | 9                       |
-   17 |  05  | 5                       |
-   18 |  04  | 4                       |
-   19 |  05  | 5                       |
-   20 |  4D  | X→П d                   | setup Rd
+   04 |  1D  | F cos                   | expected_mode("grd") cosine
+   05 |  18  | F ln                    | expected_mode("grd") domain guard
+   06 |  00  | 0                       |
+   07 |  40  | X→П 0                   | setup R0
+   08 |  44  | X→П 4                   | setup R4
+   09 |  01  | 1                       |
+   10 |  49  | X→П 9                   | setup R9
+   11 |  02  | 2                       |
+   12 |  48  | X→П 8                   | setup R8
+   13 |  04  | 4                       |
+   14 |  47  | X→П 7                   | setup R7
+   15 |  02  | 2                       |
+   16 |  15  | F 10ˣ                   | setup constant 100
+   17 |  4B  | X→П b                   | setup Rb
+   18 |  01  | 1                       |
+   19 |  03  | 3                       |
+   20 |  01  | 1                       |
    21 |  03  | 3                       |
-   22 |  03  | 3                       |
-   23 |  03  | 3                       |
-   24 |  03  | 3                       |
-   25 |  03  | 3                       |
-   26 |  03  | 3                       |
+   22 |  09  | 9                       |
+   23 |  05  | 5                       |
+   24 |  04  | 4                       |
+   25 |  05  | 5                       |
+   26 |  4D  | X→П d                   | setup Rd
    27 |  03  | 3                       |
-   28 |  01  | 1                       |
-   29 |  4C  | X→П c                   | setup Rc
-   30 |  00  | 0                       |
-   31 |  0A  | .                       |
-   32 |  05  | 5                       |
-   33 |  4A  | X→П a                   | setup Ra
-   34 |  05  | 5                       |
-   35 |  08  | 8                       |
-   36 |  4E  | X→П e                   | setup Re
-   37 |  42  | X→П 2                   | setup own_ships
-   38 |  43  | X→П 3                   | setup enemy_ships
-   39 |  3B  | К СЧ                    | random()
-   40 |  09  | 9                       |
-   41 |  09  | 9                       |
-   42 |  09  | 9                       |
-   43 |  12  | ×                       | expr *
-   44 |  0E  | В↑                      | random int keep scaled draw
-   45 |  35  | К {x}                   | random int fractional part
-   46 |  11  | −                       | random int floor
-   47 |  41  | X→П 1                   | setup enemy_fleet
-   48 |  6D  | П→X d                   | expected_mode("grd") probe
-   49 |  1D  | F cos                   | expected_mode("grd") cosine
-   50 |  18  | F ln                    | expected_mode("grd") domain guard
-   51 |  50  | С/П                     | setup complete
+   28 |  03  | 3                       |
+   29 |  03  | 3                       |
+   30 |  03  | 3                       |
+   31 |  03  | 3                       |
+   32 |  03  | 3                       |
+   33 |  03  | 3                       |
+   34 |  01  | 1                       |
+   35 |  4C  | X→П c                   | setup Rc
+   36 |  00  | 0                       |
+   37 |  0A  | .                       |
+   38 |  05  | 5                       |
+   39 |  4A  | X→П a                   | setup Ra
+   40 |  05  | 5                       |
+   41 |  08  | 8                       |
+   42 |  4E  | X→П e                   | setup Re
+   43 |  3B  | К СЧ                    | random()
+   44 |  09  | 9                       |
+   45 |  09  | 9                       |
+   46 |  09  | 9                       |
+   47 |  12  | ×                       | expr *
+   48 |  0E  | В↑                      | random int keep scaled draw
+   49 |  35  | К {x}                   | random int fractional part
+   50 |  11  | −                       | random int floor
+   51 |  41  | X→П 1                   | setup enemy_fleet
+   52 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
