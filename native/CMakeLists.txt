@@ -90,8 +90,6 @@ add_library(mkpro_core STATIC
   src/core/state_banks.cpp
   src/core/super_dark_layout.cpp
   src/core/v2_const.cpp
-  src/emulator/mk61.cpp
-  src/emulator/rom.cpp
   src/oracle.cpp
   src/stub_compiler.cpp
 )
@@ -104,9 +102,21 @@ if(UNIX AND NOT APPLE)
   target_link_libraries(mkpro_core PUBLIC m)
 endif()
 
+add_library(mkpro_debug STATIC
+  # CLI/debug/regression behavior digest and emulator-backed validation helpers.
+  # Keep this target separate from mkpro_core so optimizer candidate selection
+  # cannot grow an implicit emulator dependency through the production core
+  # target.
+  src/core/compiler_behavior_digest.cpp
+  src/emulator/mk61.cpp
+  src/emulator/rom.cpp
+)
+target_link_libraries(mkpro_debug PUBLIC mkpro_core)
+target_compile_features(mkpro_debug PUBLIC cxx_std_23)
+
 add_executable(mkpro_cli src/main.cpp)
 set_target_properties(mkpro_cli PROPERTIES OUTPUT_NAME mkpro-native)
-target_link_libraries(mkpro_cli PRIVATE mkpro_core)
+target_link_libraries(mkpro_cli PRIVATE mkpro_debug)
 
 add_executable(mkpro_tests
   tests/address_formula_solver_test.cpp
@@ -240,7 +250,7 @@ add_executable(mkpro_tests
   tests/vp_splice_pass_test.cpp
   tests/pre_shift_stack_lift_pass_test.cpp
 )
-target_link_libraries(mkpro_tests PRIVATE mkpro_core)
+target_link_libraries(mkpro_tests PRIVATE mkpro_debug)
 
 add_executable(mkpro_validate_trig tools/validate_mk61_trig.cpp)
 target_link_libraries(mkpro_validate_trig PRIVATE mkpro_core)
@@ -438,6 +448,7 @@ target_include_directories(mkpro_int128_selftest PRIVATE
 add_test(NAME int128_selftest COMMAND mkpro_int128_selftest)
 
 mkpro_configure_target(mkpro_core)
+mkpro_configure_target(mkpro_debug)
 mkpro_configure_target(mkpro_cli)
 mkpro_configure_target(mkpro_tests)
 mkpro_configure_target(mkpro_validate_trig)

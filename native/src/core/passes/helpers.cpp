@@ -45,6 +45,13 @@ bool contains_word_ascii(const std::string& value, std::string_view word) {
   return false;
 }
 
+bool proof_marker_boundary_after_number(const std::string& comment, std::size_t cursor) {
+  if (cursor >= comment.size())
+    return true;
+  const char ch = comment.at(cursor);
+  return std::isspace(static_cast<unsigned char>(ch)) != 0 || ch == ';' || ch == ',';
+}
+
 bool has_role(const std::vector<CellRole>& roles, std::string_view role) {
   return std::any_of(roles.begin(), roles.end(),
                      [&](const CellRole& candidate) { return candidate == role; });
@@ -729,6 +736,8 @@ std::optional<int> known_indirect_flow_target(const IrOp& op) {
     target = (target * 10) + (comment.at(cursor) - '0');
     ++cursor;
   }
+  if (!proof_marker_boundary_after_number(comment, cursor))
+    return std::nullopt;
   if (target < 0 || target > 104)
     return std::nullopt;
   return target;
@@ -741,6 +750,8 @@ std::vector<std::string> computed_dispatch_target_labels(const IrOp& op) {
     return labels;
   }
   if (!op.meta.comment.has_value())
+    return labels;
+  if (!op.meta.comment->starts_with("computed dispatch;"))
     return labels;
 
   constexpr std::string_view kMarker = "computed-dispatch-targets=";

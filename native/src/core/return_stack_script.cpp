@@ -4,6 +4,7 @@
 #include "mkpro/core/opcodes.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <exception>
 #include <map>
 #include <optional>
@@ -21,6 +22,13 @@ namespace {
 constexpr int kReturnStackDepth = 5;
 constexpr int kMaxScriptReturns = 5;
 constexpr int kMaxRewriteRounds = 8;
+
+bool proof_marker_boundary_after_number(const std::string& comment, std::size_t cursor) {
+  if (cursor >= comment.size())
+    return true;
+  const char ch = comment.at(cursor);
+  return std::isspace(static_cast<unsigned char>(ch)) != 0 || ch == ';' || ch == ',';
+}
 
 struct MachineLayout {
   std::map<std::string, int> labels;
@@ -103,7 +111,7 @@ std::optional<int> proven_indirect_target_from_comment(const MachineItem& item) 
     value = value * 10 + (comment.at(cursor) - '0');
     ++cursor;
   }
-  if (!saw_digit)
+  if (!saw_digit || !proof_marker_boundary_after_number(comment, cursor) || value > 104)
     return std::nullopt;
   return value;
 }
@@ -2799,7 +2807,23 @@ bool remap_proven_indirect_target_comment_after_insertion(MachineItem& item,
       value = value * 10 + (comment.at(cursor) - '0');
       ++cursor;
     }
-    if (saw_digit && value >= insertion_address) {
+    if (!saw_digit) {
+      rejection_reason =
+          "dirty return-stack dispatch allocator found malformed proven indirect target comment";
+      return false;
+    }
+    if (!proof_marker_boundary_after_number(comment, cursor)) {
+      rejection_reason =
+          "dirty return-stack dispatch allocator found malformed proven indirect target comment";
+      return false;
+    }
+    if (value > 104) {
+      rejection_reason =
+          "dirty return-stack dispatch allocator found proven indirect target outside official "
+          "00..A4 cells";
+      return false;
+    }
+    if (value >= insertion_address) {
       if (value >= 104) {
         rejection_reason = "dirty return-stack dispatch allocator cannot shift proven indirect "
                            "target comments outside official 00..A4 cells";

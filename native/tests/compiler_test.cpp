@@ -32,6 +32,11 @@ bool has_optimization(const CompileResult& result, const std::string& name) {
                      [&](const OptimizationReport& item) { return item.name == name; });
 }
 
+bool has_proof(const CompileResult& result, const std::string& id) {
+  return std::any_of(result.proofs.begin(), result.proofs.end(),
+                     [&](const ProofReport& proof) { return proof.id == id; });
+}
+
 bool has_error_diagnostic(const CompileResult& result) {
   return std::any_of(
       result.diagnostics.begin(), result.diagnostics.end(),
@@ -4719,6 +4724,8 @@ program FractionalSelectorPreload {
           "fractional selector preload should recover the original fractional constant");
   require(has_optimization(fractional_selector_preload, "fractional-constant-selector-use"),
           "fractional selector recovery should report the TS optimization name");
+  require(has_proof(fractional_selector_preload, "fractional-selector-data-values"),
+          "fractional selector recovery should report its static data-value proof");
 
   CompileOptions natural_fractional_selector_options;
   natural_fractional_selector_options.analysis = true;
@@ -4751,6 +4758,8 @@ program NaturalFractionalSelectorPreload {
   require(has_optimization(natural_fractional_selector_preload,
                            "natural-fractional-constant-selector-use"),
           "natural fractional selector use should report the TS optimization name");
+  require(has_proof(natural_fractional_selector_preload, "fractional-selector-data-values"),
+          "natural fractional selector use should report its static data-value proof");
 
   CompileOptions forced_fractional_selector_options;
   forced_fractional_selector_options.analysis = true;
@@ -4775,6 +4784,8 @@ program ForcedFractionalSelectorPreload {
           "forced fractional selector preload should report the selector carrier value");
   require(has_optimization(forced_fractional_selector_preload, "fractional-constant-selector-use"),
           "forced fractional selector preload should recover the source constant");
+  require(has_proof(forced_fractional_selector_preload, "fractional-selector-data-values"),
+          "forced fractional selector preload should report its static data-value proof");
 
   const CompileResult known_zero_reuse = compile_source(R"mkpro(
 program DispatchKnownZeroCase {
@@ -7792,6 +7803,8 @@ program ConstantSquareSynthesis {
                                item.detail.find("Built constant 10000") != std::string::npos;
                       }),
           "suppressed square synthesis should report constant-synthesis");
+  require(has_proof(suppress_square, "suppressed-constant-preloads"),
+          "suppressed square synthesis should report its suppressed-preload proof");
 
   CompileOptions suppress_pow10_options;
   suppress_pow10_options.budget = 999;
@@ -7825,6 +7838,8 @@ program ConstantPow10Synthesis {
                                item.detail.find("F 10^x") != std::string::npos;
                       }),
           "suppressed pow10 synthesis should report constant-synthesis");
+  require(has_proof(suppress_pow10, "suppressed-constant-preloads"),
+          "suppressed pow10 synthesis should report its suppressed-preload proof");
 
   CompileOptions trig_options;
   trig_options.budget = 999;
@@ -7982,6 +7997,8 @@ program ConstantSignSynthesis {
                                item.detail.find("Built constant -100") != std::string::npos;
                       }),
           "suppressed sign synthesis should report constant-synthesis");
+  require(has_proof(suppress_sign, "suppressed-constant-preloads"),
+          "suppressed sign synthesis should report its suppressed-preload proof");
 
   CompileOptions suppress_binary_options;
   suppress_binary_options.budget = 999;
@@ -8023,6 +8040,8 @@ program ConstantBinarySynthesis {
                                item.detail.find("Built constant 110000") != std::string::npos;
                       }),
           "suppressed binary synthesis should report constant-synthesis");
+  require(has_proof(suppress_binary, "suppressed-constant-preloads"),
+          "suppressed binary synthesis should report its suppressed-preload proof");
 
   CompileOptions suppress_double_options;
   suppress_double_options.budget = 999;
@@ -8066,6 +8085,8 @@ program ConstantDoubleSynthesis {
                                item.detail.find("doubled preloaded") != std::string::npos;
                       }),
           "suppressed double synthesis should report doubled-preloaded synthesis");
+  require(has_proof(suppress_double, "suppressed-constant-preloads"),
+          "suppressed double synthesis should report its suppressed-preload proof");
 
   CompileOptions suppress_half_options;
   suppress_half_options.budget = 999;
@@ -8109,6 +8130,8 @@ program ConstantHalfSynthesis {
                                item.detail.find("halved preloaded") != std::string::npos;
                       }),
           "suppressed half synthesis should report halved-preloaded synthesis");
+  require(has_proof(suppress_half, "suppressed-constant-preloads"),
+          "suppressed half synthesis should report its suppressed-preload proof");
 
   CompileOptions setup_synthesis_options;
   setup_synthesis_options.budget = 999;

@@ -476,9 +476,10 @@ PassResult runtime_indirect_call_flow(const std::vector<IrOp>& ops, const PassCo
   // Post-parity optimization (candidate #6): previously the runtime indirect-call
   // selector rewrite was suppressed for non-hoisted, non-explicit test-only lowering
   // variants (disable_candidate_search) so the variant fingerprints matched the
-  // TypeScript oracle's direct-call form. The rewrite already runs (and is exercised
-  // behaviorally) in the default candidate-search pipeline; lifting the parity gate
-  // simply lets the primary/non-hoisted variants surface their natural shorter form.
+  // TypeScript oracle's direct-call form. The rewrite already runs in the default
+  // candidate-search pipeline and is accepted through local proof obligations;
+  // lifting the parity gate simply lets the primary/non-hoisted variants surface
+  // their natural shorter form.
   const std::vector<RuntimeCallPlan> plans = runtime_indirect_call_plans(
       ops, context.options.aggressive_indirect_call_threshold,
       reserved_preloaded_registers(context.options.preloaded_constant_registers));
@@ -504,9 +505,12 @@ PassResult runtime_indirect_call_flow(const std::vector<IrOp>& ops, const PassCo
     const auto plan = by_index.find(signed_index);
     const IrOp& op = ops.at(index);
     if (plan != by_index.end() && op.kind == IrKind::Call) {
-      result.push_back(indirect_flow_op(op, plan->second.register_name,
-                                        std::to_string(plan->second.target), plan->second.target,
-                                        false));
+      IrOp rewritten_op = indirect_flow_op(op, plan->second.register_name,
+                                           std::to_string(plan->second.target),
+                                           plan->second.target, false);
+      rewritten_op.meta.comment =
+          "runtime indirect call; " + rewritten_op.meta.comment.value_or(std::string{});
+      result.push_back(std::move(rewritten_op));
       ++rewritten;
       continue;
     }

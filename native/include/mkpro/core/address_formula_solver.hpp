@@ -74,4 +74,12 @@ std::optional<AddressFormula> search_address_formula(
     const std::vector<AddressConstraint>& constraints, std::string_view selector,
     const AddressSolverOptions& options);
 
+// Re-check an already-solved formula against concrete proof obligations. This
+// is the verifier-side counterpart of search_address_formula: it does not search
+// the grid, it only reapplies the requested op + affine transform and confirms
+// every target through the canonical static indirect-address model.
+bool address_formula_matches_constraints(
+    const AddressFormula& formula, const std::vector<AddressConstraint>& constraints,
+    std::string_view selector, const AddressSolverOptions& options);
+
 }  // namespace mkpro::core

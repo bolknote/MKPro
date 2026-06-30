@@ -92,6 +92,10 @@ struct CandidateReport {
   std::string reason;
 };
 
+// Human-readable proof report derived from local verifier results. This is an
+// output artifact only: optimizer candidate selection must re-run the relevant
+// verifier at the optimization boundary and must not trust caller-supplied
+// ProofReport entries.
 struct ProofReport {
   std::string id;
   std::string status;
@@ -121,12 +125,19 @@ struct FractionalConstantSelectorPlan {
   int target = 0;
 };
 
+struct SynthesizedDispatchProofConstraint {
+  double input = 0.0;
+  int target = 0;
+};
+
 // A solved computed-dispatch for one `match` statement: instead of a k-way
 // compare chain, the selector value is transformed by op(scale*x + offset) and
 // used as an indirect jump (К БП r), landing directly on the matching case body.
 // The formula is found post-layout by the address-formula solver so that each
-// case value resolves to that case body entry address. Emitted only behind a
-// SizeRescue candidate and validated by the behavioral-equivalence gate.
+// case value resolves to that case body entry address. The proof constraints are
+// captured at the fixpoint that solved the final post-layout entry addresses, so
+// the optimizer gate can re-check this candidate statically without falling back
+// to emulator-backed behavioral equivalence.
 struct SynthesizedDispatchPlan {
   int match_line = 0;            // identifies the match statement to rewrite
   std::string selector_register; // stable register holding the raw selector value
@@ -135,6 +146,9 @@ struct SynthesizedDispatchPlan {
   std::string op_name;           // human-readable op name (for listing comments)
   double scale = 1.0;            // affine pre-multiply
   double offset = 0.0;           // affine pre-add
+  std::vector<SynthesizedDispatchProofConstraint> proof_constraints;
+  bool proof_angle_fixed = false; // true => proof_angle_mode pins trig op semantics
+  std::string proof_angle_mode;   // "deg", "rad", or "grd" for proof re-checks
 };
 
 enum class DeliveryMode {
@@ -227,15 +241,18 @@ struct CompileOptions {
   bool fast_candidate_search = false;
   int fast_candidate_threshold_ms = 500;
   bool collect_coalesce_shares = false;
+  // Requested setup-time constant preloads. This is optimizer intent, not a
+  // proof artifact: indirect-flow gates must still prove branch selectors from
+  // final PreloadReport entries rather than trusting this map.
   std::map<std::string, std::string> preloaded_constant_registers;
   std::set<std::string> suppress_constant_preloads;
   std::vector<FractionalConstantSelectorPlan> fractional_constant_selectors;
   // When true, the lowering omits the `К {x}` fractional-recovery op that
   // normally restores a dual-use register's data value after its integer part
   // has been retuned to an address. This is only sound when the integer part is
-  // dead at every data read (the reference program relies on exactly this); the
-  // behavioral-equivalence gate validates each candidate, so an unsound case is
-  // rejected automatically rather than producing wrong code.
+  // dead at every data read (the reference program relies on exactly this).
+  // Until a local dead-component proof exists, static candidate selection treats
+  // this as dangerous and rejects it rather than relying on the emulator.
   bool assume_dead_selector_integer_part = false;
   // Solved computed-dispatch plans (one per rewritten match). Default empty:
   // normal compiles keep the compare-chain lowering untouched.

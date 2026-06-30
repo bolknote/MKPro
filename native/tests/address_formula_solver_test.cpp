@@ -14,6 +14,7 @@ namespace {
 using core::AddressConstraint;
 using core::AddressFormula;
 using core::AddressSolverOptions;
+using core::address_formula_matches_constraints;
 using core::resolve_flow_target;
 using core::search_address_formula;
 
@@ -132,6 +133,38 @@ void address_formula_solver_synthesizes_dispatch() {
     const std::optional<AddressFormula> f = search_address_formula({}, selector, options);
     require(!f.has_value(), "solver should return nothing for an empty dispatch table");
   }
+}
+
+void address_formula_solver_verifies_static_proof_obligations() {
+  const std::string selector = "9";
+  std::vector<AddressConstraint> constraints;
+  for (double value : {3.0, 7.0, 12.0}) {
+    const std::optional<int> target = resolve_flow_target(selector, value);
+    require(target.has_value(), "stable selector integer value should resolve to a target");
+    constraints.push_back({value, *target});
+  }
+
+  AddressSolverOptions options;
+  options.allow_affine = false;
+  options.angle_fixed = false;
+
+  AddressFormula identity;
+  identity.op_name = "id";
+  identity.op_opcode = -1;
+  identity.scale = 1.0;
+  identity.offset = 0.0;
+  require(address_formula_matches_constraints(identity, constraints, selector, options),
+          "verifier should accept a formula that reproduces every proof constraint");
+
+  AddressFormula shifted = identity;
+  shifted.offset = 1.0;
+  require(!address_formula_matches_constraints(shifted, constraints, selector, options),
+          "verifier should reject a formula whose affine transform reaches a different target");
+
+  std::vector<AddressConstraint> wrong_target = constraints;
+  wrong_target.at(1).target += 1;
+  require(!address_formula_matches_constraints(identity, wrong_target, selector, options),
+          "verifier should reject stale or corrupted proof constraints");
 }
 
 }  // namespace mkpro::tests

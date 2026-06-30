@@ -2751,10 +2751,14 @@ data read of the constant is insensitive to the integer part. This is exactly
 the density trick used by hand-written reference programs (one register serving
 as both data and address with no recovery tax).
 
-The native optimizer currently treats `-dead-int` as a dangerous unproved form:
-it is generated only as a last-ditch candidate, enters the static proof gate via
-`assume_dead_selector_integer_part`, and is rejected until a local
-dead-component proof exists. The emulator is not used to bless this candidate.
+The native optimizer treats `-dead-int` as a dangerous proof-gated form: it is
+generated only as a last-ditch candidate and enters the static proof gate via
+`assume_dead_selector_integer_part`.  The only currently accepted local proof is
+the narrow final-artifact shape `recall retuned selector; К {x}`, which erases
+the retuned integer component before any consumer can observe it. Other
+dead-integer candidates, including arithmetic uses such as `recall; *`, remain
+rejected until their own local dead-component proof exists. The emulator is not
+used to bless this candidate.
 
 ## Emulator decoupling
 

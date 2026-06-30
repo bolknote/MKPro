@@ -276,6 +276,9 @@ DirectReturnAnalysisContext direct_return_analysis_context(const std::vector<IrO
 std::optional<int> target_address(const IrTarget& target, const std::map<std::string, int>& labels);
 std::optional<std::string> known_indirect_memory_target(const IrOp& op);
 std::optional<std::set<std::string>> known_indirect_memory_targets(const IrOp& op);
+// Parses a proof-carrying `indirect-target=N` annotation only when the number is
+// followed by a clear marker boundary. Malformed comments are not treated as
+// known control-flow facts.
 std::optional<int> known_indirect_flow_target(const IrOp& op);
 // Target entry labels advertised by a computed-dispatch indirect jump (empty for
 // every other op). These edges are otherwise invisible to the CFG because the

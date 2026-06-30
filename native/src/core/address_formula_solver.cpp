@@ -149,6 +149,18 @@ int formula_cost(const Op& op, double scale, double b) {
   return c;
 }
 
+std::optional<Op> find_op_for_formula(const AddressFormula& formula,
+                                      const AddressSolverOptions& options) {
+  for (Op op : op_library(options)) {
+    if (op.opcode != formula.op_opcode)
+      continue;
+    if (!formula.op_name.empty() && formula.op_name != op.name)
+      continue;
+    return op;
+  }
+  return std::nullopt;
+}
+
 }  // namespace
 
 std::optional<int> resolve_flow_target(std::string_view selector, double value) {
@@ -211,6 +223,22 @@ std::optional<AddressFormula> search_address_formula(
     }
   }
   return best;
+}
+
+bool address_formula_matches_constraints(
+    const AddressFormula& formula, const std::vector<AddressConstraint>& constraints,
+    std::string_view selector, const AddressSolverOptions& options) {
+  if (constraints.empty()) return false;
+  const std::optional<Op> op = find_op_for_formula(formula, options);
+  if (!op.has_value()) return false;
+
+  for (const AddressConstraint& c : constraints) {
+    const double v = round8(op->fn(formula.scale * c.input + formula.offset));
+    if (!std::isfinite(v)) return false;
+    const std::optional<int> got = resolve_flow_target(selector, v);
+    if (!got.has_value() || *got != c.target) return false;
+  }
+  return true;
 }
 
 }  // namespace mkpro::core

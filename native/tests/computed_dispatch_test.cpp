@@ -1,4 +1,7 @@
 #include "mkpro/compiler.hpp"
+#include "mkpro/core/address_formula_solver.hpp"
+#include "mkpro/core/compiler_static_proof_gate.hpp"
+#include "mkpro/core/indirect_addressing.hpp"
 #include "mkpro/core/ir.hpp"
 #include "mkpro/core/passes/dead_code_after_halt.hpp"
 #include "mkpro/core/result.hpp"
@@ -6,7 +9,14 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <sstream>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace mkpro::tests {
@@ -94,6 +104,20 @@ void computed_dispatch_targets_survive_dead_code_elimination() {
     require(has_plain(kept.ops, "body_c"),
             "marked computed-dispatch must keep case body C reachable");
   }
+
+  {
+    const PassResult removed =
+        dead_code_after_halt(dispatch_ir(
+                                 "note: computed dispatch; computed-dispatch-targets=case_a,"
+                                 "case_b,case_c"),
+                             context);
+    require(!has_plain(removed.ops, "body_a"),
+            "embedded computed-dispatch marker must not keep case body A reachable");
+    require(!has_plain(removed.ops, "body_b"),
+            "embedded computed-dispatch marker must not keep case body B reachable");
+    require(!has_plain(removed.ops, "body_c"),
+            "embedded computed-dispatch marker must not keep case body C reachable");
+  }
 }
 
 namespace {
@@ -104,12 +128,358 @@ bool has_error_diagnostic(const CompileResult& result) {
       [](const Diagnostic& item) { return item.severity == DiagnosticSeverity::Error; });
 }
 
+bool has_optimization(const CompileResult& result, const std::string& name) {
+  return std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                     [&](const OptimizationReport& item) { return item.name == name; });
+}
+
+bool has_proof(const CompileResult& result, const std::string& id) {
+  return std::any_of(result.proofs.begin(), result.proofs.end(),
+                     [&](const ProofReport& proof) { return proof.id == id; });
+}
+
+OptimizationReport optimization_report(std::string name) {
+  OptimizationReport report;
+  report.name = std::move(name);
+  return report;
+}
+
+ProofReport proved_report(std::string id) {
+  ProofReport report;
+  report.id = std::move(id);
+  report.status = "proved";
+  report.detail = "unit-test proof";
+  return report;
+}
+
+PreloadReport flow_preload(std::string register_name, std::string value) {
+  return PreloadReport{
+      .register_name = std::move(register_name),
+      .value = std::move(value),
+      .counts_against_program = false,
+  };
+}
+
+ResolvedStep resolved_step(int opcode, std::string comment) {
+  ResolvedStep step;
+  step.opcode = opcode;
+  step.comment = std::move(comment);
+  return step;
+}
+
+std::string indirect_target_comment(const std::string& register_name, const std::string& value,
+                                    int target) {
+  return "preloaded R" + register_name + "=" + value + " indirect-target=" +
+         std::to_string(target) + " indirect flow";
+}
+
+std::string runtime_indirect_target_comment(const std::string& register_name,
+                                            const std::string& value, int target) {
+  return "runtime indirect call; " + indirect_target_comment(register_name, value, target);
+}
+
+std::string computed_dispatch_comment(const SynthesizedDispatchPlan& plan,
+                                      const std::vector<std::string>& labels) {
+  std::string out = "computed dispatch; computed-dispatch-targets=";
+  for (std::size_t index = 0; index < labels.size(); ++index) {
+    if (index > 0)
+      out += ",";
+    out += labels.at(index);
+  }
+  out += "; computed-dispatch-proof-targets=";
+  for (std::size_t index = 0; index < plan.proof_constraints.size(); ++index) {
+    if (index > 0)
+      out += ",";
+    out += std::to_string(plan.proof_constraints.at(index).target);
+  }
+  return out;
+}
+
+std::filesystem::path project_file(std::filesystem::path relative_path) {
+  const std::vector<std::filesystem::path> starts = {
+      std::filesystem::path(__FILE__).parent_path(),
+      std::filesystem::absolute(std::filesystem::path(__FILE__)).parent_path(),
+      (std::filesystem::current_path() / std::filesystem::path(__FILE__)).parent_path(),
+      std::filesystem::current_path(),
+  };
+  for (std::filesystem::path current : starts) {
+    while (true) {
+      const std::filesystem::path candidate = current / relative_path;
+      if (std::filesystem::exists(candidate))
+        return candidate;
+      if (!current.has_parent_path() || current == current.parent_path())
+        break;
+      current = current.parent_path();
+    }
+  }
+  return relative_path;
+}
+
+std::string read_text_file(const std::filesystem::path& path) {
+  std::ifstream file(path);
+  require(file.good(), "test fixture source file should be readable: " + path.string());
+  std::ostringstream out;
+  out << file.rdbuf();
+  return out.str();
+}
+
+bool identifier_char(char ch) {
+  return std::isalnum(static_cast<unsigned char>(ch)) != 0 || ch == '_';
+}
+
+std::string source_without_comments(const std::string& source) {
+  enum class State {
+    Code,
+    LineComment,
+    BlockComment,
+    StringLiteral,
+    CharLiteral,
+  };
+
+  State state = State::Code;
+  bool escaped = false;
+  std::string out;
+  out.reserve(source.size());
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    const char ch = source.at(index);
+    const char next = index + 1U < source.size() ? source.at(index + 1U) : '\0';
+    switch (state) {
+      case State::Code:
+        if (ch == '/' && next == '/') {
+          out.push_back(' ');
+          out.push_back(' ');
+          ++index;
+          state = State::LineComment;
+        } else if (ch == '/' && next == '*') {
+          out.push_back(' ');
+          out.push_back(' ');
+          ++index;
+          state = State::BlockComment;
+        } else if (ch == '"') {
+          out.push_back(ch);
+          state = State::StringLiteral;
+          escaped = false;
+        } else if (ch == '\'') {
+          out.push_back(ch);
+          state = State::CharLiteral;
+          escaped = false;
+        } else {
+          out.push_back(ch);
+        }
+        break;
+      case State::LineComment:
+        if (ch == '\n') {
+          out.push_back('\n');
+          state = State::Code;
+        } else {
+          out.push_back(' ');
+        }
+        break;
+      case State::BlockComment:
+        if (ch == '*' && next == '/') {
+          out.push_back(' ');
+          out.push_back(' ');
+          ++index;
+          state = State::Code;
+        } else {
+          out.push_back(ch == '\n' ? '\n' : ' ');
+        }
+        break;
+      case State::StringLiteral:
+      case State::CharLiteral:
+        out.push_back(ch);
+        if (escaped) {
+          escaped = false;
+        } else if (ch == '\\') {
+          escaped = true;
+        } else if ((state == State::StringLiteral && ch == '"') ||
+                   (state == State::CharLiteral && ch == '\'')) {
+          state = State::Code;
+        }
+        break;
+    }
+  }
+  return out;
+}
+
+std::string code_without_comments_and_literals(const std::string& source) {
+  enum class State {
+    Code,
+    LineComment,
+    BlockComment,
+    StringLiteral,
+    CharLiteral,
+  };
+
+  State state = State::Code;
+  bool escaped = false;
+  std::string out;
+  out.reserve(source.size());
+  for (std::size_t index = 0; index < source.size(); ++index) {
+    const char ch = source.at(index);
+    const char next = index + 1U < source.size() ? source.at(index + 1U) : '\0';
+    switch (state) {
+      case State::Code:
+        if (ch == '/' && next == '/') {
+          out.push_back(' ');
+          out.push_back(' ');
+          ++index;
+          state = State::LineComment;
+        } else if (ch == '/' && next == '*') {
+          out.push_back(' ');
+          out.push_back(' ');
+          ++index;
+          state = State::BlockComment;
+        } else if (ch == '"') {
+          out.push_back(' ');
+          state = State::StringLiteral;
+          escaped = false;
+        } else if (ch == '\'') {
+          out.push_back(' ');
+          state = State::CharLiteral;
+          escaped = false;
+        } else {
+          out.push_back(ch);
+        }
+        break;
+      case State::LineComment:
+        if (ch == '\n') {
+          out.push_back('\n');
+          state = State::Code;
+        } else {
+          out.push_back(' ');
+        }
+        break;
+      case State::BlockComment:
+        if (ch == '*' && next == '/') {
+          out.push_back(' ');
+          out.push_back(' ');
+          ++index;
+          state = State::Code;
+        } else {
+          out.push_back(ch == '\n' ? '\n' : ' ');
+        }
+        break;
+      case State::StringLiteral:
+      case State::CharLiteral:
+        out.push_back(ch == '\n' ? '\n' : ' ');
+        if (escaped) {
+          escaped = false;
+        } else if (ch == '\\') {
+          escaped = true;
+        } else if ((state == State::StringLiteral && ch == '"') ||
+                   (state == State::CharLiteral && ch == '\'')) {
+          state = State::Code;
+        }
+        break;
+    }
+  }
+  return out;
+}
+
+bool contains_function_call_token(const std::string& code, const std::string& name) {
+  std::size_t position = code.find(name);
+  while (position != std::string::npos) {
+    const bool left_ok = position == 0 || !identifier_char(code.at(position - 1U));
+    std::size_t cursor = position + name.size();
+    while (cursor < code.size() && std::isspace(static_cast<unsigned char>(code.at(cursor))) != 0)
+      ++cursor;
+    if (left_ok && cursor < code.size() && code.at(cursor) == '(')
+      return true;
+    position = code.find(name, position + 1U);
+  }
+  return false;
+}
+
+bool contains_emulator_include(const std::string& code) {
+  std::istringstream lines(code);
+  std::string line;
+  while (std::getline(lines, line)) {
+    const std::size_t first = line.find_first_not_of(" \t");
+    if (first == std::string::npos)
+      continue;
+    const std::string_view rest(line.data() + first, line.size() - first);
+    if (rest.size() >= std::string_view("#include").size() &&
+        rest.compare(0, std::string_view("#include").size(), "#include") == 0 &&
+        rest.find("mkpro/emulator") != std::string_view::npos)
+      return true;
+  }
+  return false;
+}
+
+bool contains_noncomment_line_text(const std::string& text, const std::string& needle) {
+  std::istringstream lines(text);
+  std::string line;
+  while (std::getline(lines, line)) {
+    const std::size_t first = line.find_first_not_of(" \t");
+    if (first == std::string::npos || line.at(first) == '#')
+      continue;
+    if (line.find(needle) != std::string::npos)
+      return true;
+  }
+  return false;
+}
+
+int count_noncomment_lines_with_text(const std::string& text, const std::string& needle) {
+  int count = 0;
+  std::istringstream lines(text);
+  std::string line;
+  while (std::getline(lines, line)) {
+    const std::size_t first = line.find_first_not_of(" \t");
+    if (first == std::string::npos || line.at(first) == '#')
+      continue;
+    if (line.find(needle) != std::string::npos)
+      ++count;
+  }
+  return count;
+}
+
+std::string required_source_range(const std::string& source, const std::string& begin_marker,
+                                  const std::string& end_marker) {
+  const std::size_t begin = source.find(begin_marker);
+  require(begin != std::string::npos, "source boundary begin marker should exist: " + begin_marker);
+  const std::size_t end = source.find(end_marker, begin);
+  require(end != std::string::npos, "source boundary end marker should exist: " + end_marker);
+  return source.substr(begin, end - begin);
+}
+
+std::string required_source_range_after(const std::string& source, const std::string& anchor_marker,
+                                        const std::string& begin_marker,
+                                        const std::string& end_marker) {
+  const std::size_t anchor = source.find(anchor_marker);
+  require(anchor != std::string::npos, "source boundary anchor marker should exist: " + anchor_marker);
+  const std::size_t begin = source.find(begin_marker, anchor);
+  require(begin != std::string::npos,
+          "source boundary begin marker should exist after anchor: " + begin_marker);
+  const std::size_t end = source.find(end_marker, begin);
+  require(end != std::string::npos, "source boundary end marker should exist: " + end_marker);
+  return source.substr(begin, end - begin);
+}
+
+SynthesizedDispatchPlan identity_dispatch_plan() {
+  SynthesizedDispatchPlan plan;
+  plan.indirect_register = "9";
+  plan.op_name = "id";
+  plan.op_opcode = -1;
+  plan.scale = 1.0;
+  plan.offset = 0.0;
+  for (double value : {3.0, 7.0, 12.0}) {
+    const auto target = core::resolve_flow_target(plan.indirect_register, value);
+    require(target.has_value(), "identity dispatch proof value should resolve statically");
+    plan.proof_constraints.push_back(SynthesizedDispatchProofConstraint{
+        .input = value,
+        .target = *target,
+    });
+  }
+  return plan;
+}
+
 }  // namespace
 
 // Forcing the computed-dispatch rescue (via an artificially tiny budget) must
 // never break a program: the discovery fixpoint either converges to a formula
-// the behavioral-equivalence gate accepts, or it is rejected and the compiler
-// keeps the compare-chain lowering. Either way the result stays implemented and
+// the static proof gate accepts, or it is rejected and the compiler keeps the
+// compare-chain lowering. Either way the result stays implemented and
 // error-free. This guards the discovery + lowering plumbing against regressions
 // independently of whether the dispatch happens to win on size.
 void computed_dispatch_discovery_keeps_program_correct() {
@@ -144,11 +514,15 @@ program DispatchProbe {
           "forcing computed-dispatch discovery must keep the program implemented");
   require(!has_error_diagnostic(rescued),
           "computed-dispatch discovery must not introduce error diagnostics");
+  if (has_optimization(rescued, "computed-dispatch")) {
+    require(has_proof(rescued, "computed-dispatch-targets"),
+            "selected computed-dispatch must report its static target proof");
+  }
 
   // Stage 3: with a contractually fixed angle mode, discovery additionally lets
   // the solver offer trig ops (angle_fixed). That path must stay correct too:
-  // any trig-backed formula is still behavioral-equivalence gated, so the result
-  // is implemented and error-free whether or not a trig dispatch is chosen.
+  // any trig-backed formula is still static-proof gated, so the result is
+  // implemented and error-free whether or not a trig dispatch is chosen.
   const std::string angle_fixed_source = R"mkpro(
 program DispatchProbeAngle {
   state {
@@ -176,6 +550,922 @@ program DispatchProbeAngle {
           "computed-dispatch discovery under expected_mode_only must stay implemented");
   require(!has_error_diagnostic(angle_fixed),
           "trig-eligible dispatch discovery must not introduce error diagnostics");
+  if (has_optimization(angle_fixed, "computed-dispatch")) {
+    require(has_proof(angle_fixed, "computed-dispatch-targets"),
+            "selected trig-eligible computed-dispatch must report its static target proof");
+  }
+}
+
+void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
+  CompileOptions computed_options;
+  computed_options.synthesized_dispatch_plans.push_back(identity_dispatch_plan());
+  CompileResult computed_result;
+  computed_result.optimizations.push_back(optimization_report("computed-dispatch"));
+  computed_result.steps.push_back(
+      resolved_step(0x89,
+                    computed_dispatch_comment(computed_options.synthesized_dispatch_plans.at(0),
+                                              {"case_a", "case_b", "case_c"})));
+  CompileOptions unproved_computed_options = computed_options;
+  unproved_computed_options.synthesized_dispatch_plans.at(0).proof_constraints.clear();
+  require(!optimizer_static_proof_gate_accepts_for_testing(unproved_computed_options,
+                                                           computed_result),
+          "computed-dispatch candidate without proof constraints must be rejected");
+  require(optimizer_static_proof_gate_accepts_for_testing(computed_options, computed_result),
+          "computed-dispatch candidate should be accepted by verified constraints and final artifact without a proof report");
+
+  CompileResult computed_missing_artifact_result = computed_result;
+  computed_missing_artifact_result.steps.clear();
+  require(!optimizer_static_proof_gate_accepts_for_testing(computed_options,
+                                                           computed_missing_artifact_result),
+          "computed-dispatch candidate without final jump artifact must be rejected");
+
+  CompileResult computed_bad_artifact_result = computed_result;
+  computed_bad_artifact_result.steps.clear();
+  computed_bad_artifact_result.steps.push_back(
+      resolved_step(0x83,
+                    computed_dispatch_comment(computed_options.synthesized_dispatch_plans.at(0),
+                                              {"case_a", "case_b", "case_c"})));
+  require(!optimizer_static_proof_gate_accepts_for_testing(computed_options,
+                                                           computed_bad_artifact_result),
+          "computed-dispatch candidate through an unstable final register must be rejected");
+
+  CompileResult computed_wrong_label_count_result = computed_result;
+  computed_wrong_label_count_result.steps.clear();
+  computed_wrong_label_count_result.steps.push_back(
+      resolved_step(0x89,
+                    computed_dispatch_comment(computed_options.synthesized_dispatch_plans.at(0),
+                                              {"case_a", "case_b"})));
+  require(!optimizer_static_proof_gate_accepts_for_testing(computed_options,
+                                                           computed_wrong_label_count_result),
+          "computed-dispatch final artifact must cover the same number of targets as the proof constraints");
+
+  CompileResult computed_malformed_labels_result = computed_result;
+  computed_malformed_labels_result.steps.clear();
+  std::string malformed_computed_labels_comment =
+      computed_dispatch_comment(computed_options.synthesized_dispatch_plans.at(0),
+                                {"case_a", "case_b", "case_c"});
+  malformed_computed_labels_comment.insert(
+      malformed_computed_labels_comment.find("; computed-dispatch-proof-targets"), ",");
+  computed_malformed_labels_result.steps.push_back(
+      resolved_step(0x89, malformed_computed_labels_comment));
+  require(!optimizer_static_proof_gate_accepts_for_testing(computed_options,
+                                                           computed_malformed_labels_result),
+          "computed-dispatch final artifact must reject malformed target label markers");
+
+  CompileResult computed_embedded_marker_result = computed_result;
+  computed_embedded_marker_result.steps.clear();
+  computed_embedded_marker_result.steps.push_back(
+      resolved_step(0x89, "note: " +
+                              computed_dispatch_comment(
+                                  computed_options.synthesized_dispatch_plans.at(0),
+                                  {"case_a", "case_b", "case_c"})));
+  require(!optimizer_static_proof_gate_accepts_for_testing(computed_options,
+                                                           computed_embedded_marker_result),
+          "computed-dispatch final artifact must reject embedded proof markers without the "
+          "computed-dispatch prefix");
+
+  CompileResult computed_missing_marker_result = computed_result;
+  computed_missing_marker_result.steps.insert(computed_missing_marker_result.steps.begin(),
+                                              resolved_step(0x89, "computed dispatch; missing proof metadata"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(computed_options,
+                                                           computed_missing_marker_result),
+          "computed-dispatch final artifact must reject malformed computed-dispatch prefix "
+          "comments even when another dispatch artifact is proved");
+
+  CompileResult computed_wrong_proof_targets_result = computed_result;
+  computed_wrong_proof_targets_result.steps.clear();
+  computed_wrong_proof_targets_result.steps.push_back(
+      resolved_step(0x89,
+                    "computed dispatch; computed-dispatch-targets=case_a,case_b,case_c; "
+                    "computed-dispatch-proof-targets=104,103,102"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(computed_options,
+                                                           computed_wrong_proof_targets_result),
+          "computed-dispatch final artifact must carry proof targets matching the solved "
+          "constraints");
+
+  computed_result.proofs.push_back(proved_report("computed-dispatch-targets"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(unproved_computed_options,
+                                                           computed_result),
+          "computed-dispatch candidate must not be accepted by a fabricated proof report");
+  require(optimizer_static_proof_gate_accepts_for_testing(computed_options, computed_result),
+          "computed-dispatch candidate with matching proof constraints should be accepted");
+
+  CompileOptions computed_with_fractional_options = computed_options;
+  computed_with_fractional_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.123456", .target = 3});
+  require(!optimizer_static_proof_gate_accepts_for_testing(computed_with_fractional_options,
+                                                           computed_result),
+          "computed-dispatch gate must not accept mixed fractional-selector candidates");
+
+  CompileOptions computed_with_dead_integer_options = computed_options;
+  computed_with_dead_integer_options.assume_dead_selector_integer_part = true;
+  require(!optimizer_static_proof_gate_accepts_for_testing(computed_with_dead_integer_options,
+                                                           computed_result),
+          "computed-dispatch gate must not accept mixed dead-integer candidates");
+
+  CompileOptions stale_computed_options = computed_options;
+  stale_computed_options.synthesized_dispatch_plans.at(0).offset = 1.0;
+  require(!optimizer_static_proof_gate_accepts_for_testing(stale_computed_options,
+                                                           computed_result),
+          "computed-dispatch candidate with stale formula constraints must be rejected");
+
+  CompileOptions preloaded_options;
+  preloaded_options.preloaded_indirect_flow = true;
+  CompileResult preloaded_result;
+  preloaded_result.optimizations.push_back(optimization_report("preloaded-indirect-flow"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(preloaded_options, preloaded_result),
+          "preloaded indirect-flow candidate without target proof must be rejected");
+
+  CompileResult fabricated_preloaded_report = preloaded_result;
+  fabricated_preloaded_report.proofs.push_back(proved_report("indirect-flow-targets"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
+                                                           fabricated_preloaded_report),
+          "preloaded indirect-flow candidate must not be accepted by a fabricated proof report");
+
+  const int target = *core::resolve_flow_target("9", 3.0);
+  CompileResult preloaded_mismatched_annotation_result = preloaded_result;
+  preloaded_mismatched_annotation_result.preloads.push_back(flow_preload("9", "3"));
+  preloaded_mismatched_annotation_result.steps.push_back(
+      resolved_step(0x89, indirect_target_comment("9", "4", target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              preloaded_options, preloaded_mismatched_annotation_result),
+          "preloaded indirect-flow candidate must reject selector values that disagree with the "
+          "rewrite annotation");
+
+  CompileResult preloaded_bad_target_marker_result = preloaded_result;
+  preloaded_bad_target_marker_result.preloads.push_back(flow_preload("9", "3"));
+  preloaded_bad_target_marker_result.steps.push_back(
+      resolved_step(0x89, "preloaded R9=3 indirect-target=" + std::to_string(target) +
+                              "garbage indirect flow"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              preloaded_options, preloaded_bad_target_marker_result),
+          "preloaded indirect-flow proof must reject malformed indirect-target markers");
+
+  CompileResult preloaded_reordered_annotation_result = preloaded_result;
+  preloaded_reordered_annotation_result.preloads.push_back(flow_preload("9", "3"));
+  preloaded_reordered_annotation_result.steps.push_back(
+      resolved_step(0x89, "indirect-target=" + std::to_string(target) +
+                              " preloaded R9=3 indirect flow"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              preloaded_options, preloaded_reordered_annotation_result),
+          "preloaded indirect-flow proof must reject target markers that precede selector values");
+
+  preloaded_result.preloads.push_back(flow_preload("9", "3"));
+  preloaded_result.steps.push_back(
+      resolved_step(0x89, indirect_target_comment("9", "3", target)));
+  require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options, preloaded_result),
+          "preloaded indirect-flow candidate with verified target artifact should be accepted");
+
+  CompileResult artifact_only_preloaded_result = preloaded_result;
+  artifact_only_preloaded_result.optimizations.clear();
+  require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
+                                                          artifact_only_preloaded_result),
+          "preloaded indirect-flow proof should be accepted from final artifacts without trusting "
+          "optimization report names");
+
+  CompileResult preloaded_allocated_selector_result = preloaded_result;
+  preloaded_allocated_selector_result.registers["live_value"] = "9";
+  require(!optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
+                                                           preloaded_allocated_selector_result),
+          "preloaded indirect-flow proof must reject selector preloads that overwrite allocated "
+          "data registers");
+
+  CompileResult preloaded_compiler_selector_result = preloaded_result;
+  preloaded_compiler_selector_result.registers["__loop_indirect"] = "9";
+  require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
+                                                          preloaded_compiler_selector_result),
+          "preloaded indirect-flow proof should allow compiler-owned selector allocations");
+
+  CompileResult preloaded_constant_selector_result = preloaded_result;
+  preloaded_constant_selector_result.registers["__const_3"] = "9";
+  require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
+                                                          preloaded_constant_selector_result),
+          "preloaded indirect-flow proof should allow compiler-owned constant selector reuse");
+
+  const auto bit_mask_selector_target =
+      core::evaluate_indirect_address("e", "58", core::IndirectOperationKind::Flow);
+  require(bit_mask_selector_target.has_value(), "bit-mask selector target should resolve");
+  require(bit_mask_selector_target->actual_flow_target.has_value(),
+          "bit-mask selector target should resolve to a final flow address");
+  CompileResult preloaded_bit_mask_selector_result;
+  preloaded_bit_mask_selector_result.optimizations.push_back(
+      optimization_report("preloaded-indirect-flow"));
+  preloaded_bit_mask_selector_result.preloads.push_back(flow_preload("e", "58"));
+  preloaded_bit_mask_selector_result.steps.push_back(
+      resolved_step(0xae, indirect_target_comment("e", "58",
+                                                  *bit_mask_selector_target->actual_flow_target)));
+  preloaded_bit_mask_selector_result.registers["__bit_mask_71"] = "e";
+  require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
+                                                          preloaded_bit_mask_selector_result),
+          "preloaded indirect-flow proof should allow compiler-owned bit-mask selector reuse");
+
+  CompileOptions options_only_preload_options = preloaded_options;
+  options_only_preload_options.preloaded_constant_registers["9"] = "3";
+  CompileResult options_only_preload_result;
+  options_only_preload_result.optimizations.push_back(
+      optimization_report("preloaded-indirect-flow"));
+  options_only_preload_result.steps.push_back(
+      resolved_step(0x89, indirect_target_comment("9", "3", target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(options_only_preload_options,
+                                                           options_only_preload_result),
+          "preloaded indirect-flow proof must reject selector values that exist only in compile "
+          "options and not in final preload artifacts");
+
+  const auto formal_alias_target =
+      core::evaluate_indirect_address("9", "B2", core::IndirectOperationKind::Flow);
+  require(formal_alias_target.has_value(), "formal selector alias B2 should resolve statically");
+  require(formal_alias_target->actual_flow_target.has_value(),
+          "formal selector alias B2 should resolve to a flow target");
+  CompileResult preloaded_formal_alias_result;
+  preloaded_formal_alias_result.optimizations.push_back(
+      optimization_report("preloaded-indirect-flow"));
+  preloaded_formal_alias_result.preloads.push_back(flow_preload("9", "B2"));
+  preloaded_formal_alias_result.steps.push_back(
+      resolved_step(0x89, indirect_target_comment("9", "b2",
+                                                  *formal_alias_target->actual_flow_target)));
+  require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
+                                                          preloaded_formal_alias_result),
+          "preloaded indirect-flow proof should accept case-insensitive formal aliases");
+
+  CompileResult preloaded_formal_alias_mismatch_result = preloaded_formal_alias_result;
+  preloaded_formal_alias_mismatch_result.steps.clear();
+  preloaded_formal_alias_mismatch_result.steps.push_back(
+      resolved_step(0x89, indirect_target_comment("9", "2",
+                                                  *formal_alias_target->actual_flow_target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              preloaded_options, preloaded_formal_alias_mismatch_result),
+          "preloaded indirect-flow proof must not numeric-normalize formal aliases");
+
+  CompileResult preloaded_with_runtime_marker_result = preloaded_result;
+  preloaded_with_runtime_marker_result.steps.push_back(
+      resolved_step(0xa9, runtime_indirect_target_comment("9", std::to_string(target), target)));
+  require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
+                                                          preloaded_with_runtime_marker_result),
+          "preloaded indirect-flow proof should ignore runtime-specific indirect-call markers");
+
+  CompileResult preloaded_with_unstable_target_result = preloaded_result;
+  preloaded_with_unstable_target_result.steps.push_back(
+      resolved_step(0x83, indirect_target_comment("3", "3", target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              preloaded_options, preloaded_with_unstable_target_result),
+          "preloaded indirect-flow proof must reject annotated targets through unstable registers");
+
+  CompileOptions suppressed_preload_options = preloaded_options;
+  suppressed_preload_options.suppress_constant_preloads.insert("10000");
+  CompileResult bad_suppressed_preload_result = preloaded_result;
+  bad_suppressed_preload_result.preloads.push_back(flow_preload("8", "10000"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(suppressed_preload_options,
+                                                           bad_suppressed_preload_result),
+          "suppressed-preload indirect-flow candidate must reject final preloads that keep the "
+          "suppressed value");
+
+  require(optimizer_static_proof_gate_accepts_for_testing(suppressed_preload_options,
+                                                          preloaded_result),
+          "suppressed-preload indirect-flow candidate should be accepted when the suppressed value "
+          "is absent from final preloads");
+
+  CompileOptions suppress_only_options;
+  suppress_only_options.suppress_constant_preloads.insert("10000");
+  CompileResult bad_suppress_only_result;
+  bad_suppress_only_result.preloads.push_back(flow_preload("7", "10000"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(suppress_only_options,
+                                                           bad_suppress_only_result),
+          "suppress-only candidate must reject final preloads that keep the suppressed value");
+
+  CompileResult suppress_only_result;
+  suppress_only_result.preloads.push_back(flow_preload("7", "20000"));
+  require(optimizer_static_proof_gate_accepts_for_testing(suppress_only_options,
+                                                          suppress_only_result),
+          "suppress-only candidate should be accepted when the suppressed value is absent from "
+          "final preloads");
+
+  CompileOptions forward_options;
+  forward_options.forward_indirect_flow = true;
+  CompileResult forward_result;
+  forward_result.optimizations.push_back(optimization_report("preloaded-indirect-flow"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(forward_options, forward_result),
+          "forward indirect-flow candidate without target proof must be rejected");
+
+  forward_result.preloads.push_back(flow_preload("9", "3"));
+  forward_result.steps.push_back(resolved_step(0x89, indirect_target_comment("9", "3", target)));
+  require(optimizer_static_proof_gate_accepts_for_testing(forward_options, forward_result),
+          "forward indirect-flow candidate with verified target artifact should be accepted");
+
+  CompileOptions forward_dead_integer_options = forward_options;
+  forward_dead_integer_options.assume_dead_selector_integer_part = true;
+  require(!optimizer_static_proof_gate_accepts_for_testing(forward_dead_integer_options,
+                                                           forward_result),
+          "forward indirect-flow candidate must not bypass the dead-integer proof requirement");
+
+  CompileOptions pure_dead_integer_options;
+  pure_dead_integer_options.assume_dead_selector_integer_part = true;
+  CompileResult pure_dead_integer_result;
+  pure_dead_integer_result.optimizations.push_back(
+      optimization_report("dead-integer-fractional-selector-use"));
+  pure_dead_integer_result.steps = forward_result.steps;
+  pure_dead_integer_result.preloads = forward_result.preloads;
+  require(!optimizer_static_proof_gate_accepts_for_testing(pure_dead_integer_options,
+                                                           pure_dead_integer_result),
+          "dead-integer fractional selector elision must stay rejected without its own proof");
+
+  CompileOptions forward_fractional_options = forward_options;
+  forward_fractional_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.123456", .target = target});
+
+  CompileOptions safe_dead_integer_options = forward_fractional_options;
+  safe_dead_integer_options.assume_dead_selector_integer_part = true;
+  CompileResult safe_dead_integer_result = forward_result;
+  safe_dead_integer_result.optimizations.push_back(
+      optimization_report("dead-integer-fractional-selector-use"));
+  safe_dead_integer_result.steps.push_back(
+      resolved_step(0x69, "preload const 3.123456; fractional selector source 0.123456"));
+  safe_dead_integer_result.steps.push_back(resolved_step(0x35, "frac()"));
+  require(optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                          safe_dead_integer_result),
+          "dead-integer fractional selector elision should be accepted when final artifacts "
+          "immediately erase the retuned integer part");
+
+  CompileResult unsafe_dead_integer_result = safe_dead_integer_result;
+  unsafe_dead_integer_result.steps.back() = resolved_step(0x12, "expr *");
+  require(!optimizer_static_proof_gate_accepts_for_testing(safe_dead_integer_options,
+                                                           unsafe_dead_integer_result),
+          "dead-integer fractional selector elision must reject any use before K {x} erases the "
+          "retuned integer part");
+
+  CompileResult forward_fractional_result = forward_result;
+  forward_fractional_result.optimizations.push_back(
+      optimization_report("fractional-constant-selector-use"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(forward_fractional_options,
+                                                           forward_fractional_result),
+          "forward fractional-selector candidate without data-value proof must be rejected");
+
+  forward_fractional_result.steps.push_back(
+      resolved_step(0x35, "fractional selector const 0.123456"));
+  require(optimizer_static_proof_gate_accepts_for_testing(forward_fractional_options,
+                                                          forward_fractional_result),
+          "forward fractional-selector candidate with explicit data recovery should be accepted");
+
+  CompileOptions forced_recovered_forward_fractional_options = forward_fractional_options;
+  forced_recovered_forward_fractional_options.force_fractional_constant_selector_preloads.push_back(
+      "0.123456");
+  require(optimizer_static_proof_gate_accepts_for_testing(forced_recovered_forward_fractional_options,
+                                                          forward_fractional_result),
+          "forced fractional selector preload should be accepted when the same value is recovered "
+          "by the К {x} proof marker");
+
+  const std::optional<int> natural_target = core::resolve_flow_target("9", 0.123456);
+  require(natural_target.has_value(), "natural fractional selector value should resolve statically");
+  CompileOptions natural_forward_fractional_options = forward_options;
+  natural_forward_fractional_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.123456", .target = *natural_target});
+  CompileResult natural_forward_fractional_result;
+  natural_forward_fractional_result.optimizations.push_back(
+      optimization_report("preloaded-indirect-flow"));
+  natural_forward_fractional_result.optimizations.push_back(
+      optimization_report("natural-fractional-constant-selector-use"));
+  natural_forward_fractional_result.preloads.push_back(flow_preload("9", "0.123456"));
+  natural_forward_fractional_result.steps.push_back(
+      resolved_step(0x89, indirect_target_comment("9", "0.123456", *natural_target)));
+  require(optimizer_static_proof_gate_accepts_for_testing(natural_forward_fractional_options,
+                                                          natural_forward_fractional_result),
+          "forward fractional-selector candidate with matching natural preload should be accepted");
+
+  CompileOptions forced_natural_forward_fractional_options = natural_forward_fractional_options;
+  forced_natural_forward_fractional_options.force_fractional_constant_selector_preloads.push_back(
+      "0.123456");
+  require(optimizer_static_proof_gate_accepts_for_testing(forced_natural_forward_fractional_options,
+                                                          natural_forward_fractional_result),
+          "forced fractional selector preload should be accepted when a matching stable natural "
+          "preload proves the value");
+
+  CompileOptions bad_natural_forward_fractional_options = natural_forward_fractional_options;
+  CompileResult bad_natural_forward_fractional_result = natural_forward_fractional_result;
+  const std::optional<int> bad_natural_target = core::resolve_flow_target("9", 0.654321);
+  require(bad_natural_target.has_value(),
+          "mismatched natural fractional selector value should resolve statically");
+  bad_natural_forward_fractional_result.preloads.clear();
+  bad_natural_forward_fractional_result.preloads.push_back(flow_preload("9", "0.654321"));
+  bad_natural_forward_fractional_result.steps.clear();
+  bad_natural_forward_fractional_result.steps.push_back(
+      resolved_step(0x89, indirect_target_comment("9", "0.654321", *bad_natural_target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(bad_natural_forward_fractional_options,
+                                                           bad_natural_forward_fractional_result),
+          "natural fractional-selector proof must reject preloaded values that do not match the "
+          "required selector value");
+
+  CompileOptions unstable_natural_forward_fractional_options = natural_forward_fractional_options;
+  CompileResult unstable_natural_forward_fractional_result = natural_forward_fractional_result;
+  unstable_natural_forward_fractional_result.preloads.clear();
+  unstable_natural_forward_fractional_result.preloads.push_back(flow_preload("9", "0.654321"));
+  unstable_natural_forward_fractional_result.preloads.push_back(flow_preload("3", "0.123456"));
+  unstable_natural_forward_fractional_result.steps.clear();
+  unstable_natural_forward_fractional_result.steps.push_back(
+      resolved_step(0x89, indirect_target_comment("9", "0.654321", *bad_natural_target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(unstable_natural_forward_fractional_options,
+                                                           unstable_natural_forward_fractional_result),
+          "natural fractional-selector proof must reject matching values outside stable selector "
+          "registers");
+
+  CompileResult wrong_opcode_forward_fractional_result = forward_result;
+  wrong_opcode_forward_fractional_result.optimizations.push_back(
+      optimization_report("fractional-constant-selector-use"));
+  wrong_opcode_forward_fractional_result.steps.push_back(
+      resolved_step(0x36, "fractional selector const 0.123456"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(forward_fractional_options,
+                                                           wrong_opcode_forward_fractional_result),
+          "fractional-selector recovery proof marker must be attached to the К {x} opcode");
+
+  CompileOptions partial_forward_fractional_options = forward_fractional_options;
+  partial_forward_fractional_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.654321", .target = target});
+  require(!optimizer_static_proof_gate_accepts_for_testing(partial_forward_fractional_options,
+                                                           forward_fractional_result),
+          "fractional-selector data proof must cover every selector value, not just one");
+
+  CompileOptions forced_extra_forward_fractional_options = forward_fractional_options;
+  forced_extra_forward_fractional_options.force_fractional_constant_selector_preloads.push_back(
+      "0.654321");
+  require(!optimizer_static_proof_gate_accepts_for_testing(forced_extra_forward_fractional_options,
+                                                           forward_fractional_result),
+          "fractional-selector data proof must cover every forced selector preload value");
+
+  CompileOptions standalone_fractional_options;
+  standalone_fractional_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.123456", .target = target});
+  CompileResult standalone_fractional_result;
+  standalone_fractional_result.optimizations.push_back(
+      optimization_report("fractional-constant-selector-use"));
+  standalone_fractional_result.steps.push_back(
+      resolved_step(0x35, "fractional selector const 0.123456"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(standalone_fractional_options,
+                                                           standalone_fractional_result),
+          "fractional selector packing without an indirect-flow family gate must be rejected");
+
+  CompileOptions standalone_forced_fractional_options;
+  standalone_forced_fractional_options.force_fractional_constant_selector_preloads.push_back(
+      "0.123456");
+  CompileResult standalone_forced_fractional_result;
+  require(!optimizer_static_proof_gate_accepts_for_testing(standalone_forced_fractional_options,
+                                                           standalone_forced_fractional_result),
+          "forced fractional selector preload without a proof route must be rejected");
+
+  CompileOptions forced_fractional_with_preloaded_options = preloaded_options;
+  forced_fractional_with_preloaded_options.force_fractional_constant_selector_preloads.push_back(
+      "0.123456");
+  require(!optimizer_static_proof_gate_accepts_for_testing(forced_fractional_with_preloaded_options,
+                                                           preloaded_result),
+          "preloaded indirect-flow proof must reject forced fractional selector preloads without a "
+          "matching fractional-selector data proof");
+
+  CompileOptions forced_fractional_with_forward_options = forward_options;
+  forced_fractional_with_forward_options.force_fractional_constant_selector_preloads.push_back(
+      "0.123456");
+  require(!optimizer_static_proof_gate_accepts_for_testing(forced_fractional_with_forward_options,
+                                                           forward_result),
+          "forward indirect-flow proof must reject forced fractional selector preloads without a "
+          "matching fractional-selector data proof");
+
+  CompileOptions forced_fractional_with_forward_plan_options = forward_options;
+  forced_fractional_with_forward_plan_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.123456", .target = target});
+  forced_fractional_with_forward_plan_options.force_fractional_constant_selector_preloads.push_back(
+      "0.123456");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              forced_fractional_with_forward_plan_options, forward_result),
+          "forward indirect-flow proof must reject forced fractional selector preloads even when a "
+          "fractional selector plan exists but no data proof is present");
+
+  CompileOptions forced_fractional_with_dual_use_plan_options;
+  forced_fractional_with_dual_use_plan_options.dual_use_constant_indirect_flow = true;
+  forced_fractional_with_dual_use_plan_options.fractional_constant_selectors.push_back(
+      FractionalConstantSelectorPlan{.value = "0.123456", .target = target});
+  forced_fractional_with_dual_use_plan_options.force_fractional_constant_selector_preloads.push_back(
+      "0.123456");
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              forced_fractional_with_dual_use_plan_options, preloaded_result),
+          "dual-use indirect-flow proof must reject forced fractional selector preloads even when "
+          "a fractional selector plan exists but no data proof is present");
+
+  CompileOptions runtime_options;
+  runtime_options.runtime_indirect_call_flow = true;
+  CompileResult runtime_result;
+  runtime_result.optimizations.push_back(optimization_report("runtime-indirect-call-flow"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(runtime_options, runtime_result),
+          "runtime indirect-call candidate without target proof must be rejected");
+
+  CompileResult fabricated_runtime_report = runtime_result;
+  fabricated_runtime_report.proofs.push_back(proved_report("runtime-indirect-call-targets"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(runtime_options,
+                                                           fabricated_runtime_report),
+          "runtime indirect-call candidate must not be accepted by a fabricated proof report");
+
+  CompileResult runtime_bad_order_result = runtime_result;
+  runtime_bad_order_result.steps.push_back(
+      resolved_step(0xa9, runtime_indirect_target_comment("9", std::to_string(target), target)));
+  runtime_bad_order_result.steps.push_back(
+      resolved_step(3, "runtime indirect call selector " + std::to_string(target)));
+  runtime_bad_order_result.steps.push_back(
+      resolved_step(0x49, "runtime indirect call selector " + std::to_string(target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(runtime_options,
+                                                           runtime_bad_order_result),
+          "runtime indirect-call candidate must reject selector stores that appear after the call");
+
+  CompileResult runtime_overwrite_result = runtime_result;
+  runtime_overwrite_result.steps.push_back(
+      resolved_step(3, "runtime indirect call selector " + std::to_string(target)));
+  runtime_overwrite_result.steps.push_back(
+      resolved_step(0x49, "runtime indirect call selector " + std::to_string(target)));
+  runtime_overwrite_result.steps.push_back(resolved_step(0x49, "unrelated store"));
+  runtime_overwrite_result.steps.push_back(
+      resolved_step(0xa9, runtime_indirect_target_comment("9", std::to_string(target), target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(runtime_options,
+                                                           runtime_overwrite_result),
+          "runtime indirect-call candidate must reject selector registers overwritten before call");
+
+  CompileResult runtime_unstable_call_result = runtime_result;
+  runtime_unstable_call_result.steps.push_back(
+      resolved_step(3, "runtime indirect call selector " + std::to_string(target)));
+  runtime_unstable_call_result.steps.push_back(
+      resolved_step(0x43, "runtime indirect call selector " + std::to_string(target)));
+  runtime_unstable_call_result.steps.push_back(
+      resolved_step(0xa3, runtime_indirect_target_comment("3", std::to_string(target), target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(runtime_options,
+                                                           runtime_unstable_call_result),
+          "runtime indirect-call candidate must reject annotated calls through unstable registers");
+
+  CompileResult runtime_missing_literal_result = runtime_result;
+  runtime_missing_literal_result.steps.push_back(
+      resolved_step(0x49, "runtime indirect call selector " + std::to_string(target)));
+  runtime_missing_literal_result.steps.push_back(
+      resolved_step(0xa9, runtime_indirect_target_comment("9", std::to_string(target), target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(runtime_options,
+                                                           runtime_missing_literal_result),
+          "runtime indirect-call candidate must reject selector stores without target literal digits");
+
+  CompileResult runtime_embedded_marker_result = runtime_result;
+  runtime_embedded_marker_result.steps.push_back(
+      resolved_step(3, "note: runtime indirect call selector " + std::to_string(target)));
+  runtime_embedded_marker_result.steps.push_back(
+      resolved_step(0x49, "note: runtime indirect call selector " + std::to_string(target)));
+  runtime_embedded_marker_result.steps.push_back(
+      resolved_step(0xa9, "note: " +
+                              runtime_indirect_target_comment("9", std::to_string(target),
+                                                               target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(runtime_options,
+                                                           runtime_embedded_marker_result),
+          "runtime indirect-call proof markers must be prefix-based, not embedded text");
+
+  CompileResult runtime_bad_selector_marker_result = runtime_result;
+  runtime_bad_selector_marker_result.steps.push_back(
+      resolved_step(3, "runtime indirect call selector " + std::to_string(target) + "garbage"));
+  runtime_bad_selector_marker_result.steps.push_back(
+      resolved_step(0x49, "runtime indirect call selector " + std::to_string(target) + "garbage"));
+  runtime_bad_selector_marker_result.steps.push_back(
+      resolved_step(0xa9, runtime_indirect_target_comment("9", std::to_string(target), target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              runtime_options, runtime_bad_selector_marker_result),
+          "runtime indirect-call proof must reject malformed selector markers");
+
+  CompileResult runtime_malformed_store_marker_result = runtime_result;
+  runtime_malformed_store_marker_result.steps.push_back(
+      resolved_step(3, "runtime indirect call selector " + std::to_string(target)));
+  runtime_malformed_store_marker_result.steps.push_back(
+      resolved_step(0x49, "runtime indirect call selector " + std::to_string(target) +
+                              "garbage"));
+  runtime_malformed_store_marker_result.steps.push_back(
+      resolved_step(3, "runtime indirect call selector " + std::to_string(target)));
+  runtime_malformed_store_marker_result.steps.push_back(
+      resolved_step(0x49, "runtime indirect call selector " + std::to_string(target)));
+  runtime_malformed_store_marker_result.steps.push_back(
+      resolved_step(0xa9, runtime_indirect_target_comment("9", std::to_string(target), target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              runtime_options, runtime_malformed_store_marker_result),
+          "runtime indirect-call proof must reject malformed selector store markers even when a "
+          "later store/call pair is proved");
+
+  CompileResult runtime_malformed_digit_marker_result = runtime_result;
+  runtime_malformed_digit_marker_result.steps.push_back(
+      resolved_step(3, "runtime indirect call selector " + std::to_string(target) + "garbage"));
+  runtime_malformed_digit_marker_result.steps.push_back(
+      resolved_step(3, "runtime indirect call selector " + std::to_string(target)));
+  runtime_malformed_digit_marker_result.steps.push_back(
+      resolved_step(0x49, "runtime indirect call selector " + std::to_string(target)));
+  runtime_malformed_digit_marker_result.steps.push_back(
+      resolved_step(0xa9, runtime_indirect_target_comment("9", std::to_string(target), target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              runtime_options, runtime_malformed_digit_marker_result),
+          "runtime indirect-call proof must reject malformed selector digit markers even when a "
+          "later store/call pair is proved");
+
+  CompileResult runtime_out_of_range_target_result = runtime_result;
+  runtime_out_of_range_target_result.steps.push_back(
+      resolved_step(1, "runtime indirect call selector 105"));
+  runtime_out_of_range_target_result.steps.push_back(
+      resolved_step(0, "runtime indirect call selector 105"));
+  runtime_out_of_range_target_result.steps.push_back(
+      resolved_step(5, "runtime indirect call selector 105"));
+  runtime_out_of_range_target_result.steps.push_back(
+      resolved_step(0x49, "runtime indirect call selector 105"));
+  runtime_out_of_range_target_result.steps.push_back(
+      resolved_step(0xa9, runtime_indirect_target_comment("9", "105", 105)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              runtime_options, runtime_out_of_range_target_result),
+          "runtime indirect-call proof must reject out-of-range target markers");
+
+  CompileResult runtime_malformed_call_marker_result = runtime_result;
+  runtime_malformed_call_marker_result.steps.push_back(
+      resolved_step(3, "runtime indirect call selector " + std::to_string(target)));
+  runtime_malformed_call_marker_result.steps.push_back(
+      resolved_step(0x49, "runtime indirect call selector " + std::to_string(target)));
+  runtime_malformed_call_marker_result.steps.push_back(
+      resolved_step(0xa9, "runtime indirect call; preloaded R9=" + std::to_string(target) +
+                              " indirect-target=" + std::to_string(target) + "garbage"));
+  runtime_malformed_call_marker_result.steps.push_back(
+      resolved_step(0xa9, runtime_indirect_target_comment("9", std::to_string(target), target)));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              runtime_options, runtime_malformed_call_marker_result),
+          "runtime indirect-call proof must reject malformed call target markers even when another "
+          "runtime call is proved");
+
+  runtime_result.steps.push_back(
+      resolved_step(3, "runtime indirect call selector " + std::to_string(target)));
+  runtime_result.steps.push_back(
+      resolved_step(0x49, "runtime indirect call selector " + std::to_string(target)));
+  runtime_result.steps.push_back(
+      resolved_step(0xa9, runtime_indirect_target_comment("9", std::to_string(target), target)));
+  require(optimizer_static_proof_gate_accepts_for_testing(runtime_options, runtime_result),
+          "runtime indirect-call candidate with verified runtime selector artifact should be accepted");
+
+  CompileOptions aggressive_runtime_options;
+  aggressive_runtime_options.aggressive_indirect_call = true;
+  require(!optimizer_static_proof_gate_accepts_for_testing(aggressive_runtime_options,
+                                                           fabricated_runtime_report),
+          "aggressive indirect-call candidate must not bypass runtime proof obligations");
+  require(optimizer_static_proof_gate_accepts_for_testing(aggressive_runtime_options,
+                                                          runtime_result),
+          "aggressive indirect-call candidate with verified runtime selector artifact should be accepted");
+
+  CompileOptions threshold_runtime_options;
+  threshold_runtime_options.aggressive_indirect_call_threshold = true;
+  require(!optimizer_static_proof_gate_accepts_for_testing(threshold_runtime_options,
+                                                           fabricated_runtime_report),
+          "aggressive indirect-call threshold candidate must not bypass runtime proof obligations");
+  require(optimizer_static_proof_gate_accepts_for_testing(threshold_runtime_options,
+                                                          runtime_result),
+          "aggressive indirect-call threshold candidate with verified runtime selector artifact should be accepted");
+}
+
+void optimizer_translation_unit_stays_emulator_free() {
+  const std::string compiler_source =
+      read_text_file(project_file("native/src/core/compiler.cpp"));
+  const std::string compiler_without_comments = source_without_comments(compiler_source);
+  const std::string compiler_code = code_without_comments_and_literals(compiler_source);
+  require(!contains_emulator_include(compiler_without_comments),
+          "compiler.cpp must not include emulator headers; behavior digest belongs to the debug "
+          "translation unit");
+  require(!contains_function_call_token(compiler_code, "program_behavior_digest"),
+          "compiler.cpp must not define or call the emulator-backed behavior digest");
+  require(!contains_function_call_token(compiler_code, "run_equivalence_observation"),
+          "compiler.cpp must not define or call the emulator equivalence observation harness");
+  require(!contains_function_call_token(compiler_code, "equivalence_observations"),
+          "compiler.cpp must not define or call the emulator equivalence observation harness");
+  const std::string candidate_gate_predicate =
+      required_source_range(compiler_code, "bool candidate_needs_static_proof_gate",
+                            "bool suppressed_constant_preloads_proved");
+  require(candidate_gate_predicate.find("aggressive_post_layout_indirect_flow") !=
+              std::string::npos,
+          "static proof-gate predicate must cover aggressive indirect-flow candidates");
+  require(candidate_gate_predicate.find("dual_use_constant_indirect_flow") != std::string::npos,
+          "static proof-gate predicate must cover dual-use indirect-flow candidates");
+  require(candidate_gate_predicate.find("runtime_indirect_call_flow") != std::string::npos,
+          "static proof-gate predicate must cover runtime indirect-call candidates");
+  require(candidate_gate_predicate.find("aggressive_indirect_call") != std::string::npos,
+          "static proof-gate predicate must cover aggressive indirect-call candidates");
+  require(candidate_gate_predicate.find("aggressive_indirect_call_threshold") !=
+              std::string::npos,
+          "static proof-gate predicate must cover aggressive indirect-call threshold candidates");
+  require(candidate_gate_predicate.find("preloaded_indirect_flow") != std::string::npos,
+          "static proof-gate predicate must cover preloaded indirect-flow candidates");
+  require(candidate_gate_predicate.find("forward_indirect_flow") != std::string::npos,
+          "static proof-gate predicate must cover forward indirect-flow candidates");
+  require(candidate_gate_predicate.find("assume_dead_selector_integer_part") != std::string::npos,
+          "static proof-gate predicate must reject dead-integer selector assumptions");
+  require(candidate_gate_predicate.find("suppress_constant_preloads") != std::string::npos,
+          "static proof-gate predicate must cover suppress-only preload candidates");
+  require(candidate_gate_predicate.find("fractional_constant_selectors") != std::string::npos,
+          "static proof-gate predicate must cover fractional selector candidates");
+  require(candidate_gate_predicate.find("force_fractional_constant_selector_preloads") !=
+              std::string::npos,
+          "static proof-gate predicate must cover forced fractional selector preloads");
+  require(candidate_gate_predicate.find("synthesized_dispatch_plans") != std::string::npos,
+          "static proof-gate predicate must cover computed-dispatch candidates");
+  const std::string static_gate_source =
+      required_source_range(compiler_code, "bool computed_dispatch_static_gate_accepts",
+                            "bool is_only_budget_exceeded");
+  require(static_gate_source.find(".proofs") == std::string::npos,
+          "optimizer static proof gates must not trust CompileResult::proofs");
+  require(static_gate_source.find("program_behavior_digest") == std::string::npos,
+          "optimizer static proof gates must not call the behavior digest");
+  require(static_gate_source.find("run_equivalence") == std::string::npos,
+          "optimizer static proof gates must not call the emulator equivalence harness");
+  require(static_gate_source.find("emulator::") == std::string::npos,
+          "optimizer static proof gates must not instantiate the emulator");
+  require(static_gate_source.find("indirect_flow_targets_proved(result.optimizations, "
+                                  "result.preloads") != std::string::npos,
+          "optimizer static gates must pass final preload artifacts to indirect-flow verifier");
+  require(static_gate_source.find("result.registers") != std::string::npos,
+          "optimizer static gates must pass allocated registers to indirect-flow verifier");
+  require(static_gate_source.find("indirect_flow_targets_proved(result.optimizations, "
+                                  "candidate_options") == std::string::npos,
+          "optimizer static gates must not pass compile options as indirect-flow proof input");
+  require(static_gate_source.find("computed_dispatch_artifacts_proved(candidate_options, "
+                                  "result.steps") != std::string::npos,
+          "computed-dispatch gate must require final emitted dispatch artifacts");
+  const std::string computed_dispatch_artifact_source =
+      required_source_range(compiler_code, "bool computed_dispatch_artifacts_proved",
+                            "bool computed_dispatch_static_gate_accepts");
+  require(computed_dispatch_artifact_source.find("computed_dispatch_proof_targets_from_comment") !=
+              std::string::npos,
+          "computed-dispatch verifier must parse final numeric proof-target artifacts");
+  require(computed_dispatch_artifact_source.find("is_computed_dispatch_comment") !=
+              std::string::npos,
+          "computed-dispatch verifier must require the computed-dispatch proof-comment prefix");
+  const std::string preload_verifier_source =
+      required_source_range(compiler_code, "bool final_preload_resolves_to_flow_target",
+                            "bool suppressed_constant_preloads_proved");
+  require(preload_verifier_source.find("bool preload_resolves_to_flow_target") ==
+              std::string::npos,
+          "indirect-flow preload verifier must keep the final-artifact-only helper name");
+  require(preload_verifier_source.find("const std::vector<PreloadReport>& preloads") !=
+              std::string::npos,
+          "indirect-flow preload verifier must inspect final preload artifacts");
+  require(preload_verifier_source.find("preloaded_constant_registers") == std::string::npos,
+          "indirect-flow preload verifier must not trust compile options as proof");
+  const std::string indirect_flow_verifier_source = required_source_range_after(
+      compiler_code, "bool final_preload_resolves_to_flow_target",
+      "bool indirect_flow_targets_proved", "bool fractional_selector_data_values_proved");
+  require(indirect_flow_verifier_source.find("const std::vector<PreloadReport>& preloads") !=
+              std::string::npos,
+          "indirect-flow target verifier must accept final preload artifacts");
+  require(indirect_flow_verifier_source.find("CompileOptions") == std::string::npos,
+          "indirect-flow target verifier must not accept compile options as proof input");
+  const std::string proof_report_source =
+      required_source_range(compiler_without_comments,
+                            "std::vector<ProofReport> build_proof_report",
+                            "void populate_public_report");
+  require(proof_report_source.find("indirect_flow_targets_proved") != std::string::npos,
+          "ProofReport must mirror the indirect-flow verifier result");
+  require(proof_report_source.find("Final preload artifacts for indirect branch/call selectors") !=
+              std::string::npos,
+          "ProofReport detail must describe indirect-flow proof as final-preload-artifact based");
+  require(proof_report_source.find("synthesized_dispatch_plans_proved") != std::string::npos,
+          "ProofReport must mirror the computed-dispatch verifier result");
+  require(proof_report_source.find("computed_dispatch_artifacts_proved") != std::string::npos,
+          "ProofReport must mirror the computed-dispatch final-artifact verifier result");
+  require(proof_report_source.find("matched final indirect-jump target/proof-target markers") !=
+              std::string::npos,
+          "ProofReport detail must describe computed-dispatch proof as final-artifact based");
+  require(proof_report_source.find("runtime_indirect_call_targets_proved") != std::string::npos,
+          "ProofReport must mirror the runtime indirect-call verifier result");
+  require(proof_report_source.find("fractional_selector_data_values_proved") != std::string::npos,
+          "ProofReport must mirror the fractional-selector data verifier result");
+  require(proof_report_source.find("Every required fractional selector value was proved from final "
+                                   "artifacts") != std::string::npos,
+          "ProofReport detail must describe fractional-selector proof as final-artifact based");
+  require(proof_report_source.find("suppressed_constant_preloads_proved") != std::string::npos,
+          "ProofReport must mirror the suppressed-preload verifier result");
+  require(proof_report_source.find("preloaded_constant_registers_proved") != std::string::npos,
+          "ProofReport must mirror the explicit-preload verifier result");
+  const std::string fractional_verifier_source = required_source_range_after(
+      compiler_code, "bool has_fractional_selector_recovery_step",
+      "bool fractional_selector_data_values_proved",
+      "std::vector<ProofReport> build_proof_report");
+  const std::string fractional_recovery_helper_source =
+      required_source_range(compiler_code, "bool has_fractional_selector_recovery_step",
+                            "std::optional<std::string> indirect_flow_register_for_opcode");
+  const std::string fractional_verifier_function_source =
+      required_source_range_after(compiler_code, "bool has_fractional_selector_recovery_step",
+                                  "bool fractional_selector_data_values_proved",
+                                  "std::vector<ProofReport> build_proof_report");
+  require(fractional_verifier_source.find("required_values") != std::string::npos,
+          "fractional-selector verifier must collect the complete set of required values");
+  require(fractional_verifier_source.find("fractional_constant_selectors") != std::string::npos,
+          "fractional-selector verifier must include selector plan values");
+  require(fractional_verifier_source.find("force_fractional_constant_selector_preloads") !=
+              std::string::npos,
+          "fractional-selector verifier must include forced selector preload values");
+  require(fractional_verifier_source.find("is_stable_indirect_selector") != std::string::npos,
+          "fractional-selector natural preload proof must require a stable selector register");
+  require(fractional_verifier_source.find("const std::vector<PreloadReport>& preloads") !=
+              std::string::npos,
+          "fractional-selector natural preload proof must inspect final preload artifacts");
+  require(fractional_verifier_function_source.find("preloaded_constant_registers") ==
+              std::string::npos,
+          "fractional-selector natural preload proof must not trust compile options as proof");
+  require(fractional_verifier_source.find("for (const std::string& expected : required_values)") !=
+              std::string::npos,
+          "fractional-selector verifier must prove every required value individually");
+  require(fractional_verifier_source.find("has_fractional_selector_recovery_step") !=
+              std::string::npos,
+          "fractional-selector verifier must require recovery proof markers on recovery opcodes");
+  require(fractional_recovery_helper_source.find("kFractionalSelectorRecoveryOpcode") !=
+              std::string::npos,
+          "fractional-selector recovery proof must use the named К {x} opcode constant");
+  require(fractional_verifier_source.find("has_resolved_step_comment") == std::string::npos,
+          "fractional-selector verifier must not accept recovery proof markers on arbitrary steps");
+  require(fractional_verifier_source.find("saw_recovery") == std::string::npos,
+          "fractional-selector verifier must not accept a single recovered value as proof for all "
+          "required values");
+  require(fractional_verifier_source.find("saw_natural_value") == std::string::npos,
+          "fractional-selector verifier must not accept a single natural value as proof for all "
+          "required values");
+  require(compiler_code.find("candidate_needs_static_proof_gate(candidate.options)") !=
+              std::string::npos,
+          "main optimizer candidate loop must ask whether a candidate needs static proof");
+  require(compiler_code.find("optimizer_static_gate_accepts(candidate.options, result)") !=
+              std::string::npos,
+          "main optimizer candidate loop must reject unproved risky candidates");
+  require(compiler_code.find("candidate_needs_static_proof_gate(candidate_options)") !=
+              std::string::npos,
+          "optimizer beam search must ask whether a candidate needs static proof");
+  require(compiler_code.find("optimizer_static_gate_accepts(candidate_options, result)") !=
+              std::string::npos,
+          "optimizer beam search must reject unproved risky candidates");
+
+  const std::string wrapper_source = read_text_file(project_file("native/include/mkpro/compiler.hpp"));
+  const std::string wrapper_without_comments = source_without_comments(wrapper_source);
+  require(wrapper_without_comments.find("compiler_behavior_digest.hpp") == std::string::npos,
+          "public compiler wrapper must not re-export the emulator-backed behavior digest API");
+
+  const std::string compiler_header =
+      source_without_comments(read_text_file(project_file("native/include/mkpro/core/compiler.hpp")));
+  require(compiler_header.find("program_behavior_digest") == std::string::npos,
+          "core compiler API must not declare the emulator-backed behavior digest");
+  require(compiler_header.find("optimizer_static_proof_gate_accepts_for_testing") ==
+              std::string::npos,
+          "core compiler API must not declare the static proof gate test hook");
+
+  const std::string digest_header = source_without_comments(
+      read_text_file(project_file("native/include/mkpro/core/compiler_behavior_digest.hpp")));
+  require(digest_header.find("program_behavior_digest") != std::string::npos,
+          "behavior digest API should remain available only through its explicit debug header");
+  require(digest_header.find("compile_source") == std::string::npos,
+          "behavior digest header must not become a replacement production compiler API");
+
+  const std::string proof_gate_header = source_without_comments(
+      read_text_file(project_file("native/include/mkpro/core/compiler_static_proof_gate.hpp")));
+  require(proof_gate_header.find("optimizer_static_proof_gate_accepts_for_testing") !=
+              std::string::npos,
+          "static proof gate test hook should remain available only through its explicit header");
+  require(proof_gate_header.find("compile_source") == std::string::npos,
+          "static proof gate header must not become a replacement production compiler API");
+  require(proof_gate_header.find("program_behavior_digest") == std::string::npos,
+          "static proof gate header must not expose the emulator-backed behavior digest");
+  require(proof_gate_header.find("mkpro/emulator") == std::string::npos,
+          "static proof gate header must not depend on emulator headers");
+
+  const std::string digest_impl =
+      source_without_comments(read_text_file(project_file("native/src/core/compiler_behavior_digest.cpp")));
+  require(contains_emulator_include(digest_impl),
+          "behavior digest implementation should be the explicit emulator-owning translation unit");
+  require(digest_impl.find("optimizer_static_proof_gate_accepts_for_testing") == std::string::npos,
+          "behavior digest implementation must not expose the static proof gate test hook");
+  require(digest_impl.find("optimizer_static_gate_accepts") == std::string::npos,
+          "behavior digest implementation must not participate in optimizer candidate acceptance");
+
+  const std::string cmake_source = read_text_file(project_file("native/CMakeLists.txt"));
+  require(contains_noncomment_line_text(cmake_source, "src/core/compiler.cpp"),
+          "CMake must keep the optimizer translation unit explicit");
+  const std::string core_target_source =
+      required_source_range(cmake_source, "add_library(mkpro_core STATIC",
+                            "add_library(mkpro_debug STATIC");
+  require(core_target_source.find("src/core/compiler_behavior_digest.cpp") == std::string::npos,
+          "mkpro_core must not include the emulator-backed behavior digest translation unit");
+  require(core_target_source.find("src/emulator/") == std::string::npos,
+          "mkpro_core must not include emulator translation units");
+  const std::string debug_target_source =
+      required_source_range(cmake_source, "add_library(mkpro_debug STATIC",
+                            "add_executable(mkpro_cli");
+  require(contains_noncomment_line_text(cmake_source, "src/core/compiler_behavior_digest.cpp"),
+          "CMake must keep the emulator-backed behavior digest in its separate translation unit");
+  require(debug_target_source.find("src/core/compiler_behavior_digest.cpp") != std::string::npos,
+          "mkpro_debug must own the emulator-backed behavior digest translation unit");
+  require(debug_target_source.find("src/emulator/mk61.cpp") != std::string::npos,
+          "mkpro_debug must own the MK-61 emulator implementation");
+  require(debug_target_source.find("src/emulator/rom.cpp") != std::string::npos,
+          "mkpro_debug must own the MK-61 emulator ROM implementation");
+  require(cmake_source.find("target_link_libraries(mkpro_cli PRIVATE mkpro_debug)") !=
+              std::string::npos,
+          "CLI may use behavior digest only through mkpro_debug, not mkpro_core");
+  require(cmake_source.find("target_link_libraries(mkpro_tests PRIVATE mkpro_debug)") !=
+              std::string::npos,
+          "tests may use emulator-backed validation only through mkpro_debug, not mkpro_core");
+  require(count_noncomment_lines_with_text(cmake_source, "src/core/compiler.cpp") == 1,
+          "CMake must list compiler.cpp exactly once as the optimizer translation unit");
+  require(count_noncomment_lines_with_text(cmake_source, "src/core/compiler_behavior_digest.cpp") ==
+              1,
+          "CMake must list compiler_behavior_digest.cpp exactly once as the debug digest "
+          "translation unit");
 }
 
 }  // namespace mkpro::tests

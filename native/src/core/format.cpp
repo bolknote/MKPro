@@ -370,12 +370,15 @@ std::string flow_register_name(int opcode) {
 std::optional<int> parse_indirect_target_comment(const ResolvedStep& step) {
   if (!step.comment.has_value())
     return std::nullopt;
-  static const std::regex pattern(R"(indirect-target=([0-9]+))");
+  static const std::regex pattern(R"(indirect-target=([0-9]+)(?:$|[\s;,]))");
   std::smatch match;
   if (!std::regex_search(*step.comment, match, pattern))
     return std::nullopt;
   try {
-    return std::stoi(match[1].str());
+    const int target = std::stoi(match[1].str());
+    if (target < 0 || target > 104)
+      return std::nullopt;
+    return target;
   } catch (const std::exception&) {
     return std::nullopt;
   }
@@ -996,7 +999,6 @@ std::string format_hex_steps(const std::vector<ResolvedStep>& steps) {
   }
   return out.str();
 }
-
 
 std::string format_mk61s_steps(const std::vector<ResolvedStep>& steps) {
   return format_mk61s_steps_with_prefix(steps, "");

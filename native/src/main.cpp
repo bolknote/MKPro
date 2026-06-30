@@ -1,4 +1,5 @@
 #include "mkpro/compiler.hpp"
+#include "mkpro/core/compiler_behavior_digest.hpp"
 #include "mkpro/core/format.hpp"
 #include "mkpro/core/result.hpp"
 #include "mkpro/version.hpp"

@@ -1966,8 +1966,6 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
     return preload.setup_expression && preload.value != "stack.X" && preload.value != "stack.Y" &&
            !call_like;
   };
-  if (expected_mode.has_value())
-    emit_expected_mode_setup_check(setup, optimizations, *expected_mode);
   std::vector<std::size_t> preload_order;
   preload_order.reserve(preloads.size());
   const std::set<std::size_t> empty_consumed;
@@ -2328,6 +2326,8 @@ compile_setup_program_with_preloads(const std::map<std::string, const V2Board*>&
   if (setup_r0_dirty)
     emit_restore_setup_pointer_r0(setup, preloads, setup_r0_current_value,
                                   !options.disable_candidate_search);
+  if (expected_mode.has_value())
+    emit_expected_mode_setup_check(setup, optimizations, *expected_mode);
   if (initialized_random_coord_list && !initialized_segmented_bitplanes)
     setup.emit_number("7");
   setup.emit_op(0x50, "С/П", "setup complete", std::nullopt, true);

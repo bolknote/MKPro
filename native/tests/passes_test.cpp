@@ -22,6 +22,7 @@
 #include "test_support.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -310,6 +311,39 @@ core::passes::PassResult run_pre_shift_stack_lift(const std::vector<IrOp>& ops) 
 }
 
 } // namespace
+
+void indirect_flow_target_marker_requires_strict_boundary() {
+  IrOp op;
+  op.kind = IrKind::IndirectJump;
+  op.register_name = "7";
+  op.opcode = 0xb7;
+
+  op.meta.comment = "preloaded R7=42 indirect-target=12";
+  std::optional<int> target = core::passes::known_indirect_flow_target(op);
+  require(target.has_value() && *target == 12,
+          "indirect-target marker should accept an end-of-comment boundary");
+
+  op.meta.comment = "preloaded R7=42 indirect-target=12; verified";
+  target = core::passes::known_indirect_flow_target(op);
+  require(target.has_value() && *target == 12,
+          "indirect-target marker should accept a semicolon boundary");
+
+  op.meta.comment = "preloaded R7=42 indirect-target=12garbage";
+  require(!core::passes::known_indirect_flow_target(op).has_value(),
+          "indirect-target marker should reject alphabetic suffixes");
+
+  op.meta.comment = "preloaded R7=42 indirect-target=12.5";
+  require(!core::passes::known_indirect_flow_target(op).has_value(),
+          "indirect-target marker should reject decimal-looking suffixes");
+
+  op.meta.comment = "preloaded R7=42 indirect-target=abc";
+  require(!core::passes::known_indirect_flow_target(op).has_value(),
+          "indirect-target marker should reject missing numeric targets");
+
+  op.meta.comment = "preloaded R7=42 indirect-target=105";
+  require(!core::passes::known_indirect_flow_target(op).has_value(),
+          "indirect-target marker should reject targets outside official cells");
+}
 
 void pass_pipeline_matches_initial_typescript_contract() {
   {

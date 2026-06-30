@@ -75,6 +75,11 @@ bool has_optimization(const CompileResult& result, const std::string& name) {
                      });
 }
 
+bool has_proof(const CompileResult& result, const std::string& id) {
+  return std::any_of(result.proofs.begin(), result.proofs.end(),
+                     [&](const ProofReport& proof) { return proof.id == id; });
+}
+
 bool has_dark_selector_preload(const CompileResult& result) {
   return std::any_of(result.preloads.begin(), result.preloads.end(),
                      [](const PreloadReport& preload) {
@@ -149,11 +154,11 @@ void emulator_indirect_flow_equivalence_matches_typescript_contract() {
   const std::string source = read_text(root / "examples" / "human.mkpro");
 
   // The aggressive post-layout indirect-flow rescue is now enabled by default
-  // and is selected automatically by candidate search (guarded by the
-  // behavioral-equivalence gate in compile_source). To still exercise the
-  // shrink-and-preserve-behavior contract we compare the default compile
-  // (which now picks the aggressive form) against a non-aggressive reference
-  // produced by disabling candidate search entirely.
+  // and is selected automatically by candidate search (guarded by local static
+  // proof obligations in compile_source). To still exercise the
+  // shrink-and-preserve-behavior contract we compare the default compile (which
+  // now picks the aggressive form) against a non-aggressive reference produced
+  // by disabling candidate search entirely.
   CompileOptions baseline_options;
   baseline_options.disable_candidate_search = true;
   const CompileResult before = compile_source(source, baseline_options);
@@ -171,6 +176,8 @@ void emulator_indirect_flow_equivalence_matches_typescript_contract() {
           "aggressive indirect-flow should emit an indirect branch");
   require(has_optimization(after, "dark-entry-layout"),
           "aggressive indirect-flow should report dark-entry-layout");
+  require(has_proof(after, "indirect-flow-targets"),
+          "aggressive indirect-flow should report its static target proof");
 
   const std::set<std::string> before_preloads = [&] {
     std::set<std::string> keys;

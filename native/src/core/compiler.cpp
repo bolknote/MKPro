@@ -1,6 +1,7 @@
 #include "mkpro/core/compiler.hpp"
 
 #include "mkpro/core/address_formula_solver.hpp"
+#include "mkpro/core/compiler_static_proof_gate.hpp"
 #include "mkpro/core/constant_folder.hpp"
 #include "mkpro/core/emit/lowering/coord_list.hpp"
 #include "mkpro/core/emit/lowering/display.hpp"
@@ -27,7 +28,6 @@
 #include "mkpro/core/rules.hpp"
 #include "mkpro/core/state_banks.hpp"
 #include "mkpro/core/v2_const.hpp"
-#include "mkpro/emulator/mk61.hpp"
 
 #include <algorithm>
 #include <array>
@@ -10136,15 +10136,15 @@ void emit_number_or_preload(LoweringContext& context, const std::string& value,
     } else if (selector.has_value() && selector_value.has_value() &&
                fractional_selector_needs_recovery(key, *selector_value)) {
       // Dead-integer-part mode: the recalled value still carries the retuned
-      // integer part, but every data read of this constant is insensitive to it
-      // (assumed here, validated by the behavioral-equivalence gate). We skip
-      // the `К {x}` recovery entirely, so the dual-use register costs nothing
-      // extra on the data side while still serving as an indirect address.
+      // integer part. This shape is only selectable when a future local proof
+      // shows every data read is insensitive to that integer component; until
+      // then candidate_needs_static_proof_gate marks it dangerous and the
+      // static gate rejects it rather than asking the emulator.
       context.optimizations.push_back(OptimizationReport{
           .name = "dead-integer-fractional-selector-use",
           .detail = "Used dual-use R" + register_text_for(context, preload_it->second) +
                     " carrying target " + std::to_string(selector->target) + " as " + key +
-                    " without fractional recovery (integer part dead at this read).",
+                    " without fractional recovery (integer part assumed dead at this read).",
       });
     } else if (selector.has_value() && selector_value.has_value()) {
       context.optimizations.push_back(OptimizationReport{
@@ -12779,8 +12779,6 @@ void remember_preloaded_number(LoweringContext& context, const std::string& key,
 
 bool reserve_preloaded_number(LoweringContext& context, const std::string& value) {
   const std::string key = normalize_preload_key(value);
-  if (context.suppress_constant_preloads.contains(key))
-    return false;
   if (context.preloaded_numbers.contains(key))
     return true;
   for (const std::string& name :
@@ -12790,6 +12788,8 @@ bool reserve_preloaded_number(LoweringContext& context, const std::string& value
       return true;
     }
   }
+  if (context.suppress_constant_preloads.contains(key))
+    return false;
 
   const std::optional<int> index = available_constant_register_index(context);
   if (!index.has_value())
@@ -24634,7 +24634,7 @@ bool lower_numeric_residual_match_statement(LoweringContext& context,
 // op(scale*x + offset). The formula in `plan` was solved post-layout by the
 // address-formula solver so each case value lands on its case body entry. Only
 // reached when a matching SynthesizedDispatchPlan is present (SizeRescue
-// candidate); the behavioral-equivalence gate validates the result.
+// candidate); the static proof gate validates the result.
 bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& statement,
                                 const SynthesizedDispatchPlan& plan) {
   // Reserve the indirect-jump register up front (before emitting anything) so we
@@ -24687,8 +24687,15 @@ bool lower_synthesized_dispatch(LoweringContext& context, const V2Statement& sta
       targets_marker += ",";
     targets_marker += entry_labels.at(index);
   }
+  std::string proof_targets_marker = "computed-dispatch-proof-targets=";
+  for (std::size_t index = 0; index < plan.proof_constraints.size(); ++index) {
+    if (index > 0)
+      proof_targets_marker += ",";
+    proof_targets_marker += std::to_string(plan.proof_constraints.at(index).target);
+  }
   context.emitter.emit_op(0x80 + jump_index, "К БП " + register_text_for(context, jump_var),
-                          "computed dispatch; " + targets_marker, statement.line);
+                          "computed dispatch; " + targets_marker + "; " + proof_targets_marker,
+                          statement.line);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression.reset();
   context.emitter.current_x_aliases.clear();
@@ -39399,245 +39406,509 @@ bool has_return_stack_optimization(const CompileResult& result) {
                      });
 }
 
-// Behavioral-equivalence acceptance gate for the aggressive post-layout
-// rescue (and the other runtime-state-dependent indirect-flow rewrites).
-// Candidate selection ranks purely by cell count, so without this gate a
-// smaller-but-miscompiled candidate (e.g. a stale preloaded selector after a
-// helper-overlay shift) could be selected. We run the candidate and the
-// non-aggressive baseline on a battery of representative input scenarios and
-// reject the candidate unless every observable result matches. This makes the
-// whole class of "smaller-but-wrong" forms unselectable.
-struct EquivalenceTurn {
-  bool stopped = false;
-  std::string display;
-  bool operator==(const EquivalenceTurn& other) const {
-    return stopped == other.stopped && display == other.display;
+bool candidate_needs_static_proof_gate(const CompileOptions& options) {
+  // This predicate intentionally includes both rewrite-family flags and raw
+  // knobs that can create dangerous proof obligations.  A candidate must not be
+  // able to bypass optimizer_static_gate_accepts merely because the risky shape
+  // is introduced indirectly (for example by fractional selector packing or
+  // dead-integer recovery elision).
+  //
+  // Treat this as a deny-by-default boundary for optimizer options that change
+  // control flow, selector meaning, delivered preloads, or data/control dual
+  // use.  A new risky option belongs here at the same time as its local verifier
+  // or it must remain unselectable by automatic candidate search.
+  return options.aggressive_post_layout_indirect_flow || options.dual_use_constant_indirect_flow ||
+         options.runtime_indirect_call_flow || options.preloaded_indirect_flow ||
+         options.forward_indirect_flow || options.aggressive_indirect_call ||
+         options.aggressive_indirect_call_threshold ||
+         options.assume_dead_selector_integer_part ||
+         !options.suppress_constant_preloads.empty() ||
+         !options.fractional_constant_selectors.empty() ||
+         !options.force_fractional_constant_selector_preloads.empty() ||
+         !options.synthesized_dispatch_plans.empty();
+}
+
+bool suppressed_constant_preloads_proved(const CompileOptions& options,
+                                         const std::vector<PreloadReport>& preloads);
+bool preloaded_constant_registers_proved(const CompileOptions& options,
+                                         const std::vector<PreloadReport>& preloads);
+bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimizations,
+                                  const std::vector<PreloadReport>& preloads,
+                                  const std::vector<ResolvedStep>& steps,
+                                  const std::map<std::string, std::string>& allocated_registers);
+bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
+                                          const std::vector<ResolvedStep>& steps);
+bool fractional_selector_data_values_proved(const std::vector<OptimizationReport>& optimizations,
+                                            const CompileOptions& options,
+                                            const std::vector<PreloadReport>& preloads,
+                                            const std::vector<ResolvedStep>& steps);
+bool dead_integer_fractional_selector_uses_proved(
+    const std::vector<OptimizationReport>& optimizations, const CompileOptions& options,
+    const std::vector<ResolvedStep>& steps);
+
+std::vector<core::AddressConstraint> address_constraints_for_proof(
+    const SynthesizedDispatchPlan& plan) {
+  std::vector<core::AddressConstraint> constraints;
+  constraints.reserve(plan.proof_constraints.size());
+  for (const SynthesizedDispatchProofConstraint& constraint : plan.proof_constraints)
+    constraints.push_back({constraint.input, constraint.target});
+  return constraints;
+}
+
+std::optional<core::AddressSolverOptions> address_solver_options_for_proof(
+    const SynthesizedDispatchPlan& plan) {
+  core::AddressSolverOptions proof_options;
+  proof_options.angle_fixed = plan.proof_angle_fixed;
+  if (!plan.proof_angle_fixed)
+    return proof_options;
+  if (plan.proof_angle_mode == "rad") {
+    proof_options.angle_mode = core::SolverAngleMode::Rad;
+  } else if (plan.proof_angle_mode == "grd") {
+    proof_options.angle_mode = core::SolverAngleMode::Grd;
+  } else if (plan.proof_angle_mode == "deg") {
+    proof_options.angle_mode = core::SolverAngleMode::Deg;
+  } else {
+    return std::nullopt;
   }
-  bool operator!=(const EquivalenceTurn& other) const { return !(*this == other); }
-};
-
-struct EquivalenceObservation {
-  // `runnable` is false when the candidate could not be exercised in this
-  // harness at all (a load diagnostic or an emulator parse/runtime exception,
-  // e.g. a preload value the emulator number parser cannot accept). We treat
-  // "not runnable" as its own observable bucket so that a baseline and a
-  // candidate that are both un-runnable for the same structural reason still
-  // compare equal, while a candidate that becomes un-runnable when the
-  // baseline runs is rejected.
-  bool runnable = false;
-  // One entry per interaction turn: turn 0 is the display after the initial
-  // В/О С/П, and each subsequent entry is the display after pressing С/П with
-  // the next scenario input. Capturing every turn (rather than only the final
-  // state) lets the comparison stop once the reference program goes idle.
-  std::vector<EquivalenceTurn> turns;
-};
-
-// Preload values are carried in the compiler's hex-ish register encoding
-// (A/B/C/D/E/F nibbles). The emulator's number parser expects MK-61 display
-// glyphs, so translate the same way the indirect-flow equivalence test does
-// before handing a value to set_register. Without this, dark-entry selector
-// preloads (e.g. "B2") would throw inside the emulator and make the gate
-// spuriously treat a candidate as un-runnable.
-std::string emulator_preload_literal(const std::string& value) {
-  std::string out;
-  out.reserve(value.size());
-  for (char ch : value) {
-    switch (static_cast<char>(std::toupper(static_cast<unsigned char>(ch)))) {
-      case 'A':
-        out.push_back('-');
-        break;
-      case 'B':
-        out.push_back('L');
-        break;
-      case 'C':
-        out += "С";
-        break;
-      case 'D':
-        out += "Г";
-        break;
-      case 'E':
-        out += "Е";
-        break;
-      case 'F':
-        out.push_back('_');
-        break;
-      default:
-        out.push_back(ch);
-        break;
-    }
-  }
-  return out;
+  return proof_options;
 }
 
-// EMULATOR-DECOUPLE (tracked debt): this candidate-acceptance gate embeds the
-// MK-61 emulator inside the optimizer to prove behavioral equivalence. Running
-// the emulator from research/tests is fine, but having it load-bearing inside
-// the translator/optimizer is only acceptable as a TEMPORARY measure. The plan
-// is to replace gate-proven soundness with static models/analyses (the address
-// math already uses the static `evaluate_indirect_address` model; the
-// dead-integer fractional selector needs a static dead-integer analysis), and
-// then demote this emulator run to an optional self-check or remove it.
-// See docs/20-mkpro-optimization-reference.md ("Emulator decoupling").
-EquivalenceObservation run_equivalence_observation(const CompileResult& result,
-                                                   const std::vector<int>& inputs) {
-  EquivalenceObservation observation;
-  try {
-    emulator::MK61 calc;
-    if (result.setup_program.has_value()) {
-      std::vector<int> setup_codes;
-      setup_codes.reserve(result.setup_program->steps.size());
-      for (const ResolvedStep& step : result.setup_program->steps)
-        setup_codes.push_back(step.opcode);
-      const emulator::ProgramLoadResult setup_loaded = calc.load_program(setup_codes);
-      if (!setup_loaded.diagnostics.empty())
-        return observation;
-      calc.press_sequence({"В/О", "С/П"});
-      calc.run_until_stable(2000, 6);
-    }
-
-    std::vector<int> codes;
-    codes.reserve(result.steps.size());
-    for (const ResolvedStep& step : result.steps)
-      codes.push_back(step.opcode);
-    const emulator::ProgramLoadResult loaded = calc.load_program(codes);
-    if (!loaded.diagnostics.empty())
-      return observation;
-    for (const PreloadReport& preload : result.preloads)
-      calc.set_register(preload.register_name, emulator_preload_literal(preload.value));
-
-    calc.press_sequence({"В/О", "С/П"});
-    {
-      const emulator::RunResult run = calc.run_until_stable(2000, 6);
-      observation.turns.push_back(
-          EquivalenceTurn{.stopped = run.stopped, .display = calc.display_text()});
-    }
-    for (const int value : inputs) {
-      // Clear X before each key so consecutive turns enter a fresh number
-      // rather than concatenating digits, matching how the calculator is
-      // actually driven (see emulator_indirect_flow_equivalence_test).
-      calc.input_number(std::to_string(value), /*clear=*/true);
-      calc.press("С/П");
-      const emulator::RunResult run = calc.run_until_stable(2000, 6);
-      observation.turns.push_back(
-          EquivalenceTurn{.stopped = run.stopped, .display = calc.display_text()});
-    }
-    observation.runnable = true;
-  } catch (const std::exception&) {
-    // Any emulator-side failure leaves `runnable` false; the comparison logic
-    // below treats that conservatively.
-    observation.runnable = false;
-  }
-  return observation;
-}
-
-const std::vector<std::vector<int>>& equivalence_scenarios() {
-  static const std::vector<std::vector<int>> kScenarios = {
-      {},          {1},         {2},          {5},          {8},
-      {1, 2},      {2, 1},      {7, 3},       {3, 3},       {5, 5},
-      {1, 20},     {20, 20},    {3, 7, 3},    {3, 7, 7},    {3, 7, 5},
-      {7, 3, 7},   {4, 5, 5},   {4, 5, 1},    {8, 9, 12},   {1, 20, 16},
-      {9, 12, 5},  {3, 10, 4},  {4, 6, 5},    {1, 2, 3, 4},
-  };
-  return kScenarios;
-}
-
-std::vector<EquivalenceObservation> equivalence_observations(const CompileResult& result) {
-  std::vector<EquivalenceObservation> observations;
-  observations.reserve(equivalence_scenarios().size());
-  for (const std::vector<int>& inputs : equivalence_scenarios())
-    observations.push_back(run_equivalence_observation(result, inputs));
-  return observations;
-}
-
-std::string equivalence_observations_digest(const std::vector<EquivalenceObservation>& obs) {
-  const std::vector<std::vector<int>>& scenarios = equivalence_scenarios();
-  std::string out;
-  for (std::size_t index = 0; index < obs.size(); ++index) {
-    out += '[';
-    if (index < scenarios.size()) {
-      for (std::size_t i = 0; i < scenarios[index].size(); ++i) {
-        if (i != 0)
-          out += ',';
-        out += std::to_string(scenarios[index][i]);
-      }
-    }
-    out += "] ";
-    if (!obs[index].runnable) {
-      out += "<not-runnable>";
-    } else {
-      for (std::size_t t = 0; t < obs[index].turns.size(); ++t) {
-        if (t != 0)
-          out += " | ";
-        out += obs[index].turns[t].stopped ? "stop:" : "run:";
-        out += obs[index].turns[t].display;
-      }
-    }
-    out += '\n';
-  }
-  return out;
-}
-
-std::string program_behavior_digest(const CompileResult& result) {
-  return equivalence_observations_digest(equivalence_observations(result));
-}
-
-bool candidate_behaviorally_matches_baseline(
-    const std::vector<EquivalenceObservation>& baseline_observations,
-    const CompileResult& candidate) {
-  static const bool trace_gate = std::getenv("MKPRO_NATIVE_TRACE_GATE") != nullptr;
-  const std::vector<std::vector<int>>& scenarios = equivalence_scenarios();
-  for (std::size_t index = 0; index < scenarios.size(); ++index) {
-    const EquivalenceObservation candidate_observation =
-        run_equivalence_observation(candidate, scenarios.at(index));
-    const EquivalenceObservation& baseline = baseline_observations.at(index);
-
-    // A candidate that cannot even be exercised when the trusted baseline can
-    // (or vice versa) is treated as non-equivalent.
-    if (baseline.runnable != candidate_observation.runnable) {
-      if (trace_gate)
-        std::cerr << "[gate-trace] scenario#" << index << " runnable mismatch base="
-                  << baseline.runnable << " cand=" << candidate_observation.runnable << "\n";
+bool synthesized_dispatch_plans_proved(const CompileOptions& options) {
+  if (options.synthesized_dispatch_plans.empty())
+    return false;
+  for (const SynthesizedDispatchPlan& plan : options.synthesized_dispatch_plans) {
+    if (!core::is_stable_indirect_selector(plan.indirect_register))
       return false;
-    }
-    if (!baseline.runnable)
-      continue;
-
-    // Compare the interaction transcripts turn by turn. We only hold the
-    // candidate to the baseline while the baseline is still *actively*
-    // responding to input: once the reference program goes idle (its display
-    // stops changing between turns, i.e. it has reached a terminal halt and is
-    // merely re-stopping on each subsequent С/П), any further input is outside
-    // the program's live contract and the layout-dependent resume behavior of
-    // the two forms is allowed to differ.
-    const std::size_t turns =
-        std::min(baseline.turns.size(), candidate_observation.turns.size());
-    for (std::size_t t = 0; t < turns; ++t) {
-      if (baseline.turns[t] == candidate_observation.turns[t])
-        continue;
-      const bool reference_idle =
-          t > 0 && baseline.turns[t].display == baseline.turns[t - 1].display &&
-          baseline.turns[t].stopped == baseline.turns[t - 1].stopped;
-      if (reference_idle)
-        break;  // baseline is past its live contract; stop holding candidate.
-      if (trace_gate) {
-        std::cerr << "[gate-trace] scenario#" << index << " turn#" << t << " inputs={";
-        for (std::size_t k = 0; k < scenarios.at(index).size(); ++k)
-          std::cerr << (k ? "," : "") << scenarios.at(index).at(k);
-        std::cerr << "} base{stop=" << baseline.turns[t].stopped << ",disp='"
-                  << baseline.turns[t].display << "'} cand{stop="
-                  << candidate_observation.turns[t].stopped << ",disp='"
-                  << candidate_observation.turns[t].display << "'}\n";
-      }
+    const std::vector<core::AddressConstraint> constraints = address_constraints_for_proof(plan);
+    if (constraints.empty())
+      return false;
+    const core::AddressFormula formula{
+        .op_name = plan.op_name,
+        .op_opcode = plan.op_opcode,
+        .scale = plan.scale,
+        .offset = plan.offset,
+    };
+    const std::optional<core::AddressSolverOptions> proof_options =
+        address_solver_options_for_proof(plan);
+    if (!proof_options.has_value())
+      return false;
+    if (!core::address_formula_matches_constraints(formula, constraints, plan.indirect_register,
+                                                   *proof_options)) {
       return false;
     }
   }
   return true;
 }
 
-bool candidate_needs_behavioral_equivalence_gate(const CompileOptions& options) {
-  return options.aggressive_post_layout_indirect_flow || options.dual_use_constant_indirect_flow ||
-         options.runtime_indirect_call_flow || options.preloaded_indirect_flow ||
-         options.forward_indirect_flow || !options.synthesized_dispatch_plans.empty();
+std::vector<std::string> computed_dispatch_target_labels_from_comment(
+    const std::optional<std::string>& comment) {
+  std::vector<std::string> labels;
+  if (!comment.has_value())
+    return labels;
+  constexpr std::string_view kMarker = "computed-dispatch-targets=";
+  const std::size_t marker = comment->find(kMarker);
+  if (marker == std::string::npos)
+    return labels;
+
+  std::size_t cursor = marker + kMarker.size();
+  std::string current;
+  while (cursor < comment->size()) {
+    const char ch = comment->at(cursor);
+    if (ch == ',') {
+      if (current.empty())
+        return {};
+      labels.push_back(current);
+      current.clear();
+    } else if (std::isspace(static_cast<unsigned char>(ch)) != 0 || ch == ';') {
+      break;
+    } else {
+      current.push_back(ch);
+    }
+    ++cursor;
+  }
+  if (current.empty())
+    return {};
+  labels.push_back(current);
+  return labels;
+}
+
+std::optional<std::vector<int>> computed_dispatch_proof_targets_from_comment(
+    const std::optional<std::string>& comment) {
+  if (!comment.has_value())
+    return std::nullopt;
+  constexpr std::string_view kMarker = "computed-dispatch-proof-targets=";
+  const std::size_t marker = comment->find(kMarker);
+  if (marker == std::string::npos)
+    return std::nullopt;
+
+  std::vector<int> targets;
+  std::size_t cursor = marker + kMarker.size();
+  bool expect_target = true;
+  while (cursor < comment->size()) {
+    if (std::isspace(static_cast<unsigned char>(comment->at(cursor))) != 0 ||
+        comment->at(cursor) == ';') {
+      break;
+    }
+    if (!expect_target)
+      return std::nullopt;
+    if (!std::isdigit(static_cast<unsigned char>(comment->at(cursor))))
+      return std::nullopt;
+    int target = 0;
+    while (cursor < comment->size() &&
+           std::isdigit(static_cast<unsigned char>(comment->at(cursor)))) {
+      target = target * 10 + (comment->at(cursor) - '0');
+      ++cursor;
+    }
+    if (target < 0 || target > 104)
+      return std::nullopt;
+    targets.push_back(target);
+    expect_target = false;
+    if (cursor < comment->size() && comment->at(cursor) == ',') {
+      expect_target = true;
+      ++cursor;
+    }
+  }
+  if (targets.empty() || expect_target)
+    return std::nullopt;
+  return targets;
+}
+
+std::optional<std::string> computed_dispatch_register_for_opcode(int opcode) {
+  if (opcode < 0x80 || opcode > 0x8e)
+    return std::nullopt;
+  const std::string register_name = core::register_name_for_index(opcode - 0x80);
+  if (!core::is_stable_indirect_selector(register_name))
+    return std::nullopt;
+  return register_name;
+}
+
+bool is_computed_dispatch_comment(const std::optional<std::string>& comment) {
+  return comment.has_value() && comment->starts_with("computed dispatch;");
+}
+
+bool computed_dispatch_artifacts_proved(const CompileOptions& options,
+                                        const std::vector<ResolvedStep>& steps) {
+  std::vector<std::size_t> available_steps;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    const ResolvedStep& step = steps.at(index);
+    const bool has_target_marker =
+        step.comment.has_value() &&
+        step.comment->find("computed-dispatch-targets=") != std::string::npos;
+    if (is_computed_dispatch_comment(step.comment) && !has_target_marker)
+      return false;
+    if (!has_target_marker) {
+      continue;
+    }
+    if (!is_computed_dispatch_comment(step.comment))
+      return false;
+    const std::optional<std::string> register_name =
+        computed_dispatch_register_for_opcode(step.opcode);
+    if (!register_name.has_value())
+      return false;
+    const std::vector<std::string> labels =
+        computed_dispatch_target_labels_from_comment(step.comment);
+    if (labels.empty())
+      return false;
+    const std::optional<std::vector<int>> proof_targets =
+        computed_dispatch_proof_targets_from_comment(step.comment);
+    if (!proof_targets.has_value())
+      return false;
+    available_steps.push_back(index);
+  }
+
+  std::vector<bool> used(steps.size(), false);
+  for (const SynthesizedDispatchPlan& plan : options.synthesized_dispatch_plans) {
+    bool matched = false;
+    for (const std::size_t index : available_steps) {
+      if (used.at(index))
+        continue;
+      const ResolvedStep& step = steps.at(index);
+      const std::optional<std::string> register_name =
+          computed_dispatch_register_for_opcode(step.opcode);
+      const std::vector<std::string> labels =
+          computed_dispatch_target_labels_from_comment(step.comment);
+      const std::optional<std::vector<int>> proof_targets =
+          computed_dispatch_proof_targets_from_comment(step.comment);
+      if (!proof_targets.has_value())
+        return false;
+      if (proof_targets->size() != plan.proof_constraints.size())
+        continue;
+      bool proof_targets_match = true;
+      for (std::size_t target_index = 0; target_index < proof_targets->size(); ++target_index) {
+        if (proof_targets->at(target_index) !=
+            plan.proof_constraints.at(target_index).target) {
+          proof_targets_match = false;
+          break;
+        }
+      }
+      if (register_name.has_value() && *register_name == plan.indirect_register &&
+          labels.size() == plan.proof_constraints.size() && proof_targets_match) {
+        used.at(index) = true;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched)
+      return false;
+  }
+  return true;
+}
+
+bool computed_dispatch_static_gate_accepts(const CompileOptions& candidate_options,
+                                           const CompileResult& result) {
+  if (candidate_options.synthesized_dispatch_plans.empty())
+    return false;
+  if (candidate_options.aggressive_post_layout_indirect_flow ||
+      candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.runtime_indirect_call_flow || candidate_options.preloaded_indirect_flow ||
+      candidate_options.forward_indirect_flow ||
+      candidate_options.assume_dead_selector_integer_part ||
+      !candidate_options.fractional_constant_selectors.empty() ||
+      !candidate_options.force_fractional_constant_selector_preloads.empty() ||
+      !candidate_options.suppress_constant_preloads.empty()) {
+    return false;
+  }
+  const bool has_computed_dispatch_optimization =
+      std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                  [](const OptimizationReport& item) { return item.name == "computed-dispatch"; });
+  if (!has_computed_dispatch_optimization) {
+    return false;
+  }
+
+  return synthesized_dispatch_plans_proved(candidate_options) &&
+         computed_dispatch_artifacts_proved(candidate_options, result.steps);
+}
+
+bool suppressed_preload_static_gate_accepts(const CompileOptions& candidate_options,
+                                            const CompileResult& result) {
+  if (candidate_options.suppress_constant_preloads.empty())
+    return true;
+  return suppressed_constant_preloads_proved(candidate_options, result.preloads);
+}
+
+bool suppress_constant_preload_only_static_gate_accepts(const CompileOptions& candidate_options,
+                                                        const CompileResult& result) {
+  if (candidate_options.suppress_constant_preloads.empty() ||
+      candidate_options.aggressive_post_layout_indirect_flow ||
+      candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.runtime_indirect_call_flow ||
+      candidate_options.preloaded_indirect_flow ||
+      candidate_options.forward_indirect_flow ||
+      candidate_options.aggressive_indirect_call ||
+      candidate_options.aggressive_indirect_call_threshold ||
+      candidate_options.assume_dead_selector_integer_part ||
+      !candidate_options.synthesized_dispatch_plans.empty() ||
+      !candidate_options.fractional_constant_selectors.empty() ||
+      !candidate_options.force_fractional_constant_selector_preloads.empty()) {
+    return false;
+  }
+  return suppressed_constant_preloads_proved(candidate_options, result.preloads);
+}
+
+bool preloaded_indirect_flow_static_gate_accepts(const CompileOptions& candidate_options,
+                                                 const CompileResult& result) {
+  // Covers both backward-only and forward-target preloaded indirect flow.  The
+  // post-layout pass emits the same "indirect-flow-targets" proof after it has
+  // resolved final addresses and retargeted selector preloads across layout
+  // shifts; mixed dual-use/fractional/demote forms have separate proof
+  // obligations and are rejected here unless their own static gate accepts them.
+  if (!candidate_options.preloaded_indirect_flow ||
+      candidate_options.aggressive_post_layout_indirect_flow ||
+      candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.runtime_indirect_call_flow ||
+      candidate_options.assume_dead_selector_integer_part ||
+      !candidate_options.synthesized_dispatch_plans.empty() ||
+      !candidate_options.fractional_constant_selectors.empty() ||
+      !candidate_options.force_fractional_constant_selector_preloads.empty()) {
+    return false;
+  }
+  if (!suppressed_preload_static_gate_accepts(candidate_options, result))
+    return false;
+  const bool has_indirect_flow_proof =
+      indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
+                                   result.registers);
+  return has_indirect_flow_proof;
+}
+
+bool aggressive_post_layout_indirect_flow_static_gate_accepts(
+    const CompileOptions& candidate_options, const CompileResult& result) {
+  if (!candidate_options.aggressive_post_layout_indirect_flow ||
+      candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.preloaded_indirect_flow || candidate_options.forward_indirect_flow ||
+      candidate_options.runtime_indirect_call_flow ||
+      candidate_options.assume_dead_selector_integer_part ||
+      !candidate_options.synthesized_dispatch_plans.empty() ||
+      !candidate_options.fractional_constant_selectors.empty() ||
+      !candidate_options.force_fractional_constant_selector_preloads.empty()) {
+    return false;
+  }
+  if (!suppressed_preload_static_gate_accepts(candidate_options, result))
+    return false;
+  const bool has_indirect_flow_proof =
+      indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
+                                   result.registers);
+  return has_indirect_flow_proof;
+}
+
+bool runtime_indirect_call_flow_static_gate_accepts(const CompileOptions& candidate_options,
+                                                    const CompileResult& result) {
+  const bool enables_runtime_indirect_call_flow =
+      candidate_options.runtime_indirect_call_flow || candidate_options.aggressive_indirect_call ||
+      candidate_options.aggressive_indirect_call_threshold;
+  if (!enables_runtime_indirect_call_flow ||
+      candidate_options.aggressive_post_layout_indirect_flow ||
+      candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.preloaded_indirect_flow || candidate_options.forward_indirect_flow ||
+      candidate_options.assume_dead_selector_integer_part ||
+      !candidate_options.synthesized_dispatch_plans.empty() ||
+      !candidate_options.fractional_constant_selectors.empty() ||
+      !candidate_options.force_fractional_constant_selector_preloads.empty()) {
+    return false;
+  }
+  if (!suppressed_preload_static_gate_accepts(candidate_options, result))
+    return false;
+  const bool has_runtime_call_proof =
+      runtime_indirect_call_targets_proved(result.optimizations, result.steps);
+  const bool has_runtime_call_optimization =
+      std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                  [](const OptimizationReport& item) {
+                    return item.name == "runtime-indirect-call-flow";
+                  });
+  return has_runtime_call_optimization && has_runtime_call_proof;
+}
+
+bool dual_use_constant_indirect_flow_static_gate_accepts(const CompileOptions& candidate_options,
+                                                         const CompileResult& result) {
+  const bool uses_fractional_selectors = !candidate_options.fractional_constant_selectors.empty();
+  if (!candidate_options.dual_use_constant_indirect_flow ||
+      candidate_options.preloaded_indirect_flow || candidate_options.forward_indirect_flow ||
+      candidate_options.runtime_indirect_call_flow ||
+      !candidate_options.synthesized_dispatch_plans.empty() ||
+      (!uses_fractional_selectors &&
+       !candidate_options.force_fractional_constant_selector_preloads.empty())) {
+    return false;
+  }
+  if (candidate_options.assume_dead_selector_integer_part && !uses_fractional_selectors)
+    return false;
+  if (!suppressed_preload_static_gate_accepts(candidate_options, result))
+    return false;
+  const bool has_indirect_flow_optimization =
+      std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                  [](const OptimizationReport& item) {
+                    return item.name == "constants-dual-use" ||
+                           item.name == "preloaded-indirect-flow";
+                  });
+  const bool has_indirect_flow_proof =
+      indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
+                                   result.registers);
+  if (!has_indirect_flow_optimization || !has_indirect_flow_proof)
+    return false;
+
+  if (uses_fractional_selectors) {
+    const bool has_forced_fractional_selector_preloads =
+        !candidate_options.force_fractional_constant_selector_preloads.empty();
+    const bool has_dead_integer_use =
+        std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                    [](const OptimizationReport& item) {
+                      return item.name == "dead-integer-fractional-selector-use";
+                    });
+    const bool has_dead_integer_proof = has_dead_integer_use &&
+                                        dead_integer_fractional_selector_uses_proved(
+                                            result.optimizations, candidate_options, result.steps);
+    if (has_dead_integer_use && !has_dead_integer_proof)
+      return false;
+    const bool has_fractional_data_use =
+        std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                    [](const OptimizationReport& item) {
+                      return item.name == "fractional-constant-selector-use" ||
+                             item.name == "natural-fractional-constant-selector-use";
+                    });
+    const bool has_fractional_data_proof =
+        fractional_selector_data_values_proved(result.optimizations, candidate_options,
+                                               result.preloads,
+                                               result.steps);
+    if ((has_fractional_data_use || has_forced_fractional_selector_preloads) &&
+        !has_fractional_data_proof && !has_dead_integer_proof)
+      return false;
+  }
+  return true;
+}
+
+bool forward_indirect_flow_static_gate_accepts(const CompileOptions& candidate_options,
+                                               const CompileResult& result) {
+  const bool uses_fractional_selectors = !candidate_options.fractional_constant_selectors.empty();
+  if (!candidate_options.forward_indirect_flow ||
+      candidate_options.preloaded_indirect_flow ||
+      candidate_options.runtime_indirect_call_flow ||
+      !candidate_options.synthesized_dispatch_plans.empty() ||
+      (!uses_fractional_selectors &&
+       !candidate_options.force_fractional_constant_selector_preloads.empty())) {
+    return false;
+  }
+  if (candidate_options.assume_dead_selector_integer_part && !uses_fractional_selectors)
+    return false;
+  if (!suppressed_preload_static_gate_accepts(candidate_options, result))
+    return false;
+
+  const bool has_indirect_flow_optimization =
+      std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                  [](const OptimizationReport& item) {
+                    return item.name == "preloaded-indirect-flow" ||
+                           item.name == "dark-entry-layout" ||
+                           item.name == "post-layout-existing-selector-flow" ||
+                           item.name == "constants-dual-use";
+                  });
+  const bool has_indirect_flow_proof =
+      indirect_flow_targets_proved(result.optimizations, result.preloads, result.steps,
+                                   result.registers);
+  if (!has_indirect_flow_optimization || !has_indirect_flow_proof)
+    return false;
+
+  if (uses_fractional_selectors) {
+    const bool has_forced_fractional_selector_preloads =
+        !candidate_options.force_fractional_constant_selector_preloads.empty();
+    const bool has_dead_integer_use =
+        std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                    [](const OptimizationReport& item) {
+                      return item.name == "dead-integer-fractional-selector-use";
+                    });
+    const bool has_dead_integer_proof = has_dead_integer_use &&
+                                        dead_integer_fractional_selector_uses_proved(
+                                            result.optimizations, candidate_options, result.steps);
+    if (has_dead_integer_use && !has_dead_integer_proof)
+      return false;
+    const bool has_fractional_data_use =
+        std::any_of(result.optimizations.begin(), result.optimizations.end(),
+                    [](const OptimizationReport& item) {
+                      return item.name == "fractional-constant-selector-use" ||
+                             item.name == "natural-fractional-constant-selector-use";
+                    });
+    const bool has_fractional_data_proof =
+        fractional_selector_data_values_proved(result.optimizations, candidate_options,
+                                               result.preloads,
+                                               result.steps);
+    if ((has_fractional_data_use || has_forced_fractional_selector_preloads) &&
+        !has_fractional_data_proof && !has_dead_integer_proof)
+      return false;
+  }
+
+  return true;
+}
+
+bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
+                                   const CompileResult& result) {
+  return computed_dispatch_static_gate_accepts(candidate_options, result) ||
+         suppress_constant_preload_only_static_gate_accepts(candidate_options, result) ||
+         preloaded_indirect_flow_static_gate_accepts(candidate_options, result) ||
+         aggressive_post_layout_indirect_flow_static_gate_accepts(candidate_options, result) ||
+         runtime_indirect_call_flow_static_gate_accepts(candidate_options, result) ||
+         dual_use_constant_indirect_flow_static_gate_accepts(candidate_options, result) ||
+         forward_indirect_flow_static_gate_accepts(candidate_options, result);
+}
+
+bool optimizer_static_proof_gate_accepts_for_testing(const CompileOptions& candidate_options,
+                                                     const CompileResult& result) {
+  return optimizer_static_gate_accepts(candidate_options, result);
 }
 
 bool is_only_budget_exceeded(const CompileResult& result) {
@@ -39758,7 +40029,7 @@ std::string implemented_candidate_key(const CompileOptions& options) {
   for (const SynthesizedDispatchPlan& plan : options.synthesized_dispatch_plans)
     out << ";synth_dispatch=" << plan.match_line << ":" << plan.selector_register << ":"
         << plan.indirect_register << ":" << plan.op_opcode << ":" << plan.scale << ":"
-        << plan.offset;
+        << plan.offset << ":" << plan.proof_angle_fixed << ":" << plan.proof_angle_mode;
   for (const std::string& value : options.force_fractional_constant_selector_preloads)
     out << ";force_fractional_selector_preload=" << normalize_number_key(value);
   for (const RegisterShare& share : options.forced_register_shares)
@@ -39951,11 +40222,6 @@ bool has_optimization_named(const std::vector<OptimizationReport>& optimizations
                      [&](const OptimizationReport& optimization) {
                        return optimization.name == name;
                      });
-}
-
-bool has_proof_named(const std::vector<ProofReport>& proofs, std::string_view id) {
-  return std::any_of(proofs.begin(), proofs.end(),
-                     [&](const ProofReport& proof) { return proof.id == id; });
 }
 
 bool has_any_optimization_named(const std::vector<OptimizationReport>& optimizations,
@@ -40214,15 +40480,525 @@ build_machine_features_used(const std::vector<OptimizationReport>& optimizations
         "Optimizer scheduled hidden X2 values across display-byte or temporary boundaries.");
   if (has_optimization_named(optimizations, "r0-fractional-sentinel"))
     add("r0-fractional-sentinel", "optimizer",
-        "Optimizer used fractional R0 side effects under emulator-proved semantics.");
+        "Optimizer used fractional R0 side effects under machine-profile semantics.");
   if (has_optimization_named(optimizations, "raw-display-5f"))
     add("raw-display-5f", "optimizer",
         "Raw block emitted opcode 5F as a display-state transform.");
   return features;
 }
 
+bool has_resolved_step_comment(const std::vector<ResolvedStep>& steps,
+                               const std::string& comment) {
+  return std::any_of(steps.begin(), steps.end(), [&](const ResolvedStep& step) {
+    return step.comment.has_value() && *step.comment == comment;
+  });
+}
+
+bool has_fractional_selector_recovery_step(const std::vector<ResolvedStep>& steps,
+                                           const std::string& expected) {
+  constexpr int kFractionalSelectorRecoveryOpcode = 0x35;  // К {x}
+  // The proof marker is only meaningful on the actual fractional-recovery
+  // opcode. A copied comment on an unrelated step is not a local proof that the
+  // selector's data value was restored.
+  const std::string comment = "fractional selector const " + expected;
+  return std::any_of(steps.begin(), steps.end(), [&](const ResolvedStep& step) {
+    return step.opcode == kFractionalSelectorRecoveryOpcode && step.comment.has_value() &&
+           *step.comment == comment;
+  });
+}
+
+std::optional<std::string> indirect_flow_register_for_opcode(int opcode) {
+  if (opcode < 0)
+    return std::nullopt;
+  const int offset = opcode & 0x0f;
+  if (offset > 14)
+    return std::nullopt;
+  const int base = opcode - offset;
+  switch (base) {
+  case 0x70:  // К x!=0 r
+  case 0x80:  // К БП r
+  case 0x90:  // К x>=0 r
+  case 0xa0:  // К ПП r
+  case 0xc0:  // К x<0 r
+  case 0xe0:  // К x=0 r
+    return core::register_name_for_index(offset);
+  default:
+    return std::nullopt;
+  }
+}
+
+std::optional<int> indirect_target_from_comment(const std::optional<std::string>& comment) {
+  if (!comment.has_value())
+    return std::nullopt;
+  const std::string marker = "indirect-target=";
+  const std::size_t start = comment->find(marker);
+  if (start == std::string::npos)
+    return std::nullopt;
+  std::size_t pos = start + marker.size();
+  if (pos >= comment->size() || !std::isdigit(static_cast<unsigned char>((*comment)[pos])))
+    return std::nullopt;
+  int value = 0;
+  while (pos < comment->size() && std::isdigit(static_cast<unsigned char>((*comment)[pos]))) {
+    value = value * 10 + ((*comment)[pos] - '0');
+    ++pos;
+  }
+  if (pos < comment->size() && !std::isspace(static_cast<unsigned char>((*comment)[pos])))
+    return std::nullopt;
+  if (value < 0 || value > 104)
+    return std::nullopt;
+  return value;
+}
+
+struct PreloadedSelectorAnnotation {
+  std::string value;
+  int target = 0;
+};
+
+// The indirect-flow optimizers emit proof-carrying comments such as
+// "preloaded R9=B2 indirect-target=0". The static gate treats those comments as
+// part of the final artifact contract: the annotated selector value must match
+// the delivered preload/constant-register value and re-resolve to the annotated
+// target. The selector value and target must appear in that order in the same
+// comment, so the verifier cannot accidentally combine unrelated fields. This
+// is deliberately local and does not execute the program.
+std::optional<PreloadedSelectorAnnotation> preloaded_selector_annotation_from_comment(
+    const std::optional<std::string>& comment, const std::string& register_name) {
+  if (!comment.has_value())
+    return std::nullopt;
+  const std::string marker = "preloaded R" + register_name + "=";
+  const std::size_t start = comment->find(marker);
+  if (start == std::string::npos)
+    return std::nullopt;
+  std::size_t pos = start + marker.size();
+  const std::size_t value_start = pos;
+  while (pos < comment->size() &&
+         !std::isspace(static_cast<unsigned char>((*comment)[pos]))) {
+    ++pos;
+  }
+  if (pos == value_start)
+    return std::nullopt;
+  const std::string value = comment->substr(value_start, pos - value_start);
+
+  const std::string target_marker = "indirect-target=";
+  const std::size_t target_start = comment->find(target_marker, pos);
+  if (target_start == std::string::npos)
+    return std::nullopt;
+  pos = target_start + target_marker.size();
+  if (pos >= comment->size() || !std::isdigit(static_cast<unsigned char>((*comment)[pos])))
+    return std::nullopt;
+  int target = 0;
+  while (pos < comment->size() && std::isdigit(static_cast<unsigned char>((*comment)[pos]))) {
+    target = target * 10 + ((*comment)[pos] - '0');
+    ++pos;
+  }
+  if (pos < comment->size() && !std::isspace(static_cast<unsigned char>((*comment)[pos])))
+    return std::nullopt;
+  if (target < 0 || target > 104)
+    return std::nullopt;
+  return PreloadedSelectorAnnotation{
+      .value = value,
+      .target = target,
+  };
+}
+
+// Runtime indirect-call proof uses a separate local pattern:
+//   literal digits for target N; X->P r; runtime-marked K PP r to N.
+// The helper only parses the shared "runtime indirect call selector N" marker;
+// ordering/register-overwrite checks live in runtime_indirect_call_targets_proved.
+std::optional<int> runtime_selector_target_from_comment(
+    const std::optional<std::string>& comment) {
+  if (!comment.has_value())
+    return std::nullopt;
+  const std::string marker = "runtime indirect call selector ";
+  if (!comment->starts_with(marker))
+    return std::nullopt;
+  std::size_t pos = marker.size();
+  if (pos >= comment->size() || !std::isdigit(static_cast<unsigned char>((*comment)[pos])))
+    return std::nullopt;
+  int value = 0;
+  while (pos < comment->size() && std::isdigit(static_cast<unsigned char>((*comment)[pos]))) {
+    value = value * 10 + ((*comment)[pos] - '0');
+    ++pos;
+  }
+  if (pos != comment->size())
+    return std::nullopt;
+  if (value < 0 || value > 104)
+    return std::nullopt;
+  return value;
+}
+
+bool is_runtime_indirect_call_comment(const std::optional<std::string>& comment) {
+  return comment.has_value() && comment->starts_with("runtime indirect call;");
+}
+
+std::optional<std::string> store_register_for_opcode(int opcode) {
+  if (opcode < 0x40 || opcode > 0x4e)
+    return std::nullopt;
+  return core::register_name_for_index(opcode - 0x40);
+}
+
+bool runtime_selector_literal_precedes_store(const std::vector<ResolvedStep>& steps,
+                                             std::size_t store_index, int target) {
+  std::string reversed_digits;
+  std::size_t index = store_index;
+  while (index > 0) {
+    const ResolvedStep& step = steps.at(index - 1);
+    if (step.opcode < 0 || step.opcode > 9)
+      break;
+    const std::optional<int> digit_target = runtime_selector_target_from_comment(step.comment);
+    if (!digit_target.has_value() || *digit_target != target)
+      break;
+    reversed_digits.push_back(static_cast<char>('0' + step.opcode));
+    --index;
+  }
+  if (reversed_digits.empty())
+    return false;
+  return std::string(reversed_digits.rbegin(), reversed_digits.rend()) == std::to_string(target);
+}
+
+bool selector_value_resolves_to_flow_target(const std::string& register_name,
+                                            const std::string& value, int target) {
+  const std::optional<core::IndirectAddressEvaluation> resolved =
+      core::evaluate_indirect_address(register_name, value, core::IndirectOperationKind::Flow);
+  return resolved.has_value() && resolved->actual_flow_target == target;
+}
+
+bool ascii_case_insensitive_equal(const std::string& left, const std::string& right) {
+  if (left.size() != right.size())
+    return false;
+  for (std::size_t index = 0; index < left.size(); ++index) {
+    if (std::tolower(static_cast<unsigned char>(left.at(index))) !=
+        std::tolower(static_cast<unsigned char>(right.at(index)))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool selector_value_allows_numeric_normalization(const std::string& value) {
+  if (value.empty())
+    return false;
+  bool saw_digit_before_exponent = false;
+  bool saw_exponent = false;
+  bool saw_digit_after_exponent = false;
+  for (std::size_t index = 0; index < value.size(); ++index) {
+    const char ch = value.at(index);
+    const unsigned char uch = static_cast<unsigned char>(ch);
+    if (std::isdigit(uch)) {
+      if (saw_exponent)
+        saw_digit_after_exponent = true;
+      else
+        saw_digit_before_exponent = true;
+      continue;
+    }
+    if (ch == '+' || ch == '-') {
+      if (index != 0 &&
+          !(saw_exponent && (value.at(index - 1) == 'e' || value.at(index - 1) == 'E'))) {
+        return false;
+      }
+      continue;
+    }
+    if (ch == '.' || ch == ',') {
+      if (saw_exponent)
+        return false;
+      continue;
+    }
+    if (ch == 'e' || ch == 'E') {
+      if (!saw_digit_before_exponent || saw_exponent)
+        return false;
+      saw_exponent = true;
+      continue;
+    }
+    return false;
+  }
+  return saw_digit_before_exponent && (!saw_exponent || saw_digit_after_exponent);
+}
+
+bool selector_values_match(const std::string& left, const std::string& right) {
+  if (left == right || ascii_case_insensitive_equal(left, right))
+    return true;
+  if (!selector_value_allows_numeric_normalization(left) ||
+      !selector_value_allows_numeric_normalization(right)) {
+    return false;
+  }
+  try {
+    return normalize_number_key(left) == normalize_number_key(right);
+  } catch (...) {
+    return false;
+  }
+}
+
+bool final_preload_resolves_to_flow_target(const std::vector<PreloadReport>& preloads,
+                                           const std::string& register_name, int target,
+                                           const std::string& expected_value) {
+  for (const PreloadReport& preload : preloads) {
+    if (preload.register_name != register_name)
+      continue;
+    if (!selector_values_match(preload.value, expected_value))
+      continue;
+    if (selector_value_resolves_to_flow_target(preload.register_name, preload.value, target))
+      return true;
+  }
+  return false;
+}
+
+bool suppressed_constant_preloads_proved(const CompileOptions& options,
+                                         const std::vector<PreloadReport>& preloads) {
+  if (options.suppress_constant_preloads.empty())
+    return false;
+  std::set<std::string> suppressed;
+  try {
+    for (const std::string& value : options.suppress_constant_preloads)
+      suppressed.insert(normalize_number_key(value));
+    for (const PreloadReport& preload : preloads) {
+      if (preload.setup_expression || preload.setup_target_name.has_value() ||
+          preload.setup_source_line.has_value())
+        continue;
+      if (suppressed.contains(normalize_number_key(preload.value)))
+        return false;
+    }
+  } catch (...) {
+    return false;
+  }
+  return true;
+}
+
+bool preloaded_constant_registers_proved(const CompileOptions& options,
+                                         const std::vector<PreloadReport>& preloads) {
+  if (options.preloaded_constant_registers.empty())
+    return false;
+  for (const auto& [register_name, expected_value] : options.preloaded_constant_registers) {
+    const bool found =
+        std::any_of(preloads.begin(), preloads.end(), [&](const PreloadReport& preload) {
+          return preload.register_name == register_name &&
+                 selector_values_match(preload.value, expected_value);
+        });
+    if (!found)
+      return false;
+  }
+  return true;
+}
+
+bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>& optimizations,
+                                          const std::vector<ResolvedStep>& steps) {
+  if (!has_optimization_named(optimizations, "runtime-indirect-call-flow"))
+    return false;
+
+  std::map<std::string, int> current_selector_targets;
+  bool saw_proved_call = false;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    const ResolvedStep& step = steps.at(index);
+    if (step.comment.has_value() && step.comment->starts_with("runtime indirect call selector ") &&
+        !runtime_selector_target_from_comment(step.comment).has_value()) {
+      return false;
+    }
+    const std::optional<std::string> store_register = store_register_for_opcode(step.opcode);
+    if (store_register.has_value() && core::is_stable_indirect_selector(*store_register)) {
+      const std::optional<int> stored_target = runtime_selector_target_from_comment(step.comment);
+      if (stored_target.has_value() &&
+          runtime_selector_literal_precedes_store(steps, index, *stored_target)) {
+        current_selector_targets[*store_register] = *stored_target;
+      } else {
+        current_selector_targets.erase(*store_register);
+      }
+    }
+
+    if (!is_runtime_indirect_call_comment(step.comment))
+      continue;
+    if (step.opcode < 0xa0 || step.opcode > 0xae)
+      return false;
+    const std::string register_name = core::register_name_for_index(step.opcode - 0xa0);
+    if (!core::is_stable_indirect_selector(register_name))
+      return false;
+    const std::optional<int> target = indirect_target_from_comment(step.comment);
+    if (!target.has_value())
+      return false;
+    const auto current = current_selector_targets.find(register_name);
+    if (current == current_selector_targets.end() || current->second != *target)
+      return false;
+    saw_proved_call = true;
+  }
+
+  return saw_proved_call;
+}
+
+bool indirect_flow_selector_registers_are_unallocated(
+    const std::set<std::string>& selector_registers,
+    const std::map<std::string, std::string>& allocated_registers) {
+  for (const auto& [name, allocated_register] : allocated_registers) {
+    if (name.starts_with("__") &&
+        (name.find("indirect") != std::string::npos || name.find("branch") != std::string::npos ||
+         name.find("tail") != std::string::npos || name.find("case_") != std::string::npos ||
+         name.find("shared_") != std::string::npos || name.find("bump_proc") != std::string::npos ||
+         name.starts_with("__bit_mask_") || name.starts_with("__const_") ||
+         name.starts_with("__display_scale_")))
+      continue;
+    if (selector_registers.contains(allocated_register))
+      return false;
+  }
+  return true;
+}
+
+bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimizations,
+                                  const std::vector<PreloadReport>& preloads,
+                                  const std::vector<ResolvedStep>& steps,
+                                  const std::map<std::string, std::string>& allocated_registers) {
+  // Deliberately no CompileOptions parameter here: selector preload intent is
+  // not a proof artifact.  The proof is discharged only by final delivered
+  // preload reports paired with final proof-carrying step annotations.  Some
+  // shape-specific lowerers emit the same artifacts before optimizer reporting
+  // attaches a generic preloaded-indirect-flow name, so the verifier must not
+  // depend on OptimizationReport labels.
+  (void)optimizations;
+  bool saw_proved_step = false;
+  std::set<std::string> selector_registers;
+  for (const ResolvedStep& step : steps) {
+    if (!step.comment.has_value() ||
+        step.comment->find("indirect-target=") == std::string::npos) {
+      continue;
+    }
+    if (is_runtime_indirect_call_comment(step.comment))
+      continue;
+    const std::optional<std::string> register_name = indirect_flow_register_for_opcode(step.opcode);
+    if (!register_name.has_value() || !core::is_stable_indirect_selector(*register_name))
+      return false;
+    const std::optional<PreloadedSelectorAnnotation> annotation =
+        preloaded_selector_annotation_from_comment(step.comment, *register_name);
+    if (!annotation.has_value())
+      return false;
+    if (!final_preload_resolves_to_flow_target(preloads, *register_name, annotation->target,
+                                         annotation->value))
+      return false;
+    selector_registers.insert(*register_name);
+    saw_proved_step = true;
+  }
+  return saw_proved_step &&
+         indirect_flow_selector_registers_are_unallocated(selector_registers,
+                                                          allocated_registers);
+}
+
+bool fractional_selector_data_values_proved(const std::vector<OptimizationReport>& optimizations,
+                                            const CompileOptions& options,
+                                            const std::vector<PreloadReport>& preloads,
+                                            const std::vector<ResolvedStep>& steps) {
+  const bool has_recovered =
+      has_optimization_named(optimizations, "fractional-constant-selector-use");
+  const bool has_natural =
+      has_optimization_named(optimizations, "natural-fractional-constant-selector-use");
+  if (!has_recovered && !has_natural)
+    return false;
+  if (has_optimization_named(optimizations, "dead-integer-fractional-selector-use"))
+    return false;
+
+  std::set<std::string> required_values;
+  try {
+    for (const FractionalConstantSelectorPlan& selector : options.fractional_constant_selectors)
+      required_values.insert(normalize_number_key(selector.value));
+    for (const std::string& value : options.force_fractional_constant_selector_preloads)
+      required_values.insert(normalize_number_key(value));
+  } catch (...) {
+    return false;
+  }
+  if (required_values.empty())
+    return false;
+
+  for (const std::string& expected : required_values) {
+    bool proved = false;
+    if (has_recovered && has_fractional_selector_recovery_step(steps, expected)) {
+      proved = true;
+    }
+    if (!proved && has_natural) {
+      for (const PreloadReport& preload : preloads) {
+        // Natural fractional-selector proof is tied to a selector-capable
+        // stable register. A matching value preloaded into an ordinary data
+        // register is not a proof that the indirect-flow selector preserves
+        // the user-visible fractional data.
+        if (!core::is_stable_indirect_selector(preload.register_name))
+          continue;
+        if (normalize_number_key(preload.value) == expected) {
+          proved = true;
+          break;
+        }
+      }
+    }
+    if (!proved)
+      return false;
+  }
+
+  return true;
+}
+
+std::optional<std::string>
+dead_integer_fractional_selector_source_from_comment(const std::optional<std::string>& comment) {
+  if (!comment.has_value())
+    return std::nullopt;
+  constexpr std::string_view kMarker = "; fractional selector source ";
+  const std::size_t marker = comment->find(kMarker);
+  if (marker == std::string::npos)
+    return std::nullopt;
+  std::size_t pos = marker + kMarker.size();
+  const std::size_t value_start = pos;
+  while (pos < comment->size() && !std::isspace(static_cast<unsigned char>(comment->at(pos))) &&
+         comment->at(pos) != ';') {
+    ++pos;
+  }
+  if (pos == value_start)
+    return std::nullopt;
+  return comment->substr(value_start, pos - value_start);
+}
+
+bool is_register_recall_opcode(int opcode) {
+  return opcode >= 0x60 && opcode <= 0x6e;
+}
+
+bool dead_integer_fractional_selector_uses_proved(
+    const std::vector<OptimizationReport>& optimizations, const CompileOptions& options,
+    const std::vector<ResolvedStep>& steps) {
+  if (!has_optimization_named(optimizations, "dead-integer-fractional-selector-use"))
+    return false;
+
+  std::set<std::string> required_values;
+  try {
+    for (const FractionalConstantSelectorPlan& selector : options.fractional_constant_selectors)
+      required_values.insert(normalize_number_key(selector.value));
+    for (const std::string& value : options.force_fractional_constant_selector_preloads)
+      required_values.insert(normalize_number_key(value));
+  } catch (...) {
+    return false;
+  }
+  if (required_values.empty())
+    return false;
+
+  std::set<std::string> proved_values;
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    const std::optional<std::string> source =
+        dead_integer_fractional_selector_source_from_comment(steps.at(index).comment);
+    if (!source.has_value())
+      continue;
+    std::string normalized_source;
+    try {
+      normalized_source = normalize_number_key(*source);
+    } catch (...) {
+      return false;
+    }
+    if (!required_values.contains(normalized_source))
+      return false;
+    if (!is_register_recall_opcode(steps.at(index).opcode))
+      return false;
+    if (index + 1U >= steps.size() || steps.at(index + 1U).opcode != 0x35)
+      return false;
+    proved_values.insert(normalized_source);
+  }
+
+  return proved_values == required_values;
+}
+
 std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
-                                            const std::vector<OptimizationReport>& optimizations) {
+                                            const std::vector<OptimizationReport>& optimizations,
+                                            const CompileOptions& options,
+                                            const std::vector<PreloadReport>& preloads,
+                                            const std::vector<ResolvedStep>& steps,
+                                            const std::map<std::string, std::string>& registers) {
   std::vector<ProofReport> proofs;
   if (ast.v2.has_value()) {
     proofs.push_back(ProofReport{
@@ -40231,12 +41007,67 @@ std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
         .detail = "V2 state domains and expression ranges were tracked during lowering.",
     });
   }
-  if (has_any_optimization_named(optimizations, {"preloaded-indirect-flow", "dark-entry-layout",
-                                                 "post-layout-existing-selector-flow"})) {
+  if (indirect_flow_targets_proved(optimizations, preloads, steps, registers)) {
     proofs.push_back(ProofReport{
         .id = "indirect-flow-targets",
         .status = "proved",
-        .detail = "Indirect branch/call targets were selected only after layout/data-flow proof.",
+        .detail =
+            "Final preload artifacts for indirect branch/call selectors match the annotated "
+            "selector value and re-resolve to the annotated target.",
+    });
+  }
+  if (has_optimization_named(optimizations, "computed-dispatch") &&
+      synthesized_dispatch_plans_proved(options) && computed_dispatch_artifacts_proved(options, steps)) {
+    proofs.push_back(ProofReport{
+        .id = "computed-dispatch-targets",
+        .status = "proved",
+        .detail =
+            "Computed-dispatch formulas were solved against post-layout case-entry addresses and "
+            "matched final indirect-jump target/proof-target markers.",
+    });
+  }
+  if (runtime_indirect_call_targets_proved(optimizations, steps)) {
+    proofs.push_back(ProofReport{
+        .id = "runtime-indirect-call-targets",
+        .status = "proved",
+        .detail =
+            "Runtime indirect calls enter the target literal, store it into the same stable "
+            "register, and use that register before any overwrite.",
+    });
+  }
+  if (fractional_selector_data_values_proved(optimizations, options, preloads, steps)) {
+    proofs.push_back(ProofReport{
+        .id = "fractional-selector-data-values",
+        .status = "proved",
+        .detail =
+            "Every required fractional selector value was proved from final artifacts: a K {x} "
+            "recovery step or a matching final preload in a stable selector register.",
+    });
+  }
+  if (dead_integer_fractional_selector_uses_proved(optimizations, options, steps)) {
+    proofs.push_back(ProofReport{
+        .id = "dead-integer-fractional-selector-uses",
+        .status = "proved",
+        .detail =
+            "Every dead-integer fractional-selector recall is immediately followed by K {x}, "
+            "so the retuned integer component is erased before the value is consumed.",
+    });
+  }
+  if (suppressed_constant_preloads_proved(options, preloads)) {
+      proofs.push_back(ProofReport{
+          .id = "suppressed-constant-preloads",
+          .status = "proved",
+          .detail = "Suppressed constant preload value" +
+                    std::string(options.suppress_constant_preloads.size() == 1 ? " was" : "s were") +
+                  " absent from compiler-owned final preload entries.",
+      });
+  }
+  if (preloaded_constant_registers_proved(options, preloads)) {
+    proofs.push_back(ProofReport{
+        .id = "explicit-constant-preloads",
+        .status = "proved",
+        .detail =
+            "Every requested explicit constant preload was present in the final preload table.",
     });
   }
   if (has_optimization_named(optimizations, "address-code-overlay")) {
@@ -40269,7 +41100,8 @@ void populate_public_report(CompileResult& result, const ProgramAst& ast,
   result.rejected_candidates =
       build_rejected_candidate_reports(result.optimizations, static_cast<int>(result.steps.size()));
   result.machine_features_used = build_machine_features_used(result.optimizations, result.candidates);
-  result.proofs = build_proof_report(ast, result.optimizations);
+  result.proofs = build_proof_report(ast, result.optimizations, options, result.preloads,
+                                     result.steps, result.registers);
   result.emulator_facts = mk61_profile().emulator_facts;
   result.optimizer =
       build_optimizer_report(result.optimizations, result.candidates, result.rejected_candidates);
@@ -40500,8 +41332,9 @@ std::optional<std::string> store_register_from_opcode(int opcode) {
 
 std::vector<PreloadReport>
 preloaded_indirect_flow_comment_preloads(const std::vector<MachineItem>& items) {
-  static const std::regex preload_pattern(R"(preloaded R([0-9a-e])=[^\s;]+ indirect-target=(\d+))",
-                                          std::regex_constants::icase);
+  static const std::regex preload_pattern(
+      R"(preloaded R([0-9a-e])=[^\s;]+ indirect-target=(\d+)(?:$|[\s;,]))",
+      std::regex_constants::icase);
 
   std::vector<PreloadReport> preloads;
   std::set<std::string> program_initialized_selectors;
@@ -40801,7 +41634,7 @@ discover_fractional_constant_selector_plans(const CompileResult& result,
 // jump (op(scale*x + offset) -> К БП r) instead of a k-way compare chain, and
 // solves the address formula against the actual post-layout case-body entry
 // addresses. Emulator-free: the formula is confirmed through the solver core,
-// and the whole candidate is still behavioral-equivalence gated.
+// and the whole candidate is still static-proof gated.
 
 struct ComputedDispatchMatch {
   int line = 0;
@@ -40869,9 +41702,9 @@ void collect_computed_dispatch_matches_stmt(const V2Statement& statement,
                                             std::vector<ComputedDispatchMatch>& out) {
   // Only exhaustive (no `otherwise`) k>=3 matches over distinct numeric case
   // values are eligible: a computed jump has no fall-through default, so an
-  // unmatched selector value would jump to an unintended address. The
-  // equivalence gate is the final guard, but requiring no otherwise keeps the
-  // candidate honest up front. Non-integer values are admitted only for the
+  // unmatched selector value would jump to an unintended address. The static
+  // computed-dispatch proof gate is the final guard, but requiring no otherwise
+  // keeps the candidate honest up front. Non-integer values are admitted only for the
   // reverse-packed decimal-cents shape (payload.target, reached by scale=100);
   // arbitrary fractional matches would explode the post-layout formula search.
   if (statement.kind == "v2_match" && statement.expr.has_value() &&
@@ -40995,6 +41828,18 @@ std::optional<core::SolverAngleMode> solver_angle_mode_for(const V2Program& prog
   return std::nullopt;
 }
 
+std::string solver_angle_mode_name(core::SolverAngleMode mode) {
+  switch (mode) {
+    case core::SolverAngleMode::Rad:
+      return "rad";
+    case core::SolverAngleMode::Grd:
+      return "grd";
+    case core::SolverAngleMode::Deg:
+    default:
+      return "deg";
+  }
+}
+
 namespace {
 
 constexpr std::size_t kMaxCompileResultCacheEntries = 4096;
@@ -41103,11 +41948,6 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   // Single-step candidate mutations, retained so the beam pass can replay them
   // on top of arbitrary frontier states rather than just the base options.
   std::vector<std::function<void(CompileOptions&)>> beam_configures;
-  // Non-aggressive reference compile used by the behavioral-equivalence gate.
-  // Captured before any candidate replaces `best` so risky candidates are
-  // always validated against the trusted baseline rather than another
-  // speculative form.
-  const CompileResult equivalence_baseline = best;
   if (!options.disable_return_stack_script &&
       (!best.implemented || has_return_stack_optimization(best))) {
     CompileOptions fallback_options = options;
@@ -41144,11 +41984,9 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   //      after a cell-deleting overlay (post_layout_indirect_flow.cpp
   //      retarget_selector_preloads_after_overlay), fixing the DEFECT-4
   //      off-by-one that made e.g. the BitClear fixture read 0 instead of 1.
-  //   2. A behavioral-equivalence acceptance gate
-  //      (candidate_behaviorally_matches_baseline) runs every aggressive
-  //      candidate against the non-aggressive baseline on a battery of input
-  //      scenarios and rejects any form whose runtime behavior diverges, so a
-  //      smaller-but-wrong candidate can never be selected.
+  //   2. Dangerous candidates must satisfy local static proof obligations
+  //      (optimizer_static_gate_accepts) before selection.  Unproved forms are
+  //      rejected instead of being blessed by an optimizer-internal emulator run.
   // Combined with the earlier DEFECT 1/2/3 fixes (sound conditional conversion,
   // stable-register-only borrows, raw-load-stable selectors) the rescue is
   // correct for all programs. See docs/20 "Applied post-parity optimizations".
@@ -41270,10 +42108,9 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         // byte-identical while still letting genuinely over-budget programs
         // (e.g. tic-tac-toe-4x4) reach a smaller listing.
         //
-        // TEMPORARY: correctness of the dead-integer twin currently rests on the
-        // behavioral-equivalence gate, which embeds the emulator inside the
-        // optimizer; see EMULATOR-DECOUPLE. The plan is to replace gate-proven
-        // soundness with a static dead-integer analysis.
+        // Dead-integer twins still need a static dead-component proof.  Until
+        // that proof exists, the default optimizer rejects them as unproved
+        // dangerous candidates.
         if (emit_rescue_twins) {
           std::vector<FractionalConstantSelectorPlan> rescue_plans =
               discover_fractional_constant_selector_plans(probe, selector_program,
@@ -41292,25 +42129,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           }
         }
       };
-  auto fast_static_gate_accepts = [&](const CandidateSpec& candidate,
-                                      const CompileResult& result) {
-    if (!options.fast_candidate_search || candidate.name != "dual-use-constant-indirect-flow")
-      return false;
-    if (!candidate.options.dual_use_constant_indirect_flow ||
-        candidate.options.aggressive_post_layout_indirect_flow ||
-        candidate.options.preloaded_indirect_flow || candidate.options.forward_indirect_flow ||
-        candidate.options.runtime_indirect_call_flow ||
-        candidate.options.assume_dead_selector_integer_part ||
-        !candidate.options.fractional_constant_selectors.empty() ||
-        !candidate.options.synthesized_dispatch_plans.empty() ||
-        !candidate.options.force_fractional_constant_selector_preloads.empty()) {
-      return false;
-    }
-    return has_optimization_named(result.optimizations, "constants-dual-use") &&
-           has_proof_named(result.proofs, "indirect-flow-targets");
-  };
   std::size_t evaluated_candidate_count = 0;
-  std::optional<std::vector<EquivalenceObservation>> baseline_observations;
   auto evaluate_queued_candidates = [&]() {
     for (; evaluated_candidate_count < candidates.size(); ++evaluated_candidate_count) {
       const CandidateSpec& candidate = candidates.at(evaluated_candidate_count);
@@ -41335,18 +42154,14 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       }
       if (!candidate_beats_best(result, best))
         continue;
-      if (candidate_needs_behavioral_equivalence_gate(candidate.options) &&
-          equivalence_baseline.implemented && !fast_static_gate_accepts(candidate, result)) {
-        if (!baseline_observations.has_value())
-          baseline_observations = equivalence_observations(equivalence_baseline);
-        if (!candidate_behaviorally_matches_baseline(*baseline_observations, result)) {
-          if (trace_candidates) {
-            std::cerr << "[candidate-trace] reject-nonequivalent #"
-                      << (evaluated_candidate_count + 1U) << " " << candidate.name << " steps="
-                      << result.steps.size() << "\n";
-          }
-          continue;
+      if (candidate_needs_static_proof_gate(candidate.options) &&
+          !optimizer_static_gate_accepts(candidate.options, result)) {
+        if (trace_candidates) {
+          std::cerr << "[candidate-trace] reject-unproved #"
+                    << (evaluated_candidate_count + 1U) << " " << candidate.name << " steps="
+                    << result.steps.size() << "\n";
         }
+        continue;
       }
       const std::string comparison = best.implemented
                                          ? std::to_string(result.steps.size()) + " vs " +
@@ -42970,7 +43785,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   // into a single computed indirect jump. The address formula is solved against
   // the actual post-layout case-body entry addresses via a small fixpoint (the
   // dispatch prefix size depends on the formula, which shifts the entries), then
-  // queued as a behavioral-equivalence-gated SizeRescue candidate.
+  // queued as a static-proof-gated SizeRescue candidate.
   if (needs_size_rescue && selector_probe_program.has_value() &&
       fast_candidate_allowed("computed-dispatch")) {
     const std::vector<ComputedDispatchMatch> dispatch_matches =
@@ -42986,6 +43801,9 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
         plan.op_opcode = -1;
         plan.scale = 1.0;
         plan.offset = 0.0;
+        plan.proof_angle_fixed = angle_mode.has_value();
+        plan.proof_angle_mode = angle_mode.has_value() ? solver_angle_mode_name(*angle_mode) : "";
+        std::vector<core::AddressConstraint> proof_constraints;
         core::AddressSolverOptions solver_options;
         solver_options.allow_affine = true;
         solver_options.angle_fixed = angle_mode.has_value();
@@ -43029,11 +43847,21 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
           plan.op_name = formula->op_name;
           plan.scale = formula->scale;
           plan.offset = formula->offset;
-          if (same)
+          if (same) {
+            proof_constraints = constraints;
             converged = true;
+          }
         }
         if (!converged)
           continue;
+        plan.proof_constraints.clear();
+        plan.proof_constraints.reserve(proof_constraints.size());
+        for (const core::AddressConstraint& constraint : proof_constraints) {
+          plan.proof_constraints.push_back(SynthesizedDispatchProofConstraint{
+              .input = constraint.input,
+              .target = constraint.target,
+          });
+        }
         CompileOptions candidate_options = options;
         candidate_options.synthesized_dispatch_plans = {plan};
         add_configured_candidate(std::move(candidate_options), "computed-dispatch",
@@ -43385,7 +44213,7 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
   // later step builds on them) are discarded. The beam keeps the K smallest
   // frontier states regardless of whether they beat the incumbent, layering the
   // same single-step mutations on each, so multi-step chains among the existing
-  // general passes can be discovered and validated through the behavioral gate.
+  // general passes can be discovered and validated through the static proof gate.
   if (beam_search_enabled) {
     const auto env_size = [](const char* name, std::size_t fallback) -> std::size_t {
       const char* value = std::getenv(name);
@@ -43466,12 +44294,9 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
     std::set<std::string> beam_seen;
     auto beam_gate_ok = [&](const CompileOptions& candidate_options,
                             const CompileResult& result) -> bool {
-      if (candidate_needs_behavioral_equivalence_gate(candidate_options) &&
-          equivalence_baseline.implemented) {
-        if (!baseline_observations.has_value())
-          baseline_observations = equivalence_observations(equivalence_baseline);
-        if (!candidate_behaviorally_matches_baseline(*baseline_observations, result))
-          return false;
+      if (candidate_needs_static_proof_gate(candidate_options) &&
+          !optimizer_static_gate_accepts(candidate_options, result)) {
+        return false;
       }
       return true;
     };

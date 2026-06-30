@@ -9,8 +9,11 @@
 namespace mkpro::tests {
 
 void address_formula_solver_synthesizes_dispatch();
+void address_formula_solver_verifies_static_proof_obligations();
 void computed_dispatch_targets_survive_dead_code_elimination();
 void computed_dispatch_discovery_keeps_program_correct();
+void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates();
+void optimizer_translation_unit_stays_emulator_free();
 void arithmetic_if_matches_typescript_contract();
 void bit_mask_quotient_reuse_matches_typescript_contract();
 void board_width_macros_matches_typescript_contract();
@@ -72,6 +75,7 @@ void format_primitives_match_typescript_contract();
 void golden_listing_contract_matches_typescript_contract();
 void setup_formatting_matches_typescript_contract();
 void functions_match_typescript_contract();
+void indirect_flow_target_marker_requires_strict_boundary();
 void indirect_addressing_matches_typescript_contract();
 void indirect_selector_integer_part_matches_typescript_contract();
 void int128_fallback_matches_builtin();
@@ -159,10 +163,16 @@ int main(int argc, char** argv) {
   const std::vector<TestCase> tests = {
       {"address_formula_solver_synthesizes_dispatch",
        mkpro::tests::address_formula_solver_synthesizes_dispatch},
+      {"address_formula_solver_verifies_static_proof_obligations",
+       mkpro::tests::address_formula_solver_verifies_static_proof_obligations},
       {"computed_dispatch_targets_survive_dead_code_elimination",
        mkpro::tests::computed_dispatch_targets_survive_dead_code_elimination},
       {"computed_dispatch_discovery_keeps_program_correct",
        mkpro::tests::computed_dispatch_discovery_keeps_program_correct},
+      {"optimizer_static_proof_gate_rejects_unproved_dangerous_candidates",
+       mkpro::tests::optimizer_static_proof_gate_rejects_unproved_dangerous_candidates},
+      {"optimizer_translation_unit_stays_emulator_free",
+       mkpro::tests::optimizer_translation_unit_stays_emulator_free},
       {"arithmetic_if_matches_typescript_contract",
        mkpro::tests::arithmetic_if_matches_typescript_contract},
       {"bit_mask_quotient_reuse_matches_typescript_contract",
@@ -280,6 +290,8 @@ int main(int argc, char** argv) {
       {"golden_listing_contract_matches_typescript_contract",
        mkpro::tests::golden_listing_contract_matches_typescript_contract},
       {"functions_match_typescript_contract", mkpro::tests::functions_match_typescript_contract},
+      {"indirect_flow_target_marker_requires_strict_boundary",
+       mkpro::tests::indirect_flow_target_marker_requires_strict_boundary},
       {"indirect_addressing_matches_typescript_contract",
        mkpro::tests::indirect_addressing_matches_typescript_contract},
       {"indirect_selector_integer_part_matches_typescript_contract",

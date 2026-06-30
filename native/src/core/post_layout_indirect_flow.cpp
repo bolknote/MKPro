@@ -1059,18 +1059,25 @@ std::string regex_escape(std::string_view value) {
 }
 
 std::optional<std::string> replace_indirect_target_comment(
-    const std::optional<std::string>& comment, const std::string& register_name,
-    const std::string& selector_value, int target) {
+    const std::optional<std::string>& comment, const std::string& old_register_name,
+    const std::string& new_register_name, const std::string& selector_value, int target) {
   if (!comment.has_value())
     return std::nullopt;
-  const std::regex pattern("preloaded R" + regex_escape(register_name) +
+  const std::regex pattern("preloaded R" + regex_escape(old_register_name) +
                            R"(=[^\s;]+ indirect-target=\d+)",
                            std::regex_constants::icase);
   if (!std::regex_search(*comment, pattern))
     return comment;
   return std::regex_replace(*comment, pattern,
-                            "preloaded R" + register_name + "=" + selector_value +
+                            "preloaded R" + new_register_name + "=" + selector_value +
                                 " indirect-target=" + std::to_string(target));
+}
+
+std::optional<std::string> replace_indirect_target_comment(
+    const std::optional<std::string>& comment, const std::string& register_name,
+    const std::string& selector_value, int target) {
+  return replace_indirect_target_comment(comment, register_name, register_name, selector_value,
+                                         target);
 }
 
 std::vector<MachineItem>
@@ -1122,6 +1129,7 @@ MergeDuplicateSelectorsResult merge_duplicate_selectors(const std::vector<Machin
                                                         const std::vector<PreloadReport>& preloads) {
   std::map<std::string, std::string> canonical_by_value;
   std::map<std::string, std::string> remap;
+  std::map<std::string, std::string> value_by_kept_register;
   std::vector<PreloadReport> kept;
   kept.reserve(preloads.size());
 
@@ -1129,6 +1137,7 @@ MergeDuplicateSelectorsResult merge_duplicate_selectors(const std::vector<Machin
     const auto canonical_it = canonical_by_value.find(preload.value);
     if (canonical_it == canonical_by_value.end()) {
       canonical_by_value[preload.value] = preload.register_name;
+      value_by_kept_register[preload.register_name] = preload.value;
       kept.push_back(preload);
       continue;
     }
@@ -1150,8 +1159,26 @@ MergeDuplicateSelectorsResult merge_duplicate_selectors(const std::vector<Machin
     const auto remap_it = remap.find(op.register_name);
     if (remap_it == remap.end())
       continue;
+    const std::string source_register = op.register_name;
     const std::string target_register = remap_it->second;
-    op.opcode = op.opcode - register_index(op.register_name) + register_index(target_register);
+    const auto selector_it = value_by_kept_register.find(target_register);
+    if (selector_it == value_by_kept_register.end())
+      return MergeDuplicateSelectorsResult{
+          .items = items,
+          .preloads = preloads,
+      };
+    const std::optional<IndirectAddressEvaluation> decoded = evaluate_indirect_address(
+        target_register, selector_it->second, IndirectOperationKind::Flow);
+    if (!decoded.has_value() || !decoded->actual_flow_target.has_value())
+      return MergeDuplicateSelectorsResult{
+          .items = items,
+          .preloads = preloads,
+      };
+    op.opcode = op.opcode - register_index(source_register) + register_index(target_register);
+    op.meta.mnemonic = indirect_branch_mnemonic(op.opcode, target_register);
+    op.meta.comment =
+        replace_indirect_target_comment(op.meta.comment, source_register, target_register,
+                                        selector_it->second, *decoded->actual_flow_target);
     op.register_name = target_register;
   }
 
@@ -1327,6 +1354,13 @@ std::optional<int> known_indirect_flow_target_comment(const std::optional<std::s
          std::isdigit(static_cast<unsigned char>(comment->at(cursor))) != 0) {
     target = (target * 10) + (comment->at(cursor) - '0');
     ++cursor;
+  }
+  if (cursor < comment->size()) {
+    const char boundary = comment->at(cursor);
+    if (std::isspace(static_cast<unsigned char>(boundary)) == 0 && boundary != ';' &&
+        boundary != ',') {
+      return std::nullopt;
+    }
   }
   if (target < 0 || target > 104)
     return std::nullopt;
