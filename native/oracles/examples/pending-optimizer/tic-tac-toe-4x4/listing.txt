@@ -52,10 +52,11 @@
    48 |  02  | 2                       |
    49 |  09  | 9                       |
    50 |  4C  | X→П c                   | setup Rc
-   51 |  64  | П→X 4                   | expected_mode("grd") probe
-   52 |  1D  | F cos                   | expected_mode("grd") cosine
-   53 |  18  | F ln                    | expected_mode("grd") domain guard
-   54 |  50  | С/П                     | setup complete
+   51 |  09  | 9                       |
+   52 |  01  | 1                       |
+   53 |  1D  | F cos                   | expected_mode("grd") cosine
+   54 |  18  | F ln                    | expected_mode("grd") domain guard
+   55 |  50  | С/П                     | setup complete
 
 # Main Listing
  Step | Code | Command                 | Comment
@@ -117,7 +118,7 @@
    54 |  01  | 1                       |
    55 |  11  | −                       | expr -
    56 |  4D  | X→П d                   | set slot
-   57 |  DD  | К П→X d                 | indexed packed digit update base
+   57 |  DD  | К П→X d                 | indexed packed digit update base lines; indirect-memory-targets=4,5,6,7
    58 |  60  | П→X 0                   | recall best_score
    59 |  10  | +                       | indexed packed digit update
    60 |  BD  | К X→П d                 | indexed set lines; indirect-memory-targets=4,5,6,7
@@ -184,8 +185,9 @@
   >79 |  15  | F 10ˣ                   | pow10()
   >7A |  62  | П→X 2                   | recall y
   >7B |  6C  | П→X c                   | preload const 36.22600029; fractional selector source 0.22600029
-  >7C |  12  | ×                       | expr *
-  >7D |  15  | F 10ˣ                   | pow10()
-  >7E |  34  | К [x]                   | int()
-  >7F |  10  | +                       | expr +
-  >80 |  52  | В/О                     | expression helper return
+  >7C |  35  | К {x}                   | fractional selector const 0.22600029
+  >7D |  12  | ×                       | expr *
+  >7E |  15  | F 10ˣ                   | pow10()
+  >7F |  34  | К [x]                   | int()
+  >80 |  10  | +                       | expr +
+  >81 |  52  | В/О                     | expression helper return

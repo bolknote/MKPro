@@ -492,7 +492,7 @@
       "id": "pending-optimizer/tic-tac-toe-4x4",
       "sourcePath": "examples/pending-optimizer/tic-tac-toe-4x4.mkpro",
       "sourceSha256": "19feaeeeaec1a25e74b1dd03a8788f7afc1f926529faef773444bcf2e709ed9a",
-      "steps": 134,
+      "steps": 130,
       "artifacts": {
         "bytes": "pending-optimizer/tic-tac-toe-4x4/bytes.txt",
         "hex": "pending-optimizer/tic-tac-toe-4x4/hex.txt",

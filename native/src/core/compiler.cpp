@@ -10495,6 +10495,15 @@ std::string indexed_memory_comment(const LoweringContext& context, const std::st
   return comment;
 }
 
+std::string indexed_memory_comment_or_action(LoweringContext& context, const std::string& action,
+                                             const Expression& expression,
+                                             const PreparedIndexedSelector& prepared) {
+  const V2StateField* field = indexed_state_field(context, expression);
+  if (field == nullptr)
+    return action;
+  return indexed_memory_comment(context, action, expression, *field, prepared);
+}
+
 std::optional<PreparedIndexedSelector> prepare_indirect_index_selector(LoweringContext& context,
                                                                        const Expression& expression,
                                                                        int source_line) {
@@ -17250,15 +17259,18 @@ bool emit_indexed_packed_pow10_delta_from_stack_index(LoweringContext& context,
   if (!lower_expression_to_x(context, factor))
     return false;
   context.emitter.emit_op(0x12, "*", "stack-carried packed digit delta", line);
+  const PreparedIndexedSelector prepared_selector{.selector = selector};
   context.emitter.emit_op(0xd0 + selector_register,
                           "К П->X " + core::register_name_for_index(selector_register),
-                          "indexed packed digit update base", line);
+                          indexed_memory_comment_or_action(
+                              context, "indexed packed digit update base", target,
+                              prepared_selector),
+                          line);
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(op);
   if (!opcode.has_value())
     return false;
   context.emitter.emit_op(opcode->first, opcode->second, "indexed packed digit update", line);
-  emit_prepared_indirect_indexed_store(context, target,
-                                       PreparedIndexedSelector{.selector = selector}, line);
+  emit_prepared_indirect_indexed_store(context, target, prepared_selector, line);
   return true;
 }
 
@@ -17326,7 +17338,10 @@ bool lower_indexed_packed_pow10_delta_statement(LoweringContext& context,
     return false;
   context.emitter.emit_op(0xd0 + register_index_for(context, prepared_selector->selector),
                           "К П->X " + register_text_for(context, prepared_selector->selector),
-                          "indexed packed digit update base", statement.line);
+                          indexed_memory_comment_or_action(
+                              context, "indexed packed digit update base", target,
+                              *prepared_selector),
+                          statement.line);
   if (!lower_expression_to_x(context, factor))
     return false;
   const std::optional<std::pair<int, std::string>> opcode = binary_opcode(op);
@@ -17811,15 +17826,18 @@ void emit_packed_line_family_update_check_tail(LoweringContext& context,
   context.emitter.emit_op(0x15, "F 10^x", "stack-carried packed digit pow10", update.update_line);
   (void)lower_expression_to_x(context, update.factor);
   context.emitter.emit_op(0x12, "*", "stack-carried packed digit delta", update.update_line);
+  const PreparedIndexedSelector prepared_selector{.selector = update.selector};
   context.emitter.emit_op(0xd0 + update.selector_register,
                           "К П->X " + core::register_name_for_index(update.selector_register),
-                          "indexed packed digit update base", update.update_line);
+                          indexed_memory_comment_or_action(
+                              context, "indexed packed digit update base", update.target,
+                              prepared_selector),
+                          update.update_line);
   const std::optional<std::pair<int, std::string>> op = binary_opcode(update.op);
   if (op.has_value())
     context.emitter.emit_op(op->first, op->second, "indexed packed digit update",
                             update.update_line);
-  emit_prepared_indirect_indexed_store(context, update.target,
-                                       PreparedIndexedSelector{.selector = update.selector},
+  emit_prepared_indirect_indexed_store(context, update.target, prepared_selector,
                                        update.update_line);
 
   (void)lower_expression_to_x(context, update.mask);
@@ -17942,16 +17960,19 @@ bool lower_x_param_indexed_fractional_report_tail_rule(LoweringContext& context,
     if (!lower_expression_to_x(context, match->factor))
       return false;
     context.emitter.emit_op(0x12, "*", "stack-carried packed digit delta", match->update_line);
+    const PreparedIndexedSelector prepared_selector{.selector = match->selector};
     context.emitter.emit_op(0xd0 + match->selector_register,
                             "К П->X " + core::register_name_for_index(match->selector_register),
-                            "indexed packed digit update base", match->update_line);
+                            indexed_memory_comment_or_action(
+                                context, "indexed packed digit update base", match->target,
+                                prepared_selector),
+                            match->update_line);
     const std::optional<std::pair<int, std::string>> op = binary_opcode(match->op);
     if (!op.has_value())
       return false;
     context.emitter.emit_op(op->first, op->second, "indexed packed digit update",
                             match->update_line);
-    emit_prepared_indirect_indexed_store(context, match->target,
-                                         PreparedIndexedSelector{.selector = match->selector},
+    emit_prepared_indirect_indexed_store(context, match->target, prepared_selector,
                                          match->update_line);
 
     if (!lower_expression_to_x(context, match->mask))
@@ -31466,9 +31487,10 @@ bool lower_preincrement_indexed_store(LoweringContext& context, const V2Statemen
   }
 
   const int pointer_register = pointer_register_it->second;
+  const PreparedIndexedSelector prepared_selector{.selector = pointer};
   context.emitter.emit_op(0xb0 + pointer_register, "К X->П " + register_text_for(context, pointer),
-                          "preincrement indexed set " +
-                              bank_member_key(store->target.base, store->target.field),
+                          indexed_memory_comment(context, "preincrement indexed set",
+                                                 store->target, *field, prepared_selector),
                           store->line);
   context.emitter.current_x_variable.reset();
   context.emitter.current_x_expression.reset();
@@ -40822,19 +40844,140 @@ bool runtime_indirect_call_targets_proved(const std::vector<OptimizationReport>&
   return saw_proved_call;
 }
 
-bool indirect_flow_selector_registers_are_unallocated(
-    const std::set<std::string>& selector_registers,
-    const std::map<std::string, std::string>& allocated_registers) {
-  for (const auto& [name, allocated_register] : allocated_registers) {
-    if (name.starts_with("__") &&
-        (name.find("indirect") != std::string::npos || name.find("branch") != std::string::npos ||
-         name.find("tail") != std::string::npos || name.find("case_") != std::string::npos ||
-         name.find("shared_") != std::string::npos || name.find("bump_proc") != std::string::npos ||
-         name.starts_with("__bit_mask_") || name.starts_with("__const_") ||
-         name.starts_with("__display_scale_")))
+std::optional<std::set<std::string>> indirect_memory_targets_from_comment(
+    const std::optional<std::string>& comment) {
+  if (!comment.has_value())
+    return std::nullopt;
+  constexpr std::string_view kMarker = "indirect-memory-targets=";
+  std::string lowered = *comment;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  const std::size_t marker = lowered.find(kMarker);
+  if (marker == std::string::npos)
+    return std::nullopt;
+
+  std::size_t cursor = marker + kMarker.size();
+  std::set<std::string> targets;
+  bool expect_register = true;
+  while (cursor < lowered.size()) {
+    const char ch = lowered.at(cursor);
+    const bool is_valid_register = (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'e');
+    if (expect_register) {
+      if (!is_valid_register)
+        break;
+      targets.insert(std::string(1, ch));
+      expect_register = false;
+      ++cursor;
       continue;
-    if (selector_registers.contains(allocated_register))
+    }
+    if (ch != ',')
+      break;
+    expect_register = true;
+    ++cursor;
+  }
+  if (targets.empty() || expect_register)
+    return std::nullopt;
+  return targets;
+}
+
+bool opcode_is_indirect_memory_store(int opcode) {
+  return opcode >= 0xb0 && opcode <= 0xbe;
+}
+
+bool opcode_is_indirect_memory_recall(int opcode) {
+  return opcode >= 0xd0 && opcode <= 0xde;
+}
+
+bool step_mnemonic_starts_with(const ResolvedStep& step, std::string_view prefix) {
+  return step.mnemonic.rfind(std::string(prefix), 0) == 0;
+}
+
+bool step_is_direct_store(const ResolvedStep& step) {
+  return step.opcode >= 0x40 && step.opcode <= 0x4e &&
+         step_mnemonic_starts_with(step, "X->П ");
+}
+
+bool step_is_direct_recall(const ResolvedStep& step) {
+  return step.opcode >= 0x60 && step.opcode <= 0x6e &&
+         step_mnemonic_starts_with(step, "П->X ");
+}
+
+bool step_is_indirect_memory_store(const ResolvedStep& step) {
+  return opcode_is_indirect_memory_store(step.opcode) &&
+         step_mnemonic_starts_with(step, "К X->П ");
+}
+
+bool step_is_indirect_memory_recall(const ResolvedStep& step) {
+  return opcode_is_indirect_memory_recall(step.opcode) &&
+         step_mnemonic_starts_with(step, "К П->X ");
+}
+
+bool indirect_memory_access_may_touch_selector(const ResolvedStep& step,
+                                               const std::set<std::string>& selector_registers) {
+  const std::optional<std::set<std::string>> targets =
+      indirect_memory_targets_from_comment(step.comment);
+  if (!targets.has_value())
+    return true;
+  return std::any_of(targets->begin(), targets->end(), [&](const std::string& target) {
+    return selector_registers.contains(target);
+  });
+}
+
+bool step_writes_indirect_flow_selector(const ResolvedStep& step,
+                                        const std::set<std::string>& selector_registers) {
+  if (step_is_direct_store(step)) {
+    const std::string register_name = core::register_name_for_index(step.opcode - 0x40);
+    return selector_registers.contains(register_name);
+  }
+  if (step_is_indirect_memory_store(step))
+    return indirect_memory_access_may_touch_selector(step, selector_registers);
+  return false;
+}
+
+bool step_accesses_selector_as_data(const ResolvedStep& step,
+                                    const std::set<std::string>& selector_registers) {
+  if (step_writes_indirect_flow_selector(step, selector_registers))
+    return true;
+  if (step_is_direct_recall(step)) {
+    const std::string register_name = core::register_name_for_index(step.opcode - 0x60);
+    return selector_registers.contains(register_name);
+  }
+  if (step_is_indirect_memory_recall(step))
+    return indirect_memory_access_may_touch_selector(step, selector_registers);
+  return false;
+}
+
+bool compiler_owned_indirect_flow_allocation(const std::string& name) {
+  return name.starts_with("__") &&
+         (name.find("indirect") != std::string::npos || name.find("branch") != std::string::npos ||
+          name.find("tail") != std::string::npos || name.find("case_") != std::string::npos ||
+          name.find("shared_") != std::string::npos || name.find("bump_proc") != std::string::npos ||
+          name.starts_with("__bit_mask_") || name.starts_with("__const_") ||
+          name.starts_with("__display_scale_"));
+}
+
+bool indirect_flow_selector_registers_are_preserved(
+    const std::set<std::string>& selector_registers,
+    const std::map<std::string, std::string>& allocated_registers,
+    const std::vector<ResolvedStep>& steps) {
+  if (std::any_of(steps.begin(), steps.end(), [&](const ResolvedStep& step) {
+        return step_writes_indirect_flow_selector(step, selector_registers);
+      })) {
+    return false;
+  }
+
+  for (const auto& [name, allocated_register] : allocated_registers) {
+    if (compiler_owned_indirect_flow_allocation(name))
+      continue;
+    if (!selector_registers.contains(allocated_register))
+      continue;
+    const std::set<std::string> allocated_selector{allocated_register};
+    if (std::any_of(steps.begin(), steps.end(), [&](const ResolvedStep& step) {
+          return step_accesses_selector_as_data(step, allocated_selector);
+        })) {
       return false;
+    }
   }
   return true;
 }
@@ -40873,8 +41016,8 @@ bool indirect_flow_targets_proved(const std::vector<OptimizationReport>& optimiz
     saw_proved_step = true;
   }
   return saw_proved_step &&
-         indirect_flow_selector_registers_are_unallocated(selector_registers,
-                                                          allocated_registers);
+         indirect_flow_selector_registers_are_preserved(selector_registers, allocated_registers,
+                                                        steps);
 }
 
 bool fractional_selector_data_values_proved(const std::vector<OptimizationReport>& optimizations,

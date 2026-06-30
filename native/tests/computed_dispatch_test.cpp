@@ -167,6 +167,12 @@ ResolvedStep resolved_step(int opcode, std::string comment) {
   return step;
 }
 
+ResolvedStep resolved_step_with_mnemonic(int opcode, std::string mnemonic, std::string comment) {
+  ResolvedStep step = resolved_step(opcode, std::move(comment));
+  step.mnemonic = std::move(mnemonic);
+  return step;
+}
+
 std::string indirect_target_comment(const std::string& register_name, const std::string& value,
                                     int target) {
   return "preloaded R" + register_name + "=" + value + " indirect-target=" +
@@ -716,6 +722,13 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
   require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options, preloaded_result),
           "preloaded indirect-flow candidate with verified target artifact should be accepted");
 
+  CompileResult preloaded_with_raw_operand_result = preloaded_result;
+  preloaded_with_raw_operand_result.steps.insert(preloaded_with_raw_operand_result.steps.begin(),
+                                                resolved_step(0x49, "raw address operand"));
+  require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
+                                                          preloaded_with_raw_operand_result),
+          "preloaded indirect-flow proof must not treat raw operand bytes as register writes");
+
   CompileResult artifact_only_preloaded_result = preloaded_result;
   artifact_only_preloaded_result.optimizations.clear();
   require(optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
@@ -723,12 +736,32 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
           "preloaded indirect-flow proof should be accepted from final artifacts without trusting "
           "optimization report names");
 
-  CompileResult preloaded_allocated_selector_result = preloaded_result;
-  preloaded_allocated_selector_result.registers["live_value"] = "9";
+  CompileResult preloaded_dead_allocated_selector_result = preloaded_result;
+  preloaded_dead_allocated_selector_result.registers["dead_value"] = "9";
+  require(optimizer_static_proof_gate_accepts_for_testing(
+              preloaded_options, preloaded_dead_allocated_selector_result),
+          "preloaded indirect-flow proof should allow allocated selector registers that are not "
+          "accessed as data by the final program");
+
+  CompileResult preloaded_read_allocated_selector_result = preloaded_result;
+  preloaded_read_allocated_selector_result.registers["live_value"] = "9";
+  preloaded_read_allocated_selector_result.steps.insert(
+      preloaded_read_allocated_selector_result.steps.begin(),
+      resolved_step_with_mnemonic(0x69, "П->X 9", "recall live_value"));
+  require(!optimizer_static_proof_gate_accepts_for_testing(
+              preloaded_options, preloaded_read_allocated_selector_result),
+          "preloaded indirect-flow proof must reject allocated selector registers that are read as "
+          "data by the final program");
+
+  CompileResult preloaded_written_selector_result = preloaded_result;
+  preloaded_written_selector_result.registers["live_value"] = "9";
+  preloaded_written_selector_result.steps.insert(preloaded_written_selector_result.steps.begin(),
+                                                resolved_step_with_mnemonic(0x49, "X->П 9",
+                                                                            "set live_value"));
   require(!optimizer_static_proof_gate_accepts_for_testing(preloaded_options,
-                                                           preloaded_allocated_selector_result),
-          "preloaded indirect-flow proof must reject selector preloads that overwrite allocated "
-          "data registers");
+                                                           preloaded_written_selector_result),
+          "preloaded indirect-flow proof must reject selector preloads that are overwritten by the "
+          "final program");
 
   CompileResult preloaded_compiler_selector_result = preloaded_result;
   preloaded_compiler_selector_result.registers["__loop_indirect"] = "9";
