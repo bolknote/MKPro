@@ -138,6 +138,24 @@ bool has_proof(const CompileResult& result, const std::string& id) {
                      [&](const ProofReport& proof) { return proof.id == id; });
 }
 
+const CandidateReport* find_candidate(const std::vector<CandidateReport>& candidates,
+                                      const std::string& variant) {
+  const auto it = std::find_if(candidates.begin(), candidates.end(),
+                               [&](const CandidateReport& candidate) {
+                                 return candidate.variant == variant;
+                               });
+  return it == candidates.end() ? nullptr : &*it;
+}
+
+std::string capability_status(const CompileResult& result, const std::string& id) {
+  const auto it =
+      std::find_if(result.optimizer.capabilities.begin(), result.optimizer.capabilities.end(),
+                   [&](const OptimizerCapabilityReport& capability) {
+                     return capability.id == id;
+                   });
+  return it == result.optimizer.capabilities.end() ? "" : it->status;
+}
+
 OptimizationReport optimization_report(std::string name) {
   OptimizationReport report;
   report.name = std::move(name);
@@ -560,6 +578,73 @@ program DispatchProbeAngle {
     require(has_proof(angle_fixed, "computed-dispatch-targets"),
             "selected trig-eligible computed-dispatch must report its static target proof");
   }
+}
+
+void optimizer_analysis_reports_sign_pack_and_address_formula_opportunities() {
+  const std::string source = R"mkpro(
+program OpportunityReportProbe {
+  state {
+    expected_mode_only("grd")
+    flag: flag = 0
+    phase: counter 1..3 = 1
+    shown: counter 1..9 = 1
+  }
+
+  loop {
+    show(shown)
+    command = read()
+    match command {
+      1 => set_flag()
+      otherwise => clear_flag()
+    }
+    if flag == 1 {
+      phase = 1
+    }
+    else {
+      phase = 2
+    }
+    match phase {
+      1 => one()
+      2 => two()
+      3 => three()
+    }
+  }
+
+  fn set_flag() { flag = 1 }
+  fn clear_flag() { flag = 0 }
+  fn one() { halt(1) }
+  fn two() { halt(2) }
+  fn three() { halt(3) }
+}
+)mkpro";
+
+  CompileOptions options;
+  options.analysis = true;
+  options.disable_candidate_search = true;
+  const CompileResult result = compile_source(source, options);
+  require(result.implemented, "opportunity report probe should compile");
+  require(!has_error_diagnostic(result), "opportunity report probe should be diagnostic-free");
+
+  const CandidateReport* sign_pack = find_candidate(result.candidates, "sign-pack-state");
+  require(sign_pack != nullptr, "analysis should report a sign-pack state opportunity");
+  require(!sign_pack->selected, "sign-pack opportunity must be report-only");
+  require(sign_pack->reason.find("flag") != std::string::npos,
+          "sign-pack opportunity should name the boolean state");
+  require(sign_pack->reason.find("phase") != std::string::npos,
+          "sign-pack opportunity should name the hidden positive carrier");
+
+  const CandidateReport* computed_dispatch =
+      find_candidate(result.candidates, "computed-dispatch-formula");
+  require(computed_dispatch != nullptr,
+          "analysis should report an address-formula computed-dispatch opportunity");
+  require(!computed_dispatch->selected, "computed-dispatch opportunity must be report-only");
+  require(computed_dispatch->reason.find("address formula solver") != std::string::npos,
+          "computed-dispatch opportunity should point at the address solver");
+
+  require(capability_status(result, "sign-packed-state") == "considered",
+          "sign-packed-state capability should be considered when an opportunity is reported");
+  require(capability_status(result, "computed-dispatch") == "considered",
+          "computed-dispatch capability should be considered when an opportunity is reported");
 }
 
 void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {

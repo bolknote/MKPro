@@ -12,6 +12,7 @@ void address_formula_solver_synthesizes_dispatch();
 void address_formula_solver_verifies_static_proof_obligations();
 void computed_dispatch_targets_survive_dead_code_elimination();
 void computed_dispatch_discovery_keeps_program_correct();
+void optimizer_analysis_reports_sign_pack_and_address_formula_opportunities();
 void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates();
 void optimizer_translation_unit_stays_emulator_free();
 void arithmetic_if_matches_typescript_contract();
@@ -169,6 +170,8 @@ int main(int argc, char** argv) {
        mkpro::tests::computed_dispatch_targets_survive_dead_code_elimination},
       {"computed_dispatch_discovery_keeps_program_correct",
        mkpro::tests::computed_dispatch_discovery_keeps_program_correct},
+      {"optimizer_analysis_reports_sign_pack_and_address_formula_opportunities",
+       mkpro::tests::optimizer_analysis_reports_sign_pack_and_address_formula_opportunities},
       {"optimizer_static_proof_gate_rejects_unproved_dangerous_candidates",
        mkpro::tests::optimizer_static_proof_gate_rejects_unproved_dangerous_candidates},
       {"optimizer_translation_unit_stays_emulator_free",

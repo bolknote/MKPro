@@ -38397,6 +38397,9 @@ constexpr int kPostLayoutOfficialProgramLimit = 105;
 int reference_indirect_flow_rescue_above(const ProgramAst& ast, const CompileOptions& options);
 void populate_public_report(CompileResult& result, const ProgramAst& ast,
                             const CompileOptions& options);
+std::vector<CandidateReport> build_analysis_opportunity_reports(const ProgramAst& ast,
+                                                                const CompileResult& result,
+                                                                const CompileOptions& options);
 
 CompileResult compile_source_once(std::string source, const CompileOptions& options) {
   CompileResult result;
@@ -40471,9 +40474,15 @@ OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& op
       {"ephemeral-input-dispatch", "flow", "documented", {},
        {"ephemeral-input-dispatch"}, false,
        "Dispatches directly on one-shot input values without allocating persistent state."},
+      {"computed-dispatch", "flow", "undocumented", {"indirect-flow", "address-formula-solver"},
+       {"computed-dispatch", "computed-dispatch-formula"}, false,
+       "Synthesizes indirect-flow targets with a solved address formula after layout."},
       {"dispatch-default-merge", "flow", "documented", {},
        {"dispatch-default-merge"}, false,
        "Merges dispatch cases whose bodies are identical to the default branch."},
+      {"sign-packed-state", "state", "undocumented", {"sign-digits"},
+       {"sign-pack-state"}, false,
+       "Considers carrying one boolean state bit in the sign of a positive hidden counter."},
       {"preloaded-indirect-flow", "flow", "undocumented", {"indirect-flow"},
        {"preloaded-indirect-flow"}, false,
        "Uses compiler-owned setup-time branch selectors for one-cell indirect flow."},
@@ -40492,6 +40501,11 @@ OptimizerReport build_optimizer_report(const std::vector<OptimizationReport>& op
                           [&](const CandidateReport& rejected) {
                             return std::find(spec.active_when.begin(), spec.active_when.end(),
                                              rejected.variant) != spec.active_when.end();
+                          }) ||
+               std::any_of(candidates.begin(), candidates.end(), [&](const CandidateReport& candidate) {
+                 return !candidate.selected &&
+                        std::find(spec.active_when.begin(), spec.active_when.end(),
+                                  candidate.variant) != spec.active_when.end();
                           })) {
       status = "considered";
     }
@@ -40538,6 +40552,9 @@ build_machine_features_used(const std::vector<OptimizationReport>& optimizations
                                                  "post-layout-existing-selector-flow"}))
     add("indirect-flow", "optimizer",
         "Optimizer selected register-held branch addresses for one-cell indirect flow.");
+  if (has_optimization_named(optimizations, "computed-dispatch"))
+    add("address-formula-solver", "optimizer",
+        "Optimizer synthesized an indirect-flow target through a solved address formula.");
   if (has_any_optimization_named(optimizations, {"preloaded-super-dark-flow", "dark-entry-layout"}) ||
       std::any_of(candidates.begin(), candidates.end(), [](const CandidateReport& candidate) {
         return candidate.variant == "super-dark-dispatch" ||
@@ -41323,6 +41340,12 @@ void populate_public_report(CompileResult& result, const ProgramAst& ast,
   }
   result.candidates =
       build_candidate_reports(result.optimizations, static_cast<int>(result.steps.size()));
+  if (options.analysis) {
+    for (CandidateReport& candidate :
+         build_analysis_opportunity_reports(ast, result, options)) {
+      append_candidate_report_once(result.candidates, std::move(candidate));
+    }
+  }
   std::vector<CandidateReport> rejected_candidates = std::move(result.rejected_candidates);
   for (CandidateReport& rejected :
        build_rejected_candidate_reports(result.optimizations, static_cast<int>(result.steps.size()))) {
@@ -41987,6 +42010,218 @@ std::vector<ComputedDispatchMatch> collect_computed_dispatch_matches(const V2Pro
   for (const V2Rule& rule : program.rules)
     collect_computed_dispatch_matches_in(rule.body, out);
   return out;
+}
+
+bool analysis_boolean_state_field(const V2StateField& field) {
+  if (field.type == "flag")
+    return true;
+  if ((field.type == "counter" || field.type == "range") && field.min.has_value() &&
+      field.max.has_value()) {
+    return *field.min == 0 && *field.max == 1;
+  }
+  return false;
+}
+
+bool analysis_positive_sign_carrier_field(const V2StateField& field) {
+  if ((field.type != "counter" && field.type != "range") || !field.min.has_value() ||
+      !field.max.has_value())
+    return false;
+  return *field.min >= 1 && *field.max <= 99;
+}
+
+std::string analysis_register_suffix(const std::map<std::string, std::string>& registers,
+                                     const std::string& name) {
+  const auto it = registers.find(name);
+  return it == registers.end() ? "" : " (R" + it->second + ")";
+}
+
+void append_analysis_candidate_once(std::vector<CandidateReport>& reports,
+                                    CandidateReport candidate) {
+  const bool exists = std::any_of(
+      reports.begin(), reports.end(), [&](const CandidateReport& existing) {
+        return existing.site == candidate.site && existing.variant == candidate.variant &&
+               existing.reason == candidate.reason;
+      });
+  if (!exists)
+    reports.push_back(std::move(candidate));
+}
+
+std::vector<CandidateReport> build_sign_pack_opportunity_reports(const V2Program& program,
+                                                                 const CompileResult& result,
+                                                                 int steps) {
+  std::vector<CandidateReport> reports;
+  const std::set<std::string> displayed = display_source_names(program);
+  std::vector<const V2StateField*> booleans;
+  std::vector<const V2StateField*> carriers;
+  std::vector<std::string> displayed_carriers;
+
+  for (const V2StateField& field : program.state) {
+    if (analysis_boolean_state_field(field))
+      booleans.push_back(&field);
+    if (analysis_positive_sign_carrier_field(field)) {
+      if (displayed.contains(field.name)) {
+        displayed_carriers.push_back(field.name);
+      } else {
+        carriers.push_back(&field);
+      }
+    }
+  }
+
+  for (const V2StateField* boolean : booleans) {
+    std::vector<std::string> carrier_names;
+    for (const V2StateField* carrier : carriers) {
+      if (carrier->name == boolean->name)
+        continue;
+      carrier_names.push_back(carrier->name + analysis_register_suffix(result.registers,
+                                                                       carrier->name));
+    }
+    std::string reason;
+    if (!carrier_names.empty()) {
+      reason = boolean->name + analysis_register_suffix(result.registers, boolean->name) +
+               " is boolean state; possible positive hidden sign carrier(s): " +
+               join_strings(carrier_names, ", ");
+    } else {
+      reason = boolean->name + analysis_register_suffix(result.registers, boolean->name) +
+               " is boolean state, but no positive non-displayed counter carrier was found";
+      if (!displayed_carriers.empty())
+        reason += "; displayed carrier(s) would expose the sign: " +
+                  join_strings(displayed_carriers, ", ");
+    }
+    append_analysis_candidate_once(
+        reports, CandidateReport{
+                     .site = "state@" + boolean->name,
+                     .variant = "sign-pack-state",
+                     .steps = steps,
+                     .selected = false,
+                     .reason = std::move(reason),
+                 });
+  }
+  return reports;
+}
+
+struct NumericMatchOpportunity {
+  int line = 0;
+  int case_count = 0;
+  int value_count = 0;
+  bool has_otherwise = false;
+  bool numeric = false;
+  bool duplicate_value = false;
+  bool reverse_packed_decimal_cents = false;
+};
+
+void collect_numeric_match_opportunities_in(const std::vector<V2Statement>& statements,
+                                            std::vector<NumericMatchOpportunity>& out);
+
+void collect_numeric_match_opportunities_stmt(const V2Statement& statement,
+                                              std::vector<NumericMatchOpportunity>& out) {
+  if (statement.kind == "v2_match" && statement.expr.has_value() && statement.cases.size() >= 3) {
+    NumericMatchOpportunity opportunity;
+    opportunity.line = statement.line;
+    opportunity.case_count = static_cast<int>(statement.cases.size());
+    opportunity.has_otherwise = statement.otherwise != nullptr;
+    opportunity.numeric = true;
+    std::set<double> seen;
+    for (const V2MatchCase& match_case : statement.cases) {
+      if (match_case.values.empty()) {
+        opportunity.numeric = false;
+        break;
+      }
+      for (const std::string& value : match_case.values) {
+        const std::optional<ParsedComputedDispatchValue> parsed =
+            parse_computed_dispatch_match_value(value);
+        if (!parsed.has_value()) {
+          opportunity.numeric = false;
+          break;
+        }
+        ++opportunity.value_count;
+        opportunity.reverse_packed_decimal_cents =
+            opportunity.reverse_packed_decimal_cents || parsed->reverse_packed_decimal_cents;
+        if (!seen.insert(parsed->value).second)
+          opportunity.duplicate_value = true;
+      }
+      if (!opportunity.numeric)
+        break;
+    }
+    out.push_back(opportunity);
+  }
+
+  collect_numeric_match_opportunities_in(statement.body, out);
+  collect_numeric_match_opportunities_in(statement.then_body, out);
+  collect_numeric_match_opportunities_in(statement.else_body, out);
+  for (const V2MatchCase& match_case : statement.cases)
+    if (match_case.action != nullptr)
+      collect_numeric_match_opportunities_stmt(*match_case.action, out);
+  if (statement.otherwise != nullptr)
+    collect_numeric_match_opportunities_stmt(*statement.otherwise, out);
+}
+
+void collect_numeric_match_opportunities_in(const std::vector<V2Statement>& statements,
+                                            std::vector<NumericMatchOpportunity>& out) {
+  for (const V2Statement& statement : statements)
+    collect_numeric_match_opportunities_stmt(statement, out);
+}
+
+std::vector<NumericMatchOpportunity> collect_numeric_match_opportunities(
+    const V2Program& program) {
+  std::vector<NumericMatchOpportunity> out;
+  collect_numeric_match_opportunities_in(program.body, out);
+  for (const V2Rule& rule : program.rules)
+    collect_numeric_match_opportunities_in(rule.body, out);
+  return out;
+}
+
+std::vector<CandidateReport> build_computed_dispatch_opportunity_reports(
+    const V2Program& program, const CompileResult& result, int steps) {
+  (void)result;
+  std::vector<CandidateReport> reports;
+  if (has_optimization_named(result.optimizations, "computed-dispatch"))
+    return reports;
+
+  for (const NumericMatchOpportunity& opportunity : collect_numeric_match_opportunities(program)) {
+    std::string reason;
+    if (!opportunity.numeric) {
+      reason = "match has non-numeric case values; address formula solver handles only numeric "
+               "selectors";
+    } else if (opportunity.duplicate_value) {
+      reason = "match repeats a case value; computed dispatch needs a one-to-one value proof";
+    } else if (opportunity.has_otherwise) {
+      reason = "numeric match has an otherwise/default branch; computed indirect dispatch has no "
+               "safe fallback target yet";
+    } else {
+      reason = "exhaustive numeric match with " + std::to_string(opportunity.value_count) +
+               " value(s); address formula solver can try op(scale*x+offset) after layout";
+      if (opportunity.reverse_packed_decimal_cents)
+        reason += " including reverse-packed decimal-cents values";
+    }
+    append_analysis_candidate_once(
+        reports, CandidateReport{
+                     .site = "dispatch@line:" + std::to_string(opportunity.line),
+                     .variant = "computed-dispatch-formula",
+                     .steps = steps,
+                     .selected = false,
+                     .reason = std::move(reason),
+                 });
+  }
+  return reports;
+}
+
+std::vector<CandidateReport> build_analysis_opportunity_reports(const ProgramAst& ast,
+                                                                const CompileResult& result,
+                                                                const CompileOptions& options) {
+  (void)options;
+  std::vector<CandidateReport> reports;
+  if (!ast.v2.has_value())
+    return reports;
+  const int steps = static_cast<int>(result.steps.size());
+  for (CandidateReport& candidate :
+       build_sign_pack_opportunity_reports(*ast.v2, result, steps)) {
+    append_analysis_candidate_once(reports, std::move(candidate));
+  }
+  for (CandidateReport& candidate :
+       build_computed_dispatch_opportunity_reports(*ast.v2, result, steps)) {
+    append_analysis_candidate_once(reports, std::move(candidate));
+  }
+  return reports;
 }
 
 // Case-body entry addresses (in case order) from a probe compile that lowered the
