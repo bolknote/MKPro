@@ -2,6 +2,9 @@
 
 #include "mkpro/core/result.hpp"
 
+#include <optional>
+#include <string>
+
 namespace mkpro {
 
 // Test hook for the optimizer candidate acceptance boundary. Production
@@ -13,5 +16,8 @@ namespace mkpro {
 // not a production optimizer input.
 bool optimizer_static_proof_gate_accepts_for_testing(const CompileOptions& candidate_options,
                                                      const CompileResult& result);
+
+std::optional<std::string> optimizer_static_proof_gate_rejection_reason_for_testing(
+    const CompileOptions& candidate_options, const CompileResult& result);
 
 }  // namespace mkpro

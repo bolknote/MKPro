@@ -39467,6 +39467,9 @@ bool fractional_selector_data_values_proved(const std::vector<OptimizationReport
 bool dead_integer_fractional_selector_uses_proved(
     const std::vector<OptimizationReport>& optimizations, const CompileOptions& options,
     const std::vector<ResolvedStep>& steps);
+std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reason(
+    const std::vector<OptimizationReport>& optimizations, const CompileOptions& options,
+    const std::vector<ResolvedStep>& steps);
 
 std::vector<core::AddressConstraint> address_constraints_for_proof(
     const SynthesizedDispatchPlan& plan) {
@@ -39928,9 +39931,28 @@ bool optimizer_static_gate_accepts(const CompileOptions& candidate_options,
          forward_indirect_flow_static_gate_accepts(candidate_options, result);
 }
 
+std::optional<std::string> optimizer_static_gate_rejection_reason(
+    const CompileOptions& candidate_options, const CompileResult& result) {
+  if (optimizer_static_gate_accepts(candidate_options, result))
+    return std::nullopt;
+  if (candidate_options.assume_dead_selector_integer_part) {
+    if (const std::optional<std::string> reason =
+            dead_integer_fractional_selector_uses_rejection_reason(
+                result.optimizations, candidate_options, result.steps)) {
+      return reason;
+    }
+  }
+  return std::string("static proof gate rejected candidate");
+}
+
 bool optimizer_static_proof_gate_accepts_for_testing(const CompileOptions& candidate_options,
                                                      const CompileResult& result) {
   return optimizer_static_gate_accepts(candidate_options, result);
+}
+
+std::optional<std::string> optimizer_static_proof_gate_rejection_reason_for_testing(
+    const CompileOptions& candidate_options, const CompileResult& result) {
+  return optimizer_static_gate_rejection_reason(candidate_options, result);
 }
 
 bool is_only_budget_exceeded(const CompileResult& result) {
@@ -41094,11 +41116,21 @@ bool is_register_recall_opcode(int opcode) {
   return opcode >= 0x60 && opcode <= 0x6e;
 }
 
-bool dead_integer_fractional_selector_uses_proved(
+constexpr int kDeadIntegerFractionalEraseOpcode = 0x35;  // К {x}
+
+std::string dead_integer_fractional_selector_next_step_name(const ResolvedStep& step) {
+  if (!step.mnemonic.empty())
+    return step.mnemonic;
+  if (step.comment.has_value() && !step.comment->empty())
+    return *step.comment;
+  return "opcode " + std::to_string(step.opcode);
+}
+
+std::optional<std::string> dead_integer_fractional_selector_uses_rejection_reason(
     const std::vector<OptimizationReport>& optimizations, const CompileOptions& options,
     const std::vector<ResolvedStep>& steps) {
   if (!has_optimization_named(optimizations, "dead-integer-fractional-selector-use"))
-    return false;
+    return std::string("missing dead-integer fractional selector proof artifact");
 
   std::set<std::string> required_values;
   try {
@@ -41107,10 +41139,10 @@ bool dead_integer_fractional_selector_uses_proved(
     for (const std::string& value : options.force_fractional_constant_selector_preloads)
       required_values.insert(normalize_number_key(value));
   } catch (...) {
-    return false;
+    return std::string("dead-integer fractional selector proof has malformed required values");
   }
   if (required_values.empty())
-    return false;
+    return std::string("dead-integer fractional selector proof has no required values");
 
   std::set<std::string> proved_values;
   for (std::size_t index = 0; index < steps.size(); ++index) {
@@ -41122,18 +41154,37 @@ bool dead_integer_fractional_selector_uses_proved(
     try {
       normalized_source = normalize_number_key(*source);
     } catch (...) {
-      return false;
+      return std::string("malformed dead-integer fractional selector source ") + *source;
     }
     if (!required_values.contains(normalized_source))
-      return false;
+      return std::string("dead-integer fractional selector source ") + *source +
+             " is not required by the candidate";
     if (!is_register_recall_opcode(steps.at(index).opcode))
-      return false;
-    if (index + 1U >= steps.size() || steps.at(index + 1U).opcode != 0x35)
-      return false;
+      return std::string("dead-integer fractional selector source ") + *source +
+             " is not attached to a register recall";
+    if (index + 1U >= steps.size())
+      return std::string("dead-integer fractional selector source ") + *source +
+             " has no following K {x}";
+    if (steps.at(index + 1U).opcode != kDeadIntegerFractionalEraseOpcode) {
+      return std::string("dead-integer fractional selector source ") + *source + " reaches " +
+             dead_integer_fractional_selector_next_step_name(steps.at(index + 1U)) +
+             " before K {x}";
+    }
     proved_values.insert(normalized_source);
   }
 
-  return proved_values == required_values;
+  for (const std::string& required : required_values) {
+    if (!proved_values.contains(required))
+      return std::string("missing dead-integer fractional selector source ") + required;
+  }
+  return std::nullopt;
+}
+
+bool dead_integer_fractional_selector_uses_proved(
+    const std::vector<OptimizationReport>& optimizations, const CompileOptions& options,
+    const std::vector<ResolvedStep>& steps) {
+  return !dead_integer_fractional_selector_uses_rejection_reason(optimizations, options, steps)
+              .has_value();
 }
 
 std::vector<ProofReport> build_proof_report(const ProgramAst& ast,
@@ -42300,9 +42351,14 @@ CompileResult compile_source(std::string source, const CompileOptions& options) 
       if (candidate_needs_static_proof_gate(candidate.options) &&
           !optimizer_static_gate_accepts(candidate.options, result)) {
         if (trace_candidates) {
+          const std::optional<std::string> rejection_reason =
+              optimizer_static_gate_rejection_reason(candidate.options, result);
           std::cerr << "[candidate-trace] reject-unproved #"
                     << (evaluated_candidate_count + 1U) << " " << candidate.name << " steps="
-                    << result.steps.size() << "\n";
+                    << result.steps.size();
+          if (rejection_reason.has_value())
+            std::cerr << " reason=" << *rejection_reason;
+          std::cerr << "\n";
         }
         continue;
       }

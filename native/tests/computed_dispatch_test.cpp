@@ -917,6 +917,10 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                                                           safe_dead_integer_result),
           "dead-integer fractional selector elision should be accepted when final artifacts "
           "immediately erase the retuned integer part");
+  require(!optimizer_static_proof_gate_rejection_reason_for_testing(
+               safe_dead_integer_options, safe_dead_integer_result)
+               .has_value(),
+          "accepted dead-integer fractional selector elision should not report a rejection reason");
 
   CompileResult unsafe_dead_integer_result = safe_dead_integer_result;
   unsafe_dead_integer_result.steps.back() = resolved_step(0x12, "expr *");
@@ -924,6 +928,13 @@ void optimizer_static_proof_gate_rejects_unproved_dangerous_candidates() {
                                                            unsafe_dead_integer_result),
           "dead-integer fractional selector elision must reject any use before K {x} erases the "
           "retuned integer part");
+  const std::optional<std::string> unsafe_dead_integer_reason =
+      optimizer_static_proof_gate_rejection_reason_for_testing(safe_dead_integer_options,
+                                                               unsafe_dead_integer_result);
+  require(unsafe_dead_integer_reason.has_value() &&
+              unsafe_dead_integer_reason->find("reaches expr * before K {x}") !=
+                  std::string::npos,
+          "dead-integer rejection reason must identify the first consumer before fractional erase");
 
   CompileResult forward_fractional_result = forward_result;
   forward_fractional_result.optimizations.push_back(
@@ -1450,6 +1461,10 @@ void optimizer_translation_unit_stays_emulator_free() {
   require(proof_gate_header.find("optimizer_static_proof_gate_accepts_for_testing") !=
               std::string::npos,
           "static proof gate test hook should remain available only through its explicit header");
+  require(proof_gate_header.find("optimizer_static_proof_gate_rejection_reason_for_testing") !=
+              std::string::npos,
+          "static proof gate rejection-reason test hook should remain available only through its "
+          "explicit header");
   require(proof_gate_header.find("compile_source") == std::string::npos,
           "static proof gate header must not become a replacement production compiler API");
   require(proof_gate_header.find("program_behavior_digest") == std::string::npos,
