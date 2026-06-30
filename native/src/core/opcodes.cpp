@@ -297,7 +297,6 @@ std::vector<OpcodeInfo> build_opcode_catalog() {
   }
   {
     OpcodeInfo extra = with_effects(X2Effect::Preserves, StackEffect::ConsumeYKeep);
-    extra.enterable = loader_or_hex();
     extra.risk = OpcodeRisk::Undocumented;
     set(info(0x3e, "Y->X", "3E", extra));
   }

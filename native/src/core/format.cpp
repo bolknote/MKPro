@@ -845,12 +845,37 @@ bool is_number_entry_step(const ResolvedStep& step) {
          step.mnemonic == "." || step.mnemonic == "ВП" || step.mnemonic == "/-/";
 }
 
-ListingRow step_to_listing_row(const ResolvedStep& step) {
+std::optional<std::string> manual_key_for_step(const std::vector<ResolvedStep>& steps,
+                                               std::size_t index) {
+  if (index >= steps.size())
+    return std::nullopt;
+  if (index > 0 && opcode_by_code(steps.at(index - 1U).opcode).takes_address)
+    return format_address(code_to_address(steps.at(index).opcode));
+  const OpcodeInfo& info = opcode_by_code(steps.at(index).opcode);
+  if (steps.at(index).opcode == 0x3e)
+    return std::nullopt;
+  return info.keys;
+}
+
+std::string manual_3e_entry_comment(const std::optional<std::string>& previous_key) {
+  if (!previous_key.has_value() || previous_key->empty())
+    return "manual: code 3E needs an editable previous cell";
+  return "manual: ШГ← БП 3 В↑ ШГ← ШГ← " + *previous_key + " ШГ→";
+}
+
+ListingRow step_to_listing_row(const ResolvedStep& step,
+                               std::optional<std::string> previous_key = std::nullopt) {
+  std::optional<std::string> comment = step.comment;
+  if (step.opcode == 0x3e) {
+    const std::string manual = manual_3e_entry_comment(previous_key);
+    comment = comment.has_value() && !comment->empty() ? *comment + "; " + manual
+                                                        : manual;
+  }
   return ListingRow{
       .address = step.address,
       .hex = step.hex,
       .mnemonic = step.mnemonic,
-      .comment = step.comment,
+      .comment = std::move(comment),
   };
 }
 
@@ -928,7 +953,8 @@ std::vector<ListingRow> coalesce_number_entry_rows(const std::vector<ResolvedSte
   for (std::size_t index = 0; index < steps.size(); ++index) {
     const ResolvedStep& step = steps.at(index);
     if (!is_number_entry_step(step)) {
-      rows.push_back(step_to_listing_row(step));
+      rows.push_back(step_to_listing_row(
+          step, index > 0 ? manual_key_for_step(steps, index - 1U) : std::nullopt));
       continue;
     }
 
@@ -1073,8 +1099,11 @@ std::string format_setup_listing_steps(const std::vector<ManualSetupInput>& manu
         .comment = "enter " + format_manual_input_value(input) + " in " + input.stack,
     });
   }
-  for (const ResolvedStep& step : steps)
-    rows.push_back(step_to_listing_row(step));
+  for (std::size_t index = 0; index < steps.size(); ++index) {
+    const ResolvedStep& step = steps.at(index);
+    rows.push_back(step_to_listing_row(
+        step, index > 0 ? manual_key_for_step(steps, index - 1U) : std::nullopt));
+  }
   return format_listing_rows(rows);
 }
 

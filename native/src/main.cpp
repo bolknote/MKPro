@@ -433,13 +433,38 @@ void print_json(const mkpro::CompileResult& result) {
 }
 
 void append_step_keys(std::vector<std::string>& tokens, const std::vector<mkpro::ResolvedStep>& steps) {
+  std::optional<std::string> previous_cell_key;
   for (std::size_t index = 0; index < steps.size(); ++index) {
     const mkpro::ResolvedStep& step = steps[index];
     const mkpro::OpcodeInfo& opcode = mkpro::opcode_by_code(step.opcode);
+    if (step.opcode == 0x3e && previous_cell_key.has_value()) {
+      tokens.push_back("ШГ←");
+      tokens.push_back("БП");
+      tokens.push_back("3");
+      tokens.push_back("В↑");
+      tokens.push_back("ШГ←");
+      tokens.push_back("ШГ←");
+      tokens.push_back(*previous_cell_key);
+      tokens.push_back("ШГ→");
+      previous_cell_key.reset();
+      continue;
+    }
+    if (step.opcode == 0x3e) {
+      tokens.push_back("[3E:requires-previous-editable-step;use-hex-or-mk61s]");
+      previous_cell_key.reset();
+      continue;
+    }
     tokens.push_back(opcode.keys);
     if (opcode.takes_address && index + 1U < steps.size()) {
-      tokens.push_back(mkpro::format_address(mkpro::code_to_address(steps[index + 1U].opcode)));
+      const std::string address_key =
+          mkpro::format_address(mkpro::code_to_address(steps[index + 1U].opcode));
+      tokens.push_back(address_key);
       ++index;
+      previous_cell_key = address_key;
+    } else if (step.opcode == 0x3e) {
+      previous_cell_key.reset();
+    } else {
+      previous_cell_key = opcode.keys;
     }
   }
 }

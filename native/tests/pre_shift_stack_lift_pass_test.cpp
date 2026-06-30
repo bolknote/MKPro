@@ -1557,6 +1557,41 @@ void pre_shift_stack_lift_matches_typescript_contract() {
     check_ops_equal(result.ops, program, "pre-shift-stack-lift keeps В↑ before stack-exposing commands");
   }
 
+  {
+    // pre-shift-stack-lift folds F reverse; В↑ to 3E when hidden X2 is overwritten
+    const std::vector<IrOp> program = {
+      plain(0x54, "К НОП"),
+      plain(0x25, "F reverse"),
+      plain(0x0e, "В↑"),
+      plain(0x0d, "Cx"),
+      halt(),
+    };
+    const auto result = run(program);
+
+    check_applied(result.applied, 1, "pre-shift-stack-lift folds F reverse; В↑ to 3E");
+    check_ops_equal(result.ops, (std::vector<IrOp>{
+      plain(0x54, "К НОП"),
+      plain(0x3e, "Y->X"),
+      plain(0x0d, "Cx"),
+      halt(),
+    }), "pre-shift-stack-lift folds F reverse; В↑ to 3E");
+  }
+
+  {
+    // pre-shift-stack-lift keeps F reverse; В↑ when the hidden X2 sync can reach a later restore
+    const std::vector<IrOp> program = {
+      plain(0x54, "К НОП"),
+      plain(0x25, "F reverse"),
+      plain(0x0e, "В↑"),
+      plain(0x10, "+"),
+      halt(),
+    };
+    const auto result = run(program);
+
+    check_applied(result.applied, 0, "pre-shift-stack-lift keeps F reverse; В↑ before stack consumer");
+    check_ops_equal(result.ops, program, "pre-shift-stack-lift keeps F reverse; В↑ before stack consumer");
+  }
+
   const std::set<std::string> deferred = {};
 
   std::set<std::string> failed(failures.begin(), failures.end());

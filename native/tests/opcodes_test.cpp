@@ -66,6 +66,10 @@ void opcode_catalog_matches_typescript_contract() {
   require(raw_display.name == "raw display 5F", "5F should be modeled as raw display");
   require(raw_display.risk == OpcodeRisk::Undocumented, "5F should be undocumented");
 
+  const auto& y_to_x = opcode_by_code(0x3e);
+  require(contains_manual(y_to_x.enterable), "3E should be manually enterable via БП 3 В↑");
+  require(code_for("Y->X") == 0x3e, "Y->X lookup should resolve undocumented 3E");
+
   require(opcode_by_code(0x00).x2_effect == X2Effect::Restores, "00 X2 effect");
   require(opcode_by_code(0x0a).x2_effect == X2Effect::Restores, "0A X2 effect");
   require(opcode_by_code(0x0b).x2_effect == X2Effect::Restores, "0B X2 effect");
